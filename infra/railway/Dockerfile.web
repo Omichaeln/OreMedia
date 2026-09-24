@@ -10,7 +10,8 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc turbo.json tsconfig.
 COPY apps ./apps
 COPY packages ./packages
 COPY tooling ./tooling
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+# Railway cache mounts require a service-specific id; this Dockerfile is shared by the web deployment definition.
+RUN pnpm install --frozen-lockfile
 ARG VITE_REVIEW_PORTAL_ORIGIN
 RUN pnpm --filter @oremedia/web build
 

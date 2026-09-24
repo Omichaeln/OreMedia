@@ -15,7 +15,8 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc turbo.json tsconfig.
 COPY apps ./apps
 COPY packages ./packages
 COPY tooling ./tooling
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+# Railway cache mounts require a service-specific id; this Dockerfile is shared by multiple services.
+RUN pnpm install --frozen-lockfile
 # tsup inlines the workspace packages and leaves every third-party package external (apps/*/tsup.config.ts).
 RUN pnpm --filter @oremedia/${OREMEDIA_APP} build
 # Flat production dependency tree for this app and the workspace packages inlined into it, so the bundle resolves
