@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import express, {
   type CookieOptions,
   type NextFunction,
@@ -62,7 +63,11 @@ const googleFetch: typeof fetch = async (input, init) => {
   if (!isGoogleJsonEndpoint) return response;
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType.toLowerCase().includes('json')) return response;
-  const text = await response.text();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const text =
+    bytes[0] === 0x1f && bytes[1] === 0x8b
+      ? gunzipSync(bytes).toString('utf8')
+      : new TextDecoder().decode(bytes);
   const normalized = text.replace(/^\uFEFF/, '').trimStart();
   const jsonText = normalized.startsWith(")]}'") ? normalized.slice(4).trimStart() : normalized;
   try {
@@ -75,7 +80,7 @@ const googleFetch: typeof fetch = async (input, init) => {
       bodyLength: text.length,
       firstCodePoint: text.codePointAt(0) ?? null,
     });
-    return response;
+    return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
   }
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json');
