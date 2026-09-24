@@ -1,6 +1,6 @@
 /**
- * X weighted text counting (spec 14.5: weighted counting lives in the adapter, not a generic helper; 20.2 count.length
- * refactor). Rules as X documents them for its v3 configuration: scale 100, default weight 200, weight 100 for the
+ * X weighted text counting (spec 14.5: weighted counting lives in the adapter, not a generic helper; 20.2 weighted
+ * text counting refactor). Rules as X documents them for its v3 configuration: scale 100, default weight 200, weight 100 for the
  * code point ranges below, every URL counts as 23 characters (transformedURLLength), an emoji sequence counts as 2.
  */
 const WEIGHT_ONE_RANGES: ReadonlyArray<readonly [number, number]> = [

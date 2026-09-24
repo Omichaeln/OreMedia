@@ -51,7 +51,7 @@ soft delete by default.
 Report every gate and checklist item as **verified** (how), **open** (risk) or **not applicable** (why).
 "It should work" is not a status. Never fabricate a verification.
 
-## the reference codebase
+## Reference codebase
 
-the reference codebase (the parent directory of this tree, pinned at commit the pinned commit) is a reference, not a dependency.
+The reference codebase studied in spec section 20 is a reference, not a dependency.
 No code is copied from it unless ADR-06 records acceptance of the AGPL route.

@@ -78,7 +78,7 @@
         ],
         [
           "0.6",
-          "ADR-06 the reference codebase reference-only / licensing drafted",
+          "ADR-06 reference-codebase-only / licensing drafted",
           "critical",
           "24.1",
           "complete",
