@@ -16,7 +16,8 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc turbo.json tsconfig.
 COPY apps ./apps
 COPY packages ./packages
 COPY tooling ./tooling
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+# Railway cache mounts require a service-specific id; this Dockerfile is shared by the renderer service definition.
+RUN pnpm install --frozen-lockfile
 # The render-only bundle of the shared Konva scene (spec 11.5) is built first; the worker build copies it beside
 # the workflow bundles and fails loudly if it is missing.
 RUN pnpm --filter @oremedia/editor build:renderer && pnpm --filter @oremedia/worker-render build
