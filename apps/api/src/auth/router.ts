@@ -53,12 +53,18 @@ const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
  */
 const googleFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
-  if ((response.headers.get('content-type') ?? '').toLowerCase().includes('json')) return response;
-  const text = await response.clone().text();
-  if (!text.trimStart().startsWith('{')) return response;
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const isGoogleJsonEndpoint =
+    url.startsWith('https://oauth2.googleapis.com/token') ||
+    url.startsWith('https://oauth2.googleapis.com/revoke') ||
+    url.startsWith('https://openidconnect.googleapis.com/v1/userinfo') ||
+    url.startsWith('https://www.googleapis.com/oauth2/v3/certs');
+  if (!isGoogleJsonEndpoint || (response.headers.get('content-type') ?? '').toLowerCase().includes('json')) {
+    return response;
+  }
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json');
-  return new Response(text, { status: response.status, statusText: response.statusText, headers });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 };
 
 async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> {
