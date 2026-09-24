@@ -31,6 +31,13 @@ const mutationCtx = (ctx: MutationCtx, ttlHours?: number) => ({
 export const accessRouter = router({
   me: tenantQuery.query(({ ctx }) => accessService.me(ctx.tenant.actor)),
 
+  /** The signed-in person, for the app header (D-03 sign-in); user sessions only. */
+  session: authedProcedure.query(({ ctx }) => {
+    if (ctx.principal.kind !== 'user')
+      throw new PolicyDeniedError('user_session_required', 'Only a user session has a signed-in person');
+    return accessService.sessionUser(ctx.principal.userId, ctx.correlationId);
+  }),
+
   listCompanies: authedProcedure.query(({ ctx }) => {
     if (ctx.principal.kind !== 'user')
       throw new PolicyDeniedError('user_session_required', 'Only a user session has a portfolio');

@@ -2,7 +2,9 @@ import { and, eq, gt, isNull, or, type SQL } from 'drizzle-orm';
 import { PlatformRepository, TenantScopedRepository, requireTenant, type Tx } from '@oremedia/db';
 import {
   apiClients,
+  authEvents,
   brandGrants,
+  externalIdentities,
   externalReviewerLinks,
   memberships,
   servicePrincipals,
@@ -11,6 +13,7 @@ import {
   tenants,
   users,
 } from '@oremedia/db/schema/access';
+import { SESSION_IDLE_MS, SESSION_TOUCH_MS } from './authenticator';
 
 /** Global tables (users, tenants, sessions) are read through explicit, narrow finders; they are never tenant-scoped. */
 export class UserDirectory extends PlatformRepository {
@@ -56,7 +59,13 @@ export class UserDirectory extends PlatformRepository {
         and(eq(memberships.userId, userId), eq(memberships.status, 'active'), eq(tenants.status, 'active')),
       );
   }
+  /**
+   * A live session: not revoked, before its absolute expiry, and used within the idle window (last seen, or created
+   * when never seen since).
+   */
   async sessionByTokenHash(tokenHash: string, tx?: Tx) {
+    const now = new Date();
+    const idleCutoff = new Date(now.getTime() - SESSION_IDLE_MS);
     const rows = await this.conn(tx)
       .select()
       .from(sessions)
@@ -64,11 +73,21 @@ export class UserDirectory extends PlatformRepository {
         and(
           eq(sessions.tokenHash, tokenHash),
           isNull(sessions.revokedAt),
-          gt(sessions.expiresAt, new Date()),
+          gt(sessions.expiresAt, now),
+          or(
+            gt(sessions.lastSeenAt, idleCutoff),
+            and(isNull(sessions.lastSeenAt), gt(sessions.createdAt, idleCutoff)),
+          ),
         ),
       )
       .limit(1);
     return rows[0] ?? null;
+  }
+  /** Idle-timeout bookkeeping: moves lastSeenAt forward, at most once per SESSION_TOUCH_MS per session. */
+  async touchSession(id: string, lastSeenAt: Date | null, tx?: Tx) {
+    const now = new Date();
+    if (lastSeenAt && now.getTime() - lastSeenAt.getTime() < SESSION_TOUCH_MS) return;
+    await this.conn(tx).update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
   }
   async createSession(values: typeof sessions.$inferInsert, tx?: Tx) {
     await this.conn(tx).insert(sessions).values(values);
@@ -102,6 +121,8 @@ export class UserDirectory extends PlatformRepository {
       })
       .where(eq(users.id, userId));
     await this.revokeSessionsForUser(userId, tx);
+    // The provider link carries the email at link time; an anonymised user can never be signed in again.
+    await this.conn(tx).delete(externalIdentities).where(eq(externalIdentities.userId, userId));
     return true;
   }
   /** Spec 17.5 tenant deletion: the tenant row stays as a tombstone (audit rows name it) without its name. */
@@ -172,6 +193,53 @@ export class UserDirectory extends PlatformRepository {
       .from(brandGrants)
       .where(and(eq(brandGrants.tenantId, tenantId), eq(brandGrants.membershipId, m.id)));
     return { membership: m, grants };
+  }
+  /** D-03: the user an external identity (provider + subject) is linked to. */
+  async identityFor(provider: string, subject: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(externalIdentities)
+      .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.subject, subject)))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /**
+   * The identity a user already has at a provider, as a locking read (the latest committed row, not the
+   * transaction's snapshot), so a concurrent first sign-in that committed a link is seen after lockUser waits.
+   */
+  async identityOfUser(provider: string, userId: string, tx: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(externalIdentities)
+      .where(and(eq(externalIdentities.provider, provider), eq(externalIdentities.userId, userId)))
+      .limit(1)
+      .for('update');
+    return rows[0] ?? null;
+  }
+  /** Serialises sign-ins that resolve to one user (SELECT … FOR UPDATE on the users row); returns the fresh row. */
+  async lockUser(userId: string, tx: Tx) {
+    const rows = await this.conn(tx).select().from(users).where(eq(users.id, userId)).limit(1).for('update');
+    return rows[0] ?? null;
+  }
+  async linkIdentity(values: typeof externalIdentities.$inferInsert, tx?: Tx) {
+    await this.conn(tx)
+      .insert(externalIdentities)
+      .values({ ...values, emailAtLink: values.emailAtLink.toLowerCase() });
+  }
+  /** Every membership of one user across tenants, whatever its status (sign-in reads invitations here). */
+  async allMembershipsOfUser(userId: string, tx?: Tx) {
+    return this.conn(tx).select().from(memberships).where(eq(memberships.userId, userId));
+  }
+  /** Claims an invitation placeholder (created disabled by inviteMember) on its first verified sign-in. */
+  async activateUser(userId: string, name: string, tx?: Tx) {
+    await this.conn(tx)
+      .update(users)
+      .set({ status: 'active', name: name.slice(0, 200) })
+      .where(and(eq(users.id, userId), eq(users.status, 'disabled')));
+  }
+  /** Insert-only: pre-tenant authentication outcomes (auth_events has no update or delete method). */
+  async recordAuthEvent(values: typeof authEvents.$inferInsert, tx?: Tx) {
+    await this.conn(tx).insert(authEvents).values(values);
   }
   async servicePrincipalFor(id: string, tenantId: string, tx?: Tx) {
     const rows = await this.conn(tx)

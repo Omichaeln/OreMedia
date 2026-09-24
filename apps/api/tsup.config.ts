@@ -11,6 +11,7 @@ export default defineConfig({
     main: 'src/main.ts',
     migrate: 'src/migrate.ts',
     'seed-builtin-skills': 'src/seed-builtin-skills.ts',
+    'bootstrap-owner': 'src/bootstrap-owner.ts',
   },
   format: ['esm'],
   target: 'node22',

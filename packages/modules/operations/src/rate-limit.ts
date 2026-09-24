@@ -64,6 +64,10 @@ const PATH_POLICIES: Record<string, RateLimitPolicy> = {
   'creative.renders.request': { limit: 60, windowSec: 60 },
   'assets.uploads.createIntent': { limit: 120, windowSec: 60 },
   'publishing.publications.schedule': { limit: 120, windowSec: 60 },
+  // D-03 sign-in routes, keyed per client address before anyone is authenticated.
+  'auth.google.start': { limit: 30, windowSec: 60 },
+  'auth.google.callback': { limit: 30, windowSec: 60 },
+  'auth.sign_out': { limit: 30, windowSec: 60 },
 };
 
 export class RateLimiter {

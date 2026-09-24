@@ -14,6 +14,10 @@ export const ID_PREFIXES = {
   session: 'ses',
   externalReviewerLink: 'erl',
   supportSession: 'ss',
+  /** D-03: an external OIDC identity (provider + subject) linked to a user. */
+  externalIdentity: 'xid',
+  /** A pre-tenant authentication outcome (sign-in, refusal, sign-out). */
+  authEvent: 'aue',
   brand: 'brd',
   brandVersion: 'bv',
   designTokenSet: 'tok',

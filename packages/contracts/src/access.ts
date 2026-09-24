@@ -98,3 +98,84 @@ export const SupportSessionEscalate = z.object({
   reason: z.string().min(10).max(1000),
   durationMinutes: z.number().int().min(5).max(60).default(30),
 });
+
+/**
+ * D-03: an identity the OpenID Connect adapter has verified (ID token signature, issuer, audience, expiry, nonce).
+ * The access module decides what it may do: email_verified and the hosted-domain allowlist first, then the user it
+ * resolves to. Google only authenticates; authorisation stays Oremedia's policy layer.
+ */
+export const IdentityProvider = z.enum(['google']);
+export const VerifiedExternalIdentity = z.object({
+  provider: IdentityProvider,
+  subject: z.string().min(1).max(255),
+  email: z.string().email().max(320).optional(),
+  emailVerified: z.boolean(),
+  /** Google Workspace hosted domain (`hd` claim); absent for consumer accounts. */
+  hostedDomain: z.string().max(253).optional(),
+  name: z.string().max(200).optional(),
+});
+export type VerifiedExternalIdentity = z.infer<typeof VerifiedExternalIdentity>;
+
+/** Every reason a sign-in is refused, as recorded in auth_events.reason. */
+export const SignInRefusalReason = z.enum([
+  'flow_invalid', // missing, tampered or expired state/flow cookie
+  'provider_error', // the provider returned an error (e.g. the person cancelled)
+  'token_invalid', // code exchange or ID token validation failed (signature, iss, aud, exp, nonce)
+  'email_not_verified',
+  'domain_not_allowed',
+  'not_invited',
+  'account_disabled',
+  'identity_conflict', // the user is already linked to another subject at this provider (e.g. a reassigned address)
+  // First link by email (existing user, invitation, bootstrap owner) from an account Google is not authoritative
+  // for: no `hd` equal to the email's domain and not a Gmail address (a consumer account on a company address).
+  'email_not_authoritative',
+  'internal_error', // an unexpected failure in the sign-in routes (recorded so no attempt goes unaudited)
+]);
+export type SignInRefusalReason = z.infer<typeof SignInRefusalReason>;
+
+/**
+ * The code the callback passes back to the sign-in screen (`/sign-in?error=<code>`). Deliberately coarse: protocol
+ * failures all read `sign_in_failed`, so the page reveals nothing an attacker could probe.
+ */
+export const SignInErrorCode = z.enum([
+  'not_invited',
+  'domain_not_allowed',
+  'email_not_verified',
+  'account_disabled',
+  'email_not_authoritative',
+  'sign_in_failed',
+  'unavailable',
+]);
+export type SignInErrorCode = z.infer<typeof SignInErrorCode>;
+
+export const signInErrorCodeFor = (reason: SignInRefusalReason): SignInErrorCode => {
+  switch (reason) {
+    case 'not_invited':
+    case 'domain_not_allowed':
+    case 'email_not_verified':
+    case 'account_disabled':
+    case 'email_not_authoritative':
+      return reason;
+    default:
+      return 'sign_in_failed';
+  }
+};
+
+/** Google issues the address itself: consumer Gmail domains. Any other domain needs a matching `hd` claim. */
+export const GOOGLE_CONSUMER_DOMAINS: readonly string[] = ['gmail.com', 'googlemail.com'];
+
+/**
+ * Whether Google is authoritative for a verified email: the ID token's `hd` (Workspace hosted domain) equals the
+ * email's domain, or the address is a Gmail address. A consumer Google account created on a company address has
+ * email_verified=true but no `hd`; it proves control of the inbox at sign-up time only, not ownership of the domain.
+ */
+export function googleIsAuthoritativeFor(email: string, hostedDomain: string | undefined): boolean {
+  const at = email.lastIndexOf('@');
+  if (at < 1) return false;
+  const domain = email
+    .slice(at + 1)
+    .trim()
+    .toLowerCase();
+  if (GOOGLE_CONSUMER_DOMAINS.includes(domain)) return true;
+  return Boolean(hostedDomain) && hostedDomain?.trim().toLowerCase() === domain;
+}
