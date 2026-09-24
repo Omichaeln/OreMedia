@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-24T07:45:00Z",
+  "updatedAt": "2026-09-24T14:00:00Z",
   "repository": "omichaeln/postiz-app · branch claude/gallant-gauss-rh58uh · directory oremedia/",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -130,7 +130,7 @@
           "critical",
           "24.2",
           "blocked",
-          "Each row in DECISIONS.md is Open; deciding is the user's call. Working assumptions are labelled and reversible."
+          "D-03 (authentication: Google OpenID Connect) is decided (programme owner, 24 September 2026); the other rows in DECISIONS.md are Open and deciding them is the user's call. Working assumptions are labelled and reversible."
         ],
         [
           "0.13",
@@ -407,11 +407,11 @@
         ],
         [
           "1.27",
-          "access: authentication (session; D-03 pending)",
+          "access: authentication (Google OpenID Connect sign-in, D-03 decided)",
           "critical",
           "3.1, 18",
           "in_progress",
-          "Opaque session, API-key, reviewer-link and support tokens hashed at rest with constant-time comparison (authenticator.ts, resolve.ts). Sign-in flows (password/OIDC/magic link) wait on D-03."
+          "Built and verified locally: apps/api/src/auth (openid-client 6: authorization code + PKCE S256 + state + nonce, ID token signature via JWKS, iss/aud/exp; sealed ten-minute flow cookie; open-redirect-safe returnTo), access module sign-in (linked subject → existing user by verified email → invitation; no self-sign-up; disabled users and re-linking a user to another subject refused, also under concurrency (user row locked, unique provider+user); a first link by email only when Google is authoritative for the address (hd equals the domain, or Gmail); email_verified and AUTH_ALLOWED_DOMAINS enforced), opaque sessions (12 h idle / 7 d absolute, __Host- HttpOnly Secure cookies in production, SameSite=Lax, CSRF cookie, prior session revoked in the sign-in transaction), CSRF-protected sign-out (support sessions closed), per-address rate limit on /auth, auth_events for every outcome including internal_error; migration 0003; apps/api/src/auth.integration.test.ts against a local fake OIDC provider, auth.cross-tenant.test.ts, unit tests for config and the flow cookie. Open: not yet exercised against Google itself (needs the Google Cloud OAuth client and the Railway deploy, runbook deploy-railway.md 1a). MFA: Oremedia does not claim it for Google sign-ins (users.mfa_enrolled stays false); a brand policy with mfaRequired would refuse every Google user, so it stays off and 2-Step Verification is enforced in the Google Workspace admin console with AUTH_ALLOWED_DOMAINS (DECISIONS.md D-03)."
         ],
         [
           "1.28",
@@ -1974,7 +1974,7 @@
           "critical",
           "Appendix A",
           "in_progress",
-          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint; remaining names are consumed by later phases"
+          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases"
         ],
         [
           "R.6",

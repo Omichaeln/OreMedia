@@ -336,6 +336,7 @@ function createRouter(backend: Backend) {
   const dto = ({ steps: _s, ...r }: Run) => r;
   return t.router({
     access: t.router({
+      session: authedOnly.query(() => ({ userId: 'usr_e2e', name: 'E2E person', email: 'e2e@example.test' })),
       listCompanies: authedOnly.query(({ ctx }) => [
         { tenantId: E2E.tenantId, name: 'E2E company', slug: 'e2e', role: ctx.role, allBrands: true },
       ]),

@@ -1,4 +1,5 @@
-# apps/web: static SPA build served by Caddy (immutable assets, SPA fallback, security headers).
+# apps/web: static SPA build served by Caddy (immutable assets, SPA fallback, security headers), which also
+# reverse-proxies the API paths to API_INTERNAL_URL (runtime variable) so the app and API share one origin (D-03).
 # syntax=docker/dockerfile:1.7
 FROM node:22.22.2-bookworm-slim AS build
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true
@@ -11,7 +12,6 @@ COPY packages ./packages
 COPY tooling ./tooling
 # Railway cache mounts require a service-specific id; this Dockerfile is shared by the web deployment definition.
 RUN pnpm install --frozen-lockfile
-ARG VITE_API_ORIGIN
 ARG VITE_REVIEW_PORTAL_ORIGIN
 RUN pnpm --filter @oremedia/web build
 

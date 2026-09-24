@@ -1,6 +1,8 @@
 export { appRouter, allProcedures, type AppRouter } from './router';
 export { createContext, CSRF_COOKIE, SESSION_COOKIE, type RequestContext } from './context';
-export { createServer } from './server';
+export { createServer, type ServerOptions } from './server';
+export { authConfigFromEnv, type AuthConfig } from './auth/config';
+export { safeReturnTo } from './auth/flow';
 export { configureRateLimiter } from './trpc';
 export { composeModules } from './composition';
 export { envelopeFor } from './trpc';

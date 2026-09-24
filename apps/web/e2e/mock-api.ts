@@ -602,6 +602,11 @@ export function createMockRouter(backend: MockBackend) {
     intelligence: p6.intelligence,
     experiments: p6.experiments,
     access: t.router({
+      session: authedOnly.query(() => ({
+        userId: 'usr_e2e',
+        name: 'E2E person',
+        email: 'e2e.person@example.test',
+      })),
       listCompanies: authedOnly.query(({ ctx }) => {
         const bearer = first(ctx.headers['authorization']);
         // Every company of the group the caller belongs to, with the role and brand scope of that membership.
