@@ -36,6 +36,26 @@ import {
 
 const PROVIDER = 'google';
 
+/**
+ * Railway's egress occasionally returns Google's JSON discovery document with a non-JSON content type.
+ * Normalize only the well-known metadata response; token and JWKS responses retain their original headers.
+ */
+const discoveryFetch: typeof fetch = async (input, init) => {
+  const response = await fetch(input, init);
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const contentType = response.headers.get('content-type') ?? '';
+  if (response.ok && url.includes('accounts.google.com/.well-known/') && !contentType.includes('json')) {
+    const headers = new Headers(response.headers);
+    headers.set('content-type', 'application/json');
+    return new Response(await response.arrayBuffer(), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  return response;
+};
+
 export interface AuthRouterOptions {
   config: AuthConfig | null;
   onError: (cause: unknown, stage: string) => void;
@@ -55,6 +75,7 @@ function discoveryFor(config: AuthConfig): () => Promise<oidc.Configuration> {
           oidc.enableNonRepudiationChecks,
           ...(config.allowInsecureIssuer ? [oidc.allowInsecureRequests] : []),
         ],
+        [oidc.customFetch]: discoveryFetch,
       })
       .catch((err: unknown) => {
         pending = null;
