@@ -1,0 +1,148 @@
+---
+# Oremedia CI (spec 2.1.12, 22 Phase 1).
+name: Oremedia CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: oremedia-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Format, lint, typecheck, schema and secrets checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Gitleaks scans the pull request's commit range, which needs the base commit present
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm check:schema
+      - run: pnpm check:secrets
+      - name: Gitleaks (secrets in history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: 'false'
+        continue-on-error: false
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  integration:
+    name: Integration, cross-tenant harness (MySQL 8) and OpenAPI diff
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: oremedia
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ptest"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+    env:
+      TEST_DATABASE_URL: mysql://root:test@127.0.0.1:3306/mysql
+      TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # The render worker's golden and end-to-end tests need the render-only bundle (a build output) and a Chromium
+      # matching the pinned Playwright version (spec 19.5).
+      - run: pnpm --filter @oremedia/editor build:renderer
+      - run: pnpm --filter @oremedia/worker-render exec playwright install --with-deps chromium
+      - run: pnpm test:integration
+      - run: pnpm test:cross-tenant
+      - run: pnpm check:openapi
+      # Studio end-to-end smoke (spec 21): the built app in Chromium against an in-process tRPC mock.
+      - run: pnpm --filter @oremedia/web build
+      - run: pnpm exec vitest run --project unit apps/web/e2e/studio.e2e.test.ts apps/web/e2e/phase5.e2e.test.ts apps/web/e2e/agents.e2e.test.ts apps/web/e2e/phase6.e2e.test.ts apps/web/e2e/a11y.e2e.test.ts apps/web/e2e/journey.e2e.test.ts
+        env:
+          OREMEDIA_E2E: '1'
+
+  workflow-replay:
+    name: Temporal workflow replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:replay
+
+  supply-chain:
+    name: Dependency and container scans
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm audit (high and critical fail the build)
+        run: pnpm audit --audit-level high
+      - name: Build API image
+        run: docker build --build-arg OREMEDIA_APP=api -f infra/railway/Dockerfile -t oremedia-api:ci .
+      - name: Trivy container scan (HIGH and CRITICAL fail the build)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          # Findings are printed to the job log (table) and uploaded to code scanning (SARIF); the second run is cached.
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln --format table oremedia-api:ci
+          trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln --format sarif --output trivy.sarif oremedia-api:ci
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy.sarif') != ''
+        with:
+          sarif_file: trivy.sarif

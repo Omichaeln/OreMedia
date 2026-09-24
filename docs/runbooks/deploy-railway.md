@@ -9,8 +9,8 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
 1. Create a Railway project per environment. Never share a database or credentials between environments.
 2. Add plugins: **MySQL** (application), **Redis**. If self-hosting Temporal, add a **second MySQL** for it.
 3. Create a Cloudflare R2 bucket pair (`assets`, `releases`), private, with versioning and lifecycle rules.
-4. For each application service: "New service → GitHub repo `omichaeln/postiz-app`", set **Root Directory** to
-   `oremedia`, set **Config-as-code path** to `infra/railway/<service>/railway.json`, and set the variables:
+4. For each application service: "New service → GitHub repo" (this repository), leave **Root Directory** at the
+   repository root, set **Config-as-code path** to `infra/railway/<service>/railway.json`, and set the variables:
    - all services: `DATABASE_URL`, `REDIS_URL`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TLS_CERT_REF`,
      `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OREMEDIA_APP` (api | worker-core | worker-ingest | redirector);
    - `api`: `AUTH_ISSUER_URL`, `AUTH_CLIENT_ID`, `WEB_ORIGIN`, `REVIEW_PORTAL_ORIGIN`, `KMS_KEY_ID_CREDENTIALS`
