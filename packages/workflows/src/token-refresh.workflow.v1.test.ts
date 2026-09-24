@@ -49,7 +49,7 @@ function fakes(opts: {
   return { acts, host, names, sleeps };
 }
 
-describe('tokenRefreshWorkflowV1 cycle (spec 14.7, ported from Postiz refresh.token.workflow)', () => {
+describe('tokenRefreshWorkflowV1 cycle (spec 14.7, ported pattern, spec 20.2)', () => {
   it('sleeps until tokenExpiresAt - margin, re-reads the row, refreshes', async () => {
     const f = fakes({});
     expect(await runTokenRefreshCycle(f.acts, input, f.host)).toBe('refreshed');

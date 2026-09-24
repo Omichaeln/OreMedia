@@ -2,7 +2,7 @@ import type { RestRouteSpec } from '../route';
 
 /**
  * Spec 7.6 / 14.1 publications. Scheduling is the same publications.schedule command as the product: it requires a
- * valid approval or an active mandate (spec 13.4, Postiz R2), and dispatch re-checks it.
+ * valid approval or an active mandate (spec 13.4, reference risk R2), and dispatch re-checks it.
  */
 export const PUBLICATION_ROUTES: readonly RestRouteSpec[] = [
   {

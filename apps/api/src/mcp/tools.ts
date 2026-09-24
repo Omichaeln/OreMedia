@@ -15,7 +15,7 @@ import { publicationService } from '@oremedia/module-publishing';
  * other four are read/start surfaces the registry does not carry, defined here as ordinary ToolDefinitions so they
  * pass through the same dispatcher (policy, audit, budget, timeout, output parsing) as every agent tool. None has
  * an external effect and none schedules: scheduling exists only as publications.schedule with an approval or a
- * mandate (spec 13.4, Postiz R2), which MCP does not expose.
+ * mandate (spec 13.4, reference risk R2), which MCP does not expose.
  */
 
 const BrandSummary = z

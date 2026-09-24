@@ -8,5 +8,5 @@
 
 Temporal (TypeScript SDK 1.x) owns durable state and waits. The model loop is bounded inside activities. Roles
 (planner, copywriter, designer, reviewer, analyst) are skill + tool-allowlist configurations, not services.
-Postiz's three AI stacks (CopilotKit, Mastra, LangGraph) are not replicated; the LangGraph decomposition is a
+The reference codebase's three AI stacks are not replicated; its generation pipeline's decomposition is a
 skill-decomposition reference only. Temporal persistence never shares the application database.

@@ -17,7 +17,7 @@ import {
 export interface PublishingProviderOptions {
   registry?: ProviderRegistry;
   limiter?: RateLimiter;
-  /** Explicit per-request timeout (spec 14.5; Postiz R8 set none). */
+  /** Explicit per-request timeout (spec 14.5; reference risk R8 set none). */
   timeoutMs?: number;
   /** Tests only: allow loopback targets (refused in production by the dispatcher). */
   insecureAllowLoopback?: boolean;

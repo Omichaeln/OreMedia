@@ -2,7 +2,7 @@ import { continueAsNew, proxyActivities, sleep } from '@temporalio/workflow';
 import type { TokenRefreshActivitiesV1, TokenRefreshWorkflowInputV1 } from '@oremedia/contracts/publishing';
 
 /**
- * Spec 14.7, ported in shape from Postiz apps/orchestrator/src/workflows/refresh.token.workflow.ts: one workflow
+ * Spec 14.7, ported in shape from the reference token-refresh workflow (spec 20.2): one workflow
  * per connection (workflow id `token-refresh:<channelConnectionId>`) sleeps until tokenExpiresAt - margin, re-reads
  * the row (it may have been disconnected meanwhile), refreshes under the per-connection lock in the activity and
  * loops; a failure leaves the connection flagged refresh_needed / reconnect_needed and ends the run. The payload
