@@ -46,8 +46,24 @@ const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
   revocation_endpoint: 'https://oauth2.googleapis.com/revoke',
 };
 
+/**
+ * Railway's outbound proxy can preserve a JSON response body while rewriting its content type. oauth4webapi
+ * correctly rejects that response by default; only normalize responses whose body is demonstrably a JSON object.
+ * Non-JSON responses and all status codes are returned unchanged, so protocol and signature validation remain strict.
+ */
+const googleFetch: typeof fetch = async (input, init) => {
+  const response = await fetch(input, init);
+  if ((response.headers.get('content-type') ?? '').toLowerCase().includes('json')) return response;
+  const text = await response.clone().text();
+  if (!text.trimStart().startsWith('{')) return response;
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'application/json');
+  return new Response(text, { status: response.status, statusText: response.statusText, headers });
+};
+
 async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> {
   const client = new oidc.Configuration(GOOGLE_SERVER_METADATA, config.clientId, config.clientSecret);
+  client[oidc.customFetch] = googleFetch;
   oidc.enableNonRepudiationChecks(client);
   return client;
 }
