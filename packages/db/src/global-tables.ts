@@ -7,6 +7,10 @@ export const GLOBAL_TABLES: Readonly<Record<string, string>> = {
   tenants: 'The tenant row itself; the id is the tenant key.',
   sessions:
     'Belongs to a user; the selected tenant is a hint verified against memberships on every request (spec 7.1).',
+  external_identities:
+    'Links an external OIDC subject to a user (D-03); identities span tenants like users (spec 5.1).',
+  auth_events:
+    'Sign-in and sign-out outcomes before any tenant is selected (a refused sign-in has no tenant); ids and reasons only.',
   provider_capabilities: 'Platform-wide capability register (spec 14.6); contains no tenant content.',
   plans: 'Commercial catalogue shared by all tenants (spec 22.1); contains no tenant content.',
   feature_flags:
@@ -42,6 +46,7 @@ export const INSERT_ONLY_TABLES: readonly string[] = [
   'link_clicks',
   'usage_ledger',
   'audit_events',
+  'auth_events',
   'agent_steps',
   'tool_invocations',
   'evaluation_results',

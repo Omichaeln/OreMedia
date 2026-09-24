@@ -2,6 +2,7 @@ import type { CrossTenantFixture } from '../cross-tenant-inputs';
 
 export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
   'access.me': { buildInput: null, reason: 'no resource ids; tenant comes from the verified membership' },
+  'access.session': { buildInput: null, reason: "the caller's own user; takes no ids" },
   'access.listCompanies': { buildInput: null, reason: "projection over the caller's own memberships" },
   'access.switchCompany': {
     buildInput: (f) => ({ tenantId: f['tenantId'] }),

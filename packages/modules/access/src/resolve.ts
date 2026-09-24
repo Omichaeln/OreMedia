@@ -41,9 +41,9 @@ export async function authenticate(bearer: string | undefined, tx?: Tx): Promise
   return runAsPlatform('authenticate', 'authn', async () => {
     if (bearer.startsWith('ses_')) {
       const s = await directory.sessionByTokenHash(hash, tx);
-      return s
-        ? { kind: 'user', userId: s.userId, sessionId: s.id, selectedTenantId: s.selectedTenantId }
-        : null;
+      if (!s) return null;
+      await directory.touchSession(s.id, s.lastSeenAt, tx);
+      return { kind: 'user', userId: s.userId, sessionId: s.id, selectedTenantId: s.selectedTenantId };
     }
     if (bearer.startsWith('ak_')) {
       const c = await directory.apiClientByKeyHash(hash, tx);
@@ -76,6 +76,7 @@ export async function authenticate(bearer: string | undefined, tx?: Tx): Promise
       const s = await directory.sessionByTokenHash(hashToken(`ses_${tokenPart}`), tx);
       const ss = await directory.supportSessionById(supportSessionId, tx);
       if (!s || !ss || ss.operatorId !== s.userId || ss.closedAt) return null;
+      await directory.touchSession(s.id, s.lastSeenAt, tx);
       return {
         kind: 'platform_operator',
         operatorId: s.userId,

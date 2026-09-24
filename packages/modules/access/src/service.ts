@@ -12,6 +12,9 @@ import {
   SupportSessionEscalate,
   SupportSessionOpen,
   TenantCreate,
+  VerifiedExternalIdentity,
+  googleIsAuthoritativeFor,
+  type SignInRefusalReason,
 } from '@oremedia/contracts/access';
 import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
@@ -27,7 +30,7 @@ import {
   SupportSessionRepository,
   UserDirectory,
 } from './repositories';
-import { newOpaqueToken } from './authenticator';
+import { SESSION_ABSOLUTE_MS, newOpaqueToken } from './authenticator';
 import { policy } from './policy';
 
 const directory = new UserDirectory();
@@ -59,18 +62,67 @@ const brands = (): BrandChecker => {
   return brandChecker;
 };
 
+/** Where a sign-in or sign-out request came from, as the audit trail records it (salted hashes, never raw). */
+export interface AuthOrigin {
+  correlationId: string;
+  ipHash: string | null;
+  userAgentHash: string | null;
+}
+
+export type SignInResult =
+  | { ok: true; userId: string; sessionId: string; token: string; expiresAt: Date }
+  | { ok: false; reason: SignInRefusalReason };
+
+/** Raised inside the sign-in transaction so the whole attempt rolls back; mapped to identity_conflict. */
+class IdentityConflict extends Error {
+  constructor(readonly userId: string) {
+    super('identity_conflict');
+  }
+}
+
+const isDuplicateKeyError = (err: unknown): boolean =>
+  (err as { code?: string } | undefined)?.code === 'ER_DUP_ENTRY' ||
+  (err as { cause?: { code?: string } } | undefined)?.cause?.code === 'ER_DUP_ENTRY';
+
+type Resolution =
+  | { refused: SignInRefusalReason; userId: string | null }
+  | { refused: null; userId: string; sessionId: string; token: string; expiresAt: Date };
+
+const authEvent = (
+  origin: AuthOrigin,
+  values: {
+    action: 'auth.sign_in' | 'auth.identity_link' | 'auth.sign_out';
+    provider: string;
+    reason?: SignInRefusalReason | null;
+    userId?: string | null;
+    sessionId?: string | null;
+  },
+) => ({
+  id: newId('authEvent'),
+  action: values.action,
+  provider: values.provider,
+  decision: values.reason ? ('denied' as const) : ('allowed' as const),
+  reason: values.reason ?? null,
+  userId: values.userId ?? null,
+  sessionId: values.sessionId ?? null,
+  correlationId: origin.correlationId,
+  ipHash: origin.ipHash,
+  userAgentHash: origin.userAgentHash,
+});
+
 export const accessService = {
   /** Bootstrap: creates a tenant and its owner membership. Called by sign-up, outside any tenant context. */
   async createTenantWithOwner(
     input: z.infer<typeof TenantCreate>,
     ownerUserId: string,
     correlationId: string,
+    outer?: Tx,
   ): Promise<{ tenantId: string; membershipId: string }> {
     const parsed = TenantCreate.parse(input);
     const tenantId = newId('tenant');
     const membershipId = newId('membership');
     await runAsPlatform('tenant-bootstrap', correlationId, () =>
-      withTransaction(async (tx) => {
+      withTransaction(outer, async (tx) => {
         await directory.createTenant({ id: tenantId, name: parsed.name, slug: parsed.slug }, tx);
         await directory.createMembership(
           {
@@ -88,9 +140,305 @@ export const accessService = {
     return { tenantId, membershipId };
   },
 
+  /**
+   * D-03 sign-in. `input` is an identity the OIDC adapter has already verified (signature, issuer, audience, expiry,
+   * nonce). Resolution, in order: email must be verified and (when configured) the Workspace domain allowed; then
+   * the linked identity (provider, subject) → its user; else the active user with that email → linked; else an
+   * unclaimed invitation for that email → the placeholder user is activated and linked; else refused (there is no
+   * self-sign-up). Pending invitations for the verified email are accepted on every successful sign-in. A new
+   * opaque session is minted every time. Every outcome, allowed or refused, is written to auth_events.
+   */
+  async signInWithExternalIdentity(
+    input: VerifiedExternalIdentity,
+    opts: {
+      allowedDomains: readonly string[] | null;
+      /** The session this browser held before: ended in the same transaction that creates the new one. */
+      replaces?: { userId: string; sessionId: string } | null;
+    },
+    origin: AuthOrigin,
+  ): Promise<SignInResult> {
+    const identity = VerifiedExternalIdentity.parse(input);
+    const { provider, subject } = identity;
+    const refuse = async (
+      reason: SignInRefusalReason,
+      userId: string | null = null,
+    ): Promise<SignInResult> => {
+      await accessService.recordSignInRefusal(provider, reason, origin, userId);
+      return { ok: false, reason };
+    };
+    const email = identity.email?.trim().toLowerCase();
+    if (!identity.emailVerified || !email) return refuse('email_not_verified');
+    if (opts.allowedDomains?.length) {
+      const hd = identity.hostedDomain?.trim().toLowerCase();
+      if (!hd || !opts.allowedDomains.includes(hd)) return refuse('domain_not_allowed');
+    }
+    let resolution: Resolution;
+    try {
+      resolution = await runAsPlatform('sign-in', origin.correlationId, () =>
+        withTransaction(async (tx): Promise<Resolution> => {
+          const linked = await directory.identityFor(provider, subject, tx);
+          // A first link by email (existing user, invitation, bootstrap owner) needs Google to be authoritative for
+          // the address; a consumer account created on a company address must not take over that person's user.
+          if (!linked && !googleIsAuthoritativeFor(email, identity.hostedDomain))
+            return { refused: 'email_not_authoritative', userId: null };
+          const found = linked
+            ? await directory.findById(linked.userId, tx)
+            : await directory.findByEmail(email, tx);
+          // users.email uses utf8mb4_0900_ai_ci (case- and accent-insensitive): only the exact address links.
+          const candidate = found && (linked || found.email.toLowerCase() === email) ? found : null;
+          if (!candidate) return { refused: linked ? 'account_disabled' : 'not_invited', userId: null };
+          // Concurrent first sign-ins resolving to one user are serialised here; the checks below read fresh rows.
+          const user = await directory.lockUser(candidate.id, tx);
+          if (!user) return { refused: 'account_disabled', userId: null };
+          let alreadyLinked = Boolean(linked);
+          if (!linked) {
+            // A person already linked to another subject is not re-linked by email: a reassigned Workspace address
+            // must not inherit the previous holder's account.
+            const existing = await directory.identityOfUser(provider, user.id, tx);
+            if (existing && existing.subject !== subject)
+              return { refused: 'identity_conflict', userId: user.id };
+            alreadyLinked = Boolean(existing); // the same subject, linked by a concurrent sign-in
+          }
+          const memberships = await directory.allMembershipsOfUser(user.id, tx);
+          const invitations = memberships.filter(
+            (m) => m.status === 'invited' && m.invitedEmail?.toLowerCase() === email,
+          );
+          // inviteMember creates a disabled placeholder for an unknown email; it is claimed only while it has never
+          // been used: no linked identity and nothing but invitations.
+          const claimPlaceholder =
+            !alreadyLinked &&
+            user.status === 'disabled' &&
+            invitations.length > 0 &&
+            memberships.every((m) => m.status === 'invited');
+          if (user.status !== 'active' && !claimPlaceholder)
+            return { refused: 'account_disabled', userId: user.id };
+
+          if (claimPlaceholder) await directory.activateUser(user.id, identity.name ?? user.name, tx);
+          if (!alreadyLinked) {
+            try {
+              await directory.linkIdentity(
+                { id: newId('externalIdentity'), provider, subject, userId: user.id, emailAtLink: email },
+                tx,
+              );
+            } catch (err) {
+              // uq_external_identity_user: another subject won a race the lock did not cover. Roll back everything.
+              if (isDuplicateKeyError(err)) throw new IdentityConflict(user.id);
+              throw err;
+            }
+            await directory.recordAuthEvent(
+              authEvent(origin, { action: 'auth.identity_link', provider, userId: user.id }),
+              tx,
+            );
+          }
+          for (const m of invitations)
+            await runInTenant(
+              {
+                tenantId: m.tenantId,
+                actor: { kind: 'user', id: user.id },
+                brandIds: new Set<string>(),
+                correlationId: origin.correlationId,
+              },
+              async () => {
+                await membershipsRepo.update(m.id, m.version, { status: 'active' }, tx);
+                await audit.record(
+                  { kind: 'user', id: user.id },
+                  'membership.accept',
+                  { type: 'membership', id: m.id },
+                  'allowed',
+                  tx,
+                  { fromState: 'invited', toState: 'active' },
+                );
+                await outbox.add(
+                  'membership.changed',
+                  { type: 'membership', id: m.id, version: m.version + 1 },
+                  { membershipId: m.id, change: 'accepted' },
+                  tx,
+                );
+              },
+            );
+
+          // Rotation: the session this browser held ends with the sign-in, atomically (never an orphan either way).
+          if (opts.replaces) {
+            await directory.revokeSession(opts.replaces.sessionId, tx);
+            await directory.recordAuthEvent(
+              authEvent(origin, {
+                action: 'auth.sign_out',
+                provider: 'session',
+                userId: opts.replaces.userId,
+                sessionId: opts.replaces.sessionId,
+              }),
+              tx,
+            );
+          }
+          const now = new Date();
+          const { token, hash } = newOpaqueToken('ses');
+          const sessionId = newId('session');
+          const expiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_MS);
+          await directory.createSession(
+            {
+              id: sessionId,
+              userId: user.id,
+              tokenHash: hash,
+              selectedTenantId: null,
+              expiresAt,
+              ipHash: origin.ipHash,
+              userAgentHash: origin.userAgentHash,
+              lastSeenAt: now,
+            },
+            tx,
+          );
+          await directory.recordAuthEvent(
+            authEvent(origin, { action: 'auth.sign_in', provider, userId: user.id, sessionId }),
+            tx,
+          );
+          return { refused: null, userId: user.id, sessionId, token, expiresAt };
+        }),
+      );
+    } catch (err) {
+      if (err instanceof IdentityConflict) return refuse('identity_conflict', err.userId);
+      throw err;
+    }
+    if (resolution.refused) return refuse(resolution.refused, resolution.userId);
+    const { userId, sessionId, token, expiresAt } = resolution;
+    return { ok: true, userId, sessionId, token, expiresAt };
+  },
+
+  /** A refused sign-in, on its own connection (nothing else of the attempt is written). */
+  async recordSignInRefusal(
+    provider: string,
+    reason: SignInRefusalReason,
+    origin: AuthOrigin,
+    userId: string | null = null,
+  ): Promise<void> {
+    await runAsPlatform('sign-in', origin.correlationId, () =>
+      directory.recordAuthEvent(authEvent(origin, { action: 'auth.sign_in', provider, reason, userId })),
+    );
+  },
+
+  /** Revokes the caller's own browser session (the token stops authenticating on the next request). */
+  async signOut(principal: { userId: string; sessionId: string }, origin: AuthOrigin): Promise<void> {
+    await runAsPlatform('sign-out', origin.correlationId, () =>
+      withTransaction(async (tx) => {
+        await directory.revokeSession(principal.sessionId, tx);
+        await directory.recordAuthEvent(
+          authEvent(origin, {
+            action: 'auth.sign_out',
+            provider: 'session',
+            userId: principal.userId,
+            sessionId: principal.sessionId,
+          }),
+          tx,
+        );
+      }),
+    );
+  },
+
+  /**
+   * Sign-out inside a support session (spec 5.7): the support session is closed (its `sup_` bearer stops working on
+   * the next request), audited in the tenant's own trail, and recorded in auth_events. The operator's underlying
+   * user session is left alone; it is theirs, not the tenant's.
+   */
+  async endSupportSession(
+    principal: { operatorId: string; supportSessionId: string; tenantId: string },
+    origin: AuthOrigin,
+  ): Promise<void> {
+    await runAsPlatform('sign-out', origin.correlationId, () =>
+      withTransaction(async (tx) => {
+        await directory.closeSupportSession(principal.supportSessionId, tx);
+        await directory.recordAuthEvent(
+          authEvent(origin, {
+            action: 'auth.sign_out',
+            provider: 'support_session',
+            userId: principal.operatorId,
+            sessionId: principal.supportSessionId,
+          }),
+          tx,
+        );
+        await runInTenant(
+          {
+            tenantId: principal.tenantId,
+            actor: { kind: 'platform_operator', id: principal.operatorId },
+            brandIds: 'all',
+            correlationId: origin.correlationId,
+            supportSessionId: principal.supportSessionId,
+          },
+          () =>
+            audit.record(
+              { kind: 'platform_operator', id: principal.operatorId },
+              'support.close',
+              { type: 'support_session', id: principal.supportSessionId },
+              'allowed',
+              tx,
+              { toState: 'closed' },
+            ),
+        );
+      }),
+    );
+  },
+
+  /**
+   * Operator bootstrap (apps/api/src/bootstrap-owner.ts, run once per new company from the api service shell): an
+   * active user for the owner's email, then the existing createTenantWithOwner path, in one transaction. The owner
+   * then signs in with Google, which links their Google identity to this user by verified email when Google is
+   * authoritative for the address (Workspace `hd` or Gmail). Refuses a disabled or deleted user.
+   */
+  async bootstrapOwner(
+    input: { email: string; name: string; tenant: z.infer<typeof TenantCreate> },
+    correlationId: string,
+  ): Promise<{ userId: string; tenantId: string; membershipId: string; userCreated: boolean }> {
+    const email = MemberInvite.shape.email.parse(input.email.trim()).toLowerCase();
+    const tenant = TenantCreate.parse(input.tenant);
+    // One transaction: a failed company creation leaves no user behind (and no half-made company).
+    const result = await runAsPlatform('tenant-bootstrap', correlationId, () =>
+      withTransaction(async (tx) => {
+        if (await directory.tenantBySlug(tenant.slug, tx))
+          throw new ValidationFailedError([{ path: 'slug', issue: 'already_exists' }]);
+        const found = await directory.findByEmail(email, tx);
+        // Collation is accent-insensitive; only the exact address is the same person.
+        const existing = found && found.email.toLowerCase() === email ? found : null;
+        if (found && !existing) throw new ValidationFailedError([{ path: 'email', issue: 'ambiguous' }]);
+        let userId: string;
+        if (existing) {
+          if (existing.status !== 'active')
+            throw new ValidationFailedError([{ path: 'email', issue: 'user_not_active' }]);
+          userId = existing.id;
+        } else {
+          userId = newId('user');
+          await directory.create(
+            { id: userId, email, name: input.name.trim().slice(0, 200) || email, status: 'active' },
+            tx,
+          );
+        }
+        const created = await accessService.createTenantWithOwner(tenant, userId, correlationId, tx);
+        await runInTenant(
+          { tenantId: created.tenantId, actor: { kind: 'user', id: userId }, brandIds: 'all', correlationId },
+          () =>
+            audit.record(
+              { kind: 'platform_operator', id: 'bootstrap-cli' },
+              'tenant.bootstrap',
+              { type: 'membership', id: created.membershipId },
+              'allowed',
+              tx,
+              { toState: 'active' },
+            ),
+        );
+        return { userId, ...created, userCreated: !existing };
+      }),
+    );
+    const { userId, tenantId, membershipId, userCreated } = result;
+    return { userId, tenantId, membershipId, userCreated };
+  },
+
   async me(actor: ResolvedActor) {
     const ctx = requireTenant();
     return { actor, tenantId: ctx.tenantId, brandIds: ctx.brandIds === 'all' ? 'all' : [...ctx.brandIds] };
+  },
+
+  /** The person behind a user session (name and email for the app header; never another user's). */
+  async sessionUser(userId: string, correlationId: string, tx?: Tx) {
+    const user = await runAsPlatform('session-user', correlationId, () => directory.findById(userId, tx));
+    if (!user) throw new NotFoundError('User', userId);
+    return { userId: user.id, name: user.name, email: user.email };
   },
 
   /** Portfolio: authorised companies as a projection over memberships (spec 5.1). */

@@ -19,6 +19,28 @@ export interface RequestContext {
 
 export const SESSION_COOKIE = 'oremedia_session';
 export const CSRF_COOKIE = 'oremedia_csrf';
+/** `__Host-` cookies are Secure, Path=/ and host-only: a sibling subdomain can neither set nor shadow them. */
+export const HOST_PREFIX = '__Host-';
+
+/** The cookie names the API sets: `__Host-` prefixed whenever cookies are Secure (production). */
+export const cookieNames = (secure: boolean) =>
+  secure
+    ? { session: `${HOST_PREFIX}${SESSION_COOKIE}`, csrf: `${HOST_PREFIX}${CSRF_COOKIE}` }
+    : { session: SESSION_COOKIE, csrf: CSRF_COOKIE };
+
+/**
+ * The session and CSRF cookie values of a request, as a pair. In production only the `__Host-` names count (an
+ * unprefixed cookie could have been planted by a sibling subdomain); elsewhere (http development and tests) the
+ * unprefixed names are read when no `__Host-` session is present.
+ */
+export function sessionCookies(cookies: Record<string, string>): { session?: string; csrf?: string } {
+  const host = {
+    session: cookies[`${HOST_PREFIX}${SESSION_COOKIE}`],
+    csrf: cookies[`${HOST_PREFIX}${CSRF_COOKIE}`],
+  };
+  if (process.env['NODE_ENV'] === 'production' || host.session) return host;
+  return { session: cookies[SESSION_COOKIE], csrf: cookies[CSRF_COOKIE] };
+}
 
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -28,12 +50,17 @@ export function parseCookies(header: string | undefined): Record<string, string>
     if (i < 0) continue;
     const k = part.slice(0, i).trim();
     const v = part.slice(i + 1).trim();
-    if (k) out[k] = decodeURIComponent(v);
+    if (!k) continue;
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      out[k] = v; // a malformed escape is kept verbatim (and then fails whatever check reads it)
+    }
   }
   return out;
 }
 
-function firstHeader(h: string | string[] | undefined): string | undefined {
+export function firstHeader(h: string | string[] | undefined): string | undefined {
   return Array.isArray(h) ? h[0] : h;
 }
 
@@ -43,23 +70,36 @@ const CORRELATION_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 /** Salt for origin hashes (AUDIT_HASH_SALT); absent, hashes are still one-way but not keyed. */
 const originSalt = () => process.env['AUDIT_HASH_SALT'] ?? 'oremedia';
 
-/** Builds the request context from raw headers; the same function serves HTTP and in-process test callers. */
-export async function createContext(
+/** Correlation id and salted origin hashes of a request (the fields audit rows and sessions record). */
+export function requestOrigin(
   headers: IncomingHttpHeaders,
   remoteAddress?: string,
-): Promise<RequestContext> {
+): { correlationId: string; ipHash: string | null; userAgentHash: string | null } {
   const requestedCorrelationId = firstHeader(headers['x-correlation-id']);
   const correlationId =
     requestedCorrelationId && CORRELATION_ID.test(requestedCorrelationId)
       ? requestedCorrelationId
       : randomUUID();
-  const cookies = parseCookies(firstHeader(headers['cookie']));
+  return {
+    correlationId,
+    ipHash: remoteAddress ? hashForAudit(remoteAddress, originSalt()) : null,
+    userAgentHash: headers['user-agent'] ? hashForAudit(String(headers['user-agent']), originSalt()) : null,
+  };
+}
+
+/** Builds the request context from raw headers; the same function serves HTTP and in-process test callers. */
+export async function createContext(
+  headers: IncomingHttpHeaders,
+  remoteAddress?: string,
+): Promise<RequestContext> {
+  const { correlationId, ipHash, userAgentHash } = requestOrigin(headers, remoteAddress);
+  const cookies = sessionCookies(parseCookies(firstHeader(headers['cookie'])));
   const auth = firstHeader(headers['authorization']);
   let bearer: string | undefined;
   let cookieSession = false;
   if (auth?.startsWith('Bearer ')) bearer = auth.slice(7).trim();
-  else if (cookies[SESSION_COOKIE]) {
-    bearer = cookies[SESSION_COOKIE];
+  else if (cookies.session) {
+    bearer = cookies.session;
     cookieSession = true;
   }
   const principal = await withLogContext({ correlationId }, () => authenticate(bearer));
@@ -68,9 +108,9 @@ export async function createContext(
     principal,
     requestedTenantId: firstHeader(headers['x-oremedia-tenant'])?.slice(0, 32),
     headers,
-    csrf: { cookie: cookies[CSRF_COOKIE], header: firstHeader(headers['x-oremedia-csrf']) },
+    csrf: { cookie: cookies.csrf, header: firstHeader(headers['x-oremedia-csrf']) },
     cookieSession,
-    ipHash: remoteAddress ? hashForAudit(remoteAddress, originSalt()) : null,
-    userAgentHash: headers['user-agent'] ? hashForAudit(String(headers['user-agent']), originSalt()) : null,
+    ipHash,
+    userAgentHash,
   };
 }

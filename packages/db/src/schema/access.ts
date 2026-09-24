@@ -176,6 +176,54 @@ export const sessions = mysqlTable(
   ],
 );
 
+/**
+ * Global: an identity at an external OpenID Connect provider (D-03: Google) linked to one user. The provider's
+ * subject (`sub`) is the stable key; the email is the verified address at link time, kept for audit of the link.
+ * Authorisation never reads this table: it only answers "which user is this signed-in person".
+ */
+export const externalIdentities = mysqlTable(
+  'external_identities',
+  {
+    id: id(),
+    provider: varchar('provider', { length: 24 }).notNull(),
+    subject: varchar('subject', { length: 255 }).notNull(),
+    userId: ref('user_id').notNull(),
+    emailAtLink: varchar('email_at_link', { length: 320 }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_external_identity').on(t.provider, t.subject),
+    // One subject per user per provider: two Google accounts can never both link to one user (D-03, concurrent
+    // first sign-ins included; the sign-in maps the duplicate key to identity_conflict).
+    uniqueIndex('uq_external_identity_user').on(t.provider, t.userId),
+    index('ix_external_identity_user').on(t.userId),
+    foreignKey({ columns: [t.userId], foreignColumns: [users.id], name: 'fk_external_identity_user' }),
+  ],
+);
+
+/**
+ * Global, insert-only: authentication outcomes that happen before any tenant is selected (sign-in success, every
+ * refusal reason, sign-out). audit_events is tenant-scoped and a refused sign-in has no tenant, so these live here.
+ * No email, subject or raw address: the user id (when known), the reason, and salted origin hashes only.
+ */
+export const authEvents = mysqlTable(
+  'auth_events',
+  {
+    id: id(),
+    action: varchar('action', { length: 40 }).notNull(),
+    provider: varchar('provider', { length: 24 }).notNull(),
+    decision: mysqlEnum('decision', ['allowed', 'denied']).notNull(),
+    reason: varchar('reason', { length: 120 }),
+    userId: ref('user_id'),
+    sessionId: ref('session_id'),
+    correlationId: varchar('correlation_id', { length: 64 }).notNull(),
+    ipHash: varchar('ip_hash', { length: 64 }),
+    userAgentHash: varchar('user_agent_hash', { length: 64 }),
+    createdAt: createdAt(),
+  },
+  (t) => [index('ix_auth_event_user').on(t.userId, t.createdAt), index('ix_auth_event_time').on(t.createdAt)],
+);
+
 export const externalReviewerLinks = mysqlTable(
   'external_reviewer_links',
   {

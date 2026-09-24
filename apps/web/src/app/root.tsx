@@ -3,7 +3,7 @@ import { Button } from '@oremedia/ui';
 import { TooltipProvider } from '../components/tooltip';
 import { ToastProvider } from '../components/toast';
 import { useTheme } from '../lib/theme';
-import { clearBearerToken, getBearerToken } from '../lib/session';
+import { SessionControls } from '../features/session/session-controls';
 
 export interface RootContext {
   theme: 'light' | 'dark';
@@ -30,7 +30,6 @@ export function RootLayout() {
 /** The slim top bar used by the portfolio-level screens (brand screens render their own header, spec 11.1). */
 export function TopBar({ title, children }: { title: string; children?: React.ReactNode }) {
   const { theme, toggle } = useTheme();
-  const signedInWithToken = Boolean(getBearerToken());
   return (
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 py-2">
       <div className="flex items-center gap-3">
@@ -47,18 +46,7 @@ export function TopBar({ title, children }: { title: string; children?: React.Re
         <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
           {theme === 'dark' ? 'Light theme' : 'Dark theme'}
         </Button>
-        {signedInWithToken && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              clearBearerToken();
-              window.location.assign('/sign-in');
-            }}
-          >
-            Sign out
-          </Button>
-        )}
+        <SessionControls />
       </div>
     </header>
   );
