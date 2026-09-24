@@ -1,6 +1,6 @@
 # Railway deployment (spec 17.1)
 
-Six application services, each with root directory `oremedia` and a config-as-code path under `infra/railway/<service>/railway.json`:
+Six application services, each with the repository root as its root directory and a config-as-code path under `infra/railway/<service>/railway.json`:
 
 | Service         | Image                             | `OREMEDIA_APP` variable | Ports / health                                                      |
 | --------------- | --------------------------------- | ----------------------- | ------------------------------------------------------------------- |
