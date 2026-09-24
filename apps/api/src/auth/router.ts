@@ -40,7 +40,7 @@ const PROVIDER = 'google';
 const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
   issuer: 'https://accounts.google.com',
   authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-  token_endpoint: 'https://oauth2.googleapis.com/token',
+  token_endpoint: 'https://www.googleapis.com/oauth2/v4/token',
   userinfo_endpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
   jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
   revocation_endpoint: 'https://oauth2.googleapis.com/revoke',
@@ -55,13 +55,18 @@ const googleFetch: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const isGoogleJsonEndpoint =
-    url.startsWith('https://oauth2.googleapis.com/token') ||
+    url.startsWith('https://www.googleapis.com/oauth2/v4/token') ||
     url.startsWith('https://oauth2.googleapis.com/revoke') ||
     url.startsWith('https://openidconnect.googleapis.com/v1/userinfo') ||
     url.startsWith('https://www.googleapis.com/oauth2/v3/certs');
   if (!isGoogleJsonEndpoint || (response.headers.get('content-type') ?? '').toLowerCase().includes('json')) {
     return response;
   }
+  console.warn('Google OAuth endpoint returned a non-JSON content type', {
+    url,
+    status: response.status,
+    contentType: response.headers.get('content-type') ?? '',
+  });
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
