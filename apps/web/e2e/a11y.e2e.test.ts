@@ -44,6 +44,28 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
   const testId = (page: Page, id: string) => page.getByTestId(id).first().waitFor({ timeout: 15_000 });
   const SCREENS: Screen[] = [
     {
+      name: 'sign in',
+      path: () => '/sign-in?next=%2Fportfolio',
+      ready: (page) => page.getByRole('link', { name: 'Continue with Google' }).waitFor({ timeout: 15_000 }),
+    },
+    // D-03: every refusal the Google callback can pass back renders its own explanation.
+    ...(
+      [
+        'not_invited',
+        'domain_not_allowed',
+        'email_not_verified',
+        'account_disabled',
+        'email_not_authoritative',
+        'sign_in_failed',
+        'unavailable',
+      ] as const
+    ).map((code) => ({
+      name: `sign in (${code.replace(/_/g, ' ')})`,
+      path: () => `/sign-in?error=${code}`,
+      ready: (page: Page) =>
+        page.locator(`[data-testid="sign-in-refusal"][data-refusal="${code}"]`).waitFor({ timeout: 15_000 }),
+    })),
+    {
       name: 'portfolio',
       path: () => '/portfolio',
       ready: (page) => page.getByRole('list', { name: 'Companies' }).waitFor({ timeout: 15_000 }),

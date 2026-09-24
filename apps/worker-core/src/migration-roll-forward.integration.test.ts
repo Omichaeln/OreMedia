@@ -8,6 +8,7 @@ import * as schema from '@oremedia/db/schema';
 import { modelRoutingPolicies, providerJobs } from '@oremedia/db/schema/agents';
 import { usageLedger } from '@oremedia/db/schema/billing';
 import { featureFlags } from '@oremedia/db/schema/operations';
+import { authEvents, externalIdentities } from '@oremedia/db/schema/access';
 import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
@@ -28,9 +29,12 @@ const NEW_TABLES = [providerJobs, modelRoutingPolicies, renderPreviews, previewE
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
+/** Added by later migrations (0003: apps/api/src/migration-0003-roll-forward.integration.test.ts covers them). */
+const LATER_TABLES: MySqlTable[] = [externalIdentities, authEvents];
+
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t as never));
+  .filter((t) => !NEW_TABLES.includes(t as never) && !LATER_TABLES.includes(t));
 
 describe('migrations roll forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

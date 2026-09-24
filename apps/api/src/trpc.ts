@@ -218,6 +218,19 @@ export async function consumeRateLimit(
   await (limiter as RateLimiter).consume(scope, actorId, path); // throws TOO_MANY_REQUESTS with retry-after
 }
 
+/**
+ * The /auth routes (D-03) run before anyone is authenticated: limited per client address (its salted hash, so no
+ * raw address reaches Redis), with the same limiter and store as every other surface.
+ */
+export async function consumeAuthRateLimit(
+  ipHash: string | null,
+  path: 'auth.google.start' | 'auth.google.callback' | 'auth.sign_out',
+): Promise<void> {
+  if (!limiter) configureRateLimiter();
+  const client = ipHash ?? 'unknown';
+  await (limiter as RateLimiter).consume(`ip:${client}`, client, path);
+}
+
 /** Tenant procedures are limited per tenant and per principal; authed-only procedures per principal. */
 const rateLimited = t.middleware(async ({ ctx, path, next }) => {
   if (!ctx.principal) throw new TRPCError({ code: 'UNAUTHORIZED' });

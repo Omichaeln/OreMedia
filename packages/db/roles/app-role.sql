@@ -13,6 +13,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`asset_usages` TO '__APP_U
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`asset_versions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`assets` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`audit_events` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT ON `__DB_NAME__`.`auth_events` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_grants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_objectives` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_versions` TO '__APP_USER__'@'%';
@@ -43,6 +44,7 @@ GRANT SELECT, INSERT ON `__DB_NAME__`.`experiment_assignments` TO '__APP_USER__'
 GRANT SELECT, INSERT ON `__DB_NAME__`.`experiment_results` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`experiment_variants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`experiments` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_identities` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_refs` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_reviewer_links` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`feature_flags` TO '__APP_USER__'@'%';

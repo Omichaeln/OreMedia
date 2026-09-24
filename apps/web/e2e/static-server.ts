@@ -29,7 +29,7 @@ export interface StaticServerOptions {
   apiOrigin?: string;
 }
 
-/** Serves the built app (SPA fallback to index.html) and routes /trpc to the mock or the real API. */
+/** Serves the built app (SPA fallback to index.html) and routes /trpc (and /auth) to the mock or the real API. */
 export async function startStaticServer(
   opts: StaticServerOptions,
 ): Promise<{ server: Server; origin: string; close: () => Promise<void> }> {
@@ -40,6 +40,13 @@ export async function startStaticServer(
       if (opts.apiOrigin) return proxy(req, res, opts.apiOrigin);
       res.statusCode = 502;
       res.end('no API configured');
+      return;
+    }
+    // Mirrors the production web container (infra/railway/web/Caddyfile): /auth/* is the API's, same origin.
+    if (url.pathname.startsWith('/auth/')) {
+      if (opts.apiOrigin) return proxy(req, res, opts.apiOrigin);
+      res.statusCode = url.pathname === '/auth/sign-out' && req.method === 'POST' ? 204 : 404;
+      res.end();
       return;
     }
     let file = join(opts.dist, normalize(url.pathname).replace(/^(\.\.[/\\])+/, ''));

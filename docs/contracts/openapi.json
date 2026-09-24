@@ -395,6 +395,12 @@
         }
       }
     },
+    "/trpc/access.session": {
+      "get": {
+        "operationId": "access.session",
+        "x-trpc-type": "query"
+      }
+    },
     "/trpc/access.supportSessions.escalate": {
       "post": {
         "operationId": "access.supportSessions.escalate",
@@ -8168,6 +8174,10 @@
           },
           "required": ["servicePrincipalId", "expectedVersion"]
         }
+      },
+      "access.session": {
+        "type": "query",
+        "input": null
       },
       "access.supportSessions.escalate": {
         "type": "mutation",

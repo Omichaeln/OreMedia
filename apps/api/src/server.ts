@@ -6,6 +6,8 @@ import { appRouter } from './router';
 import { createContext } from './context';
 import { createMcpRouter } from './mcp/server';
 import { createRestRouter } from './rest/router';
+import { createAuthRouter } from './auth/router';
+import type { AuthConfig } from './auth/config';
 
 /**
  * Log fields for an unhandled (INTERNAL) error. Driver messages embed user data (ER_DUP_ENTRY quotes the
@@ -24,6 +26,8 @@ export function internalErrorFields(err: unknown): Record<string, unknown> {
 export interface ServerOptions {
   webOrigin?: string;
   reviewPortalOrigin?: string;
+  /** D-03 Google sign-in; null or absent = the sign-in routes answer "unavailable" (never outside development). */
+  auth?: AuthConfig | null;
 }
 
 /** Spec 4.3 request path and spec 18 security headers. */
@@ -103,7 +107,17 @@ export function createServer(opts: ServerOptions = {}): Express {
     createMcpRouter((cause) => log.error({ path: 'mcp', ...internalErrorFields(cause) }, 'unhandled error')),
   );
 
-  // Fallback for anything outside tRPC, REST and MCP: a consistent envelope.
+  // D-03 browser sign-in and sign-out (pre-tenant: they create or end a session, never read tenant data).
+  app.use(
+    '/auth',
+    createAuthRouter({
+      config: opts.auth ?? null,
+      onError: (cause, stage) =>
+        log.warn({ path: `auth/${stage}`, ...internalErrorFields(cause) }, 'sign-in step failed'),
+    }),
+  );
+
+  // Fallback for anything outside tRPC, REST, MCP and auth: a consistent envelope.
   app.use((req, res) => {
     res
       .status(404)

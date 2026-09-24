@@ -10,13 +10,12 @@ import { createTRPCContext, createTRPCOptionsProxy, type TRPCOptionsProxy } from
 import type { QueryClient } from '@tanstack/react-query';
 import superjson from 'superjson';
 import type { AppRouter } from '@oremedia/api';
-import { readCookie } from './cookies';
 import { newIntentKey } from './intent-key';
-import { CSRF_COOKIE, getBearerToken } from './session';
+import { HEADER_CSRF, getBearerToken, readCsrfCookie } from './session';
 
 /** Spec 7.1/7.3/18: the headers the API reads (apps/api/src/context.ts, trpc.ts). */
 export const HEADER_TENANT = 'x-oremedia-tenant';
-export const HEADER_CSRF = 'x-oremedia-csrf';
+export { HEADER_CSRF };
 export const HEADER_CORRELATION = 'x-correlation-id';
 export const HEADER_IDEMPOTENCY = 'idempotency-key';
 
@@ -50,7 +49,7 @@ export function headersFor(op: Operation, opts: ClientOptions): Record<string, s
   if (tenant) headers[HEADER_TENANT] = tenant;
   const bearer = opts.bearerToken ? opts.bearerToken() : getBearerToken();
   if (bearer) headers['authorization'] = `Bearer ${bearer}`;
-  const csrf = readCookie(CSRF_COOKIE);
+  const csrf = readCsrfCookie();
   if (csrf) headers[HEADER_CSRF] = csrf;
   if (op.type === 'mutation')
     // A mutation without an explicit intent key still gets one, but it is new on every attempt: callers that can be

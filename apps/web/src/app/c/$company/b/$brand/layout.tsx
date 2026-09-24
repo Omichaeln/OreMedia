@@ -5,7 +5,7 @@ import { useCompanies } from '../../../../../features/portfolio/use-companies';
 import { useBrand } from '../../../../../features/brand/use-brand';
 import { brandPath, type BrandContext } from '../../../../../features/brand/brand-context';
 import { useTheme } from '../../../../../lib/theme';
-import { clearBearerToken, getBearerToken } from '../../../../../lib/session';
+import { SessionControls } from '../../../../../features/session/session-controls';
 
 const NAV: Array<[string, string]> = [
   ['home', 'Home'],
@@ -73,18 +73,7 @@ export function BrandLayout() {
           <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
             {theme === 'dark' ? 'Light theme' : 'Dark theme'}
           </Button>
-          {getBearerToken() && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                clearBearerToken();
-                window.location.assign('/sign-in');
-              }}
-            >
-              Sign out
-            </Button>
-          )}
+          <SessionControls />
         </div>
       </header>
       {brand.isPending && (
