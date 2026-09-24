@@ -59,17 +59,27 @@ const googleFetch: typeof fetch = async (input, init) => {
     url.startsWith('https://oauth2.googleapis.com/revoke') ||
     url.startsWith('https://openidconnect.googleapis.com/v1/userinfo') ||
     url.startsWith('https://www.googleapis.com/oauth2/v3/certs');
-  if (!isGoogleJsonEndpoint || (response.headers.get('content-type') ?? '').toLowerCase().includes('json')) {
+  if (!isGoogleJsonEndpoint) return response;
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.toLowerCase().includes('json')) return response;
+  const text = await response.text();
+  const normalized = text.replace(/^\uFEFF/, '').trimStart();
+  const jsonText = normalized.startsWith(")]}'") ? normalized.slice(4).trimStart() : normalized;
+  try {
+    JSON.parse(jsonText);
+  } catch {
+    console.warn('Google OAuth endpoint returned a non-JSON body', {
+      url,
+      status: response.status,
+      contentType,
+      bodyLength: text.length,
+      firstCodePoint: text.codePointAt(0) ?? null,
+    });
     return response;
   }
-  console.warn('Google OAuth endpoint returned a non-JSON content type', {
-    url,
-    status: response.status,
-    contentType: response.headers.get('content-type') ?? '',
-  });
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json');
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return new Response(jsonText, { status: response.status, statusText: response.statusText, headers });
 };
 
 async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> {
