@@ -37,24 +37,22 @@ import {
 const PROVIDER = 'google';
 
 /**
- * Railway's egress occasionally returns Google's JSON discovery document with a non-JSON content type.
- * Normalize only the well-known metadata response; token and JWKS responses retain their original headers.
+ * Railway's egress occasionally returns Google's JSON discovery document with a non-JSON content type, which
+ * openid-client rejects before it can build the authorization URL. Fetch and parse the document ourselves, while
+ * retaining openid-client's Configuration, PKCE, token exchange, nonce, and JWKS signature validation afterward.
  */
-const discoveryFetch: typeof fetch = async (input, init) => {
-  const response = await fetch(input, init);
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-  const contentType = response.headers.get('content-type') ?? '';
-  if (response.ok && url.includes('accounts.google.com/.well-known/') && !contentType.includes('json')) {
-    const headers = new Headers(response.headers);
-    headers.set('content-type', 'application/json');
-    return new Response(await response.arrayBuffer(), {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  }
-  return response;
-};
+async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> {
+  const metadataUrl = config.issuerUrl.href.includes('/.well-known/')
+    ? config.issuerUrl
+    : new URL('https://accounts.google.com/.well-known/openid-configuration');
+  const response = await fetch(metadataUrl, { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Google discovery returned HTTP ${response.status}`);
+  const metadata = (await response.json()) as oidc.ServerMetadata;
+  if (metadata.issuer !== 'https://accounts.google.com') throw new Error('Unexpected Google discovery issuer');
+  const client = new oidc.Configuration(metadata, config.clientId, config.clientSecret);
+  oidc.enableNonRepudiationChecks(client);
+  return client;
+}
 
 export interface AuthRouterOptions {
   config: AuthConfig | null;
@@ -68,15 +66,16 @@ export interface AuthRouterOptions {
  */
 function discoveryFor(config: AuthConfig): () => Promise<oidc.Configuration> {
   let pending: Promise<oidc.Configuration> | null = null;
+  const isGoogle = config.issuerUrl.hostname === 'accounts.google.com';
   return () => {
-    pending ??= oidc
-      .discovery(config.issuerUrl, config.clientId, config.clientSecret, undefined, {
-        execute: [
-          oidc.enableNonRepudiationChecks,
-          ...(config.allowInsecureIssuer ? [oidc.allowInsecureRequests] : []),
-        ],
-        [oidc.customFetch]: discoveryFetch,
-      })
+    pending ??= (isGoogle
+      ? googleDiscovery(config)
+      : oidc.discovery(config.issuerUrl, config.clientId, config.clientSecret, undefined, {
+          execute: [
+            oidc.enableNonRepudiationChecks,
+            ...(config.allowInsecureIssuer ? [oidc.allowInsecureRequests] : []),
+          ],
+        }))
       .catch((err: unknown) => {
         pending = null;
         throw err;
