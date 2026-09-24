@@ -36,20 +36,18 @@ import {
 
 const PROVIDER = 'google';
 
-/**
- * Railway's egress occasionally returns Google's JSON discovery document with a non-JSON content type, which
- * openid-client rejects before it can build the authorization URL. Fetch and parse the document ourselves, while
- * retaining openid-client's Configuration, PKCE, token exchange, nonce, and JWKS signature validation afterward.
- */
+/** Google publishes stable OAuth/OIDC endpoints; using them avoids provider discovery being blocked by Railway egress. */
+const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
+  issuer: 'https://accounts.google.com',
+  authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+  token_endpoint: 'https://oauth2.googleapis.com/token',
+  userinfo_endpoint: 'https://openidconnect.googleapis.com/v1/userinfo',
+  jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
+  revocation_endpoint: 'https://oauth2.googleapis.com/revoke',
+};
+
 async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> {
-  const metadataUrl = config.issuerUrl.href.includes('/.well-known/')
-    ? config.issuerUrl
-    : new URL('https://accounts.google.com/.well-known/openid-configuration');
-  const response = await fetch(metadataUrl, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Google discovery returned HTTP ${response.status}`);
-  const metadata = (await response.json()) as oidc.ServerMetadata;
-  if (metadata.issuer !== 'https://accounts.google.com') throw new Error('Unexpected Google discovery issuer');
-  const client = new oidc.Configuration(metadata, config.clientId, config.clientSecret);
+  const client = new oidc.Configuration(GOOGLE_SERVER_METADATA, config.clientId, config.clientSecret);
   oidc.enableNonRepudiationChecks(client);
   return client;
 }
