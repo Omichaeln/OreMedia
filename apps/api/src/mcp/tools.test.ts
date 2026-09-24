@@ -24,7 +24,7 @@ describe('MCP tool subset (spec 7.6)', () => {
     }
   });
 
-  it('has no scheduling or publishing tool and nothing with an external effect (Postiz R2)', () => {
+  it('has no scheduling or publishing tool and nothing with an external effect (reference risk R2)', () => {
     assertNoExternalTools(registry);
     for (const t of MCP_TOOLS) {
       const def = registry.get(t.name);

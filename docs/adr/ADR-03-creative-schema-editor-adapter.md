@@ -9,7 +9,7 @@
 `CreativeDocumentV1` (contracts) is the persisted, layered document. Human and agent edits are `OperationBatch`
 values reduced by a pure reducer. The canvas library sits behind `EditorAdapter`; the recommended default is
 Konva/react-konva with application state outside the stage. Polotno is context-dependent on written licence
-confirmation (D-05); Postiz's Polotno integration (flattened PNG, module-level store) is not ported.
+confirmation (D-05); the reference codebase's Polotno integration (flattened PNG, module-level store) is not ported.
 
 ## Consequences
 

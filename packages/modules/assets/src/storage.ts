@@ -12,7 +12,7 @@ import { requireTenant } from '@oremedia/db';
 import { logger } from '@oremedia/observability';
 
 /**
- * Spec 9.1 / 20.2: the storage abstraction ported as a pattern from Postiz's upload interface, with tenant-prefixed
+ * Spec 9.1 / 20.2: the storage abstraction ported as a pattern from the reference upload interface, with tenant-prefixed
  * keys enforced by the implementation, `headObject`/`copyObject`/`deleteObject` added and no local-disk storage in
  * production. Every key is `quarantine/{tenant}/...`, `assets/{tenant}/{brand}/{asset}/{version}/...` or
  * `releases/{tenant}/...`; a key that does not carry the *current* tenant's prefix is refused before any I/O.

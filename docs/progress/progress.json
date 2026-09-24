@@ -2,7 +2,7 @@
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
   "updatedAt": "2026-09-24T14:00:00Z",
-  "repository": "omichaeln/postiz-app · branch claude/gallant-gauss-rh58uh · directory oremedia/",
+  "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
     "in_progress": "Started; not yet complete or not yet verified.",
@@ -78,11 +78,11 @@
         ],
         [
           "0.6",
-          "ADR-06 Postiz reference-only / licensing drafted",
+          "ADR-06 reference-codebase-only / licensing drafted",
           "critical",
           "24.1",
           "complete",
-          "docs/adr/ADR-06-postiz-reference-only.md (Proposed; legal decision D-07 open)"
+          "docs/adr/ADR-06-reference-codebase-only.md (Proposed; legal decision D-07 open)"
         ],
         [
           "0.7",

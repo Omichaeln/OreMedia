@@ -82,7 +82,7 @@ const profileUrl = (username: string | undefined, id: string): string =>
 /**
  * Instagram Business adapter (spec 14.5, 14.8). publish creates media containers (invisible until published),
  * returns `pending`; checkStatus polls the container; finalize calls media_publish (the effect boundary). Edge
- * cases learned from the Postiz reference as patterns: container status polling with FINISHED/IN_PROGRESS/
+ * cases learned from the reference codebase as patterns: container status polling with FINISHED/IN_PROGRESS/
  * ERROR/EXPIRED/PUBLISHED, and finalize checking for an already PUBLISHED container before publishing again.
  */
 export class InstagramBusinessAdapter implements ProviderAdapter {

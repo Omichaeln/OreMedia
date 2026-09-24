@@ -2,8 +2,8 @@
 
 **Document type:** implementation prompt and architecture specification for an engineering agent or team.
 **Prepared:** 23 September 2026.
-**Derived from:** the Postiz architecture study (repository `omichaeln/postiz-app`, commit `4c33d525a6ee66ec06b04bb55b1d259911a12669`) and the brand-intelligence extension that followed it.
-**Status:** specification. Nothing described here has been built. Every Postiz observation cited below was re-checked against source at the pinned commit; nothing was runtime-tested.
+**Derived from:** an architecture study of an open-source social scheduling codebase (the *reference codebase*) and the brand-intelligence extension that followed it.
+**Status:** specification. Nothing described here has been built. Every observation about the reference codebase cited below was re-checked against its source; nothing was runtime-tested.
 
 ---
 
@@ -25,7 +25,7 @@ Read this whole document before writing code. Then execute the phases in section
 4. **Contracts before implementations.** For every module: Zod schemas and TypeScript types first, then the tRPC router or worker interface, then tests, then the implementation.
 5. **Small, reviewable commits** on short-lived branches. Main is always releasable.
 6. **Stop and escalate** (section 24) at irreversible forks: licence adoption, data deletion semantics, public API commitments, vendor lock-in, spending commitments, and any product policy this document leaves open. Prepare the decision, state it, and stop. Do not guess through it.
-7. **Postiz is a reference, not a dependency.** Section 20 states exactly what to port as a *pattern*, what may be ported as *code* (only if ADR-06 accepts the AGPL route), and what must not be copied.
+7. **The reference codebase is a reference, not a dependency.** Section 20 states exactly what to port as a *pattern*, what may be ported as *code* (only if ADR-06 accepts the AGPL route), and what must not be copied.
 8. **Never fabricate verification.** If you did not run it, say so.
 
 ### 0.2 What "done" means for the whole programme
@@ -77,7 +77,7 @@ An insight must lead directly to an actionable brief, an editable creative varia
 | Intelligence | Metric snapshots, brand analyst, creative performance library, customer-question clustering, recommendations | Listening, CRM attribution, forecasting, paid-organic planning |
 | Experiments | Structured organic comparisons; randomised tests on owned destinations (link landing pages) | Platform-native randomised tests via ad APIs |
 | Community | Read-only comment ingestion feeding the customer-voice library | Unified inbox with drafting and assignment |
-| Out of scope | Paid ad buying, influencer payments, marketplace/payouts (Postiz marketplace models are not carried forward) | — |
+| Out of scope | Paid ad buying, influencer payments, marketplace/payouts (marketplace models in the reference codebase are not carried forward) | — |
 
 ---
 
@@ -101,7 +101,7 @@ An insight must lead directly to an actionable brief, an editable creative varia
 ### 2.2 Prohibited
 
 - Prompt-only approval or confirmation as a control.
-- Optional tenant filters, raw database handles in feature code, or upserts keyed on caller-supplied IDs without tenant predicates (see Postiz R1, section 20.4).
+- Optional tenant filters, raw database handles in feature code, or upserts keyed on caller-supplied IDs without tenant predicates (see reference risk R1, section 20.4).
 - Fire-and-forget scheduling (DB write, then an unawaited, error-swallowing workflow start).
 - Retrying a non-idempotent provider mutation after an ambiguous failure, including an HTTP 5xx or a heartbeat timeout.
 - Terminating an in-flight publish workflow as a way to "update" a post.
@@ -145,9 +145,9 @@ Oremedia uses the **PointFive OS stack**, extended only where a requirement dema
 | Observability | OpenTelemetry traces/metrics/logs; Sentry for errors; structured JSON logs via pino with field allowlists | Mandatory baseline |
 | Secrets | Cloud secret manager + KMS for envelope encryption | Mandatory baseline |
 
-### 3.2 Where this deviates from the Postiz study, and why
+### 3.2 Where this deviates from the reference study, and why
 
-The earlier study recommended NestJS, PostgreSQL and Next.js as the target stack. That recommendation was written from the Postiz baseline. Oremedia follows the PointFive OS stack instead, because nothing in the requirements needs NestJS, Postgres or server-side rendering: tRPC 11 on Express covers the application API, Drizzle covers persistence, and the studio is an authenticated single-page application.
+The earlier study recommended NestJS, PostgreSQL and Next.js as the target stack. That recommendation was written from the reference codebase's baseline. Oremedia follows the PointFive OS stack instead, because nothing in the requirements needs NestJS, Postgres or server-side rendering: tRPC 11 on Express covers the application API, Drizzle covers persistence, and the studio is an authenticated single-page application.
 
 The genuine cost is **PostgreSQL row-level security**, which the study listed as a recommended defence-in-depth layer. MySQL and TiDB have no equivalent. The mitigation is structural and mandatory: the scoped repository (section 5.3), a lint rule banning raw database access outside `packages/db`, composite tenant keys, and a CI suite that attempts cross-tenant access on every entry point. If an ADR later demands database-enforced RLS as a hard control, that is the one requirement that would overturn the MySQL/TiDB choice, and it should be raised explicitly rather than approximated.
 
@@ -187,7 +187,7 @@ oremedia/
 │   │   ├── community/
 │   │   ├── billing/
 │   │   └── operations/
-│   ├── providers/              # Social provider adapters + capability register (ported pattern from Postiz)
+│   ├── providers/              # Social provider adapters + capability register (ported pattern, section 20)
 │   ├── editor/                 # Document model, operation engine, Konva renderer, editor adapter
 │   ├── workflows/              # Temporal workflow definitions (deterministic code only)
 │   ├── activities/             # Temporal activity implementations (thin; call modules)
@@ -301,7 +301,7 @@ HTTP → authn (session or API client or OAuth token)
 | `worker-render` | `render`, `media` | CPU/memory heavy; runs untrusted-input parsers; no credential access; restricted egress |
 | `worker-ingest` | `ingest-metrics`, `ingest-comments`, `listening`, `crm` | Scheduled pulls with provider rate limits; must never starve publishing |
 
-The per-provider publish queue is a direct port of the Postiz pattern (`libraries/nestjs-libraries/src/temporal/temporal.module.ts` builds provider-specific activity queues). Keep it.
+The per-provider publish queue is a direct port of the reference pattern (provider-specific activity queues). Keep it.
 
 ---
 
@@ -425,7 +425,7 @@ export abstract class TenantScopedRepository<T extends TenantTable> {
 
 Rules:
 
-- **Create and update are separate commands.** No upsert keyed on a client-supplied ID. (Direct response to Postiz R1.)
+- **Create and update are separate commands.** No upsert keyed on a client-supplied ID. (Direct response to reference risk R1.)
 - Any ID arriving from a client is loaded through a scoped repository before use. A foreign ID produces `NOT_FOUND`, not `FORBIDDEN`, so existence is not leaked.
 - Brand-owned repositories extend `BrandScopedRepository`, which additionally requires `brandId ∈ ctx.brandIds`.
 - Cross-tenant jobs (billing roll-ups, platform metrics) use a separate `PlatformRepository` available only in `operations`, reading aggregate projections, audited, and never returning tenant content.
@@ -505,7 +505,7 @@ Client approvers without accounts receive a **review link**: a single-use-per-se
 
 ### 5.7 Platform operator access
 
-No silent impersonation (Postiz implements privileged impersonation in its auth middleware; do not port that as-is). Operators open a **support session**: reason, ticket reference, tenant consent flag where contractually required, time-boxed (default 60 minutes), read-only unless escalated with a second operator, every request audited with `supportSessionId`.
+No silent impersonation (the reference codebase implements privileged impersonation in its auth middleware; do not port that as-is). Operators open a **support session**: reason, ticket reference, tenant consent flag where contractually required, time-boxed (default 60 minutes), read-only unless escalated with a second operator, every request audited with `supportSessionId`.
 
 ---
 
@@ -1013,7 +1013,7 @@ Cursor pagination everywhere a list can grow (`{ items, nextCursor }`, cursor = 
 
 - **Public REST (`/v1/...`)**: authenticated by API client keys (hashed at rest, prefix-identifiable, scoped to a service principal) or OAuth 2.1 access tokens. Each route calls the **same application command** as the tRPC procedure. OpenAPI is generated into `docs/contracts/openapi.json` in CI and diffed; a breaking diff fails the build unless the version is bumped.
 - **MCP server**: exposes a curated tool subset (list brands, search eligible assets, create brief, start run, propose design operations, request review, read publication state, read insights). It authenticates as a service principal, has **no** scheduling tool that bypasses `publications.schedule`, and every tool call passes through the same tool dispatcher and policy engine as internal agents (section 12.4).
-- Postiz reference: its public API middleware resolves organisation API keys and OAuth tokens (`apps/backend/src/services/auth/public.auth.middleware.ts`), and its MCP setup lives in `libraries/nestjs-libraries/src/chat/start.mcp.ts`. Port the idea of a shared validation service used by every surface; do not port the tool set, which schedules posts without an approval credential (Postiz R2).
+- Reference codebase: its public API middleware resolves organisation API keys and OAuth tokens, and its MCP server shares that authentication. Port the idea of a shared validation service used by every surface; do not port the tool set, which schedules posts without an approval credential (reference risk R2).
 
 ### 7.7 Event contract
 
@@ -1110,7 +1110,7 @@ complete(intentId)                                          → Temporal: assetI
 
 Accepted kinds and caps (recommended defaults): images 50 MB (JPEG, PNG, WebP, AVIF, HEIC→converted), SVG 2 MB, fonts 10 MB (OTF, TTF, WOFF2), video 2 GB (MP4, MOV; Release 2 processing), audio 200 MB, PDF references 100 MB. Everything else is rejected. Archives are rejected in Release 1.
 
-Postiz reference to port as a pattern: `libraries/nestjs-libraries/src/upload/custom.upload.validation.ts` (MIME allowlist, per-type max size, stream size limiter) and `upload.factory.ts` / `upload.interface.ts` (storage provider abstraction with `signUploadUrl`/`signDownloadUrl`). Oremedia's `StorageProvider` keeps that interface shape but drops local-disk storage in production and adds `copyObject`, `headObject` and `deleteObject` with tenant-prefixed keys enforced by the implementation.
+Reference pattern to port: upload validation (MIME allowlist, per-type max size, stream size limiter) and a storage provider abstraction with `signUploadUrl`/`signDownloadUrl`. Oremedia's `StorageProvider` keeps that interface shape but drops local-disk storage in production and adds `copyObject`, `headObject` and `deleteObject` with tenant-prefixed keys enforced by the implementation.
 
 ### 9.2 Eligibility (mandatory baseline)
 
@@ -1373,7 +1373,7 @@ export interface EditorHandle {
 
 Recommended default: Konva/react-konva implementation, with application state held outside the canvas (the React-Konva guidance to keep state separate from the stage supports this).
 
-Polotno is **context-dependent**: Postiz integrates it (`apps/frontend/src/components/launches/polonto.tsx`) but only exports a flattened PNG (`store.toBlob()` → `media.png`) and keeps a module-level store. Its commercial licence contains application-scope and competing-design-platform restrictions. Use it only with written confirmation from Polotno that Oremedia's use is permitted, and then only behind `EditorAdapter` with round-trip tests proving no loss against `CreativeDocumentV1`.
+Polotno is **context-dependent**: the reference codebase integrates it but only exports a flattened PNG (`store.toBlob()` → `media.png`) and keeps a module-level store. Its commercial licence contains application-scope and competing-design-platform restrictions. Use it only with written confirmation from Polotno that Oremedia's use is permitted, and then only behind `EditorAdapter` with round-trip tests proving no loss against `CreativeDocumentV1`.
 
 ---
 
@@ -1383,7 +1383,7 @@ Polotno is **context-dependent**: Postiz integrates it (`apps/frontend/src/compo
 
 One orchestration model with logical roles (planner, researcher, copywriter, designer, reviewer, publishing coordinator, analyst). Roles are skill + tool-allowlist configurations, not separate services. **Temporal owns durable state and waits; the model loop is bounded inside activities.**
 
-Postiz reference: it runs three separate AI stacks (CopilotKit chat, a Mastra agent with a static tool registry and PostgreSQL memory, a LangGraph generation pipeline in `libraries/nestjs-libraries/src/agent/agent.graph.service.ts`) plus MCP. Do not replicate three frameworks. The LangGraph pipeline's decomposition (research → classify → select examples → hook → content → optional image → suggest slot) is a useful **skill decomposition** reference for `campaign-planning` and `brand-copywriting`.
+Reference codebase: it runs three separate AI stacks (a chat framework, an agent framework with a static tool registry and database memory, and a graph-based generation pipeline) plus MCP. Do not replicate three frameworks. The generation pipeline's decomposition (research → classify → select examples → hook → content → optional image → suggest slot) is a useful **skill decomposition** reference for `campaign-planning` and `brand-copywriting`.
 
 ### 12.2 Run lifecycle (Temporal workflow)
 
@@ -1782,10 +1782,10 @@ async function reconcile(tenantId: string, publicationId: string, claim: Claim, 
 Rules:
 
 - The provider activity **never** retries a mutation internally after the request may have reached the platform. Transport errors before the request is sent (DNS failure, connection refused) are `retryable_error`. Timeouts after sending, 5xx after sending, socket resets after sending, and worker loss are `unknown`.
-- A heartbeat timeout is `unknown`. Oremedia does not infer "never started" from missing heartbeat details (direct response to Postiz R4). The only safe "never sent" signal is the attempt ledger: `openAttempt` commits the `publication_attempts` row, and `publishOnce` commits `sentAt` on it **immediately before** the outbound mutation. An attempt with no `sentAt` proves the call was not made and may be retried; an attempt with `sentAt` and no recorded outcome is `unknown` and goes to reconciliation.
+- A heartbeat timeout is `unknown`. Oremedia does not infer "never started" from missing heartbeat details (direct response to reference risk R4). The only safe "never sent" signal is the attempt ledger: `openAttempt` commits the `publication_attempts` row, and `publishOnce` commits `sentAt` on it **immediately before** the outbound mutation. An attempt with no `sentAt` proves the call was not made and may be retried; an attempt with `sentAt` and no recorded outcome is `unknown` and goes to reconciliation.
 - Provider idempotency keys are used whenever the platform supports them (`providerIdempotencyKey = attempt.id`).
-- Rescheduling updates the row and signals the workflow; it **never terminates** an in-flight workflow (Postiz `startWorkflow` terminates running workflows before starting a new one; do not port that).
-- Workflow versioning: once a workflow type is deployed, its code is immutable. Changes ship as `publicationWorkflowV2` with new starts routed to it; V1 workers run until in-flight V1 histories drain. Replay tests (section 19.4) guard this. Postiz's `post.workflow.v1.0.1` … `v1.1.2` sequence is the reference for the discipline, not for the code.
+- Rescheduling updates the row and signals the workflow; it **never terminates** an in-flight workflow (the reference codebase terminates running workflows before starting a new one; do not port that).
+- Workflow versioning: once a workflow type is deployed, its code is immutable. Changes ship as `publicationWorkflowV2` with new starts routed to it; V1 workers run until in-flight V1 histories drain. Replay tests (section 19.4) guard this. The reference codebase's versioned post-workflow sequence is the reference for the discipline, not for the code.
 
 ### 14.4 Partial multi-channel publication
 
@@ -1793,7 +1793,7 @@ Each channel is its own publication and workflow. A package page shows per-chann
 
 ### 14.5 Provider adapter contract
 
-Port the **shape** of Postiz's contract (`libraries/nestjs-libraries/src/integrations/social/social.integrations.interface.ts`, `social.abstract.ts`), with the changes marked.
+Port the **shape** of the reference provider contract and its base class, with the changes marked.
 
 ```ts
 // packages/providers/src/contract.ts
@@ -1813,7 +1813,7 @@ export interface ProviderAdapter {
   // Publishing (ported: post / postPending / checkPostStatus / finalizePost; CHANGED: outcomes classified)
   publish(req: PublishRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome>;
   checkStatus?(pending: PendingState, creds: DecryptedCredentials, io: ProviderIO): Promise<PendingCheck>;   // read-only
-  finalize?(pending: PendingState, creds: DecryptedCredentials, io: ProviderIO): Promise<PendingCheck>;      // same contract as Postiz: once done, checkStatus must return 'completed'
+  finalize?(pending: PendingState, creds: DecryptedCredentials, io: ProviderIO): Promise<PendingCheck>;      // same contract as the reference: once done, checkStatus must return 'completed'
   comment?(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome>;
 
   // Reconciliation (NEW)
@@ -1848,7 +1848,7 @@ export function createProviderIO(opts: { providerKey: string; tenantId: string; 
   return {
     async request(url, init, meta: { mutation: boolean }) {
       await opts.limiter.acquire(opts.providerKey, opts.tenantId);
-      recordHeartbeatDetail(`${meta.mutation ? 'mutation' : 'read'} ${stripQuery(url)}`);   // ported idea: Postiz setHeartbeatDetails
+      recordHeartbeatDetail(`${meta.mutation ? 'mutation' : 'read'} ${stripQuery(url)}`);   // ported idea: heartbeat details on the activity context
       let sent = false;
       // sendTracking wraps the SSRF-safe undici dispatcher and flips `sent` from the handler's
       // onRequestSent/onBodySent hooks, so a failure can be classified as before or after send.
@@ -1866,7 +1866,7 @@ export function createProviderIO(opts: { providerKey: string; tenantId: string; 
 
 Where the underlying client cannot report whether the request was sent, treat every failure of a mutation as `after_send`. Being conservative here costs a reconciliation, which is cheap; being optimistic costs a duplicate public post.
 
-**Do not port** Postiz's retry behaviour in `SocialAbstract.fetch`, which re-sends any request, including publishing mutations, after HTTP 429, a rate-limit body, or an unclassified HTTP 500, with a fixed five-second wait and up to three retries. A 500 after a POST is an ambiguous outcome. Retries are allowed only for reads and for mutations the platform documents as idempotent or rejected-before-effect.
+**Do not port** the reference codebase's provider fetch retry behaviour, which re-sends any request, including publishing mutations, after HTTP 429, a rate-limit body, or an unclassified HTTP 500, with a fixed five-second wait and up to three retries. A 500 after a POST is an ambiguous outcome. Retries are allowed only for reads and for mutations the platform documents as idempotent or rejected-before-effect.
 
 ### 14.6 Capability register
 
@@ -1900,12 +1900,12 @@ The UI, the channel-adaptation skill and `validateVariant` all read this registe
 
 - On connect: tokens are encrypted with a per-record data key (AES-256-GCM), the data key wrapped by KMS, AAD = `${tenantId}:${channelConnectionId}`. Plaintext never touches the DB, logs or events.
 - On use: `credentialBroker.withCredentials(tenantId, channelConnectionId, fn)` runs only in `worker-core` and `worker-ingest`, decrypts in memory, passes to the adapter, zeroes references after. The API process cannot decrypt (IAM policy on the KMS key).
-- Refresh: a `tokenRefreshWorkflowV1` per connection sleeps until `tokenExpiresAt - margin` (ported pattern: Postiz `apps/orchestrator/src/workflows/refresh.token.workflow.ts`), refreshes under a per-connection Redis lock, writes a new credential row version, and on failure sets `refresh_needed`/`reconnect_needed` and notifies the brand's publishers.
-- Workflow and activity payloads carry `channelConnectionId` only. Postiz passes whole integration objects, including tokens, into activities (R5); do not port that.
+- Refresh: a `tokenRefreshWorkflowV1` per connection sleeps until `tokenExpiresAt - margin` (ported pattern: the reference token-refresh workflow), refreshes under a per-connection Redis lock, writes a new credential row version, and on failure sets `refresh_needed`/`reconnect_needed` and notifies the brand's publishers.
+- Workflow and activity payloads carry `channelConnectionId` only. The reference codebase passes whole integration objects, including tokens, into activities (reference risk R5); do not port that.
 
 ### 14.8 Initial channel set (decision D-04)
 
-Recommended default for Release 1, ordered by typical agency value: LinkedIn Page, Instagram Business (via Facebook Graph), Facebook Page, then one of X or TikTok depending on the pilot clients. Every channel requires your own platform app review and permissions; Postiz's code shows intended behaviour but none of its providers were live-tested in the study.
+Recommended default for Release 1, ordered by typical agency value: LinkedIn Page, Instagram Business (via Facebook Graph), Facebook Page, then one of X or TikTok depending on the pilot clients. Every channel requires your own platform app review and permissions; the reference codebase shows intended behaviour but none of its providers were live-tested in the study.
 
 ---
 
@@ -1919,7 +1919,7 @@ Recommended default for Release 1, ordered by typical agency value: LinkedIn Pag
 - `metric_key` mapped through `metric_definitions` (provider-native name, unit, aggregation, `comparable_group`),
 - `completeness`: `complete`, `partial` (provider reports incomplete window), `unavailable` (not supported, scope missing, or error). **Unavailable is stored as a row with no value, never as zero.**
 
-Postiz reference: analytics are fetched live through provider `analytics`/`postAnalytics` and cached in Redis for an hour (`libraries/nestjs-libraries/src/database/prisma/integrations/integration.service.ts`). Oremedia keeps the provider methods but persists history; Redis is only a read cache in front of snapshots.
+Reference codebase: analytics are fetched live through provider `analytics`/`postAnalytics` and cached in Redis for an hour. Oremedia keeps the provider methods but persists history; Redis is only a read cache in front of snapshots.
 
 ### 15.2 Normalisation rules (mandatory baseline)
 
@@ -2160,7 +2160,7 @@ Reconnect a channel; reconcile an `outcome_unknown` publication; drain and repla
 | External reviewer link → escalation | Token bound to one review request; separate origin; expiry and revocation; magic-link verification | Link reuse on other requests; post-revocation use |
 | Platform operator → tenant data | Support sessions with reason, time box, audit; no silent impersonation | Audit completeness test |
 | Provider webhooks inbound | Signature verification per provider; replay window; idempotent processing | Forged and replayed webhook tests |
-| Outbound webhooks (tenant-configured) | SSRF-safe dispatcher with pinned DNS (ported from Postiz `ssrf.safe.dispatcher.ts` and `webhook.url.validator.ts`); HMAC signatures; bounded retries with backoff; dead-letter | Private-range and DNS-rebinding tests |
+| Outbound webhooks (tenant-configured) | SSRF-safe dispatcher with pinned DNS (ported as a pattern, section 20.2); HMAC signatures; bounded retries with backoff; dead-letter | Private-range and DNS-rebinding tests |
 
 Authentication baseline: OIDC or maintained session library; MFA available for all and enforceable per tenant; session revocation on role change, membership removal and password change; short-lived access tokens with rotating refresh; CSRF protection for cookie sessions; strict CSP on the app and review portal; security headers; dependency and container scanning in CI; secrets only in the secret manager.
 
@@ -2217,49 +2217,47 @@ Each skill version ships with cases (input, brand fixture, expected properties).
 
 ---
 
-## 20. Postiz reuse and refactor map
+## 20. Reference reuse and refactor map
 
 ### 20.1 Licensing gate (ADR-06, human decision)
 
-Postiz is licensed AGPL-3.0 (root `LICENSE`). Copying its source into Oremedia makes Oremedia a derivative subject to AGPL obligations, including offering source to network users of modified versions. The default in this prompt is **clean implementation using Postiz as an architectural reference**: read it, understand it, and write Oremedia's code against Oremedia's contracts without copying code. Only if ADR-06 records a decision to accept AGPL (or a separate licence from the copyright holders) may code in the "Port as code" column be copied, and then with attribution and licence headers preserved. An API boundary to a separately operated Postiz instance is an architectural choice, not a legal conclusion; get legal review for any bridge.
+The reference codebase is licensed AGPL-3.0. Copying its source into Oremedia makes Oremedia a derivative subject to AGPL obligations, including offering source to network users of modified versions. The default in this prompt is **clean implementation using the reference codebase as an architectural reference**: read it, understand it, and write Oremedia's code against Oremedia's contracts without copying code. Only if ADR-06 records a decision to accept AGPL (or a separate licence from the copyright holders) may code marked "port as code" be copied, and then with attribution and licence headers preserved. An API boundary to a separately operated instance is an architectural choice, not a legal conclusion; get legal review for any bridge.
 
 ### 20.2 Map
 
-Paths are relative to the Postiz repository at commit `4c33d525`.
-
-| Postiz source | What it does | Oremedia action | Target | Required changes |
+| Reference pattern | What it does | Oremedia action | Target | Required changes |
 |---|---|---|---|---|
-| `libraries/nestjs-libraries/src/integrations/social/social.integrations.interface.ts` | Provider contract: auth, post, postPending, checkPostStatus, finalizePost, comment, analytics, maxLength, checkValidity | **Port as pattern** (code only under ADR-06) | `packages/providers/src/contract.ts` | Credentials passed explicitly, not a DB `Integration` row; outcome classification; `findRemotePost`; capability object replaces scattered booleans (`editor`, `isBetweenSteps`, `convertToJPEG`, `stripLinks`, `refreshCron`) |
-| `libraries/nestjs-libraries/src/integrations/social.abstract.ts` | Base class: error taxonomy (`RefreshToken`, `Disconnect`, `BadBody`), Temporal-safe truncation, media probing, scope checks, fetch with retries | **Port selectively** | `packages/providers/src/base.ts`, `io.ts` | Keep: error taxonomy, `truncateForTemporal` idea (cap failure payload size), `checkScopes`, media size/dimension probing through SSRF-safe I/O. **Drop:** retry of 429/500 on mutations; untimed `fetch`; `runInConcurrent`'s swallow-and-rethrow |
-| `libraries/nestjs-libraries/src/integrations/integration.manager.ts` | Static registry of 35 provider instances | **Port as pattern** | `packages/providers/src/registry.ts` | Registry keyed by provider key; only certified adapters are enabled; capability versions registered alongside |
-| `libraries/nestjs-libraries/src/integrations/social/*.provider.ts` | Per-platform API code | **Reference per provider during certification** | `packages/providers/src/<key>/` | Re-derive from current platform docs; use Postiz code to learn edge cases (e.g. Instagram container polling and the "finalize already completed" check in `instagram.provider.ts`); write fixtures; certify with your own app |
-| `libraries/nestjs-libraries/src/integrations/refresh.integration.service.ts` + `apps/orchestrator/src/workflows/refresh.token.workflow.ts` | Token refresh per integration, sleeping until expiry | **Port as pattern** | `tokenRefreshWorkflowV1`, credential broker | Per-connection lock; credential row versioning; tenant-scoped reads; notifications |
-| `libraries/nestjs-libraries/src/integrations/integration.missing.scopes.ts` | Detects missing OAuth scopes | **Port as pattern** | Capability `requiredScopes` + connect flow | Surface missing scopes before a channel is usable |
-| `libraries/nestjs-libraries/src/temporal/temporal.module.ts` | Worker setup, per-provider task queues, concurrency division | **Port as pattern** | `apps/worker-core/src/worker.ts` | Per-tenant fairness caps added |
-| `libraries/nestjs-libraries/src/temporal/temporal.heartbeat.ts` | Heartbeat interval + heartbeat details on the activity context | **Port the details idea; change semantics** | `packages/activities/src/heartbeat.ts` | Keep per-context details (not singleton state). Do not use missing heartbeat details as proof of no effect; the attempt ledger decides |
-| `apps/orchestrator/src/workflows/post-workflows/post.workflow.v1.1.2.ts` | Wait, reload, publish, pending/finalize polling, comments, notifications, error handling | **Reference only** | `publicationWorkflowV1` | Rewrite around fencing, attempt ledger, release evaluation at dispatch, `outcome_unknown`, reconciliation. Do not port the heartbeat-timeout retry branch |
-| `apps/orchestrator/src/workflows/post-workflows/post.workflow.v1.0.1` … `v1.1.1` | Versioned workflow history | **Port the discipline** | Workflow versioning policy (section 14.3) | Replay tests per version |
-| `apps/orchestrator/src/workflows/missing.post.workflow.ts` + `temporal/infinite.workflow.register.ts` | Periodic scan for overdue queued posts, gated by `RUN_CRON` | **Replace** | Outbox dispatcher + `publicationSweeperWorkflowV1` | Sweeper still exists as defence in depth (finds `scheduled` rows past due and `dispatching` rows older than the claim lease with no running workflow; re-emits outbox events for the former and moves the latter to `outcome_unknown` for reconciliation), always on, alerting when it finds anything |
-| `apps/orchestrator/src/activities/post.activity.ts` | Activity implementations for publishing | **Reference only** | `packages/activities/src/publish.ts` | Credentials via broker; attempt row before send |
-| `libraries/nestjs-libraries/src/database/prisma/posts/posts.service.ts` (`createPost`, `startWorkflow`) | Validation, persistence, unawaited workflow start that terminates running workflows | **Do not port** | `schedulePublication` (section 14.1) | Outbox; no terminate; await and observe dispatch |
-| `libraries/nestjs-libraries/src/database/prisma/posts/posts.repository.ts` (`createOrUpdatePost`) | Upsert by caller-supplied ID; group sweeps without org predicate | **Do not port** | Scoped repositories | Separate create/update; tenant predicates everywhere |
-| Post validation path (`validatePosts` via controller, public API and chat tool) | One validation service used by several entry points | **Port as pattern** | `providers.validateVariant` + application command | Pure, capability-driven |
-| `libraries/nestjs-libraries/src/dtos/webhooks/ssrf.safe.dispatcher.ts`, `webhook.url.validator.ts` | Pinned-DNS SSRF guard for undici and axios; blocked IP ranges | **Port as pattern** (small, well-understood; re-implement) | `packages/providers/src/ssrf.ts` | No `DISABLE_SSRF_PROTECTION` escape hatch in the hosted product; per-connection private-network allowance only for explicitly self-hosted targets, audited |
-| `libraries/nestjs-libraries/src/upload/upload.interface.ts`, `upload.factory.ts`, `r2.uploader.ts` | Storage abstraction (local / R2) with signed URLs | **Port as pattern** | `packages/modules/assets/src/storage.ts` | Tenant-prefixed keys enforced; no local storage in production; `headObject`/`copyObject` |
-| `libraries/nestjs-libraries/src/upload/custom.upload.validation.ts` | MIME allowlist, per-type size caps, stream size limiter | **Port as pattern** | Ingestion workflow step 1–2 | Content sniffing is authoritative; add scanning and sanitising |
-| `libraries/nestjs-libraries/src/upload/media.processor.interface.ts` | Versioned job contract for an external media normaliser | **Port as pattern** | `worker-render` media jobs | Keep the "URLs in, metadata out, versioned schema" contract |
-| `libraries/helpers/src/utils/count.length.ts` | Weighted text counting (X) inside a generic helper with an `if (integrationType !== 'x')` branch | **Refactor** | `ProviderAdapter.measureText` | Provider-specific logic moves into the adapter |
-| `libraries/nestjs-libraries/src/short-linking/` | Short-link providers | **Reference** | Tracked links (section 15.4) | Oremedia owns its redirect domain for attribution |
-| `libraries/nestjs-libraries/src/agent/agent.graph.service.ts` | LangGraph content pipeline | **Reference for skill decomposition** | `campaign-planning`, `brand-copywriting` skills | Not a framework dependency |
-| `libraries/nestjs-libraries/src/chat/load.tools.service.ts`, `chat/tools/*` | Mastra agent tools, including scheduling without an approval credential | **Do not port the tool set** | Tool registry (section 12.4) | Scheduling only via `publications.proposeSchedule` |
-| `libraries/nestjs-libraries/src/chat/start.mcp.ts` | MCP server setup with API-key/OAuth auth | **Port as pattern** | `apps/api/src/mcp/` | Same dispatcher and policy as internal agents |
-| `apps/backend/src/services/auth/auth.middleware.ts`, `permissions/permissions.guard.ts` | JWT + org selection + CASL guard; impersonation | **Reference** | `access` module | Resource-level policy; support sessions instead of impersonation |
-| `apps/backend/src/services/auth/public.auth.middleware.ts` | API key / OAuth resolution for public API | **Port as pattern** | Public REST auth | Hashed keys with prefixes; per-key scopes |
-| `apps/frontend/src/components/launches/polonto.tsx` | Polotno editor exporting a flattened PNG | **Do not port** | `packages/editor` | Persistent layered document; licence gate for Polotno |
-| Frontend calendar (`apps/frontend/src/components/launches/`) and composer (`apps/frontend/src/components/new-launch/`) | Calendar views; composer with per-channel preview and settings | **Reference for UX** | Calendar and channel-variant editor | Rebuild on Oremedia contracts |
-| Prisma schema (`Organization`, `UserOrganization`, `Integration`, `Post`, `Media`, `Customer`, marketplace models) | Data model | **Map for migration only** (section 23) | — | Marketplace, orders, payouts, agencies listing: not carried forward |
-| `package.json` `prisma-db-push` with `--accept-data-loss` | Schema push | **Prohibited** | drizzle-kit versioned migrations | Expand/contract, rehearsal |
-| `.github/workflows/*` | Build, containers, CodeQL; `eslint` file lacks a `.yml` extension | **Reference** | Oremedia CI (section 22, Phase 1) | Add tests, cross-tenant suite, replay, scans |
+| Provider contract | Provider contract: auth, post, postPending, checkPostStatus, finalizePost, comment, analytics, maxLength, checkValidity | **Port as pattern** (code only under ADR-06) | `packages/providers/src/contract.ts` | Credentials passed explicitly, not a database integration row; outcome classification; `findRemotePost`; a capability object replaces scattered provider booleans |
+| Provider base class | Error taxonomy (refresh token, disconnect, bad body), Temporal-safe truncation, media probing, scope checks, fetch with retries | **Port selectively** | `packages/providers/src/base.ts`, `io.ts` | Keep: error taxonomy, the failure-payload size cap, scope checks, media size/dimension probing through SSRF-safe I/O. **Drop:** retry of 429/500 on mutations; untimed fetch; swallow-and-rethrow in concurrent runs |
+| Provider registry | Static registry of provider instances | **Port as pattern** | `packages/providers/src/registry.ts` | Registry keyed by provider key; only certified adapters are enabled; capability versions registered alongside |
+| Per-platform provider code | Per-platform API code | **Reference per provider during certification** | `packages/providers/src/<key>/` | Re-derive from current platform docs; use the reference only to learn edge cases (e.g. Instagram container polling and the "finalize already completed" check); write fixtures; certify with your own app |
+| Token refresh | Token refresh per integration, sleeping until expiry | **Port as pattern** | `tokenRefreshWorkflowV1`, credential broker | Per-connection lock; credential row versioning; tenant-scoped reads; notifications |
+| Missing-scope detection | Detects missing OAuth scopes | **Port as pattern** | Capability `requiredScopes` + connect flow | Surface missing scopes before a channel is usable |
+| Temporal worker setup | Worker setup, per-provider task queues, concurrency division | **Port as pattern** | `apps/worker-core/src/worker.ts` | Per-tenant fairness caps added |
+| Activity heartbeats | Heartbeat interval + heartbeat details on the activity context | **Port the details idea; change semantics** | `packages/activities/src/heartbeat.ts` | Keep per-context details (not singleton state). Do not use missing heartbeat details as proof of no effect; the attempt ledger decides |
+| Post workflow | Wait, reload, publish, pending/finalize polling, comments, notifications, error handling | **Reference only** | `publicationWorkflowV1` | Rewrite around fencing, attempt ledger, release evaluation at dispatch, `outcome_unknown`, reconciliation. Do not port the heartbeat-timeout retry branch |
+| Versioned workflow history | Versioned workflow files | **Port the discipline** | Workflow versioning policy (section 14.3) | Replay tests per version |
+| Missed-post scan | Periodic scan for overdue queued posts, gated by an environment flag | **Replace** | Outbox dispatcher + `publicationSweeperWorkflowV1` | Sweeper still exists as defence in depth (finds `scheduled` rows past due and `dispatching` rows older than the claim lease with no running workflow; re-emits outbox events for the former and moves the latter to `outcome_unknown` for reconciliation), always on, alerting when it finds anything |
+| Publishing activities | Activity implementations for publishing | **Reference only** | `packages/activities/src/publish.ts` | Credentials via broker; attempt row before send |
+| Post creation service | Validation, persistence, unawaited workflow start that terminates running workflows | **Do not port** | `schedulePublication` (section 14.1) | Outbox; no terminate; await and observe dispatch |
+| Post repository | Upsert by caller-supplied ID; group sweeps without an organisation predicate | **Do not port** | Scoped repositories | Separate create/update; tenant predicates everywhere |
+| Post validation path | One validation service used by several entry points | **Port as pattern** | `providers.validateVariant` + application command | Pure, capability-driven |
+| SSRF-safe dispatcher | Pinned-DNS SSRF guard for outbound HTTP; blocked IP ranges | **Port as pattern** (small, well-understood; re-implement) | `packages/providers/src/ssrf.ts` | No escape hatch that disables the guard in the hosted product; per-connection private-network allowance only for explicitly self-hosted targets, audited |
+| Storage abstraction | Storage abstraction (local / object store) with signed URLs | **Port as pattern** | `packages/modules/assets/src/storage.ts` | Tenant-prefixed keys enforced; no local storage in production; `headObject`/`copyObject` |
+| Upload validation | MIME allowlist, per-type size caps, stream size limiter | **Port as pattern** | Ingestion workflow step 1–2 | Content sniffing is authoritative; add scanning and sanitising |
+| Media processor contract | Versioned job contract for an external media normaliser | **Port as pattern** | `worker-render` media jobs | Keep the "URLs in, metadata out, versioned schema" contract |
+| Weighted text counting | Weighted text counting (X) inside a generic helper with a provider-specific branch | **Refactor** | `ProviderAdapter.measureText` | Provider-specific logic moves into the adapter |
+| Short links | Short-link providers | **Reference** | Tracked links (section 15.4) | Oremedia owns its redirect domain for attribution |
+| Generation pipeline | Graph-based content pipeline | **Reference for skill decomposition** | `campaign-planning`, `brand-copywriting` skills | Not a framework dependency |
+| Agent tool set | Agent tools, including scheduling without an approval credential | **Do not port the tool set** | Tool registry (section 12.4) | Scheduling only via `publications.proposeSchedule` |
+| MCP server | MCP server setup with API-key/OAuth auth | **Port as pattern** | `apps/api/src/mcp/` | Same dispatcher and policy as internal agents |
+| Auth middleware and guard | JWT + organisation selection + permission guard; impersonation | **Reference** | `access` module | Resource-level policy; support sessions instead of impersonation |
+| Public API auth | API key / OAuth resolution for the public API | **Port as pattern** | Public REST auth | Hashed keys with prefixes; per-key scopes |
+| Polotno editor integration | Polotno editor exporting a flattened PNG | **Do not port** | `packages/editor` | Persistent layered document; licence gate for Polotno |
+| Calendar and composer | Calendar views; composer with per-channel preview and settings | **Reference for UX** | Calendar and channel-variant editor | Rebuild on Oremedia contracts |
+| Data model (organisations, memberships, integrations, posts, media, customers, marketplace) | Data model | **Map for migration only** (section 23) | — | Marketplace, orders, payouts, agencies listing: not carried forward |
+| Schema push with data loss accepted | Schema push | **Prohibited** | drizzle-kit versioned migrations | Expand/contract, rehearsal |
+| CI workflows | Build, containers, CodeQL | **Reference** | Oremedia CI (section 22, Phase 1) | Add tests, cross-tenant suite, replay, scans |
 
 ### 20.3 Patterns worth keeping verbatim in spirit
 
@@ -2269,18 +2267,18 @@ Paths are relative to the Postiz repository at commit `4c33d525`.
 - **One queue per provider** so a slow platform cannot starve others.
 - **Server-side validation shared by every entry point.**
 
-### 20.4 Postiz risks Oremedia must not inherit (re-verified at the pinned commit)
+### 20.4 Reference risks Oremedia must not inherit
 
 | ID | Evidence | Oremedia control |
 |---|---|---|
-| R1 | `posts.repository.ts` `createOrUpdatePost` upserts `where: { id: value.id || uuidv4() }` with no organisation predicate; group sweeps (`updateMany where: { group }`) have no organisation predicate | Scoped repository; separate create/update; cross-tenant harness |
+| R1 | Post create-or-update upserts on a caller-supplied ID (or a fresh UUID) with no organisation predicate; group sweeps have no organisation predicate | Scoped repository; separate create/update; cross-tenant harness |
 | R2 | Scheduling tool validates and creates posts; confirmation exists only in agent instructions | Approval binding / mandate at command and dispatch |
-| R3 | `posts.service.ts` calls `this.startWorkflow(...).catch((err) => {})` unawaited after persistence; `startWorkflow` swallows errors and terminates running workflows for the post | Transactional outbox; stable workflow IDs; no terminate |
-| R4 | `post.workflow.v1.1.2.ts` treats a heartbeat timeout with no details as safe to retry; `withHeartbeat` sends its first heartbeat after 15 seconds while the activity starts immediately | Attempt ledger before send; heartbeat timeout = unknown |
-| R5 | Integration tokens written directly through Prisma; whole integration objects passed into activities | Envelope encryption; broker; refs in payloads |
-| R6 | Root script pushes schema with `--accept-data-loss`; no migration history tracked | Versioned expand/contract migrations |
+| R3 | The post service starts its workflow unawaited after persistence with errors swallowed, and the start terminates running workflows for the post | Transactional outbox; stable workflow IDs; no terminate |
+| R4 | The post workflow treats a heartbeat timeout with no details as safe to retry; the first heartbeat is sent 15 seconds after the activity starts | Attempt ledger before send; heartbeat timeout = unknown |
+| R5 | Integration tokens written directly through the ORM; whole integration objects passed into activities | Envelope encryption; broker; refs in payloads |
+| R6 | Root script pushes schema with data loss accepted; no migration history tracked | Versioned expand/contract migrations |
 | R7 | No conventional test files tracked | Section 19 |
-| R8 | `SocialAbstract.fetch` re-sends any request, whatever its method, after HTTP 429, a rate-limit body, an HTTP 500 the provider does not classify, or a provider `retry` classification (fixed 5 s wait, up to three retries), and sets no explicit request timeout (only undici defaults apply) | `ProviderIO` with explicit timeouts; no mutation retry after send |
+| R8 | The provider fetch re-sends any request, whatever its method, after HTTP 429, a rate-limit body, an HTTP 500 the provider does not classify, or a provider `retry` classification (fixed 5 s wait, up to three retries), and sets no explicit request timeout | `ProviderIO` with explicit timeouts; no mutation retry after send |
 
 ---
 
@@ -2371,7 +2369,7 @@ Trunk-based with short-lived branches; conventional commits; PR template with "w
 
 ## 23. Migration and rollout
 
-### 23.1 If importing from an existing Postiz deployment (context-dependent)
+### 23.1 If importing from an existing scheduling tool (context-dependent)
 
 - `Organization` → `tenants` (preserve IDs in an `external_refs` mapping table, not as primary keys).
 - `UserOrganization` → `memberships` (`SUPERADMIN`/`ADMIN` → `admin`, `USER` → `creator`; review before activation).
@@ -2402,7 +2400,7 @@ Disable new agent starts and release dispatch independently (kill switches). Kee
 | ADR-03 | Application-owned versioned creative schema behind an editor adapter; Konva default | Medium |
 | ADR-04 | Temporal for durable work; one agent loop inside activities; no second agent framework | Medium |
 | ADR-05 | Deterministic release policy gates every external effect; approval binding by content hash | Must hold before first live publish |
-| ADR-06 | Postiz used as reference only; no code copied unless AGPL route or separate licence is accepted; Polotno only with written permission | Human commercial/legal decision |
+| ADR-06 | Reference codebase used as reference only; no code copied unless AGPL route or separate licence is accepted; Polotno only with written permission | Human commercial/legal decision |
 | ADR-07 | PointFive OS stack on MySQL/TiDB with structural tenant enforcement in lieu of Postgres RLS | High after Phase 2 |
 | ADR-08 | Publication outcome model: attempt ledger, fencing, `outcome_unknown`, reconciliation; no blind mutation retries | Must hold before first live publish |
 | ADR-09 | Credential envelope encryption and broker isolation | Must hold before first channel connect |
@@ -2418,7 +2416,7 @@ Disable new agent starts and release dispatch independently (kill switches). Kee
 | D-04 | Release 1 channel set | Pilot client mix; platform app-review lead times |
 | D-05 | Polotno licence enquiry vs. Konva-only | Commercial terms |
 | D-06 | Image-generation provider(s) and data terms | Cost, rights in outputs, data retention |
-| D-07 | ADR-06 licensing route for any Postiz code | Legal |
+| D-07 | ADR-06 licensing route for any reference-codebase code | Legal |
 | D-08 | Plans, prices, entitlements and downgrade/billing-failure behaviour | Commercial policy |
 | D-09 | Retention periods per data class | Legal and contractual |
 | D-10 | Availability and recovery targets (SLOs, RPO/RTO) | Business commitments and cost |
@@ -2464,7 +2462,7 @@ For each item report **verified** (how), **open** (risk), or **not applicable** 
 
 ## Appendix C. Material assumptions behind this prompt
 
-1. Oremedia is a new codebase, not a Postiz fork (ADR-06 default).
+1. Oremedia is a new codebase, not a fork (ADR-06 default).
 2. The PointFive OS stack applies to Oremedia; Temporal is added because durable waits, reconciliation and replayable versioned workflows are requirements the stack does not otherwise meet.
 3. Release 1 excludes video editing, paid-ad buying, unified inbox replies and managed autopublish.
 4. Anthropic models are the default LLM provider behind an adapter; image generation is a separate provider decision.
