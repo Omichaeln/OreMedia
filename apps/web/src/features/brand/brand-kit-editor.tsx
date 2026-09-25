@@ -55,7 +55,8 @@ function luminance(hex: string): number | null {
   }) as [number, number, number];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
-const contrast = (a: string, b: string): number | null => {
+/** WCAG 2 contrast ratio of two hex colours; null when either is not hex. */
+export const contrast = (a: string, b: string): number | null => {
   const [la, lb] = [luminance(a), luminance(b)];
   if (la === null || lb === null) return null;
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
@@ -67,7 +68,10 @@ const contrast = (a: string, b: string): number | null => {
  * colours, unique keys, logos and images of this brand) and reports all problems at once; publishing stays a
  * separate, reviewed step.
  */
-export function BrandKitEditor({ version }: { version: BrandVersionDto }) {
+/** The kit's editable sections; the brand system shows one at a time, the versions list shows them all. */
+export type KitSection = 'guidelines' | 'palette' | 'voice' | 'logos' | 'imagery';
+
+export function BrandKitEditor({ version, only }: { version: BrandVersionDto; only?: KitSection }) {
   const { brandId } = useBrandContext();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -79,6 +83,7 @@ export function BrandKitEditor({ version }: { version: BrandVersionDto }) {
     setDoc(next);
     setDirty(true);
   };
+  const show = (section: KitSection) => only === undefined || only === section;
   const intent = useIntentKey();
   const save = useMutation(
     trpc.brand.versions.update.mutationOptions({
@@ -146,17 +151,17 @@ export function BrandKitEditor({ version }: { version: BrandVersionDto }) {
           }
         />
       )}
-      {doc.guidelines && (
+      {show('guidelines') && doc.guidelines && (
         <GuidelinesSection doc={doc} onChange={change}>
           {version.state === 'draft' && version.document.guidelines && (
             <VoiceExtraction versionId={version.id} unsaved={dirty} />
           )}
         </GuidelinesSection>
       )}
-      <PaletteSection doc={doc} onChange={change} />
-      <VoiceSection doc={doc} onChange={change} />
-      <LogosSection doc={doc} onChange={change} />
-      <ReferenceImagerySection doc={doc} onChange={change} />
+      {show('palette') && <PaletteSection doc={doc} onChange={change} />}
+      {show('voice') && <VoiceSection doc={doc} onChange={change} />}
+      {show('logos') && <LogosSection doc={doc} onChange={change} />}
+      {show('imagery') && <ReferenceImagerySection doc={doc} onChange={change} />}
     </div>
   );
 }
@@ -353,8 +358,66 @@ function PaletteSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => voi
   );
 }
 
+type Voice = Doc['voice'];
+const lines = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+const commas = (text: string, max: number) =>
+  text
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, max);
+
+/** "key: description" per line. */
+const audiencesText = (v: Voice) => v.audiences.map((a) => `${a.key}: ${a.description}`).join('\n');
+const parseAudiences = (text: string): Voice['audiences'] =>
+  lines(text).map((l) => {
+    const at = l.indexOf(':');
+    return at === -1
+      ? { key: l, description: '' }
+      : { key: l.slice(0, at).trim(), description: l.slice(at + 1).trim() };
+  });
+/** "use instead of avoid, avoid" per line. */
+const termsText = (v: Voice) =>
+  v.preferredTerms
+    .map((t) => (t.avoid.length ? `${t.use} instead of ${t.avoid.join(', ')}` : t.use))
+    .join('\n');
+const parseTerms = (text: string): Voice['preferredTerms'] =>
+  lines(text).map((l) => {
+    const [use = '', avoid = ''] = l.split(/\s+instead of\s+/i);
+    return { use: use.trim(), avoid: commas(avoid, 10) };
+  });
+/** Examples of one verdict, one per line; a line that matches an existing example keeps its note. */
+const examplesText = (v: Voice, verdict: 'on_brand' | 'off_brand') =>
+  v.examples
+    .filter((e) => e.verdict === verdict)
+    .map((e) => e.text)
+    .join('\n');
+const parseExamples = (text: string, verdict: 'on_brand' | 'off_brand', current: Voice['examples']) =>
+  lines(text).map((t) => ({
+    text: t,
+    verdict,
+    note: current.find((e) => e.verdict === verdict && e.text === t)?.note ?? '',
+  }));
+
 function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
-  const [toneText, setToneText] = useState(doc.voice.tone.join(', '));
+  const v = doc.voice;
+  const [text, setText] = useState({
+    tone: v.tone.join(', '),
+    audiences: audiencesText(v),
+    terms: termsText(v),
+    prohibited: v.prohibitedPhrases.join('\n'),
+    onBrand: examplesText(v, 'on_brand'),
+    offBrand: examplesText(v, 'off_brand'),
+    locales: v.locales.join(', '),
+  });
+  const edit = (key: keyof typeof text, value: string, voice: (next: string) => Partial<Voice>) => {
+    setText((t) => ({ ...t, [key]: value }));
+    onChange({ ...doc, voice: { ...doc.voice, ...voice(value) } });
+  };
   return (
     <Section
       title="Voice"
@@ -365,8 +428,8 @@ function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void 
           id="kit-voice-summary"
           rows={3}
           maxLength={2000}
-          value={doc.voice.summary}
-          onChange={(e) => onChange({ ...doc, voice: { ...doc.voice, summary: e.target.value } })}
+          value={v.summary}
+          onChange={(e) => onChange({ ...doc, voice: { ...v, summary: e.target.value } })}
         />
       </Field>
       <Field
@@ -376,16 +439,83 @@ function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void 
       >
         <Input
           id="kit-voice-tone"
-          value={toneText}
-          onChange={(e) => {
-            setToneText(e.target.value);
-            const tone = e.target.value
-              .split(',')
-              .map((t) => t.trim())
-              .filter(Boolean)
-              .slice(0, 12);
-            onChange({ ...doc, voice: { ...doc.voice, tone } });
-          }}
+          value={text.tone}
+          onChange={(e) => edit('tone', e.target.value, (t) => ({ tone: commas(t, 12) }))}
+        />
+      </Field>
+      <Field
+        label="Audiences"
+        htmlFor="kit-voice-audiences"
+        hint="One per line: name, a colon, then who they are."
+      >
+        <Textarea
+          id="kit-voice-audiences"
+          rows={3}
+          value={text.audiences}
+          onChange={(e) => edit('audiences', e.target.value, (t) => ({ audiences: parseAudiences(t) }))}
+        />
+      </Field>
+      <Field
+        label="Preferred terms"
+        htmlFor="kit-voice-terms"
+        hint="One per line, for example: roast instead of blend, mix"
+      >
+        <Textarea
+          id="kit-voice-terms"
+          rows={4}
+          value={text.terms}
+          onChange={(e) => edit('terms', e.target.value, (t) => ({ preferredTerms: parseTerms(t) }))}
+        />
+      </Field>
+      <Field label="Never write" htmlFor="kit-voice-prohibited" hint="One word or phrase per line.">
+        <Textarea
+          id="kit-voice-prohibited"
+          rows={3}
+          value={text.prohibited}
+          onChange={(e) => edit('prohibited', e.target.value, (t) => ({ prohibitedPhrases: lines(t) }))}
+        />
+      </Field>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="On-brand examples" htmlFor="kit-voice-on" hint="One per line.">
+          <Textarea
+            id="kit-voice-on"
+            rows={3}
+            value={text.onBrand}
+            onChange={(e) =>
+              edit('onBrand', e.target.value, (t) => ({
+                examples: [
+                  ...parseExamples(t, 'on_brand', v.examples),
+                  ...v.examples.filter((x) => x.verdict === 'off_brand'),
+                ],
+              }))
+            }
+          />
+        </Field>
+        <Field label="Off-brand examples" htmlFor="kit-voice-off" hint="One per line.">
+          <Textarea
+            id="kit-voice-off"
+            rows={3}
+            value={text.offBrand}
+            onChange={(e) =>
+              edit('offBrand', e.target.value, (t) => ({
+                examples: [
+                  ...v.examples.filter((x) => x.verdict === 'on_brand'),
+                  ...parseExamples(t, 'off_brand', v.examples),
+                ],
+              }))
+            }
+          />
+        </Field>
+      </div>
+      <Field
+        label="Locales"
+        htmlFor="kit-voice-locales"
+        hint="Language tags separated by commas, for example en-GB, fr-FR."
+      >
+        <Input
+          id="kit-voice-locales"
+          value={text.locales}
+          onChange={(e) => edit('locales', e.target.value, (t) => ({ locales: commas(t, 12) }))}
         />
       </Field>
     </Section>

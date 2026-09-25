@@ -18,7 +18,7 @@ const launchOptions = chromiumPath
   ? { executablePath: chromiumPath, headless: true, args: ['--no-sandbox'] }
   : { channel: 'chromium' as const, headless: true, args: ['--no-sandbox'] };
 
-const systemPath = `/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}/system`;
+const systemPath = `/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}/system?section=versions`;
 
 describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app in Chromium)', () => {
   const backend = new MockBackend();
@@ -81,5 +81,33 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
     expect(await extract().getAttribute('title')).toBe('Save or discard your changes first');
     await page.getByRole('button', { name: 'Discard changes' }).click();
     await expect.poll(() => extract().getAttribute('aria-disabled'), { timeout: 15_000 }).toBeNull();
+  }, 45_000);
+
+  it('brand system: overview tiles open a section; the draft opens it in the editor and saves every voice field', async () => {
+    const base = systemPath.replace('?section=versions', '');
+    await page.goto(`${origin}${base}`);
+    await page
+      .getByRole('button', { name: /^Colour/ })
+      .first()
+      .waitFor({ timeout: 15_000 });
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: /^Voice & writing/ })
+      .last()
+      .click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('section')).toBe('voice');
+    await page
+      .getByRole('group', { name: 'Version shown' })
+      .getByRole('button', { name: /proposed/ })
+      .click();
+    await page.getByLabel('Preferred terms').fill('roast instead of blend, mix');
+    await page.getByLabel('Never write').fill('artisanal');
+    await page.getByRole('button', { name: 'Save brand kit' }).click();
+    await expect
+      .poll(() => backend.lastBrandDraftVoice(), { timeout: 15_000 })
+      .toMatchObject({
+        preferredTerms: [{ use: 'roast', avoid: ['blend', 'mix'] }],
+        prohibitedPhrases: ['artisanal'],
+      });
   }, 45_000);
 });

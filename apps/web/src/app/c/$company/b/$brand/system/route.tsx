@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { FactKind, type FactState } from '@oremedia/contracts/brand';
 import {
@@ -11,13 +12,25 @@ import {
   Skeleton,
   StatusBanner,
   Textarea,
+  cn,
   type Tone,
 } from '@oremedia/ui';
-import { PageHeading, RequestError } from '../../../../../../components/request-state';
+import { RequestError } from '../../../../../../components/request-state';
 import { Select } from '../../../../../../components/select';
 import { useToast } from '../../../../../../components/toast';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
-import { BrandKitEditor } from '../../../../../../features/brand/brand-kit-editor';
+import { BrandKitEditor, type KitSection } from '../../../../../../features/brand/brand-kit-editor';
+import {
+  ChannelsView,
+  ColourView,
+  GuidelinesView,
+  ImageryView,
+  LogoView,
+  OverviewView,
+  PatternsView,
+  TypographyView,
+  VoiceView,
+} from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
 import {
   useBrandVersion,
@@ -25,6 +38,7 @@ import {
   useFacts,
   useObjectives,
   versionStateLabel,
+  type BrandVersionDto,
   type BrandVersionSummary,
 } from '../../../../../../features/brand/use-brand';
 import { useTRPC } from '../../../../../../lib/trpc';
@@ -38,21 +52,273 @@ const VERSION_TONE: Record<BrandVersionSummary['state'], Tone> = {
   retired: 'neutral',
 };
 
-/** Spec 21.2 brand system states: proposed extraction; published; conflict; retired version. */
+type SectionKey =
+  | 'overview'
+  | 'logo'
+  | 'colour'
+  | 'typography'
+  | 'voice'
+  | 'imagery'
+  | 'patterns'
+  | 'channels'
+  | 'guidelines'
+  | 'facts'
+  | 'objectives'
+  | 'versions';
+
+/** The system's parts in the order the prototype reads them; each lives at `?section=`. */
+const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit?: KitSection }> = [
+  {
+    key: 'overview',
+    label: 'Overview',
+    description: 'The brand at a glance: voice, palette and what each part holds.',
+  },
+  {
+    key: 'logo',
+    label: 'Logo',
+    description: 'Variants with their grounds, clear space and minimum width.',
+    kit: 'logos',
+  },
+  {
+    key: 'colour',
+    label: 'Colour',
+    description: 'Tokens by role, and every text pairing against the contrast target.',
+    kit: 'palette',
+  },
+  {
+    key: 'typography',
+    label: 'Typography & layout',
+    description: 'Type roles bound to font files, spacing and radii.',
+  },
+  {
+    key: 'voice',
+    label: 'Voice & writing',
+    description: 'How the brand sounds: tone, audiences, terms, banned phrases and examples.',
+    kit: 'voice',
+  },
+  {
+    key: 'imagery',
+    label: 'Imagery',
+    description: 'Reference images that show what on-brand photography looks like.',
+    kit: 'imagery',
+  },
+  {
+    key: 'patterns',
+    label: 'Patterns & templates',
+    description: 'Named layouts and the templates that implement them.',
+  },
+  {
+    key: 'channels',
+    label: 'Channel guidance',
+    description: 'Caption style, formats and calls to action per channel.',
+  },
+  {
+    key: 'guidelines',
+    label: 'Guidelines',
+    description: 'The brand skill text agents read with the published version.',
+    kit: 'guidelines',
+  },
+  {
+    key: 'facts',
+    label: 'Facts',
+    description: 'What copy may state: proposed with evidence, approved by a brand manager.',
+  },
+  {
+    key: 'objectives',
+    label: 'Objectives',
+    description: 'The metric the brand is steering by, with its guardrails.',
+  },
+  {
+    key: 'versions',
+    label: 'Versions',
+    description: 'Draft → in review → published → retired. Publishing never changes approved work.',
+  },
+];
+
+const OVERVIEW = SECTIONS[0] as (typeof SECTIONS)[number];
+
+/**
+ * Spec 21.2 brand system (proposed extraction; published; conflict; retired version) in the prototype's layout: the
+ * parts of the system in a side list, the version being read in the header. The published version reads; a draft or
+ * a version in review opens the same part in the kit editor. Facts, objectives and versions are their own panels.
+ */
 export function BrandSystemRoute() {
-  const { brand } = useBrandContext();
+  const { brand, brandId } = useBrandContext();
+  const [params, setParams] = useSearchParams();
+  const versions = useBrandVersions(brandId);
+  const approvedFacts = useFacts(brandId, 'approved');
+  const proposedFacts = useFacts(brandId, 'proposed');
+  const section = SECTIONS.find((x) => x.key === params.get('section')) ?? OVERVIEW;
+  const items = versions.data?.items ?? [];
+  const published = items.find((v) => v.id === brand.publishedVersionId) ?? null;
+  const working =
+    items.find(
+      (v) => (v.state === 'draft' || v.state === 'in_review') && (!published || v.number > published.number),
+    ) ?? null;
+  const viewingId = params.get('version') ?? published?.id ?? working?.id ?? null;
+  const viewing = useBrandVersion(
+    brandId,
+    section.key === 'facts' || section.key === 'objectives' || section.key === 'versions' ? null : viewingId,
+  );
+  const set = (key: string, value: string | null) => {
+    const p = new URLSearchParams(params);
+    if (value === null) p.delete(key);
+    else p.set(key, value);
+    setParams(p, { replace: true });
+  };
+  const proposedCount = proposedFacts.data?.items.length ?? 0;
+  const editable = viewing.data && (viewing.data.state === 'draft' || viewing.data.state === 'in_review');
+
   return (
-    <main id="main" className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-      <PageHeading
-        title="Brand system"
-        description="Versions of the brand standards, approved facts and objectives. Every document revision records the brand version it was designed against."
-      />
-      <BrandSkillImport />
-      <Versions publishedVersionId={brand.publishedVersionId} />
-      <Facts />
-      <Objectives />
+    <main id="main" className="flex min-h-full flex-col lg:flex-row">
+      <nav aria-label="Brand system sections" className="shrink-0 border-border lg:w-56 lg:border-r">
+        <p className="hidden px-6 pb-2 pt-6 text-xs font-semibold uppercase tracking-wide text-muted-foreground lg:block">
+          Brand system
+        </p>
+        <ul className="flex gap-1 overflow-x-auto px-4 py-2 lg:flex-col lg:gap-0.5 lg:px-3 lg:py-0">
+          {SECTIONS.map((x) => (
+            <li key={x.key} className="shrink-0">
+              <button
+                type="button"
+                aria-current={x.key === section.key ? 'page' : undefined}
+                onClick={() => set('section', x.key === 'overview' ? null : x.key)}
+                className={cn(
+                  'flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  x.key === section.key
+                    ? 'bg-secondary font-medium text-secondary-foreground'
+                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+                )}
+              >
+                {x.label}
+                {x.key === 'facts' && proposedCount > 0 && (
+                  <span className="text-xs tabular-nums text-status-critical">
+                    {proposedCount}
+                    <span className="sr-only"> proposed</span>
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <div className="min-w-0 flex-1">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-8">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold">{brand.name}</h1>
+            {viewing.data && (
+              <>
+                <Badge tone={VERSION_TONE[viewing.data.state]}>
+                  Version {viewing.data.number} · {versionStateLabel[viewing.data.state]}
+                </Badge>
+                <code className="text-xs text-muted-foreground">{viewing.data.contentHash.slice(0, 12)}</code>
+              </>
+            )}
+          </div>
+          {(published || working) && (
+            <div role="group" aria-label="Version shown" className="flex gap-1">
+              {[published, working].flatMap((v) =>
+                v
+                  ? [
+                      <Button
+                        key={v.id}
+                        size="sm"
+                        variant={v.id === viewingId ? 'secondary' : 'ghost'}
+                        aria-pressed={v.id === viewingId}
+                        onClick={() => set('version', v.id === published?.id ? null : v.id)}
+                      >
+                        v{v.number} · {versionStateLabel[v.state].toLowerCase()}
+                      </Button>,
+                    ]
+                  : [],
+              )}
+            </div>
+          )}
+        </header>
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
+          <div>
+            <h2 className="text-lg font-semibold">{section.label}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
+          </div>
+          {section.key === 'versions' && (
+            <>
+              <BrandSkillImport />
+              <Versions publishedVersionId={brand.publishedVersionId} />
+            </>
+          )}
+          {section.key === 'facts' && <Facts />}
+          {section.key === 'objectives' && <Objectives />}
+          {section.key !== 'versions' && section.key !== 'facts' && section.key !== 'objectives' && (
+            <>
+              {versions.isSuccess && !viewingId && (
+                <EmptyState
+                  title="No brand version yet"
+                  description="Create a draft or import a brand skill in Versions; nothing is published until a brand manager publishes it."
+                />
+              )}
+              {viewingId && viewing.isPending && <Skeleton label="Loading brand version" lines={4} />}
+              {viewing.isError && (
+                <RequestError error={viewing.error} onRetry={() => void viewing.refetch()} />
+              )}
+              {viewing.data && editable && section.kit && (
+                <BrandKitEditor
+                  key={`${viewing.data.id}:${viewing.data.version}`}
+                  version={viewing.data}
+                  only={section.kit}
+                />
+              )}
+              {viewing.data && !(editable && section.kit) && (
+                <SectionView
+                  section={section.key}
+                  doc={viewing.data.document}
+                  brandName={brand.name}
+                  factCount={approvedFacts.data?.items.length}
+                  onOpen={(key) => set('section', key)}
+                />
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </main>
   );
+}
+
+function SectionView({
+  section,
+  doc,
+  brandName,
+  factCount,
+  onOpen,
+}: {
+  section: SectionKey;
+  doc: BrandVersionDto['document'];
+  brandName: string;
+  factCount: number | undefined;
+  onOpen: (key: string) => void;
+}) {
+  switch (section) {
+    case 'overview':
+      return <OverviewView doc={doc} brandName={brandName} factCount={factCount} onOpen={onOpen} />;
+    case 'logo':
+      return <LogoView doc={doc} />;
+    case 'colour':
+      return <ColourView doc={doc} />;
+    case 'typography':
+      return <TypographyView doc={doc} />;
+    case 'voice':
+      return <VoiceView doc={doc} />;
+    case 'imagery':
+      return <ImageryView doc={doc} />;
+    case 'patterns':
+      return <PatternsView doc={doc} />;
+    case 'channels':
+      return <ChannelsView doc={doc} />;
+    case 'guidelines':
+      return <GuidelinesView doc={doc} />;
+    default:
+      return null;
+  }
 }
 
 /** A CONFLICT from an optimistic-concurrency check is the "conflict" state: shown with the reload action. */
