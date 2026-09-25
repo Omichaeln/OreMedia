@@ -6,7 +6,8 @@ import { createEvaluationRunner, type EvaluationRunner } from './run-evaluation'
 
 /**
  * The runner a composition root registers with skillsService.registerEvaluationRunner. Adapters are built on first
- * use from the environment (ANTHROPIC_API_KEY_REF, or the scripted fake outside production), so wiring never fails
+ * use from the environment (OPENROUTER_API_KEY_REF, else ANTHROPIC_API_KEY_REF, or the scripted fake outside
+ * production), so wiring never fails
  * at start-up; an evaluation without a configured model fails with that error at the call.
  */
 export function createEvaluationRunnerFromEnv(
