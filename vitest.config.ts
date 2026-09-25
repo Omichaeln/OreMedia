@@ -13,7 +13,12 @@ export default defineConfig({
         test: {
           ...shared,
           name: 'unit',
-          include: ['packages/**/*.test.ts', 'apps/**/*.test.ts', 'tooling/eslint-config/**/*.test.js'],
+          include: [
+            'packages/**/*.test.ts',
+            'apps/**/*.test.ts',
+            'tooling/eslint-config/**/*.test.js',
+            'tooling/scripts/**/*.test.ts',
+          ],
           exclude: [
             '**/node_modules/**',
             '**/dist/**',
