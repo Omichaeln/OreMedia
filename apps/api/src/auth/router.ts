@@ -53,9 +53,9 @@ const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
  * correctly rejects that response by default; only normalize responses whose body is demonstrably a JSON object.
  * Non-JSON responses and all status codes are returned unchanged, so protocol and signature validation remain strict.
  */
-const googleFetch: typeof fetch = async (input, init) => {
-  const response = await fetch(input, init);
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+const googleFetch: oidc.CustomFetch = async (url, options) => {
+  // openid-client passes a plain RequestInit-shaped object; its body type (Uint8Array included) is fetch-compatible.
+  const response = await fetch(url, options as RequestInit);
   const isGoogleJsonEndpoint =
     url.startsWith('https://www.googleapis.com/oauth2/v4/token') ||
     url.startsWith('https://oauth2.googleapis.com/revoke') ||
