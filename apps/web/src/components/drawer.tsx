@@ -4,7 +4,8 @@ import { cn } from '@oremedia/ui';
 
 /**
  * A side sheet on the Radix Dialog primitive (as dialog.tsx): focus is trapped and returned, Escape and the overlay
- * close it, the title is the accessible name. Used for the brand navigation at phone width.
+ * close it, the title is the accessible name. Used for the brand navigation at phone width and for side sheets
+ * (asset detail and upload, the brand analyst).
  */
 export const Drawer = RadixDialog.Root;
 export const DrawerTrigger = RadixDialog.Trigger;

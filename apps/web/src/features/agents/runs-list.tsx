@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { Badge, EmptyState, Skeleton } from '@oremedia/ui';
+import { listButton } from '../../components/column-header';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { formatMicros, runStateChip } from './run-helpers';
@@ -9,6 +10,8 @@ export interface RunsListProps {
   runs: Array<{ runId: string; run: RunDto | undefined; error: unknown; isPending: boolean }>;
   selectedId: string | null;
   hrefFor: (runId: string) => string;
+  /** Called when a row is followed, including the row already selected (the screen closes its start form). */
+  onSelect?: () => void;
   /** Why the brand-wide history is not available (audit.read denied); the device list still shows. */
   historyNotice: string | null;
   /** The audit query has not settled yet and nothing is known from this device: show loading, not "no runs". */
@@ -24,22 +27,30 @@ export function RunsList({
   runs,
   selectedId,
   hrefFor,
+  onSelect,
   historyNotice,
   historyPending,
   historyError,
   onRetryHistory,
 }: RunsListProps) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col">
       {historyError !== null && historyNotice === null && (
-        <RequestError error={historyError} onRetry={onRetryHistory} title="Run history unavailable" />
+        <div className="px-4 py-3">
+          <RequestError error={historyError} onRetry={onRetryHistory} title="Run history unavailable" />
+        </div>
       )}
-      {historyNotice && <p className="text-xs text-muted-foreground">{historyNotice}</p>}
-      {runs.length === 0 && historyPending && <Skeleton label="Loading runs" lines={3} />}
+      {historyNotice && <p className="px-4 py-3 text-xs text-muted-foreground">{historyNotice}</p>}
+      {runs.length === 0 && historyPending && (
+        <div className="p-4">
+          <Skeleton label="Loading runs" lines={3} />
+        </div>
+      )}
       {runs.length === 0 && !historyPending && (
         <EmptyState
           title="No runs yet"
-          description="Nothing has run for this brand. Start a run below; it appears here with its state, cost and every step."
+          description="Nothing has run for this brand. Start a run with +; it appears here with its state, cost and every step."
+          className="m-4"
         />
       )}
       {runs.length > 0 && (
@@ -48,24 +59,25 @@ export function RunsList({
             const selected = runId === selectedId;
             return (
               <li key={runId} data-testid="run-row" data-run-state={run?.state}>
-                {isPending && <Skeleton label={`Loading run ${runId}`} lines={2} className="py-2" />}
+                {isPending && <Skeleton label={`Loading run ${runId}`} lines={2} className="px-4 py-3" />}
                 {error !== null && !run && (
-                  <p className="py-2 text-sm text-muted-foreground">
+                  <p className="px-4 py-3 text-sm text-muted-foreground">
                     <code>{runId}</code>: {toUiError(error).message}
                   </p>
                 )}
                 {run && (
                   <Link
                     to={hrefFor(runId)}
+                    onClick={onSelect}
                     aria-current={selected ? 'page' : undefined}
-                    className={`block rounded-md px-2 py-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'bg-secondary' : ''}`}
+                    className={listButton(selected)}
                   >
                     <span className="flex flex-wrap items-center gap-2 text-sm">
                       <Badge tone={runStateChip(run.state).tone}>{runStateChip(run.state).label}</Badge>
                       <span className="font-medium">{run.taskKind.replace(/_/g, ' ')}</span>
                       <span className="text-muted-foreground">{formatMicros(run.costMicros)}</span>
                     </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
+                    <span className="block text-xs text-muted-foreground">
                       {run.initiatorKind} {run.initiatorId} · started {when(run.createdAt)} · finished{' '}
                       {when(run.finishedAt)}
                     </span>

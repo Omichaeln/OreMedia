@@ -4,7 +4,7 @@ import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
-import { HomeSection } from '../home/section';
+import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingRange } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
@@ -287,7 +287,7 @@ export function PerformanceScreen() {
 
           {selected && (
             <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-              <HomeSection id="posts-heading" title={`Posts by ${selected.label.toLowerCase()}`}>
+              <Section id="posts-heading" title={`Posts by ${selected.label.toLowerCase()}`}>
                 <ol className="flex flex-col divide-y divide-border" data-testid="performance-posts">
                   {sorted.map((r) => (
                     <li key={r.publication.publicationId} className="flex flex-col gap-1.5 py-3 text-sm">
@@ -330,9 +330,9 @@ export function PerformanceScreen() {
                     </li>
                   ))}
                 </ol>
-              </HomeSection>
+              </Section>
 
-              <HomeSection id="channels-heading" title="By channel">
+              <Section id="channels-heading" title="By channel">
                 {byChannel.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     No channel returned {selected.label.toLowerCase()}.
@@ -354,7 +354,7 @@ export function PerformanceScreen() {
                     ))}
                   </ul>
                 )}
-              </HomeSection>
+              </Section>
             </div>
           )}
         </>

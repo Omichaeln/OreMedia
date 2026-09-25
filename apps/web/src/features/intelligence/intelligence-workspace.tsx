@@ -1,18 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  BarSeries,
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  Input,
-  Panel,
-  Skeleton,
-  StatusBanner,
-} from '@oremedia/ui';
-import { PageHeading, RequestError } from '../../components/request-state';
+import { BarSeries, Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Drawer, DrawerContent, DrawerTrigger } from '../../components/drawer';
+import { RequestError } from '../../components/request-state';
+import { Section } from '../../components/section';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -44,14 +36,15 @@ import {
 } from './use-intelligence';
 
 const VIEW_PARAM = 'view';
-const VIEWS = ['changed', 'learned', 'next', 'experiments', 'playbook'] as const;
+const VIEWS = ['changed', 'learned', 'next', 'voice', 'playbook', 'experiments'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABEL: Record<View, string> = {
   changed: 'What changed',
   learned: 'What we learned',
   next: 'What to do next',
-  experiments: 'Experiments',
+  voice: 'Customer voice',
   playbook: 'Brand playbook',
+  experiments: 'Experiments',
 };
 
 function InsightList({ items, label, emptyText }: { items: InsightDto[]; label: string; emptyText: string }) {
@@ -277,8 +270,8 @@ function WhatChanged({ view, brandId }: { view: WorkspaceDto['whatChanged']; bra
   const anomalies = useAnomalies(brandId);
   const gaps = hasCoverageGaps(view.items);
   return (
-    <div className="flex flex-col gap-4">
-      <Panel title="Movements and data gaps" data-testid="what-changed">
+    <div className="flex flex-col gap-8">
+      <Section id="movements-heading" title="Movements and data gaps" testId="what-changed">
         <FreshnessLine
           freshness={view.freshness}
           coverage={view.coverage}
@@ -300,8 +293,8 @@ function WhatChanged({ view, brandId }: { view: WorkspaceDto['whatChanged']; bra
         ) : (
           <InsightList items={view.items} label="Movements" emptyText="" />
         )}
-      </Panel>
-      <Panel title="Anomalies" data-testid="anomalies">
+      </Section>
+      <Section id="anomalies-heading" title="Anomalies" testId="anomalies">
         {anomalies.isPending && <Skeleton label="Loading anomalies" />}
         {anomalies.isError && (
           <RequestError error={anomalies.error} onRetry={() => void anomalies.refetch()} />
@@ -337,71 +330,79 @@ function WhatChanged({ view, brandId }: { view: WorkspaceDto['whatChanged']; bra
             })}
           </ul>
         )}
-      </Panel>
+      </Section>
     </div>
   );
 }
 
-function WhatWeLearned({ view, brandId }: { view: WorkspaceDto['whatWeLearned']; brandId: string }) {
-  const clusters = useVoiceClusters(brandId);
+function WhatWeLearned({ view }: { view: WorkspaceDto['whatWeLearned'] }) {
   return (
-    <div className="flex flex-col gap-4">
-      <Panel title="Observations and hypotheses" data-testid="what-we-learned">
+    <div className="flex flex-col gap-8">
+      <Section id="observations-heading" title="Observations and hypotheses" testId="what-we-learned">
         <FreshnessLine freshness={view.freshness} statement={view.statement} />
         <InsightList
           items={[...view.observations, ...view.directional]}
           label="Hypotheses"
           emptyText="No observations or hypotheses yet."
         />
-      </Panel>
-      <Panel title="Experimentally supported findings" data-testid="findings">
+      </Section>
+      <Section id="findings-heading" title="Experimentally supported findings" testId="findings">
         <InsightList
           items={view.experimentallySupported}
           label="Findings"
           emptyText="No experimentally supported findings yet. Only a sound randomised experiment can add one."
         />
-      </Panel>
-      <Panel title="Customer voice" data-testid="voice">
-        <p className="mb-2 text-xs text-muted-foreground">
-          Clusters of comments by kind with counts and sample references; author identities are never shown
-          here. Social discussion is not a representative measure of market demand.
-        </p>
-        {clusters.isPending && <Skeleton label="Loading customer voice" />}
-        {clusters.isError && <RequestError error={clusters.error} onRetry={() => void clusters.refetch()} />}
-        {clusters.data && clusters.data.items.length === 0 && (
-          <p className="text-sm text-muted-foreground">No clusters yet.</p>
-        )}
-        {clusters.data && clusters.data.items.length > 0 && (
-          <ul className="divide-y divide-border" aria-label="Customer voice clusters">
-            {clusters.data.items.map((c) => {
-              const kind = clusterKindChip(c.kind);
-              return (
-                <li key={c.id} className="flex flex-col gap-1 py-2" data-testid="cluster">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <Badge tone={kind.tone}>{kind.label}</Badge>
-                    <span className="font-medium">{c.label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {c.size} message{c.size === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    First seen {new Date(c.firstSeen).toLocaleDateString()} · last seen{' '}
-                    {new Date(c.lastSeen).toLocaleString()} · samples {c.sampleMessageRefs.length}
-                    {c.linkedRecommendationIds.length
-                      ? ` · linked recommendations ${c.linkedRecommendationIds.join(', ')}`
-                      : ''}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Panel>
+      </Section>
     </div>
   );
 }
 
-/** Spec 21.1 `intelligence/`: the five views of spec 16.9 as tabs; the selected view is in the URL. */
+function CustomerVoice({ brandId }: { brandId: string }) {
+  const clusters = useVoiceClusters(brandId);
+  return (
+    <Section id="voice-heading" title="Comment clusters" testId="voice">
+      <p className="text-xs text-muted-foreground">
+        Clusters of comments by kind with counts and sample references; author identities are never shown
+        here. Social discussion is not a representative measure of market demand.
+      </p>
+      {clusters.isPending && <Skeleton label="Loading customer voice" />}
+      {clusters.isError && <RequestError error={clusters.error} onRetry={() => void clusters.refetch()} />}
+      {clusters.data && clusters.data.items.length === 0 && (
+        <p className="text-sm text-muted-foreground">No clusters yet.</p>
+      )}
+      {clusters.data && clusters.data.items.length > 0 && (
+        <ul className="divide-y divide-border" aria-label="Customer voice clusters">
+          {clusters.data.items.map((c) => {
+            const kind = clusterKindChip(c.kind);
+            return (
+              <li key={c.id} className="flex flex-col gap-1 py-2" data-testid="cluster">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Badge tone={kind.tone}>{kind.label}</Badge>
+                  <span className="font-medium">{c.label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {c.size} message{c.size === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  First seen {new Date(c.firstSeen).toLocaleDateString()} · last seen{' '}
+                  {new Date(c.lastSeen).toLocaleString()} · samples {c.sampleMessageRefs.length}
+                  {c.linkedRecommendationIds.length
+                    ? ` · linked recommendations ${c.linkedRecommendationIds.join(', ')}`
+                    : ''}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Spec 21.1 `intelligence/`: the views of spec 16.9 as tabs (customer voice on its own, as in the v3 prototype); the
+ * selected view is in the URL. The analyst is started from a side sheet so the views stay first on the page.
+ */
 export function IntelligenceWorkspaceScreen() {
   const { companyId, brandId, brand } = useBrandContext();
   const trpc = useTRPC();
@@ -421,22 +422,60 @@ export function IntelligenceWorkspaceScreen() {
     if (analysis !== null && ws !== undefined && asOf !== analysis.asOfBefore) setAnalysis(null);
   }, [analysis, ws, asOf]);
   const systemHref = brandPath(companyId, brandId, 'system');
+  const [analystOpen, setAnalystOpen] = useState(false);
 
   return (
-    <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 sm:p-6">
-      <PageHeading
-        title="Intelligence"
-        description={`What changed, what ${brand.name} learned and what to do next. Every number carries its fetch time; hypotheses are labelled as such and only experiments support causal claims.`}
-        actions={
+    <main id="main" className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Intelligence</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {ws?.objective
+              ? `Ranked against ${ws.objective.primaryMetricKey.replace(/_/g, ' ')}`
+              : 'No objective set'}{' '}
+            · learned from {brand.name}’s data only · hypotheses are labelled; only experiments support causal
+            claims
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
           <Button
             size="sm"
+            variant="ghost"
             onClick={() => void queryClient.invalidateQueries(trpc.intelligence.pathFilter())}
             disabled={workspace.isFetching}
           >
             {workspace.isFetching ? 'Refreshing…' : 'Refresh'}
           </Button>
-        }
-      />
+          {ws && (
+            <Drawer open={analystOpen} onOpenChange={setAnalystOpen}>
+              <DrawerTrigger asChild>
+                <Button size="sm" variant="primary">
+                  Run brand analyst
+                </Button>
+              </DrawerTrigger>
+              <DrawerContent
+                title="Run the brand analyst"
+                side="right"
+                className="w-[min(92vw,26rem)] overflow-y-auto p-5"
+              >
+                <div id="analyse-now" className="flex flex-col gap-4">
+                  <p className="text-sm text-muted-foreground">
+                    Reviews the period’s metric snapshots and comments and writes insights and
+                    recommendations. The views refresh when they land.
+                  </p>
+                  <AnalyseNowForm
+                    brandId={brandId}
+                    onStarted={(run) => {
+                      setAnalysis({ run, asOfBefore: ws.whatChanged.freshness.asOf });
+                      setAnalystOpen(false);
+                    }}
+                  />
+                </div>
+              </DrawerContent>
+            </Drawer>
+          )}
+        </div>
+      </header>
       {workspace.isPending && <Skeleton label="Loading intelligence workspace" lines={4} />}
       {workspace.isError && (
         <RequestError
@@ -469,16 +508,10 @@ export function IntelligenceWorkspaceScreen() {
               data-testid="analysis-running"
             />
           )}
-          <Panel title="Analyse now" id="analyse-now">
-            <AnalyseNowForm
-              brandId={brandId}
-              onStarted={(run) => setAnalysis({ run, asOfBefore: ws.whatChanged.freshness.asOf })}
-            />
-          </Panel>
           <Tabs
             value={view}
             onValueChange={(v) => setParams({ [VIEW_PARAM]: v }, { replace: true })}
-            className="flex flex-col gap-4"
+            className="flex flex-col gap-6"
           >
             <TabList label="Intelligence views" className="overflow-x-auto">
               {VIEWS.map((v) => (
@@ -491,27 +524,47 @@ export function IntelligenceWorkspaceScreen() {
               <WhatChanged view={ws.whatChanged} brandId={brandId} />
             </TabPanel>
             <TabPanel value="learned">
-              <WhatWeLearned view={ws.whatWeLearned} brandId={brandId} />
+              <WhatWeLearned view={ws.whatWeLearned} />
             </TabPanel>
             <TabPanel value="next">
-              <Panel title="Ranked actions" data-testid="what-to-do-next">
+              <Section id="next-heading" title="Ranked actions" testId="what-to-do-next">
                 <FreshnessLine freshness={ws.whatToDoNext.freshness} statement={ws.whatToDoNext.statement} />
-                <p className="mb-2 text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {ws.whatToDoNext.ranked
                     ? `Ranking policy: ${ws.whatToDoNext.rankingPolicy}.`
                     : 'Unranked list.'}
                 </p>
                 <RecommendationList companyId={companyId} brandId={brandId} view={ws.whatToDoNext} />
-              </Panel>
+              </Section>
+            </TabPanel>
+            <TabPanel value="voice">
+              <CustomerVoice brandId={brandId} />
+            </TabPanel>
+            <TabPanel value="playbook">
+              <PlaybookPanel
+                brandId={brandId}
+                view={ws.brandPlaybook}
+                insights={[
+                  ...ws.whatChanged.items,
+                  ...ws.whatWeLearned.observations,
+                  ...ws.whatWeLearned.directional,
+                  ...ws.whatWeLearned.experimentallySupported,
+                ]}
+                canApprove={canApprovePlaybook(role)}
+              />
             </TabPanel>
             <TabPanel value="experiments">
-              <Panel
+              <Section
+                id="experiments-heading"
                 title="Experiments"
-                data-testid="experiments-view"
-                actions={
-                  <Button size="sm" asChild>
-                    <Link to={brandPath(companyId, brandId, 'experiments')}>Open experiments</Link>
-                  </Button>
+                testId="experiments-view"
+                action={
+                  <Link
+                    to={brandPath(companyId, brandId, 'experiments')}
+                    className="underline-offset-2 hover:underline"
+                  >
+                    Open experiments <span aria-hidden="true">→</span>
+                  </Link>
                 }
               >
                 <FreshnessLine freshness={ws.experiments.freshness} statement={ws.experiments.statement} />
@@ -528,20 +581,7 @@ export function IntelligenceWorkspaceScreen() {
                     ),
                   )}
                 </div>
-              </Panel>
-            </TabPanel>
-            <TabPanel value="playbook">
-              <PlaybookPanel
-                brandId={brandId}
-                view={ws.brandPlaybook}
-                insights={[
-                  ...ws.whatChanged.items,
-                  ...ws.whatWeLearned.observations,
-                  ...ws.whatWeLearned.directional,
-                  ...ws.whatWeLearned.experimentallySupported,
-                ]}
-                canApprove={canApprovePlaybook(role)}
-              />
+              </Section>
             </TabPanel>
           </Tabs>
         </>
