@@ -13,3 +13,4 @@ export * from './experiments';
 export * from './community';
 export * from './billing';
 export * from './operations';
+export * from './platform';

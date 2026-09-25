@@ -67,6 +67,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`policy_versions` TO '__AP
 GRANT SELECT, INSERT ON `__DB_NAME__`.`preview_exports` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`provider_capabilities` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`provider_jobs` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`provider_review_statuses` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`publication_attempts` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`publications` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`publishing_mandates` TO '__APP_USER__'@'%';

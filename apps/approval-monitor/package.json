@@ -1,0 +1,21 @@
+{
+  "name": "@oremedia/approval-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --dir ../.. exec vitest run --project unit apps/approval-monitor/src/review.test.ts"
+  },
+  "dependencies": {
+    "@oremedia/db": "workspace:*",
+    "@oremedia/observability": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.4"
+  }
+}
