@@ -9,7 +9,7 @@ if (missing.length) {
   for (const name of missing)
     console.error(
       JSON.stringify({
-        level: 50,
+        level: 'error',
         service: 'oremedia-redirector',
         msg: `${name} is required`,
         time: Date.now(),

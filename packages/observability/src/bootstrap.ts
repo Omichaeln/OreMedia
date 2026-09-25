@@ -3,6 +3,7 @@ import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentation
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { createServer } from 'node:http';
 import * as Sentry from '@sentry/node';
 import { createLogger, type Logger } from './logger';
 
@@ -66,3 +67,33 @@ export async function stopTelemetry(): Promise<void> {
 export const captureException = (err: unknown, context?: Record<string, string | number>): void => {
   Sentry.captureException(err, context ? { tags: context } : undefined);
 };
+
+export interface HealthServer {
+  port: number;
+  close(): Promise<void>;
+}
+
+/**
+ * Worker readiness for the platform health check. A worker calls this only once its Temporal workers are running,
+ * so a worker that cannot start never answers `/health` and its deploy fails, instead of showing healthy while
+ * nothing polls. Listens on `port` (default `PORT`); with neither set (local runs) nothing listens.
+ */
+export async function startHealthServer(port = process.env['PORT']): Promise<HealthServer> {
+  if (port === undefined || port === '') return { port: 0, close: async () => {} };
+  const server = createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(Number(port), resolve);
+  });
+  const address = server.address();
+  return {
+    port: typeof address === 'object' && address ? address.port : Number(port),
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}

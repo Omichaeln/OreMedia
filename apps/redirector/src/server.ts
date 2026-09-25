@@ -50,7 +50,7 @@ export function createRedirector(opts: RedirectorOptions): express.Express {
   const log = logger().child('redirector');
   if (opts.trustProxy) app.set('trust proxy', true);
   app.disable('x-powered-by');
-  app.get('/healthz', (_req, res) => {
+  app.get(['/health', '/healthz'], (_req, res) => {
     res.json({ ok: true, buffered: opts.clicks.size() });
   });
   app.get('/:code', async (req, res) => {

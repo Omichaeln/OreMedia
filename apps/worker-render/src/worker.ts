@@ -13,7 +13,7 @@ import { createAssetIngestActivities, createRenderJobActivities } from '@oremedi
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
 import { configureStorage, createStorageFromEnv, storage } from '@oremedia/module-assets';
-import { startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { createChromiumRenderer } from './chromium-renderer';
 import { creativeRenderJobStore } from './creative-store';
 
@@ -100,6 +100,8 @@ const mediaWorker = await Worker.create({
   maxConcurrentActivityTaskExecutions: Number(process.env['MEDIA_CONCURRENCY'] ?? 4),
 });
 log.info({ status: RENDERER_VERSION }, 'worker-render polling task queues render and media');
+// Answer the platform health check only now that both workers were created (a failed start throws above).
+const health = await startHealthServer();
 
 const shutdown = () => {
   log.info({}, 'worker-render shutting down');
@@ -112,6 +114,7 @@ process.on('SIGINT', shutdown);
 try {
   await Promise.all([renderWorker.run(), mediaWorker.run()]);
 } finally {
+  await health.close();
   await renderer.close();
   await connection.close();
   await closeDatabase();

@@ -51,6 +51,8 @@ export function createLogger(opts: {
       level: opts.level ?? process.env['LOG_LEVEL'] ?? 'info',
       base: { service: opts.service, env: opts.env ?? process.env['NODE_ENV'] ?? 'development' },
       messageKey: 'msg',
+      // Level as its label ('error', not 50): log platforms such as Railway read severity from this field.
+      formatters: { level: (label) => ({ level: label }) },
       timestamp: pino.stdTimeFunctions.isoTime,
       // Belt and braces: pino redaction on top of the allowlist, for nested objects a caller passes under an allowed key.
       redact: {
