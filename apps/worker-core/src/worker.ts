@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, configureRoleDatabase, closeDatabase } from '@oremedia/db';
 import { composeModules } from './composition';
 import { startAgentsWorker } from './agents-worker';
@@ -73,9 +73,12 @@ const loop = runDispatchLoop({
   intervalMs: Number(process.env['OUTBOX_POLL_INTERVAL_MS'] ?? 1000),
   signal: controller.signal,
 });
+// Answer the platform health check only now that every worker started (a failed start exited above).
+const health = await startHealthServer();
 
 const shutdown = async () => {
   controller.abort();
+  await health.close();
   agentsWorker.shutdown();
   publishingWorkers.shutdown();
   await Promise.all([loop, agentsRun, publishingRun]);

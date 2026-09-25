@@ -14,6 +14,7 @@ import {
   type SignInRefusalReason,
 } from '@oremedia/contracts/access';
 import { PolicyDeniedError, RateLimitedError, toErrorEnvelope } from '@oremedia/contracts/errors';
+import { logger } from '@oremedia/observability';
 import { accessService, authenticate, type AuthOrigin } from '@oremedia/module-access';
 import {
   cookieNames,
@@ -73,14 +74,17 @@ const googleFetch: typeof fetch = async (input, init) => {
   try {
     JSON.parse(jsonText);
   } catch {
-    console.warn('Google OAuth endpoint returned a non-JSON body', {
-      url,
+    logger()
+      .child('auth')
+      .warn(
+        { path: new URL(url).pathname, status: response.status, reason: contentType, bytes: text.length },
+        'Google OAuth endpoint returned a non-JSON body',
+      );
+    return new Response(bytes, {
       status: response.status,
-      contentType,
-      bodyLength: text.length,
-      firstCodePoint: text.codePointAt(0) ?? null,
+      statusText: response.statusText,
+      headers: response.headers,
     });
-    return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
   }
   const headers = new Headers(response.headers);
   headers.set('content-type', 'application/json');
@@ -108,18 +112,19 @@ function discoveryFor(config: AuthConfig): () => Promise<oidc.Configuration> {
   let pending: Promise<oidc.Configuration> | null = null;
   const isGoogle = config.issuerUrl.hostname === 'accounts.google.com';
   return () => {
-    pending ??= (isGoogle
-      ? googleDiscovery(config)
-      : oidc.discovery(config.issuerUrl, config.clientId, config.clientSecret, undefined, {
-          execute: [
-            oidc.enableNonRepudiationChecks,
-            ...(config.allowInsecureIssuer ? [oidc.allowInsecureRequests] : []),
-          ],
-        }))
-      .catch((err: unknown) => {
-        pending = null;
-        throw err;
-      });
+    pending ??= (
+      isGoogle
+        ? googleDiscovery(config)
+        : oidc.discovery(config.issuerUrl, config.clientId, config.clientSecret, undefined, {
+            execute: [
+              oidc.enableNonRepudiationChecks,
+              ...(config.allowInsecureIssuer ? [oidc.allowInsecureRequests] : []),
+            ],
+          })
+    ).catch((err: unknown) => {
+      pending = null;
+      throw err;
+    });
     return pending;
   };
 }

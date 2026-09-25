@@ -2,14 +2,14 @@
 
 Six application services, each with the repository root as its root directory and a config-as-code path under `infra/railway/<service>/railway.json`:
 
-| Service         | Image                             | `OREMEDIA_APP` variable | Ports / health                                                      |
-| --------------- | --------------------------------- | ----------------------- | ------------------------------------------------------------------- |
-| `api`           | `infra/railway/Dockerfile`        | `api`                   | `PORT` (HTTP), `/health`; runs migrations as its pre-deploy command |
-| `worker-core`   | `infra/railway/Dockerfile`        | `worker-core`           | no HTTP; Temporal worker (queues `core`, `agents`, `publish-*`)     |
-| `worker-ingest` | `infra/railway/Dockerfile`        | `worker-ingest`         | no HTTP; Temporal worker (`ingest-*`, `listening`, `crm`)           |
-| `worker-render` | `infra/railway/Dockerfile.render` | (fixed)                 | no HTTP; Temporal worker (`render`, `media`); Chromium image        |
-| `redirector`    | `infra/railway/Dockerfile`        | `redirector`            | `PORT`, `/health`; tracked-link redirects on `LINK_REDIRECT_DOMAIN` |
-| `web`           | `infra/railway/Dockerfile.web`    | (fixed)                 | `PORT`, `/health` (proxied); SPA + API proxy (`API_INTERNAL_URL`)   |
+| Service         | Image                             | `OREMEDIA_APP` variable | Ports / health                                                                   |
+| --------------- | --------------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `api`           | `infra/railway/Dockerfile`        | `api`                   | `PORT` (HTTP), `/health`; runs migrations as its pre-deploy command              |
+| `worker-core`   | `infra/railway/Dockerfile`        | `worker-core`           | `PORT`, `/health` once all workers started; queues `core`, `agents`, `publish-*` |
+| `worker-ingest` | `infra/railway/Dockerfile`        | `worker-ingest`         | `PORT`, `/health` once workers started; `ingest-*`, `listening`, `crm`           |
+| `worker-render` | `infra/railway/Dockerfile.render` | (fixed)                 | `PORT`, `/health` once workers started; `render`, `media`; Chromium              |
+| `redirector`    | `infra/railway/Dockerfile`        | `redirector`            | `PORT`, `/health`; tracked-link redirects on `LINK_REDIRECT_DOMAIN`              |
+| `web`           | `infra/railway/Dockerfile.web`    | (fixed)                 | `PORT`, `/health` (proxied); SPA + API proxy (`API_INTERNAL_URL`)                |
 
 `worker-ingest` (Phase 6) and `redirector` (Phase 5) are listed for completeness: their `railway.json` files are
 in place, but the apps do not exist yet and the services must not be created until they do.

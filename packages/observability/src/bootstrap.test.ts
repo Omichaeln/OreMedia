@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gunzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { captureException, startTelemetry, stopTelemetry } from './bootstrap';
+import { captureException, startHealthServer, startTelemetry, stopTelemetry } from './bootstrap';
 import { METRIC, count, tracer } from './telemetry';
 
 /**
@@ -88,4 +88,23 @@ describe('telemetry bootstrap delivers to a collector and to Sentry', () => {
     expect(sentryBodies).toContain('bootstrap-test request failure');
     expect(sentryBodies).not.toContain(SENTINEL);
   }, 30_000);
+});
+
+describe('worker health server', () => {
+  it('answers GET /health with 200 once started, 404 elsewhere, and stops answering after close', async () => {
+    const health = await startHealthServer('0');
+    const base = `http://127.0.0.1:${health.port}`;
+    const ok = await fetch(`${base}/health`);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ ok: true });
+    expect((await fetch(`${base}/other`)).status).toBe(404);
+    await health.close();
+    await expect(fetch(`${base}/health`)).rejects.toThrow();
+  });
+
+  it('listens on nothing when no port is configured (local runs and tests)', async () => {
+    const health = await startHealthServer('');
+    expect(health.port).toBe(0);
+    await health.close();
+  });
 });
