@@ -22,6 +22,7 @@ import { useBrandContext } from '../../../../../../features/brand/brand-context'
 import { BrandKitEditor, type KitSection } from '../../../../../../features/brand/brand-kit-editor';
 import {
   ChannelsView,
+  changedSections,
   ColourView,
   GuidelinesView,
   ImageryView,
@@ -131,7 +132,8 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   {
     key: 'versions',
     label: 'Versions',
-    description: 'Draft → in review → published → retired. Publishing never changes approved work.',
+    description:
+      'Draft → in review → published → retired. Publishing never edits approved content; it invalidates the brand’s approvals and re-checks scheduled posts.',
   },
 ];
 
@@ -168,6 +170,13 @@ export function BrandSystemRoute() {
   };
   const proposedCount = proposedFacts.data?.items.length ?? 0;
   const editable = viewing.data && (viewing.data.state === 'draft' || viewing.data.state === 'in_review');
+  // A draft or a version in review is read against the published version it would replace.
+  const base = useBrandVersion(brandId, editable && published ? published.id : null);
+  const changed = new Set(
+    viewing.data && editable && base.data
+      ? changedSections(viewing.data.document, base.data.document).map((c) => c.key)
+      : [],
+  );
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -191,6 +200,11 @@ export function BrandSystemRoute() {
                 )}
               >
                 {x.label}
+                {changed.has(x.key) && (
+                  <span className="text-xs text-accent">
+                    Changed<span className="sr-only"> in this version</span>
+                  </span>
+                )}
                 {x.key === 'facts' && proposedCount > 0 && (
                   <span className="text-xs tabular-nums text-status-critical">
                     {proposedCount}
@@ -236,6 +250,25 @@ export function BrandSystemRoute() {
           )}
         </header>
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
+          {viewing.data && editable && (
+            <StatusBanner
+              tone="info"
+              title={`You’re viewing version ${viewing.data.number}, ${versionStateLabel[viewing.data.state].toLowerCase()}`}
+              description={
+                published
+                  ? `Sections that differ from published version ${published.number} are marked Changed. Nothing applies until a brand manager publishes it.`
+                  : 'Nothing is published yet. Nothing applies until a brand manager publishes this version.'
+              }
+              actions={
+                section.key !== 'versions' && (
+                  <Button size="sm" onClick={() => set('section', 'versions')}>
+                    Review changes
+                  </Button>
+                )
+              }
+              data-testid="viewing-draft"
+            />
+          )}
           <div>
             <h2 className="text-lg font-semibold">{section.label}</h2>
             <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
@@ -244,6 +277,19 @@ export function BrandSystemRoute() {
             <>
               <BrandSkillImport />
               <Versions publishedVersionId={brand.publishedVersionId} />
+              {working && published && (
+                <VersionChanges
+                  brandId={brandId}
+                  version={working}
+                  published={published}
+                  onOpen={(key) => {
+                    const p = new URLSearchParams(params);
+                    p.set('section', key);
+                    p.set('version', working.id);
+                    setParams(p, { replace: true });
+                  }}
+                />
+              )}
             </>
           )}
           {section.key === 'facts' && <Facts />}
@@ -319,6 +365,69 @@ function SectionView({
     default:
       return null;
   }
+}
+
+/**
+ * "Changes in version N": the sections the newer version changes against the published one, each opening that
+ * section of the newer version, and what publishing it does to approved and scheduled work (spec 8.2).
+ */
+function VersionChanges({
+  brandId,
+  version,
+  published,
+  onOpen,
+}: {
+  brandId: string;
+  version: BrandVersionSummary;
+  published: BrandVersionSummary;
+  onOpen: (key: string) => void;
+}) {
+  const next = useBrandVersion(brandId, version.id);
+  const base = useBrandVersion(brandId, published.id);
+  const changes = next.data && base.data ? changedSections(next.data.document, base.data.document) : null;
+  return (
+    <section aria-labelledby="version-changes" className="flex flex-col gap-2" data-testid="version-changes">
+      <h3
+        id="version-changes"
+        className="border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+      >
+        Changes in version {version.number}
+      </h3>
+      {(next.isPending || base.isPending) && <Skeleton label="Comparing versions" lines={2} />}
+      {next.isError && <RequestError error={next.error} onRetry={() => void next.refetch()} />}
+      {base.isError && <RequestError error={base.error} onRetry={() => void base.refetch()} />}
+      {changes && changes.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          Version {version.number} has the same content as published version {published.number}.
+        </p>
+      )}
+      {changes && changes.length > 0 && (
+        <ul className="flex flex-col divide-y divide-border text-sm">
+          {changes.map((c) => (
+            <li key={c.key} className="flex items-center justify-between gap-3 py-2">
+              <span>{c.label}</span>
+              <button
+                type="button"
+                onClick={() => onOpen(c.key)}
+                className="text-sm font-medium underline-offset-2 hover:underline"
+              >
+                Open <span aria-hidden="true">→</span>
+                <span className="sr-only">
+                  {' '}
+                  {c.label} in version {version.number}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-muted-foreground">
+        If version {version.number} is published, approvals of this brand are invalidated and every scheduled
+        publication is re-checked against the release policy; any that fail are held with the failed checks
+        (spec 8.2).
+      </p>
+    </section>
+  );
 }
 
 /** A CONFLICT from an optimistic-concurrency check is the "conflict" state: shown with the reload action. */

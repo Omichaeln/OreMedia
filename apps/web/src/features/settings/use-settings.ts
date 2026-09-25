@@ -9,3 +9,27 @@ export function useSkills() {
   const trpc = useTRPC();
   return useQuery(trpc.skills.list.queryOptions({ page: { limit: 200 } }));
 }
+
+export type KillSwitchScope = 'agent_starts' | 'release_dispatch';
+
+/** Spec 8.1 / 13.5: the brand's active release policy version (NOT_FOUND while none is activated). */
+export function useReleasePolicy(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.brand.policy.get.queryOptions({ brandId }), retry: false });
+}
+
+/** Runbook kill switches: company-wide (no brandId) or for one brand. Admin-only on the server (audit.read). */
+export function useKillSwitch(scope: KillSwitchScope, brandId: string | undefined, enabled: boolean) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.operations.killSwitch.get.queryOptions({ scope, brandId }),
+    enabled,
+    retry: false,
+  });
+}
+
+/** Spec 12.7: the company's model-routing policy. Admin-only on the server (billing.manage). */
+export function useRoutingPolicy(enabled: boolean) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.agents.routingPolicy.get.queryOptions(), enabled, retry: false });
+}
