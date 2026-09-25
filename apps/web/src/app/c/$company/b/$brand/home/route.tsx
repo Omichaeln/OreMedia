@@ -84,7 +84,7 @@ export function BrandHomeRoute() {
               description={`Version ${newerDraft.number} (${newerDraft.state === 'in_review' ? 'in review' : 'proposed'}) is newer than the published version ${published?.number}. Documents keep the published version until the new one is published.`}
               actions={
                 <Button asChild size="sm">
-                  <Link to={system}>Review</Link>
+                  <Link to={`${system}?section=versions`}>Review</Link>
                 </Button>
               }
             />

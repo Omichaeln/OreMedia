@@ -114,7 +114,7 @@ export function NeedsYou() {
             state: 'Proposed',
             title: `${factCount} proposed brand ${factCount === 1 ? 'fact' : 'facts'}`,
             detail: 'Agents and checks cannot rely on them until a brand manager approves them.',
-            href: `${brandPath(companyId, brandId, 'system')}#facts`,
+            href: `${brandPath(companyId, brandId, 'system')}?section=facts`,
             action: 'Review facts',
             at: null,
           },

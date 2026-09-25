@@ -199,6 +199,11 @@ const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
 export class MockBackend {
+  /** The last brand draft document saved through brand.versions.update (tests read what the editor sent). */
+  brandDraftDocument: { voice?: unknown } | null = null;
+  lastBrandDraftVoice(): unknown {
+    return this.brandDraftDocument?.voice ?? null;
+  }
   readonly tenantId: string;
   readonly brandId: string;
   readonly companyName: string;
@@ -739,6 +744,7 @@ export function createMockRouter(backend: MockBackend) {
           .input(BrandVersionGet)
           .query(({ input }) => (input.versionId === brandDraft.id ? brandDraft : brandVersion)),
         update: mutation.input(BrandVersionUpdate).mutation(({ input }) => {
+          backend.brandDraftDocument = input.document as { voice?: unknown };
           brandDraft = {
             ...brandDraft,
             document: input.document as typeof brandDraftDoc,
