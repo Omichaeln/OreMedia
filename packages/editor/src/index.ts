@@ -15,7 +15,7 @@ export {
   type TemplateDocument,
 } from './reduce';
 export { guardProtected, guardLogoInsertion } from './guard';
-export { validateAgainstBrand, contrastRatio } from './validate';
+export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
 export { invertBatch, type InvertResult } from './invert';
 export { rebaseBatch, type RebaseConflict, type RebaseResult } from './rebase';

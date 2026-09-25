@@ -35,6 +35,7 @@ import {
 import {
   isOremediaError,
   NotFoundError,
+  PolicyDeniedError,
   StaleRevisionError,
   toErrorEnvelope,
   ValidationFailedError,
@@ -235,6 +236,8 @@ export class MockBackend {
     updatedAt: '2026-09-01T09:00:00.000Z',
     version: 1,
   }));
+  /** Kill switches by `${scope}:${brandId ?? ''}` (operations.killSwitch); '' is the company-wide row. */
+  readonly killSwitches = new Map<string, { engaged: boolean; reason: string | null }>();
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
   /**
@@ -697,6 +700,25 @@ export function createMockRouter(backend: MockBackend) {
       })),
     }),
     agents: t.router({
+      routingPolicy: t.router({
+        get: query.query(() => {
+          if (backend.role !== 'owner' && backend.role !== 'admin')
+            throw new PolicyDeniedError('billing.manage');
+          return {
+            policy: {
+              schemaVersion: 1 as const,
+              defaultModel: 'anthropic/claude-sonnet',
+              permittedVendors: ['anthropic', 'openrouter'] as Array<'anthropic' | 'openrouter' | 'fake'>,
+              permittedRegions: ['eu'],
+              retention: 'zero' as const,
+              dataClasses: ['brand_content'] as Array<'brand_content' | 'customer_voice' | 'pii'>,
+              deniedModels: [],
+            },
+            version: 2,
+            stored: true as const,
+          };
+        }),
+      }),
       runs: t.router({
         get: query.input(RunGet).query(({ input }) => {
           const run = backend.runs.get(input.runId);
@@ -712,6 +734,37 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     operations: t.router({
+      killSwitch: t.router({
+        // As the server: engaged when the company-wide row is, or the brand's own row.
+        get: query
+          .input(
+            z.object({ scope: z.enum(['agent_starts', 'release_dispatch']), brandId: z.string().optional() }),
+          )
+          .query(({ input }) => {
+            if (backend.role !== 'owner' && backend.role !== 'admin')
+              throw new PolicyDeniedError('audit.read');
+            const on = (b: string) => backend.killSwitches.get(`${input.scope}:${b}`)?.engaged === true;
+            return { engaged: on('') || (input.brandId ? on(input.brandId) : false) };
+          }),
+        set: mutation
+          .input(
+            z.object({
+              scope: z.enum(['agent_starts', 'release_dispatch']),
+              brandId: z.string().nullable(),
+              engaged: z.boolean(),
+              reason: z.string().max(500).nullable(),
+            }),
+          )
+          .mutation(({ input }) => {
+            if (backend.role !== 'owner' && backend.role !== 'admin')
+              throw new PolicyDeniedError('billing.manage');
+            backend.killSwitches.set(`${input.scope}:${input.brandId ?? ''}`, {
+              engaged: input.engaged,
+              reason: input.reason,
+            });
+            return { ok: true };
+          }),
+      }),
       audit: t.router({
         /** The run history the agents screen reads: one `agent.run.request` event per run of this company. */
         query: query.input(z.object({ query: AuditQuery, page: PageRequest })).query(({ input }) => ({
@@ -737,6 +790,14 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     brand: t.router({
+      policy: t.router({
+        // No policy version is activated in the mock brand: the screen shows the defaults in force.
+        get: query
+          .input(z.object({ brandId: z.string(), policyVersionId: z.string().optional() }))
+          .query(() => {
+            throw new NotFoundError('PolicyVersion', 'active');
+          }),
+      }),
       list: query.query(({ ctx }) =>
         backend.brands
           .filter((b) => !ctx.member?.brandIds || ctx.member.brandIds.includes(b.id))

@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { prohibitedPhrasesIn } from '@oremedia/editor';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
-import { Badge, cn } from '@oremedia/ui';
+import { Badge, Field, Textarea, cn } from '@oremedia/ui';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useAsset } from '../assets/use-assets';
 import { contrast } from './brand-kit-editor';
@@ -217,7 +218,99 @@ export function VoiceView({ doc }: { doc: Doc }) {
           <Chips items={v.locales} />
         </ReadSection>
       )}
+      <DraftCheck voice={v} />
     </div>
+  );
+}
+
+/** A word or phrase as a whole-word, case-insensitive match (so "blend" does not match "blender"). */
+const wordIn = (text: string, phrase: string) =>
+  new RegExp(
+    `(^|[^\\p{L}\\p{N}])${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`,
+    'iu',
+  ).test(text);
+
+/**
+ * "Check a draft": the prohibited-phrase rule the studio blocks on save (the same function), and the preferred terms
+ * as suggestions, which the studio does not enforce. Nothing leaves the page.
+ */
+function DraftCheck({ voice }: { voice: Doc['voice'] }) {
+  const [text, setText] = useState('');
+  const blocked = text.trim() ? prohibitedPhrasesIn(text, voice.prohibitedPhrases) : [];
+  const suggestions = text.trim()
+    ? voice.preferredTerms.flatMap((t) =>
+        t.avoid.filter((a) => a && wordIn(text, a)).map((a) => ({ use: t.use, avoid: a })),
+      )
+    : [];
+  return (
+    <ReadSection title="Check a draft">
+      <Field
+        label="Draft copy"
+        htmlFor="voice-draft"
+        hint="Prohibited phrases are the check the studio blocks on save; preferred terms are suggestions."
+      >
+        <Textarea id="voice-draft" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
+      </Field>
+      {text.trim() && (
+        <ul
+          className="flex flex-col gap-1.5 text-sm"
+          aria-label="Draft findings"
+          data-testid="draft-findings"
+        >
+          {blocked.map((p) => (
+            <li key={`b:${p}`} className="flex flex-wrap items-center gap-2">
+              <Badge tone="critical">Blocked</Badge>
+              <span>Never write “{p}”.</span>
+            </li>
+          ))}
+          {suggestions.map((s) => (
+            <li key={`s:${s.avoid}`} className="flex flex-wrap items-center gap-2">
+              <Badge tone="warning">Suggestion</Badge>
+              <span>
+                Use “{s.use}” instead of “{s.avoid}”.
+              </span>
+            </li>
+          ))}
+          {blocked.length === 0 && suggestions.length === 0 && (
+            <li className="flex items-center gap-2">
+              <Badge tone="good">Clear</Badge>
+              <span>No prohibited phrases or avoided terms.</span>
+            </li>
+          )}
+        </ul>
+      )}
+    </ReadSection>
+  );
+}
+
+/** The parts of the document each brand system section reads; used to say what a draft changes. */
+const SECTION_PARTS: Array<{ key: string; label: string; parts: (d: Doc) => unknown }> = [
+  { key: 'logo', label: 'Logo', parts: (d) => d.logoRules },
+  { key: 'colour', label: 'Colour', parts: (d) => [d.tokens.colours, d.tokens.contrastTarget] },
+  {
+    key: 'typography',
+    label: 'Typography & layout',
+    parts: (d) => [d.tokens.typeRoles, d.tokens.spacingScale, d.tokens.radii],
+  },
+  { key: 'voice', label: 'Voice & writing', parts: (d) => d.voice },
+  {
+    key: 'imagery',
+    label: 'Imagery',
+    parts: (d) => d.patterns.find((p) => p.key === REFERENCE_PATTERN) ?? null,
+  },
+  {
+    key: 'patterns',
+    label: 'Patterns & templates',
+    parts: (d) => d.patterns.filter((p) => p.key !== REFERENCE_PATTERN),
+  },
+  { key: 'channels', label: 'Channel guidance', parts: (d) => d.channelGuidance },
+  { key: 'guidelines', label: 'Guidelines', parts: (d) => d.guidelines ?? null },
+];
+
+/** The sections whose content differs between a version and the one it would replace (none when both are equal). */
+export function changedSections(next: Doc, base: Doc): Array<{ key: string; label: string }> {
+  return SECTION_PARTS.filter((s) => JSON.stringify(s.parts(next)) !== JSON.stringify(s.parts(base))).map(
+    ({ key, label }) => ({ key, label }),
   );
 }
 

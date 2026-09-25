@@ -52,6 +52,15 @@ function flat(els: Element[]): Element[] {
  * approved facts, prohibited phrases, safe areas. Agent proposals must have no blocking findings; humans see
  * warnings. Render-time checks (spec 11.5) run again on the actual pixels.
  */
+/**
+ * The brand's prohibited phrases a text contains (case-insensitive substring), lower-cased. The one rule the studio
+ * applies on save and the brand system's "Check a draft" applies as you type.
+ */
+export function prohibitedPhrasesIn(text: string, prohibited: readonly string[]): string[] {
+  const lower = text.toLowerCase();
+  return prohibited.map((p) => p.toLowerCase()).filter((p) => p && lower.includes(p));
+}
+
 export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSnapshot): Finding[] {
   const findings: Finding[] = [];
   const colours = new Map(snapshot.document.tokens.colours.map((c) => [c.key, c]));
@@ -303,15 +312,13 @@ function validateText(
         factId: f,
         ...at,
       });
-  const lower = el.text.toLowerCase();
-  for (const p of prohibited)
-    if (lower.includes(p))
-      out.push({
-        code: 'prohibited_phrase',
-        severity: 'blocking',
-        message: `Prohibited phrase "${p}"`,
-        ...at,
-      });
+  for (const p of prohibitedPhrasesIn(el.text, prohibited))
+    out.push({
+      code: 'prohibited_phrase',
+      severity: 'blocking',
+      message: `Prohibited phrase "${p}"`,
+      ...at,
+    });
   // Approximate overflow: average glyph width 0.55em; the render check is authoritative (spec 11.5).
   const approxLineChars = Math.max(1, Math.floor(el.transform.width / (0.55 * el.style.sizePx)));
   const approxLines = Math.ceil(el.text.length / approxLineChars);
