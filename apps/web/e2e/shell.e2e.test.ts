@@ -151,4 +151,19 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await page.getByTestId('coverage').count()).toBe(0);
     await page.close();
   }, 45_000);
+  it('settings: channels and skills are tabs; a skill without a published version says so', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings')}`);
+    await page.getByTestId('channels').waitFor({ timeout: 15_000 });
+    expect(await page.getByRole('tab', { name: 'Channels' }).getAttribute('aria-selected')).toBe('true');
+    await page.getByRole('tab', { name: 'Skills' }).click();
+    const skills = page.getByRole('list', { name: 'Skills' }).getByRole('listitem');
+    await expect.poll(() => skills.count(), { timeout: 15_000 }).toBe(3);
+    expect(new URL(page.url()).searchParams.get('tab')).toBe('skills');
+    const imported = skills.filter({ hasText: 'acme-voice' });
+    expect(await imported.textContent()).toContain('This brand');
+    expect(await imported.textContent()).toContain('No published version');
+    expect(await skills.filter({ hasText: 'brand-onboarding' }).textContent()).toContain('Built in');
+    await page.close();
+  }, 45_000);
 });

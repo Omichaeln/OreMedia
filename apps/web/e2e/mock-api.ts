@@ -44,6 +44,7 @@ import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } f
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
 import { PageRequest } from '@oremedia/contracts/pagination';
+import { SkillList } from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
@@ -216,6 +217,24 @@ export class MockBackend {
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*, listed through operations.audit.query). */
   readonly runs = new Map<string, AgentRunRow>();
+  /** Skills visible to the company (skills.list): built in, company-wide and this brand's own. */
+  readonly skills = [
+    ['sk_onboarding', 'platform', null, 'brand-onboarding', 'Brand onboarding', 'skv_onboarding_1'],
+    ['sk_copy', 'tenant', null, 'brand-copywriting', 'Brand copywriting', 'skv_copy_3'],
+    ['sk_voice', 'brand', 'brand', 'acme-voice', 'Acme voice (imported)', null],
+  ].map(([id, scope, brand, key, title, activeVersionId]) => ({
+    id: id as string,
+    scope: scope as 'platform' | 'tenant' | 'brand',
+    brandId: brand ? E2E.brandId : null,
+    key: key as string,
+    title: title as string,
+    state: 'active' as const,
+    activeVersionId,
+    ownerUserId: null,
+    createdAt: '2026-09-01T09:00:00.000Z',
+    updatedAt: '2026-09-01T09:00:00.000Z',
+    version: 1,
+  }));
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
   /**
@@ -668,6 +687,14 @@ export function createMockRouter(backend: MockBackend) {
             : [];
         });
       }),
+    }),
+    skills: t.router({
+      list: query.input(SkillList).query(({ input }) => ({
+        items: backend.skills.filter(
+          (k) => (!input.scope || k.scope === input.scope) && (!input.brandId || k.brandId === input.brandId),
+        ),
+        nextCursor: null,
+      })),
     }),
     agents: t.router({
       runs: t.router({

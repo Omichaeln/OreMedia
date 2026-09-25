@@ -92,7 +92,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await noHorizontalOverflow()).toBe(true);
   }, 45_000);
 
-  it('What we learned separates hypotheses from experimentally supported findings, with customer voice', async () => {
+  it('What we learned separates hypotheses from experimentally supported findings; customer voice has its own tab', async () => {
     await page.getByRole('tab', { name: 'What we learned' }).click();
     await expect.poll(() => count('what-we-learned'), { timeout: 15_000 }).toBe(1);
     const learned = await text('what-we-learned');
@@ -103,6 +103,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(findings).toContain('Finding');
     expect(findings).toContain('Experimentally supported');
     expect(findings).not.toContain('Posts with a price');
+    await page.getByRole('tab', { name: 'Customer voice' }).click();
     await expect.poll(() => count('cluster'), { timeout: 15_000 }).toBe(1);
     expect(await text('cluster')).toContain('Question');
     expect(await text('cluster')).toContain('14 messages');
@@ -175,6 +176,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   it('analyse now shows the running state until the analyst writes its insights', async () => {
     await open('intelligence');
     await expect.poll(() => count('what-changed'), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('button', { name: 'Run brand analyst' }).click();
     await page.getByLabel('Analyst principal').fill(P6.principalId);
     await page.getByRole('button', { name: 'Analyse now' }).click();
     await expect.poll(() => count('analysis-running'), { timeout: 15_000 }).toBe(1);
@@ -277,6 +279,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('create, pre-register (frozen hash shown), start and stop', async () => {
+    await page.getByRole('button', { name: 'New experiment' }).click();
     await page.getByLabel('Hypothesis').fill('A question hook lifts enquiries');
     await page.getByLabel('Primary metric key').fill('qualified_enquiries');
     await page.locator('#x-v0-revision').fill(P5.revisions.one);

@@ -1,18 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { EvidenceStrength } from '@oremedia/contracts/intelligence';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  Input,
-  Panel,
-  Skeleton,
-  StatusBanner,
-  Textarea,
-} from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { Section } from '../../components/section';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -143,7 +134,7 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
   const due = new Set(view.dueForReview);
   return (
     <div className="flex flex-col gap-4">
-      <Panel title="Approved practices" data-testid="playbook-approved">
+      <Section id="playbook-approved-heading" title="Approved practices" testId="playbook-approved">
         <FreshnessLine freshness={view.freshness} statement={view.statement} />
         {view.items.length === 0 ? (
           <EmptyState
@@ -157,8 +148,8 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
             ))}
           </ul>
         )}
-      </Panel>
-      <Panel title="Proposed practices" data-testid="playbook-proposed">
+      </Section>
+      <Section id="playbook-proposed-heading" title="Proposed practices" testId="playbook-proposed">
         {proposed.isPending && <Skeleton label="Loading proposals" />}
         {proposed.isError && <RequestError error={proposed.error} onRetry={() => void proposed.refetch()} />}
         {proposed.data && proposed.data.items.length === 0 && (
@@ -174,8 +165,8 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
             ))}
           </ul>
         )}
-      </Panel>
-      <Panel title="Propose a practice" id="propose-practice">
+      </Section>
+      <Section id="propose-practice" title="Propose a practice">
         <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
           <Field
             label="Practice"
@@ -255,7 +246,7 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
             </Button>
           </div>
         </form>
-      </Panel>
+      </Section>
     </div>
   );
 }
