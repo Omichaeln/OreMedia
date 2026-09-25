@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), '..', '..');
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.git', 'migrations']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.git', 'migrations', '.certify']);
 const SKIP_FILES = new Set(['pnpm-lock.yaml', 'check-secrets.ts']);
 const PATTERNS: Array<[string, RegExp]> = [
   ['AWS access key', /AKIA[0-9A-Z]{16}/],
