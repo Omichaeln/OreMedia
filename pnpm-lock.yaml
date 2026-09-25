@@ -20,6 +20,9 @@ importers:
       '@oremedia/db':
         specifier: workspace:*
         version: link:packages/db
+      '@oremedia/providers':
+        specifier: workspace:*
+        version: link:packages/providers
       '@types/node':
         specifier: ^22.19.0
         version: 22.20.4

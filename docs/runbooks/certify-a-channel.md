@@ -3,7 +3,7 @@
 **Purpose:** move a provider adapter from `certifiedAt: null` (registry refuses it for tenants) to certified
 (spec 14.6). Certification means: sandbox or test-account publish and read-back, refresh and reconnect, rate-limit
 behaviour, error fixtures captured, reconciliation proven, metrics fetched. **Owner:** platform engineer with the
-platform's developer app. **Exercised:** not yet (blocked: needs each platform's own app and app review).
+platform's developer app. **Exercised:** not yet. The harness (below) removes the in-product blocker; Meta needs test accounts with roles on the unpublished app, LinkedIn needs the Community Management API grant.
 
 Release 1 adapters (spec 14.8; decision D-04 still open): `linkedin_page`, `instagram_business` (Facebook Graph),
 `facebook_page`, `x` (built as the fourth channel; TikTok is the alternative D-04 may choose). Code lives in
@@ -39,6 +39,43 @@ Release 1 adapters (spec 14.8; decision D-04 still open): `linkedin_page`, `inst
 10. Comments: read a page with `fetchComments` (cursor paging) and reply with `comment`.
 11. Record the run in `docs/decisions/DECISIONS.md` (D-04) and set `certifiedAt` in the adapter's `capability.ts` to
     the certification timestamp. Only then does `providerRegistry.get(key)` hand the adapter to tenants.
+
+## Running the certification harness
+
+The tenant connect flow refuses uncertified providers by design (spec 14.6), so steps 3 to 10 are run with the
+certification harness instead: `pnpm certify <provider> <command>` (`tooling/scripts/certify/`). It drives the real
+adapter against the platform from your machine, through the same `ProviderIO` production uses (SSRF guard, timeouts,
+rate limiter), reaching the uncertified adapter through `providerRegistry.forCertification`. It never touches the
+database, the API or any tenant: what the running product allows is unchanged.
+
+Setup, once per provider:
+
+1. In the platform app, register a redirect URI that nothing in the product handles, for example
+   `https://oremedia-production.up.railway.app/certify-callback`. After consent the browser lands there (a not-found
+   page) with `?code=…&state=…` in the address bar. Never use the product's own channel callback: it would consume the
+   single-use code.
+2. Meta: while the app is unpublished (development mode), only people with a role on the app (administrator,
+   developer, tester) can authorise it. Use a test Page and Instagram professional account owned by such a person.
+   LinkedIn: the Community Management API must be granted before organisation posting works.
+3. In your shell, set `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (the same names the product reads),
+   e.g. `PROVIDER_FACEBOOK_PAGE_CLIENT_ID_REF`.
+
+Commands, by runbook step:
+
+| Step | Command                                                                                                                                                                                                                                                                                       |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3    | `pnpm certify facebook_page auth-url --redirect-uri <uri>`, open the URL, approve, then `pnpm certify facebook_page exchange --code <code> --state <state>`; the output lists granted and missing scopes and the other pages the login can address (`select-account --account <id>` switches) |
+| 4    | `publish --text "…"` (add `--image url,mime,width,height,bytes[,alt]` for media; the image must be at a public HTTPS URL), then `status` and `finalize` while pending; `status` again after `finalize` must say `completed`                                                                   |
+| 5    | `find` after publishing (`found`), after deleting the post on the platform (`definitely_absent`), after removing the read permission (`cannot_determine`)                                                                                                                                     |
+| 7    | `refresh`; after revoking the app on the platform, `refresh` must report `reconnect_required`                                                                                                                                                                                                 |
+| 9    | `metrics --hours 1` and `metrics --hours 24` (post), `metrics --account-metrics`; the output lists declared metrics not returned and those reported unavailable                                                                                                                               |
+| 10   | `comments` (add `--cursor` to page), `comments --reply "…"`                                                                                                                                                                                                                                   |
+
+Every request and response is recorded under `.certify/<provider>/recordings/<time>-<command>.json`, with credential
+query parameters and token fields redacted and only rate-limit and request-id headers kept: copy the exchanges the
+fixture table needs from there (step 6). The test account's tokens stay in `.certify/<provider>/session.json` (mode
+0600, git-ignored, skipped by `check:secrets`) until `pnpm certify <provider> forget`. Step 8 (driving a 429) is done by
+hand against a read endpoint; record the headers from the recording.
 
 ## Fixtures each adapter needs captured
 

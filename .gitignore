@@ -8,3 +8,5 @@ coverage
 !.env.example
 docs/contracts/openapi.generated.json
 tooling/test-fixtures/golden/.actual
+# Certification harness sessions (test-account tokens) and raw recordings; never committed
+.certify/

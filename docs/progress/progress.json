@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-25T10:00:00Z",
+  "updatedAt": "2026-09-25T15:00:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -193,7 +193,7 @@
           "1.g4",
           "Migrations apply and roll forward on MySQL 8",
           "complete",
-          "apps/worker-core/src/migration-roll-forward.integration.test.ts: migrate to 0001, seed two tenants, migrate to head (0002): every existing table byte-equal, new columns defaulted, new tables empty, and the migrated data works with the new code. packages/db immutability and retention-role tests run on the migrated schema."
+          "Every migration has a roll-forward test on a populated database: apps/worker-core/src/migration-roll-forward.integration.test.ts (0001 → head), apps/api/src/migration-0003-roll-forward.integration.test.ts, apps/worker-core/src/migration-0004-… and migration-0006-roll-forward.integration.test.ts (each: previous head, seed two tenants, migrate to head, every existing row unchanged, new tables empty, the new code works on the migrated data). 0005 (provider_review_statuses, a global table) is rolled through by the 0006 test and the older ones. packages/db immutability and retention-role tests run on the migrated schema."
         ]
       ],
       "items": [
@@ -784,6 +784,22 @@
           "18",
           "complete",
           "Attack fixtures generated in tests and rejected with typed reasons: SVG with script / onload / external xlink:href / @import url(http…) / <!ENTITY> → svg_unsafe_content; 40000×40000 SVG and a PNG whose IHDR declares 40000×40000 → pixel_limit_exceeded before decode; garbage/truncated font → font_unparsable; TTC → font_collection_unsupported; truncated PNG, declared-mime mismatch, zip → rejected; EICAR → malware_detected; unreachable scanner → quarantined. End-to-end: a script SVG upload ends rejected, quarantine object deleted, no asset rows."
+        ],
+        [
+          "2.29",
+          "Brand kit editor: palette (hex, roles, contrast), voice, logo variants with usage rules and rights, reference imagery",
+          "production",
+          "8.1, 9",
+          "complete",
+          "PR #9 (merged 25 September 2026): apps/web/src/features/brand/brand-kit-editor.tsx edits a draft's BrandSystemDocumentV1 (palette with AA/AAA contrast table, voice, primary/reversed/mono/mark-only logos with grounds, clear space and minimum width, 'our own logo' rights record, reference-imagery pattern); brand.versions.update rejects non-hex colours, duplicate keys, logo rules not naming a logo of the brand and pattern examples of other brands (fail-closed BrandAssetKindSource). Integration tests (brand, assets) and the WCAG audit of the editor in both themes at 390 and 1280 px."
+        ],
+        [
+          "2.30",
+          "Brand skill import: guidelines carried by the brand version, palette read from the skill, second-person publish",
+          "critical",
+          "8.1, 8.2, 5.5",
+          "complete",
+          "PR #10 (merged 25 September 2026): brand.guidelines.import turns an Agent Skills package (SKILL.md + references, text only, 64 KB) into a new draft with guidelines and the palette its tables state; agents receive the guidelines with the brand constraints once published. Publishing changed guidelines is refused to their last author (brand_guideline_authors, migration 0006; recorded by import and by any update changing them; fail closed). Unit tests on real brand skills' structure, integration tests of the approval rule, cross-tenant fixture, 0006 roll-forward test. Not yet built: model extraction of voice and vocabulary; importing the skill's SVG logo."
         ]
       ]
     },
@@ -1202,16 +1218,16 @@
           "OpenRouter model adapter for agent runs (chat with tool use), selected by the routing policy (ADR-11)",
           "production",
           "ADR-11",
-          "open",
-          "Decided 25 September 2026. Needs OPENROUTER_API_KEY_REF for the live check."
+          "in_progress",
+          "PR #6 (merged 25 September 2026): OpenRouterModelAdapter (chat with tool use, data_collection deny, explicit model id from the routing policy, stop-reason and error mapping), unit-tested; worker-core runs on it in production (OPENROUTER_API_KEY_REF sealed, OREMEDIA_MODEL_ID=anthropic/claude-sonnet-5; log: agents queue polling with adapter openrouter). Not yet verified: a live agent run completing through OpenRouter."
         ],
         [
           "4.24",
           "Image generation through OpenRouter (Nano Banana / Nano Banana 2) as an asset with provenance",
           "production",
           "ADR-11, 9",
-          "open",
-          "Decided 25 September 2026 (D-06)."
+          "in_progress",
+          "PR #8 (merged 25 September 2026): OpenRouterImageGenerator hands each image to asset ingest as a generated upload (scan, sanitise, derivatives), catalogued pending_review with generated provenance (model, prompt hash, run) in generated_uploads (migration 0004); agents authorised as creative.edit under the run's autonomy mode. Unit, integration and roll-forward tests. Production: IMAGE_GEN_PROVIDER=openrouter, OREMEDIA_IMAGE_MODEL_ID=google/gemini-3.1-flash-image. Not yet verified: a live generation."
         ],
         [
           "4.25",
@@ -1495,8 +1511,8 @@
           "Certification of 3–5 channels with the platform's own app (sandbox publish, read-back, refresh, reconnect, rate limits, error fixtures, reconciliation, metrics)",
           "critical",
           "14.6",
-          "blocked",
-          "Requires platform developer apps and app review; cannot be done from this environment."
+          "in_progress",
+          "Kickoff 25 September 2026: adapter suites pass (71 provider tests; Facebook 9, Instagram 10); Meta app OreMedia (1111601258212850) unpublished with the Page and Instagram use cases customised, Tech Provider / App Review pending; LinkedIn Community Management API (development tier) review in progress. The certification harness (5.36) runs steps 3–10 against the real platforms without enabling providers in the product. Remaining: live runs with test accounts, captured fixtures, the D-04 record, then certifiedAt per adapter."
         ],
         [
           "5.28",
@@ -1561,6 +1577,14 @@
           "21.2",
           "complete",
           "apps/web/src/app/c/$company/b/$brand/review/route.tsx + features/review: inbox with all six attention flags as text chips, request detail with stale / changes-requested / approved / invalidated / revoked banners, decision form, external links (token shown once, revoke). phase5.e2e.test.ts, review-attention.test.ts (7)."
+        ],
+        [
+          "5.36",
+          "Certification harness: runbook steps 3–10 against the real platform without enabling uncertified providers in the product",
+          "critical",
+          "14.6",
+          "complete",
+          "tooling/scripts/certify (pnpm certify <provider> <command>): auth-url/exchange (state and PKCE checked, scopes against requiredScopes), select-account, publish/status/finalize, find, refresh, metrics (declared metrics not returned or unavailable listed), comments; drives the real adapter through ProviderIO via providerRegistry.forCertification; every exchange recorded with credentials redacted for fixtures; session file mode 0600, git-ignored. Unit tests with a scripted adapter; Facebook consent URL generated for app 1111601258212850. Documented in docs/runbooks/certify-a-channel.md. Chosen over an in-product certification tenant, which would open the gate in production."
         ]
       ]
     },
@@ -2039,6 +2063,14 @@
           "17.1",
           "open",
           ""
+        ],
+        [
+          "R.9",
+          "Provider approval status monitor (Meta and LinkedIn review mail → provider_review_statuses)",
+          "internal",
+          "14.6",
+          "in_progress",
+          "apps/approval-monitor (commit eb44cf5): polls Gmail for Meta and LinkedIn review mail, classifies it and records per-provider status in the global provider_review_statuses table (migration 0005); infra/railway/approval-monitor. Its CI failures (format, no-provider-branching lint, roll-forward tests) were fixed in PR #10. Not verified by me: the Railway service, its Gmail credentials and a first successful poll."
         ]
       ]
     },
