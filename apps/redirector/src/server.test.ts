@@ -124,6 +124,14 @@ describe('GET /<code>', () => {
       headers: { 'x-forwarded-for': ip, 'user-agent': 'UA-test' },
     });
 
+  it('answers the platform health check on /health (and the older /healthz), never as a short code', async () => {
+    for (const path of ['/health', '/healthz']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ ok: true });
+    }
+  });
+
   it('redirects the same visitor to the same arm and records the exposure on the arm link', async () => {
     const first = await get('entry0001', '203.0.113.7');
     const again = await get('entry0001', '203.0.113.7');

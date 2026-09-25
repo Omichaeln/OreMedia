@@ -1,4 +1,4 @@
-import { startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { definitionService } from '@oremedia/module-measurement';
 import { providerRegistry } from '@oremedia/providers';
@@ -46,8 +46,11 @@ try {
   process.exit(2);
 }
 const ingestRun = ingestWorkers.run();
+// Answer the platform health check only now that the ingest workers started (a failed start exited above).
+const health = await startHealthServer();
 
 const shutdown = async () => {
+  await health.close();
   ingestWorkers.shutdown();
   await ingestRun;
   await ingestWorkers.close();
