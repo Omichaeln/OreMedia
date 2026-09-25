@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { closeDatabase, configureDatabase, getDb } from '@oremedia/db';
+import { closeDatabase, configureDatabase, getDb, runMigrations } from '@oremedia/db';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
 
@@ -186,6 +186,7 @@ async function persistStatuses(messages: ReviewMessage[], checkedAt: Date): Prom
 export async function runApprovalMonitor(): Promise<{ messages: number; matchedProviders: number }> {
   const databaseUrl = process.env['DATABASE_URL'];
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  await runMigrations(databaseUrl);
   configureDatabase({ url: databaseUrl, connectionLimit: 2 });
   const accessToken = await gmailAccessToken();
   const messages = await fetchReviewMessages(accessToken);
