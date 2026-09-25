@@ -20,6 +20,7 @@ import {
   UploadIntentComplete,
   UploadIntentCreate,
   UsageRightsInput,
+  type AssetKind,
   type AssetPurpose,
   type AssetRef,
   type DerivativePurpose,
@@ -32,7 +33,7 @@ import {
   RightsIneligibleError,
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
-import type { Page, PageRequest } from '@oremedia/contracts/pagination';
+import { ID_LIST_MAX, type Page, type PageRequest } from '@oremedia/contracts/pagination';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
@@ -226,6 +227,24 @@ export const assetService = {
         width: version.width ?? 0,
         height: version.height ?? 0,
       });
+    }
+    return out;
+  },
+
+  /**
+   * The brand module's check of a brand system draft (registered as its BrandAssetKindSource): the kind of each
+   * listed asset that belongs to the brand and is not retired. Missing, foreign, other-brand and retired ids are
+   * absent. Reads through the scoped repository, so an id outside the caller's tenant is simply not found.
+   */
+  async kindsForBrand(
+    brandId: string,
+    assetIds: readonly string[],
+    tx?: Tx,
+  ): Promise<Map<string, AssetKind>> {
+    const out = new Map<string, AssetKind>();
+    for (const id of assetIds.slice(0, ID_LIST_MAX)) {
+      const a = await assetsRepo.findInTenant(id, tx);
+      if (a && a.brandId === brandId && a.state !== 'retired') out.set(a.id, a.kind);
     }
     return out;
   },

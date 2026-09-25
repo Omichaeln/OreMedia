@@ -23,8 +23,14 @@ import {
   type OperationBatch,
 } from '@oremedia/contracts/creative';
 import { RunGet, RunSteps } from '@oremedia/contracts/agents';
-import { AssetSearch, MediaSignedUrlRequest } from '@oremedia/contracts/assets';
-import { BrandVersionGet, BrandVersionList, FactList, ObjectiveList } from '@oremedia/contracts/brand';
+import { AssetGet, AssetSearch, MediaSignedUrlRequest } from '@oremedia/contracts/assets';
+import {
+  BrandVersionGet,
+  BrandVersionList,
+  BrandVersionUpdate,
+  FactList,
+  ObjectiveList,
+} from '@oremedia/contracts/brand';
 import {
   isOremediaError,
   NotFoundError,
@@ -585,6 +591,29 @@ export function createMockRouter(backend: MockBackend) {
     version: 1,
   };
   const { document: _d, ...brandVersionSummary } = brandVersion;
+  /** A draft with a palette and selected reference imagery, so the brand kit editor opens with content. */
+  const brandDraftDoc = {
+    ...brandDoc,
+    patterns: [
+      {
+        key: 'reference-imagery',
+        description: 'Natural light on raw materials.',
+        exampleAssetIds: ['ast_e2e'],
+        templateVersionIds: [],
+      },
+    ],
+  };
+  let brandDraft = {
+    ...brandVersion,
+    id: 'bv_e2e_draft',
+    number: 2,
+    state: 'draft' as const,
+    document: brandDraftDoc,
+    contentHash: hash(brandDraftDoc),
+    publishedAt: null,
+    publishedByUserId: null,
+  };
+  const summaryOf = ({ document: _doc, ...rest }: typeof brandDraft) => rest;
   const pngDataUrl =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC';
 
@@ -695,8 +724,25 @@ export function createMockRouter(backend: MockBackend) {
         };
       }),
       versions: t.router({
-        list: query.input(BrandVersionList).query(() => ({ items: [brandVersionSummary], nextCursor: null })),
-        get: query.input(BrandVersionGet).query(() => brandVersion),
+        list: query
+          .input(BrandVersionList)
+          .query(() => ({ items: [summaryOf(brandDraft), brandVersionSummary], nextCursor: null })),
+        get: query
+          .input(BrandVersionGet)
+          .query(({ input }) => (input.versionId === brandDraft.id ? brandDraft : brandVersion)),
+        update: mutation.input(BrandVersionUpdate).mutation(({ input }) => {
+          brandDraft = {
+            ...brandDraft,
+            document: input.document as typeof brandDraftDoc,
+            contentHash: hash(input.document),
+            version: brandDraft.version + 1,
+          };
+          return {
+            versionId: brandDraft.id,
+            version: brandDraft.version,
+            contentHash: brandDraft.contentHash,
+          };
+        }),
       }),
       facts: t.router({ list: query.input(FactList).query(() => ({ items: [], nextCursor: null })) }),
       objectives: t.router({
@@ -719,6 +765,22 @@ export function createMockRouter(backend: MockBackend) {
         ],
         nextCursor: null,
       })),
+      /** The fixture brand's logo (ast_logo, no rights yet) and the sample photo, as the brand kit editor reads them. */
+      get: query.input(AssetGet).query(({ input }) => {
+        if (input.assetId !== 'ast_logo' && input.assetId !== 'ast_e2e')
+          throw new NotFoundError('Asset', input.assetId);
+        const logo = input.assetId === 'ast_logo';
+        return {
+          id: input.assetId,
+          brandId: backend.brandId,
+          kind: logo ? ('logo' as const) : ('photo' as const),
+          name: logo ? 'E2E wordmark.svg' : 'Sample photo',
+          state: 'approved' as const,
+          rightsState: logo ? ('unknown' as const) : ('recorded' as const),
+          currentVersion: { id: 'av_photo' },
+          version: 1,
+        };
+      }),
       media: t.router({
         signedUrl: query.input(MediaSignedUrlRequest).query(({ input }) => {
           if (input.assetVersionId !== 'av_photo')
