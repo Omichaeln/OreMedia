@@ -12,7 +12,7 @@ import {
   weekDays,
 } from '../publishing/publication-state';
 import { useCalendarRange } from '../publishing/use-publishing';
-import { HomeSection } from './section';
+import { Section } from '../../components/section';
 
 const weekday = (key: string) =>
   parseKey(key).toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
@@ -32,7 +32,7 @@ export function WeekStrip() {
   const byDay = groupByDay(calendar.data?.publications ?? [], timeZone);
   const calendarHref = brandPath(companyId, brandId, 'calendar');
   return (
-    <HomeSection
+    <Section
       id="this-week"
       title="This week"
       action={
@@ -85,6 +85,6 @@ export function WeekStrip() {
           })}
         </ol>
       )}
-    </HomeSection>
+    </Section>
   );
 }

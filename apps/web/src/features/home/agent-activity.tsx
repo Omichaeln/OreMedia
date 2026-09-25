@@ -3,7 +3,7 @@ import { Badge, EmptyState } from '@oremedia/ui';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { readRecentRuns, runStateChip } from '../agents/run-helpers';
 import { useAgentRuns } from '../agents/use-agent-runs';
-import { HomeSection } from './section';
+import { Section } from '../../components/section';
 
 const RECENT = 5;
 
@@ -17,7 +17,7 @@ export function AgentActivity() {
   const runs = useAgentRuns(recent.map((r) => r.runId));
   const agentsHref = brandPath(companyId, brandId, 'agents');
   return (
-    <HomeSection
+    <Section
       id="agent-activity"
       title="Agent activity"
       action={
@@ -55,6 +55,6 @@ export function AgentActivity() {
           })}
         </ul>
       )}
-    </HomeSection>
+    </Section>
   );
 }

@@ -6,7 +6,7 @@ import { brandPath, useBrandContext } from '../../../../../../features/brand/bra
 import { useBrandVersions } from '../../../../../../features/brand/use-brand';
 import { AgentActivity } from '../../../../../../features/home/agent-activity';
 import { NeedsYou } from '../../../../../../features/home/needs-you';
-import { HomeSection } from '../../../../../../features/home/section';
+import { Section } from '../../../../../../components/section';
 import { WeekStrip } from '../../../../../../features/home/week-strip';
 import { useSessionUser } from '../../../../../../features/session/use-session-user';
 import { hasCredential } from '../../../../../../lib/session';
@@ -95,12 +95,12 @@ export function BrandHomeRoute() {
       <WeekStrip />
       <div className="grid gap-8 md:grid-cols-2">
         <AgentActivity />
-        <HomeSection id="documents" title="Documents">
+        <Section id="documents" title="Documents">
           <RecentDocuments />
           <NewDocument
             disabledReason={brand.publishedVersionId ? undefined : 'Publish brand standards first'}
           />
-        </HomeSection>
+        </Section>
       </div>
     </main>
   );

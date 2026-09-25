@@ -1,7 +1,8 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import { AddToggle, ColumnHeader, listButton } from '../../components/column-header';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -20,44 +21,6 @@ import {
 } from './content-helpers';
 import { PackageDetail } from './package-detail';
 import { useBriefs, useCampaigns, useRecentPackages } from './use-content';
-
-const listButton = (selected: boolean) =>
-  `flex w-full flex-col gap-1 px-4 py-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? 'bg-secondary' : 'hover:bg-muted'}`;
-
-/** A column's heading row: the title and the one action that adds to it. */
-function ColumnHeader({
-  id,
-  title,
-  level,
-  subtitle,
-  action,
-}: {
-  id: string;
-  title: string;
-  level: 1 | 2;
-  subtitle?: string;
-  action?: ReactNode;
-}) {
-  const Heading = level === 1 ? 'h1' : 'h2';
-  return (
-    <div className="flex items-start justify-between gap-2 border-b border-border px-4 pb-3 pt-6">
-      <div className="min-w-0">
-        <Heading
-          id={id}
-          className={
-            level === 1
-              ? 'text-xl font-semibold'
-              : 'text-xs font-semibold uppercase tracking-wide text-muted-foreground'
-          }
-        >
-          {title}
-        </Heading>
-        {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
-      </div>
-      {action}
-    </div>
-  );
-}
 
 function CreateCampaignForm({ brandId, onCreated }: { brandId: string; onCreated: (id: string) => void }) {
   const trpc = useTRPC();
@@ -292,23 +255,11 @@ export function CampaignsScreen() {
           level={1}
           action={
             !forbidden && (
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-expanded={creating === 'campaign'}
-                onClick={() => setCreating(creating === 'campaign' ? null : 'campaign')}
-              >
-                {creating === 'campaign' ? (
-                  'Close'
-                ) : (
-                  <>
-                    <span aria-hidden="true" className="text-base leading-none">
-                      +
-                    </span>
-                    <span className="sr-only">New campaign</span>
-                  </>
-                )}
-              </Button>
+              <AddToggle
+                open={creating === 'campaign'}
+                label="New campaign"
+                onToggle={() => setCreating(creating === 'campaign' ? null : 'campaign')}
+              />
             )
           }
         />

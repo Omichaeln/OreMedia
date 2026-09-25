@@ -491,7 +491,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   it('lists every run of the brand from the audit log with a state chip, task kind, initiator, cost and times', async () => {
     await signIn(E2E.ownerToken);
     await page.goto(`${origin}${agentsPath()}`);
-    await expect.poll(() => page.getByRole('heading', { level: 1 }).textContent()).toBe('Agent activity');
+    await expect.poll(() => page.getByRole('heading', { level: 1 }).textContent()).toBe('Agent runs');
     await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(6);
     // Each row loads its run separately, so the state attribute arrives after the row: poll until all six are set.
     await expect
@@ -630,6 +630,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
 
   it('start run: the new run opens as Queued and the same intent key is kept for the submission', async () => {
     await page.goto(`${origin}${agentsPath()}`);
+    await page.getByRole('button', { name: 'New run' }).click();
     await page.getByLabel('Service principal').fill('sp_wrong');
     await page.locator('#run-brief').fill('{"goal": "spring launch"}');
     await page.getByRole('button', { name: 'Start run' }).click();
@@ -668,6 +669,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await expect
       .poll(() => page.getByTestId('runs').textContent(), { timeout: 15_000 })
       .toContain('Brand-wide history needs audit access');
+    await page.getByRole('button', { name: 'New run' }).click();
     await page.getByLabel('Service principal').fill(E2E.principalId);
     await page.getByRole('button', { name: 'Start run' }).click();
     await expect.poll(() => page.getByTestId('start-denied').count(), { timeout: 15_000 }).toBe(1);

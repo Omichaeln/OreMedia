@@ -9,7 +9,7 @@ import { usePublicationsInState, type PublicationSummaryDto } from '../publishin
 import { ATTENTION_CHIP } from '../review/review-attention';
 import { useReviewInbox, type InboxItemDto } from '../review/use-review';
 import { REVIEW_NEEDS_YOU } from '../shell/use-nav-counts';
-import { HomeSection } from './section';
+import { Section } from '../../components/section';
 
 export interface NeedsYouRow {
   key: string;
@@ -123,7 +123,7 @@ export function NeedsYou() {
   ].sort((a, b) => ORDER[a.tone] - ORDER[b.tone]);
   const failedQuery = queries.find((q) => q.isError);
   return (
-    <HomeSection id="needs-you" title="Needs you">
+    <Section id="needs-you" title="Needs you">
       {failedQuery && (
         <RequestError
           error={failedQuery.error}
@@ -163,6 +163,6 @@ export function NeedsYou() {
           ))}
         </ul>
       )}
-    </HomeSection>
+    </Section>
   );
 }

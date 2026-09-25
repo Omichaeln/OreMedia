@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { TaskKind } from '@oremedia/contracts/skills';
-import { Button, Field, Input, Panel, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
@@ -71,7 +71,10 @@ export function StartRunForm({ companyId, brandId, brandName, hrefFor }: StartRu
   const ui = start.isError ? toUiError(start.error) : null;
   const fieldIssue = (path: string) => ui?.details.find((d) => d.path === path)?.issue;
   return (
-    <Panel title="Start a run" id="start-run">
+    <section aria-labelledby="start-run-title" id="start-run" className="flex flex-col gap-4">
+      <h2 id="start-run-title" className="text-lg font-semibold">
+        Start a run
+      </h2>
       <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
         <Field label="Brand" htmlFor="run-brand" hint="Runs belong to the brand in the address bar.">
           <Input id="run-brand" value={brandName} readOnly aria-readonly="true" />
@@ -152,6 +155,6 @@ export function StartRunForm({ companyId, brandId, brandName, hrefFor }: StartRu
           </Button>
         </div>
       </form>
-    </Panel>
+    </section>
   );
 }

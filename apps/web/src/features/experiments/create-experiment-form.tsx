@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Field, Input, Panel, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
@@ -66,7 +66,10 @@ export function CreateExperimentForm({ brandId, onCreated }: CreateExperimentFor
     issues.find((i) => i.path === path)?.issue ?? ui?.details.find((d) => d.path === `design.${path}`)?.issue;
 
   return (
-    <Panel title="Design an experiment" id="create-experiment">
+    <section aria-labelledby="create-experiment-title" id="create-experiment" className="flex flex-col gap-4">
+      <h2 id="create-experiment-title" className="text-lg font-semibold">
+        Design an experiment
+      </h2>
       <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
         <Field label="Hypothesis" htmlFor="x-hypothesis" error={issue('hypothesis')}>
           <Textarea
@@ -273,6 +276,6 @@ export function CreateExperimentForm({ brandId, onCreated }: CreateExperimentFor
           </Button>
         </div>
       </form>
-    </Panel>
+    </section>
   );
 }

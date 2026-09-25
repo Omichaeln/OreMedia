@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, EmptyState, Panel, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Skeleton, StatusBanner } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
-import { PageHeading, RequestError } from '../../components/request-state';
+import { RequestError } from '../../components/request-state';
+import { Section } from '../../components/section';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
@@ -272,10 +273,10 @@ function FinishConnect({ state, code, onDone }: { state: string; code: string; o
 
 /**
  * Spec 21.1 `settings/` channels (spec 14.7): each connection with its status as text, connect and reconnect through
- * the provider's authorisation page, completion on return, disconnect with confirmation. Mandates, skills and
- * members share this screen in later phases.
+ * the provider's authorisation page, completion on return, disconnect with confirmation. The Settings screen shows
+ * it as its Channels tab.
  */
-export function ChannelSettingsScreen() {
+export function ChannelSettings() {
   const { companyId, brandId, brand } = useBrandContext();
   const channels = useChannels(brandId);
   const [params, setParams] = useSearchParams();
@@ -288,16 +289,7 @@ export function ChannelSettingsScreen() {
   const listUi = channels.isError ? toUiError(channels.error) : null;
 
   return (
-    <main id="main" className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-4 sm:p-6">
-      <PageHeading
-        title="Brand settings: channels"
-        description={`The social accounts ${brand.name} publishes to. Credentials are sealed server-side and never shown. Mandates, skills and members arrive on this screen in later phases.`}
-        actions={
-          <Button size="sm" onClick={() => void channels.refetch()} disabled={channels.isFetching}>
-            {channels.isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-        }
-      />
+    <div className="flex flex-col gap-8">
       {callback && <FinishConnect state={callback.state} code={callback.code} onDone={clearCallback} />}
       {providerError && (
         <StatusBanner
@@ -312,7 +304,24 @@ export function ChannelSettingsScreen() {
           data-testid="provider-error"
         />
       )}
-      <Panel title="Connected channels" data-testid="channels">
+      <Section
+        id="channels-heading"
+        title="Connected channels"
+        testId="channels"
+        action={
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void channels.refetch()}
+            disabled={channels.isFetching}
+          >
+            {channels.isFetching ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
+      >
+        <p className="text-xs text-muted-foreground">
+          The social accounts {brand.name} publishes to. Credentials are sealed server-side and never shown.
+        </p>
         {channels.isPending && <Skeleton label="Loading channels" lines={3} />}
         {channels.isError && (
           <RequestError
@@ -334,10 +343,10 @@ export function ChannelSettingsScreen() {
             ))}
           </ul>
         )}
-      </Panel>
+      </Section>
       {listUi?.kind !== 'forbidden' && (
-        <Panel title="Connect a channel" data-testid="providers">
-          <p className="mb-2 text-xs text-muted-foreground">
+        <Section id="providers-heading" title="Connect a channel" testId="providers">
+          <p className="text-xs text-muted-foreground">
             Only providers certified after their platform review can be connected; the server refuses the
             others and the reason is shown here.
           </p>
@@ -368,8 +377,8 @@ export function ChannelSettingsScreen() {
               );
             })}
           </ul>
-        </Panel>
+        </Section>
       )}
-    </main>
+    </div>
   );
 }
