@@ -18,7 +18,7 @@ vi.mock('@temporalio/worker', () => ({
   Worker: {
     create: async (opts: { taskQueue: string; activities?: object }) => {
       registrations.push({ taskQueue: opts.taskQueue, activities: opts.activities ?? {} });
-      return { run: async () => undefined, shutdown: () => undefined };
+      return { run: async () => undefined, shutdown: () => undefined, getState: () => 'RUNNING' };
     },
   },
 }));
