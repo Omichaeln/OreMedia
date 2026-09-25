@@ -7,9 +7,14 @@ export function useDocument(documentId: string) {
   return useQuery(trpc.creative.documents.get.queryOptions({ documentId }));
 }
 
+/** The newest revisions the studio's history lists. */
+export const REVISIONS_SHOWN = 50;
+
 export function useRevisions(documentId: string) {
   const trpc = useTRPC();
-  return useQuery(trpc.creative.revisions.list.queryOptions({ documentId, page: { limit: 50 } }));
+  return useQuery(
+    trpc.creative.revisions.list.queryOptions({ documentId, page: { limit: REVISIONS_SHOWN } }),
+  );
 }
 
 export function useComments(documentId: string) {
