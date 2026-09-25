@@ -1,6 +1,6 @@
 # ADR-04: Temporal for durable work; one agent loop inside activities; no second agent framework
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Medium.
 

@@ -1,6 +1,6 @@
 # ADR-05: Deterministic release policy gates every external effect; approval binding by content hash
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Must hold before first live publish.
 

@@ -1,6 +1,6 @@
 # ADR-09: Credential envelope encryption and broker isolation
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Must hold before first channel connect.
 

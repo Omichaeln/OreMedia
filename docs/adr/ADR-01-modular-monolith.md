@@ -1,6 +1,6 @@
 # ADR-01: Modular monolith API and three Temporal worker pools
 
-**Status:** Proposed (acceptance requires a named owner; see `docs/decisions/DECISIONS.md`)
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Low if module boundaries are enforced.
 
