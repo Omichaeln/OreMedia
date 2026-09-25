@@ -12,6 +12,7 @@ export const GLOBAL_TABLES: Readonly<Record<string, string>> = {
   auth_events:
     'Sign-in and sign-out outcomes before any tenant is selected (a refused sign-in has no tenant); ids and reasons only.',
   provider_capabilities: 'Platform-wide capability register (spec 14.6); contains no tenant content.',
+  provider_review_statuses: 'Platform-wide external app-review status evidence; contains no tenant content.',
   plans: 'Commercial catalogue shared by all tenants (spec 22.1); contains no tenant content.',
   feature_flags:
     'Engineering flags with tenant targeting inside the row (spec 22.1); contains no tenant content.',

@@ -10,6 +10,7 @@ export type { Tx, Db } from './client';
 export {
   configureDatabase,
   closeDatabase,
+  getDb,
   configureRoleDatabase,
   runWithDatabaseRole,
   type DatabaseRole,

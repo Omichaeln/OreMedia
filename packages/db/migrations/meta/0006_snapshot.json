@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "2e61d34a-316b-464b-9621-c944dc2055e2",
-  "prevId": "692f3e31-3f2a-4bde-ba70-33b4e6ac6d97",
+  "id": "5b54d4fe-2fb8-4ce4-b289-90db3063cff0",
+  "prevId": "2e61d34a-316b-464b-9621-c944dc2055e2",
   "tables": {
     "api_clients": {
       "name": "api_clients",
@@ -1397,6 +1397,105 @@
       "compositePrimaryKeys": {
         "approved_facts_id": {
           "name": "approved_facts_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "brand_guideline_authors": {
+      "name": "brand_guideline_authors",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author_kind": {
+          "name": "author_kind",
+          "type": "enum('user','service_principal')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "package_hash": {
+          "name": "package_hash",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "fk_guideline_author_version": {
+          "name": "fk_guideline_author_version",
+          "tableFrom": "brand_guideline_authors",
+          "tableTo": "brand_versions",
+          "columnsFrom": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "brand_guideline_authors_id": {
+          "name": "brand_guideline_authors_id",
           "columns": [
             "id"
           ]

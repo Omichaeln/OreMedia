@@ -10,17 +10,17 @@ import { brandService } from '@oremedia/module-brand';
 import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0005 (brand skill import): on a database populated at the previous head (0004) the
+ * Ledger 1.g4 for migration 0006 (brand skill import): on a database populated at the previous head (0005) the
  * migration only adds `brand_guideline_authors`; every existing row is unchanged, the new table is empty, and a
  * brand skill imports on the migrated data with its importer recorded as the guidelines' author.
  */
-const PREVIOUS_HEAD = '0004_generated_uploads';
+const PREVIOUS_HEAD = '0005_lazy_redwing';
 const NEW_TABLES: MySqlTable[] = [brandGuidelineAuthors];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t));
 
-describe('migration 0005 rolls forward on a populated database (ledger 1.g4)', () => {
+describe('migration 0006 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
   let tenantA: SeededTenant;
   let before = '';
@@ -38,7 +38,7 @@ describe('migration 0005 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(brandGuidelineAuthors)).rejects.toThrow(); // not there at 0004
+    await expect(tdb.db.select().from(brandGuidelineAuthors)).rejects.toThrow(); // not there at 0005
     before = await snapshot();
   });
   afterAll(async () => {
@@ -56,7 +56,7 @@ describe('migration 0005 rolls forward on a populated database (ledger 1.g4)', (
       kind: 'user',
       id: tenantA.ownerUserId,
       tenantId: tenantA.tenantId,
-      membershipId: 'mem_roll_forward_0005',
+      membershipId: 'mem_roll_forward_0006',
       membershipStatus: 'active',
       role: 'owner',
       allBrands: true,
@@ -68,7 +68,7 @@ describe('migration 0005 rolls forward on a populated database (ledger 1.g4)', (
         tenantId: tenantA.tenantId,
         actor: { kind: 'user', id: owner.id },
         brandIds: 'all',
-        correlationId: 'corr_roll_forward_0005',
+        correlationId: 'corr_roll_forward_0006',
       },
       () =>
         withTransaction((tx) =>
