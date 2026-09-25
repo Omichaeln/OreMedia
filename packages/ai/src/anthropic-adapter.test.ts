@@ -164,8 +164,10 @@ describe('model adapter configuration (Appendix A)', () => {
     expect(createModelAdapterFromEnv({ ANTHROPIC_API_KEY_REF: 'k' })).toBeInstanceOf(AnthropicModelAdapter);
     expect(createModelAdapterFromEnv({ OREMEDIA_FAKE_MODEL: '1' })).toBeInstanceOf(FakeModelAdapter);
     expect(() => createModelAdapterFromEnv({ OREMEDIA_FAKE_MODEL: '1', NODE_ENV: 'production' })).toThrow(
-      /ANTHROPIC_API_KEY_REF is required in production/,
+      /OPENROUTER_API_KEY_REF \(or ANTHROPIC_API_KEY_REF\) is required in production/,
     );
-    expect(() => createModelAdapterFromEnv({})).toThrow(/ANTHROPIC_API_KEY_REF is required/);
+    expect(() => createModelAdapterFromEnv({})).toThrow(
+      /OPENROUTER_API_KEY_REF \(or ANTHROPIC_API_KEY_REF\) is required/,
+    );
   });
 });

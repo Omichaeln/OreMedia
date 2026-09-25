@@ -20,7 +20,8 @@ import type { TemporalConfig } from './temporal';
  * Spec 4.4: worker-core hosts task queue `agents` (agentRunWorkflowV1, its signal relay and skillEvaluationWorkflowV1). Workflow code is
  * pre-bundled at build time (tsup.config.ts → dist/workflows.agents.js) because production images carry no
  * sources; outside production the queue entry is bundled at start. The model adapter comes from the environment:
- * ANTHROPIC_API_KEY_REF, or the scripted fake outside production (OREMEDIA_FAKE_MODEL=1); nothing else.
+ * OPENROUTER_API_KEY_REF (ADR-11), else ANTHROPIC_API_KEY_REF, or the scripted fake outside production
+ * (OREMEDIA_FAKE_MODEL=1); nothing else.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
