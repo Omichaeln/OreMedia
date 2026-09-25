@@ -1,81 +1,66 @@
-import { Link, NavLink, Outlet, useParams } from 'react-router';
-import { Button, Skeleton, cn } from '@oremedia/ui';
+import { useState } from 'react';
+import { Outlet, useMatch, useParams } from 'react-router';
+import { Button, Skeleton } from '@oremedia/ui';
 import { RequestError } from '../../../../../components/request-state';
+import { Drawer, DrawerContent, DrawerTrigger } from '../../../../../components/drawer';
 import { useCompanies } from '../../../../../features/portfolio/use-companies';
 import { useBrand } from '../../../../../features/brand/use-brand';
-import { brandPath, type BrandContext } from '../../../../../features/brand/brand-context';
-import { useTheme } from '../../../../../lib/theme';
-import { SessionControls } from '../../../../../features/session/session-controls';
+import { type BrandContext } from '../../../../../features/brand/brand-context';
+import { BrandSidebar, type NavItem } from '../../../../../features/shell/brand-sidebar';
+import { useNavCounts } from '../../../../../features/shell/use-nav-counts';
+import type { BrandDto } from '../../../../../features/brand/use-brand';
 
-const NAV: Array<[string, string]> = [
-  ['home', 'Home'],
-  ['system', 'Brand system'],
-  ['assets', 'Assets'],
-  ['campaigns', 'Campaigns'],
-  ['review', 'Review'],
-  ['calendar', 'Calendar'],
-  ['intelligence', 'Intelligence'],
-  ['experiments', 'Experiments'],
-  ['agents', 'Agents'],
-  ['settings', 'Settings'],
+const WORK: NavItem[] = [
+  { segment: 'home', label: 'Home' },
+  { segment: 'review', label: 'Review' },
+  { segment: 'calendar', label: 'Calendar' },
+  { segment: 'campaigns', label: 'Campaigns' },
+  { segment: 'intelligence', label: 'Intelligence' },
+  { segment: 'experiments', label: 'Experiments' },
+  { segment: 'agents', label: 'Agents' },
+];
+const STANDING: NavItem[] = [
+  { segment: 'system', label: 'Brand system' },
+  { segment: 'assets', label: 'Assets' },
+  { segment: 'settings', label: 'Settings' },
 ];
 
-/** Spec 11.1: company and brand are always visible in the header; every brand screen renders inside this shell. */
+/**
+ * Spec 11.1: company and brand are always visible; every brand screen renders inside this shell. A sidebar beside
+ * the screen from 1024 px; below that a top bar names company and brand and opens the same navigation as a drawer.
+ * The studio is a full-screen workspace with its own breadcrumb, so it renders without the sidebar.
+ */
 export function BrandLayout() {
   const { company = '', brand: brandId = '' } = useParams();
   const companies = useCompanies();
   const brand = useBrand(brandId);
-  const { theme, toggle } = useTheme();
+  const inStudio = useMatch('/c/:company/b/:brand/studio/*') !== null;
+  const [menuOpen, setMenuOpen] = useState(false);
   const companyName = companies.data?.find((c) => c.tenantId === company)?.name ?? null;
+  const brandName = brand.data?.name ?? (brand.isPending ? 'Loading…' : brandId);
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border px-4 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
-          <Link to="/portfolio" className="font-semibold">
-            Oremedia
-          </Link>
-          <span aria-hidden="true" className="text-muted-foreground">
-            /
-          </span>
-          <Link to={`/c/${encodeURIComponent(company)}`} className="truncate" aria-label="Company">
-            {companyName ?? company}
-          </Link>
-          <span aria-hidden="true" className="text-muted-foreground">
-            /
-          </span>
-          <span className="truncate font-medium" aria-label="Brand">
-            {brand.data?.name ?? (brand.isPending ? 'Loading…' : brandId)}
-          </span>
-        </div>
-        <nav
-          aria-label="Brand sections"
-          className="order-3 -mb-2 flex w-full gap-1 overflow-x-auto md:order-none md:w-auto"
-        >
-          {NAV.map(([segment, label]) => (
-            <NavLink
-              key={segment}
-              to={brandPath(company, brandId, segment)}
-              className={({ isActive }) =>
-                cn(
-                  'whitespace-nowrap rounded-md px-2 py-1 text-sm',
-                  isActive
-                    ? 'bg-secondary font-medium text-secondary-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )
-              }
-            >
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
-            {theme === 'dark' ? 'Light theme' : 'Dark theme'}
-          </Button>
-          <SessionControls />
-        </div>
-      </header>
+  const sidebar = (onNavigate?: () => void) =>
+    brand.data ? (
+      <CountedSidebar
+        brand={brand.data}
+        companyId={company}
+        companyName={companyName}
+        onNavigate={onNavigate}
+      />
+    ) : (
+      <BrandSidebar
+        companyId={company}
+        companyName={companyName}
+        brandId={brandId}
+        brandName={brandName}
+        work={WORK}
+        standing={STANDING}
+        onNavigate={onNavigate}
+      />
+    );
+
+  const content = (
+    <>
       {brand.isPending && (
         <main id="main" className="p-6">
           <Skeleton label="Loading brand" />
@@ -91,6 +76,74 @@ export function BrandLayout() {
           context={{ companyId: company, companyName, brandId, brand: brand.data } satisfies BrandContext}
         />
       )}
+    </>
+  );
+
+  if (inStudio) return <div className="flex h-full min-h-0 flex-col">{content}</div>;
+
+  return (
+    <div className="flex h-full min-h-0">
+      <aside
+        aria-label="Brand navigation"
+        className="hidden w-60 shrink-0 border-r border-border bg-muted lg:block"
+      >
+        {sidebar()}
+      </aside>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2 lg:hidden">
+          <p className="min-w-0 truncate text-sm">
+            <span className="text-muted-foreground" aria-label="Company">
+              {companyName ?? company}
+            </span>
+            <span aria-hidden="true" className="px-1.5 text-muted-foreground">
+              /
+            </span>
+            <span className="font-medium" aria-label="Brand">
+              {brandName}
+            </span>
+          </p>
+          <Drawer open={menuOpen} onOpenChange={setMenuOpen}>
+            <DrawerTrigger asChild>
+              <Button size="sm" variant="secondary">
+                Menu
+              </Button>
+            </DrawerTrigger>
+            <DrawerContent title="Brand navigation">{sidebar(() => setMenuOpen(false))}</DrawerContent>
+          </Drawer>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto">{content}</div>
+      </div>
     </div>
+  );
+}
+
+/** The sidebar once the brand has loaded: the same navigation with the counts its sections report. */
+function CountedSidebar({
+  brand,
+  companyId,
+  companyName,
+  onNavigate,
+}: {
+  brand: BrandDto;
+  companyId: string;
+  companyName: string | null;
+  onNavigate?: () => void;
+}) {
+  const counts = useNavCounts(brand);
+  const withCount = (items: NavItem[]) =>
+    items.map((n) => {
+      const count = counts[n.segment as keyof typeof counts];
+      return count === undefined ? n : { ...n, count };
+    });
+  return (
+    <BrandSidebar
+      companyId={companyId}
+      companyName={companyName}
+      brandId={brand.id}
+      brandName={brand.name}
+      work={withCount(WORK)}
+      standing={withCount(STANDING)}
+      onNavigate={onNavigate}
+    />
   );
 }

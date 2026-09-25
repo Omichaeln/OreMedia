@@ -79,7 +79,10 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       name: 'brand home',
       path: () => brandPath('home'),
       ready: (page) =>
-        page.getByRole('heading', { level: 1, name: E2E.brandName }).waitFor({ timeout: 15_000 }),
+        page
+          .getByTestId('needs-you')
+          .or(page.getByRole('heading', { name: 'Nothing needs you' }))
+          .waitFor({ timeout: 15_000 }),
     },
     {
       name: 'brand system',

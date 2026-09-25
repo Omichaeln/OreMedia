@@ -84,3 +84,9 @@ export function usePublicationEvidence(publicationId: string | null) {
     enabled: publicationId !== null,
   });
 }
+
+/** One page of the brand's publications in one state (the list's own filter): what a count or a to-do list needs. */
+export function usePublicationsInState(brandId: string, state: PublicationSummaryDto['state']) {
+  const trpc = useTRPC();
+  return useQuery(trpc.publishing.publications.list.queryOptions({ brandId, state, page: { limit: 100 } }));
+}
