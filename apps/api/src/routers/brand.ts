@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BrandCreate,
+  BrandGuidelinesImport,
   BrandVersionCreateDraft,
   BrandVersionGet,
   BrandVersionList,
@@ -116,6 +117,15 @@ export const brandRouter = router({
     get: tenantQuery
       .input(PolicyGet)
       .query(({ ctx, input }) => brandService.policy.get(ctx.tenant.actor, input)),
+  }),
+
+  guidelines: router({
+    /** Imports a brand skill as a new draft version carrying its guidelines and palette (people only). */
+    import: tenantMutation
+      .input(BrandGuidelinesImport)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.guidelines.import(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   onboarding: router({

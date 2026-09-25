@@ -1286,6 +1286,42 @@
         }
       }
     },
+    "/trpc/brand.guidelines.import": {
+      "post": {
+        "operationId": "brand.guidelines.import",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["path", "content"]
+                    }
+                  }
+                },
+                "required": ["brandId", "files"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/brand.list": {
       "get": {
         "operationId": "brand.list",
@@ -1926,6 +1962,42 @@
                           },
                           "required": ["providerKey", "captionStyle", "preferredFormats", "ctaConventions"]
                         }
+                      },
+                      "guidelines": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "packageHash": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["name", "description", "packageHash"]
+                          },
+                          "documents": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["path", "content"]
+                            }
+                          }
+                        },
+                        "required": ["source", "documents"]
                       }
                     },
                     "required": [
@@ -8837,6 +8909,33 @@
           "required": ["brandId"]
         }
       },
+      "brand.guidelines.import": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": ["path", "content"]
+              }
+            }
+          },
+          "required": ["brandId", "files"]
+        }
+      },
       "brand.list": {
         "type": "query",
         "input": null
@@ -9371,6 +9470,42 @@
                     },
                     "required": ["providerKey", "captionStyle", "preferredFormats", "ctaConventions"]
                   }
+                },
+                "guidelines": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "packageHash": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "description", "packageHash"]
+                    },
+                    "documents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "content": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["path", "content"]
+                      }
+                    }
+                  },
+                  "required": ["source", "documents"]
                 }
               },
               "required": ["schemaVersion", "voice", "tokens", "logoRules", "patterns", "channelGuidance"]

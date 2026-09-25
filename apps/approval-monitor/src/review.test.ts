@@ -44,7 +44,11 @@ describe('provider review message classification', () => {
 
   it('ignores unrelated mail', () => {
     expect(
-      classifyReviewMessage({ sender: 'alerts@example.com', subject: 'Build complete', snippet: 'Deployment succeeded.' }),
+      classifyReviewMessage({
+        sender: 'alerts@example.com',
+        subject: 'Build complete',
+        snippet: 'Deployment succeeded.',
+      }),
     ).toBeNull();
   });
 });

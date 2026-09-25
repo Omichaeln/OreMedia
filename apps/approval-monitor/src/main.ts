@@ -25,9 +25,12 @@ const monitoredQuery =
   process.env['GMAIL_REVIEW_QUERY'] ??
   'newer_than:30d (from:(linkedin.com) OR from:(facebookmail.com) OR from:(meta.com))';
 
-const terms = (text: string, candidates: string[]): string[] => candidates.filter((term) => text.includes(term));
+const terms = (text: string, candidates: string[]): string[] =>
+  candidates.filter((term) => text.includes(term));
 
-export function classifyReviewMessage(message: Pick<ReviewMessage, 'sender' | 'subject' | 'snippet'>): ReviewMatch | null {
+export function classifyReviewMessage(
+  message: Pick<ReviewMessage, 'sender' | 'subject' | 'snippet'>,
+): ReviewMatch | null {
   const text = `${message.sender} ${message.subject} ${message.snippet}`.toLowerCase();
   const providerGroup: ProviderGroup | null = text.includes('linkedin')
     ? 'linkedin'
@@ -39,8 +42,14 @@ export function classifyReviewMessage(message: Pick<ReviewMessage, 'sender' | 's
   const rejected = terms(text, ['rejected', 'declined', 'not approved', 'unable to approve', 'denied']);
   if (rejected.length > 0) return { status: 'rejected', providerGroup, matchedTerms: rejected };
 
-  const actionRequired = terms(text, ['action required', 'needs more information', 'more information required', 'take action']);
-  if (actionRequired.length > 0) return { status: 'action_required', providerGroup, matchedTerms: actionRequired };
+  const actionRequired = terms(text, [
+    'action required',
+    'needs more information',
+    'more information required',
+    'take action',
+  ]);
+  if (actionRequired.length > 0)
+    return { status: 'action_required', providerGroup, matchedTerms: actionRequired };
 
   const approved = terms(text, ['approved', 'approval complete', 'review complete', 'accepted', 'live mode']);
   if (approved.length > 0) return { status: 'approved', providerGroup, matchedTerms: approved };
@@ -51,8 +60,14 @@ export function classifyReviewMessage(message: Pick<ReviewMessage, 'sender' | 's
   return { status: 'unknown', providerGroup, matchedTerms: [] };
 }
 
-function providersFor(group: ProviderGroup): MonitoredProvider[] {
-  return group === 'linkedin' ? ['linkedin_page'] : ['facebook_page', 'instagram_business'];
+/** The providers each review mail family covers (a lookup, so no provider key is branched on here). */
+const PROVIDERS_BY_GROUP: Readonly<Record<ProviderGroup, readonly MonitoredProvider[]>> = {
+  linkedin: ['linkedin_page'],
+  meta: ['facebook_page', 'instagram_business'],
+};
+
+function providersFor(group: ProviderGroup): readonly MonitoredProvider[] {
+  return PROVIDERS_BY_GROUP[group];
 }
 
 function header(headers: Array<{ name?: string; value?: string }> | undefined, name: string): string {
@@ -70,16 +85,31 @@ async function gmailAccessToken(): Promise<string> {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }),
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
   });
-  const body = (await response.json()) as { access_token?: string; error?: string; error_description?: string };
+  const body = (await response.json()) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+  };
   if (!response.ok || !body.access_token) {
-    throw new Error(`Gmail token refresh failed: ${body.error ?? response.status} ${body.error_description ?? ''}`.trim());
+    throw new Error(
+      `Gmail token refresh failed: ${body.error ?? response.status} ${body.error_description ?? ''}`.trim(),
+    );
   }
   return body.access_token;
 }
 
-async function gmailJson<T>(accessToken: string, path: string, params: Record<string, string | string[]>): Promise<T> {
+async function gmailJson<T>(
+  accessToken: string,
+  path: string,
+  params: Record<string, string | string[]>,
+): Promise<T> {
   const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`);
   for (const [key, value] of Object.entries(params)) {
     for (const item of Array.isArray(value) ? value : [value]) url.searchParams.append(key, item);
@@ -195,12 +225,18 @@ export async function runApprovalMonitor(): Promise<{ messages: number; matchedP
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const log = startTelemetry({ service: 'oremedia-approval-monitor', version: process.env['OREMEDIA_VERSION'] });
+  const log = startTelemetry({
+    service: 'oremedia-approval-monitor',
+    version: process.env['OREMEDIA_VERSION'],
+  });
   try {
     const result = await runApprovalMonitor();
     log.info({ ...result, query: monitoredQuery }, 'provider review status monitor completed');
   } catch (err) {
-    log.error({ errorMessage: err instanceof Error ? err.message : String(err) }, 'provider review status monitor failed');
+    log.error(
+      { errorMessage: err instanceof Error ? err.message : String(err) },
+      'provider review status monitor failed',
+    );
     process.exitCode = 1;
   } finally {
     await closeDatabase();

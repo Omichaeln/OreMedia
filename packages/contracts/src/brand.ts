@@ -1,6 +1,25 @@
 import { z } from 'zod';
 import { PageRequest } from './pagination';
 
+/** Imported guideline text is capped so it always fits an agent's context alongside everything else. */
+export const GUIDELINES_MAX_BYTES = 64 * 1024;
+export const GUIDELINES_MAX_DOCUMENTS = 40;
+
+export const BrandGuidelinesV1 = z.object({
+  source: z.object({
+    /** The skill's name (front matter), e.g. ore-and-tar-brand. */
+    name: z.string().min(1).max(200),
+    description: z.string().max(1000),
+    /** sha256 of the imported text files, sorted by path: the same package always hashes the same. */
+    packageHash: z.string().length(64),
+  }),
+  documents: z
+    .array(z.object({ path: z.string().min(1).max(200), content: z.string().max(GUIDELINES_MAX_BYTES) }))
+    .min(1)
+    .max(GUIDELINES_MAX_DOCUMENTS),
+});
+export type BrandGuidelinesV1 = z.infer<typeof BrandGuidelinesV1>;
+
 /** Spec 8.1: the brand system document, versioned. */
 export const BrandSystemDocumentV1 = z.object({
   schemaVersion: z.literal(1),
@@ -61,6 +80,12 @@ export const BrandSystemDocumentV1 = z.object({
       ctaConventions: z.string(),
     }),
   ),
+  /**
+   * The brand's written guidelines (an imported brand skill: SKILL.md and its references), carried with the version
+   * and given to agents with the brand constraints. Absent on versions that have none. Publishing a version whose
+   * guidelines differ from the published ones needs a person other than their last author.
+   */
+  guidelines: BrandGuidelinesV1.optional(),
 });
 export type BrandSystemDocumentV1 = z.infer<typeof BrandSystemDocumentV1>;
 
@@ -252,6 +277,18 @@ export const PolicyVersionActivate = z.object({
 });
 export const PolicyGet = z.object({ brandId: z.string(), policyVersionId: z.string().optional() });
 export const BrandSnapshotResolve = z.object({ brandId: z.string(), versionId: z.string().optional() });
+/**
+ * An Agent Skills package describing the brand (SKILL.md plus references/*). Text files only; other files are
+ * reported as skipped. The import creates a new draft version carrying the guidelines and the palette read from them.
+ */
+export const BrandGuidelinesImport = z.object({
+  brandId: z.string(),
+  /** Any one file may be larger than the cap: the import keeps what fits and reports the rest as skipped. */
+  files: z
+    .array(z.object({ path: z.string().min(1).max(200), content: z.string().max(512 * 1024) }))
+    .min(1)
+    .max(100),
+});
 /** Spec 8.2: onboarding is an agent run (Phase 4). The input shape is fixed now so clients can be written against it. */
 export const OnboardingStart = z.object({
   brandId: z.string(),

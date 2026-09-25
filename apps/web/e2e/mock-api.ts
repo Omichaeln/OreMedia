@@ -602,6 +602,13 @@ export function createMockRouter(backend: MockBackend) {
         templateVersionIds: [],
       },
     ],
+    guidelines: {
+      source: { name: 'e2e-brand', description: 'The E2E brand system.', packageHash: hash('e2e-brand') },
+      documents: [
+        { path: 'SKILL.md', content: '# E2E brand\nDirect and precise.' },
+        { path: 'references/tone.md', content: '# Tone\nNever loud.' },
+      ],
+    },
   };
   let brandDraft = {
     ...brandVersion,

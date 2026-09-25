@@ -2,15 +2,15 @@
 
 Application services, plus a short-lived approval monitor, each use the repository root as their root directory and a config-as-code path under `infra/railway/<service>/railway.json`:
 
-| Service | Image | `OREMEDIA_APP` variable | Ports / health |
-| --- | --- | --- | --- |
-| `api` | `infra/railway/Dockerfile` | `api` | `PORT` (HTTP), `/health`; runs migrations as its pre-deploy command |
-| `worker-core` | `infra/railway/Dockerfile` | `worker-core` | `PORT`, `/health` once all workers started; queues `core`, `agents`, `publish-*` |
-| `worker-ingest` | `infra/railway/Dockerfile` | `worker-ingest` | `PORT`, `/health` once workers started; `ingest-*`, `listening`, `crm` |
-| `worker-render` | `infra/railway/Dockerfile.render` | (fixed) | `PORT`, `/health` once workers started; `render`, `media`; Chromium |
-| `redirector` | `infra/railway/Dockerfile` | `redirector` | `PORT`, `/health`; tracked-link redirects on `LINK_REDIRECT_DOMAIN` |
-| `web` | `infra/railway/Dockerfile.web` | (fixed) | `PORT`, `/health` (proxied); SPA + API proxy (`API_INTERNAL_URL`) |
-| `approval-monitor` | `infra/railway/Dockerfile` | `approval-monitor` | Railway cron; Gmail review-status poller, exits after each run |
+| Service            | Image                             | `OREMEDIA_APP` variable | Ports / health                                                                   |
+| ------------------ | --------------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `api`              | `infra/railway/Dockerfile`        | `api`                   | `PORT` (HTTP), `/health`; runs migrations as its pre-deploy command              |
+| `worker-core`      | `infra/railway/Dockerfile`        | `worker-core`           | `PORT`, `/health` once all workers started; queues `core`, `agents`, `publish-*` |
+| `worker-ingest`    | `infra/railway/Dockerfile`        | `worker-ingest`         | `PORT`, `/health` once workers started; `ingest-*`, `listening`, `crm`           |
+| `worker-render`    | `infra/railway/Dockerfile.render` | (fixed)                 | `PORT`, `/health` once workers started; `render`, `media`; Chromium              |
+| `redirector`       | `infra/railway/Dockerfile`        | `redirector`            | `PORT`, `/health`; tracked-link redirects on `LINK_REDIRECT_DOMAIN`              |
+| `web`              | `infra/railway/Dockerfile.web`    | (fixed)                 | `PORT`, `/health` (proxied); SPA + API proxy (`API_INTERNAL_URL`)                |
+| `approval-monitor` | `infra/railway/Dockerfile`        | `approval-monitor`      | Railway cron; Gmail review-status poller, exits after each run                   |
 
 `worker-ingest` (Phase 6) and `redirector` (Phase 5) are listed for completeness: their `railway.json` files are in place, but the apps do not exist yet and the services must not be created until they do.
 

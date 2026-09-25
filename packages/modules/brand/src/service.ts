@@ -9,6 +9,7 @@ import {
   BrandVersionPublish,
   BrandVersionSubmit,
   BrandVersionUpdate,
+  BrandGuidelinesImport,
   DesignTokenSetV1,
   EvidenceRef,
   FactApprove,
@@ -50,14 +51,17 @@ import {
   BrandObjectiveRepository,
   BrandRepository,
   BrandVersionRepository,
+  BrandGuidelineAuthorRepository,
   DesignTokenRepository,
   PlatformBrandRepository,
   PolicyVersionRepository,
 } from './repositories';
+import { extractPalette, parseGuidelinesPackage } from './guidelines';
 
 const brandsRepo = new BrandRepository();
 const platformBrandsRepo = new PlatformBrandRepository();
 const versionsRepo = new BrandVersionRepository();
+const guidelineAuthorsRepo = new BrandGuidelineAuthorRepository();
 const tokensRepo = new DesignTokenRepository();
 const factsRepo = new ApprovedFactRepository();
 const objectivesRepo = new BrandObjectiveRepository();
@@ -140,6 +144,73 @@ async function assertDocumentReferences(
     }),
   );
   if (issues.length) throw new ValidationFailedError(issues, 'The brand system draft has invalid references');
+}
+
+/** The guidelines' identity for change detection: absent guidelines are ''. */
+const guidelinesKey = (d: BrandSystemDocumentV1): string => (d.guidelines ? hashCanonical(d.guidelines) : '');
+
+async function recordGuidelineAuthor(
+  actor: ResolvedActor,
+  brandId: string,
+  versionId: string,
+  packageHash: string | null,
+  tx: Tx,
+): Promise<void> {
+  if (actor.kind !== 'user' && actor.kind !== 'service_principal')
+    throw new PolicyDeniedError(
+      'actor_kind_not_allowed',
+      'Only people and agents may change brand guidelines',
+    );
+  await guidelineAuthorsRepo.record(
+    { id: versionId, brandId, authorKind: actor.kind, authorId: actor.id, packageHash },
+    tx,
+  );
+}
+
+/**
+ * Separation of duties for guidelines (the owner's decision, 25 September 2026): a version whose guidelines differ
+ * from the published ones, other than by removing them, is published only by someone other than whoever last
+ * imported or edited them, because agents follow that text. Unknown authorship is refused (fail closed).
+ */
+async function assertGuidelinesApprover(
+  actor: ResolvedActor,
+  versionId: string,
+  document: BrandSystemDocumentV1,
+  published: BrandSystemDocumentV1 | null,
+  tx: Tx,
+): Promise<void> {
+  if (!document.guidelines) return;
+  if (published && guidelinesKey(published) === guidelinesKey(document)) return;
+  const author = await guidelineAuthorsRepo.findById(versionId, tx);
+  if (!author)
+    throw new PolicyDeniedError(
+      'distinct_approver_required',
+      'These guidelines have no recorded author; re-import them so a second person can approve',
+    );
+  if (author.authorKind === actor.kind && author.authorId === actor.id)
+    throw new PolicyDeniedError(
+      'distinct_approver_required',
+      'New brand guidelines must be published by someone other than the person who imported or last edited them',
+    );
+}
+
+/** Adds the colours read from guidelines that the palette does not already hold (by value); keys stay unique. */
+function mergePalette(
+  palette: BrandSystemDocumentV1['tokens']['colours'],
+  extracted: BrandSystemDocumentV1['tokens']['colours'],
+): BrandSystemDocumentV1['tokens']['colours'] {
+  const values = new Set(palette.map((c) => c.value.toUpperCase()));
+  const keys = new Set(palette.map((c) => c.key));
+  const added = [];
+  for (const c of extracted) {
+    if (values.has(c.value.toUpperCase())) continue;
+    let key = c.key;
+    for (let n = 2; keys.has(key); n++) key = `${c.key}-${n}`;
+    keys.add(key);
+    values.add(c.value.toUpperCase());
+    added.push({ ...c, key });
+  }
+  return [...palette, ...added];
 }
 
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
@@ -367,6 +438,8 @@ export const brandService = {
       await assertDocumentReferences(brand.id, document, tx);
       const contentHash = hashCanonical(document);
       await versionsRepo.update(v.id, parsed.expectedVersion, { document, contentHash }, tx);
+      if (guidelinesKey(BrandSystemDocumentV1.parse(v.document)) !== guidelinesKey(document))
+        await recordGuidelineAuthor(actor, brand.id, v.id, null, tx);
       await audit.record(
         actorRef(actor),
         'brand.version.update',
@@ -424,6 +497,13 @@ export const brandService = {
       const toState = transition(brandVersionMachine, v.state, 'publish', 'versionId');
       const document = BrandSystemDocumentV1.parse(v.document);
       const previous = await versionsRepo.findPublished(brand.id, tx);
+      await assertGuidelinesApprover(
+        actor,
+        v.id,
+        document,
+        previous ? BrandSystemDocumentV1.parse(previous.document) : null,
+        tx,
+      );
       if (previous && previous.id !== v.id)
         await versionsRepo.update(
           previous.id,
@@ -790,6 +870,54 @@ export const brandService = {
       timezone: brand.timezone,
       defaultLocale: brand.defaultLocale,
     });
+  },
+
+  guidelines: {
+    /**
+     * Imports a brand skill (Agent Skills package) as a new draft version: the draft starts from the published
+     * document, carries the package's text as its guidelines, and adds the colours its tables state. People only;
+     * the importer cannot publish the draft (assertGuidelinesApprover). Skipped files are reported, never stored.
+     */
+    async import(actor: ResolvedActor, input: z.infer<typeof BrandGuidelinesImport>, tx: Tx) {
+      const parsed = BrandGuidelinesImport.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
+      const decision = await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+      assertMayDecide(decision);
+      const { guidelines, skipped } = parseGuidelinesPackage(parsed.files);
+      const extracted = extractPalette(guidelines.documents);
+      const published = await versionsRepo.findPublished(brand.id, tx);
+      const base = published ? BrandSystemDocumentV1.parse(published.document) : emptyBrandSystemDocument();
+      const colours = mergePalette(base.tokens.colours, extracted);
+      const document = BrandSystemDocumentV1.parse({
+        ...base,
+        tokens: { ...base.tokens, colours },
+        guidelines,
+      });
+      const id = newId('brandVersion');
+      const number = await versionsRepo.nextNumber(brand.id, tx);
+      await versionsRepo.create(
+        { id, brandId: brand.id, number, state: 'draft', document, contentHash: hashCanonical(document) },
+        tx,
+      );
+      await recordGuidelineAuthor(actor, brand.id, id, guidelines.source.packageHash, tx);
+      await audit.record(
+        actorRef(actor),
+        'brand.guidelines.import',
+        { type: 'brand_version', id },
+        'allowed',
+        tx,
+        { brandId: brand.id, count: guidelines.documents.length },
+      );
+      return {
+        versionId: id,
+        number,
+        version: 0,
+        source: guidelines.source,
+        documents: guidelines.documents.map((d) => d.path),
+        coloursAdded: colours.length - base.tokens.colours.length,
+        skipped,
+      };
+    },
   },
 
   /**
