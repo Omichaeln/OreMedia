@@ -45,6 +45,7 @@ import {
   type EvidenceStrength,
   type RecommendationAction,
 } from '@oremedia/contracts/intelligence';
+import { MetricDefinitionList, MetricsQueryV1 } from '@oremedia/contracts/measurement';
 import {
   ChannelConnectComplete,
   ChannelConnectStart,
@@ -269,6 +270,138 @@ export class Phase6Backend {
     state: 'open';
     version: number;
   }> = [];
+
+  /**
+   * Measurement (spec 15.1-15.2): provider-native definitions and the latest snapshot per (publication, metric).
+   * Keys are what the providers call them; the comparable group says what may be summed together.
+   */
+  readonly metricDefinitions: Array<{
+    key: string;
+    providerKey: string | null;
+    comparableGroup: string;
+    unit: string;
+    aggregation: 'last' | 'series';
+  }> = [
+    {
+      key: 'impressions',
+      providerKey: 'linkedin',
+      comparableGroup: 'impressions',
+      unit: 'count',
+      aggregation: 'last',
+    },
+    {
+      key: 'reactions',
+      providerKey: 'linkedin',
+      comparableGroup: 'likes',
+      unit: 'count',
+      aggregation: 'last',
+    },
+    { key: 'clicks', providerKey: 'linkedin', comparableGroup: 'clicks', unit: 'count', aggregation: 'last' },
+    {
+      key: 'impression_count',
+      providerKey: 'x',
+      comparableGroup: 'impressions',
+      unit: 'count',
+      aggregation: 'last',
+    },
+    { key: 'like_count', providerKey: 'x', comparableGroup: 'likes', unit: 'count', aggregation: 'last' },
+    {
+      key: 'url_link_clicks',
+      providerKey: 'x',
+      comparableGroup: 'clicks',
+      unit: 'count',
+      aggregation: 'last',
+    },
+    {
+      key: 'engagement_rate',
+      providerKey: null,
+      comparableGroup: 'rate:engagement/impressions',
+      unit: 'ratio',
+      aggregation: 'last',
+    },
+  ];
+  /** value null = the provider did not return it (unavailable, never zero); ageHours drives freshness. */
+  readonly metricSnapshots: Array<{
+    subjectId: string;
+    metricKey: string;
+    value: number | null;
+    ageHours: number;
+    latencyHours: number;
+    source: string;
+  }> = [
+    {
+      subjectId: P5.publications.published,
+      metricKey: 'impression_count',
+      value: 1840,
+      ageHours: 2,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.published,
+      metricKey: 'like_count',
+      value: 96,
+      ageHours: 2,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.published,
+      metricKey: 'url_link_clicks',
+      value: 31,
+      ageHours: 2,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.publishedEarlier,
+      metricKey: 'impressions',
+      value: 5200,
+      ageHours: 60,
+      latencyHours: 24,
+      source: 'provider:linkedin',
+    },
+    {
+      subjectId: P5.publications.publishedEarlier,
+      metricKey: 'reactions',
+      value: 143,
+      ageHours: 60,
+      latencyHours: 24,
+      source: 'provider:linkedin',
+    },
+    {
+      subjectId: P5.publications.publishedEarlier,
+      metricKey: 'clicks',
+      value: null,
+      ageHours: 60,
+      latencyHours: 24,
+      source: 'provider:linkedin',
+    },
+    {
+      subjectId: P5.publications.publishedOlder,
+      metricKey: 'impression_count',
+      value: 760,
+      ageHours: 5,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.publishedOlder,
+      metricKey: 'like_count',
+      value: 12,
+      ageHours: 5,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.publishedOlder,
+      metricKey: 'url_link_clicks',
+      value: 4,
+      ageHours: 5,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+  ];
 
   /** The brand these rows belong to is phase 5's (one company, one brand store); `seed: false` starts empty. */
   constructor(
@@ -1531,7 +1664,108 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
     }),
   };
 
-  return { intelligence, experiments, content, variants, channels };
+  const measurement = router({
+    definitions: router({
+      list: query.input(MetricDefinitionList).query(({ input }) =>
+        b.metricDefinitions
+          .filter((d) => !input.providerKey || d.providerKey === input.providerKey)
+          .map((d, i) => ({
+            id: `md_${i}`,
+            scope: 'global' as const,
+            key: d.key,
+            providerKey: d.providerKey,
+            nativeName: d.key,
+            unit: d.unit,
+            aggregation: d.aggregation,
+            comparableGroup: d.comparableGroup,
+            definitionVersion: 1,
+            separatesPaidOrganic: false,
+            definition: null,
+            createdAt: hoursAgo(500),
+          })),
+      ),
+    }),
+    metrics: router({
+      /** Spec 15.2: the latest value per (subject, metric), freshness on each, sums only within a comparable group. */
+      query: query.input(MetricsQueryV1).query(({ input }) => {
+        brandOf(input.brandId);
+        const groupOf = (key: string) =>
+          b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
+        const values = b.metricSnapshots
+          .filter((m) => input.subjectIds.includes(m.subjectId) && input.metricKeys.includes(m.metricKey))
+          .map((m, i) => {
+            const freshness = {
+              fetchedAt: hoursAgo(m.ageHours),
+              ageHours: m.ageHours,
+              latencyHours: m.latencyHours,
+              stale: m.ageHours > m.latencyHours * 2,
+            };
+            return {
+              snapshotId: `ms_${i}_${m.subjectId}`,
+              subjectType: input.subjectType,
+              subjectId: m.subjectId,
+              metricKey: m.metricKey,
+              comparableGroup: groupOf(m.metricKey),
+              value: m.value,
+              series: null,
+              completeness: m.value === null ? ('unavailable' as const) : ('complete' as const),
+              freshness,
+              source: m.source,
+              definitionVersion: 1,
+              windowStart: input.windowStart,
+              windowEnd: input.windowEnd,
+              brandTimezone: 'UTC',
+              numeratorSnapshotId: null,
+              denominatorSnapshotId: null,
+            };
+          });
+        const withData = values.filter((v) => v.value !== null);
+        const groups = [...new Set(values.map((v) => v.comparableGroup))].sort();
+        const aggregates =
+          input.grouping === 'comparable_group'
+            ? groups.map((g) => {
+                const inGroup = values.filter((v) => v.comparableGroup === g);
+                const data = inGroup.filter((v) => v.value !== null);
+                const oldest = data.reduce<(typeof data)[number] | null>(
+                  (acc, v) => (!acc || v.freshness.fetchedAt < acc.freshness.fetchedAt ? v : acc),
+                  null,
+                );
+                return {
+                  comparableGroup: g,
+                  metricKeys: [...new Set(inGroup.map((v) => v.metricKey))].sort(),
+                  value: data.length ? data.reduce((sum, v) => sum + (v.value as number), 0) : null,
+                  snapshotIds: data.map((v) => v.snapshotId),
+                  subjectsWithData: new Set(data.map((v) => v.subjectId)).size,
+                  subjectsUnavailable: new Set(
+                    inGroup.filter((v) => v.value === null).map((v) => v.subjectId),
+                  ).size,
+                  freshness: oldest?.freshness ?? null,
+                  stale: data.some((v) => v.freshness.stale),
+                };
+              })
+            : [];
+        return {
+          grouping: input.grouping,
+          values,
+          groups: [],
+          aggregates,
+          coverage: {
+            subjectsRequested: input.subjectIds.length,
+            subjectsWithData: new Set(withData.map((v) => v.subjectId)).size,
+            metricsRequested: input.metricKeys,
+            metricsWithData: [...new Set(withData.map((v) => v.metricKey))].sort(),
+            metricsUnavailable: input.metricKeys.filter((k) => !withData.some((v) => v.metricKey === k)),
+            staleValues: withData.filter((v) => v.freshness.stale).length,
+            windowStart: input.windowStart,
+            windowEnd: input.windowEnd,
+          },
+          computedAt: now(),
+        };
+      }),
+    }),
+  });
+
+  return { intelligence, experiments, content, variants, channels, measurement };
 }
 
 /** A policy refusal for a procedure the test marks denied (spec 5.5: the server decides on every call). */

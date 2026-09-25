@@ -117,4 +117,38 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .waitFor({ timeout: 15_000 });
     await page.close();
   }, 45_000);
+
+  it('performance: totals stay within a kind, missing numbers are named, period and channel filter the posts', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}`);
+    const metric = page.getByRole('group', { name: 'Metric' });
+    const impressions = metric.getByRole('button', { name: /^Impressions/ });
+    await impressions.waitFor({ timeout: 15_000 });
+    // 1,840 (X) + 5,200 (LinkedIn) + 760 (X): impressions of both providers are one comparable group.
+    expect(await impressions.textContent()).toContain((7800).toLocaleString('en-US'));
+    expect(await page.getByTestId('coverage').textContent()).toContain('3 of 3 publications have numbers');
+    expect(await page.getByTestId('coverage').textContent()).toContain('2 stale values');
+    const clicks = metric.getByRole('button', { name: /^Clicks/ });
+    expect(await clicks.textContent()).toContain('2 of 3 posts');
+    await clicks.click();
+    await expect.poll(() => clicks.getAttribute('aria-pressed')).toBe('true');
+    const posts = page.getByTestId('performance-posts').getByRole('listitem');
+    expect(await posts.count()).toBe(3);
+    // LinkedIn did not return clicks: the row says so and sorts last, never shown as 0.
+    await expect.poll(() => posts.last().textContent()).toContain('Unavailable');
+    await page.getByRole('group', { name: 'Period' }).getByRole('button', { name: '7 days' }).click();
+    await expect.poll(() => posts.count(), { timeout: 15_000 }).toBe(2);
+    await page.getByRole('group', { name: 'Channel' }).getByRole('button', { name: 'Acme LinkedIn' }).click();
+    await expect.poll(() => posts.count(), { timeout: 15_000 }).toBe(1);
+    expect(new URL(page.url()).searchParams.get('metric')).toBe('clicks');
+    // A channel with nothing published in the period shows that, and none of the previous selection's totals.
+    await page
+      .getByRole('group', { name: 'Channel' })
+      .getByRole('button', { name: 'Acme Instagram' })
+      .click();
+    await page.getByText('Nothing published in the last 7 days').waitFor({ timeout: 15_000 });
+    expect(await page.getByRole('group', { name: 'Metric' }).count()).toBe(0);
+    expect(await page.getByTestId('coverage').count()).toBe(0);
+    await page.close();
+  }, 45_000);
 });
