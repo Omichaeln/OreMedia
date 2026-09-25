@@ -9,6 +9,7 @@ import {
   assetUsages,
   assetVersions,
   assets,
+  generatedUploads,
   uploadIntents,
   usageRights,
 } from '@oremedia/db/schema/assets';
@@ -305,6 +306,19 @@ export class AssetUsageRepository extends BrandScopedRepository<typeof assetUsag
       .orderBy(desc(assetUsages.id))
       .limit(req.limit + 1);
     return page(rows, req.limit);
+  }
+}
+
+/** ADR-11: the generated provenance of an upload intent, keyed by the intent's id. */
+export class GeneratedUploadRepository extends BrandScopedRepository<typeof generatedUploads> {
+  constructor() {
+    super(generatedUploads);
+  }
+  async create(
+    values: Omit<typeof generatedUploads.$inferInsert, 'tenantId'> & { brandId: string },
+    tx?: Tx,
+  ) {
+    await this.insertBrandScoped(values, tx);
   }
 }
 

@@ -23,6 +23,7 @@ import {
   type AssetPurpose,
   type AssetRef,
   type DerivativePurpose,
+  type Provenance,
 } from '@oremedia/contracts/assets';
 import {
   NotFoundError,
@@ -33,6 +34,7 @@ import {
 } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
+import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { assetMachine, uploadIntentMachine } from '@oremedia/domain';
 import { newId } from '@oremedia/domain/ids';
@@ -46,10 +48,12 @@ import {
   AssetRepository,
   AssetUsageRepository,
   AssetVersionRepository,
+  GeneratedUploadRepository,
   UploadIntentRepository,
   UsageRightsRepository,
   type AssetRow,
   type AssetVersionRow,
+  type UploadIntentRow,
 } from './repositories';
 import { storage, storageKeys } from './storage';
 
@@ -60,6 +64,7 @@ const rightsRepo = new UsageRightsRepository();
 const grantsRepo = new AssetGrantRepository();
 const usagesRepo = new AssetUsageRepository();
 const intentsRepo = new UploadIntentRepository();
+const generatedRepo = new GeneratedUploadRepository();
 
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
@@ -120,52 +125,12 @@ export const assetService = {
   /** Spec 9.1: declared mime and size are checked against the kind's accepted list and cap; returns a presigned PUT. */
   async createIntent(actor: ResolvedActor, input: z.infer<typeof UploadIntentCreate>, tx: Tx) {
     const parsed = UploadIntentCreate.parse(input);
-    const { tenantId } = requireTenant();
     await brandService.assertExist([parsed.brandId], tx);
     assetsRepo.assertBrandVisible(parsed.brandId); // an invisible brand behaves like a missing one (spec 5.3)
     const decision = await policy.assert(actor, 'asset.upload', brandResource(parsed.brandId), {}, tx);
     if (decision.obligations?.some((o) => o.type === 'propose_only'))
       throw new PolicyDeniedError('propose_only', 'Agents may only propose uploads');
-    const mime = parsed.declaredMime.toLowerCase();
-    if (ARCHIVE_MIMES.includes(mime))
-      throw new ValidationFailedError([{ path: 'declaredMime', issue: 'archives_rejected' }]);
-    if (KINDS_NOT_PROCESSABLE.includes(parsed.kind))
-      throw new ValidationFailedError([{ path: 'kind', issue: 'processing_not_available_in_release_1' }]);
-    const group = KIND_MIME_GROUPS[parsed.kind].find((g) => ACCEPTED_MIMES[g]?.includes(mime));
-    if (!group)
-      throw new ValidationFailedError([{ path: 'declaredMime', issue: 'mime_not_accepted_for_kind' }]);
-    const maxBytes = UPLOAD_CAPS_BYTES[group] as number;
-    if (parsed.declaredBytes > maxBytes)
-      throw new ValidationFailedError([{ path: 'declaredBytes', issue: `exceeds_cap_${maxBytes}` }]);
-    const id = newId('uploadIntent');
-    const storageKey = storageKeys.quarantine(tenantId, id);
-    const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_SEC * 1000);
-    await intentsRepo.create(
-      {
-        id,
-        brandId: parsed.brandId,
-        kind: parsed.kind,
-        declaredMime: mime,
-        declaredBytes: parsed.declaredBytes,
-        maxBytes,
-        storageKey,
-        originalFilename: parsed.originalFilename,
-        state: 'issued',
-        createdByUserId: actor.id,
-        expiresAt,
-      },
-      tx,
-    );
-    await audit.record(
-      actorRef(actor),
-      'upload_intent.created',
-      { type: 'upload_intent', id },
-      'allowed',
-      tx,
-      {
-        brandId: parsed.brandId,
-      },
-    );
+    const { id, storageKey, mime, maxBytes, expiresAt } = await issueIntent(actor, parsed, null, tx);
     const upload = await storage().signUploadUrl(storageKey, {
       contentType: mime,
       expiresInSec: UPLOAD_INTENT_TTL_SEC,
@@ -178,28 +143,91 @@ export const assetService = {
     const parsed = UploadIntentComplete.parse(input);
     const intent = await intentsRepo.getById(parsed.intentId, tx);
     await policy.assert(actor, 'asset.upload', brandResource(intent.brandId), {}, tx);
-    if (intent.expiresAt.getTime() < Date.now())
-      throw new ValidationFailedError([{ path: 'intentId', issue: 'intent_expired' }]);
-    if (!uploadIntentMachine.can(intent.state, 'complete'))
-      throw new ValidationFailedError([{ path: 'intentId', issue: `intent_${intent.state}` }]);
-    const next = uploadIntentMachine.transition(intent.state, 'complete');
-    await intentsRepo.update(intent.id, intent.version, { state: next }, tx);
-    await audit.record(
-      actorRef(actor),
-      'upload_intent.completed',
-      { type: 'upload_intent', id: intent.id },
-      'allowed',
-      tx,
-      { brandId: intent.brandId, fromState: intent.state, toState: next },
-    );
-    await outbox.add(
-      'asset.upload_completed',
-      { type: 'upload_intent', id: intent.id, version: intent.version + 1 },
-      { uploadIntentId: intent.id, brandId: intent.brandId, actorKind: actor.kind, actorId: actor.id },
-      tx,
-      { brandId: intent.brandId },
-    );
-    return { intentId: intent.id, state: next };
+    return markUploaded(actor, intent, tx);
+  },
+
+  /**
+   * ADR-11: bytes from a generation provider enter exactly like an upload. The intent is issued with the generated
+   * provenance, the bytes are written to its quarantine key and the intent completes, so assetIngestWorkflowV1 runs
+   * every step an upload gets (sniff, scan, sanitise, hash, derivatives) and catalogues a pending asset whose
+   * version records the provenance. Authorised as creative.edit, the images tool's action: an agent may not upload
+   * outright (asset.upload is propose_only), and a pending asset is the proposal a person approves. Image kinds only
+   * (video and audio processing is Release 2, spec 9.1).
+   */
+  async uploadGenerated(
+    actor: ResolvedActor,
+    input: {
+      brandId: string;
+      kind: 'photo' | 'illustration';
+      mime: string;
+      bytes: Buffer;
+      originalFilename: string;
+      provenance: Extract<Provenance, { kind: 'generated' }>;
+    },
+    tx: Tx,
+    opts: { autonomyMode?: AutonomyMode } = {},
+  ): Promise<{ intentId: string }> {
+    const parsed = UploadIntentCreate.parse({
+      brandId: input.brandId,
+      kind: input.kind,
+      declaredMime: input.mime,
+      declaredBytes: input.bytes.length,
+      originalFilename: input.originalFilename,
+    });
+    await brandService.assertExist([parsed.brandId], tx);
+    assetsRepo.assertBrandVisible(parsed.brandId);
+    await policy.assert(actor, 'creative.edit', brandResource(parsed.brandId), opts, tx);
+    const { id, storageKey, mime } = await issueIntent(actor, parsed, input.provenance, tx);
+    await storage().putObject(storageKey, input.bytes, { contentType: mime });
+    await markUploaded(actor, await intentsRepo.getById(id, tx), tx);
+    return { intentId: id };
+  },
+
+  /**
+   * Where generated uploads stand: accepted ones carry their asset version; a rejection carries its reason. Internal
+   * to the image generator's poll (no router exposes it); reads stay tenant- and brand-scoped through the repositories.
+   */
+  async generatedUploadStatus(intentIds: readonly string[], tx?: Tx) {
+    const out: Array<
+      | { intentId: string; state: 'pending' }
+      | { intentId: string; state: 'rejected'; reason: string }
+      | {
+          intentId: string;
+          state: 'accepted';
+          assetId: string;
+          storageKey: string;
+          contentHash: string;
+          width: number;
+          height: number;
+        }
+    > = [];
+    for (const intentId of intentIds) {
+      const intent = await intentsRepo.getById(intentId, tx);
+      if (intent.state === 'rejected') {
+        out.push({ intentId, state: 'rejected', reason: intent.rejectionReason ?? 'rejected' });
+        continue;
+      }
+      if (intent.state !== 'accepted' || !intent.resultAssetId) {
+        out.push({ intentId, state: 'pending' });
+        continue;
+      }
+      const asset = await assetsRepo.getById(intent.resultAssetId, tx);
+      const version = asset.currentVersionId ? await versionsRepo.getById(asset.currentVersionId, tx) : null;
+      if (!version) {
+        out.push({ intentId, state: 'pending' });
+        continue;
+      }
+      out.push({
+        intentId,
+        state: 'accepted',
+        assetId: asset.id,
+        storageKey: version.storageKey,
+        contentHash: version.contentHash,
+        width: version.width ?? 0,
+        height: version.height ?? 0,
+      });
+    }
+    return out;
   },
 
   /** Any asset id from a client is loaded through the scoped repository first; a foreign id is NOT_FOUND. */
@@ -647,3 +675,77 @@ export const assetService = {
     };
   },
 };
+
+/**
+ * Issues an upload intent once the caller has authorised it: the kind's mime list and size cap are checked, the
+ * quarantine key is allocated and the intent is recorded and audited. Generated uploads carry their provenance.
+ */
+async function issueIntent(
+  actor: ResolvedActor,
+  parsed: z.infer<typeof UploadIntentCreate>,
+  provenance: Extract<Provenance, { kind: 'generated' }> | null,
+  tx: Tx,
+) {
+  const { tenantId } = requireTenant();
+  const mime = parsed.declaredMime.toLowerCase();
+  if (ARCHIVE_MIMES.includes(mime))
+    throw new ValidationFailedError([{ path: 'declaredMime', issue: 'archives_rejected' }]);
+  if (KINDS_NOT_PROCESSABLE.includes(parsed.kind))
+    throw new ValidationFailedError([{ path: 'kind', issue: 'processing_not_available_in_release_1' }]);
+  const group = KIND_MIME_GROUPS[parsed.kind].find((g) => ACCEPTED_MIMES[g]?.includes(mime));
+  if (!group)
+    throw new ValidationFailedError([{ path: 'declaredMime', issue: 'mime_not_accepted_for_kind' }]);
+  const maxBytes = UPLOAD_CAPS_BYTES[group] as number;
+  if (parsed.declaredBytes > maxBytes)
+    throw new ValidationFailedError([{ path: 'declaredBytes', issue: `exceeds_cap_${maxBytes}` }]);
+  const id = newId('uploadIntent');
+  const storageKey = storageKeys.quarantine(tenantId, id);
+  const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_SEC * 1000);
+  await intentsRepo.create(
+    {
+      id,
+      brandId: parsed.brandId,
+      kind: parsed.kind,
+      declaredMime: mime,
+      declaredBytes: parsed.declaredBytes,
+      maxBytes,
+      storageKey,
+      originalFilename: parsed.originalFilename,
+      state: 'issued',
+      createdByUserId: actor.id,
+      expiresAt,
+    },
+    tx,
+  );
+  if (provenance) await generatedRepo.create({ id, brandId: parsed.brandId, provenance }, tx);
+  await audit.record(actorRef(actor), 'upload_intent.created', { type: 'upload_intent', id }, 'allowed', tx, {
+    brandId: parsed.brandId,
+  });
+  return { id, storageKey, mime, maxBytes, expiresAt };
+}
+
+/** issued → uploaded once the caller has authorised it; the outbox event starts assetIngestWorkflowV1. */
+async function markUploaded(actor: ResolvedActor, intent: UploadIntentRow, tx: Tx) {
+  if (intent.expiresAt.getTime() < Date.now())
+    throw new ValidationFailedError([{ path: 'intentId', issue: 'intent_expired' }]);
+  if (!uploadIntentMachine.can(intent.state, 'complete'))
+    throw new ValidationFailedError([{ path: 'intentId', issue: `intent_${intent.state}` }]);
+  const next = uploadIntentMachine.transition(intent.state, 'complete');
+  await intentsRepo.update(intent.id, intent.version, { state: next }, tx);
+  await audit.record(
+    actorRef(actor),
+    'upload_intent.completed',
+    { type: 'upload_intent', id: intent.id },
+    'allowed',
+    tx,
+    { brandId: intent.brandId, fromState: intent.state, toState: next },
+  );
+  await outbox.add(
+    'asset.upload_completed',
+    { type: 'upload_intent', id: intent.id, version: intent.version + 1 },
+    { uploadIntentId: intent.id, brandId: intent.brandId, actorKind: actor.kind, actorId: actor.id },
+    tx,
+    { brandId: intent.brandId },
+  );
+  return { intentId: intent.id, state: next };
+}
