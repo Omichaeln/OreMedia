@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-25T15:00:00Z",
+  "updatedAt": "2026-09-25T15:40:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -800,6 +800,14 @@
           "8.1, 8.2, 5.5",
           "complete",
           "PR #10 (merged 25 September 2026): brand.guidelines.import turns an Agent Skills package (SKILL.md + references, text only, 64 KB) into a new draft with guidelines and the palette its tables state; agents receive the guidelines with the brand constraints once published. Publishing changed guidelines is refused to their last author (brand_guideline_authors, migration 0006; recorded by import and by any update changing them; fail closed). Unit tests on real brand skills' structure, integration tests of the approval rule, cross-tenant fixture, 0006 roll-forward test. Not yet built: model extraction of voice and vocabulary; importing the skill's SVG logo."
+        ],
+        [
+          "2.31",
+          "Voice and vocabulary extraction: an onboarding agent run proposes a draft’s voice from its imported guidelines",
+          "production",
+          "8.2, 10.4, 12.3",
+          "in_progress",
+          "Branch claude/brand-voice-extraction: brand.onboarding.start (a stub until now) starts a brand_onboarding agent run over a draft carrying imported guidelines, passed as untrusted evidence (one item per document, chunked at 20 000 characters). The new agent tool brand.proposeVoice (draft, brand.edit_standards, run autonomy) writes summary, tone, audiences, preferred/avoided terms, prohibited phrases, locales and examples into the draft named by the run’s server-written brief, and only while that draft’s voice still hashes to the voice the run started from: a person’s edit always wins, and the model never names the target. Onboarding resolves the approved baseline (the published snapshot, or the empty document as version 0 for a brand with nothing published), never the draft. Publishing stays a person’s decision (propose_only; the guidelines second-person rule is unchanged). Built-in seeding now adds a changed package as the next draft version with its suite; the evaluation sandbox feeds a case’s evidence; brand-onboarding gains a guidelines-voice evaluation case. Brand kit editor: “Extract voice and vocabulary” on a draft with guidelines. Contract version 3 (new required onboarding fields). Verified: brand integration (baseline, refusals, brief, proposal, person-edit-wins), worker-core end to end through the real dispatcher with the shipped manifest, cross-tenant harness 283/283, integration 515/515, browser suites 218 + brand-kit e2e. Open: brand-onboarding v2 must pass evaluation against a real model and be published by a person before any brand can run it; no live model run yet; website captures are refused until a capture source exists."
         ]
       ]
     },
@@ -1131,7 +1139,7 @@
           "production",
           "10.4",
           "complete",
-          "packages/modules/skills/builtin/<key>: SKILL.md (inputs, context, 10.3 precedence, numbered procedure, output contract, never-list, conflicts surfaced as findings), manifest.json (valid SkillManifestV1: task kinds, JSON-schema input/output, requiredContext, allowedTools ⊆ TOOL_NAMES_RELEASE_1, budgets within limits), references, two evaluation cases with expected properties and rubric. loadBuiltinSkills() validates all eight; seedBuiltinSkills registers them as platform skills v1 in draft (publishing needs a passing evaluation; nothing auto-publishes). skills.integration.test.ts."
+          "packages/modules/skills/builtin/<key>: SKILL.md (inputs, context, 10.3 precedence, numbered procedure, output contract, never-list, conflicts surfaced as findings), manifest.json (valid SkillManifestV1: task kinds, JSON-schema input/output, requiredContext, allowedTools ⊆ TOOL_NAMES_RELEASE_1, budgets within limits), references, two evaluation cases with expected properties and rubric. loadBuiltinSkills() validates all eight; seedBuiltinSkills registers them as platform skills v1 in draft (publishing needs a passing evaluation; nothing auto-publishes). skills.integration.test.ts. Version 2 (branch claude/brand-voice-extraction) adds brand.proposeVoice to allowedTools, the guidelines inputs and a third evaluation case; it is seeded as a draft and needs a passing evaluation before publishing."
         ],
         [
           "4.13",

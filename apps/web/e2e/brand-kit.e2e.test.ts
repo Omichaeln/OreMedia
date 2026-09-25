@@ -55,7 +55,7 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
 
   it('an unknown principal is refused in text; a known one starts the run and links to it', async () => {
     await openEditor();
-    expect(await extract().isDisabled()).toBe(true); // no principal yet
+    expect(await extract().getAttribute('aria-disabled')).toBe('true'); // no principal yet
     await page.getByLabel('Agent principal').fill('sp_unknown');
     await extract().click();
     await expect
@@ -75,11 +75,11 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
   it('with unsaved edits the extraction waits until they are saved or discarded', async () => {
     await openEditor();
     await page.getByLabel('Agent principal').fill('sp_e2e_onboarding');
-    expect(await extract().isDisabled()).toBe(false);
+    expect(await extract().getAttribute('aria-disabled')).toBeNull();
     await page.getByLabel('Summary', { exact: true }).fill('Edited but not saved.');
-    expect(await extract().isDisabled()).toBe(true);
-    expect(await page.getByText('Save or discard your changes first.').count()).toBe(1);
+    expect(await extract().getAttribute('aria-disabled')).toBe('true');
+    expect(await extract().getAttribute('title')).toBe('Save or discard your changes first');
     await page.getByRole('button', { name: 'Discard changes' }).click();
-    await expect.poll(() => extract().isDisabled(), { timeout: 15_000 }).toBe(false);
+    await expect.poll(() => extract().getAttribute('aria-disabled'), { timeout: 15_000 }).toBeNull();
   }, 45_000);
 });

@@ -31,6 +31,7 @@ import {
 import type { EvidenceItem } from '@oremedia/contracts/agents';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import {
+  ConflictError,
   NotFoundError,
   PolicyDeniedError,
   ValidationFailedError,
@@ -110,7 +111,8 @@ export const resetBrandAssetKindSource = (): void => {
 /**
  * Spec 8.2 onboarding runs are agent runs, which are the agents module's rows, so it registers the source
  * (composition wires `agentsService.runs.start` / `runs.get`). `get` returns the run's brief as the server wrote it.
- * Until registered, onboarding refuses with not_available_yet and no proposal can be written.
+ * Unlike the other hooks there is no harmless default (a missing template or asset list is an empty answer; a
+ * missing run source is not), so until registered onboarding refuses with not_available_yet and nothing is written.
  */
 export interface OnboardingRunSource {
   start(
@@ -122,7 +124,7 @@ export interface OnboardingRunSource {
     actor: ResolvedActor,
     runId: string,
     tx: Tx,
-  ): Promise<{ brandId: string; taskKind: string; state: string; brief: Record<string, unknown> }>;
+  ): Promise<{ brandId: string; taskKind: string; brief: Record<string, unknown> }>;
 }
 let onboardingRunSource: OnboardingRunSource | null = null;
 export const registerOnboardingRunSource = (source: OnboardingRunSource): void => {
@@ -304,7 +306,6 @@ function transition<S extends string, E extends string>(
   }
 }
 
-/** Brand-owned rows are loaded through the scoped repository and bound to the brand in the input: a foreign or mismatched id is NOT_FOUND. */
 /** A snapshot of a brand with nothing published: the empty document, never a draft. */
 const UNPUBLISHED_VERSION_ID = 'unpublished';
 
@@ -345,6 +346,7 @@ async function snapshotOf(
   });
 }
 
+/** Brand-owned rows are loaded through the scoped repository and bound to the brand in the input: a foreign or mismatched id is NOT_FOUND. */
 async function loadVersion(brandId: string, versionId: string, tx?: Tx) {
   const v = await versionsRepo.getById(versionId, tx);
   if (v.brandId !== brandId) throw new NotFoundError('BrandVersion', versionId);
@@ -1106,10 +1108,9 @@ export const brandService = {
     if (v.state !== 'draft')
       throw new ValidationFailedError([{ path: 'voice', issue: 'the draft is no longer a draft' }]);
     const current = BrandSystemDocumentV1.parse(v.document);
+    // A person changed the voice after the run started: their edit wins (CONFLICT, like any stale edit).
     if (hashCanonical(current.voice) !== baseVoiceHash)
-      throw new ValidationFailedError([
-        { path: 'voice', issue: 'the draft voice changed since the run started; nothing was written' },
-      ]);
+      throw new ConflictError('BrandVersion', v.id, v.version);
     const document = BrandSystemDocumentV1.parse({ ...current, voice });
     const contentHash = hashCanonical(document);
     await versionsRepo.update(v.id, v.version, { document, contentHash }, tx);

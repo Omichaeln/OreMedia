@@ -1129,7 +1129,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       async get(_actor, runId) {
         const r = runs.get(runId);
         if (!r) throw new NotFoundError('AgentRun', runId);
-        return { ...r, state: 'running' };
+        return r;
       },
     };
     const proposal = {
@@ -1244,9 +1244,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(after.document.guidelines).toEqual(before.document.guidelines);
       expect(after.document.tokens).toEqual(before.document.tokens);
       // The voice is no longer the one the run started from: a repeat never overwrites.
-      await expect(propose('run_1', { ...proposal, summary: 'Loud.' })).rejects.toBeInstanceOf(
-        ValidationFailedError,
-      );
+      await expect(propose('run_1', { ...proposal, summary: 'Loud.' })).rejects.toBeInstanceOf(ConflictError);
       expect((await versionOf(draftId)).document.voice.summary).toBe('Warm and plain.');
       const audits = await tdb.db
         .select()
@@ -1274,7 +1272,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
           tx,
         ),
       );
-      await expect(propose('run_2')).rejects.toBeInstanceOf(ValidationFailedError);
+      await expect(propose('run_2')).rejects.toBeInstanceOf(ConflictError);
       expect((await versionOf(draftId)).document.voice.summary).toBe('Edited by a person.');
       runs.set('run_copy', { brandId: brandOnb, taskKind: 'copywriting', brief: runs.get('run_2')!.brief });
       await expect(propose('run_copy')).rejects.toMatchObject({
@@ -1282,6 +1280,20 @@ describe('brand module (spec 8) against MySQL 8', () => {
         reason: 'not_an_onboarding_run',
       });
       await expect(propose('run_2', { ...proposal, tone: Array(13).fill('x') })).rejects.toThrow();
+    });
+
+    it('a draft that went to review takes no proposal, even from a run that started on it', async () => {
+      const { runId } = await start(draftId); // starts from the person's voice
+      const current = await versionOf(draftId);
+      await run(tenantA, (tx) =>
+        brandService.versions.submitForReview(
+          person,
+          { brandId: brandOnb, versionId: draftId, expectedVersion: current.version },
+          tx,
+        ),
+      );
+      await expect(propose(runId)).rejects.toBeInstanceOf(ValidationFailedError);
+      expect((await versionOf(draftId)).document.voice.summary).toBe('Edited by a person.');
     });
   });
 });

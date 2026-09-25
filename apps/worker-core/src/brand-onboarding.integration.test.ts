@@ -164,6 +164,23 @@ describe('brand onboarding: voice and vocabulary proposed by an agent run (worke
   });
 
   it('a person starts onboarding on the imported draft; the run proposes its voice and nothing is published', async () => {
+    // The generic start refuses the task kind: only brand.onboarding.start writes the brief the run's tool trusts.
+    await expect(
+      asManager((tx) =>
+        agentsService.runs.start(
+          managerActor,
+          {
+            brandId: brandA,
+            servicePrincipalId: spA,
+            requestedAutonomy: 'create',
+            taskKind: 'brand_onboarding',
+            brief: { brandVersionId: 'bv_any', baseVoiceHash: '0'.repeat(64) },
+          },
+          tx,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(await tdb.db.select().from(agentRuns).where(eq(agentRuns.tenantId, tenantA))).toEqual([]);
     const imported = await asManager((tx) =>
       brandService.guidelines.import(managerActor, { brandId: brandA, files }, tx),
     );

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Field, Input, StatusBanner } from '@oremedia/ui';
 import { rememberRun } from '../agents/run-helpers';
 import { brandPath, useBrandContext } from './brand-context';
@@ -16,6 +16,7 @@ import { toUiError } from '../../lib/errors';
 export function VoiceExtraction({ versionId, unsaved }: { versionId: string; unsaved: boolean }) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [principalId, setPrincipalId] = useState('');
   const start = useMutation(
@@ -24,6 +25,7 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
       onSuccess: (res) => {
         intent.renew();
         rememberRun({ companyId, brandId, runId: res.runId });
+        void queryClient.invalidateQueries(trpc.operations.audit.pathFilter());
       },
     }),
   );
@@ -62,12 +64,18 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
           type="submit"
           size="sm"
           variant="primary"
-          disabled={unsaved || start.isPending || !principalId.trim()}
+          disabled={start.isPending}
+          disabledReason={
+            unsaved
+              ? 'Save or discard your changes first'
+              : principalId.trim()
+                ? undefined
+                : 'Enter an agent principal id first'
+          }
         >
           {start.isPending ? 'Starting…' : 'Extract voice and vocabulary'}
         </Button>
       </div>
-      {unsaved && <p className="text-xs text-muted-foreground">Save or discard your changes first.</p>}
       {ui && (
         <StatusBanner
           tone="critical"

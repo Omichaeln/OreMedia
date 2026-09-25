@@ -96,12 +96,12 @@ export async function seedBuiltinSkills(
       for (const b of builtins) {
         const existing = await platformRepo.findByKey(b.key, t);
         if (existing) {
+          await platformRepo.lockSkill(existing.id, t); // one seeder at a time checks and numbers a skill's versions
           if (await platformRepo.hasVersionWithHash(existing.id, b.packageHash, t)) {
             skipped.push(b.key);
             continue;
           }
           const versionId = newId('skillVersion');
-          await platformRepo.lockSkill(existing.id, t); // one seeder numbers a skill's versions at a time
           await platformRepo.createVersion(
             {
               id: versionId,
