@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reduce } from './reduce';
-import { contrastRatio, validateAgainstBrand } from './validate';
+import { contrastRatio, prohibitedPhrasesIn, validateAgainstBrand } from './validate';
 import { fixtureDocument, fixtureSnapshot, ids } from './fixtures';
 
 const P = 'page_1';
@@ -244,5 +244,14 @@ describe('static contrast uses what is actually under the text (spec 11.4)', () 
       patch: { colourToken: 'mist' },
     });
     expect(contrast(paleText)).toEqual([]);
+  });
+});
+
+describe('prohibitedPhrasesIn (the studio rule, shared with the brand system draft check)', () => {
+  it('finds each prohibited phrase case-insensitively and ignores empty entries', () => {
+    expect(
+      prohibitedPhrasesIn('An ARTISANAL, best-ever roast', ['artisanal', 'Best-Ever', '', 'cheap']),
+    ).toEqual(['artisanal', 'best-ever']);
+    expect(prohibitedPhrasesIn('Plain words', ['artisanal'])).toEqual([]);
   });
 });

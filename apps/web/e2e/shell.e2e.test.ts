@@ -166,4 +166,79 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await skills.filter({ hasText: 'brand-onboarding' }).textContent()).toContain('Built in');
     await page.close();
   }, 45_000);
+  it('settings admin: the release policy defaults, kill switches with the company-wide override, model routing', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings')}`);
+    const tabs = page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab');
+    await expect
+      .poll(() => tabs.allTextContents(), { timeout: 15_000 })
+      .toEqual(['Channels', 'Policy', 'Skills', 'Model routing']);
+    await page.getByRole('tab', { name: 'Policy' }).click();
+    const policy = page.getByTestId('release-policy');
+    await expect
+      .poll(() => policy.textContent(), { timeout: 15_000 })
+      .toContain('defaults below are in force');
+    expect(await policy.textContent()).toContain('Hold on revoked facts');
+    // Engage agent starts for this brand, with a reason.
+    const brandRow = page.getByTestId('kill-agent_starts-brand');
+    await brandRow.getByRole('button', { name: 'Engage' }).click();
+    await page.getByLabel('Reason').fill('Incident drill');
+    await page.getByTestId('confirm-kill-agent_starts').click();
+    await expect.poll(() => brandRow.textContent(), { timeout: 15_000 }).toContain('Engaged');
+    expect(backend.killSwitches.get(`agent_starts:${E2E.brandId}`)).toEqual({
+      engaged: true,
+      reason: 'Incident drill',
+    });
+    // The company-wide mandate-publishing switch shows on the brand row and must be released on its own row.
+    await page.getByTestId('kill-release_dispatch-company').getByRole('button', { name: 'Engage' }).click();
+    await page.getByTestId('confirm-kill-release_dispatch').click();
+    const mandateBrand = page.getByTestId('kill-release_dispatch-brand');
+    await expect
+      .poll(() => mandateBrand.textContent(), { timeout: 15_000 })
+      .toContain('Engaged company-wide');
+    expect(await mandateBrand.getByRole('button', { name: 'Release' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    await page.getByRole('tab', { name: 'Model routing' }).click();
+    const routing = page.getByTestId('model-routing');
+    await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('anthropic/claude-sonnet');
+    expect(await routing.textContent()).toContain('Zero retention');
+    backend.killSwitches.clear();
+    await page.close();
+  }, 45_000);
+
+  it('settings: a brand manager sees neither the kill switches nor model routing', async () => {
+    backend.role = 'brand_manager';
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=policy')}`);
+    await page.getByTestId('release-policy').waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('kill-switches').count()).toBe(0);
+    expect(await page.getByRole('tab', { name: 'Model routing' }).count()).toBe(0);
+    backend.role = 'owner';
+    await page.close();
+  }, 45_000);
+
+  it('brand system: a draft is read against the published version, and a draft check blocks prohibited phrases', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/system')}`);
+    await page
+      .getByRole('group', { name: 'Version shown' })
+      .getByRole('button', { name: /proposed/ })
+      .click();
+    await page.getByTestId('viewing-draft').waitFor({ timeout: 15_000 });
+    const nav = page.getByRole('navigation', { name: 'Brand system sections' });
+    // The mock draft adds reference imagery and guidelines; nothing else differs.
+    await expect
+      .poll(() => nav.getByRole('button', { name: /Changed/ }).allTextContents(), { timeout: 15_000 })
+      .toEqual(['ImageryChanged in this version', 'GuidelinesChanged in this version']);
+    await page.getByRole('button', { name: 'Review changes' }).click();
+    const changes = page.getByTestId('version-changes');
+    await expect.poll(() => changes.textContent(), { timeout: 15_000 }).toContain('Imagery');
+    expect(await changes.textContent()).toContain('approvals of this brand are invalidated');
+    await page.goto(`${origin}${home.replace('/home', '/system?section=voice')}`);
+    await page.getByLabel('Draft copy').fill('A cheap and cheerful roast');
+    const findings = page.getByTestId('draft-findings');
+    await expect.poll(() => findings.textContent(), { timeout: 15_000 }).toContain('Never write “cheap”');
+    await page.close();
+  }, 45_000);
 });

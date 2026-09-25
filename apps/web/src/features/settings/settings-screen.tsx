@@ -6,14 +6,21 @@ import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
 import { ChannelSettings } from '../publishing/channel-settings';
+import { useCompanies } from '../portfolio/use-companies';
+import { KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
 import { useSkills, type SkillDto } from './use-settings';
 
 const TAB_PARAM = 'tab';
 const TABS = [
-  ['channels', 'Channels'],
-  ['skills', 'Skills'],
+  ['channels', 'Channels', false],
+  ['policy', 'Policy', false],
+  ['skills', 'Skills', false],
+  ['routing', 'Model routing', true],
 ] as const;
 type SettingsTab = (typeof TABS)[number][0];
+
+/** Owners and admins hold audit.read and billing.manage (the kill switches and model routing); the server re-checks. */
+const ADMIN_ROLES = new Set(['owner', 'admin']);
 
 const SCOPE_LABEL: Record<SkillDto['scope'], string> = {
   platform: 'Built in',
@@ -77,14 +84,19 @@ function SkillsSettings() {
 }
 
 /**
- * Spec 21.1 `settings/`: the brand's settings as tabs (the v3 prototype's arrangement), the tab in the URL. Channels
- * and skills have an API to read; mandates, members and budgets are not listed by the API, so they are not shown.
+ * Spec 21.1 `settings/`: the brand's settings as tabs (the v3 prototype's arrangement), the tab in the URL. Owners and
+ * admins also see the kill switches (on Policy) and model routing. Mandates, members and budgets are not listed by
+ * the API, so they are not shown.
  */
 export function SettingsScreen() {
   const { companyName, companyId, brand } = useBrandContext();
   const [params, setParams] = useSearchParams();
+  const companies = useCompanies();
+  const role = companies.data?.find((c) => c.tenantId === companyId)?.role ?? null;
+  const isAdmin = role !== null && ADMIN_ROLES.has(role);
+  const tabs = TABS.filter(([, , adminOnly]) => !adminOnly || isAdmin);
   const raw = params.get(TAB_PARAM);
-  const tab: SettingsTab = TABS.some(([k]) => k === raw) ? (raw as SettingsTab) : 'channels';
+  const tab: SettingsTab = tabs.some(([k]) => k === raw) ? (raw as SettingsTab) : 'channels';
 
   return (
     <main id="main" className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-8">
@@ -100,7 +112,7 @@ export function SettingsScreen() {
         className="flex flex-col gap-6"
       >
         <TabList label="Settings sections">
-          {TABS.map(([k, label]) => (
+          {tabs.map(([k, label]) => (
             <Tab key={k} value={k}>
               {label}
             </Tab>
@@ -109,9 +121,18 @@ export function SettingsScreen() {
         <TabPanel value="channels">
           <ChannelSettings />
         </TabPanel>
+        <TabPanel value="policy" className="flex flex-col gap-8">
+          <ReleasePolicy />
+          {isAdmin && <KillSwitches />}
+        </TabPanel>
         <TabPanel value="skills">
           <SkillsSettings />
         </TabPanel>
+        {isAdmin && (
+          <TabPanel value="routing">
+            <ModelRouting />
+          </TabPanel>
+        )}
       </Tabs>
     </main>
   );
