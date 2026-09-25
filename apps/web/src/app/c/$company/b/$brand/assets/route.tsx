@@ -1,5 +1,4 @@
 import { useState, type ChangeEvent } from 'react';
-import { useMutation } from '@tanstack/react-query';
 import { AssetKind, AssetPurpose, type AssetPurpose as AssetPurposeT } from '@oremedia/contracts/assets';
 import {
   Badge,
@@ -17,8 +16,7 @@ import { Select } from '../../../../../../components/select';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { AssetThumb } from '../../../../../../features/assets/asset-thumb';
 import { useAsset, useAssetSearch, type AssetDto } from '../../../../../../features/assets/use-assets';
-import { useTRPCClient } from '../../../../../../lib/trpc';
-import { newIntentKey, intentContext } from '../../../../../../lib/intent-key';
+import { useAssetUpload } from '../../../../../../features/assets/use-upload';
 import { toUiError } from '../../../../../../lib/errors';
 
 /** Spec 21.2 asset library states: processing; restricted; expired rights; missing rights; duplicate; retired. */
@@ -237,55 +235,14 @@ function Inspect({ assetId, onChange }: { assetId: string | null; onChange: (id:
   );
 }
 
-type UploadStep =
-  | { kind: 'idle' }
-  | { kind: 'uploading'; name: string }
-  | { kind: 'queued'; intentId: string }
-  | { kind: 'failed'; message: string; details: string[] };
-
-/** Spec 9.1: intent → PUT to the signed URL → complete; processing continues in the ingest workflow. */
+/** Spec 9.1 upload; the ingest workflow does the rest (see useAssetUpload). */
 function Upload() {
   const { brandId } = useBrandContext();
-  const client = useTRPCClient();
   const [kind, setKind] = useState<string>('photo');
-  const [step, setStep] = useState<UploadStep>({ kind: 'idle' });
-  const start = useMutation({
-    mutationFn: async (file: File) => {
-      const intent = await client.assets.uploads.createIntent.mutate(
-        {
-          brandId,
-          kind: AssetKind.parse(kind),
-          declaredMime: file.type,
-          declaredBytes: file.size,
-          originalFilename: file.name,
-        },
-        intentContext(newIntentKey()),
-      );
-      const put = await fetch(intent.uploadUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'content-type': file.type },
-      });
-      if (!put.ok) throw new Error(`Upload failed with HTTP ${put.status}`);
-      return client.assets.uploads.complete.mutate(
-        { intentId: intent.intentId },
-        intentContext(newIntentKey()),
-      );
-    },
-    onMutate: (file) => setStep({ kind: 'uploading', name: file.name }),
-    onSuccess: (res) => setStep({ kind: 'queued', intentId: res.intentId }),
-    onError: (err) => {
-      const ui = toUiError(err);
-      setStep({
-        kind: 'failed',
-        message: ui.message,
-        details: ui.details.map((d) => `${d.path ?? ''} ${d.issue}`.trim()),
-      });
-    },
-  });
+  const { step, pending, upload } = useAssetUpload(brandId);
   const onFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) start.mutate(file);
+    if (file) upload(file, AssetKind.parse(kind));
     e.target.value = '';
   };
   return (
@@ -304,13 +261,7 @@ function Upload() {
           htmlFor="upload-file"
           hint="Images, SVG, fonts and PDF; archives are rejected. Video and audio processing arrives in Release 2."
         >
-          <input
-            id="upload-file"
-            type="file"
-            onChange={onFile}
-            disabled={start.isPending}
-            className="text-sm"
-          />
+          <input id="upload-file" type="file" onChange={onFile} disabled={pending} className="text-sm" />
         </Field>
         {step.kind === 'uploading' && <StatusBanner tone="info" busy title={`Uploading ${step.name}`} />}
         {step.kind === 'queued' && (

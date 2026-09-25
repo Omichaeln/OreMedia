@@ -899,6 +899,30 @@ describe('assets module against MySQL 8 (spec 9)', () => {
     });
   });
 
+  describe('brand kit references (kindsForBrand)', () => {
+    it("returns the kind of this brand's live assets only: never another brand's, another tenant's or a retired one", async () => {
+      const logo = await seedAsset({ brandId: brandA1, kind: 'logo' });
+      const photo = await seedAsset({ brandId: brandA1 });
+      const retired = await seedAsset({ brandId: brandA1, kind: 'logo', state: 'retired' });
+      const otherBrand = await seedAsset({ brandId: brandA2, kind: 'logo' });
+      const otherTenant = await seedAsset({ brandId: brandB1, kind: 'logo', tenantId: tenantB });
+      const kinds = await runInTenant(ctxFor(ownerA), () =>
+        assetService.kindsForBrand(brandA1, [
+          logo.id,
+          photo.id,
+          retired.id,
+          otherBrand.id,
+          otherTenant.id,
+          'ast_missing',
+        ]),
+      );
+      expect([...kinds.entries()]).toEqual([
+        [logo.id, 'logo'],
+        [photo.id, 'photo'],
+      ]);
+    });
+  });
+
   describe('cursor pagination bounds (spec 7.4)', () => {
     it('pages through eligible assets with an opaque cursor and rejects out-of-range limits', async () => {
       const brandP = newId('brand');

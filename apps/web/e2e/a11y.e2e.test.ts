@@ -87,6 +87,14 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       ready: (page) => page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 }),
     },
     {
+      name: 'brand kit editor',
+      path: () => brandPath('system'),
+      ready: async (page) => {
+        await page.getByRole('button', { name: 'Edit brand kit' }).first().click({ timeout: 15_000 });
+        await page.getByRole('heading', { name: 'Reference imagery' }).waitFor({ timeout: 15_000 });
+      },
+    },
+    {
       name: 'assets',
       path: () => brandPath('assets'),
       ready: (page) => page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 }),

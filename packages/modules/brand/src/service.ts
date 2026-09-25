@@ -26,7 +26,13 @@ import {
   emptyBrandSystemDocument,
   type BrandSnapshot,
 } from '@oremedia/contracts/brand';
-import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
+import type { AssetKind } from '@oremedia/contracts/assets';
+import {
+  NotFoundError,
+  PolicyDeniedError,
+  ValidationFailedError,
+  type ErrorDetail,
+} from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, runAsPlatform, type Tx } from '@oremedia/db';
 import { buildBrandSnapshot } from '@oremedia/domain/brand-snapshot';
@@ -74,6 +80,67 @@ export const registerEligibleTemplateSource = (fn: EligibleTemplateSource): void
 export const resetEligibleTemplateSource = (): void => {
   eligibleTemplateSource = noEligibleTemplates;
 };
+
+/**
+ * The kind of each listed asset that belongs to the brand (assets are the assets module's rows, so it registers
+ * the source; composition wires `assetService.kindsForBrand`). Ids that are missing, foreign or of another brand
+ * are absent from the map. Until registered every reference is absent, so a draft naming assets is refused.
+ */
+export type BrandAssetKindSource = (
+  brandId: string,
+  assetIds: string[],
+  tx?: Tx,
+) => Promise<Map<string, AssetKind>>;
+const noBrandAssets: BrandAssetKindSource = async () => new Map();
+let brandAssetKindSource: BrandAssetKindSource = noBrandAssets;
+export const registerBrandAssetKindSource = (fn: BrandAssetKindSource): void => {
+  brandAssetKindSource = fn;
+};
+export const resetBrandAssetKindSource = (): void => {
+  brandAssetKindSource = noBrandAssets;
+};
+
+const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * A draft's references must hold together before it is saved: colours are hex with unique keys, a logo rule names a
+ * logo of this brand and colour keys the palette defines, and pattern examples are assets of this brand. Every
+ * problem is reported at once.
+ */
+async function assertDocumentReferences(
+  brandId: string,
+  document: BrandSystemDocumentV1,
+  tx: Tx,
+): Promise<void> {
+  const issues: ErrorDetail[] = [];
+  const keys = new Set<string>();
+  document.tokens.colours.forEach((c, i) => {
+    if (!HEX_COLOUR.test(c.value))
+      issues.push({ path: `tokens.colours.${i}.value`, issue: 'not_a_hex_colour' });
+    if (!c.key.trim()) issues.push({ path: `tokens.colours.${i}.key`, issue: 'empty' });
+    if (keys.has(c.key)) issues.push({ path: `tokens.colours.${i}.key`, issue: 'duplicate_key' });
+    keys.add(c.key);
+  });
+  const logoIds = document.logoRules.map((r) => r.assetId);
+  const exampleIds = document.patterns.flatMap((p) => p.exampleAssetIds);
+  const ids = [...new Set([...logoIds, ...exampleIds])];
+  const kinds = ids.length ? await brandAssetKindSource(brandId, ids, tx) : new Map<string, AssetKind>();
+  document.logoRules.forEach((r, i) => {
+    if (kinds.get(r.assetId) !== 'logo')
+      issues.push({ path: `logoRules.${i}.assetId`, issue: 'not_a_logo_of_this_brand' });
+    r.allowedBackgroundColourKeys.forEach((k, j) => {
+      if (!keys.has(k))
+        issues.push({ path: `logoRules.${i}.allowedBackgroundColourKeys.${j}`, issue: 'unknown_colour_key' });
+    });
+  });
+  document.patterns.forEach((p, i) =>
+    p.exampleAssetIds.forEach((id, j) => {
+      if (!kinds.has(id))
+        issues.push({ path: `patterns.${i}.exampleAssetIds.${j}`, issue: 'not_an_asset_of_this_brand' });
+    }),
+  );
+  if (issues.length) throw new ValidationFailedError(issues, 'The brand system draft has invalid references');
+}
 
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
 const brandResource = (b: BrandRow) => ({ type: 'brand', tenantId: b.tenantId, brandId: b.id, id: b.id });
@@ -297,6 +364,7 @@ export const brandService = {
         tx,
       );
       const document = BrandSystemDocumentV1.parse(parsed.document);
+      await assertDocumentReferences(brand.id, document, tx);
       const contentHash = hashCanonical(document);
       await versionsRepo.update(v.id, parsed.expectedVersion, { document, contentHash }, tx);
       await audit.record(

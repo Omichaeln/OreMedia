@@ -26,7 +26,13 @@ import {
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
-import { brandService, registerEligibleTemplateSource, resetEligibleTemplateSource } from './service';
+import {
+  brandService,
+  registerBrandAssetKindSource,
+  registerEligibleTemplateSource,
+  resetBrandAssetKindSource,
+  resetEligibleTemplateSource,
+} from './service';
 
 const USER = 'usr_brand_test';
 const ctx = (tenantId: string, brandIds: ReadonlySet<string> | 'all' = 'all'): TenantContext => ({
@@ -823,6 +829,132 @@ describe('brand module (spec 8) against MySQL 8', () => {
         toState: 'revoked',
         reason: 'offer withdrawn',
       });
+    });
+  });
+
+  describe('brand kit references (logos, palette, reference imagery)', () => {
+    const brandKit = newId('brand');
+    let draft = '';
+    let version = 0;
+    const asked: Array<{ brandId: string; ids: string[] }> = [];
+    const kit = (over: Partial<BrandSystemDocumentV1> = {}): BrandSystemDocumentV1 => ({
+      ...document(),
+      logoRules: [
+        {
+          assetId: 'ast_logo',
+          variant: 'primary',
+          allowedBackgroundColourKeys: ['paper'],
+          clearSpaceRatio: 0.5,
+          minWidthPx: 96,
+        },
+      ],
+      patterns: [
+        {
+          key: 'reference-imagery',
+          description: 'Site photography',
+          exampleAssetIds: ['ast_photo'],
+          templateVersionIds: [],
+        },
+      ],
+      ...over,
+    });
+    const save = (doc: BrandSystemDocumentV1) =>
+      run(tenantA, (tx) =>
+        brandService.versions.update(
+          A,
+          { brandId: brandKit, versionId: draft, expectedVersion: version, document: doc },
+          tx,
+        ),
+      );
+    const issuesOf = async (doc: BrandSystemDocumentV1) => {
+      const err = await save(doc).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ValidationFailedError);
+      return (err as ValidationFailedError).details?.map((d) => `${d.path} ${d.issue}`);
+    };
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandKit,
+        tenantId: tenantA,
+        name: 'Kit',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+      });
+      draft = (await run(tenantA, (tx) => brandService.versions.createDraft(A, { brandId: brandKit }, tx)))
+        .versionId;
+      registerBrandAssetKindSource(async (brandId, ids) => {
+        asked.push({ brandId, ids });
+        const own = new Map([
+          ['ast_logo', 'logo'],
+          ['ast_photo', 'photo'],
+        ] as const);
+        return new Map(ids.flatMap((id) => (own.has(id as never) ? [[id, own.get(id as never)!]] : [])));
+      });
+    });
+    afterAll(() => resetBrandAssetKindSource());
+
+    it('saves a draft whose logos and reference images are assets of this brand', async () => {
+      const saved = await save(kit());
+      version = saved.version;
+      expect(asked.at(-1)).toEqual({ brandId: brandKit, ids: ['ast_logo', 'ast_photo'] });
+      const got = await runInTenant(ctx(tenantA), () =>
+        brandService.versions.get(A, { brandId: brandKit, versionId: draft }),
+      );
+      expect(got.document.logoRules[0]).toMatchObject({ assetId: 'ast_logo', variant: 'primary' });
+      expect(got.document.patterns[0]!.exampleAssetIds).toEqual(['ast_photo']);
+    });
+
+    it('rejects every bad reference at once and writes nothing', async () => {
+      const issues = await issuesOf(
+        kit({
+          tokens: {
+            ...document().tokens,
+            colours: [
+              { key: 'ink', value: 'blue', role: 'text' },
+              { key: 'ink', value: '#FFF', role: 'background' },
+            ],
+          },
+          logoRules: [
+            {
+              assetId: 'ast_photo',
+              variant: 'mono',
+              allowedBackgroundColourKeys: ['paper'],
+              clearSpaceRatio: 0.5,
+              minWidthPx: 96,
+            },
+          ],
+          patterns: [
+            { key: 'refs', description: '', exampleAssetIds: ['ast_other_brand'], templateVersionIds: [] },
+          ],
+        }),
+      );
+      expect(issues).toEqual([
+        'tokens.colours.0.value not_a_hex_colour',
+        'tokens.colours.1.key duplicate_key',
+        'logoRules.0.assetId not_a_logo_of_this_brand',
+        'logoRules.0.allowedBackgroundColourKeys.0 unknown_colour_key',
+        'patterns.0.exampleAssetIds.0 not_an_asset_of_this_brand',
+      ]);
+      const got = await runInTenant(ctx(tenantA), () =>
+        brandService.versions.get(A, { brandId: brandKit, versionId: draft }),
+      );
+      expect(got.version).toBe(version);
+    });
+
+    it('without a registered asset source a draft naming assets is refused (fail closed)', async () => {
+      resetBrandAssetKindSource();
+      try {
+        expect(await issuesOf(kit())).toEqual([
+          'logoRules.0.assetId not_a_logo_of_this_brand',
+          'patterns.0.exampleAssetIds.0 not_an_asset_of_this_brand',
+        ]);
+        // A document with no asset references never consults the source.
+        const saved = await save(document());
+        version = saved.version;
+      } finally {
+        registerBrandAssetKindSource(async () => new Map());
+      }
     });
   });
 });

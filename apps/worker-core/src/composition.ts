@@ -23,7 +23,11 @@ import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
 import { assetService, registerAssetOutboxRoutes } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
-import { brandService, registerEligibleTemplateSource } from '@oremedia/module-brand';
+import {
+  brandService,
+  registerBrandAssetKindSource,
+  registerEligibleTemplateSource,
+} from '@oremedia/module-brand';
 import {
   creativeService,
   registerAssetAuthoriser,
@@ -198,6 +202,7 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     contentService.revisions.withVariants(contentRevisionId, tx),
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
+  registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
   registerMetricsSource(async (actor, query, tx) => {
     const publications = await publicationService.calendarRange(
       query.brandId,

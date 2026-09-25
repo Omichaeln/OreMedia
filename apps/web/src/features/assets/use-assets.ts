@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
-import type { AssetPurpose } from '@oremedia/contracts/assets';
+import type { AssetKind, AssetPurpose } from '@oremedia/contracts/assets';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 
 export type AssetDto = inferOutput<Trpc['assets']['get']>;
@@ -12,6 +12,20 @@ export function useAssetSearch(brandId: string, purpose: AssetPurpose, query?: s
   return useQuery(
     trpc.assets.search.queryOptions({
       query: { brandId, purpose, channelConnectionIds: [], query: query || undefined },
+      page: { limit: 100 },
+    }),
+  );
+}
+
+/**
+ * This brand's approved assets of the given kinds, whatever their rights (the `reference` purpose): what the brand
+ * kit editor offers as logos and reference imagery. Rights are recorded separately where a purpose needs them.
+ */
+export function useBrandAssetsOfKind(brandId: string, kinds: AssetKind[]) {
+  const trpc = useTRPC();
+  return useQuery(
+    trpc.assets.search.queryOptions({
+      query: { brandId, purpose: 'reference', channelConnectionIds: [], kinds },
       page: { limit: 100 },
     }),
   );
