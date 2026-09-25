@@ -253,7 +253,7 @@ export const RunApproveProposal = z.object({
 // ---- tenant model-routing policy (spec 12.7) ----
 
 /** Model vendors a tenant can permit. `fake` is the deterministic test adapter. */
-export const ModelVendor = z.enum(['anthropic', 'fake']);
+export const ModelVendor = z.enum(['anthropic', 'openrouter', 'fake']);
 export type ModelVendor = z.infer<typeof ModelVendor>;
 
 /**

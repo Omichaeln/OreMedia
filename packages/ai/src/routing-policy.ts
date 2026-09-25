@@ -21,13 +21,31 @@ const builtIn = (): ModelRoutingPolicy =>
   });
 
 /**
+ * ADR-11: with OPENROUTER_API_KEY_REF set, the built-in policy permits the OpenRouter gateway and its default model
+ * must be configured (OREMEDIA_MODEL_ID, an OpenRouter model id such as `vendor/model`): no model is guessed.
+ */
+const builtInFor = (env: NodeJS.ProcessEnv): ModelRoutingPolicy => {
+  if (!env['OPENROUTER_API_KEY_REF']) return builtIn();
+  const model = env['OREMEDIA_MODEL_ID'];
+  if (!model)
+    throw new Error('OREMEDIA_MODEL_ID is required with OPENROUTER_API_KEY_REF (an OpenRouter model id)');
+  return ModelRoutingPolicy.parse({
+    schemaVersion: 1,
+    defaultModel: model,
+    permittedVendors: ['openrouter'],
+  });
+};
+
+/**
  * MODEL_ROUTING_POLICY_REF names a JSON document mounted from the secret manager (a file path); when absent the
  * built-in policy applies with OREMEDIA_MODEL_ID as the default model.
  */
 export function routingPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): ModelRoutingPolicy {
   const ref = env['MODEL_ROUTING_POLICY_REF'];
   const base =
-    ref && existsSync(ref) ? ModelRoutingPolicy.parse(JSON.parse(readFileSync(ref, 'utf8'))) : builtIn();
+    ref && existsSync(ref)
+      ? ModelRoutingPolicy.parse(JSON.parse(readFileSync(ref, 'utf8')))
+      : builtInFor(env);
   const modelId = env['OREMEDIA_MODEL_ID'];
   return modelId ? { ...base, defaultModel: modelId } : base;
 }

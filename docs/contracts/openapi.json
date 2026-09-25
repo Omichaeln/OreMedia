@@ -478,7 +478,7 @@
                         "type": "array",
                         "items": {
                           "type": "string",
-                          "enum": ["anthropic", "fake"]
+                          "enum": ["anthropic", "openrouter", "fake"]
                         }
                       },
                       "permittedRegions": {
@@ -8231,7 +8231,7 @@
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "enum": ["anthropic", "fake"]
+                    "enum": ["anthropic", "openrouter", "fake"]
                   }
                 },
                 "permittedRegions": {

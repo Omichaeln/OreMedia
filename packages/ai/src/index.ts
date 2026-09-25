@@ -10,6 +10,12 @@ export {
   toCompletion,
   type AnthropicAdapterOptions,
 } from './anthropic-adapter';
+export {
+  OpenRouterModelAdapter,
+  openRouterApiKeyFromEnv,
+  createOpenRouterAdapterFromEnv,
+  type OpenRouterAdapterOptions,
+} from './openrouter-adapter';
 export { FakeModelAdapter, type FakeModelScript, type FakeModelStep } from './fake-adapter';
 export {
   ModelRoutingPolicy,
