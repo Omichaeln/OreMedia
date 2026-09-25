@@ -347,6 +347,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => count(`campaign-${P6.campaigns.missed}`), { timeout: 15_000 }).toBe(1);
     expect(await text(`campaign-${P6.campaigns.missed}`)).toContain('Missed date');
     expect(await text(`campaign-${P6.campaigns.spring}`)).not.toContain('Missed date');
+    await page.getByRole('button', { name: 'New campaign' }).click();
     await page.getByLabel('Campaign name').fill('Summer');
     await page.getByLabel('Starts').fill('2026-06-01T09:00');
     await page.getByLabel('Ends').fill('2026-06-30T18:00');

@@ -656,6 +656,8 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
     await page.getByRole('button', { name: 'Sign out' }).click();
+    // Sign out navigates to /sign-in itself; a second navigation started before it lands is aborted (ERR_ABORTED).
+    await page.waitForURL('**/sign-in*', { timeout: 15_000 });
     await signIn(E2E.creatorToken);
     // The device list belongs to the previous sign-in on this browser; clear it to get the honest empty state.
     await page.evaluate(() => localStorage.clear());
