@@ -15,7 +15,11 @@ import {
 } from '@oremedia/module-intelligence';
 import { assetService } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
-import { brandService, registerEligibleTemplateSource } from '@oremedia/module-brand';
+import {
+  brandService,
+  registerBrandAssetKindSource,
+  registerEligibleTemplateSource,
+} from '@oremedia/module-brand';
 import {
   creativeService,
   registerAssetAuthoriser,
@@ -245,6 +249,7 @@ export function composeModules(): void {
     contentService.revisions.withVariants(contentRevisionId, tx),
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
+  registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }

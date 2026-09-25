@@ -17,6 +17,7 @@ import { PageHeading, RequestError } from '../../../../../../components/request-
 import { Select } from '../../../../../../components/select';
 import { useToast } from '../../../../../../components/toast';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
+import { BrandKitEditor } from '../../../../../../features/brand/brand-kit-editor';
 import {
   useBrandVersion,
   useBrandVersions,
@@ -148,121 +149,134 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
       {versions.isSuccess && versions.data.items.length === 0 && (
         <EmptyState
           title="No brand versions yet"
-          description="Create a draft to start. Onboarding extraction (an agent run) arrives in Phase 4; until then drafts are edited by people."
+          description="Create a draft, then open it to set the palette, voice, logos and reference imagery. Submit it for review and publish it when it is right."
         />
       )}
       {versions.isSuccess && versions.data.items.length > 0 && (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-muted-foreground">
-              <th scope="col" className="py-1 pr-3">
-                Version
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                State
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Updated
-              </th>
-              <th scope="col" className="py-1">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {versions.data.items.map((v) => (
-              <tr key={v.id} className="border-t border-border">
-                <td className="py-2 pr-3">
-                  <button
-                    type="button"
-                    className="underline-offset-2 hover:underline"
-                    onClick={() => setSelectedId(v.id)}
-                    aria-expanded={selectedId === v.id}
-                  >
-                    Version {v.number}
-                  </button>
-                </td>
-                <td className="py-2 pr-3">
-                  <Badge tone={VERSION_TONE[v.state]}>{versionStateLabel[v.state]}</Badge>{' '}
-                  {v.id === publishedVersionId && <Badge tone="good">Current</Badge>}
-                </td>
-                <td className="py-2 pr-3 text-muted-foreground">{new Date(v.updatedAt).toLocaleString()}</td>
-                <td className="py-2">
-                  <div className="flex gap-1">
-                    {v.state === 'draft' && (
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          submitForReview.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
-                        }
-                        disabled={submitForReview.isPending}
-                      >
-                        Submit for review
-                      </Button>
-                    )}
-                    {v.state === 'in_review' && (
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        onClick={() =>
-                          publish.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
-                        }
-                        disabled={publish.isPending}
-                      >
-                        Publish
-                      </Button>
-                    )}
-                    {v.state === 'retired' && (
-                      <span className="text-xs text-muted-foreground">Read only</span>
-                    )}
-                  </div>
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground">
+                <th scope="col" className="py-1 pr-3">
+                  Version
+                </th>
+                <th scope="col" className="py-1 pr-3">
+                  State
+                </th>
+                <th scope="col" className="py-1 pr-3">
+                  Updated
+                </th>
+                <th scope="col" className="py-1">
+                  Actions
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {versions.data.items.map((v) => (
+                <tr key={v.id} className="border-t border-border">
+                  <td className="py-2 pr-3">
+                    <button
+                      type="button"
+                      className="underline-offset-2 hover:underline"
+                      onClick={() => setSelectedId(v.id)}
+                      aria-expanded={selectedId === v.id}
+                    >
+                      Version {v.number}
+                    </button>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <Badge tone={VERSION_TONE[v.state]}>{versionStateLabel[v.state]}</Badge>{' '}
+                    {v.id === publishedVersionId && <Badge tone="good">Current</Badge>}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {new Date(v.updatedAt).toLocaleString()}
+                  </td>
+                  <td className="py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {(v.state === 'draft' || v.state === 'in_review') && (
+                        <Button size="sm" onClick={() => setSelectedId(v.id)}>
+                          Edit brand kit
+                        </Button>
+                      )}
+                      {v.state === 'draft' && (
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            submitForReview.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
+                          }
+                          disabled={submitForReview.isPending}
+                        >
+                          Submit for review
+                        </Button>
+                      )}
+                      {v.state === 'in_review' && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() =>
+                            publish.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
+                          }
+                          disabled={publish.isPending}
+                        >
+                          Publish
+                        </Button>
+                      )}
+                      {v.state === 'retired' && (
+                        <span className="text-xs text-muted-foreground">Read only</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {selectedId && (
         <div className="mt-3 rounded-md border border-border bg-muted p-3" aria-live="polite">
           {selected.isPending && <Skeleton label="Loading version" lines={2} />}
           {selected.isError && <RequestError error={selected.error} />}
-          {selected.isSuccess && (
-            <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
-              <dt className="text-muted-foreground">Voice</dt>
-              <dd>{selected.data.document.voice.summary || <em>not written</em>}</dd>
-              <dt className="text-muted-foreground">Colours</dt>
-              <dd>
-                {selected.data.document.tokens.colours.length === 0 ? (
-                  <em>none</em>
-                ) : (
-                  <ul className="flex flex-wrap gap-2">
-                    {selected.data.document.tokens.colours.map((c) => (
-                      <li key={c.key} className="flex items-center gap-1">
-                        <span
-                          aria-hidden="true"
-                          className="inline-block h-3 w-3 rounded-sm border border-border"
-                          style={{ background: c.value }}
-                        />
-                        <code className="text-xs">
-                          {c.key} {c.value}
-                        </code>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </dd>
-              <dt className="text-muted-foreground">Type roles</dt>
-              <dd>
-                {selected.data.document.tokens.typeRoles
-                  .map((t) => `${t.role} ≥ ${t.minSizePx}px`)
-                  .join(', ') || <em>none</em>}
-              </dd>
-              <dt className="text-muted-foreground">Content hash</dt>
-              <dd>
-                <code className="text-xs">{selected.data.contentHash}</code>
-              </dd>
-            </dl>
+          {selected.isSuccess && (selected.data.state === 'draft' || selected.data.state === 'in_review') && (
+            <BrandKitEditor key={`${selected.data.id}:${selected.data.version}`} version={selected.data} />
           )}
+          {selected.isSuccess &&
+            (selected.data.state === 'published' || selected.data.state === 'retired') && (
+              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
+                <dt className="text-muted-foreground">Voice</dt>
+                <dd>{selected.data.document.voice.summary || <em>not written</em>}</dd>
+                <dt className="text-muted-foreground">Colours</dt>
+                <dd>
+                  {selected.data.document.tokens.colours.length === 0 ? (
+                    <em>none</em>
+                  ) : (
+                    <ul className="flex flex-wrap gap-2">
+                      {selected.data.document.tokens.colours.map((c) => (
+                        <li key={c.key} className="flex items-center gap-1">
+                          <span
+                            aria-hidden="true"
+                            className="inline-block h-3 w-3 rounded-sm border border-border"
+                            style={{ background: c.value }}
+                          />
+                          <code className="text-xs">
+                            {c.key} {c.value}
+                          </code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </dd>
+                <dt className="text-muted-foreground">Type roles</dt>
+                <dd>
+                  {selected.data.document.tokens.typeRoles
+                    .map((t) => `${t.role} ≥ ${t.minSizePx}px`)
+                    .join(', ') || <em>none</em>}
+                </dd>
+                <dt className="text-muted-foreground">Content hash</dt>
+                <dd>
+                  <code className="text-xs">{selected.data.contentHash}</code>
+                </dd>
+              </dl>
+            )}
         </div>
       )}
     </Panel>
