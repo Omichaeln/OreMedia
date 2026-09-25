@@ -98,4 +98,23 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);
     await page.close();
   }, 45_000);
+
+  it('assets: purpose chips switch the eligibility search; a card and Upload open side sheets', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/assets')}`);
+    const chips = page.getByRole('group', { name: 'Eligible for' });
+    await chips.getByRole('button', { name: 'Reference' }).click();
+    expect(await chips.getByRole('button', { name: 'Reference' }).getAttribute('aria-pressed')).toBe('true');
+    await chips.getByRole('button', { name: 'Creative' }).click();
+    await page.getByRole('list', { name: 'Eligible assets' }).getByRole('button').first().click();
+    const sheet = page.getByRole('dialog', { name: 'Asset' });
+    await sheet.getByRole('region', { name: 'Asset detail' }).waitFor({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Upload' }).click();
+    await page
+      .getByRole('dialog', { name: 'Upload an asset' })
+      .getByLabel('File')
+      .waitFor({ timeout: 15_000 });
+    await page.close();
+  }, 45_000);
 });
