@@ -3,6 +3,7 @@ import { MandateCreate } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
   MandateGet,
+  MandateList,
   MandatePause,
   MandateRevoke,
   ReviewDecisionSubmit,
@@ -89,5 +90,8 @@ export const reviewRouter = router({
     get: tenantQuery
       .input(MandateGet)
       .query(({ ctx, input }) => reviewService.mandates.get(ctx.tenant.actor, input)),
+    list: tenantQuery
+      .input(MandateList)
+      .query(({ ctx, input }) => reviewService.mandates.list(ctx.tenant.actor, input)),
   }),
 });

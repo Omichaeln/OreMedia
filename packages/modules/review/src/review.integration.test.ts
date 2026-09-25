@@ -1211,6 +1211,11 @@ describe('review module (spec 13) against MySQL 8', () => {
       const created = await runA((tx) => reviewService.mandates.create(owner, mandateInput(), tx));
       mandateId = created.mandateId;
       expect(created.state).toBe('active');
+      // The brand's mandate list shows it to anyone who can read the brand.
+      const listed = await runA((tx) =>
+        reviewService.mandates.list(manager.actor, { brandId: brandA, page: { limit: 50 } }, tx),
+      );
+      expect(listed.items.map((m) => m.id)).toContain(mandateId);
       expect((await eventsOf(tenantA, 'mandate.changed')).length).toBe(1);
       const pub = pubFor({ authority: 'mandate', mandateId });
       expect(await runA(() => evaluateRelease(pub, at))).toEqual({ allow: true });
