@@ -82,7 +82,8 @@ export async function startAgentsWorker(
   logger().info({ status: adapter.provider }, 'worker-core polling task queue agents');
   return {
     run: () => worker.run(),
-    shutdown: () => worker.shutdown(),
+    // The SDK already drains on SIGTERM/SIGINT; shutdown() on a worker that is not RUNNING throws IllegalStateError.
+    shutdown: () => worker.getState() === 'RUNNING' && worker.shutdown(),
     close: () => connection.close(),
   };
 }
