@@ -1,17 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { FrozenManifestV1, ReviewDecisionKind } from '@oremedia/contracts/review';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  Input,
-  Panel,
-  Skeleton,
-  StatusBanner,
-  Textarea,
-} from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { useToast } from '../../components/toast';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -110,13 +100,30 @@ export function ManifestSummary({
 export interface RequestDetailProps {
   reviewRequestId: string | null;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** What the request is about (the package title), shown as the heading. */
+  title?: ReactNode;
 }
 
 /** Spec 21.2 inbox states: changes requested, stale approval, revoked external access, decided. */
-export function RequestDetail({ reviewRequestId, channels }: RequestDetailProps) {
+export function RequestDetail({ reviewRequestId, channels, title }: RequestDetailProps) {
   const request = useReviewRequest(reviewRequestId);
   return (
-    <Panel title="Review request" data-testid="request-detail">
+    <section
+      aria-labelledby="request-detail-title"
+      className="mx-auto flex max-w-4xl flex-col gap-4"
+      data-testid="request-detail"
+    >
+      <div>
+        {reviewRequestId && (
+          <p className="font-mono text-xs text-muted-foreground">
+            {reviewRequestId}
+            {request.data && ` · created ${when(request.data.createdAt)}`}
+          </p>
+        )}
+        <h2 id="request-detail-title" className="text-lg font-semibold">
+          {reviewRequestId ? (title ?? 'Review request') : 'Review request'}
+        </h2>
+      </div>
       {reviewRequestId === null && (
         <EmptyState
           title="Nothing selected"
@@ -137,7 +144,7 @@ export function RequestDetail({ reviewRequestId, channels }: RequestDetailProps)
       {request.isSuccess && isMemberView(request.data) && (
         <MemberDetail request={request.data} channels={channels} />
       )}
-    </Panel>
+    </section>
   );
 }
 
@@ -201,14 +208,20 @@ function MemberDetail({
       )}
 
       <section aria-labelledby={`manifest-${r.id}`}>
-        <h3 id={`manifest-${r.id}`} className="mb-1 text-xs font-semibold">
+        <h3
+          id={`manifest-${r.id}`}
+          className="mb-2 border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        >
           Frozen manifest
         </h3>
         <ManifestSummary manifest={r.frozenManifest} manifestHash={r.manifestHash} channels={channels} />
       </section>
 
       <section aria-labelledby={`decisions-${r.id}`}>
-        <h3 id={`decisions-${r.id}`} className="mb-1 text-xs font-semibold">
+        <h3
+          id={`decisions-${r.id}`}
+          className="mb-2 border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        >
           Decisions
         </h3>
         {r.decisions.length === 0 ? (
@@ -401,7 +414,10 @@ function ExternalLinks({ request: r }: { request: MemberReviewRequestDto }) {
   };
   return (
     <section aria-labelledby={`links-${r.id}`} className="flex flex-col gap-3">
-      <h3 id={`links-${r.id}`} className="text-xs font-semibold">
+      <h3
+        id={`links-${r.id}`}
+        className="mb-2 border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+      >
         External reviewers
       </h3>
       {created && (
