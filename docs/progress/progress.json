@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-25T06:10:00Z",
+  "updatedAt": "2026-09-25T10:00:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -19,8 +19,8 @@
         [
           "0.g1",
           "ADR-01 … ADR-10 accepted by named owners",
-          "blocked",
-          "Drafted as Proposed in docs/adr. Acceptance is a human act; no owner has recorded acceptance."
+          "complete",
+          "ADR-01 … ADR-10 accepted by the programme owner on 25 September 2026 (docs/adr); ADR-11 (OpenRouter AI gateway) added and accepted the same day."
         ],
         [
           "0.g2",
@@ -129,8 +129,8 @@
           "D-01 … D-12 decided by named humans",
           "critical",
           "24.2",
-          "blocked",
-          "D-03 (authentication: Google OpenID Connect) is decided (programme owner, 24 September 2026); the other rows in DECISIONS.md are Open and deciding them is the user's call. Working assumptions are labelled and reversible."
+          "complete",
+          "docs/decisions/DECISIONS.md: D-03 decided 24 September 2026; D-01, D-02, D-04 … D-12 and the invitation rule decided by the programme owner on 25 September 2026. D-06 is recorded as ADR-11 (OpenRouter gateway)."
         ],
         [
           "0.13",
@@ -1196,6 +1196,46 @@
           "21.1, 21.2",
           "complete",
           "apps/web/src/features/agents: runs list (audit-derived plus this device's runs), run detail with the step timeline, tokens/cost/duration, invocations with policy decision and redacted input tree, needs-attention section, start-run form with a stable Idempotency-Key per intent, cancel with confirmation, proposal Accept / Modify / Reject from the verbatim payload; never renders private reasoning. Required states (waiting for review, budget exhausted, policy denied, cancelled, failed with the recorded exception, empty, permission denied) covered by apps/web/e2e/agents.e2e.test.ts (9) and run-helpers.test.ts (11)."
+        ],
+        [
+          "4.23",
+          "OpenRouter model adapter for agent runs (chat with tool use), selected by the routing policy (ADR-11)",
+          "production",
+          "ADR-11",
+          "open",
+          "Decided 25 September 2026. Needs OPENROUTER_API_KEY_REF for the live check."
+        ],
+        [
+          "4.24",
+          "Image generation through OpenRouter (Nano Banana / Nano Banana 2) as an asset with provenance",
+          "production",
+          "ADR-11, 9",
+          "open",
+          "Decided 25 September 2026 (D-06)."
+        ],
+        [
+          "4.25",
+          "Video generation through OpenRouter (Seedance 2.x; others by policy) as a durable job, behind a feature flag",
+          "production",
+          "ADR-11",
+          "open",
+          "Decided 25 September 2026 (D-06); new Release 1 scope."
+        ],
+        [
+          "4.26",
+          "Audio generation through OpenRouter (speech and music) as a durable job, behind a feature flag",
+          "production",
+          "ADR-11",
+          "open",
+          "Decided 25 September 2026 (D-06); new Release 1 scope."
+        ],
+        [
+          "4.27",
+          "Per-brand provider allowlist and no-retention routing for generated content",
+          "critical",
+          "ADR-11, 18",
+          "open",
+          "Decided 25 September 2026."
         ]
       ]
     },

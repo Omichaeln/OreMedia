@@ -1,6 +1,6 @@
 # ADR-10: Learning isolation per tenant/brand; evidence strength taxonomy; baseline comparison
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Medium.
 
