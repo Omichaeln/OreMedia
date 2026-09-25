@@ -231,6 +231,29 @@ export const uploadIntents = mysqlTable(
   ],
 );
 
+/**
+ * ADR-11: one row per upload intent whose bytes a generation provider produced (id = the intent's id). Catalogue
+ * records this provenance (model, prompt hash, run) on the asset version instead of the uploader's. Kept beside
+ * upload_intents rather than as a column on it so the intent's shape is unchanged.
+ */
+export const generatedUploads = mysqlTable(
+  'generated_uploads',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    provenance: json('provenance').$type<Extract<Provenance, { kind: 'generated' }>>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_generated_upload_brand',
+    }),
+  ],
+);
+
 export const collections = mysqlTable(
   'collections',
   {

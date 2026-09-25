@@ -29,6 +29,13 @@
       "when": 1790259964922,
       "tag": "0003_external_identities_auth_events",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1790330204971,
+      "tag": "0004_generated_uploads",
+      "breakpoints": true
     }
   ]
 }

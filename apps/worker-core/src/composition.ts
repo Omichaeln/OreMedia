@@ -38,8 +38,10 @@ import {
 } from '@oremedia/module-skills';
 import {
   createEvaluationRunnerFromEnv,
+  createOpenRouterImageGeneratorFromEnv,
   createReleaseOneRegistry,
   registerContentToolSource,
+  registerImageGenerator,
   registerIntelligenceToolSource,
   registerProviderJobStore,
   registerPublishingToolSource,
@@ -189,6 +191,9 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerContentToolSource(contentToolSource);
   registerReviewToolSource(reviewToolSource);
   registerPublishingToolSource(publishingToolSource);
+  // ADR-11: images.generate reaches OpenRouter when IMAGE_GEN_PROVIDER=openrouter; its output enters asset ingest.
+  const imageGenerator = createOpenRouterImageGeneratorFromEnv();
+  if (imageGenerator) registerImageGenerator(imageGenerator);
   registerRevisionVariantSource((contentRevisionId, tx) =>
     contentService.revisions.withVariants(contentRevisionId, tx),
   );

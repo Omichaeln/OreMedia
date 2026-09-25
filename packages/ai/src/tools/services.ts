@@ -15,6 +15,9 @@ export interface ImageGenerator {
     prompt: string;
     count: number;
     aspect: string;
+    /** The run's principal and mode: a generator that catalogues its output acts as them (policy, audit). */
+    actor: ResolvedActorServicePrincipal;
+    autonomyMode: AutonomyMode;
   }): Promise<{ jobId: string }>;
   poll(jobId: string): Promise<
     | { status: 'pending' }
@@ -191,7 +194,7 @@ export interface ToolServices {
 }
 
 const generators = new Map<string, ImageGenerator>();
-/** Providers register here (none ships in Release 1; there are no fake image bytes). */
+/** Providers register here at composition (ADR-11: openrouter); there are no fake image bytes. */
 export const registerImageGenerator = (g: ImageGenerator): void => {
   generators.set(g.provider, g);
 };
@@ -209,8 +212,10 @@ export function defaultToolServices(env: NodeJS.ProcessEnv = process.env): ToolS
       renders: creativeService.renders,
       revisions: creativeService.revisions,
     },
-    images: imageGeneratorFromEnv(env),
-    // A getter: the source registers at composition, after runtimes that captured these services were built.
+    // Getters: generators and sources register at composition, after runtimes that captured these services were built.
+    get images() {
+      return imageGeneratorFromEnv(env);
+    },
     get intelligence() {
       return intelligenceSource;
     },

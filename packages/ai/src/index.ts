@@ -16,6 +16,12 @@ export {
   createOpenRouterAdapterFromEnv,
   type OpenRouterAdapterOptions,
 } from './openrouter-adapter';
+export {
+  OpenRouterImageGenerator,
+  createOpenRouterImageGeneratorFromEnv,
+  type GeneratedAssetSink,
+  type OpenRouterImageGeneratorOptions,
+} from './openrouter-image-generator';
 export { FakeModelAdapter, type FakeModelScript, type FakeModelStep } from './fake-adapter';
 export {
   ModelRoutingPolicy,

@@ -29,6 +29,7 @@ import {
   AssetDerivativeRepository,
   AssetRepository,
   AssetVersionRepository,
+  GeneratedUploadRepository,
   UploadIntentRepository,
   type UploadIntentRow,
 } from '../repositories';
@@ -52,6 +53,7 @@ const assetsRepo = new AssetRepository();
 const versionsRepo = new AssetVersionRepository();
 const derivativesRepo = new AssetDerivativeRepository();
 const intentsRepo = new UploadIntentRepository();
+const generatedRepo = new GeneratedUploadRepository();
 
 async function loadIntent(
   input: AssetIngestInputV1,
@@ -273,7 +275,8 @@ export const assetIngest = {
           width: input.width,
           height: input.height,
           colourProfile: input.colourProfile,
-          provenance: {
+          // ADR-11: a generated upload keeps the provenance recorded with its intent.
+          provenance: (await generatedRepo.findById(intent.id, tx))?.provenance ?? {
             kind: 'upload',
             uploadedByUserId: intent.createdByUserId,
             originalFilename: intent.originalFilename,

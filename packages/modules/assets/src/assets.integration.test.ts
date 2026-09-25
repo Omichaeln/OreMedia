@@ -472,6 +472,118 @@ describe('assets module against MySQL 8 (spec 9)', () => {
     });
   });
 
+  describe('generated uploads (ADR-11)', () => {
+    const agentA1: ResolvedActor = {
+      kind: 'service_principal',
+      id: newId('servicePrincipal'),
+      tenantId: tenantA,
+      status: 'active',
+      maxAutonomy: 'create',
+      grants: [
+        { action: 'creative.edit', brandIds: [brandA1] },
+        { action: 'asset.upload', brandIds: [brandA1] },
+      ],
+    };
+    const provenance = {
+      kind: 'generated' as const,
+      model: 'openrouter:vendor/image-model',
+      promptHash: sha256Hex('a prompt'),
+      inputs: [],
+      agentRunId: 'run_gen_1',
+    };
+    const generate = async (opts: { autonomyMode?: 'assist' | 'create' }, brandId = brandA1) =>
+      runInTenant(ctxFor(agentA1), async () =>
+        withTransaction(async (tx) =>
+          assetService.uploadGenerated(
+            agentA1,
+            {
+              brandId,
+              kind: 'illustration',
+              mime: 'image/png',
+              // Distinct pixels: identical content in the brand would be a duplicate_of rejection.
+              bytes: await sharp({
+                create: { width: 64, height: 48, channels: 4, background: { r: 90, g: 40, b: 30, alpha: 1 } },
+              })
+                .png()
+                .toBuffer(),
+              originalFilename: 'generated-run_gen_1-1.png',
+              provenance,
+            },
+            tx,
+            opts,
+          ),
+        ),
+      );
+
+    it('an agent cannot upload outright, but its generated image enters ingest and lands pending with provenance', async () => {
+      await expect(
+        runInTenant(ctxFor(agentA1), () =>
+          withTransaction((tx) =>
+            assetService.createIntent(
+              agentA1,
+              {
+                brandId: brandA1,
+                kind: 'illustration',
+                declaredMime: 'image/png',
+                declaredBytes: 100,
+                originalFilename: 'x.png',
+              },
+              tx,
+            ),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      const { intentId } = await generate({ autonomyMode: 'create' });
+      const outboxRows = await tdb.db
+        .select()
+        .from(outboxEvents)
+        .where(eq(outboxEvents.aggregateId, intentId));
+      expect(outboxRows.map((r) => r.eventType)).toEqual(['asset.upload_completed']);
+      await runInTenant(ctxFor(agentA1), async () => {
+        expect(await assetService.generatedUploadStatus([intentId])).toEqual([
+          { intentId, state: 'pending' },
+        ]);
+      });
+      const input: AssetIngestInputV1 = {
+        tenantId: tenantA,
+        actor: { kind: 'service_principal', id: agentA1.id },
+        correlationId: 'corr_generated',
+        intentId,
+        brandId: brandA1,
+      };
+      // Agents never hold asset.approve, so the workflow catalogues it for a person's review.
+      const result = await runInTenant(ctxFor(ownerA), () => runPipeline(input, false));
+      expect(result).toMatchObject({ outcome: 'accepted' });
+      if (result.outcome !== 'accepted') return;
+      const [asset] = await tdb.db.select().from(assets).where(eq(assets.id, result.assetId));
+      expect(asset).toMatchObject({ state: 'pending_review', kind: 'illustration' });
+      const [version] = await tdb.db
+        .select()
+        .from(assetVersions)
+        .where(eq(assetVersions.id, result.assetVersionId));
+      expect(version?.provenance).toEqual(provenance);
+      await runInTenant(ctxFor(agentA1), async () => {
+        expect(await assetService.generatedUploadStatus([intentId])).toEqual([
+          {
+            intentId,
+            state: 'accepted',
+            assetId: result.assetId,
+            storageKey: version?.storageKey,
+            contentHash: version?.contentHash,
+            width: 64,
+            height: 48,
+          },
+        ]);
+      });
+    });
+
+    it('needs the run to hold create autonomy and the brand to be granted', async () => {
+      await expect(generate({})).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(generate({ autonomyMode: 'assist' })).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(generate({ autonomyMode: 'create' }, brandA2)).rejects.toBeInstanceOf(PolicyDeniedError);
+    });
+  });
+
   describe('eligibility (spec 9.2): ineligible assets never appear in search', () => {
     let eligible: { id: string; versionId: string };
     let pending: { id: string; versionId: string };

@@ -69,6 +69,8 @@ export const imagesGenerate: ToolDefinition<z.infer<typeof GenerateInput>, z.inf
         prompt: input.prompt,
         count: input.count,
         aspect: input.aspect,
+        actor: ctx.actor,
+        autonomyMode: ctx.run.policy.autonomyMode,
       });
       jobId = submitted.jobId;
       // Before waiting, and committed on its own: the tool's unit of work rolls back on a timeout, the job id must not.
