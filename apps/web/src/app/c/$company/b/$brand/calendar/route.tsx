@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import { Badge, Button, EmptyState, Panel, Skeleton } from '@oremedia/ui';
-import { PageHeading, RequestError } from '../../../../../../components/request-state';
+import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
+import { RequestError } from '../../../../../../components/request-state';
+import { PackageTitle } from '../../../../../../features/content/package-title';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
 import { CalendarGrid } from '../../../../../../features/publishing/calendar-grid';
 import { ChannelStatus } from '../../../../../../features/publishing/channel-status';
@@ -85,13 +86,50 @@ export function CalendarRoute() {
   const go = (direction: -1 | 1) => setAnchorKey((k) => shiftAnchor(k, view, direction));
 
   return (
-    <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6">
-      <PageHeading
-        title="Calendar and publishing"
-        description={`Publications in ${brand.name}'s time zone (${timeZone}). Each channel is its own publication with its own outcome.`}
-        actions={
+    <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-8">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">{periodTitle(view, anchorKey)}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {timeZone} · each channel is its own publication with its own outcome
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <div role="group" aria-label="View" className="flex gap-1">
+            {VIEWS.map(([v, label]) => (
+              <Button
+                key={v}
+                size="sm"
+                variant={view === v ? 'secondary' : 'ghost'}
+                aria-pressed={view === v}
+                onClick={() => update({ view: v })}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
           <Button
             size="sm"
+            variant="ghost"
+            onClick={() => go(-1)}
+            aria-label={view === 'month' ? 'Previous month' : 'Previous week'}
+          >
+            ‹
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => selectDay(todayKey)}>
+            Today
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => go(1)}
+            aria-label={view === 'month' ? 'Next month' : 'Next week'}
+          >
+            ›
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             onClick={() => {
               void queryClient.invalidateQueries(trpc.publishing.publications.pathFilter());
               void calendar.refetch();
@@ -100,8 +138,11 @@ export function CalendarRoute() {
           >
             {calendar.isFetching ? 'Refreshing…' : 'Refresh'}
           </Button>
-        }
-      />
+          <Button asChild size="sm" variant="primary">
+            <a href="#schedule">Schedule</a>
+          </Button>
+        </div>
+      </header>
       {channels.isError && (
         <RequestError
           error={channels.error}
@@ -113,45 +154,7 @@ export function CalendarRoute() {
         <ChannelStatus channels={channels.data} settingsHref={brandPath(companyId, brandId, 'settings')} />
       )}
 
-      <Panel
-        title={periodTitle(view, anchorKey)}
-        actions={
-          <div className="flex flex-wrap items-center gap-1">
-            <div role="group" aria-label="View" className="flex gap-1">
-              {VIEWS.map(([v, label]) => (
-                <Button
-                  key={v}
-                  size="sm"
-                  variant={view === v ? 'primary' : 'ghost'}
-                  aria-pressed={view === v}
-                  onClick={() => update({ view: v })}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => go(-1)}
-              aria-label={view === 'month' ? 'Previous month' : 'Previous week'}
-            >
-              ‹
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => selectDay(todayKey)}>
-              Today
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => go(1)}
-              aria-label={view === 'month' ? 'Next month' : 'Next week'}
-            >
-              ›
-            </Button>
-          </div>
-        }
-      >
+      <section aria-label="Calendar" className="flex flex-col gap-3">
         {calendar.isPending && <Skeleton label="Loading calendar" lines={4} />}
         {calendar.isError && (
           <RequestError
@@ -183,16 +186,29 @@ export function CalendarRoute() {
             )}
           </>
         )}
-      </Panel>
+      </section>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel
-          title={`Publications on ${parseKey(selectedKey).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' })}`}
-        >
+        <section aria-labelledby="day-title" className="flex min-w-0 flex-col gap-2">
+          <h2
+            id="day-title"
+            className="border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            {parseKey(selectedKey).toLocaleDateString(undefined, {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+              timeZone: 'UTC',
+            })}
+          </h2>
           {dayItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing scheduled on this day.</p>
           ) : (
-            <ul className="flex flex-col gap-1" aria-label="Publications" data-testid="day-list">
+            <ul
+              className="flex flex-col divide-y divide-border"
+              aria-label="Publications"
+              data-testid="day-list"
+            >
               {dayItems.map((p) => {
                 const chip = publicationChip(p.state);
                 const channel = channelMap.get(p.channelConnectionId);
@@ -203,38 +219,48 @@ export function CalendarRoute() {
                       type="button"
                       aria-pressed={selected}
                       onClick={() => update({ publication: p.publicationId })}
-                      className={`flex w-full flex-wrap items-center gap-2 rounded-md border p-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-accent bg-secondary' : 'border-border hover:bg-muted'}`}
+                      className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-2 py-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? 'bg-secondary' : 'hover:bg-muted'}`}
                     >
-                      <span className="tabular-nums text-muted-foreground">
+                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
                         {new Date(p.scheduledFor).toLocaleTimeString(undefined, {
                           hour: '2-digit',
                           minute: '2-digit',
                           timeZone,
                         })}
                       </span>
-                      <Badge tone={chip.tone}>{chip.label}</Badge>
-                      <span className="min-w-0 flex-1 truncate">
-                        {channel ? `${channel.displayName} (${channel.providerKey})` : p.channelConnectionId}
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">
+                          <PackageTitle contentPackageId={p.contentPackageId} />
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {channel
+                            ? `${channel.displayName} (${channel.providerKey})`
+                            : p.channelConnectionId}
+                          {' · '}
+                          <code>{p.publicationId}</code>
+                        </span>
                       </span>
-                      <code className="text-xs text-muted-foreground">{p.publicationId}</code>
+                      <Badge tone={chip.tone}>{chip.label}</Badge>
                     </button>
                   </li>
                 );
               })}
             </ul>
           )}
-        </Panel>
+        </section>
         <PublicationDetail brandId={brandId} publicationId={selectedId} channels={channelMap} />
       </div>
 
-      <ScheduleForm
-        timeZone={timeZone}
-        channels={channelMap}
-        onScheduled={(publicationId, key) => {
-          setAnchorKey(key);
-          update({ day: key, publication: publicationId });
-        }}
-      />
+      <div id="schedule" className="scroll-mt-4">
+        <ScheduleForm
+          timeZone={timeZone}
+          channels={channelMap}
+          onScheduled={(publicationId, key) => {
+            setAnchorKey(key);
+            update({ day: key, publication: publicationId });
+          }}
+        />
+      </div>
     </main>
   );
 }

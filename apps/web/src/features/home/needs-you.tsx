@@ -3,7 +3,7 @@ import { Badge, EmptyState, Skeleton, type Tone } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useFacts } from '../brand/use-brand';
-import { usePackage } from '../content/use-content';
+import { PackageTitle } from '../content/package-title';
 import { PUBLICATION_CHIP, holdReasonText, outcomeUnknownReasonText } from '../publishing/publication-state';
 import { usePublicationsInState, type PublicationSummaryDto } from '../publishing/use-publishing';
 import { ATTENTION_CHIP } from '../review/review-attention';
@@ -37,12 +37,6 @@ const when = (iso: string, timeZone: string) =>
 
 /** Most urgent first: what is already live or failing, then what blocks a release, then standards. */
 const ORDER: Record<Tone, number> = { critical: 0, warning: 1, info: 2, neutral: 3, good: 4 };
-
-/** The package title a review request or publication is about; its id until it loads. */
-function PackageTitle({ contentPackageId }: { contentPackageId: string }) {
-  const pkg = usePackage(contentPackageId);
-  return <>{pkg.data?.title ?? contentPackageId}</>;
-}
 
 const reviewRow = (item: InboxItemDto, reviewHref: string): NeedsYouRow | null => {
   const attention = item.attention.find((a) => REVIEW_NEEDS_YOU.has(a));

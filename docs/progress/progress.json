@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-25T16:30:00Z",
+  "updatedAt": "2026-09-25T17:00:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -2141,7 +2141,7 @@
           "production",
           "21.1, 21.2, 21.3",
           "in_progress",
-          "Decided 25 September 2026: keep packages/ui tokens, panels, glyph chips, both themes; adopt the prototype’s information architecture and screen structure. Part 1 (branch claude/ui-prototype-shell): brand shell with a sidebar from 1024 px (company/brand switcher, work and standing sections, counts from the lists each section shows: review requests waiting on a person, failed/outcome-unknown/held publications, proposed facts plus a newer version in review) and a Menu drawer at phone width; full-screen studio with a back link; home with the day in the brand timezone, standards banners, one “Needs you” list linking to the exact item, the week at a glance, agent runs from this device and documents. Verified: shell.e2e (3), a11y audit (light and dark, 390 and 1280 px, keyboard path) and the journey, studio, agents, phase 5/6 and brand-kit suites. Not shown because the API has no source: agent spend, Agents and Assets counts, a documents list, brand-wide run history for non-admins; Performance has no route yet."
+          "Decided 25 September 2026: keep packages/ui tokens, panels, glyph chips, both themes; adopt the prototype’s information architecture and screen structure. Part 1 (branch claude/ui-prototype-shell): brand shell with a sidebar from 1024 px (company/brand switcher, work and standing sections, counts from the lists each section shows: review requests waiting on a person, failed/outcome-unknown/held publications, proposed facts plus a newer version in review) and a Menu drawer at phone width; full-screen studio with a back link; home with the day in the brand timezone, standards banners, one “Needs you” list linking to the exact item, the week at a glance, agent runs from this device and documents. Verified: shell.e2e (3), a11y audit (light and dark, 390 and 1280 px, keyboard path) and the journey, studio, agents, phase 5/6 and brand-kit suites. Not shown because the API has no source: agent spend, Agents and Assets counts, a documents list, brand-wide run history for non-admins; Performance has no route yet. Part 2 (branch claude/ui-prototype-review): review as the request list beside the request (filters All / Needs attention / Awaiting / Approved with counts, package titles, one chip per need; the detail headed by the package with the request id and creation time); calendar with the period as the title, one toolbar (Month/Week, ‹ Today ›, Refresh, Schedule jumps to the form), an unboxed grid and a day list of time, package, channel, publication id and state. Verified: journey, phase 5, a11y (all screens, both themes, 390/1280 px, keyboard path)."
         ]
       ]
     },
