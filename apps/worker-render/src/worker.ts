@@ -105,8 +105,8 @@ const health = await startHealthServer();
 
 const shutdown = () => {
   log.info({}, 'worker-render shutting down');
-  renderWorker.shutdown();
-  mediaWorker.shutdown();
+  // The SDK already drains on SIGTERM/SIGINT; shutdown() on a worker that is not RUNNING throws IllegalStateError.
+  for (const w of [renderWorker, mediaWorker]) if (w.getState() === 'RUNNING') w.shutdown();
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

@@ -72,7 +72,8 @@ export async function startIngestWorkers(
     run: async () => {
       await Promise.all(workers.map((w) => w.run()));
     },
-    shutdown: () => workers.forEach((w) => w.shutdown()),
+    // The SDK already drains on SIGTERM/SIGINT; shutdown() on a worker that is not RUNNING throws IllegalStateError.
+    shutdown: () => workers.forEach((w) => w.getState() === 'RUNNING' && w.shutdown()),
     close: () => connection.close(),
   };
 }
