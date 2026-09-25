@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { generatedUploads, uploadIntents } from '@oremedia/db/schema/assets';
+import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { MemoryStorageProvider, assetService, configureStorage } from '@oremedia/module-assets';
 import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -16,9 +17,11 @@ import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixture
  */
 const PREVIOUS_HEAD = '0003_external_identities_auth_events';
 const NEW_TABLES: MySqlTable[] = [generatedUploads];
+/** Added by later migrations (0005: migration-0005-roll-forward.integration.test.ts). */
+const LATER_TABLES: MySqlTable[] = [brandGuidelineAuthors];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0004 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

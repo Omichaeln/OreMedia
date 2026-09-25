@@ -62,6 +62,12 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
   'brand.policy.get': {
     buildInput: (f) => ({ brandId: f['brandId'], policyVersionId: f['policyVersionId'] }),
   },
+  'brand.guidelines.import': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      files: [{ path: 'SKILL.md', content: '---\nname: cross-tenant-brand\ndescription: x\n---\n# Brand' }],
+    }),
+  },
   'brand.onboarding.start': {
     buildInput: null,
     reason:

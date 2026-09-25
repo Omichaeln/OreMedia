@@ -66,6 +66,34 @@ export const brandVersions = mysqlTable(
   ],
 );
 
+/**
+ * Who last changed a brand version's guidelines (import or edit), one row per version (id = the version's id).
+ * Publishing a version whose guidelines differ from the published ones is refused to that author: a second person
+ * approves what agents will follow. Kept beside brand_versions so that table's shape is unchanged.
+ */
+export const brandGuidelineAuthors = mysqlTable(
+  'brand_guideline_authors',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    authorKind: mysqlEnum('author_kind', ['user', 'service_principal']).notNull(),
+    authorId: ref('author_id').notNull(),
+    /** The imported package's hash; null when the guidelines were last changed by an edit. */
+    packageHash: hash('package_hash'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.id],
+      foreignColumns: [brandVersions.tenantId, brandVersions.brandId, brandVersions.id],
+      name: 'fk_guideline_author_version',
+    }),
+  ],
+);
+
 export const designTokens = mysqlTable(
   'design_tokens',
   {

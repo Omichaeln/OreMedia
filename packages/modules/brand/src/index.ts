@@ -8,6 +8,7 @@ export {
   type EligibleTemplateSource,
 } from './service';
 export {
+  BrandGuidelineAuthorRepository,
   BrandRepository,
   BrandVersionRepository,
   DesignTokenRepository,
