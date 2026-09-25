@@ -261,6 +261,9 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       p5.request(P5.requests.open).manifestHash,
     );
     expect(await page.locator('body').textContent()).toContain('Autumn offer');
+    // The header carries the link's expiry; the page says the reviewer sees only this request.
+    expect(await page.getByRole('banner').textContent()).toContain('Link expires');
+    expect(await page.locator('main').textContent()).toContain('You can only see this request.');
     await page.getByRole('button', { name: 'Approve' }).click();
     await expect.poll(() => page.getByTestId('portal-success').count(), { timeout: 15_000 }).toBe(1);
     const portalRequests = backend.requests.filter((r) => r.path === 'review.decisions.submit');

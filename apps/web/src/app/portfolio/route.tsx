@@ -1,20 +1,26 @@
 import { Link } from 'react-router';
-import { Badge, Button, EmptyState, Panel, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Badge, EmptyState, Skeleton } from '@oremedia/ui';
 import { TopBar } from '../root';
-import { PageHeading, RequestError } from '../../components/request-state';
+import { RequestError } from '../../components/request-state';
 import { useCompanies } from '../../features/portfolio/use-companies';
 
-/** Spec 21.2 portfolio states: no memberships; restricted access; disconnected company or channel. */
+/**
+ * Spec 21.2 portfolio states: no memberships; restricted access. The v3 prototype's layout: each company is its own
+ * section (a separate tenant; nothing is shared between them) with the person's role there and a link into it.
+ */
 export function PortfolioRoute() {
   const companies = useCompanies();
   return (
     <>
       <TopBar title="Portfolio" />
-      <main id="main" className="mx-auto w-full max-w-4xl p-6">
-        <PageHeading
-          title="Your companies"
-          description="Every company you are a member of. Company and brand are part of every link, and the server re-checks your membership on each request."
-        />
+      <main id="main" className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-8">
+        <header>
+          <h1 className="text-xl font-semibold">Portfolio</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Companies you are a member of. Each company is a separate tenant; nothing is shared between them,
+            and the server re-checks your membership on every request.
+          </p>
+        </header>
         {companies.isPending && <Skeleton label="Loading companies" lines={4} />}
         {companies.isError && (
           <RequestError
@@ -30,28 +36,33 @@ export function PortfolioRoute() {
           />
         )}
         {companies.isSuccess && companies.data.length > 0 && (
-          <ul className="grid gap-3 sm:grid-cols-2" aria-label="Companies">
+          <ul className="flex flex-col divide-y divide-border border-y border-border" aria-label="Companies">
             {companies.data.map((c) => (
               <li key={c.tenantId}>
-                <Panel title={c.name} level={2} bodyClassName="flex items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                    <Badge glyph={false}>{c.role}</Badge>
-                    <Badge glyph={false}>{c.allBrands ? 'All brands' : 'Selected brands'}</Badge>
+                <section
+                  aria-labelledby={`company-${c.tenantId}`}
+                  className="flex flex-wrap items-center justify-between gap-3 py-4"
+                >
+                  <div className="min-w-0">
+                    <h2 id={`company-${c.tenantId}`} className="font-semibold">
+                      {c.name}
+                    </h2>
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                      <Badge glyph={false}>{c.role}</Badge>
+                      <Badge glyph={false}>{c.allBrands ? 'All brands' : 'Selected brands'}</Badge>
+                    </p>
                   </div>
-                  <Button asChild variant="primary" size="sm">
-                    <Link to={`/c/${encodeURIComponent(c.tenantId)}`}>Open</Link>
-                  </Button>
-                </Panel>
+                  <Link
+                    to={`/c/${encodeURIComponent(c.tenantId)}`}
+                    className="text-sm font-medium underline-offset-2 hover:underline"
+                  >
+                    Open <span aria-hidden="true">→</span>
+                  </Link>
+                </section>
               </li>
             ))}
           </ul>
         )}
-        <StatusBanner
-          className="mt-6"
-          tone="info"
-          title="Overdue approvals, failed releases and channel health"
-          description="These summaries arrive with review (Phase 5) and publishing (Phase 5); until then this page lists memberships only."
-        />
       </main>
     </>
   );
