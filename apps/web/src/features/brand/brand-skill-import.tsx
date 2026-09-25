@@ -99,7 +99,8 @@ export function BrandSkillImport() {
               <>
                 {result.documents.length} guideline document{result.documents.length === 1 ? '' : 's'} kept,{' '}
                 {result.coloursAdded} colour{result.coloursAdded === 1 ? '' : 's'} added to the palette.
-                Review it below, then submit it for review; a different person publishes it.
+                Review it below: an agent can extract its voice and vocabulary from the guidelines. Then
+                submit it for review; a different person publishes it.
                 {result.skipped.length > 0 && (
                   <span className="mt-1 block">
                     Not imported: {result.skipped.map((s) => s.path).join(', ')}. Upload logos and images in

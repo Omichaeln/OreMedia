@@ -176,7 +176,7 @@ export const registerPublishingToolSource = (source: PublishingToolSource | null
 
 /** The module surfaces tools reach: narrow picks so a tool cannot wander into unrelated commands. */
 export interface ToolServices {
-  brand: Pick<typeof brandService, 'resolveBrandSnapshot'>;
+  brand: Pick<typeof brandService, 'resolveBrandSnapshot' | 'proposeVoice'>;
   assets: Pick<typeof assetService, 'findEligibleAssets'>;
   creative: {
     operations: Pick<typeof creativeService.operations, 'propose' | 'apply'>;

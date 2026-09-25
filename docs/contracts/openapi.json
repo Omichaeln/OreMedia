@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Oremedia API: public REST (/v1) and the tRPC procedure catalogue",
-    "version": "2"
+    "version": "3"
   },
   "components": {
     "securitySchemes": {
@@ -1422,6 +1422,12 @@
                   "brandId": {
                     "type": "string"
                   },
+                  "versionId": {
+                    "type": "string"
+                  },
+                  "servicePrincipalId": {
+                    "type": "string"
+                  },
                   "sourceAssetIds": {
                     "type": "array",
                     "items": {
@@ -1433,9 +1439,12 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "notes": {
+                    "type": "string"
                   }
                 },
-                "required": ["brandId"]
+                "required": ["brandId", "versionId", "servicePrincipalId"]
               }
             }
           }
@@ -7986,7 +7995,7 @@
     }
   },
   "x-contract": {
-    "contractVersion": 2,
+    "contractVersion": 3,
     "procedures": {
       "access.apiClients.create": {
         "type": "mutation",
@@ -9011,6 +9020,12 @@
             "brandId": {
               "type": "string"
             },
+            "versionId": {
+              "type": "string"
+            },
+            "servicePrincipalId": {
+              "type": "string"
+            },
             "sourceAssetIds": {
               "type": "array",
               "items": {
@@ -9022,9 +9037,12 @@
               "items": {
                 "type": "string"
               }
+            },
+            "notes": {
+              "type": "string"
             }
           },
-          "required": ["brandId"]
+          "required": ["brandId", "versionId", "servicePrincipalId"]
         }
       },
       "brand.policy.activate": {

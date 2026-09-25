@@ -59,6 +59,7 @@ export type SkillScope = z.infer<typeof SkillScope>;
  */
 export const TOOL_NAMES_RELEASE_1 = [
   'brand.getSnapshot',
+  'brand.proposeVoice',
   'assets.searchEligible',
   'facts.list',
   'metrics.query',

@@ -69,8 +69,10 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'brand.onboarding.start': {
-    buildInput: null,
-    reason:
-      'agent run (Phase 4): the procedure is a stub that refuses with FORBIDDEN not_available_yet before touching any resource; it gets a real fixture with the agent runtime',
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      versionId: f['brandVersionId'],
+      servicePrincipalId: f['servicePrincipalId'],
+    }),
   },
 };

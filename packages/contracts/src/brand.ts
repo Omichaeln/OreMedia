@@ -289,9 +289,52 @@ export const BrandGuidelinesImport = z.object({
     .min(1)
     .max(100),
 });
-/** Spec 8.2: onboarding is an agent run (Phase 4). The input shape is fixed now so clients can be written against it. */
+/**
+ * Spec 8.2: onboarding is a brand_onboarding agent run that reads the guidelines imported into a draft (as untrusted
+ * evidence) and proposes the draft's voice and vocabulary. The run acts as `servicePrincipalId`; people publish.
+ */
 export const OnboardingStart = z.object({
   brandId: z.string(),
+  /** The draft the guidelines were imported into; the run writes its proposal there and nowhere else. */
+  versionId: z.string(),
+  servicePrincipalId: z.string(),
   sourceAssetIds: z.array(z.string()).max(50).default([]),
+  /** Website captures are not available yet: any URL is refused rather than silently ignored. */
   websiteUrls: z.array(z.string().url().max(1000)).max(10).default([]),
+  notes: z.string().max(4000).optional(),
 });
+
+/**
+ * The voice section an onboarding run proposes (brand.proposeVoice): the document's voice with bounds, since the
+ * values come from a model. Every list is bounded so a proposal always fits the editor and the prompt.
+ */
+export const BrandVoiceProposal = z
+  .object({
+    summary: z.string().max(2000),
+    tone: z.array(z.string().min(1).max(60)).max(12),
+    audiences: z
+      .array(z.object({ key: z.string().min(1).max(60), description: z.string().max(500) }).strict())
+      .max(12),
+    preferredTerms: z
+      .array(
+        z
+          .object({ use: z.string().min(1).max(120), avoid: z.array(z.string().min(1).max(120)).max(10) })
+          .strict(),
+      )
+      .max(60),
+    prohibitedPhrases: z.array(z.string().min(1).max(200)).max(60),
+    locales: z.array(z.string().min(2).max(20)).max(12),
+    examples: z
+      .array(
+        z
+          .object({
+            text: z.string().min(1).max(1000),
+            verdict: z.enum(['on_brand', 'off_brand']),
+            note: z.string().max(500),
+          })
+          .strict(),
+      )
+      .max(20),
+  })
+  .strict();
+export type BrandVoiceProposal = z.infer<typeof BrandVoiceProposal>;

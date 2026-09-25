@@ -75,6 +75,8 @@ export type TenantPolicySource = (
 
 export interface ContextResolverDeps {
   resolveBrandSnapshot(actor: ResolvedActor, brandId: string, tx?: Tx): Promise<BrandSnapshot>;
+  /** The approved baseline of a brand that may have nothing published yet (onboarding): never a draft. */
+  resolveBaselineSnapshot(actor: ResolvedActor, brandId: string, tx?: Tx): Promise<BrandSnapshot>;
   findEligibleAssets(query: EligibilityQuery, page: PageRequest, tx?: Tx): Promise<{ items: AssetRef[] }>;
   resolveSkills: SkillResolver;
   tenantPolicy: TenantPolicySource;
@@ -112,6 +114,8 @@ export const tenantPolicyFor: TenantPolicySource = (tenantId, correlationId, tx)
 export function defaultContextResolverDeps(registry: ToolRegistry): ContextResolverDeps {
   return {
     resolveBrandSnapshot: (actor, brandId, tx) => brandService.resolveBrandSnapshot(actor, { brandId }, tx),
+    resolveBaselineSnapshot: (actor, brandId, tx) =>
+      brandService.resolveBaselineSnapshot(actor, { brandId }, tx),
     findEligibleAssets: (query, page, tx) => assetService.findEligibleAssets(query, page, tx),
     resolveSkills,
     tenantPolicy: tenantPolicyFor,
@@ -251,7 +255,12 @@ export async function resolveContextSnapshot(
     throw new ValidationFailedError(
       brief.error.issues.map((i) => ({ path: `brief.${i.path.join('.')}`, issue: i.message })),
     );
-  const brand = await deps.resolveBrandSnapshot(input.principal, input.brandId, tx); // policy brand.read for the principal
+  // Policy brand.read for the principal. Onboarding builds the brand system, so it starts from the approved
+  // baseline (empty when nothing is published); every other task needs a published brand.
+  const brand =
+    taskKind.data === 'brand_onboarding'
+      ? await deps.resolveBaselineSnapshot(input.principal, input.brandId, tx)
+      : await deps.resolveBrandSnapshot(input.principal, input.brandId, tx);
   const skills = await deps.resolveSkills(
     { tenantId: input.tenantId, brandId: input.brandId, taskKind: taskKind.data, actor: input.principal },
     tx,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ModelMessage, ModelToolCall } from '@oremedia/contracts/agents';
+import { EvidenceItem, type ModelMessage, type ModelToolCall } from '@oremedia/contracts/agents';
 import { BrandSnapshotV1 } from '@oremedia/contracts/brand';
 import { ValidationFailedError } from '@oremedia/contracts/errors';
 import {
@@ -63,8 +63,29 @@ export function parseJsonOutput(text: string): unknown {
   return null;
 }
 
-/** A sandbox context: the fixture brand, the skill under test and only those of its allowed tools that exist. */
-function sandboxSnapshot(input: EvaluationInput, fixture: EvaluationBrandFixture): ContextSnapshot {
+/** A case's evidence, as a run's brief carries it (context-resolver): at most 50 items, always untrusted. */
+const CaseEvidence = z.object({ evidence: z.array(EvidenceItem).max(50).default([]) }).passthrough();
+function caseEvidence(evalCase: EvaluationCase): EvidenceItem[] {
+  const parsed = CaseEvidence.safeParse(evalCase.input);
+  if (!parsed.success)
+    throw new ValidationFailedError(
+      parsed.error.issues.map((i) => ({
+        path: `cases.${evalCase.id}.input.${i.path.join('.')}`,
+        issue: i.message,
+      })),
+    );
+  return parsed.data.evidence;
+}
+
+/**
+ * A sandbox context: the fixture brand, the skill under test, only those of its allowed tools that exist, and the
+ * case's evidence labelled untrusted exactly as a run's brief evidence is.
+ */
+function sandboxSnapshot(
+  input: EvaluationInput,
+  fixture: EvaluationBrandFixture,
+  evalCase: EvaluationCase,
+): ContextSnapshot {
   const brand = fixture.snapshot;
   const skill: ResolvedSkill = {
     skillVersionId: input.skillVersionId,
@@ -93,7 +114,7 @@ function sandboxSnapshot(input: EvaluationInput, fixture: EvaluationBrandFixture
     })),
     facts: brand.facts.map((f) => ({ id: f.id, kind: f.kind, statement: f.statement })),
     playbook: [],
-    evidence: [],
+    evidence: caseEvidence(evalCase).map((e) => ({ ...e, trust: 'untrusted' as const })),
     policy: {
       autonomyMode: 'create',
       allowedTools,
@@ -242,6 +263,7 @@ export async function runEvaluation(input: EvaluationInput): Promise<EvaluationR
     const snapshot = sandboxSnapshot(
       { ...input, manifest },
       { ...fixture, snapshot: BrandSnapshotV1.parse(fixture.snapshot) },
+      evalCase,
     );
     const runs: Array<{
       deterministic: ReturnType<typeof runDeterministicChecks>;

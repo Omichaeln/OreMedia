@@ -91,6 +91,7 @@ const assets: AssetRef[] = [
 function deps(over: Partial<ContextResolverDeps> = {}): ContextResolverDeps {
   return {
     resolveBrandSnapshot: async () => brand,
+    resolveBaselineSnapshot: async () => ({ ...brand, brandVersionId: 'unpublished', brandVersionNumber: 0 }),
     findEligibleAssets: async () => ({ items: assets }),
     resolveSkills: async () => [
       skill(['facts.list', 'assets.searchEligible', 'publications.proposeSchedule', 'no.such.tool']),
@@ -195,6 +196,24 @@ describe('context resolver (spec 12.3)', () => {
     await expect(
       resolveContextSnapshot(input({ brief: { evidence: [{ id: '' }] } }), deps()),
     ).rejects.toThrow(ValidationFailedError);
+  });
+
+  it('onboarding starts from the approved baseline (never a draft); every other task needs the published brand', async () => {
+    const calls: string[] = [];
+    const d = deps({
+      resolveBrandSnapshot: async () => {
+        calls.push('published');
+        return brand;
+      },
+      resolveBaselineSnapshot: async () => {
+        calls.push('baseline');
+        return { ...brand, brandVersionId: 'unpublished', brandVersionNumber: 0 };
+      },
+    });
+    const onboarding = await resolveContextSnapshot(input({ taskKind: 'brand_onboarding' }), d);
+    expect(onboarding.brand.brandVersionId).toBe('unpublished');
+    await resolveContextSnapshot(input({ taskKind: 'copywriting' }), d);
+    expect(calls).toEqual(['baseline', 'published']);
   });
 
   it('playbook is empty until the intelligence module supplies approved entries (Phase 6)', async () => {

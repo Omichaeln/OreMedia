@@ -1,6 +1,6 @@
 // Agent runs (spec 12): durable run state, the run commands behind the agents router, the activity runtime and the
 // outbox routes that start and signal agentRunWorkflowV1 on task queue `agents`.
-export { agentsService, configureAgentModel } from './service';
+export { agentsService, configureAgentModel, onboardingRunSource } from './service';
 export { durableProviderJobStore } from './provider-jobs';
 export { createAgentRunRuntime, type AgentRuntimeOptions } from './runtime';
 export { dispatchSurfaceToolCall, surfaceAutonomyFor, type SurfaceToolCall } from './surface';
