@@ -1,6 +1,6 @@
 # ADR-03: Application-owned versioned creative schema behind an editor adapter; Konva default
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Medium.
 

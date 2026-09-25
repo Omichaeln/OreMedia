@@ -1,6 +1,6 @@
 # ADR-07: PointFive OS stack on MySQL/TiDB with structural tenant enforcement in lieu of Postgres RLS
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** High after Phase 2.
 

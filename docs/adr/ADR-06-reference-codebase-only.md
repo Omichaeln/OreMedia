@@ -1,6 +1,6 @@
 # ADR-06: Reference codebase used as reference only; no code copied unless the AGPL route or a separate licence is accepted; Polotno only with written permission
 
-**Status:** Proposed. **Human commercial/legal decision required (D-07, D-05).**
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 
 ## Context

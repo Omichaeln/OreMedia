@@ -1,6 +1,6 @@
 # ADR-02: Company = tenant; brands are children; portfolio is a projection
 
-**Status:** Proposed
+**Status:** Accepted (programme owner, 25 September 2026)
 **Date:** 23 September 2026
 **Reversal cost:** Very high after real client data.
 
