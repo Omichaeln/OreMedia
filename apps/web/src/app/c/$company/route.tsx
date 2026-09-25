@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, EmptyState, Field, Input, Panel, Skeleton } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
 import { TopBar } from '../../root';
-import { PageHeading, RequestError } from '../../../components/request-state';
+import { RequestError } from '../../../components/request-state';
+import { Section } from '../../../components/section';
 import { useCompanies } from '../../../features/portfolio/use-companies';
 import { useBrands } from '../../../features/brand/use-brand';
 import { brandPath } from '../../../features/brand/brand-context';
@@ -20,8 +21,11 @@ export function CompanyRoute() {
   return (
     <>
       <TopBar title={companyName ?? 'Company'} />
-      <main id="main" className="mx-auto w-full max-w-4xl p-6">
-        <PageHeading title={companyName ?? 'Brands'} description="Brands you can see in this company." />
+      <main id="main" className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-8">
+        <header>
+          <h1 className="text-xl font-semibold">{companyName ?? 'Brands'}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Brands you can see in this company.</p>
+        </header>
         {brands.isPending && <Skeleton label="Loading brands" lines={3} />}
         {brands.isError && (
           <RequestError
@@ -37,22 +41,33 @@ export function CompanyRoute() {
           />
         )}
         {brands.isSuccess && brands.data.length > 0 && (
-          <ul className="grid gap-3 sm:grid-cols-2" aria-label="Brands">
+          <ul className="flex flex-col divide-y divide-border border-y border-border" aria-label="Brands">
             {brands.data.map((b) => (
               <li key={b.id}>
-                <Panel title={b.name} bodyClassName="flex items-center justify-between gap-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge
-                      tone={b.status === 'active' ? 'good' : b.status === 'setup' ? 'warning' : 'neutral'}
-                    >
-                      {b.status === 'setup' ? 'Setup incomplete' : b.status}
-                    </Badge>
-                    {!b.publishedVersionId && <Badge tone="warning">No published standards</Badge>}
+                <section
+                  aria-labelledby={`brand-${b.id}`}
+                  className="flex flex-wrap items-center justify-between gap-3 py-4"
+                >
+                  <div className="min-w-0">
+                    <h2 id={`brand-${b.id}`} className="font-semibold">
+                      {b.name}
+                    </h2>
+                    <p className="mt-1 flex flex-wrap gap-2">
+                      <Badge
+                        tone={b.status === 'active' ? 'good' : b.status === 'setup' ? 'warning' : 'neutral'}
+                      >
+                        {b.status === 'setup' ? 'Setup incomplete' : b.status}
+                      </Badge>
+                      {!b.publishedVersionId && <Badge tone="warning">No published standards</Badge>}
+                    </p>
                   </div>
-                  <Button asChild variant="primary" size="sm">
-                    <Link to={brandPath(company, b.id)}>Open</Link>
-                  </Button>
-                </Panel>
+                  <Link
+                    to={brandPath(company, b.id)}
+                    className="text-sm font-medium underline-offset-2 hover:underline"
+                  >
+                    Open <span aria-hidden="true">→</span>
+                  </Link>
+                </section>
               </li>
             ))}
           </ul>
@@ -83,7 +98,7 @@ function CreateBrand() {
     if (name.trim()) create.mutate({ name: name.trim(), timezone: 'UTC', defaultLocale: 'en' });
   };
   return (
-    <Panel title="Create a brand" className="mt-6" level={2}>
+    <Section id="create-brand-heading" title="Create a brand">
       <form onSubmit={submit} className="flex flex-wrap items-end gap-3" noValidate>
         <Field
           label="Brand name"
@@ -103,6 +118,6 @@ function CreateBrand() {
           {create.isPending ? 'Creating…' : 'Create brand'}
         </Button>
       </form>
-    </Panel>
+    </Section>
   );
 }
