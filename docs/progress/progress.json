@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-25T15:40:00Z",
+  "updatedAt": "2026-09-25T16:30:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -2134,6 +2134,14 @@
           "2.2",
           "complete",
           "No innerHTML or dangerouslySetInnerHTML anywhere in apps/web; user, agent and provider content is rendered as text nodes; JSON is shown through a text-only tree."
+        ],
+        [
+          "F.7",
+          "Product UX from the v3 prototype on the existing design language (sidebar shell, Needs-you home, then review, calendar, brand system, assets, campaigns, studio, performance, intelligence, experiments, agents, settings, portfolio, review portal)",
+          "production",
+          "21.1, 21.2, 21.3",
+          "in_progress",
+          "Decided 25 September 2026: keep packages/ui tokens, panels, glyph chips, both themes; adopt the prototype’s information architecture and screen structure. Part 1 (branch claude/ui-prototype-shell): brand shell with a sidebar from 1024 px (company/brand switcher, work and standing sections, counts from the lists each section shows: review requests waiting on a person, failed/outcome-unknown/held publications, proposed facts plus a newer version in review) and a Menu drawer at phone width; full-screen studio with a back link; home with the day in the brand timezone, standards banners, one “Needs you” list linking to the exact item, the week at a glance, agent runs from this device and documents. Verified: shell.e2e (3), a11y audit (light and dark, 390 and 1280 px, keyboard path) and the journey, studio, agents, phase 5/6 and brand-kit suites. Not shown because the API has no source: agent spend, Agents and Assets counts, a documents list, brand-wide run history for non-admins; Performance has no route yet."
         ]
       ]
     },

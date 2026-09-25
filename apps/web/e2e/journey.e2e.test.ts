@@ -64,7 +64,13 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.waitForURL('**/portfolio*', { timeout: 15_000 });
   };
+  /** At phone width the brand navigation (and Sign out) is in the Menu drawer. */
+  const openMenu = async () => {
+    const menu = page.getByRole('button', { name: 'Menu' });
+    if (await menu.isVisible()) await menu.click();
+  };
   const signOut = async () => {
+    await openMenu();
     await page.getByRole('button', { name: 'Sign out' }).first().click();
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
   };
@@ -147,6 +153,7 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
   }, 45_000);
 
   it('company A: create a package from an accepted brief and generate variants for two channels', async () => {
+    await openMenu();
     await page
       .getByRole('navigation', { name: 'Brand sections' })
       .getByRole('link', { name: 'Campaigns' })
@@ -510,11 +517,14 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await expect.poll(() => brands.getByRole('listitem').count(), { timeout: 15_000 }).toBe(1);
     expect(await brands.textContent()).toContain(E2E.brandName);
     expect(await brands.textContent()).not.toContain(BRAND_2.name);
-    // Brand 1 opens.
+    // Brand 1 opens: the shell names it and its home greets the person.
     await open(pathA('home'));
     await expect
-      .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
+      .poll(() => page.getByLabel('Brand', { exact: true }).textContent(), { timeout: 15_000 })
       .toBe(E2E.brandName);
+    await expect
+      .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
+      .toMatch(/^Good (morning|afternoon|evening)/);
     // Every brand-2 route is NOT_FOUND (the server never confirms the brand exists), with no brand data rendered.
     for (const route of ['home', 'calendar', 'review', 'campaigns', 'settings', 'agents']) {
       await open(brandPath(E2E.tenantId, BRAND_2.id, route));

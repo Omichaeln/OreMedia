@@ -652,6 +652,9 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   }, 45_000);
 
   it('a creator without agent.start_run sees the empty device list and a Permission denied state on start', async () => {
+    // At phone width Sign out is in the Menu drawer with the brand navigation.
+    const menu = page.getByRole('button', { name: 'Menu' });
+    if (await menu.isVisible()) await menu.click();
     await page.getByRole('button', { name: 'Sign out' }).click();
     await signIn(E2E.creatorToken);
     // The device list belongs to the previous sign-in on this browser; clear it to get the honest empty state.
