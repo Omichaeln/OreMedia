@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { Badge, Button, Panel, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Badge, Button, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Section } from '../../components/section';
 import { ToastProvider } from '../../components/toast';
 import { DecisionForm, ManifestSummary } from '../../features/review/request-detail';
 import {
@@ -45,8 +46,21 @@ export function ReviewPortalRoute({ standalone = false }: { standalone?: boolean
           <a href="#main" className="skip-link">
             Skip to content
           </a>
-          <main id="main" className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-4 p-4 sm:p-6">
-            <h1 className="text-xl font-semibold">Oremedia review</h1>
+          <header className="border-b border-border">
+            <div className="mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm sm:px-6">
+              <span className="font-semibold">Oremedia review</span>
+              {link?.expiresAt && (
+                <span className="text-muted-foreground">
+                  Link expires {new Date(link.expiresAt).toLocaleString()}
+                </span>
+              )}
+            </div>
+          </header>
+          <main
+            id="main"
+            className="mx-auto flex min-h-full w-full max-w-2xl flex-col gap-6 px-4 py-6 sm:px-6"
+          >
+            <h1 className="text-xl font-semibold">Your review</h1>
             {!link ? (
               <StatusBanner
                 tone="warning"
@@ -158,18 +172,19 @@ function Portal({ link }: { link: PortalLink }) {
           description="The brand team cancelled it; there is nothing to decide."
         />
       )}
-      <Panel title="What you are reviewing">
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+      <Section id="reviewing-heading" title="What you are reviewing">
+        <p className="text-sm text-muted-foreground">What you see is exactly what will publish.</p>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
           <Badge tone={state.tone} data-testid="portal-state">
             {state.label}
           </Badge>
           {r.dueAt && <span className="text-muted-foreground">Due {new Date(r.dueAt).toLocaleString()}</span>}
         </div>
         <ManifestSummary manifest={r.frozenManifest} manifestHash={r.manifestHash} />
-      </Panel>
+      </Section>
       {!outcome && r.state === 'open' && (
-        <Panel title="Your decision">
-          <p className="mb-3 text-sm text-muted-foreground">
+        <Section id="decision-heading" title="Your decision">
+          <p className="text-sm text-muted-foreground">
             You can decide once. Your email address is verified by this link and recorded with the decision.
           </p>
           <DecisionForm
@@ -180,8 +195,11 @@ function Portal({ link }: { link: PortalLink }) {
               void request.refetch();
             }}
           />
-        </Panel>
+        </Section>
       )}
+      <p className="border-t border-border pt-3 text-xs text-muted-foreground">
+        You can only see this request. The link stops working if the brand team revokes it or it expires.
+      </p>
     </div>
   );
 }
