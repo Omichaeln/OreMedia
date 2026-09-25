@@ -32,7 +32,7 @@ import {
 } from '@oremedia/ai';
 import { policy, ServicePrincipalRepository } from '@oremedia/module-access';
 import { budgets, entitlements } from '@oremedia/module-billing';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, type OnboardingRunSource } from '@oremedia/module-brand';
 import { audit, killSwitch, outbox } from '@oremedia/module-operations';
 import { runWorkflowId } from './outbox-routes';
 import {
@@ -407,5 +407,23 @@ export const agentsService = {
       const row = await routingPoliciesRepo.current();
       return row ? ModelRoutingPolicy.parse(row.document) : null;
     },
+  },
+};
+
+/**
+ * Spec 8.2: the brand module's onboarding runs (registerOnboardingRunSource in both composition roots). An
+ * onboarding run is an ordinary run of task kind brand_onboarding: same policy, kill switch, entitlement, routing
+ * policy and autonomy computation as any start; `get` returns the brief exactly as the brand module wrote it.
+ */
+export const onboardingRunSource: OnboardingRunSource = {
+  start: (actor, input, tx) =>
+    agentsService.runs.start(
+      actor,
+      { ...input, requestedAutonomy: 'create', taskKind: 'brand_onboarding' },
+      tx,
+    ),
+  async get(actor, runId, tx) {
+    const run = await agentsService.runs.get(actor, { runId }, tx);
+    return { brandId: run.brandId, taskKind: run.taskKind, state: run.state, brief: run.brief };
   },
 };

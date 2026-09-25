@@ -30,8 +30,11 @@ import {
   brandService,
   registerBrandAssetKindSource,
   registerEligibleTemplateSource,
+  registerOnboardingRunSource,
   resetBrandAssetKindSource,
   resetEligibleTemplateSource,
+  resetOnboardingRunSource,
+  type OnboardingRunSource,
 } from './service';
 
 const USER = 'usr_brand_test';
@@ -793,19 +796,6 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(specific.state).toBe('retired');
     });
 
-    it('onboarding.start is an honest stub: FORBIDDEN not_available_yet and no writes', async () => {
-      const before = (await tdb.db.select().from(brandVersions).where(eq(brandVersions.tenantId, tenantA)))
-        .length;
-      await expect(
-        run(tenantA, (tx) =>
-          brandService.startOnboarding(A, { brandId: brandA, sourceAssetIds: [], websiteUrls: [] }, tx),
-        ),
-      ).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'not_available_yet' });
-      expect(
-        (await tdb.db.select().from(brandVersions).where(eq(brandVersions.tenantId, tenantA))).length,
-      ).toBe(before);
-    });
-
     it('every mutation left an allowed audit event in the command transaction', async () => {
       const rows = await tdb.db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantA));
       const actions = new Set(rows.filter((r) => r.decision === 'allowed').map((r) => r.action));
@@ -1112,6 +1102,186 @@ describe('brand module (spec 8) against MySQL 8', () => {
           brandService.guidelines.import(agent(tenantA), { brandId: brandSkill, files: skillFiles }, tx),
         ),
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+  });
+
+  describe('onboarding: voice and vocabulary proposed from imported guidelines (spec 8.2)', () => {
+    const brandOnb = newId('brand');
+    const person = manager(tenantA);
+    const sp = agent(tenantA);
+    const longReference = `# Vocabulary\n${'Say roast, not blend. '.repeat(1200)}`; // > 20000 characters: two evidence items
+    const files = [
+      {
+        path: 'SKILL.md',
+        content:
+          '---\nname: kiln-brand\ndescription: Kiln.\n---\n# Kiln\nWarm and plain. Never write "artisanal".\n',
+      },
+      { path: 'references/words.md', content: longReference },
+    ];
+    /** A stand-in for the agents module: runs keep the brief exactly as the brand module wrote it. */
+    const runs = new Map<string, { brandId: string; taskKind: string; brief: Record<string, unknown> }>();
+    const source: OnboardingRunSource = {
+      async start(_actor, input) {
+        const runId = `run_${runs.size + 1}`;
+        runs.set(runId, { brandId: input.brandId, taskKind: 'brand_onboarding', brief: input.brief });
+        return { runId, state: 'planned', autonomyMode: 'create', workflowId: `run:${runId}` };
+      },
+      async get(_actor, runId) {
+        const r = runs.get(runId);
+        if (!r) throw new NotFoundError('AgentRun', runId);
+        return { ...r, state: 'running' };
+      },
+    };
+    const proposal = {
+      summary: 'Warm and plain.',
+      tone: ['warm', 'plain'],
+      audiences: [{ key: 'regulars', description: 'Weekly buyers' }],
+      preferredTerms: [{ use: 'roast', avoid: ['blend'] }],
+      prohibitedPhrases: ['artisanal'],
+      locales: ['en-GB'],
+      examples: [{ text: 'This week: a Chipinge roast.', verdict: 'on_brand' as const, note: 'plain' }],
+    };
+    const versionOf = (versionId: string) =>
+      runInTenant(ctx(tenantA), () => brandService.versions.get(person, { brandId: brandOnb, versionId }));
+    const start = (versionId: string, over: Partial<{ websiteUrls: string[] }> = {}) =>
+      run(tenantA, (tx) =>
+        brandService.startOnboarding(
+          person,
+          {
+            brandId: brandOnb,
+            versionId,
+            servicePrincipalId: 'sp_brand_test',
+            sourceAssetIds: [],
+            websiteUrls: [],
+            ...over,
+          },
+          tx,
+        ),
+      );
+    const propose = (runId: string, voice = proposal) =>
+      run(tenantA, (tx) =>
+        brandService.proposeVoice(sp, { brandId: brandOnb, runId, voice }, tx, { autonomyMode: 'create' }),
+      );
+    let draftId = '';
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandOnb,
+        tenantId: tenantA,
+        name: 'Kiln',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+      });
+      draftId = (
+        await run(tenantA, (tx) => brandService.guidelines.import(person, { brandId: brandOnb, files }, tx))
+      ).versionId;
+    });
+    afterAll(() => resetOnboardingRunSource());
+
+    it('a brand with nothing published has an empty approved baseline, never its draft', async () => {
+      const baseline = await runInTenant(ctx(tenantA), () =>
+        brandService.resolveBaselineSnapshot(sp, { brandId: brandOnb }),
+      );
+      expect(baseline).toMatchObject({ brandVersionId: 'unpublished', brandVersionNumber: 0 });
+      expect(baseline.document).toEqual(emptyBrandSystemDocument());
+      await expect(
+        runInTenant(ctx(tenantA), () => brandService.resolveBrandSnapshot(sp, { brandId: brandOnb })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('refuses without a run source, website captures, and a draft without guidelines; nothing is started', async () => {
+      await expect(start(draftId)).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'not_available_yet' });
+      registerOnboardingRunSource(source);
+      await expect(start(draftId, { websiteUrls: ['https://kiln.example/'] })).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+      const bare = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(person, { brandId: brandOnb }, tx),
+      );
+      await expect(start(bare.versionId)).rejects.toBeInstanceOf(ValidationFailedError);
+      expect(runs.size).toBe(0);
+    });
+
+    it('starts a run whose brief names the draft, the voice it starts from and the guidelines as untrusted evidence', async () => {
+      const started = await start(draftId);
+      expect(started).toMatchObject({ runId: 'run_1', versionId: draftId });
+      const brief = runs.get('run_1')!.brief;
+      const draft = await versionOf(draftId);
+      expect(brief).toMatchObject({
+        brandVersionId: draftId,
+        baseVoiceHash: hashCanonical(draft.document.voice),
+      });
+      const items = brief['evidence'] as Array<{
+        id: string;
+        sourceKind: string;
+        ref: string;
+        trust: string;
+        text: string;
+      }>;
+      expect(items.map((e) => e.ref)).toEqual([
+        'guidelines:SKILL.md',
+        'guidelines:references/words.md',
+        'guidelines:references/words.md',
+      ]);
+      expect(items.every((e) => e.sourceKind === 'guideline_document' && e.trust === 'untrusted')).toBe(true);
+      expect(items.every((e) => e.text.length <= 20_000)).toBe(true);
+      expect(items[1]!.text + items[2]!.text).toBe(longReference);
+      const audits = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'brand.onboarding.start')));
+      expect(audits.map((a) => a.resourceId)).toContain(draftId);
+    });
+
+    it('the run proposes the voice into that draft only; guidelines and palette are untouched; a second proposal is refused', async () => {
+      const before = await versionOf(draftId);
+      const written = await propose('run_1');
+      expect(written).toMatchObject({ versionId: draftId, version: before.version + 1 });
+      const after = await versionOf(draftId);
+      expect(after.state).toBe('draft');
+      expect(after.document.voice).toEqual(proposal);
+      expect(after.document.guidelines).toEqual(before.document.guidelines);
+      expect(after.document.tokens).toEqual(before.document.tokens);
+      // The voice is no longer the one the run started from: a repeat never overwrites.
+      await expect(propose('run_1', { ...proposal, summary: 'Loud.' })).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+      expect((await versionOf(draftId)).document.voice.summary).toBe('Warm and plain.');
+      const audits = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'brand.version.propose_voice')));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ actorKind: 'service_principal', resourceId: draftId });
+    });
+
+    it("a person's edit made while the run works wins; other runs and unbounded values are refused", async () => {
+      await start(draftId); // run_2 starts from the proposed voice
+      const current = await versionOf(draftId);
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          person,
+          {
+            brandId: brandOnb,
+            versionId: draftId,
+            expectedVersion: current.version,
+            document: {
+              ...current.document,
+              voice: { ...current.document.voice, summary: 'Edited by a person.' },
+            },
+          },
+          tx,
+        ),
+      );
+      await expect(propose('run_2')).rejects.toBeInstanceOf(ValidationFailedError);
+      expect((await versionOf(draftId)).document.voice.summary).toBe('Edited by a person.');
+      runs.set('run_copy', { brandId: brandOnb, taskKind: 'copywriting', brief: runs.get('run_2')!.brief });
+      await expect(propose('run_copy')).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        reason: 'not_an_onboarding_run',
+      });
+      await expect(propose('run_2', { ...proposal, tone: Array(13).fill('x') })).rejects.toThrow();
     });
   });
 });

@@ -30,6 +30,7 @@ import {
   BrandVersionUpdate,
   FactList,
   ObjectiveList,
+  OnboardingStart,
 } from '@oremedia/contracts/brand';
 import {
   isOremediaError,
@@ -748,6 +749,24 @@ export function createMockRouter(backend: MockBackend) {
             versionId: brandDraft.id,
             version: brandDraft.version,
             contentHash: brandDraft.contentHash,
+          };
+        }),
+      }),
+      onboarding: t.router({
+        /** A known principal starts a run on the draft; anything else is refused the way the server refuses it. */
+        start: mutation.input(OnboardingStart).mutation(({ input }) => {
+          if (input.servicePrincipalId !== 'sp_e2e_onboarding')
+            throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
+          if (input.versionId !== brandDraft.id)
+            throw new ValidationFailedError([
+              { path: 'versionId', issue: 'onboarding proposes into a draft only' },
+            ]);
+          return {
+            runId: 'run_e2e_onboarding',
+            state: 'planned',
+            autonomyMode: 'create',
+            workflowId: 'run:run_e2e_onboarding',
+            versionId: brandDraft.id,
           };
         }),
       }),

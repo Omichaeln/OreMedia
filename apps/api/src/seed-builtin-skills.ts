@@ -1,6 +1,7 @@
 /**
  * Pre-deploy seeding entrypoint (Railway `preDeployCommand`, after migrate): registers the Release 1 built-in
- * skills (spec 10.4) as platform skills, then exits. Idempotent by key; a package that already exists is skipped.
+ * skills (spec 10.4) as platform skills, then exits. Idempotent by package hash; a changed package becomes a new draft
+ * version (evaluated and published by people), an unchanged one is skipped.
  */
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
@@ -16,7 +17,10 @@ try {
   configureDatabase({ url });
   const result = await seedBuiltinSkills();
   log.info(
-    { count: result.seeded.length, status: `skipped ${result.skipped.length}` },
+    {
+      count: result.seeded.length,
+      status: `new versions ${result.versioned.length}; skipped ${result.skipped.length}`,
+    },
     'built-in skills seeded',
   );
 } catch (err) {

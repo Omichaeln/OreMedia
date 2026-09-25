@@ -1,6 +1,6 @@
 import { ToolRegistry, type AnyToolDefinition } from '../tool-registry';
 import { assetsSearchEligible } from './assets';
-import { brandGetSnapshot, factsList } from './brand';
+import { brandGetSnapshot, brandProposeVoice, factsList } from './brand';
 import { contentCreateBrief, contentDraftCopy } from './content';
 import { creativeProposeOperations, creativeRequestRender } from './creative';
 import { imagesGenerate } from './images';
@@ -11,6 +11,7 @@ import { reviewRequest, reviewRunBrandReview } from './review';
 /** Spec 12.4 Release 1 tool registry, in the order of the table. No tool has an external effect. */
 export const RELEASE_1_TOOLS: readonly AnyToolDefinition[] = [
   brandGetSnapshot,
+  brandProposeVoice,
   assetsSearchEligible,
   factsList,
   metricsQuery,
@@ -35,6 +36,7 @@ export function createReleaseOneRegistry(): ToolRegistry {
 
 export {
   brandGetSnapshot,
+  brandProposeVoice,
   factsList,
   assetsSearchEligible,
   creativeProposeOperations,

@@ -1,3 +1,6 @@
+import { cpSync, appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
@@ -27,7 +30,7 @@ import {
 } from '@oremedia/db/schema/skills';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
-import { BUILTIN_SKILL_KEYS, loadBuiltinSkills, seedBuiltinSkills } from './builtin';
+import { BUILTIN_SKILL_KEYS, builtinSkillsDir, loadBuiltinSkills, seedBuiltinSkills } from './builtin';
 import { loadMaliciousPackages } from './package-fixtures';
 import { manifestJson, toPackage } from './package-format';
 import {
@@ -296,6 +299,7 @@ describe('skills module (spec 10) against MySQL 8', () => {
       expect(first.skipped).toEqual([]);
       const again = await seedBuiltinSkills();
       expect(again.seeded).toEqual([]);
+      expect(again.versioned).toEqual([]);
       expect(again.skipped).toEqual([...BUILTIN_SKILL_KEYS]);
       const rows = await tdb.db
         .select()
@@ -324,6 +328,41 @@ describe('skills module (spec 10) against MySQL 8', () => {
       expect(suites.length).toBe(8);
       copywritingBuiltinId = rows.find((r) => r.key === 'brand-copywriting')!.id;
       copywritingBuiltinV1 = versions.find((v) => v.skillId === copywritingBuiltinId)!.id;
+    });
+
+    it('a changed built-in package becomes its next draft version with a suite; v1 is never rewritten', async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'builtin-skills-'));
+      try {
+        cpSync(builtinSkillsDir(), dir, { recursive: true });
+        appendFileSync(path.join(dir, 'brand-onboarding', 'SKILL.md'), '\n<!-- revised procedure -->\n');
+        const upgraded = await seedBuiltinSkills(undefined, { dir });
+        expect(upgraded).toEqual({
+          seeded: [],
+          versioned: ['brand-onboarding'],
+          skipped: BUILTIN_SKILL_KEYS.filter((k) => k !== 'brand-onboarding'),
+        });
+        const [skill] = await tdb.db
+          .select()
+          .from(skills)
+          .where(and(eq(skills.key, 'brand-onboarding'), isNull(skills.tenantId)));
+        const versions = await tdb.db
+          .select()
+          .from(skillVersions)
+          .where(eq(skillVersions.skillId, skill!.id));
+        expect(versions.map((v) => [v.number, v.state]).sort()).toEqual([
+          [1, 'draft'],
+          [2, 'draft'],
+        ]);
+        const [v1, v2] = [...versions].sort((a, b) => a.number - b.number);
+        expect(v1!.packageHash).not.toBe(v2!.packageHash);
+        expect(
+          await tdb.db.select().from(evaluationSuites).where(eq(evaluationSuites.skillVersionId, v2!.id)),
+        ).toHaveLength(1);
+        // Seeding the same changed package again adds nothing.
+        expect((await seedBuiltinSkills(undefined, { dir })).versioned).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('platform skills are readable by every tenant', async () => {

@@ -79,21 +79,48 @@ const platformRepo = new PlatformSkillRepository();
 
 /**
  * Registers the built-ins as platform skills with version 1 in `draft` and their evaluation cases as a suite.
- * Publishing needs a passing evaluation (spec 10.2), so nothing is auto-published. Idempotent by key: a skill that
- * already exists is skipped, never rewritten (a changed package becomes a new version through the service).
+ * Publishing needs a passing evaluation (spec 10.2), so nothing is auto-published. Idempotent by package hash: an
+ * unchanged package is skipped; a changed package of an existing skill becomes its next version, in `draft` with its
+ * own suite. Existing versions are never rewritten, and published ones keep serving until a new one is published.
  */
 export async function seedBuiltinSkills(
   tx?: Tx,
   opts: { correlationId?: string; dir?: string } = {},
-): Promise<{ seeded: string[]; skipped: string[] }> {
+): Promise<{ seeded: string[]; versioned: string[]; skipped: string[] }> {
   const builtins = await loadBuiltinSkills(opts.dir);
   return runAsPlatform('seed-builtin-skills', opts.correlationId ?? 'seed-builtin-skills', () =>
     withTransaction(tx, async (t) => {
       const seeded: string[] = [];
+      const versioned: string[] = [];
       const skipped: string[] = [];
       for (const b of builtins) {
-        if (await platformRepo.findByKey(b.key, t)) {
-          skipped.push(b.key);
+        const existing = await platformRepo.findByKey(b.key, t);
+        if (existing) {
+          if (await platformRepo.hasVersionWithHash(existing.id, b.packageHash, t)) {
+            skipped.push(b.key);
+            continue;
+          }
+          const versionId = newId('skillVersion');
+          await platformRepo.lockSkill(existing.id, t); // one seeder numbers a skill's versions at a time
+          await platformRepo.createVersion(
+            {
+              id: versionId,
+              skillId: existing.id,
+              number: await platformRepo.nextVersionNumber(existing.id, t),
+              manifest: b.manifest,
+              instructions: b.instructions,
+              references: b.references,
+              packageHash: b.packageHash,
+              state: 'draft',
+              rolloutPercent: 0,
+            },
+            t,
+          );
+          await platformRepo.createSuite(
+            { id: newId('evaluationSuite'), skillVersionId: versionId, cases: b.cases },
+            t,
+          );
+          versioned.push(b.key);
           continue;
         }
         const skillId = newId('skill');
@@ -129,7 +156,7 @@ export async function seedBuiltinSkills(
         );
         seeded.push(b.key);
       }
-      return { seeded, skipped };
+      return { seeded, versioned, skipped };
     }),
   );
 }
