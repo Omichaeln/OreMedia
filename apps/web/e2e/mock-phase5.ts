@@ -43,12 +43,15 @@ export const P5 = {
   brandId: 'brd_e2e',
   channels: { ok: 'cc_linkedin', expired: 'cc_instagram', two: 'cc_x' },
   variants: { ok: 'cv_ok', invalid: 'cv_invalid', onExpired: 'cv_expired' },
-  revisions: { one: 'cr_1', two: 'cr_2', three: 'cr_3', changes: 'cr_4' },
+  revisions: { one: 'cr_1', two: 'cr_2', three: 'cr_3', changes: 'cr_4', measured: 'cr_5' },
   publications: {
     held: 'pub_held',
     unknown: 'pub_unknown',
     dispatching: 'pub_dispatching',
     published: 'pub_published',
+    /** Earlier publications that measurement has numbers for (the Performance screen's period). */
+    publishedEarlier: 'pub_published_earlier',
+    publishedOlder: 'pub_published_older',
     failed: 'pub_failed',
   },
   requests: {
@@ -583,6 +586,7 @@ export class Phase5Backend {
     this.revision(P5.revisions.two, 'pkg_2', 'approved', 'Meet the team behind the workshop.');
     this.revision(P5.revisions.three, 'pkg_3', 'approved', 'New arrivals in the showroom.');
     this.revision(P5.revisions.changes, 'pkg_4', 'changes_requested', 'Workshop dates for October.');
+    this.revision(P5.revisions.measured, 'pkg_5', 'approved', 'Behind the scenes at the workshop.');
     this.variant(P5.variants.ok, P5.revisions.one, P5.channels.ok, { ok: true, issues: [] });
     this.variant(P5.variants.invalid, P5.revisions.one, P5.channels.two, {
       ok: false,
@@ -665,6 +669,22 @@ export class Phase5Backend {
           },
         ],
       },
+    );
+    this.publicationRow(
+      P5.publications.publishedEarlier,
+      P5.revisions.measured,
+      P5.channels.ok,
+      daysFromNow(-3),
+      'published',
+      { remotePostId: 'li_881', remoteUrl: 'https://linkedin.example/posts/881' },
+    );
+    this.publicationRow(
+      P5.publications.publishedOlder,
+      P5.revisions.measured,
+      P5.channels.two,
+      daysFromNow(-12),
+      'published',
+      { remotePostId: 'x_77', remoteUrl: 'https://x.example/status/77' },
     );
     this.publicationRow(
       P5.publications.failed,

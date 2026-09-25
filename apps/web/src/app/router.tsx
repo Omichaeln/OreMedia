@@ -15,6 +15,7 @@ import { CalendarRoute } from './c/$company/b/$brand/calendar/route';
 import { ReviewInboxRoute } from './c/$company/b/$brand/review/route';
 import { AgentRunsRoute } from './c/$company/b/$brand/agents/route';
 import { IntelligenceRoute } from './c/$company/b/$brand/intelligence/route';
+import { PerformanceRoute } from './c/$company/b/$brand/performance/route';
 import { ExperimentsRoute } from './c/$company/b/$brand/experiments/route';
 import { CampaignsRoute } from './c/$company/b/$brand/campaigns/route';
 import { SettingsRoute } from './c/$company/b/$brand/settings/route';
@@ -114,6 +115,19 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
                   queryClient.ensureQueryData(
                     trpc.review.inbox.list.queryOptions(
                       { brandId: param(args, 'brand'), page: { limit: 100 } },
+                      { trpc: { context: { tenantId: param(args, 'company') } } },
+                    ),
+                  ),
+                ),
+            },
+            {
+              path: 'performance',
+              Component: PerformanceRoute,
+              loader: (args) =>
+                prefetch(
+                  queryClient.ensureQueryData(
+                    trpc.publishing.channels.list.queryOptions(
+                      { brandId: param(args, 'brand') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
                   ),

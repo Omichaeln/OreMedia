@@ -12,6 +12,7 @@ import {
   outcomeUnknownReasonText,
   publicationChip,
   rangeFor,
+  trailingRange,
   shiftAnchor,
   weekDays,
   PUBLICATION_CHIP,
@@ -135,6 +136,13 @@ describe('calendar grids', () => {
     const r = rangeFor('week', '2026-09-24', 'UTC');
     expect(r.from).toBe('2026-09-21T00:00:00.000Z');
     expect(r.to).toBe('2026-09-27T23:59:59.999Z');
+  });
+  it('a trailing period ends with today and starts days - 1 local midnights back', () => {
+    expect(trailingRange(7, '2026-09-25', 'UTC')).toEqual({
+      from: '2026-09-19T00:00:00.000Z',
+      to: '2026-09-25T23:59:59.999Z',
+    });
+    expect(trailingRange(1, '2026-09-25', 'Europe/Berlin').from).toBe('2026-09-24T22:00:00.000Z');
   });
 });
 

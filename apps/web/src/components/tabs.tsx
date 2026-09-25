@@ -41,17 +41,22 @@ export function Tab({ value, children }: { value: string; children: React.ReactN
 export function TabPanel({
   value,
   className,
+  keepMounted = false,
   children,
 }: {
   value: string;
   className?: string;
+  /** Keeps the panel (and any unsent input in it) mounted while another tab is shown; it is hidden, not removed. */
+  keepMounted?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <RadixTabs.Content
       value={value}
+      forceMount={keepMounted || undefined}
       className={cn(
         'min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        keepMounted && 'data-[state=inactive]:hidden',
         className,
       )}
     >

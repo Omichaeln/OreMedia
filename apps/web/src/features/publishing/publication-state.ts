@@ -258,6 +258,22 @@ export function rangeFor(
   };
 }
 
+/**
+ * The last `days` days up to and including `todayKey`, as instants in the brand's time zone (the Performance
+ * period): from local midnight `days - 1` days back to the end of today.
+ */
+export function trailingRange(
+  days: number,
+  todayKey: string,
+  timeZone: string,
+): { from: string; to: string } {
+  const firstKey = keyOfUtc(addDays(parseKey(todayKey), -(days - 1)));
+  return {
+    from: localMidnight(firstKey, timeZone).toISOString(),
+    to: new Date(localMidnight(todayKey, timeZone).getTime() + 86_400_000 - 1).toISOString(),
+  };
+}
+
 /** The instant at which the calendar day `key` starts in `timeZone`. */
 export function localMidnight(key: string, timeZone: string): Date {
   const utcMidnight = parseKey(key);

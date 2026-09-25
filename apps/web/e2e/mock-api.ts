@@ -643,6 +643,7 @@ export function createMockRouter(backend: MockBackend) {
     review: p5.review,
     intelligence: p6.intelligence,
     experiments: p6.experiments,
+    measurement: p6.measurement,
     access: t.router({
       session: authedOnly.query(() => ({
         userId: 'usr_e2e',

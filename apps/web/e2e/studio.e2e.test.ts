@@ -282,6 +282,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   it('an agent proposal renders as an overlay diff and Accept commits it as an agent revision', async () => {
     const documentId = documentIdFromUrl();
     const n = await headNumber(documentId);
+    await page.getByRole('tab', { name: /^Agent/ }).click();
     await page.getByTestId('simulate-proposal').click();
     await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
     expect(await page.getByTestId('proposal-overlay').count()).toBe(1);
@@ -290,6 +291,11 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     await expect.poll(() => headNumber(documentId), { timeout: 15_000 }).toBe(n + 1);
     expect(await headText(documentId, ids.headline)).toBe('Before undo — proposed');
     await expect.poll(() => page.getByTestId('proposal').count()).toBe(0);
+    await page.getByRole('tab', { name: 'History' }).click();
+    const latest = page.getByTestId('history').getByRole('listitem').first();
+    await expect.poll(() => latest.textContent(), { timeout: 15_000 }).toContain(`Revision ${n + 1}`);
+    expect(await latest.textContent()).toContain('Current');
+    await page.getByRole('tab', { name: /^Agent/ }).click();
   }, 45_000);
 
   it('arrow keys nudge the selected element by 1px (10px with Shift) through the keyboard path', async () => {
@@ -345,6 +351,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     'a render failure is reported with the worker error and a retry',
     async () => {
       backend.failNextRender = true;
+      await page.getByRole('tab', { name: 'History' }).click();
       await page.getByRole('button', { name: 'Render this page' }).click();
       await expect.poll(() => page.getByText('Render failed').count(), { timeout: 15_000 }).toBe(1);
       expect(await page.getByTestId('render').textContent()).toContain('av_font');
@@ -354,6 +361,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
 
   it('comments anchor to elements and go outdated when the element changes', async () => {
     await page.getByTestId('layers').getByRole('option', { name: /^Body/ }).click();
+    await page.getByRole('tab', { name: /^Comments/ }).click();
     await page.locator('#comment-body').fill('Check this copy');
     await page.getByRole('button', { name: 'Add comment' }).click();
     await expect.poll(() => page.getByTestId('comments').textContent()).toContain('Check this copy');

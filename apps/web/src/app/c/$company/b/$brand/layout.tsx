@@ -15,6 +15,7 @@ const WORK: NavItem[] = [
   { segment: 'review', label: 'Review' },
   { segment: 'calendar', label: 'Calendar' },
   { segment: 'campaigns', label: 'Campaigns' },
+  { segment: 'performance', label: 'Performance' },
   { segment: 'intelligence', label: 'Intelligence' },
   { segment: 'experiments', label: 'Experiments' },
   { segment: 'agents', label: 'Agents' },
