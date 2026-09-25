@@ -22,6 +22,7 @@
     "check:boundaries": "eslint . --max-warnings=0",
     "check:secrets": "tsx tooling/scripts/check-secrets.ts",
     "check:openapi": "tsx tooling/scripts/check-openapi-diff.ts",
+    "certify": "tsx tooling/scripts/certify/certify.ts",
     "db:generate": "pnpm --filter @oremedia/db db:generate",
     "db:migrate": "pnpm --filter @oremedia/db db:migrate",
     "progress:build": "node docs/progress/build.mjs && prettier --write docs/progress/progress.json docs/progress/index.html",
@@ -30,9 +31,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@oremedia/api": "workspace:*",
+    "@oremedia/contracts": "workspace:*",
+    "@oremedia/db": "workspace:*",
+    "@oremedia/providers": "workspace:*",
     "@types/node": "^22.19.0",
     "@typescript-eslint/parser": "^8.70.1",
     "@vitest/coverage-v8": "^3.2.4",
+    "drizzle-orm": "^0.45.3",
     "eslint": "^9.39.0",
     "eslint-import-resolver-typescript": "^4",
     "eslint-plugin-boundaries": "^7.2.0",
@@ -43,10 +49,6 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^3.2.4",
-    "@oremedia/db": "workspace:*",
-    "drizzle-orm": "^0.45.3",
-    "@oremedia/api": "workspace:*",
-    "@oremedia/contracts": "workspace:*",
     "zod": "^3.25.76"
   },
   "type": "module"
