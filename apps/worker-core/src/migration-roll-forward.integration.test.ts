@@ -9,6 +9,7 @@ import { modelRoutingPolicies, providerJobs } from '@oremedia/db/schema/agents';
 import { usageLedger } from '@oremedia/db/schema/billing';
 import { featureFlags } from '@oremedia/db/schema/operations';
 import { authEvents, externalIdentities } from '@oremedia/db/schema/access';
+import { generatedUploads } from '@oremedia/db/schema/assets';
 import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
@@ -29,8 +30,8 @@ const NEW_TABLES = [providerJobs, modelRoutingPolicies, renderPreviews, previewE
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
-/** Added by later migrations (0003: apps/api/src/migration-0003-roll-forward.integration.test.ts covers them). */
-const LATER_TABLES: MySqlTable[] = [externalIdentities, authEvents];
+/** Added by later migrations (0003 and 0004 have their own roll-forward tests). */
+const LATER_TABLES: MySqlTable[] = [externalIdentities, authEvents, generatedUploads];
 
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
