@@ -21,6 +21,7 @@ import {
 /** Spec 12.4 Release 1 tool table: name → effect, action. */
 const TABLE: Record<string, [effect: string, action: string]> = {
   'brand.getSnapshot': ['read', 'brand.read'],
+  'brand.proposeVoice': ['draft', 'brand.edit_standards'],
   'assets.searchEligible': ['read', 'asset.read'],
   'facts.list': ['read', 'brand.read'],
   'metrics.query': ['read', 'insight.read'],

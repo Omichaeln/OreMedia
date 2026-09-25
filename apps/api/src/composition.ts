@@ -18,6 +18,7 @@ import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerOnboardingRunSource,
   registerEligibleTemplateSource,
 } from '@oremedia/module-brand';
 import {
@@ -73,7 +74,7 @@ import {
   registerRoutingPolicySource,
   registerSkillResolver,
 } from '@oremedia/ai';
-import { agentsService } from '@oremedia/module-agents';
+import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
 
 /** Wires cross-module hooks so modules never import each other's tables. Called by main and by tests. */
 export function composeModules(): void {
@@ -250,6 +251,8 @@ export function composeModules(): void {
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
+  // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
+  registerOnboardingRunSource(onboardingRunSource);
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }

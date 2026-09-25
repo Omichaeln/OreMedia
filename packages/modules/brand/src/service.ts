@@ -10,6 +10,7 @@ import {
   BrandVersionSubmit,
   BrandVersionUpdate,
   BrandGuidelinesImport,
+  BrandVoiceProposal,
   DesignTokenSetV1,
   EvidenceRef,
   FactApprove,
@@ -27,14 +28,17 @@ import {
   emptyBrandSystemDocument,
   type BrandSnapshot,
 } from '@oremedia/contracts/brand';
+import type { EvidenceItem } from '@oremedia/contracts/agents';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import {
+  ConflictError,
   NotFoundError,
   PolicyDeniedError,
   ValidationFailedError,
   type ErrorDetail,
 } from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
+import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, runAsPlatform, type Tx } from '@oremedia/db';
 import { buildBrandSnapshot } from '@oremedia/domain/brand-snapshot';
 import { hashCanonical } from '@oremedia/domain/hash';
@@ -103,6 +107,64 @@ export const registerBrandAssetKindSource = (fn: BrandAssetKindSource): void => 
 export const resetBrandAssetKindSource = (): void => {
   brandAssetKindSource = noBrandAssets;
 };
+
+/**
+ * Spec 8.2 onboarding runs are agent runs, which are the agents module's rows, so it registers the source
+ * (composition wires `agentsService.runs.start` / `runs.get`). `get` returns the run's brief as the server wrote it.
+ * Unlike the other hooks there is no harmless default (a missing template or asset list is an empty answer; a
+ * missing run source is not), so until registered onboarding refuses with not_available_yet and nothing is written.
+ */
+export interface OnboardingRunSource {
+  start(
+    actor: ResolvedActor,
+    input: { brandId: string; servicePrincipalId: string; brief: Record<string, unknown> },
+    tx: Tx,
+  ): Promise<{ runId: string; state: string; autonomyMode: string; workflowId: string }>;
+  get(
+    actor: ResolvedActor,
+    runId: string,
+    tx: Tx,
+  ): Promise<{ brandId: string; taskKind: string; brief: Record<string, unknown> }>;
+}
+let onboardingRunSource: OnboardingRunSource | null = null;
+export const registerOnboardingRunSource = (source: OnboardingRunSource): void => {
+  onboardingRunSource = source;
+};
+export const resetOnboardingRunSource = (): void => {
+  onboardingRunSource = null;
+};
+const onboardingRuns = (): OnboardingRunSource => {
+  if (!onboardingRunSource)
+    throw new PolicyDeniedError(
+      'not_available_yet',
+      'Brand onboarding runs are not available in this service',
+    );
+  return onboardingRunSource;
+};
+
+/** The task kind of onboarding runs and the brief keys the brand module writes and later trusts. */
+const ONBOARDING_TASK_KIND = 'brand_onboarding';
+/** Evidence items are capped at 20000 characters (contracts/agents EvidenceItem.text). */
+const EVIDENCE_CHUNK = 20_000;
+
+/**
+ * The imported guidelines as untrusted evidence, one item per document, long documents split into chunks. The
+ * guidelines are capped at 64 KB and 40 documents, so this always stays under the 50-item brief limit.
+ */
+export function guidelinesEvidence(document: BrandSystemDocumentV1): EvidenceItem[] {
+  const items: EvidenceItem[] = [];
+  for (const [i, d] of (document.guidelines?.documents ?? []).entries()) {
+    for (let at = 0, part = 0; at < d.content.length; at += EVIDENCE_CHUNK, part++)
+      items.push({
+        id: `guidelines-${i + 1}-${part + 1}`,
+        sourceKind: 'guideline_document',
+        ref: `guidelines:${d.path}`,
+        text: d.content.slice(at, at + EVIDENCE_CHUNK),
+        trust: 'untrusted',
+      });
+  }
+  return items;
+}
 
 const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -242,6 +304,46 @@ function transition<S extends string, E extends string>(
       );
     throw err;
   }
+}
+
+/** A snapshot of a brand with nothing published: the empty document, never a draft. */
+const UNPUBLISHED_VERSION_ID = 'unpublished';
+
+/** The hashed snapshot of one version of the brand, with the facts, objectives and policy effective now. */
+async function snapshotOf(
+  brand: BrandRow,
+  version: { id: string; number: number; document: unknown },
+  tx?: Tx,
+): Promise<BrandSnapshot> {
+  const now = new Date();
+  const facts = await factsRepo.listEffective(brand.id, now, tx);
+  const objectives = await objectivesRepo.listActive(brand.id, now, tx);
+  const active = await policiesRepo.findActive(brand.id, tx);
+  return buildBrandSnapshot({
+    brandId: brand.id,
+    brandVersionId: version.id,
+    brandVersionNumber: version.number,
+    document: BrandSystemDocumentV1.parse(version.document),
+    facts: facts.map((f) => ({
+      id: f.id,
+      kind: f.kind,
+      statement: f.statement,
+      validFrom: iso(f.validFrom),
+      validUntil: iso(f.validUntil),
+    })),
+    objectives: objectives.map((o) => ({
+      id: o.id,
+      name: o.name,
+      primaryMetricKey: o.primaryMetricKey,
+      guardrailMetricKeys: o.guardrailMetricKeys,
+    })),
+    policyVersionId: active?.id ?? null,
+    policy: active ? PolicyDocumentV1.parse(active.document) : defaultPolicyDocument(),
+    // Approved template versions of the brand, supplied by the creative module through the registered source.
+    eligibleTemplateVersionIds: await eligibleTemplateSource(brand.id, tx),
+    timezone: brand.timezone,
+    defaultLocale: brand.defaultLocale,
+  });
 }
 
 /** Brand-owned rows are loaded through the scoped repository and bound to the brand in the input: a foreign or mismatched id is NOT_FOUND. */
@@ -841,35 +943,27 @@ export const brandService = {
       ? await loadVersion(brand.id, parsed.versionId, tx)
       : await versionsRepo.findPublished(brand.id, tx);
     if (!version) throw new NotFoundError('PublishedBrandVersion', brand.id);
-    const now = new Date();
-    const facts = await factsRepo.listEffective(brand.id, now, tx);
-    const objectives = await objectivesRepo.listActive(brand.id, now, tx);
-    const active = await policiesRepo.findActive(brand.id, tx);
-    return buildBrandSnapshot({
-      brandId: brand.id,
-      brandVersionId: version.id,
-      brandVersionNumber: version.number,
-      document: BrandSystemDocumentV1.parse(version.document),
-      facts: facts.map((f) => ({
-        id: f.id,
-        kind: f.kind,
-        statement: f.statement,
-        validFrom: iso(f.validFrom),
-        validUntil: iso(f.validUntil),
-      })),
-      objectives: objectives.map((o) => ({
-        id: o.id,
-        name: o.name,
-        primaryMetricKey: o.primaryMetricKey,
-        guardrailMetricKeys: o.guardrailMetricKeys,
-      })),
-      policyVersionId: active?.id ?? null,
-      policy: active ? PolicyDocumentV1.parse(active.document) : defaultPolicyDocument(),
-      // Approved template versions of the brand, supplied by the creative module through the registered source.
-      eligibleTemplateVersionIds: await eligibleTemplateSource(brand.id, tx),
-      timezone: brand.timezone,
-      defaultLocale: brand.defaultLocale,
-    });
+    return snapshotOf(brand, version, tx);
+  },
+
+  /**
+   * The approved baseline an onboarding run starts from: the published snapshot, or, for a brand with nothing
+   * published yet, the empty document as version 0 (`unpublished`). Never a draft: drafts are not approved
+   * constraints, and what the run reads from a draft reaches it as untrusted evidence.
+   */
+  async resolveBaselineSnapshot(
+    actor: ResolvedActor,
+    input: { brandId: string },
+    tx?: Tx,
+  ): Promise<BrandSnapshot> {
+    const brand = await brandsRepo.getById(input.brandId, tx);
+    await policy.assert(actor, 'brand.read', brandResource(brand), {}, tx);
+    const published = await versionsRepo.findPublished(brand.id, tx);
+    return snapshotOf(
+      brand,
+      published ?? { id: UNPUBLISHED_VERSION_ID, number: 0, document: emptyBrandSystemDocument() },
+      tx,
+    );
   },
 
   guidelines: {
@@ -921,20 +1015,118 @@ export const brandService = {
   },
 
   /**
-   * Spec 8.2: onboarding is an agent skill run that proposes a draft version and proposed facts from guidelines,
-   * website captures and logos (Phase 4 agent runtime). Until then this is a deliberate stub: it validates the
-   * input and refuses with a clear reason. It never fakes a proposal and never writes.
+   * Spec 8.2: onboarding starts a brand_onboarding agent run over the guidelines imported into a draft. The run
+   * reads them as untrusted evidence and proposes the draft's voice and vocabulary (brand.proposeVoice); it never
+   * publishes. The brief records the target draft and the voice it started from, so the proposal lands only on that
+   * draft and only while nobody has edited its voice since. Website captures are not available yet and are refused.
    */
-  async startOnboarding(
-    _actor: ResolvedActor,
-    input: z.infer<typeof OnboardingStart>,
-    _tx: Tx,
-  ): Promise<never> {
-    OnboardingStart.parse(input);
-    throw new PolicyDeniedError(
-      'not_available_yet',
-      'Brand onboarding runs as an agent skill and is not available yet',
+  async startOnboarding(actor: ResolvedActor, input: z.infer<typeof OnboardingStart>, tx: Tx) {
+    const parsed = OnboardingStart.parse(input);
+    if (parsed.websiteUrls.length)
+      throw new ValidationFailedError([
+        {
+          path: 'websiteUrls',
+          issue: 'website captures are not available yet; import the guidelines instead',
+        },
+      ]);
+    const brand = await brandsRepo.getById(parsed.brandId, tx);
+    const v = await loadVersion(brand.id, parsed.versionId, tx);
+    await policy.assert(
+      actor,
+      'brand.edit_standards',
+      { type: 'brand_version', tenantId: brand.tenantId, brandId: brand.id, id: v.id, state: v.state },
+      {},
+      tx,
     );
+    if (v.state !== 'draft')
+      throw new ValidationFailedError([
+        { path: 'versionId', issue: 'onboarding proposes into a draft only' },
+      ]);
+    const document = BrandSystemDocumentV1.parse(v.document);
+    const evidence = guidelinesEvidence(document);
+    if (!evidence.length)
+      throw new ValidationFailedError([
+        { path: 'versionId', issue: 'the draft has no imported guidelines to read' },
+      ]);
+    const started = await onboardingRuns().start(
+      actor,
+      {
+        brandId: brand.id,
+        servicePrincipalId: parsed.servicePrincipalId,
+        brief: {
+          brandVersionId: v.id,
+          baseVoiceHash: hashCanonical(document.voice),
+          sourceAssetIds: parsed.sourceAssetIds,
+          websiteUrls: [],
+          ...(parsed.notes ? { notes: parsed.notes } : {}),
+          evidence,
+        },
+      },
+      tx,
+    );
+    await audit.record(
+      actorRef(actor),
+      'brand.onboarding.start',
+      { type: 'brand_version', id: v.id },
+      'allowed',
+      tx,
+      { brandId: brand.id, runId: started.runId, count: evidence.length },
+    );
+    return { ...started, versionId: v.id };
+  },
+
+  /**
+   * The onboarding run's proposal (tool brand.proposeVoice): replaces the voice of the draft named in the run's
+   * brief, as the run's principal, through the same policy as any draft edit. Refused when the run is not an
+   * onboarding run of this brand, when the draft left `draft`, or when its voice changed since the run started
+   * (a person's edit is never overwritten). Publishing stays a person's decision (propose_only). `autonomyMode` is
+   * the run's mode, as for every agent write.
+   */
+  async proposeVoice(
+    actor: ResolvedActor,
+    input: { brandId: string; runId: string; voice: BrandVoiceProposal },
+    tx: Tx,
+    opts: { autonomyMode?: AutonomyMode } = {},
+  ) {
+    const voice = BrandVoiceProposal.parse(input.voice);
+    const run = await onboardingRuns().get(actor, input.runId, tx);
+    if (run.brandId !== input.brandId || run.taskKind !== ONBOARDING_TASK_KIND)
+      throw new PolicyDeniedError('not_an_onboarding_run', 'Only a brand onboarding run proposes a voice');
+    const versionId = typeof run.brief['brandVersionId'] === 'string' ? run.brief['brandVersionId'] : null;
+    const baseVoiceHash = typeof run.brief['baseVoiceHash'] === 'string' ? run.brief['baseVoiceHash'] : null;
+    if (!versionId || !baseVoiceHash)
+      throw new PolicyDeniedError('not_an_onboarding_run', 'The run names no draft to propose into');
+    const brand = await brandsRepo.getById(input.brandId, tx);
+    const v = await loadVersion(brand.id, versionId, tx);
+    await policy.assert(
+      actor,
+      'brand.edit_standards',
+      { type: 'brand_version', tenantId: brand.tenantId, brandId: brand.id, id: v.id, state: v.state },
+      opts,
+      tx,
+    );
+    if (v.state !== 'draft')
+      throw new ValidationFailedError([{ path: 'voice', issue: 'the draft is no longer a draft' }]);
+    const current = BrandSystemDocumentV1.parse(v.document);
+    // A person changed the voice after the run started: their edit wins (CONFLICT, like any stale edit).
+    if (hashCanonical(current.voice) !== baseVoiceHash)
+      throw new ConflictError('BrandVersion', v.id, v.version);
+    const document = BrandSystemDocumentV1.parse({ ...current, voice });
+    const contentHash = hashCanonical(document);
+    await versionsRepo.update(v.id, v.version, { document, contentHash }, tx);
+    await audit.record(
+      actorRef(actor),
+      'brand.version.propose_voice',
+      { type: 'brand_version', id: v.id },
+      'allowed',
+      tx,
+      {
+        brandId: brand.id,
+        runId: input.runId,
+        count: voice.preferredTerms.length + voice.prohibitedPhrases.length,
+      },
+    );
+    return { versionId: v.id, version: v.version + 1, contentHash };
   },
 
   /**

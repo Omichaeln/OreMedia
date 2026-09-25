@@ -1,11 +1,15 @@
 export {
   brandService,
+  guidelinesEvidence,
   registerBrandAssetKindSource,
   registerEligibleTemplateSource,
+  registerOnboardingRunSource,
   resetBrandAssetKindSource,
   resetEligibleTemplateSource,
+  resetOnboardingRunSource,
   type BrandAssetKindSource,
   type EligibleTemplateSource,
+  type OnboardingRunSource,
 } from './service';
 export {
   BrandGuidelineAuthorRepository,

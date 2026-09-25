@@ -21,6 +21,11 @@ const RUN_BRAND_ONLY = 'takes no resource ids: it reads or writes the run’s ow
 
 export const AGENT_TOOL_INPUTS: Record<string, AgentToolFixture> = {
   'brand.getSnapshot': { buildArguments: null, reason: RUN_BRAND_ONLY },
+  'brand.proposeVoice': {
+    buildArguments: null,
+    reason:
+      'takes no resource ids: the target draft comes from the run’s server-written brief, and the run’s brand scopes it',
+  },
   'assets.searchEligible': { buildArguments: null, reason: RUN_BRAND_ONLY },
   'facts.list': { buildArguments: null, reason: RUN_BRAND_ONLY },
   'voice.clusters': { buildArguments: null, reason: RUN_BRAND_ONLY },

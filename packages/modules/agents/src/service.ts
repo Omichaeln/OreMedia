@@ -32,7 +32,7 @@ import {
 } from '@oremedia/ai';
 import { policy, ServicePrincipalRepository } from '@oremedia/module-access';
 import { budgets, entitlements } from '@oremedia/module-billing';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, type OnboardingRunSource } from '@oremedia/module-brand';
 import { audit, killSwitch, outbox } from '@oremedia/module-operations';
 import { runWorkflowId } from './outbox-routes';
 import {
@@ -109,6 +109,95 @@ const toRunDto = (r: RunRow) => ({
   version: r.version,
 });
 
+/** Task kinds whose runs only their owning command starts (see runs.start). */
+const COMMAND_ONLY_TASK_KINDS: ReadonlySet<string> = new Set(['brand_onboarding']);
+
+/** Starts a run of any task kind: policy, kill switch, entitlement, principal, autonomy, routing, row, audit, outbox. */
+async function startRun(
+  actor: ResolvedActor,
+  input: z.infer<typeof RunStart>,
+  tx: Tx,
+  opts: { autonomyMode?: AutonomyMode } = {},
+) {
+  const parsed = RunStart.parse(input);
+  const taskKind = TaskKind.safeParse(parsed.taskKind);
+  if (!taskKind.success)
+    throw new ValidationFailedError([{ path: 'taskKind', issue: `unknown task kind ${parsed.taskKind}` }]);
+  const { tenantId, correlationId } = requireTenant();
+  await brandService.assertExist([parsed.brandId], tx); // NOT_FOUND for a foreign brand
+  // A service principal that starts runs on a schedule (the brand analyst) does so under its own ceiling.
+  await policy.assert(
+    actor,
+    'agent.start_run',
+    { type: 'brand', tenantId, brandId: parsed.brandId, id: parsed.brandId },
+    opts,
+    tx,
+  );
+  if (await killSwitch.isOn('agent_starts', parsed.brandId, tx))
+    throw new PolicyDeniedError('kill_switch_engaged', 'Agent starts are paused for this brand');
+  await entitlements.assert(tenantId, 'generation_budget_micros_month', tx);
+  const principal = await principalsRepo.getById(parsed.servicePrincipalId, tx); // NOT_FOUND for a foreign principal
+  if (principal.status !== 'active')
+    throw new ValidationFailedError([{ path: 'servicePrincipalId', issue: 'revoked' }]);
+  const [tenantPolicy, ent] = await Promise.all([
+    tenantPolicyFor(tenantId, correlationId, tx),
+    entitlements.resolve(tenantId, tx),
+  ]);
+  const autonomyMode = effectiveAutonomy(
+    parsed.requestedAutonomy,
+    principal.maxAutonomy,
+    tenantPolicy.maxAutonomy,
+    entitlementAutonomy(ent),
+  );
+  const cfg = currentModelConfig();
+  await assertRoutingAllowed(tenantId, cfg.provider, cfg.model);
+  const id = newId('agentRun');
+  const workflowId = runWorkflowId(id);
+  await runsRepo.create(
+    {
+      id,
+      brandId: parsed.brandId,
+      initiatorKind: actor.kind === 'user' ? 'user' : 'system',
+      initiatorId: actor.id,
+      servicePrincipalId: principal.id,
+      autonomyMode,
+      taskKind: taskKind.data,
+      brief: parsed.brief,
+      contextSnapshotHash: null,
+      skillVersionIds: [],
+      modelConfig: { provider: cfg.provider, model: cfg.model },
+      state: 'planned',
+      budgetReservationId: null,
+      costMicros: 0,
+      deadlineAt: new Date(Date.now() + INITIAL_DEADLINE_SECONDS * 1000),
+      workflowId,
+      correlationId,
+    },
+    tx,
+  );
+  await audit.record(actorRef(actor), 'agent.run.request', { type: 'agent_run', id }, 'allowed', tx, {
+    brandId: parsed.brandId,
+    runId: id,
+    toState: 'planned',
+  });
+  await outbox.add(
+    'agent.run_requested',
+    { type: 'agent_run', id, version: 0 },
+    {
+      runId: id,
+      brandId: parsed.brandId,
+      servicePrincipalId: principal.id,
+      initiatorKind: actor.kind,
+      initiatorId: actor.id,
+      taskKind: taskKind.data,
+      autonomyMode,
+    },
+    tx,
+    { brandId: parsed.brandId },
+  );
+  return { runId: id, state: 'planned' as const, autonomyMode, workflowId, version: 0 };
+}
+
 /**
  * Spec 7.5 agents router commands. A run is a brand-owned row (NOT_FOUND for a foreign id), starts through the
  * outbox (agent.run_requested → agentRunWorkflowV1 on queue `agents`) and changes state only through
@@ -116,91 +205,25 @@ const toRunDto = (r: RunRow) => ({
  */
 export const agentsService = {
   runs: {
+    /**
+     * A run of a command-only task kind starts through its owning command, which writes the brief the run's tools
+     * later trust (brand_onboarding: brand.onboarding.start, which requires brand.edit_standards on the draft). Here
+     * it is refused, so a person who may start runs but not edit standards cannot hand a run a brief of their own.
+     */
     async start(
       actor: ResolvedActor,
       input: z.infer<typeof RunStart>,
       tx: Tx,
       opts: { autonomyMode?: AutonomyMode } = {},
     ) {
-      const parsed = RunStart.parse(input);
-      const taskKind = TaskKind.safeParse(parsed.taskKind);
-      if (!taskKind.success)
+      if (COMMAND_ONLY_TASK_KINDS.has(input.taskKind))
         throw new ValidationFailedError([
-          { path: 'taskKind', issue: `unknown task kind ${parsed.taskKind}` },
+          {
+            path: 'taskKind',
+            issue: `${input.taskKind} runs start from their own command (brand.onboarding.start)`,
+          },
         ]);
-      const { tenantId, correlationId } = requireTenant();
-      await brandService.assertExist([parsed.brandId], tx); // NOT_FOUND for a foreign brand
-      // A service principal that starts runs on a schedule (the brand analyst) does so under its own ceiling.
-      await policy.assert(
-        actor,
-        'agent.start_run',
-        { type: 'brand', tenantId, brandId: parsed.brandId, id: parsed.brandId },
-        opts,
-        tx,
-      );
-      if (await killSwitch.isOn('agent_starts', parsed.brandId, tx))
-        throw new PolicyDeniedError('kill_switch_engaged', 'Agent starts are paused for this brand');
-      await entitlements.assert(tenantId, 'generation_budget_micros_month', tx);
-      const principal = await principalsRepo.getById(parsed.servicePrincipalId, tx); // NOT_FOUND for a foreign principal
-      if (principal.status !== 'active')
-        throw new ValidationFailedError([{ path: 'servicePrincipalId', issue: 'revoked' }]);
-      const [tenantPolicy, ent] = await Promise.all([
-        tenantPolicyFor(tenantId, correlationId, tx),
-        entitlements.resolve(tenantId, tx),
-      ]);
-      const autonomyMode = effectiveAutonomy(
-        parsed.requestedAutonomy,
-        principal.maxAutonomy,
-        tenantPolicy.maxAutonomy,
-        entitlementAutonomy(ent),
-      );
-      const cfg = currentModelConfig();
-      await assertRoutingAllowed(tenantId, cfg.provider, cfg.model);
-      const id = newId('agentRun');
-      const workflowId = runWorkflowId(id);
-      await runsRepo.create(
-        {
-          id,
-          brandId: parsed.brandId,
-          initiatorKind: actor.kind === 'user' ? 'user' : 'system',
-          initiatorId: actor.id,
-          servicePrincipalId: principal.id,
-          autonomyMode,
-          taskKind: taskKind.data,
-          brief: parsed.brief,
-          contextSnapshotHash: null,
-          skillVersionIds: [],
-          modelConfig: { provider: cfg.provider, model: cfg.model },
-          state: 'planned',
-          budgetReservationId: null,
-          costMicros: 0,
-          deadlineAt: new Date(Date.now() + INITIAL_DEADLINE_SECONDS * 1000),
-          workflowId,
-          correlationId,
-        },
-        tx,
-      );
-      await audit.record(actorRef(actor), 'agent.run.request', { type: 'agent_run', id }, 'allowed', tx, {
-        brandId: parsed.brandId,
-        runId: id,
-        toState: 'planned',
-      });
-      await outbox.add(
-        'agent.run_requested',
-        { type: 'agent_run', id, version: 0 },
-        {
-          runId: id,
-          brandId: parsed.brandId,
-          servicePrincipalId: principal.id,
-          initiatorKind: actor.kind,
-          initiatorId: actor.id,
-          taskKind: taskKind.data,
-          autonomyMode,
-        },
-        tx,
-        { brandId: parsed.brandId },
-      );
-      return { runId: id, state: 'planned' as const, autonomyMode, workflowId, version: 0 };
+      return startRun(actor, input, tx, opts);
     },
 
     async get(actor: ResolvedActor, input: z.infer<typeof RunGet>, tx?: Tx) {
@@ -407,5 +430,20 @@ export const agentsService = {
       const row = await routingPoliciesRepo.current();
       return row ? ModelRoutingPolicy.parse(row.document) : null;
     },
+  },
+};
+
+/**
+ * Spec 8.2: the brand module's onboarding runs (registerOnboardingRunSource in both composition roots). An
+ * onboarding run is an ordinary run of task kind brand_onboarding: same policy, kill switch, entitlement, routing
+ * policy and autonomy computation as any start, and the only way such a run starts (runs.start refuses the task
+ * kind); `get` returns the brief exactly as the brand module wrote it.
+ */
+export const onboardingRunSource: OnboardingRunSource = {
+  start: (actor, input, tx) =>
+    startRun(actor, { ...input, requestedAutonomy: 'create', taskKind: 'brand_onboarding' }, tx),
+  async get(actor, runId, tx) {
+    const run = await agentsService.runs.get(actor, { runId }, tx);
+    return { brandId: run.brandId, taskKind: run.taskKind, brief: run.brief };
   },
 };

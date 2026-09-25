@@ -11,6 +11,7 @@ import { useAsset, useBrandAssetsOfKind } from '../assets/use-assets';
 import { useAssetUpload, type UploadStep } from '../assets/use-upload';
 import { useBrandContext } from './brand-context';
 import type { BrandVersionDto } from './use-brand';
+import { VoiceExtraction } from './voice-extraction';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError, type UiError } from '../../lib/errors';
@@ -145,7 +146,13 @@ export function BrandKitEditor({ version }: { version: BrandVersionDto }) {
           }
         />
       )}
-      {doc.guidelines && <GuidelinesSection doc={doc} onChange={change} />}
+      {doc.guidelines && (
+        <GuidelinesSection doc={doc} onChange={change}>
+          {version.state === 'draft' && version.document.guidelines && (
+            <VoiceExtraction versionId={version.id} unsaved={dirty} />
+          )}
+        </GuidelinesSection>
+      )}
       <PaletteSection doc={doc} onChange={change} />
       <VoiceSection doc={doc} onChange={change} />
       <LogosSection doc={doc} onChange={change} />
@@ -166,7 +173,15 @@ function Section({ title, hint, children }: { title: string; hint: string; child
   );
 }
 
-function GuidelinesSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
+function GuidelinesSection({
+  doc,
+  onChange,
+  children,
+}: {
+  doc: Doc;
+  onChange: (d: Doc) => void;
+  children?: ReactNode;
+}) {
   const g = doc.guidelines;
   if (!g) return null;
   const { guidelines: _removed, ...withoutGuidelines } = doc;
@@ -198,6 +213,7 @@ function GuidelinesSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => 
           </li>
         ))}
       </ul>
+      {children}
     </Section>
   );
 }

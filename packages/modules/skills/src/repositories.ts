@@ -343,6 +343,20 @@ export class PlatformSkillRepository extends PlatformRepository {
       .insert(skillVersions)
       .values({ ...values, tenantId: null });
   }
+  async hasVersionWithHash(skillId: string, packageHash: string, tx?: Tx): Promise<boolean> {
+    const rows = await this.conn(tx)
+      .select({ id: skillVersions.id })
+      .from(skillVersions)
+      .where(
+        and(
+          eq(skillVersions.skillId, skillId),
+          isNull(skillVersions.tenantId),
+          eq(skillVersions.packageHash, packageHash),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
   async updateVersion(
     id: string,
     expectedVersion: number,
