@@ -88,6 +88,33 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('portfolio and company page: counts from brand.summary, an overdue approval shows once it is past due', async () => {
+    const pubs = [...backend.phase5.publications.values()].filter((p) => p.brandId === E2E.brandId);
+    const needsPerson = pubs.filter((p) => ['failed', 'outcome_unknown', 'held'].includes(p.state)).length;
+    expect(needsPerson).toBeGreaterThan(0);
+    const open = [...backend.phase5.requests.values()].find((r) => r.state === 'open');
+    expect(open).toBeDefined();
+    const dueBefore = open!.dueAt;
+    open!.dueAt = new Date(Date.now() - 3600_000).toISOString();
+    try {
+      const page = await signedIn(1280);
+      await page.goto(`${origin}/portfolio`);
+      const company = page.getByRole('region', { name: E2E.companyName }).getByTestId('summary-counts');
+      await expect.poll(() => company.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');
+      expect(await company.textContent()).toContain(`${needsPerson} post`);
+      await page.goto(`${origin}/c/${encodeURIComponent(E2E.tenantId)}`);
+      const brand = page.getByRole('region', { name: E2E.brandName }).getByTestId('summary-counts');
+      await expect.poll(() => brand.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');
+      expect(await brand.textContent()).toContain(
+        `${needsPerson} ${needsPerson === 1 ? 'post failed or held' : 'posts failed or held'}`,
+      );
+      expect(await brand.textContent()).toMatch(/\d+ posts? due in the next 7 days/);
+      await page.close();
+    } finally {
+      open!.dueAt = dueBefore;
+    }
+  }, 30_000);
+
   it('at phone width the navigation is a Menu drawer that closes on navigating', async () => {
     const page = await signedIn(390);
     expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);

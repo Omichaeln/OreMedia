@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lt, lte, sql, type SQL } from 'drizzle-orm';
 import type { ApprovalState } from '@oremedia/contracts/approval';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import type { ReviewRequestState } from '@oremedia/contracts/review';
@@ -64,6 +64,22 @@ export class ReviewRequestRepository extends BrandScopedRepository<typeof review
       .where(this.brandScope(brandId, eq(reviewRequests.state, 'open')))
       .orderBy(desc(reviewRequests.id))
       .limit(200);
+  }
+  /** Portfolio summary: open requests past their due time, counted per brand of `brandIds` (the tenant scope still applies). */
+  async countOverdueByBrand(brandIds: 'all' | readonly string[], now: Date, tx?: Tx) {
+    if (brandIds !== 'all' && brandIds.length === 0) return [];
+    const clauses: SQL[] = [
+      eq(reviewRequests.state, 'open'),
+      isNotNull(reviewRequests.dueAt),
+      lt(reviewRequests.dueAt, now),
+    ];
+    if (brandIds !== 'all') clauses.push(inArray(reviewRequests.brandId, [...brandIds]));
+    const rows = await this.conn(tx)
+      .select({ brandId: reviewRequests.brandId, c: sql`count(*)` })
+      .from(reviewRequests)
+      .where(this.scope(and(...clauses) as SQL))
+      .groupBy(reviewRequests.brandId);
+    return rows.map((r) => ({ brandId: r.brandId, count: Number(r.c) }));
   }
   /**
    * Spec 21.2 review inbox: open, stale and decided requests of the brands the actor may see, newest first.

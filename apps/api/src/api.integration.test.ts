@@ -80,6 +80,36 @@ describe('API request path (spec 4.3, 7.1–7.3)', () => {
     expect(res.error?.details?.some((d: { path?: string }) => d.path === 'name')).toBe(true);
   });
 
+  it("brand.summary has one row per visible brand with its counts, and never another tenant's brands", async () => {
+    const as = (token: string) => ({ bearer: token, tenantId: tenantA.tenantId });
+    for (const token of [tenantA.ownerToken, tenantA.creatorToken]) {
+      const list = (await callPath(as(token), 'brand.list', undefined)).data as Array<{ id: string }>;
+      const summary = await callPath(as(token), 'brand.summary', undefined);
+      expect(summary.error).toBeUndefined();
+      const data = summary.data as {
+        upcomingDays: number;
+        brands: Array<{
+          brandId: string;
+          overdueApprovals: number;
+          publicationsNeedingPerson: number;
+          upcomingPublications: number;
+        }>;
+      };
+      expect(data.upcomingDays).toBe(7);
+      expect(data.brands.map((b) => b.brandId).sort()).toEqual(list.map((b) => b.id).sort());
+      for (const foreign of tenantB.brandIds)
+        expect(data.brands.map((b) => b.brandId)).not.toContain(foreign);
+      for (const b of data.brands)
+        expect(b).toEqual({
+          brandId: b.brandId,
+          overdueApprovals: 0,
+          publicationsNeedingPerson: 0,
+          // The seed (publishing-seed) schedules one publication on the first brand, due in an hour.
+          upcomingPublications: b.brandId === tenantA.brandIds[0] ? 1 : 0,
+        });
+    }
+  });
+
   it('role checks are server-side: a creator cannot invite members; the denial is audited', async () => {
     const res = await callPath(
       { bearer: tenantA.creatorToken, tenantId: tenantA.tenantId },

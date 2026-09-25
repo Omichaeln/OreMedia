@@ -1569,6 +1569,12 @@
         }
       }
     },
+    "/trpc/brand.summary": {
+      "get": {
+        "operationId": "brand.summary",
+        "x-trpc-type": "query"
+      }
+    },
     "/trpc/brand.versions.createDraft": {
       "post": {
         "operationId": "brand.versions.createDraft",
@@ -9135,6 +9141,10 @@
           },
           "required": ["brandId"]
         }
+      },
+      "brand.summary": {
+        "type": "query",
+        "input": null
       },
       "brand.versions.createDraft": {
         "type": "mutation",

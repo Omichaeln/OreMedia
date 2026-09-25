@@ -811,6 +811,31 @@ export function createMockRouter(backend: MockBackend) {
             version: 1,
           })),
       ),
+      // As the API: per visible brand, open requests past due, publications needing a person, and those due this week.
+      summary: query.query(({ ctx }) => {
+        const now = Date.now();
+        const until = now + 7 * 24 * 3600 * 1000;
+        const pubs = [...backend.phase5.publications.values()];
+        const reqs = [...backend.phase5.requests.values()];
+        return {
+          upcomingDays: 7,
+          brands: backend.brands
+            .filter((b) => !ctx.member?.brandIds || ctx.member.brandIds.includes(b.id))
+            .map((b) => ({
+              brandId: b.id,
+              overdueApprovals: reqs.filter(
+                (r) => r.brandId === b.id && r.state === 'open' && r.dueAt && Date.parse(r.dueAt) < now,
+              ).length,
+              publicationsNeedingPerson: pubs.filter(
+                (p) => p.brandId === b.id && ['failed', 'outcome_unknown', 'held'].includes(p.state),
+              ).length,
+              upcomingPublications: pubs.filter((p) => {
+                const at = Date.parse(p.scheduledFor);
+                return p.brandId === b.id && p.state === 'scheduled' && at >= now && at < until;
+              }).length,
+            })),
+        };
+      }),
       get: query.input(z.object({ brandId: z.string() })).query(({ input }) => {
         const b = backend.brands.find((x) => x.id === input.brandId);
         if (!b) throw new NotFoundError('Brand', input.brandId);
