@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-24T14:00:00Z",
+  "updatedAt": "2026-09-25T06:10:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -161,8 +161,8 @@
           "Temporal Cloud namespace (or self-hosted namespace config)",
           "production",
           "3.1, 17.1",
-          "open",
-          "Provisioning needs the user’s Temporal Cloud or Railway account. Self-hosted configuration written: infra/railway/temporal (auto-setup image, separate MySQL persistence, dynamic config)."
+          "complete",
+          "Self-hosted namespace running on Railway (services temporal and temporal-db, 24 September 2026). worker-core connects and dispatches the outbox; worker-render polls the render and media queues and passed its /health deploy check on 25 September 2026."
         ]
       ]
     },
@@ -410,8 +410,8 @@
           "access: authentication (Google OpenID Connect sign-in, D-03 decided)",
           "critical",
           "3.1, 18",
-          "in_progress",
-          "Built and verified locally: apps/api/src/auth (openid-client 6: authorization code + PKCE S256 + state + nonce, ID token signature via JWKS, iss/aud/exp; sealed ten-minute flow cookie; open-redirect-safe returnTo), access module sign-in (linked subject → existing user by verified email → invitation; no self-sign-up; disabled users and re-linking a user to another subject refused, also under concurrency (user row locked, unique provider+user); a first link by email only when Google is authoritative for the address (hd equals the domain, or Gmail); email_verified and AUTH_ALLOWED_DOMAINS enforced), opaque sessions (12 h idle / 7 d absolute, __Host- HttpOnly Secure cookies in production, SameSite=Lax, CSRF cookie, prior session revoked in the sign-in transaction), CSRF-protected sign-out (support sessions closed), per-address rate limit on /auth, auth_events for every outcome including internal_error; migration 0003; apps/api/src/auth.integration.test.ts against a local fake OIDC provider, auth.cross-tenant.test.ts, unit tests for config and the flow cookie. Open: not yet exercised against Google itself (needs the Google Cloud OAuth client and the Railway deploy, runbook deploy-railway.md 1a). MFA: Oremedia does not claim it for Google sign-ins (users.mfa_enrolled stays false); a brand policy with mfaRequired would refuse every Google user, so it stays off and 2-Step Verification is enforced in the Google Workspace admin console with AUTH_ALLOWED_DOMAINS (DECISIONS.md D-03)."
+          "complete",
+          "Built and verified locally: apps/api/src/auth (openid-client 6: authorization code + PKCE S256 + state + nonce, ID token signature via JWKS, iss/aud/exp; sealed ten-minute flow cookie; open-redirect-safe returnTo), access module sign-in (linked subject → existing user by verified email → invitation; no self-sign-up; disabled users and re-linking a user to another subject refused, also under concurrency (user row locked, unique provider+user); a first link by email only when Google is authoritative for the address (hd equals the domain, or Gmail); email_verified and AUTH_ALLOWED_DOMAINS enforced), opaque sessions (12 h idle / 7 d absolute, __Host- HttpOnly Secure cookies in production, SameSite=Lax, CSRF cookie, prior session revoked in the sign-in transaction), CSRF-protected sign-out (support sessions closed), per-address rate limit on /auth, auth_events for every outcome including internal_error; migration 0003; apps/api/src/auth.integration.test.ts against a local fake OIDC provider, auth.cross-tenant.test.ts, unit tests for config and the flow cookie. Verified live on 24 September 2026: the programme owner signed in with Google at oremedia-production.up.railway.app and created the first brand. Google needed fixed server metadata and a response-normalising fetch (apps/api/src/auth/router.ts), since Railway's egress altered discovery and token responses; that Google-only path is verified live and has no automated test. MFA: Oremedia does not claim it for Google sign-ins (users.mfa_enrolled stays false); a brand policy with mfaRequired would refuse every Google user, so it stays off and 2-Step Verification is enforced in the Google Workspace admin console with AUTH_ALLOWED_DOMAINS (DECISIONS.md D-03)."
         ],
         [
           "1.28",
@@ -1950,7 +1950,7 @@
           "production",
           "17.1",
           "complete",
-          "infra/railway/{api,worker-core,worker-render,worker-ingest,web,redirector}/railway.json with health checks, restart policy and the api pre-deploy migration command"
+          "infra/railway/{api,worker-core,worker-render,worker-ingest,web,redirector}/railway.json with health checks, restart policy and the api pre-deploy migration command. Railway now refuses config-as-code paths (it asks for .railway/railway.ts), so the same settings are applied to each service directly: health checks, restart policy and the api pre-deploy migration; the railway.json files are the reference. Workers serve /health once their Temporal workers run (25 September 2026)."
         ],
         [
           "R.3",
@@ -1958,15 +1958,15 @@
           "production",
           "3.1",
           "in_progress",
-          "Documented in infra/railway/README.md and the runbook; StorageProvider for R2 arrives with Phase 2 assets"
+          "Documented in infra/railway/README.md and the runbook; StorageProvider for R2 arrives with Phase 2 assets. Live: managed MySQL and Redis on Railway (24 September 2026); migrations 0000-0003 applied by the api pre-deploy step. Object store endpoint, region and buckets are set on worker-render; its access keys and an upload round trip are not yet verified."
         ],
         [
           "R.4",
           "Temporal: Cloud (recommended) or self-hosted service on Railway with its own MySQL persistence, never the application database",
           "critical",
           "3.1",
-          "in_progress",
-          "infra/railway/temporal: auto-setup image on a separate MySQL, dynamic config; Temporal Cloud path documented; namespace not provisioned"
+          "complete",
+          "infra/railway/temporal: auto-setup image on a separate MySQL, dynamic config; Temporal Cloud path documented. Live: self-hosted Temporal on Railway with its own MySQL (temporal-db), separate from the application database; workers connect via TEMPORAL_ADDRESS (24 September 2026)."
         ],
         [
           "R.5",
@@ -1974,7 +1974,7 @@
           "critical",
           "Appendix A",
           "in_progress",
-          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases"
+          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases. Live status 25 September 2026: api and web complete (sign-in works); worker-core needs ANTHROPIC_API_KEY_REF (its agents worker cannot start) and worker-ingest needs COMMENT_AUTHOR_HASH_SECRET_REF or LINK_HASH_SECRET_REF; both now fail their health-checked deploys until set."
         ],
         [
           "R.6",
@@ -1989,8 +1989,8 @@
           "Railway project provisioned and services deployed",
           "production",
           "17.1",
-          "blocked",
-          "Requires the user's Railway account (no RAILWAY_TOKEN in this environment). Configuration is written so the deploy is a `railway up` per service."
+          "in_progress",
+          "Provisioned 24 September 2026 (Railway project OreMedia Social, production): web at oremedia-production.up.railway.app, api, worker-core, worker-ingest, worker-render, self-hosted Temporal with temporal-db, MySQL and Redis. Open: the redirector service is not created yet, and worker-core and worker-ingest fail their deploys until their secrets are set (R.5)."
         ],
         [
           "R.8",
