@@ -145,6 +145,7 @@ export function BrandKitEditor({ version }: { version: BrandVersionDto }) {
           }
         />
       )}
+      {doc.guidelines && <GuidelinesSection doc={doc} onChange={change} />}
       <PaletteSection doc={doc} onChange={change} />
       <VoiceSection doc={doc} onChange={change} />
       <LogosSection doc={doc} onChange={change} />
@@ -162,6 +163,42 @@ function Section({ title, hint, children }: { title: string; hint: string; child
       </div>
       {children}
     </section>
+  );
+}
+
+function GuidelinesSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
+  const g = doc.guidelines;
+  if (!g) return null;
+  const { guidelines: _removed, ...withoutGuidelines } = doc;
+  return (
+    <Section
+      title="Brand guidelines"
+      hint="Imported from a brand skill. Agents receive this text with the brand constraints once the version is published; publishing new guidelines needs a second person."
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2 text-sm">
+        <div className="min-w-0">
+          <p className="font-medium">{g.source.name}</p>
+          {g.source.description && <p className="text-xs text-muted-foreground">{g.source.description}</p>}
+        </div>
+        <Button size="sm" variant="danger" onClick={() => onChange(withoutGuidelines)}>
+          Remove guidelines
+        </Button>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {g.documents.map((d) => (
+          <li key={d.path}>
+            <details className="rounded-md border border-border">
+              <summary className="cursor-pointer px-2 py-1.5 text-sm">
+                <code className="text-xs">{d.path}</code>
+              </summary>
+              <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-border p-2 text-xs">
+                {d.content}
+              </pre>
+            </details>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 

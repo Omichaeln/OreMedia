@@ -957,4 +957,161 @@ describe('brand module (spec 8) against MySQL 8', () => {
       }
     });
   });
+
+  describe('brand skill import (guidelines, separation of duties)', () => {
+    const brandSkill = newId('brand');
+    const importer = manager(tenantA);
+    const approver: ResolvedActor = {
+      kind: 'user',
+      id: 'usr_brand_approver',
+      tenantId: tenantA,
+      membershipId: 'mem_brand_approver',
+      membershipStatus: 'active',
+      role: 'brand_manager',
+      allBrands: true,
+      brandGrants: [],
+      mfaEnrolled: false,
+    };
+    const skillFiles = [
+      {
+        path: 'harbour-brand/SKILL.md',
+        content:
+          '---\nname: harbour-brand\ndescription: Harbour brand system.\n---\n# Harbour\n\n| Token | Value | Use |\n|---|---|---|\n| Primary | Deep Navy `#1a2a4d` | Headings |\n| Text | Ink `#172120` | Body copy |\n',
+      },
+      { path: 'harbour-brand/references/tone.md', content: '# Tone\nDirect, precise, never loud.' },
+      { path: 'harbour-brand/assets/logo.svg', content: '<svg/>' },
+    ];
+    const versionOf = (versionId: string) =>
+      runInTenant(ctx(tenantA), () =>
+        brandService.versions.get(importer, { brandId: brandSkill, versionId }),
+      );
+    const toReview = async (versionId: string) => {
+      const v = await versionOf(versionId);
+      await run(tenantA, (tx) =>
+        brandService.versions.submitForReview(
+          importer,
+          { brandId: brandSkill, versionId, expectedVersion: v.version },
+          tx,
+        ),
+      );
+      return (await versionOf(versionId)).version;
+    };
+    const publishAs = async (actor: ResolvedActor, versionId: string, expectedVersion: number) =>
+      run(tenantA, (tx) =>
+        brandService.versions.publish(actor, { brandId: brandSkill, versionId, expectedVersion }, tx),
+      );
+    let imported = '';
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandSkill,
+        tenantId: tenantA,
+        name: 'Harbour',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+      });
+    });
+
+    it('imports a skill as a new draft with its guidelines and the palette its tables state', async () => {
+      const res = await run(tenantA, (tx) =>
+        brandService.guidelines.import(importer, { brandId: brandSkill, files: skillFiles }, tx),
+      );
+      imported = res.versionId;
+      expect(res).toMatchObject({
+        number: 1,
+        documents: ['SKILL.md', 'references/tone.md'],
+        coloursAdded: 2,
+        skipped: [{ path: 'assets/logo.svg', reason: 'not_text' }],
+      });
+      const draft = await versionOf(imported);
+      expect(draft.state).toBe('draft');
+      expect(draft.document.guidelines?.source.name).toBe('harbour-brand');
+      expect(draft.document.tokens.colours).toEqual([
+        { key: 'primary', value: '#1A2A4D', role: 'primary' },
+        { key: 'text', value: '#172120', role: 'text' },
+      ]);
+    });
+
+    it('the importer cannot publish it; another person can, and agents then receive the guidelines', async () => {
+      const expected = await toReview(imported);
+      await expect(publishAs(importer, imported, expected)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        reason: 'distinct_approver_required',
+      });
+      await publishAs(approver, imported, expected);
+      const snapshot = await runInTenant(ctx(tenantA), () =>
+        brandService.resolveBrandSnapshot(importer, { brandId: brandSkill }),
+      );
+      expect(snapshot.document.guidelines?.documents.map((d) => d.path)).toEqual([
+        'SKILL.md',
+        'references/tone.md',
+      ]);
+    });
+
+    it('an edit to the guidelines makes the editor their author; palette-only edits and unchanged guidelines do not', async () => {
+      const draft = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(approver, { brandId: brandSkill }, tx),
+      );
+      const base = (await versionOf(draft.versionId)).document;
+      // Unchanged guidelines (carried from the published version): the approver may publish their own palette edit.
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          approver,
+          {
+            brandId: brandSkill,
+            versionId: draft.versionId,
+            expectedVersion: 0,
+            document: { ...base, voice: { ...base.voice, summary: 'Direct.' } },
+          },
+          tx,
+        ),
+      );
+      // Now the approver edits the guidelines themselves: they become the author and may not publish.
+      const edited = {
+        ...base,
+        guidelines: {
+          ...base.guidelines!,
+          documents: [...base.guidelines!.documents, { path: 'references/extra.md', content: '# More' }],
+        },
+      };
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          approver,
+          { brandId: brandSkill, versionId: draft.versionId, expectedVersion: 1, document: edited },
+          tx,
+        ),
+      );
+      const expected = await toReview(draft.versionId);
+      await expect(publishAs(approver, draft.versionId, expected)).rejects.toMatchObject({
+        reason: 'distinct_approver_required',
+      });
+      await publishAs(importer, draft.versionId, expected);
+    });
+
+    it('removing guidelines needs no second person; an agent cannot import', async () => {
+      const draft = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(importer, { brandId: brandSkill }, tx),
+      );
+      const { guidelines: _g, ...withoutGuidelines } = (await versionOf(draft.versionId)).document;
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          importer,
+          {
+            brandId: brandSkill,
+            versionId: draft.versionId,
+            expectedVersion: 0,
+            document: withoutGuidelines,
+          },
+          tx,
+        ),
+      );
+      await publishAs(importer, draft.versionId, await toReview(draft.versionId));
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.guidelines.import(agent(tenantA), { brandId: brandSkill, files: skillFiles }, tx),
+        ),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+  });
 });

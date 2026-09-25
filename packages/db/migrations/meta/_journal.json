@@ -43,6 +43,13 @@
       "when": 1790345229405,
       "tag": "0005_lazy_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1790346231676,
+      "tag": "0006_brand_guideline_authors",
+      "breakpoints": true
     }
   ]
 }

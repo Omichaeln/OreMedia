@@ -11,6 +11,7 @@ import {
 } from '@oremedia/db';
 import {
   approvedFacts,
+  brandGuidelineAuthors,
   brandObjectives,
   brandVersions,
   brands,
@@ -130,6 +131,30 @@ export class BrandVersionRepository extends BrandScopedRepository<typeof brandVe
 }
 
 /** Written once per published version (spec 6.3 design_tokens); no update method by design. */
+/** Who last changed a version's guidelines (id = the brand version's id). */
+export class BrandGuidelineAuthorRepository extends BrandScopedRepository<typeof brandGuidelineAuthors> {
+  constructor() {
+    super(brandGuidelineAuthors);
+  }
+  /** Records the author of the version's current guidelines, replacing any earlier one. */
+  async record(
+    values: Pick<
+      typeof brandGuidelineAuthors.$inferInsert,
+      'id' | 'brandId' | 'authorKind' | 'authorId' | 'packageHash'
+    >,
+    tx: Tx,
+  ) {
+    const existing = await this.findById(values.id, tx);
+    if (!existing) return this.insertBrandScoped(values, tx);
+    await this.updateScoped(
+      existing.id,
+      existing.version,
+      { authorKind: values.authorKind, authorId: values.authorId, packageHash: values.packageHash },
+      tx,
+    );
+  }
+}
+
 export class DesignTokenRepository extends BrandScopedRepository<typeof designTokens> {
   constructor() {
     super(designTokens);

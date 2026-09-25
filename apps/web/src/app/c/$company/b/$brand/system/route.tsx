@@ -18,6 +18,7 @@ import { Select } from '../../../../../../components/select';
 import { useToast } from '../../../../../../components/toast';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { BrandKitEditor } from '../../../../../../features/brand/brand-kit-editor';
+import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
 import {
   useBrandVersion,
   useBrandVersions,
@@ -46,6 +47,7 @@ export function BrandSystemRoute() {
         title="Brand system"
         description="Versions of the brand standards, approved facts and objectives. Every document revision records the brand version it was designed against."
       />
+      <BrandSkillImport />
       <Versions publishedVersionId={brand.publishedVersionId} />
       <Facts />
       <Objectives />
