@@ -91,7 +91,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
     },
     {
       name: 'brand kit editor',
-      path: () => brandPath('system'),
+      path: () => brandPath('system?section=versions'),
       ready: async (page) => {
         await page.getByRole('button', { name: 'Edit brand kit' }).first().click({ timeout: 15_000 });
         await page.getByRole('heading', { name: 'Reference imagery' }).waitFor({ timeout: 15_000 });
