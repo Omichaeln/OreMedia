@@ -544,6 +544,39 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
         subjectsUnavailable: 1,
       });
     });
+    it('with ageDays, each post is its total at that age; a failed pull at that age reads unavailable', async () => {
+      now = new Date(T0.getTime() + 80 * HOUR);
+      const at = (ageDays: 1 | 3) =>
+        inTenant(tenantA, () =>
+          metrics.query(A, {
+            brandId: brandA,
+            subjectType: 'publication',
+            subjectIds: [pubA],
+            metricKeys: ['impressionCount'],
+            windowStart: T0.toISOString(),
+            windowEnd: now.toISOString(),
+            grouping: 'subject',
+            ageDays,
+          }),
+        );
+      // pubA was pulled at +2 h and +24 h: the one-day number is the +24 h pull, never the +2 h one.
+      const oneDay = await at(1);
+      expect(oneDay.values).toHaveLength(1);
+      expect(oneDay.values[0]).toMatchObject({
+        metricKey: 'impressionCount',
+        value: 1000,
+        windowEnd: new Date(T0.getTime() + 24 * HOUR).toISOString(),
+      });
+      // The +72 h pull failed: the three-day number is that pull, unavailable, never the one-day total.
+      const threeDays = await at(3);
+      expect(threeDays.values).toHaveLength(1);
+      expect(threeDays.values[0]).toMatchObject({
+        value: null,
+        completeness: 'unavailable',
+        windowEnd: new Date(T0.getTime() + 72 * HOUR).toISOString(),
+      });
+      expect(threeDays.coverage).toMatchObject({ subjectsRequested: 1, subjectsWithData: 0 });
+    });
     it('a foreign brand is NOT_FOUND', async () => {
       await expect(
         inTenant(tenantA, () =>
