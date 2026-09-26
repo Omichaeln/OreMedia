@@ -386,9 +386,17 @@ export const agentsService = {
       const { tenantId } = requireTenant();
       await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
       const row = await routingPoliciesRepo.current(tx);
+      // The route agents.runs.start checks (deployment configuration), so an admin sees what a policy would stop.
+      const cfg = currentModelConfig();
+      const inUse = { provider: cfg.provider, model: cfg.model };
       return row
-        ? { policy: ModelRoutingPolicy.parse(row.document), version: row.version, stored: true as const }
-        : { policy: null, version: null, stored: false as const };
+        ? {
+            policy: ModelRoutingPolicy.parse(row.document),
+            version: row.version,
+            stored: true as const,
+            inUse,
+          }
+        : { policy: null, version: null, stored: false as const, inUse };
     },
 
     async set(actor: ResolvedActor, input: z.input<typeof RoutingPolicySet>, tx: Tx) {

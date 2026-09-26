@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ModelRoutingPolicy, ModelVendor } from '@oremedia/contracts/agents';
 import { defaultPolicyDocument, type PolicyDocumentV1 } from '@oremedia/contracts/brand';
 import { Badge, Button, EmptyState, Field, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
@@ -236,11 +237,37 @@ export function KillSwitches() {
 }
 
 const RETENTION: Record<string, string> = { zero: 'Zero retention', standard_30d: 'Standard (30 days)' };
+/** The vendors a company chooses between; `fake` (the test adapter) is kept if stored, never offered. */
+const VENDORS: ReadonlyArray<[ModelVendor, string]> = [
+  ['anthropic', 'Anthropic'],
+  ['openrouter', 'OpenRouter'],
+];
+const vendorLabel = (v: string) => VENDORS.find(([k]) => k === v)?.[1] ?? v;
 
-/** Spec 12.7: where agent inference may run. Read here; changed through agents.routingPolicy.set by an admin. */
+function Rows({ rows }: { rows: ReadonlyArray<readonly [string, string]> }) {
+  return (
+    <dl className="flex flex-col divide-y divide-border text-sm">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-3">
+          <dt className="font-medium">{k}</dt>
+          <dd className="text-right">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * Spec 12.7: which model routes the company permits. Before every model call the platform checks the vendor and
+ * the model against this policy (assertRoutingAllowed); the model itself is deployment configuration, shown as "In
+ * use". Regions, retention, data classes and the default model are stored with the policy but not checked yet, so
+ * they are shown apart and an edit keeps them as they are. Owners and admins edit; the server re-checks.
+ */
 export function ModelRouting() {
   const routing = useRoutingPolicy(true);
+  const [editing, setEditing] = useState(false);
   const p = routing.data?.policy ?? null;
+  const inUse = routing.data?.inUse ?? null;
   return (
     <Section id="routing-heading" title="Model routing" testId="model-routing">
       <p className="text-xs text-muted-foreground">
@@ -248,37 +275,212 @@ export function ModelRouting() {
       </p>
       {routing.isPending && <Skeleton label="Loading model routing" lines={3} />}
       {routing.isError && <RequestError error={routing.error} onRetry={() => void routing.refetch()} />}
-      {routing.data && !p && (
+      {inUse && (
+        <p className="text-sm" data-testid="model-in-use">
+          In use: <span className="font-medium">{inUse.model}</span> through {vendorLabel(inUse.provider)}
+          <span className="text-muted-foreground"> · set by the deployment, not by this policy</span>
+        </p>
+      )}
+      {routing.data && !p && !editing && (
         <EmptyState
           title="No routing policy stored"
           description="The platform default applies until an admin stores a routing policy for the company."
         />
       )}
-      {p && (
-        <dl className="flex flex-col divide-y divide-border text-sm">
-          {(
-            [
+      {p && !editing && (
+        <>
+          <Rows
+            rows={[
+              ['Permitted vendors', listOrNone(p.permittedVendors.map(vendorLabel))],
+              ['Denied models', listOrNone(p.deniedModels)],
+            ]}
+          />
+          <h3 className="mt-2 text-sm font-medium">Recorded, not enforced yet</h3>
+          <p className="text-xs text-muted-foreground">
+            Stored with the policy for the record; no model call is checked against these yet.
+          </p>
+          <Rows
+            rows={[
               ['Default model', p.defaultModel],
-              ['Permitted vendors', listOrNone(p.permittedVendors)],
               [
                 'Regions',
                 p.permittedRegions.length ? p.permittedRegions.join(', ') : 'Any region the vendor offers',
               ],
               ['Data retention at vendor', RETENTION[p.retention] ?? p.retention],
               ['Data classes sent', listOrNone(p.dataClasses.map((d) => d.replace(/_/g, ' ')))],
-              ['Denied models', listOrNone(p.deniedModels)],
-            ] as const
-          ).map(([k, v]) => (
-            <div key={k} className="flex flex-wrap justify-between gap-x-6 gap-y-1 py-3">
-              <dt className="font-medium">{k}</dt>
-              <dd className="text-right">{v}</dd>
-            </div>
-          ))}
-        </dl>
+            ]}
+          />
+        </>
       )}
-      {routing.data?.version !== null && routing.data?.version !== undefined && (
+      {routing.data?.version !== null && routing.data?.version !== undefined && !editing && (
         <p className="text-xs text-muted-foreground">Stored version {routing.data.version}.</p>
       )}
+      {routing.data && inUse && !editing && (
+        <div>
+          <Button variant="secondary" onClick={() => setEditing(true)}>
+            {p ? 'Edit' : 'Store a policy'}
+          </Button>
+        </div>
+      )}
+      {routing.data && inUse && editing && (
+        <RoutingForm
+          base={
+            p ?? {
+              schemaVersion: 1,
+              defaultModel: inUse.model,
+              permittedVendors: VENDORS.some(([v]) => v === inUse.provider)
+                ? [inUse.provider as ModelVendor]
+                : ['anthropic'],
+              permittedRegions: [],
+              retention: 'standard_30d',
+              dataClasses: ['brand_content'],
+              deniedModels: [],
+            }
+          }
+          version={routing.data.version}
+          inUse={inUse}
+          onDone={() => setEditing(false)}
+        />
+      )}
     </Section>
+  );
+}
+
+function RoutingForm({
+  base,
+  version,
+  inUse,
+  onDone,
+}: {
+  base: ModelRoutingPolicy;
+  version: number | null;
+  inUse: { provider: string; model: string };
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [vendors, setVendors] = useState<ModelVendor[]>(base.permittedVendors.filter((v) => v !== 'fake'));
+  const [denied, setDenied] = useState(base.deniedModels.join('\n'));
+  const [confirming, setConfirming] = useState(false);
+  const save = useMutation(
+    trpc.agents.routingPolicy.set.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        void queryClient.invalidateQueries(trpc.agents.routingPolicy.pathFilter());
+        onDone();
+      },
+    }),
+  );
+  const next: ModelRoutingPolicy = {
+    ...base,
+    permittedVendors: [...vendors, ...base.permittedVendors.filter((v) => v === 'fake')],
+    deniedModels: [
+      ...new Set(
+        denied
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean),
+      ),
+    ],
+  };
+  const blocksVendor = !next.permittedVendors.some((v) => v === inUse.provider);
+  const blocksModel = next.deniedModels.includes(inUse.model);
+  const submit = () =>
+    save.mutate({ policy: next, ...(version === null ? {} : { expectedVersion: version }) });
+  const ui = save.isError ? toUiError(save.error) : null;
+  const toggle = (v: ModelVendor) =>
+    setVendors((xs) => (xs.includes(v) ? xs.filter((x) => x !== v) : [...xs, v]));
+
+  return (
+    <form
+      className="flex flex-col gap-4 border-t border-border pt-4"
+      data-testid="routing-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (blocksVendor || blocksModel) setConfirming(true);
+        else submit();
+      }}
+      noValidate
+    >
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">Permitted vendors</legend>
+        {VENDORS.map(([v, label]) => (
+          <label key={v} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={vendors.includes(v)} onChange={() => toggle(v)} />
+            {label}
+          </label>
+        ))}
+      </fieldset>
+      <Field
+        label="Denied models"
+        htmlFor="routing-denied"
+        hint="One model id per line, exactly as the vendor names it."
+      >
+        <Textarea id="routing-denied" rows={3} value={denied} onChange={(e) => setDenied(e.target.value)} />
+      </Field>
+      {(blocksVendor || blocksModel) && (
+        <StatusBanner
+          tone="warning"
+          title="This policy stops every agent run for the company"
+          description={`The model in use, ${inUse.model} through ${vendorLabel(inUse.provider)}, would not be permitted. To pause agents for a while, the agent-starts kill switch is the reversible way.`}
+        />
+      )}
+      {ui && (
+        <StatusBanner
+          tone="critical"
+          title={
+            ui.kind === 'forbidden'
+              ? 'Permission denied'
+              : ui.kind === 'conflict'
+                ? 'Someone else changed the policy'
+                : 'The policy was not saved'
+          }
+          description={
+            ui.kind === 'conflict'
+              ? 'Cancel to see the current policy, then make the change again.'
+              : ui.message
+          }
+        />
+      )}
+      <div className="flex gap-2">
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={save.isPending}
+          disabledReason={vendors.length === 0 ? 'Permit at least one vendor' : undefined}
+        >
+          {save.isPending ? 'Saving…' : 'Save policy'}
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent
+          role="alertdialog"
+          title="Stop every agent run?"
+          description={`${inUse.model} through ${vendorLabel(inUse.provider)} would not be permitted, so no agent can run for this company until the policy changes again.`}
+        >
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="ghost">Cancel</Button>
+            </DialogClose>
+            <Button
+              variant="danger"
+              data-testid="confirm-routing-block"
+              disabled={save.isPending}
+              onClick={() => {
+                setConfirming(false);
+                submit();
+              }}
+            >
+              Save and stop agent runs
+            </Button>
+          </DialogActions>
+        </DialogContent>
+      </Dialog>
+    </form>
   );
 }

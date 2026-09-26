@@ -22,7 +22,7 @@ import {
   type Operation,
   type OperationBatch,
 } from '@oremedia/contracts/creative';
-import { RunGet, RunSteps } from '@oremedia/contracts/agents';
+import { RoutingPolicySet, RunGet, RunSteps, type ModelRoutingPolicy } from '@oremedia/contracts/agents';
 import { AssetGet, AssetSearch, MediaSignedUrlRequest } from '@oremedia/contracts/assets';
 import {
   BrandVersionGet,
@@ -33,6 +33,7 @@ import {
   OnboardingStart,
 } from '@oremedia/contracts/brand';
 import {
+  ConflictError,
   isOremediaError,
   NotFoundError,
   PolicyDeniedError,
@@ -238,6 +239,21 @@ export class MockBackend {
   }));
   /** Kill switches by `${scope}:${brandId ?? ''}` (operations.killSwitch); '' is the company-wide row. */
   readonly killSwitches = new Map<string, { engaged: boolean; reason: string | null }>();
+  /** The company's stored model-routing policy (agents.routingPolicy); null = none stored, the platform default. */
+  routingPolicy: { policy: ModelRoutingPolicy; version: number } | null = {
+    policy: {
+      schemaVersion: 1,
+      defaultModel: 'anthropic/claude-sonnet',
+      permittedVendors: ['anthropic', 'openrouter'],
+      permittedRegions: ['eu'],
+      retention: 'zero',
+      dataClasses: ['brand_content'],
+      deniedModels: [],
+    },
+    version: 2,
+  };
+  /** The route this deployment starts runs with (agents.routingPolicy.get inUse). */
+  readonly modelInUse = { provider: 'openrouter', model: 'anthropic/claude-sonnet' };
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
   /**
@@ -746,19 +762,24 @@ export function createMockRouter(backend: MockBackend) {
         get: query.query(() => {
           if (backend.role !== 'owner' && backend.role !== 'admin')
             throw new PolicyDeniedError('billing.manage');
-          return {
-            policy: {
-              schemaVersion: 1 as const,
-              defaultModel: 'anthropic/claude-sonnet',
-              permittedVendors: ['anthropic', 'openrouter'] as Array<'anthropic' | 'openrouter' | 'fake'>,
-              permittedRegions: ['eu'],
-              retention: 'zero' as const,
-              dataClasses: ['brand_content'] as Array<'brand_content' | 'customer_voice' | 'pii'>,
-              deniedModels: [],
-            },
-            version: 2,
-            stored: true as const,
-          };
+          const stored = backend.routingPolicy;
+          return stored
+            ? { ...stored, stored: true as const, inUse: backend.modelInUse }
+            : { policy: null, version: null, stored: false as const, inUse: backend.modelInUse };
+        }),
+        // As the API: owners and admins, the stored version required once a policy exists, stale is CONFLICT.
+        set: mutation.input(RoutingPolicySet).mutation(({ input }) => {
+          if (backend.role !== 'owner' && backend.role !== 'admin')
+            throw new PolicyDeniedError('billing.manage');
+          const stored = backend.routingPolicy;
+          const expected = input.expectedVersion;
+          if (stored && expected === undefined)
+            throw new ValidationFailedError([{ path: 'expectedVersion', issue: 'required' }]);
+          if (stored && expected !== undefined && expected !== stored.version)
+            throw new ConflictError('ModelRoutingPolicy', 'current', expected);
+          const version = stored ? stored.version + 1 : 0;
+          backend.routingPolicy = { policy: input.policy, version };
+          return { policy: input.policy, version };
         }),
       }),
       runs: t.router({
