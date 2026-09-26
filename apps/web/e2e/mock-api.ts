@@ -683,6 +683,48 @@ export function createMockRouter(backend: MockBackend) {
     experiments: p6.experiments,
     measurement: p6.measurement,
     access: t.router({
+      members: t.router({
+        list: query.query(({ ctx }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('membership.manage');
+          return {
+            items: [
+              ['mem_owner', 'usr_e2e', 'E2E person', 'e2e.person@example.test', 'owner', 'active', true, []],
+              [
+                'mem_creator',
+                'usr_creator',
+                'Kofi Asare',
+                'kofi@example.test',
+                'creator',
+                'active',
+                false,
+                [E2E.brandId],
+              ],
+              ['mem_invited', 'usr_invited', null, 'lina@example.test', 'reviewer', 'invited', false, []],
+            ].map(([membershipId, userId, name, email, role, status, allBrands, brandIds]) => ({
+              membershipId: membershipId as string,
+              userId: userId as string,
+              name: name as string | null,
+              email: email as string,
+              role: role as MembershipRole,
+              status: status as 'active' | 'invited' | 'disabled',
+              allBrands: allBrands as boolean,
+              brandIds: brandIds as string[],
+              createdAt: '2026-09-01T09:00:00.000Z',
+              version: 0,
+            })),
+          };
+        }),
+        invite: mutation
+          .input(
+            z.object({ email: z.string().email(), role: z.string(), allBrands: z.boolean().default(false) }),
+          )
+          .mutation(({ ctx }) => {
+            if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+              throw new PolicyDeniedError('membership.manage');
+            return { membershipId: rid('mem') };
+          }),
+      }),
       session: authedOnly.query(() => ({
         userId: 'usr_e2e',
         name: 'E2E person',
@@ -832,6 +874,31 @@ export function createMockRouter(backend: MockBackend) {
             version: 1,
           })),
       ),
+      // As the API: per visible brand, open requests past due, publications needing a person, and those due this week.
+      summary: query.query(({ ctx }) => {
+        const now = Date.now();
+        const until = now + 7 * 24 * 3600 * 1000;
+        const pubs = [...backend.phase5.publications.values()];
+        const reqs = [...backend.phase5.requests.values()];
+        return {
+          upcomingDays: 7,
+          brands: backend.brands
+            .filter((b) => !ctx.member?.brandIds || ctx.member.brandIds.includes(b.id))
+            .map((b) => ({
+              brandId: b.id,
+              overdueApprovals: reqs.filter(
+                (r) => r.brandId === b.id && r.state === 'open' && r.dueAt && Date.parse(r.dueAt) < now,
+              ).length,
+              publicationsNeedingPerson: pubs.filter(
+                (p) => p.brandId === b.id && ['failed', 'outcome_unknown', 'held'].includes(p.state),
+              ).length,
+              upcomingPublications: pubs.filter((p) => {
+                const at = Date.parse(p.scheduledFor);
+                return p.brandId === b.id && p.state === 'scheduled' && at >= now && at < until;
+              }).length,
+            })),
+        };
+      }),
       get: query.input(z.object({ brandId: z.string() })).query(({ input }) => {
         const b = backend.brands.find((x) => x.id === input.brandId);
         if (!b) throw new NotFoundError('Brand', input.brandId);

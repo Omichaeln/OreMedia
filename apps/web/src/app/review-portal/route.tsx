@@ -12,7 +12,7 @@ import {
 } from '../../features/review/review-attention';
 import { toUiError } from '../../lib/errors';
 import { createQueryClient } from '../../lib/query-client';
-import { TRPCProvider, createClient, createOptionsProxy, useTRPC } from '../../lib/trpc';
+import { TRPCProvider, createClient, createOptionsProxy, keyPrefixFor, useTRPC } from '../../lib/trpc';
 import { useTheme } from '../../lib/theme';
 
 /**
@@ -36,12 +36,16 @@ export function ReviewPortalRoute({ standalone = false }: { standalone?: boolean
   const runtime = useMemo(() => {
     const queryClient = createQueryClient();
     const client = createClient({ bearerToken: () => link?.token ?? null, pathname: () => '/review-portal' });
-    return { queryClient, client, trpc: createOptionsProxy(client, queryClient) };
+    return { queryClient, client, trpc: createOptionsProxy(client, queryClient, null) };
   }, [link]);
 
   return (
     <QueryClientProvider client={runtime.queryClient}>
-      <TRPCProvider trpcClient={runtime.client} queryClient={runtime.queryClient}>
+      <TRPCProvider
+        trpcClient={runtime.client}
+        queryClient={runtime.queryClient}
+        keyPrefix={keyPrefixFor(null)}
+      >
         <ToastProvider>
           <a href="#main" className="skip-link">
             Skip to content

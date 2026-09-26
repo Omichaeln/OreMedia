@@ -88,6 +88,33 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('portfolio and company page: counts from brand.summary, an overdue approval shows once it is past due', async () => {
+    const pubs = [...backend.phase5.publications.values()].filter((p) => p.brandId === E2E.brandId);
+    const needsPerson = pubs.filter((p) => ['failed', 'outcome_unknown', 'held'].includes(p.state)).length;
+    expect(needsPerson).toBeGreaterThan(0);
+    const open = [...backend.phase5.requests.values()].find((r) => r.state === 'open');
+    expect(open).toBeDefined();
+    const dueBefore = open!.dueAt;
+    open!.dueAt = new Date(Date.now() - 3600_000).toISOString();
+    try {
+      const page = await signedIn(1280);
+      await page.goto(`${origin}/portfolio`);
+      const company = page.getByRole('region', { name: E2E.companyName }).getByTestId('summary-counts');
+      await expect.poll(() => company.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');
+      expect(await company.textContent()).toContain(`${needsPerson} post`);
+      await page.goto(`${origin}/c/${encodeURIComponent(E2E.tenantId)}`);
+      const brand = page.getByRole('region', { name: E2E.brandName }).getByTestId('summary-counts');
+      await expect.poll(() => brand.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');
+      expect(await brand.textContent()).toContain(
+        `${needsPerson} ${needsPerson === 1 ? 'post failed or held' : 'posts failed or held'}`,
+      );
+      expect(await brand.textContent()).toMatch(/\d+ posts? due in the next 7 days/);
+      await page.close();
+    } finally {
+      open!.dueAt = dueBefore;
+    }
+  }, 30_000);
+
   it('at phone width the navigation is a Menu drawer that closes on navigating', async () => {
     const page = await signedIn(390);
     expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);
@@ -151,6 +178,31 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await page.getByTestId('coverage').count()).toBe(0);
     await page.close();
   }, 45_000);
+  it('performance trend: posts by day published at one age, against the previous period; young posts are pending', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7&age=1&metric=impressions`);
+    const trend = page.getByTestId('daily-trend');
+    const summary = trend.getByTestId('trend-summary');
+    // This week: the LinkedIn post of three days ago (5,200) at one day; today's post is not a day old yet.
+    // The previous seven days: the X post of twelve days ago (760), measured the same way.
+    await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('5,200 per post at 1 day');
+    expect(await summary.textContent()).toContain('across 1 of 2 posts');
+    expect(await summary.textContent()).toContain('previous 7 days 760');
+    expect(await summary.textContent()).toContain('(+584.2%)');
+    expect(await trend.getByTestId('trend-day').count()).toBe(7);
+    await trend.getByText('Show as a table').click();
+    const rows = trend.getByTestId('trend-table').locator('tbody tr');
+    expect(await rows.count()).toBe(2);
+    expect(await rows.last().textContent()).toMatch(/1—100$/); // today: 1 post, no number, not measured yet
+    // At seven days neither post of this week is old enough, and nothing stands in for their numbers.
+    await trend.getByRole('group', { name: 'Measured at' }).getByRole('button', { name: '7 days' }).click();
+    await expect
+      .poll(() => summary.textContent(), { timeout: 15_000 })
+      .toContain('No post in this period has a number at 7 days yet · 2 not measured at 7 days yet');
+    expect(new URL(page.url()).searchParams.get('age')).toBe('7');
+    await page.close();
+  }, 45_000);
+
   it('settings: channels and skills are tabs; a skill without a published version says so', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}`);
@@ -172,7 +224,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const tabs = page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab');
     await expect
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
-      .toEqual(['Channels', 'Policy', 'Skills', 'Model routing']);
+      .toEqual(['Channels', 'Mandates', 'Policy', 'Skills', 'Members', 'Model routing']);
     await page.getByRole('tab', { name: 'Policy' }).click();
     const policy = page.getByTestId('release-policy');
     await expect
@@ -233,6 +285,33 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('settings: members and invitations; mandates with their limits, paused behind a confirmation', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=members')}`);
+    const members = page.getByRole('list', { name: 'Members' }).getByRole('listitem');
+    await expect.poll(() => members.count(), { timeout: 15_000 }).toBe(3);
+    expect(await members.filter({ hasText: 'lina@example.test' }).textContent()).toContain('Invited');
+    expect(await members.filter({ hasText: 'Kofi Asare' }).textContent()).toContain(E2E.brandName);
+    await page.getByLabel('Email').fill('new.person@example.test');
+    await page.getByRole('button', { name: 'Invite', exact: true }).click();
+    await page.getByTestId('invite-sent').waitFor({ timeout: 15_000 });
+    await page.getByRole('tab', { name: 'Mandates' }).click();
+    const mandates = page.getByTestId('mandate');
+    await expect.poll(() => mandates.count(), { timeout: 15_000 }).toBe(2);
+    const active = mandates.filter({ hasText: 'Active' });
+    expect(await active.textContent()).toContain('3 posts');
+    expect(await active.textContent()).toContain('approved facts only');
+    expect(await mandates.filter({ hasText: 'Revoked' }).getByRole('button').count()).toBe(0);
+    await active.getByRole('button', { name: 'Pause' }).click();
+    await page.getByTestId('confirm-pause-mandate').click();
+    await expect
+      .poll(() => backend.phase5.mandates.get('mnd_active')?.state, { timeout: 15_000 })
+      .toBe('paused');
+    await expect.poll(() => mandates.first().textContent(), { timeout: 15_000 }).toContain('Paused');
+    Object.assign(backend.phase5.mandates.get('mnd_active') ?? {}, { state: 'active', version: 0 });
+    await page.close();
+  }, 45_000);
+
   it('settings: a brand manager sees neither the kill switches nor model routing', async () => {
     backend.role = 'brand_manager';
     const page = await signedIn(1440);
@@ -240,6 +319,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.getByTestId('release-policy').waitFor({ timeout: 15_000 });
     expect(await page.getByTestId('kill-switches').count()).toBe(0);
     expect(await page.getByRole('tab', { name: 'Model routing' }).count()).toBe(0);
+    expect(await page.getByRole('tab', { name: 'Members' }).count()).toBe(0);
+    await page.getByRole('tab', { name: 'Mandates' }).click();
+    await expect.poll(() => page.getByTestId('mandate').count(), { timeout: 15_000 }).toBe(2);
+    expect(await page.getByTestId('mandates').getByRole('button', { name: 'Pause' }).count()).toBe(0);
     backend.role = 'owner';
     await page.close();
   }, 45_000);

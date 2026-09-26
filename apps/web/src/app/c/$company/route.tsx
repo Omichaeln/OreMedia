@@ -1,12 +1,13 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type ComponentProps, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
 import { TopBar } from '../../root';
 import { RequestError } from '../../../components/request-state';
 import { Section } from '../../../components/section';
+import { SummaryCounts } from '../../../features/portfolio/summary-counts';
 import { useCompanies } from '../../../features/portfolio/use-companies';
-import { useBrands } from '../../../features/brand/use-brand';
+import { useBrandSummary, useBrands } from '../../../features/brand/use-brand';
 import { brandPath } from '../../../features/brand/brand-context';
 import { useTRPC } from '../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../lib/intent-key';
@@ -17,6 +18,7 @@ export function CompanyRoute() {
   const { company = '' } = useParams();
   const companies = useCompanies();
   const brands = useBrands();
+  const summary = useBrandSummary(company);
   const companyName = companies.data?.find((c) => c.tenantId === company)?.name ?? null;
   return (
     <>
@@ -60,6 +62,15 @@ export function CompanyRoute() {
                       </Badge>
                       {!b.publishedVersionId && <Badge tone="warning">No published standards</Badge>}
                     </p>
+                    {summary.data && (
+                      <BrandCounts
+                        counts={summary.data.brands.find((c) => c.brandId === b.id)}
+                        upcomingDays={summary.data.upcomingDays}
+                      />
+                    )}
+                    {summary.isError && (
+                      <p className="mt-2 text-xs text-muted-foreground">Counts are unavailable right now.</p>
+                    )}
                   </div>
                   <Link
                     to={brandPath(company, b.id)}
@@ -78,6 +89,21 @@ export function CompanyRoute() {
   );
 }
 
+function BrandCounts({
+  counts,
+  upcomingDays,
+}: {
+  counts: Omit<ComponentProps<typeof SummaryCounts>, 'upcomingDays'> | undefined;
+  upcomingDays: number;
+}) {
+  if (!counts) return null;
+  return (
+    <p className="mt-2">
+      <SummaryCounts {...counts} upcomingDays={upcomingDays} />
+    </p>
+  );
+}
+
 function CreateBrand() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -90,6 +116,7 @@ function CreateBrand() {
         intent.renew();
         setName('');
         void queryClient.invalidateQueries(trpc.brand.list.pathFilter());
+        void queryClient.invalidateQueries(trpc.brand.summary.pathFilter());
       },
     }),
   );

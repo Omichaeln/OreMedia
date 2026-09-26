@@ -59,6 +59,17 @@ export function headersFor(op: Operation, opts: ClientOptions): Record<string, s
   return headers;
 }
 
+/**
+ * A batch goes out with one set of headers (the first operation's), so only operations bound for the same tenant may
+ * share one: a query that names a tenant other than the URL's (the portfolio asking each company) goes on its own.
+ */
+export function needsOwnRequest(op: Operation, opts: ClientOptions): boolean {
+  if (op.type === 'mutation') return true;
+  const ctx = op.context as { tenantId?: unknown };
+  if (typeof ctx.tenantId !== 'string' || !ctx.tenantId) return false;
+  return ctx.tenantId !== tenantFromPath((opts.pathname ?? (() => window.location.pathname))());
+}
+
 export function createClient(opts: ClientOptions = {}): TRPCClient<AppRouter> {
   const url = opts.url ?? apiUrl();
   const baseFetch = opts.fetch ?? ((input, init) => fetch(input, init));
@@ -68,8 +79,8 @@ export function createClient(opts: ClientOptions = {}): TRPCClient<AppRouter> {
   return createTRPCClient<AppRouter>({
     links: [
       splitLink({
-        // Mutations are never batched: each carries its own Idempotency-Key header.
-        condition: (op) => op.type === 'mutation',
+        // Mutations are never batched (each carries its own Idempotency-Key header), nor is a query for another tenant.
+        condition: (op) => needsOwnRequest(op, opts),
         true: httpLink({
           url,
           transformer: superjson,
@@ -87,15 +98,31 @@ export function createClient(opts: ClientOptions = {}): TRPCClient<AppRouter> {
   });
 }
 
-const context = createTRPCContext<AppRouter>();
+/**
+ * Every query key starts with the company it was fetched for (tRPC's key prefix), so one company's cached rows can
+ * never answer another company's screen: switching company in the app starts from an empty cache for that company.
+ * Queries outside a company (the portfolio, sign-in, the review portal) use the empty prefix.
+ */
+type KeyFlags = { keyPrefix: true };
+export const keyPrefixFor = (tenantId: string | null): string => tenantId ?? '';
+
+const context = createTRPCContext<AppRouter, KeyFlags>();
 /** `useTRPC()` gives the options proxy: one `useQuery(trpc.x.y.queryOptions(input))` per hook (spec 21.1). */
 export const TRPCProvider = context.TRPCProvider;
 export const useTRPC = context.useTRPC;
 export const useTRPCClient = context.useTRPCClient;
 
-export type Trpc = TRPCOptionsProxy<AppRouter>;
+export type Trpc = TRPCOptionsProxy<AppRouter, KeyFlags>;
 
-/** The same proxy outside React (route loaders prefetch with it). */
-export function createOptionsProxy(client: TRPCClient<AppRouter>, queryClient: QueryClient): Trpc {
-  return createTRPCOptionsProxy<AppRouter>({ client, queryClient });
+/** The same proxy outside React, for one company (route loaders prefetch with it). */
+export function createOptionsProxy(
+  client: TRPCClient<AppRouter>,
+  queryClient: QueryClient,
+  tenantId: string | null,
+): Trpc {
+  return createTRPCOptionsProxy<AppRouter, KeyFlags>({
+    client,
+    queryClient,
+    keyPrefix: keyPrefixFor(tenantId),
+  });
 }

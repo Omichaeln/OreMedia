@@ -55,6 +55,9 @@ const attemptsRepo = new PublicationAttemptRepository();
 const evidenceRepo = new RemoteEvidenceRepository();
 const connectionsRepo = new ChannelConnectionRepository();
 
+/** The portfolio summary's upcoming window. */
+const UPCOMING_DAYS = 7;
+
 /** Policy options the caller may pass through (spec 5.5 step 7): the agent runtime supplies the run's autonomy mode. */
 export interface ActorOptions {
   autonomyMode?: AutonomyMode;
@@ -636,6 +639,29 @@ export const publicationService = {
     await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
     const page = await publicationsRepo.listForBrand(parsed.brandId, parsed.state, parsed.page, tx);
     return { items: page.items.map(toPublicationDto), nextCursor: page.nextCursor };
+  },
+
+  /**
+   * Portfolio summary, per brand the actor may see: publications that need a person (failed, outcome unknown,
+   * held) and publications scheduled in the next seven days.
+   */
+  async attentionByBrand(actor: ResolvedActor, now: Date, tx?: Tx) {
+    const ctx = requireTenant();
+    await policy.assert(
+      actor,
+      'brand.read',
+      { type: 'tenant', tenantId: ctx.tenantId, id: ctx.tenantId },
+      {},
+      tx,
+    );
+    const until = new Date(now.getTime() + UPCOMING_DAYS * 24 * 3600 * 1000);
+    const brands = await publicationsRepo.countAttentionByBrand(
+      ctx.brandIds === 'all' ? 'all' : [...ctx.brandIds],
+      now,
+      until,
+      tx,
+    );
+    return { upcomingDays: UPCOMING_DAYS, brands };
   },
 
   async evidence(actor: ResolvedActor, input: z.infer<typeof PublicationEvidence>, tx?: Tx) {
