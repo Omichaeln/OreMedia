@@ -34,6 +34,8 @@ export {
   resetRoutingPolicies,
   routingPolicyFor,
   assertRoutingAllowed,
+  configureModelRegion,
+  modelRegion,
   type RoutingPolicySource,
 } from './routing-policy';
 export {

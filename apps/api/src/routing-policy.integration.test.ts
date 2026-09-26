@@ -4,7 +4,7 @@ import type { ModelRoutingPolicy } from '@oremedia/contracts/agents';
 import { modelRoutingPolicies } from '@oremedia/db/schema/agents';
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { modelConfigFromEnv } from '@oremedia/ai';
+import { modelConfigFromEnv, modelRegion } from '@oremedia/ai';
 // Relative import: a workspace dependency here would create an api ↔ test-fixtures cycle (test-fixtures imports the router).
 import { callPath, seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src';
 import { configureRateLimiter } from './trpc';
@@ -21,14 +21,12 @@ describe('agents.routingPolicy through tRPC (spec 12.7)', () => {
   let tenantB: SeededTenant;
   // The model agents.runs.start routes to (configuration, never a literal at a call site).
   const { model, provider } = modelConfigFromEnv();
-  const inUse = { provider, model };
+  const inUse = { provider, model, region: modelRegion() };
   const denyConfigured: ModelRoutingPolicy = {
     schemaVersion: 1,
     defaultModel: `${model}-alt`,
     permittedVendors: ['anthropic', 'fake'],
     permittedRegions: [],
-    retention: 'zero',
-    dataClasses: ['brand_content'],
     deniedModels: [model],
   };
 

@@ -329,8 +329,6 @@ describe('agents module (spec 12) against MySQL 8', () => {
       defaultModel: 'fake-model',
       permittedVendors: ['fake', 'anthropic'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     setTenantRoutingPolicy(tenantB, {
@@ -338,8 +336,6 @@ describe('agents module (spec 12) against MySQL 8', () => {
       defaultModel: 'fake-model',
       permittedVendors: ['fake', 'anthropic'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel(modelConfig);

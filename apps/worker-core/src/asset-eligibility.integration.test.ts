@@ -514,8 +514,6 @@ describe('2.g1: ineligible assets never appear in search, agent context or rende
       defaultModel: 'fake-model',
       permittedVendors: ['fake'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel(MODEL);
