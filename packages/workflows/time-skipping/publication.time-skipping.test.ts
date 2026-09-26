@@ -97,12 +97,18 @@ function fakes(schedule: { scheduledFor: string; state?: PublicationState }, hoo
 }
 type Fakes = ReturnType<typeof fakes>;
 
-const coreWorker = (f: Fakes) =>
+/**
+ * `uncached` runs without a workflow cache, so there is no sticky task queue: when a worker stops mid-workflow the
+ * next task goes to the normal queue at once. The time-skipping test server does not move a task off a stopped
+ * worker's sticky queue, so a worker-lost test with the cache on hangs there.
+ */
+const coreWorker = (f: Fakes, { uncached = false } = {}) =>
   Worker.create({
     connection: t.env.nativeConnection,
     taskQueue: QUEUE,
     workflowBundle: bundle,
     activities: f.control,
+    ...(uncached ? { maxCachedWorkflows: 0 } : {}),
   });
 const providerWorker = (f: Fakes) =>
   Worker.create({
@@ -233,14 +239,14 @@ describe('publicationWorkflowV1 on a Temporal server (time-skipping in CI)', () 
         await provider.runUntil(async () => {
           const i = input();
           // The first core worker stops (gracefully, so the activity's result is recorded) at the boundary.
-          const first = await coreWorker(f);
+          const first = await coreWorker(f, { uncached: true });
           const h = await first.runUntil(async () => {
             const handle = await start(i);
             await workerLost;
             return handle;
           });
           // A second worker, with no cached state, picks the workflow up from its history.
-          const second = await coreWorker(f);
+          const second = await coreWorker(f, { uncached: true });
           await second.runUntil(h.result());
         });
         expect(f.calls.filter((c) => c !== 'readSchedule')).toEqual([
