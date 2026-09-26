@@ -45,6 +45,11 @@ export const LOG_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
   'errno',
   'queue',
   'taskQueue',
+  // Temporal SDK log metadata (sdkLogger)
+  'sdkComponent',
+  'namespace',
+  'workflowType',
+  'activityType',
   'phase',
   'ageMs',
   'count',

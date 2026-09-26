@@ -24,6 +24,7 @@ export default defineConfig({
             '**/dist/**',
             '**/*.integration.test.ts',
             '**/*.cross-tenant.test.ts',
+            '**/*.time-skipping.test.ts',
           ],
         },
       },
@@ -36,6 +37,18 @@ export default defineConfig({
           fileParallelism: false,
           testTimeout: 60_000,
           hookTimeout: 120_000,
+        },
+      },
+      {
+        // Spec 19.4 / ledger T.4: workflows on Temporal's time-skipping test server (downloaded by the SDK; CI).
+        test: {
+          ...shared,
+          name: 'time-skipping',
+          include: ['packages/workflows/time-skipping/**/*.time-skipping.test.ts'],
+          exclude: ['**/node_modules/**', '**/dist/**'],
+          fileParallelism: false,
+          testTimeout: 300_000,
+          hookTimeout: 300_000,
         },
       },
       {
