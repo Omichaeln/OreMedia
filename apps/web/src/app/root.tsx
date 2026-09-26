@@ -1,8 +1,10 @@
-import { Outlet, Link } from 'react-router';
+import { Outlet, Link, useLocation } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@oremedia/ui';
 import { TooltipProvider } from '../components/tooltip';
 import { ToastProvider } from '../components/toast';
 import { useTheme } from '../lib/theme';
+import { TRPCProvider, keyPrefixFor, tenantFromPath, useTRPCClient } from '../lib/trpc';
 import { SessionControls } from '../features/session/session-controls';
 
 export interface RootContext {
@@ -10,20 +12,33 @@ export interface RootContext {
   toggleTheme: () => void;
 }
 
-/** Application chrome shared by every route: skip link, theme, providers. Routes render their own headers. */
+/**
+ * Application chrome shared by every route: skip link, theme, providers. Routes render their own headers. The tRPC
+ * proxy below keys every query by the company in the URL, so a company switch never shows the previous company's
+ * cached rows (lib/trpc keyPrefixFor).
+ */
 export function RootLayout() {
   const { theme, toggle } = useTheme();
+  const { pathname } = useLocation();
+  const trpcClient = useTRPCClient();
+  const queryClient = useQueryClient();
   return (
-    <TooltipProvider>
-      <ToastProvider>
-        <a href="#main" className="skip-link">
-          Skip to content
-        </a>
-        <div className="flex h-full min-h-0 flex-col">
-          <Outlet context={{ theme, toggleTheme: toggle } satisfies RootContext} />
-        </div>
-      </ToastProvider>
-    </TooltipProvider>
+    <TRPCProvider
+      trpcClient={trpcClient}
+      queryClient={queryClient}
+      keyPrefix={keyPrefixFor(tenantFromPath(pathname))}
+    >
+      <TooltipProvider>
+        <ToastProvider>
+          <a href="#main" className="skip-link">
+            Skip to content
+          </a>
+          <div className="flex h-full min-h-0 flex-col">
+            <Outlet context={{ theme, toggleTheme: toggle } satisfies RootContext} />
+          </div>
+        </ToastProvider>
+      </TooltipProvider>
+    </TRPCProvider>
   );
 }
 
