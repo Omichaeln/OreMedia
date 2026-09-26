@@ -203,6 +203,32 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const routing = page.getByTestId('model-routing');
     await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('anthropic/claude-sonnet');
     expect(await routing.textContent()).toContain('Zero retention');
+    // What is checked is apart from what is only recorded, and the model in use comes from the deployment.
+    expect(await routing.getByTestId('model-in-use').textContent()).toContain('through OpenRouter');
+    expect(await routing.textContent()).toContain('Recorded, not enforced yet');
+    const storedBefore = backend.routingPolicy;
+    await routing.getByRole('button', { name: 'Edit' }).click();
+    const form = routing.getByTestId('routing-form');
+    await form.getByLabel('Denied models').fill('vendor/old-model\n vendor/old-model \n');
+    await form.getByRole('button', { name: 'Save policy' }).click();
+    await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('Stored version 3.');
+    expect(backend.routingPolicy?.policy).toMatchObject({
+      permittedVendors: ['anthropic', 'openrouter'],
+      deniedModels: ['vendor/old-model'],
+      permittedRegions: ['eu'], // not editable here: kept as stored
+      retention: 'zero',
+    });
+    // Dropping the vendor in use would stop every run: the form says so and asks before saving.
+    await routing.getByRole('button', { name: 'Edit' }).click();
+    await form.getByLabel('OpenRouter').uncheck();
+    expect(await form.textContent()).toContain('This policy stops every agent run for the company');
+    await form.getByRole('button', { name: 'Save policy' }).click();
+    const confirm = page.getByRole('alertdialog', { name: 'Stop every agent run?' });
+    await confirm.waitFor({ timeout: 15_000 });
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    expect(backend.routingPolicy?.version).toBe(3);
+    await form.getByRole('button', { name: 'Cancel' }).click();
+    backend.routingPolicy = storedBefore;
     backend.killSwitches.clear();
     await page.close();
   }, 45_000);
