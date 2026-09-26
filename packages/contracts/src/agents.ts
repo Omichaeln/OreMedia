@@ -257,17 +257,18 @@ export const ModelVendor = z.enum(['anthropic', 'openrouter', 'fake']);
 export type ModelVendor = z.infer<typeof ModelVendor>;
 
 /**
- * Spec 12.7: tenant model-routing policy (permitted vendors, regions, retention, data classes), checked before
- * EVERY model call. Stored per tenant as a versioned document (model_routing_policies).
+ * Spec 12.7: tenant model-routing policy (permitted vendors, inference regions, denied models), checked before
+ * EVERY model call. Stored per tenant as a versioned document (model_routing_policies). Retention and data classes
+ * were removed (26 September 2026): nothing enforced them; a stored document that still carries them parses, and
+ * the keys are dropped.
  */
 export const ModelRoutingPolicy = z.object({
   schemaVersion: z.literal(1),
+  /** Recorded only: the model a run uses is deployment configuration (OREMEDIA_MODEL_ID). */
   defaultModel: z.string().min(1).max(120),
   permittedVendors: z.array(ModelVendor).min(1),
-  /** Inference regions the tenant permits; [] = any region the vendor offers. */
-  permittedRegions: z.array(z.string().max(40)).default([]),
-  retention: z.enum(['zero', 'standard_30d']).default('standard_30d'),
-  dataClasses: z.array(z.enum(['brand_content', 'customer_voice', 'pii'])).default(['brand_content']),
+  /** Inference regions the tenant permits; [] = any region. Checked against OREMEDIA_MODEL_REGION. */
+  permittedRegions: z.array(z.string().min(1).max(40)).default([]),
   deniedModels: z.array(z.string().max(120)).default([]),
 });
 export type ModelRoutingPolicy = z.infer<typeof ModelRoutingPolicy>;

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ModelRoutingPolicy, ModelVendor } from '@oremedia/contracts/agents';
 import { defaultPolicyDocument, type PolicyDocumentV1 } from '@oremedia/contracts/brand';
-import { Badge, Button, EmptyState, Field, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
@@ -236,7 +236,6 @@ export function KillSwitches() {
   );
 }
 
-const RETENTION: Record<string, string> = { zero: 'Zero retention', standard_30d: 'Standard (30 days)' };
 /** The vendors a company chooses between; `fake` (the test adapter) is kept if stored, never offered. */
 const VENDORS: ReadonlyArray<[ModelVendor, string]> = [
   ['anthropic', 'Anthropic'],
@@ -258,10 +257,10 @@ function Rows({ rows }: { rows: ReadonlyArray<readonly [string, string]> }) {
 }
 
 /**
- * Spec 12.7: which model routes the company permits. Before every model call the platform checks the vendor and
- * the model against this policy (assertRoutingAllowed); the model itself is deployment configuration, shown as "In
- * use". Regions, retention, data classes and the default model are stored with the policy but not checked yet, so
- * they are shown apart and an edit keeps them as they are. Owners and admins edit; the server re-checks.
+ * Spec 12.7: which model routes the company permits. Before every model call the platform checks the vendor, the
+ * model and the inference region against this policy (assertRoutingAllowed); the model and region themselves are
+ * deployment configuration, shown as "In use". The default model is stored for the record only, so it is shown
+ * apart and an edit keeps it. Owners and admins edit; the server re-checks.
  */
 export function ModelRouting() {
   const routing = useRoutingPolicy(true);
@@ -271,13 +270,18 @@ export function ModelRouting() {
   return (
     <Section id="routing-heading" title="Model routing" testId="model-routing">
       <p className="text-xs text-muted-foreground">
-        Checked before every model call; a run whose model or vendor is not permitted stops.
+        Checked before every model call; a run whose vendor, model or region is not permitted stops.
       </p>
       {routing.isPending && <Skeleton label="Loading model routing" lines={3} />}
       {routing.isError && <RequestError error={routing.error} onRetry={() => void routing.refetch()} />}
       {inUse && (
         <p className="text-sm" data-testid="model-in-use">
-          In use: <span className="font-medium">{inUse.model}</span> through {vendorLabel(inUse.provider)}
+          In use: <span className="font-medium">{inUse.model}</span> through {vendorLabel(inUse.provider)} in{' '}
+          {inUse.region ? (
+            <span className="font-medium">{inUse.region}</span>
+          ) : (
+            'a region the deployment does not name'
+          )}
           <span className="text-muted-foreground"> · set by the deployment, not by this policy</span>
         </p>
       )}
@@ -292,24 +296,15 @@ export function ModelRouting() {
           <Rows
             rows={[
               ['Permitted vendors', listOrNone(p.permittedVendors.map(vendorLabel))],
+              ['Permitted regions', p.permittedRegions.length ? p.permittedRegions.join(', ') : 'Any region'],
               ['Denied models', listOrNone(p.deniedModels)],
             ]}
           />
-          <h3 className="mt-2 text-sm font-medium">Recorded, not enforced yet</h3>
+          <h3 className="mt-2 text-sm font-medium">Recorded, not enforced</h3>
           <p className="text-xs text-muted-foreground">
-            Stored with the policy for the record; no model call is checked against these yet.
+            Stored with the policy for the record; the model a run uses is set by the deployment.
           </p>
-          <Rows
-            rows={[
-              ['Default model', p.defaultModel],
-              [
-                'Regions',
-                p.permittedRegions.length ? p.permittedRegions.join(', ') : 'Any region the vendor offers',
-              ],
-              ['Data retention at vendor', RETENTION[p.retention] ?? p.retention],
-              ['Data classes sent', listOrNone(p.dataClasses.map((d) => d.replace(/_/g, ' ')))],
-            ]}
-          />
+          <Rows rows={[['Default model', p.defaultModel]]} />
         </>
       )}
       {routing.data?.version !== null && routing.data?.version !== undefined && !editing && (
@@ -332,8 +327,6 @@ export function ModelRouting() {
                 ? [inUse.provider as ModelVendor]
                 : ['anthropic'],
               permittedRegions: [],
-              retention: 'standard_30d',
-              dataClasses: ['brand_content'],
               deniedModels: [],
             }
           }
@@ -354,7 +347,7 @@ function RoutingForm({
 }: {
   base: ModelRoutingPolicy;
   version: number | null;
-  inUse: { provider: string; model: string };
+  inUse: { provider: string; model: string; region: string | null };
   onDone: () => void;
 }) {
   const trpc = useTRPC();
@@ -362,6 +355,7 @@ function RoutingForm({
   const intent = useIntentKey();
   const [vendors, setVendors] = useState<ModelVendor[]>(base.permittedVendors.filter((v) => v !== 'fake'));
   const [denied, setDenied] = useState(base.deniedModels.join('\n'));
+  const [regions, setRegions] = useState(base.permittedRegions.join(', '));
   const [confirming, setConfirming] = useState(false);
   const save = useMutation(
     trpc.agents.routingPolicy.set.mutationOptions({
@@ -376,6 +370,14 @@ function RoutingForm({
   const next: ModelRoutingPolicy = {
     ...base,
     permittedVendors: [...vendors, ...base.permittedVendors.filter((v) => v === 'fake')],
+    permittedRegions: [
+      ...new Set(
+        regions
+          .split(',')
+          .map((r) => r.trim())
+          .filter(Boolean),
+      ),
+    ],
     deniedModels: [
       ...new Set(
         denied
@@ -387,6 +389,11 @@ function RoutingForm({
   };
   const blocksVendor = !next.permittedVendors.some((v) => v === inUse.provider);
   const blocksModel = next.deniedModels.includes(inUse.model);
+  // Fails closed like the check: a region list the deployment's region is not on (or no region at all) stops runs.
+  const blocksRegion =
+    next.permittedRegions.length > 0 && (!inUse.region || !next.permittedRegions.includes(inUse.region));
+  const blocks = blocksVendor || blocksModel || blocksRegion;
+  const inUseText = `${inUse.model} through ${vendorLabel(inUse.provider)}${inUse.region ? ` in ${inUse.region}` : ''}`;
   const submit = () =>
     save.mutate({ policy: next, ...(version === null ? {} : { expectedVersion: version }) });
   const ui = save.isError ? toUiError(save.error) : null;
@@ -399,7 +406,7 @@ function RoutingForm({
       data-testid="routing-form"
       onSubmit={(e) => {
         e.preventDefault();
-        if (blocksVendor || blocksModel) setConfirming(true);
+        if (blocks) setConfirming(true);
         else submit();
       }}
       noValidate
@@ -414,17 +421,24 @@ function RoutingForm({
         ))}
       </fieldset>
       <Field
+        label="Permitted regions"
+        htmlFor="routing-regions"
+        hint="Inference regions, comma separated, as the vendor names them. Empty permits any region."
+      >
+        <Input id="routing-regions" value={regions} onChange={(e) => setRegions(e.target.value)} />
+      </Field>
+      <Field
         label="Denied models"
         htmlFor="routing-denied"
         hint="One model id per line, exactly as the vendor names it."
       >
         <Textarea id="routing-denied" rows={3} value={denied} onChange={(e) => setDenied(e.target.value)} />
       </Field>
-      {(blocksVendor || blocksModel) && (
+      {blocks && (
         <StatusBanner
           tone="warning"
           title="This policy stops every agent run for the company"
-          description={`The model in use, ${inUse.model} through ${vendorLabel(inUse.provider)}, would not be permitted. To pause agents for a while, the agent-starts kill switch is the reversible way.`}
+          description={`The model in use, ${inUseText}, would not be permitted${blocksRegion && !inUse.region ? ' (the deployment names no region, so a region list cannot be met)' : ''}. To pause agents for a while, the agent-starts kill switch is the reversible way.`}
         />
       )}
       {ui && (
@@ -461,7 +475,7 @@ function RoutingForm({
         <DialogContent
           role="alertdialog"
           title="Stop every agent run?"
-          description={`${inUse.model} through ${vendorLabel(inUse.provider)} would not be permitted, so no agent can run for this company until the policy changes again.`}
+          description={`${inUseText} would not be permitted, so no agent can run for this company until the policy changes again.`}
         >
           <DialogActions>
             <DialogClose asChild>

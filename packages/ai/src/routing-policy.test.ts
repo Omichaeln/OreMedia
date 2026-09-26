@@ -2,11 +2,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ModelRoutingPolicy } from '@oremedia/contracts/agents';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import { estimateCostMicros, modelConfigFromEnv } from './model-adapter';
 import {
   DEFAULT_MODEL_ID,
   assertRoutingAllowed,
+  configureModelRegion,
+  modelRegion,
   registerRoutingPolicySource,
   resetRoutingPolicies,
   routingPolicyFromEnv,
@@ -30,8 +33,6 @@ describe('model routing policy (spec 12.7)', () => {
       defaultModel: 'claude-sonnet-5',
       permittedVendors: ['anthropic'],
       permittedRegions: ['eu'],
-      retention: 'zero',
-      dataClasses: ['brand_content'],
       deniedModels: ['claude-opus-5'],
     });
     await expect(assertRoutingAllowed('ten_B', 'anthropic', 'claude-opus-5')).rejects.toBeInstanceOf(
@@ -44,14 +45,55 @@ describe('model routing policy (spec 12.7)', () => {
     await expect(assertRoutingAllowed('ten_A', 'anthropic', 'claude-opus-5')).resolves.toBeDefined(); // other tenants unaffected
   });
 
+  it('regions are checked against the deployment region, and a region list with no region configured fails closed', async () => {
+    setTenantRoutingPolicy('ten_R', {
+      schemaVersion: 1,
+      defaultModel: 'claude-sonnet-5',
+      permittedVendors: ['anthropic'],
+      permittedRegions: ['eu'],
+      deniedModels: [],
+    });
+    configureModelRegion(null);
+    await expect(assertRoutingAllowed('ten_R', 'anthropic', 'claude-sonnet-5')).rejects.toThrow(
+      /region is not configured/,
+    );
+    configureModelRegion('us');
+    await expect(assertRoutingAllowed('ten_R', 'anthropic', 'claude-sonnet-5')).rejects.toThrow(
+      /Region us is not permitted/,
+    );
+    configureModelRegion('eu');
+    await expect(assertRoutingAllowed('ten_R', 'anthropic', 'claude-sonnet-5')).resolves.toBeDefined();
+    // A tenant without a region list is not affected by an unset region.
+    configureModelRegion(null);
+    await expect(assertRoutingAllowed('ten_A', 'anthropic', DEFAULT_MODEL_ID)).resolves.toBeDefined();
+  });
+
+  it('the deployment region is configuration (OREMEDIA_MODEL_REGION)', () => {
+    expect(modelRegion({})).toBeNull();
+    expect(modelRegion({ OREMEDIA_MODEL_REGION: ' eu ' })).toBe('eu');
+    expect(modelRegion({ OREMEDIA_MODEL_REGION: '' })).toBeNull();
+  });
+
+  it('a stored document from before retention and data classes were removed still parses, without them', () => {
+    const parsed = ModelRoutingPolicy.parse({
+      schemaVersion: 1,
+      defaultModel: 'claude-sonnet-5',
+      permittedVendors: ['anthropic'],
+      permittedRegions: [],
+      retention: 'zero',
+      dataClasses: ['brand_content'],
+      deniedModels: [],
+    });
+    expect(parsed).not.toHaveProperty('retention');
+    expect(parsed).not.toHaveProperty('dataClasses');
+  });
+
   it('a registered source replaces the in-memory map', async () => {
     registerRoutingPolicySource(async () => ({
       schemaVersion: 1,
       defaultModel: 'm',
       permittedVendors: ['fake'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     }));
     await expect(assertRoutingAllowed('ten_C', 'anthropic', 'claude-opus-5')).rejects.toBeInstanceOf(
@@ -73,13 +115,11 @@ describe('model routing policy (spec 12.7)', () => {
         schemaVersion: 1,
         defaultModel: 'claude-opus-4-8',
         permittedVendors: ['anthropic'],
-        retention: 'zero',
       }),
     );
     const policy = routingPolicyFromEnv({ MODEL_ROUTING_POLICY_REF: file });
     expect(policy).toMatchObject({
       defaultModel: 'claude-opus-4-8',
-      retention: 'zero',
       permittedRegions: [],
     });
     expect(

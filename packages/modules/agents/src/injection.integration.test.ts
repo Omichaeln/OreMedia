@@ -166,8 +166,6 @@ describe('prompt-injection fixtures against the dispatcher (MySQL)', () => {
       defaultModel: 'fake-model',
       permittedVendors: ['fake'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel(modelConfig);

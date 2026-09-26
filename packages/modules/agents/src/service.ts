@@ -27,6 +27,7 @@ import {
   RELEASE_1_TOOLS,
   entitlementAutonomy,
   modelConfigFromEnv,
+  modelRegion,
   tenantPolicyFor,
   type ModelConfig,
 } from '@oremedia/ai';
@@ -388,7 +389,7 @@ export const agentsService = {
       const row = await routingPoliciesRepo.current(tx);
       // The route agents.runs.start checks (deployment configuration), so an admin sees what a policy would stop.
       const cfg = currentModelConfig();
-      const inUse = { provider: cfg.provider, model: cfg.model };
+      const inUse = { provider: cfg.provider, model: cfg.model, region: modelRegion() };
       return row
         ? {
             policy: ModelRoutingPolicy.parse(row.document),

@@ -150,8 +150,6 @@ describe('brand onboarding: voice and vocabulary proposed by an agent run (worke
       defaultModel: 'fake-model',
       permittedVendors: ['fake'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel(MODEL);

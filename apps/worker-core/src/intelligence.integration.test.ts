@@ -308,8 +308,6 @@ describe('Phase 6 gate: recommendation → brief, variant, experiment and a clos
       defaultModel: 'fake-model',
       permittedVendors: ['fake', 'anthropic'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel({

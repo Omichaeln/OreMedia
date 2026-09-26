@@ -286,8 +286,6 @@ describe('Release 1 content, review and publishing tools through the real dispat
       defaultModel: 'fake-model',
       permittedVendors: ['fake', 'anthropic'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel({

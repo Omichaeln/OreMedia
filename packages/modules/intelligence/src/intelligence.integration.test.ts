@@ -352,8 +352,6 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
         defaultModel: 'fake-model',
         permittedVendors: ['fake', 'anthropic'],
         permittedRegions: [],
-        retention: 'standard_30d',
-        dataClasses: ['brand_content', 'customer_voice'],
         deniedModels: [],
       });
     configureRanking({ policy: 'auto', explorationShare: 0.15, volumeThreshold: 30, baselineMargin: 0.05 });
@@ -769,8 +767,6 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
         defaultModel: 'fake-model',
         permittedVendors: ['anthropic'],
         permittedRegions: [],
-        retention: 'standard_30d',
-        dataClasses: ['brand_content'],
         deniedModels: [],
       });
       await expect(ingest(tenantB, brandB1, 'Another question?')).rejects.toMatchObject({

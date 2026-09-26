@@ -246,14 +246,16 @@ export class MockBackend {
       defaultModel: 'anthropic/claude-sonnet',
       permittedVendors: ['anthropic', 'openrouter'],
       permittedRegions: ['eu'],
-      retention: 'zero',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     },
     version: 2,
   };
   /** The route this deployment starts runs with (agents.routingPolicy.get inUse). */
-  readonly modelInUse = { provider: 'openrouter', model: 'anthropic/claude-sonnet' };
+  readonly modelInUse = {
+    provider: 'openrouter',
+    model: 'anthropic/claude-sonnet',
+    region: 'eu' as string | null,
+  };
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
   /**
