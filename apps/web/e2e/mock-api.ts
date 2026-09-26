@@ -667,6 +667,48 @@ export function createMockRouter(backend: MockBackend) {
     experiments: p6.experiments,
     measurement: p6.measurement,
     access: t.router({
+      members: t.router({
+        list: query.query(({ ctx }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('membership.manage');
+          return {
+            items: [
+              ['mem_owner', 'usr_e2e', 'E2E person', 'e2e.person@example.test', 'owner', 'active', true, []],
+              [
+                'mem_creator',
+                'usr_creator',
+                'Kofi Asare',
+                'kofi@example.test',
+                'creator',
+                'active',
+                false,
+                [E2E.brandId],
+              ],
+              ['mem_invited', 'usr_invited', null, 'lina@example.test', 'reviewer', 'invited', false, []],
+            ].map(([membershipId, userId, name, email, role, status, allBrands, brandIds]) => ({
+              membershipId: membershipId as string,
+              userId: userId as string,
+              name: name as string | null,
+              email: email as string,
+              role: role as MembershipRole,
+              status: status as 'active' | 'invited' | 'disabled',
+              allBrands: allBrands as boolean,
+              brandIds: brandIds as string[],
+              createdAt: '2026-09-01T09:00:00.000Z',
+              version: 0,
+            })),
+          };
+        }),
+        invite: mutation
+          .input(
+            z.object({ email: z.string().email(), role: z.string(), allBrands: z.boolean().default(false) }),
+          )
+          .mutation(({ ctx }) => {
+            if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+              throw new PolicyDeniedError('membership.manage');
+            return { membershipId: rid('mem') };
+          }),
+      }),
       session: authedOnly.query(() => ({
         userId: 'usr_e2e',
         name: 'E2E person',
