@@ -56,6 +56,7 @@ export const accessRouter = router({
   }),
 
   members: router({
+    list: tenantQuery.query(({ ctx }) => accessService.listMembers(ctx.tenant.actor)),
     invite: tenantMutation
       .input(MemberInvite)
       .mutation(({ ctx, input }) =>

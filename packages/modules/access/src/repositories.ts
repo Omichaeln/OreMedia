@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, type SQL } from 'drizzle-orm';
 import { PlatformRepository, TenantScopedRepository, requireTenant, type Tx } from '@oremedia/db';
 import {
   apiClients,
@@ -44,6 +44,11 @@ export class UserDirectory extends PlatformRepository {
   }
   async createTenant(values: typeof tenants.$inferInsert, tx?: Tx) {
     await this.conn(tx).insert(tenants).values(values);
+  }
+  /** The people behind a tenant's memberships (members.list): platform rows, read by id only. */
+  async usersByIds(ids: string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx).select().from(users).where(inArray(users.id, ids));
   }
   /** Bootstrap only: the owner membership of a tenant being created, before any tenant context exists. */
   async createMembership(values: typeof memberships.$inferInsert, tx?: Tx) {

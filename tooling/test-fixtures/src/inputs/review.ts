@@ -41,4 +41,5 @@ export const REVIEW_INPUTS: Record<string, CrossTenantFixture> = {
   'review.mandates.pause': { buildInput: (f) => ({ mandateId: f['mandateId'], expectedVersion: 0 }) },
   'review.mandates.revoke': { buildInput: (f) => ({ mandateId: f['mandateId'], expectedVersion: 0 }) },
   'review.mandates.get': { buildInput: (f) => ({ mandateId: f['mandateId'] }) },
+  'review.mandates.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
 };

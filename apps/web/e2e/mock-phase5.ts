@@ -26,6 +26,9 @@ import {
   ReviewInboxList,
   ReviewRequestCreate,
   ReviewRequestGet,
+  MandateList,
+  MandatePause,
+  MandateRevoke,
   type FrozenManifestV1,
   type InboxAttention,
   type ReviewRequestState,
@@ -254,6 +257,38 @@ export class Phase5Backend {
   readonly revisions = new Map<string, Revision>();
   readonly variants = new Map<string, Variant>();
   readonly publications = new Map<string, Publication>();
+  /** Spec 13.4 mandates of the brand: one active, one revoked (review.mandates.list / pause / revoke). */
+  readonly mandates = new Map(
+    (
+      [
+        ['mnd_active', 'active', daysFromNow(-5), daysFromNow(25)],
+        ['mnd_revoked', 'revoked', daysFromNow(-60), daysFromNow(-30)],
+      ] as const
+    ).map(([id, state, windowStart, windowEnd]) => [
+      id as string,
+      {
+        id: id as string,
+        brandId: P5.brandId,
+        ownerUserId: 'usr_e2e',
+        servicePrincipalId: 'sp_e2e_publisher',
+        channelConnectionIds: [P5.channels.ok],
+        allowedContentClasses: ['general'],
+        sourceRules: {
+          onlyApprovedFacts: true,
+          onlyApprovedAssets: true,
+          onlyApprovedTemplates: false,
+          requireBrandReviewClean: true,
+        },
+        maxPostsPerDay: 3,
+        windowStart,
+        windowEnd,
+        state: state as 'active' | 'paused' | 'revoked' | 'expired',
+        createdAt: windowStart,
+        updatedAt: windowStart,
+        version: 0,
+      },
+    ]),
+  );
   readonly requests = new Map<string, Request>();
   readonly decisions: Decision[] = [];
   readonly approvals: Approval[] = [];
@@ -1007,7 +1042,30 @@ export function phase5Routers(
     }),
   });
 
+  const mandateAdmin = (role: string | undefined) => {
+    if (role !== 'owner' && role !== 'admin') throw new PolicyDeniedError('mandate.manage');
+  };
+  const mandateChange = (id: string, expectedVersion: number, to: 'paused' | 'revoked') => {
+    const m = b.mandates.get(id);
+    if (!m) throw new NotFoundError('PublishingMandate', id);
+    Object.assign(m, { state: to, version: expectedVersion + 1, updatedAt: now() });
+    return m;
+  };
   const review = router({
+    mandates: router({
+      list: query.input(MandateList).query(({ input }) => ({
+        items: [...b.mandates.values()].filter((m) => m.brandId === input.brandId),
+        nextCursor: null,
+      })),
+      pause: mutation.input(MandatePause).mutation(({ ctx, input }) => {
+        mandateAdmin(ctx.member?.role);
+        return mandateChange(input.mandateId, input.expectedVersion, 'paused');
+      }),
+      revoke: mutation.input(MandateRevoke).mutation(({ ctx, input }) => {
+        mandateAdmin(ctx.member?.role);
+        return mandateChange(input.mandateId, input.expectedVersion, 'revoked');
+      }),
+    }),
     requests: router({
       /** Spec 13.3: freezes the manifest of the revision and its variants; draft | changes_requested → in_review. */
       create: mutation.input(ReviewRequestCreate).mutation(({ ctx, input }) => {

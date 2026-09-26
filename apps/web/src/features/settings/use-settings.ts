@@ -33,3 +33,15 @@ export function useRoutingPolicy(enabled: boolean) {
   const trpc = useTRPC();
   return useQuery({ ...trpc.agents.routingPolicy.get.queryOptions(), enabled, retry: false });
 }
+
+/** The company's members with name, email, role and brand scope. Owners and admins only (membership.manage). */
+export function useMembers(enabled: boolean) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.access.members.list.queryOptions(), enabled, retry: false });
+}
+
+/** Spec 13.4: the brand's mandates in every state, newest first. */
+export function useMandates(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.review.mandates.list.queryOptions({ brandId, page: { limit: 100 } }));
+}

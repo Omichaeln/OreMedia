@@ -470,6 +470,42 @@ export const accessService = {
     });
   },
 
+  /**
+   * The company's members (Settings → Members): each membership with the person's name and email, role, status,
+   * whether it covers every brand and the brands granted otherwise. Names and emails are personal data, so this is
+   * membership.manage (owners and admins), the same people who invite and change roles.
+   */
+  async listMembers(actor: ResolvedActor, tx?: Tx) {
+    await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+    const rows = await membershipsRepo.list(tx);
+    const people = await runAsPlatform('members-list', requireTenant().correlationId, () =>
+      directory.usersByIds(
+        rows.map((m) => m.userId),
+        tx,
+      ),
+    );
+    const byId = new Map(people.map((u) => [u.id, u]));
+    const items = [];
+    for (const m of rows) {
+      const user = byId.get(m.userId);
+      const grants = m.allBrands ? [] : await grantsRepo.forMembership(m.id, tx);
+      items.push({
+        membershipId: m.id,
+        userId: m.userId,
+        // An invitation not yet claimed has only the placeholder name derived from the email.
+        name: m.status === 'invited' ? null : (user?.name ?? null),
+        email: m.invitedEmail ?? user?.email ?? null,
+        role: m.role,
+        status: m.status,
+        allBrands: m.allBrands,
+        brandIds: grants.map((g) => g.brandId),
+        createdAt: m.createdAt.toISOString(),
+        version: m.version,
+      });
+    }
+    return { items: items.sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
+  },
+
   async inviteMember(actor: ResolvedActor, input: z.infer<typeof MemberInvite>, tx: Tx) {
     const parsed = MemberInvite.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);

@@ -9,6 +9,10 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
     reason: 'tenant ids are not secret; a non-member is told so',
     expectCode: 'FORBIDDEN',
   },
+  'access.members.list': {
+    buildInput: null,
+    reason: "no input; lists the caller's own tenant's memberships (tenant from the verified membership)",
+  },
   'access.members.invite': {
     buildInput: null,
     reason: "takes an email, no resource ids; the membership is created in the caller's tenant",

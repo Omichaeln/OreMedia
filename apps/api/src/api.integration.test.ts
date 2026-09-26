@@ -104,6 +104,31 @@ describe('API request path (spec 4.3, 7.1–7.3)', () => {
     ).toBe(true);
   });
 
+  it('members.list is for owners and admins, and lists only the caller company’s memberships', async () => {
+    const owner = await callPath(
+      { bearer: tenantA.ownerToken, tenantId: tenantA.tenantId },
+      'access.members.list',
+      undefined,
+    );
+    const items = (owner.data as { items: Array<{ userId: string; role: string; email: string | null }> })
+      .items;
+    expect(items.map((m) => m.userId)).toEqual(expect.arrayContaining([tenantA.creatorUserId]));
+    expect(items.every((m) => typeof m.email === 'string')).toBe(true);
+    const other = await callPath(
+      { bearer: tenantB.ownerToken, tenantId: tenantB.tenantId },
+      'access.members.list',
+      undefined,
+    );
+    const otherIds = (other.data as { items: Array<{ userId: string }> }).items.map((m) => m.userId);
+    expect(otherIds).not.toContain(tenantA.creatorUserId);
+    const creator = await callPath(
+      { bearer: tenantA.creatorToken, tenantId: tenantA.tenantId },
+      'access.members.list',
+      undefined,
+    );
+    expect(creator.error?.code).toBe('FORBIDDEN');
+  });
+
   it('service principals cannot be granted foreign brands and agents can never manage memberships', async () => {
     const bad = await callPath(
       { bearer: tenantA.ownerToken, tenantId: tenantA.tenantId },
