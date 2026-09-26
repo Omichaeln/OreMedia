@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
+import type { MetricAgeDays } from '@oremedia/contracts/measurement';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 
 export type MetricDefinitionDto = inferOutput<Trpc['measurement']['definitions']['list']>[number];
@@ -15,7 +16,8 @@ export function useMetricDefinitions() {
 
 /**
  * Spec 15.2: the latest value per (publication, metric) in the window, with freshness on every value, sums only
- * inside a comparable group and a coverage statement. Nothing is asked until there is something to ask about.
+ * inside a comparable group and a coverage statement; with `ageDays`, each post's total at that age instead (so
+ * posts published on different days compare). Nothing is asked until there is something to ask about.
  */
 export function usePublicationMetrics(
   brandId: string,
@@ -23,6 +25,7 @@ export function usePublicationMetrics(
   metricKeys: string[],
   windowStart: string,
   windowEnd: string,
+  ageDays?: MetricAgeDays,
 ) {
   const trpc = useTRPC();
   return useQuery({
@@ -34,6 +37,7 @@ export function usePublicationMetrics(
       windowStart,
       windowEnd,
       grouping: 'comparable_group',
+      ...(ageDays ? { ageDays } : {}),
     }),
     enabled: publicationIds.length > 0 && metricKeys.length > 0,
   });
