@@ -4,6 +4,7 @@ import {
   STALE_FACTOR,
   aggregateByComparableGroup,
   aggregationFor,
+  atAge,
   comparableGroupFor,
   coverageOf,
   deriveRates,
@@ -93,6 +94,34 @@ describe('normalisation rules (spec 15.2)', () => {
     const newer = { subjectId: 'p', metricKey: 'm', fetchedAt: new Date(T0.getTime() + 1), id: 'new' };
     expect(latestPerSubjectMetric([newer, older]).map((r) => r.id)).toEqual(['new']);
     expect(latestPerSubjectMetric([older, newer]).map((r) => r.id)).toEqual(['new']);
+  });
+  it('at an age, the first pull at or after it (within a day) is the number; nothing else stands in for it', () => {
+    const H = 3_600_000;
+    const pull = (id: string, hours: number, subjectId = 'p') => ({
+      id,
+      subjectId,
+      metricKey: 'm',
+      windowStart: T0,
+      windowEnd: new Date(T0.getTime() + hours * H),
+      fetchedAt: new Date(T0.getTime() + hours * H + H),
+    });
+    const schedule = [pull('1h', 1), pull('1d', 24), pull('3d', 72), pull('7d', 168), pull('28d', 672)];
+    expect(atAge(schedule, 1).map((r) => r.id)).toEqual(['1d']);
+    expect(atAge(schedule, 7).map((r) => r.id)).toEqual(['7d']);
+    expect(atAge(schedule, 28).map((r) => r.id)).toEqual(['28d']);
+    // A pull pushed past the age by the channel's delay still counts; one past the slack does not.
+    expect(atAge([pull('late', 48)], 1).map((r) => r.id)).toEqual(['late']);
+    expect(atAge([pull('too-late', 49)], 1)).toEqual([]);
+    // The +3 d pull is never read as the one-day total when the +1 d pull is missing.
+    expect(atAge([pull('3d', 72)], 1)).toEqual([]);
+    // The 7-day pull failed: the 3-day and 28-day totals are never passed off as the 7-day one.
+    expect(atAge([pull('3d', 72), pull('28d', 672)], 7)).toEqual([]);
+    // A re-fetch of the same window wins over the earlier fetch; subjects stay apart.
+    const refetch = { ...pull('7d-again', 168), fetchedAt: new Date(T0.getTime() + 200 * H) };
+    expect(atAge([pull('7d', 168), refetch, pull('other', 168, 'q')], 7).map((r) => r.id)).toEqual([
+      '7d-again',
+      'other',
+    ]);
   });
   it('aggregates only within a comparable group; unavailable rows count as unavailable subjects, never zero', () => {
     const agg = aggregateByComparableGroup([

@@ -178,6 +178,31 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await page.getByTestId('coverage').count()).toBe(0);
     await page.close();
   }, 45_000);
+  it('performance trend: posts by day published at one age, against the previous period; young posts are pending', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7&age=1&metric=impressions`);
+    const trend = page.getByTestId('daily-trend');
+    const summary = trend.getByTestId('trend-summary');
+    // This week: the LinkedIn post of three days ago (5,200) at one day; today's post is not a day old yet.
+    // The previous seven days: the X post of twelve days ago (760), measured the same way.
+    await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('5,200 per post at 1 day');
+    expect(await summary.textContent()).toContain('across 1 of 2 posts');
+    expect(await summary.textContent()).toContain('previous 7 days 760');
+    expect(await summary.textContent()).toContain('(+584.2%)');
+    expect(await trend.getByTestId('trend-day').count()).toBe(7);
+    await trend.getByText('Show as a table').click();
+    const rows = trend.getByTestId('trend-table').locator('tbody tr');
+    expect(await rows.count()).toBe(2);
+    expect(await rows.last().textContent()).toMatch(/1—100$/); // today: 1 post, no number, not measured yet
+    // At seven days neither post of this week is old enough, and nothing stands in for their numbers.
+    await trend.getByRole('group', { name: 'Measured at' }).getByRole('button', { name: '7 days' }).click();
+    await expect
+      .poll(() => summary.textContent(), { timeout: 15_000 })
+      .toContain('No post in this period has a number at 7 days yet · 2 not measured at 7 days yet');
+    expect(new URL(page.url()).searchParams.get('age')).toBe('7');
+    await page.close();
+  }, 45_000);
+
   it('settings: channels and skills are tabs; a skill without a published version says so', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}`);

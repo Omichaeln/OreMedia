@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, between, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import {
   BrandScopedRepository,
@@ -184,6 +184,8 @@ export class MetricSnapshotRepository extends BrandScopedRepository<typeof metri
     windowStart: Date,
     windowEnd: Date,
     tx?: Tx,
+    /** Only pulls whose window (publication moment → pull) lasts between these, in seconds (a post's age). */
+    ageSeconds?: { min: number; max: number },
   ) {
     if (subjectIds.length === 0 || metricKeys.length === 0) return [];
     return this.conn(tx)
@@ -198,6 +200,13 @@ export class MetricSnapshotRepository extends BrandScopedRepository<typeof metri
             inArray(metricSnapshots.metricKey, metricKeys),
             gte(metricSnapshots.windowStart, windowStart),
             lte(metricSnapshots.windowEnd, windowEnd),
+            ageSeconds
+              ? between(
+                  sql`timestampdiff(second, ${metricSnapshots.windowStart}, ${metricSnapshots.windowEnd})`,
+                  ageSeconds.min,
+                  ageSeconds.max,
+                )
+              : undefined,
           ) as SQL,
         ),
       )

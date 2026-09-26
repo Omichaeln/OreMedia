@@ -1691,8 +1691,29 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         brandOf(input.brandId);
         const groupOf = (key: string) =>
           b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
+        // With ageDays, as the API: a post younger than the age has no pull at it yet, so no number; the window
+        // runs from the publication moment to that age.
+        const publishedAt = (id: string) => b.p5.publications.get(id)?.scheduledFor ?? null;
+        const matured = (id: string) => {
+          const at = publishedAt(id);
+          return !input.ageDays || (at !== null && Date.now() - Date.parse(at) >= input.ageDays * 86_400_000);
+        };
+        const windowOf = (id: string) => {
+          const at = publishedAt(id);
+          return input.ageDays && at
+            ? {
+                windowStart: at,
+                windowEnd: new Date(Date.parse(at) + input.ageDays * 86_400_000).toISOString(),
+              }
+            : { windowStart: input.windowStart, windowEnd: input.windowEnd };
+        };
         const values = b.metricSnapshots
-          .filter((m) => input.subjectIds.includes(m.subjectId) && input.metricKeys.includes(m.metricKey))
+          .filter(
+            (m) =>
+              input.subjectIds.includes(m.subjectId) &&
+              input.metricKeys.includes(m.metricKey) &&
+              matured(m.subjectId),
+          )
           .map((m, i) => {
             const freshness = {
               fetchedAt: hoursAgo(m.ageHours),
@@ -1712,8 +1733,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
               freshness,
               source: m.source,
               definitionVersion: 1,
-              windowStart: input.windowStart,
-              windowEnd: input.windowEnd,
+              ...windowOf(m.subjectId),
               brandTimezone: 'UTC',
               numeratorSnapshotId: null,
               denominatorSnapshotId: null,

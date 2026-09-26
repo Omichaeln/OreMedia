@@ -16,6 +16,8 @@ import { definitionService } from './definitions';
 import { assertBrandExists } from './hooks';
 import {
   aggregateByComparableGroup,
+  ageWindowSeconds,
+  atAge,
   comparableGroupFor,
   coverageOf,
   freshnessOf,
@@ -85,24 +87,27 @@ const groupBy = <T>(items: T[], key: (t: T) => string): Array<{ key: string; val
 export function createMetricService(opts: MetricsQueryOptions = {}) {
   const now = opts.now ?? (() => new Date());
   return {
-    /** insight.read on the brand; the latest fetch per (subject, metric) inside the range is the number. */
+    /**
+     * insight.read on the brand; the latest fetch per (subject, metric) inside the range is the number, or with
+     * `ageDays` the post's total at that age (normalise.atAge).
+     */
     async query(actor: ResolvedActor, input: z.infer<typeof MetricsQueryV1>, tx?: Tx) {
       const parsed = MetricsQueryV1.parse(input);
       await assertBrandExists(parsed.brandId, tx);
       await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
       const windowStart = new Date(parsed.windowStart);
       const windowEnd = new Date(parsed.windowEnd);
-      const rows = latestPerSubjectMetric(
-        await snapshotsRepo.listForQuery(
-          parsed.brandId,
-          parsed.subjectType,
-          parsed.subjectIds,
-          parsed.metricKeys,
-          windowStart,
-          windowEnd,
-          tx,
-        ),
+      const snapshots = await snapshotsRepo.listForQuery(
+        parsed.brandId,
+        parsed.subjectType,
+        parsed.subjectIds,
+        parsed.metricKeys,
+        windowStart,
+        windowEnd,
+        tx,
+        parsed.ageDays ? ageWindowSeconds(parsed.ageDays) : undefined,
       );
+      const rows = parsed.ageDays ? atAge(snapshots, parsed.ageDays) : latestPerSubjectMetric(snapshots);
       const at = now();
       const values = await toValues(rows, at, tx);
       const coverage = coverageOf(values, {

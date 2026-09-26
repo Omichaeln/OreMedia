@@ -126,6 +126,42 @@ export function latestPerSubjectMetric<T extends { subjectId: string; metricKey:
   return [...seen.values()];
 }
 
+const DAY_MS = 86_400_000;
+/**
+ * How far past the asked age a pull may land (a late activity, or a reporting delay) and still count. One day keeps
+ * the next scheduled pull (+1 d → +3 d) out, so an older total is never read as a younger one.
+ */
+export const AGE_SLACK_DAYS = 1;
+
+/** The window lengths, in seconds, a pull at `ageDays` may have (the repository filters on them). */
+export const ageWindowSeconds = (ageDays: number) => ({
+  min: ageDays * 86_400,
+  max: (ageDays + AGE_SLACK_DAYS) * 86_400,
+});
+
+/**
+ * Each (subject, metric) at a post age: the first snapshot whose window (publication moment → pull) is at least
+ * `ageDays` long and at most `ageDays + AGE_SLACK_DAYS` days; ties go to the latest fetch. Nothing in that span means no
+ * number at that age: an earlier or later total is never passed off as this one.
+ */
+export function atAge<
+  T extends { subjectId: string; metricKey: string; fetchedAt: Date; windowStart: Date; windowEnd: Date },
+>(rows: T[], ageDays: number): T[] {
+  const min = ageDays * DAY_MS;
+  const max = (ageDays + AGE_SLACK_DAYS) * DAY_MS;
+  const age = (r: T) => r.windowEnd.getTime() - r.windowStart.getTime();
+  const seen = new Map<string, T>();
+  for (const row of rows) {
+    const a = age(row);
+    if (a < min || a > max) continue;
+    const k = `${row.subjectId}\u0000${row.metricKey}`;
+    const prior = seen.get(k);
+    if (!prior || a < age(prior) || (a === age(prior) && row.fetchedAt.getTime() > prior.fetchedAt.getTime()))
+      seen.set(k, row);
+  }
+  return [...seen.values()];
+}
+
 /**
  * Sums values within one comparable_group across subjects. Series are never aggregated (they stay series on the
  * values), unavailable rows count as unavailable subjects, and the aggregate is stale if any input is stale. Groups

@@ -58,8 +58,18 @@ export const MetricDefinitionCreate = MetricDefinitionInput.extend({
 
 export const MetricGrouping = z.enum(['subject', 'metric', 'comparable_group']);
 export type MetricGrouping = z.infer<typeof MetricGrouping>;
-/** Spec 15.2 query: brand, range, metric keys, grouping; every value carries freshness and completeness. */
-export const MetricsQueryV1 = MetricsQuery.extend({ grouping: MetricGrouping.default('subject') });
+/** The post ages the collection schedule pulls at (metricCollectionWorkflowV1: +1 d, +3 d, +7 d, +28 d). */
+export const MetricAgeDays = z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(28)]);
+export type MetricAgeDays = z.infer<typeof MetricAgeDays>;
+/**
+ * Spec 15.2 query: brand, range, metric keys, grouping; every value carries freshness and completeness. With
+ * `ageDays`, each value is the post's total at that age (the first pull at or after it, within two days) instead
+ * of the latest, so posts of different ages compare; each value keeps its window, so the real age is visible.
+ */
+export const MetricsQueryV1 = MetricsQuery.extend({
+  grouping: MetricGrouping.default('subject'),
+  ageDays: MetricAgeDays.optional(),
+});
 export type MetricsQueryV1 = z.infer<typeof MetricsQueryV1>;
 
 export const EngagementQualityGet = z.object({

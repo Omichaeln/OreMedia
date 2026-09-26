@@ -2,18 +2,15 @@ import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { AGES, DailyTrend } from './daily-trend';
+import { groupValue } from './performance-helpers';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingRange } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
-import {
-  useMetricDefinitions,
-  usePublicationMetrics,
-  type MetricAggregateDto,
-  type MetricValueDto,
-} from './use-measurement';
+import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
 
 const PERIODS = [
   [7, '7 days'],
@@ -48,16 +45,6 @@ interface Row {
   fetchedHoursAgo: number | null;
 }
 
-/** Sums one publication's values in one comparable group (a group is what may be added together, spec 15.2). */
-function groupValue(values: MetricValueDto[]): { value: number | null; stale: boolean; age: number | null } {
-  const withData = values.filter((v) => v.value !== null && v.completeness !== 'unavailable');
-  return {
-    value: withData.length ? withData.reduce((s, v) => s + (v.value as number), 0) : null,
-    stale: withData.some((v) => v.freshness.stale),
-    age: withData.length ? Math.max(...withData.map((v) => v.freshness.ageHours)) : null,
-  };
-}
-
 /**
  * Performance (the v3 prototype's screen on this app's design language): what the brand's published posts did in a
  * period, from the numbers measurement holds. Every figure is the latest fetch inside the period with its freshness;
@@ -69,6 +56,7 @@ export function PerformanceScreen() {
   const [params, setParams] = useSearchParams();
   const days = PERIODS.find(([d]) => String(d) === params.get('period'))?.[0] ?? 30;
   const channelFilter = params.get('channel');
+  const ageDays = AGES.find(([a]) => String(a) === params.get('age'))?.[0] ?? 7;
   const todayKey = dayKey(new Date(), timeZone);
   const range = useMemo(() => trailingRange(days, todayKey, timeZone), [days, todayKey, timeZone]);
 
@@ -284,6 +272,21 @@ export function PerformanceScreen() {
               </p>
             )}
           </section>
+
+          {selected && (
+            <DailyTrend
+              brandId={brandId}
+              timeZone={timeZone}
+              days={days}
+              range={range}
+              todayKey={todayKey}
+              channelFilter={channelFilter}
+              group={selected}
+              groupKeys={selected.metricKeys}
+              ageDays={ageDays}
+              onAgeChange={(age) => update({ age: String(age) })}
+            />
+          )}
 
           {selected && (
             <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

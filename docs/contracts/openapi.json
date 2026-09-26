@@ -4961,6 +4961,22 @@
                   "grouping": {
                     "type": "string",
                     "enum": ["subject", "metric", "comparable_group"]
+                  },
+                  "ageDays": {
+                    "anyOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "const": 3
+                      },
+                      {
+                        "const": 7
+                      },
+                      {
+                        "const": 28
+                      }
+                    ]
                   }
                 },
                 "required": ["brandId", "subjectType", "subjectIds", "metricKeys", "windowStart", "windowEnd"]
@@ -11958,6 +11974,22 @@
             "grouping": {
               "type": "string",
               "enum": ["subject", "metric", "comparable_group"]
+            },
+            "ageDays": {
+              "anyOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "const": 3
+                },
+                {
+                  "const": 7
+                },
+                {
+                  "const": 28
+                }
+              ]
             }
           },
           "required": ["brandId", "subjectType", "subjectIds", "metricKeys", "windowStart", "windowEnd"]
