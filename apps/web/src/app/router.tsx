@@ -22,7 +22,8 @@ import { SettingsRoute } from './c/$company/b/$brand/settings/route';
 import { ReviewPortalRoute } from './review-portal/route';
 
 export interface RouterDeps {
-  trpc: Trpc;
+  /** The options proxy for one company: its query keys carry that company (lib/trpc keyPrefixFor). */
+  trpcFor: (tenantId: string | null) => Trpc;
   queryClient: QueryClient;
 }
 
@@ -36,7 +37,7 @@ const param = (args: LoaderFunctionArgs, name: string): string => {
  * Spec 21.1: React Router 7 data routers; company and brand identity are in the URL. Loaders prefetch into the
  * TanStack Query cache (the same query options the components use) so a deep link renders with data.
  */
-export function createAppRouter({ trpc, queryClient }: RouterDeps) {
+export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
   const prefetch = <T,>(promise: Promise<T>) => promise.catch(() => null); // components render the error state
   return createBrowserRouter([
     {
@@ -49,7 +50,8 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
         {
           path: 'portfolio',
           Component: PortfolioRoute,
-          loader: () => prefetch(queryClient.ensureQueryData(trpc.access.listCompanies.queryOptions())),
+          loader: () =>
+            prefetch(queryClient.ensureQueryData(trpcFor(null).access.listCompanies.queryOptions())),
         },
         {
           path: 'c/:company',
@@ -57,7 +59,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
           loader: (args) =>
             prefetch(
               queryClient.ensureQueryData(
-                trpc.brand.list.queryOptions(undefined, {
+                trpcFor(param(args, 'company')).brand.list.queryOptions(undefined, {
                   trpc: { context: { tenantId: param(args, 'company') } },
                 }),
               ),
@@ -69,7 +71,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
           loader: (args) =>
             prefetch(
               queryClient.ensureQueryData(
-                trpc.brand.get.queryOptions(
+                trpcFor(param(args, 'company')).brand.get.queryOptions(
                   { brandId: param(args, 'brand') },
                   { trpc: { context: { tenantId: param(args, 'company') } } },
                 ),
@@ -86,7 +88,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.creative.documents.get.queryOptions(
+                    trpcFor(param(args, 'company')).creative.documents.get.queryOptions(
                       { documentId: param(args, 'doc') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -100,7 +102,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.publishing.channels.list.queryOptions(
+                    trpcFor(param(args, 'company')).publishing.channels.list.queryOptions(
                       { brandId: param(args, 'brand') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -113,7 +115,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.review.inbox.list.queryOptions(
+                    trpcFor(param(args, 'company')).review.inbox.list.queryOptions(
                       { brandId: param(args, 'brand'), page: { limit: 100 } },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -126,7 +128,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.publishing.channels.list.queryOptions(
+                    trpcFor(param(args, 'company')).publishing.channels.list.queryOptions(
                       { brandId: param(args, 'brand') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -139,7 +141,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.intelligence.workspace.get.queryOptions(
+                    trpcFor(param(args, 'company')).intelligence.workspace.get.queryOptions(
                       { brandId: param(args, 'brand') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -152,7 +154,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.experiments.list.queryOptions(
+                    trpcFor(param(args, 'company')).experiments.list.queryOptions(
                       { brandId: param(args, 'brand'), page: { limit: 100 } },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -165,7 +167,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.content.campaigns.list.queryOptions(
+                    trpcFor(param(args, 'company')).content.campaigns.list.queryOptions(
                       { brandId: param(args, 'brand'), page: { limit: 100 } },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
@@ -178,7 +180,7 @@ export function createAppRouter({ trpc, queryClient }: RouterDeps) {
               loader: (args) =>
                 prefetch(
                   queryClient.ensureQueryData(
-                    trpc.publishing.channels.list.queryOptions(
+                    trpcFor(param(args, 'company')).publishing.channels.list.queryOptions(
                       { brandId: param(args, 'brand') },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),

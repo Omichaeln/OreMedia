@@ -229,6 +229,12 @@
         }
       }
     },
+    "/trpc/access.members.list": {
+      "get": {
+        "operationId": "access.members.list",
+        "x-trpc-type": "query"
+      }
+    },
     "/trpc/access.members.setRole": {
       "post": {
         "operationId": "access.members.setRole",
@@ -1567,6 +1573,12 @@
             }
           }
         }
+      }
+    },
+    "/trpc/brand.summary": {
+      "get": {
+        "operationId": "brand.summary",
+        "x-trpc-type": "query"
       }
     },
     "/trpc/brand.versions.createDraft": {
@@ -5756,6 +5768,39 @@
         }
       }
     },
+    "/trpc/review.mandates.list": {
+      "get": {
+        "operationId": "review.mandates.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/review.mandates.pause": {
       "post": {
         "operationId": "review.mandates.pause",
@@ -8133,6 +8178,10 @@
           "required": ["email", "role"]
         }
       },
+      "access.members.list": {
+        "type": "query",
+        "input": null
+      },
       "access.members.setRole": {
         "type": "mutation",
         "input": {
@@ -9151,6 +9200,10 @@
           },
           "required": ["brandId"]
         }
+      },
+      "brand.summary": {
+        "type": "query",
+        "input": null
       },
       "brand.versions.createDraft": {
         "type": "mutation",
@@ -12484,6 +12537,30 @@
             }
           },
           "required": ["mandateId"]
+        }
+      },
+      "review.mandates.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
         }
       },
       "review.mandates.pause": {

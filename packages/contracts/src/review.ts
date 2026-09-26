@@ -75,6 +75,8 @@ export const ReviewInboxList = z.object({ brandId: z.string().optional(), page: 
 export const ApprovalGet = z.object({ approvalId: z.string() });
 
 export const MandateGet = z.object({ mandateId: z.string() });
+/** A brand's mandates, newest first (spec 13.4); every state, so paused and revoked ones stay visible. */
+export const MandateList = z.object({ brandId: z.string(), page: PageRequest });
 export const MandatePause = z.object({ mandateId: z.string(), expectedVersion: z.number().int() });
 export const MandateRevoke = z.object({
   mandateId: z.string(),
