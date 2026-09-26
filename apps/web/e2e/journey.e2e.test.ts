@@ -479,6 +479,15 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
         timeout: 15_000,
       })
       .toBe(2);
+    // Each company's counts are asked with its own tenant: A's failed and held posts never show under B.
+    const countsOf = (name: string) => page.getByRole('region', { name }).getByTestId('summary-counts');
+    await expect
+      .poll(() => countsOf(E2E.companyName).textContent(), { timeout: 15_000 })
+      .toContain('failed or held');
+    await expect
+      .poll(() => countsOf(E2E_B.companyName).textContent(), { timeout: 15_000 })
+      .toContain('due in the next 7 days');
+    expect(await countsOf(E2E_B.companyName).textContent()).not.toContain('failed or held');
     const portfolio = (await page.locator('main').textContent()) ?? '';
     for (const marker of aMarkers.filter((m) => m !== E2E.companyName))
       expect(portfolio, `portfolio must not show "${marker}"`).not.toContain(marker);

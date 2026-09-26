@@ -21,6 +21,8 @@ import {
 } from '@oremedia/contracts/brand';
 import { brandService } from '@oremedia/module-brand';
 import { idempotent } from '@oremedia/module-operations';
+import { publicationService } from '@oremedia/module-publishing';
+import { reviewService } from '@oremedia/module-review';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
 
 const mutationCtx = (ctx: MutationCtx) => ({
@@ -39,6 +41,29 @@ export const brandRouter = router({
   get: tenantQuery
     .input(z.object({ brandId: z.string() }))
     .query(({ ctx, input }) => brandService.get(ctx.tenant.actor, input.brandId)),
+  /**
+   * The company page and portfolio: per brand the actor may see, open review requests past their due time,
+   * publications that need a person (failed, outcome unknown, held) and publications due in the upcoming window.
+   */
+  summary: tenantQuery.query(async ({ ctx }) => {
+    const now = new Date();
+    const [brands, overdue, attention] = await Promise.all([
+      brandService.list(ctx.tenant.actor),
+      reviewService.inbox.overdueByBrand(ctx.tenant.actor, now),
+      publicationService.attentionByBrand(ctx.tenant.actor, now),
+    ]);
+    const overdueOf = new Map(overdue.map((o) => [o.brandId, o.count]));
+    const attentionOf = new Map(attention.brands.map((a) => [a.brandId, a]));
+    return {
+      upcomingDays: attention.upcomingDays,
+      brands: brands.map((b) => ({
+        brandId: b.id,
+        overdueApprovals: overdueOf.get(b.id) ?? 0,
+        publicationsNeedingPerson: attentionOf.get(b.id)?.needsPerson ?? 0,
+        upcomingPublications: attentionOf.get(b.id)?.upcoming ?? 0,
+      })),
+    };
+  }),
 
   versions: router({
     createDraft: tenantMutation

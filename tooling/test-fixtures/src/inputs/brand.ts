@@ -8,6 +8,7 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
     reason: "no resource ids; the brand is created in the caller's tenant",
   },
   'brand.list': { buildInput: null, reason: "no input; lists only the caller's visible brands" },
+  'brand.summary': { buildInput: null, reason: "no input; counts only the caller's visible brands" },
   'brand.get': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'brand.versions.createDraft': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'brand.versions.update': {

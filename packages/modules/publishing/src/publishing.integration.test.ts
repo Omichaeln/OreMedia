@@ -1935,4 +1935,57 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect((await holdRestored(A, null)).held).toContain(two.id);
     });
   });
+
+  describe('portfolio summary (attentionByBrand)', () => {
+    it('counts, per visible brand, publications needing a person and those due in the next seven days', async () => {
+      const now = new Date();
+      const until = new Date(now.getTime() + 7 * 24 * 3600 * 1000);
+      // The earlier tests leave nothing due this week: move one cancelled row into the window and one just past it.
+      const cancelled = await tdb.db
+        .select()
+        .from(publications)
+        .where(and(eq(publications.tenantId, tenantA), eq(publications.state, 'cancelled')));
+      expect(cancelled.length).toBeGreaterThanOrEqual(2);
+      const inWindow = new Date(now.getTime() + 24 * 3600 * 1000);
+      const pastWindow = new Date(until.getTime() + 3600 * 1000);
+      await tdb.db
+        .update(publications)
+        .set({ state: 'scheduled', scheduledFor: inWindow })
+        .where(eq(publications.id, cancelled[0]!.id));
+      await tdb.db
+        .update(publications)
+        .set({ state: 'scheduled', scheduledFor: pastWindow })
+        .where(eq(publications.id, cancelled[1]!.id));
+      const rows = await tdb.db.select().from(publications).where(eq(publications.tenantId, tenantA));
+      const expected = new Map<string, { needsPerson: number; upcoming: number }>();
+      for (const r of rows) {
+        const needsPerson = ['failed', 'outcome_unknown', 'held'].includes(r.state);
+        const upcoming = r.state === 'scheduled' && r.scheduledFor >= now && r.scheduledFor < until;
+        if (!needsPerson && !upcoming) continue;
+        const e = expected.get(r.brandId) ?? { needsPerson: 0, upcoming: 0 };
+        expected.set(r.brandId, {
+          needsPerson: e.needsPerson + (needsPerson ? 1 : 0),
+          upcoming: e.upcoming + (upcoming ? 1 : 0),
+        });
+      }
+      expect([...expected.values()].some((e) => e.needsPerson > 0)).toBe(true);
+      expect([...expected.values()].some((e) => e.upcoming > 0)).toBe(true);
+      const all = await runInTenant(ctx(tenantA), () => publicationService.attentionByBrand(A, now));
+      expect(all.upcomingDays).toBe(7);
+      expect(
+        new Map(all.brands.map((b) => [b.brandId, { needsPerson: b.needsPerson, upcoming: b.upcoming }])),
+      ).toEqual(expected);
+      // A brand-restricted context counts only its brands; another tenant never sees these rows.
+      const none = await runInTenant(ctx(tenantA, new Set()), () =>
+        publicationService.attentionByBrand(A, now),
+      );
+      expect(none.brands).toEqual([]);
+      const onlyA = await runInTenant(ctx(tenantA, new Set([brandA])), () =>
+        publicationService.attentionByBrand(A, now),
+      );
+      expect(onlyA.brands.every((b) => b.brandId === brandA)).toBe(true);
+      const other = await runInTenant(ctx(tenantB), () => publicationService.attentionByBrand(B, now));
+      expect(other.brands.some((b) => expected.has(b.brandId))).toBe(false);
+    });
+  });
 });

@@ -619,6 +619,19 @@ export const reviewService = {
       }
       return { items, nextCursor: page.nextCursor };
     },
+
+    /** Portfolio summary: open requests past their due time, per brand the actor may see. */
+    async overdueByBrand(actor: ResolvedActor, now: Date, tx?: Tx) {
+      const ctx = requireTenant();
+      await policy.assert(
+        actor,
+        'brand.read',
+        { type: 'tenant', tenantId: ctx.tenantId, id: ctx.tenantId },
+        {},
+        tx,
+      );
+      return requestsRepo.countOverdueByBrand(ctx.brandIds === 'all' ? 'all' : [...ctx.brandIds], now, tx);
+    },
   },
 
   externalLinks: {
