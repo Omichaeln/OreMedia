@@ -9,6 +9,7 @@ import {
   ApprovalGet,
   FrozenManifestV1,
   MandateGet,
+  MandateList,
   MandatePause,
   MandateRevoke,
   ReviewDecisionSubmit,
@@ -876,6 +877,15 @@ export const reviewService = {
       const m = await mandatesRepo.getById(parsed.mandateId, tx);
       await policy.assert(actor, 'brand.read', brandResource(m.brandId), {}, tx);
       return toMandateDto(m);
+    },
+
+    /** A brand's mandates, newest first, in every state (Settings → Mandates); the same read as get. */
+    async list(actor: ResolvedActor, input: z.infer<typeof MandateList>, tx?: Tx) {
+      const parsed = MandateList.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx); // foreign → NOT_FOUND
+      await policy.assert(actor, 'brand.read', brandResource(brand.id), {}, tx);
+      const page = await mandatesRepo.list(brand.id, parsed.page, tx);
+      return { items: page.items.map(toMandateDto), nextCursor: page.nextCursor };
     },
 
     /** Spec 13.4 mandates.getById: the scoped row (NOT_FOUND for a foreign id). */

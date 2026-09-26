@@ -8,13 +8,16 @@ import { useBrandContext } from '../brand/brand-context';
 import { ChannelSettings } from '../publishing/channel-settings';
 import { useCompanies } from '../portfolio/use-companies';
 import { KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
+import { Mandates, Members } from './members-mandates';
 import { useSkills, type SkillDto } from './use-settings';
 
 const TAB_PARAM = 'tab';
 const TABS = [
   ['channels', 'Channels', false],
+  ['mandates', 'Mandates', false],
   ['policy', 'Policy', false],
   ['skills', 'Skills', false],
+  ['members', 'Members', true],
   ['routing', 'Model routing', true],
 ] as const;
 type SettingsTab = (typeof TABS)[number][0];
@@ -85,8 +88,8 @@ function SkillsSettings() {
 
 /**
  * Spec 21.1 `settings/`: the brand's settings as tabs (the v3 prototype's arrangement), the tab in the URL. Owners and
- * admins also see the kill switches (on Policy) and model routing. Mandates, members and budgets are not listed by
- * the API, so they are not shown.
+ * admins also see the members, the kill switches (on Policy), mandate actions and model routing. Budgets have no
+ * API to read, so they are not shown.
  */
 export function SettingsScreen() {
   const { companyName, companyId, brand } = useBrandContext();
@@ -121,6 +124,9 @@ export function SettingsScreen() {
         <TabPanel value="channels">
           <ChannelSettings />
         </TabPanel>
+        <TabPanel value="mandates">
+          <Mandates canManage={isAdmin} />
+        </TabPanel>
         <TabPanel value="policy" className="flex flex-col gap-8">
           <ReleasePolicy />
           {isAdmin && <KillSwitches />}
@@ -128,6 +134,11 @@ export function SettingsScreen() {
         <TabPanel value="skills">
           <SkillsSettings />
         </TabPanel>
+        {isAdmin && (
+          <TabPanel value="members">
+            <Members />
+          </TabPanel>
+        )}
         {isAdmin && (
           <TabPanel value="routing">
             <ModelRouting />
