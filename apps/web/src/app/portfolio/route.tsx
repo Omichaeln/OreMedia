@@ -2,6 +2,8 @@ import { Link } from 'react-router';
 import { Badge, EmptyState, Skeleton } from '@oremedia/ui';
 import { TopBar } from '../root';
 import { RequestError } from '../../components/request-state';
+import { SummaryCounts } from '../../features/portfolio/summary-counts';
+import { useBrandSummary } from '../../features/brand/use-brand';
 import { useCompanies } from '../../features/portfolio/use-companies';
 
 /**
@@ -51,6 +53,7 @@ export function PortfolioRoute() {
                       <Badge glyph={false}>{c.role}</Badge>
                       <Badge glyph={false}>{c.allBrands ? 'All brands' : 'Selected brands'}</Badge>
                     </p>
+                    <CompanyTotals tenantId={c.tenantId} />
                   </div>
                   <Link
                     to={`/c/${encodeURIComponent(c.tenantId)}`}
@@ -65,5 +68,28 @@ export function PortfolioRoute() {
         )}
       </main>
     </>
+  );
+}
+
+/** One company's totals over the brands the person can see there (brand.summary, asked with that tenant). */
+function CompanyTotals({ tenantId }: { tenantId: string }) {
+  const summary = useBrandSummary(tenantId);
+  if (summary.isError)
+    return <p className="mt-2 text-xs text-muted-foreground">Counts are unavailable right now.</p>;
+  if (!summary.data) return null;
+  const sum = (key: 'overdueApprovals' | 'publicationsNeedingPerson' | 'upcomingPublications') =>
+    summary.data.brands.reduce((n, b) => n + b[key], 0);
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-2">
+      <span className="text-sm text-muted-foreground">
+        {summary.data.brands.length} {summary.data.brands.length === 1 ? 'brand' : 'brands'} ·
+      </span>
+      <SummaryCounts
+        overdueApprovals={sum('overdueApprovals')}
+        publicationsNeedingPerson={sum('publicationsNeedingPerson')}
+        upcomingPublications={sum('upcomingPublications')}
+        upcomingDays={summary.data.upcomingDays}
+      />
+    </p>
   );
 }
