@@ -18,6 +18,8 @@ import { startPublishingWorkers } from './publishing-worker';
  */
 const registrations = vi.hoisted((): WorkerRegistration[] => []);
 vi.mock('@temporalio/worker', () => ({
+  // worker.ts routes the SDK's logs through the service logger before any connection (Runtime.install).
+  Runtime: { install: () => undefined },
   NativeConnection: { connect: async () => ({ close: async () => undefined }) },
   Worker: {
     create: async (opts: { taskQueue: string; activities?: object }) => {

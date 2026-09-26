@@ -78,6 +78,39 @@ export const logger = (): Logger => {
   return wrap(root);
 };
 
+/** Temporal SDK log levels and logger shape, declared structurally so this package needs no Temporal dependency. */
+export type SdkLogLevel = 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+export interface SdkLogger {
+  log(level: SdkLogLevel, message: string, meta?: Record<string, unknown>): void;
+  trace(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>): void;
+  info(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: Record<string, unknown>): void;
+}
+
+const SDK_LEVEL = { TRACE: 'debug', DEBUG: 'debug', INFO: 'info', WARN: 'warn', ERROR: 'error' } as const;
+
+/**
+ * The Temporal SDK's logger (Runtime.install({ logger })) routed through this logger: one JSON line on stdout at the
+ * SDK's own level, through the field allowlist, instead of the SDK default that writes every level to stderr (which
+ * a platform such as Railway files as an error). An `error` in the metadata is reduced to errorFields.
+ */
+export function sdkLogger(log: Logger): SdkLogger {
+  const emit = (level: SdkLogLevel, message: string, meta: Record<string, unknown> = {}) => {
+    const { error, ...rest } = meta;
+    log[SDK_LEVEL[level]]({ ...rest, ...(error === undefined ? {} : errorFields(error)) }, message);
+  };
+  return {
+    log: emit,
+    trace: (m, meta) => emit('TRACE', m, meta),
+    debug: (m, meta) => emit('DEBUG', m, meta),
+    info: (m, meta) => emit('INFO', m, meta),
+    warn: (m, meta) => emit('WARN', m, meta),
+    error: (m, meta) => emit('ERROR', m, meta),
+  };
+}
+
 /** Summarises an error for logs without leaking internals into user-facing messages. */
 export function errorFields(err: unknown): Record<string, unknown> {
   if (err instanceof Error) {

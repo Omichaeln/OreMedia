@@ -1,4 +1,5 @@
-import { startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { Runtime } from '@temporalio/worker';
+import { sdkLogger, startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { definitionService } from '@oremedia/module-measurement';
 import { providerRegistry } from '@oremedia/providers';
@@ -7,6 +8,8 @@ import { startIngestWorkers } from './ingest-worker';
 import { temporalConfigFromEnv } from './temporal';
 
 const log = startTelemetry({ service: 'oremedia-worker-ingest', version: process.env['OREMEDIA_VERSION'] });
+// Temporal's own logs through the service logger (stdout, their real level), before any connection or worker.
+Runtime.install({ logger: sdkLogger(log.child('temporal')) });
 const url = process.env['DATABASE_URL'];
 if (!url) {
   log.error({}, 'DATABASE_URL is required');

@@ -13,7 +13,8 @@ import { createAssetIngestActivities, createRenderJobActivities } from '@oremedi
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
 import { configureStorage, createStorageFromEnv, storage } from '@oremedia/module-assets';
-import { startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { Runtime } from '@temporalio/worker';
+import { sdkLogger, startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { createChromiumRenderer } from './chromium-renderer';
 import { creativeRenderJobStore } from './creative-store';
 
@@ -26,6 +27,8 @@ import { creativeRenderJobStore } from './creative-store';
  * entry is main.ts, which checks the configuration before this module (and its dependencies) load.
  */
 const log = startTelemetry({ service: 'oremedia-worker-render', version: process.env['OREMEDIA_VERSION'] });
+// Temporal's own logs through the service logger (stdout, their real level), before any connection or worker.
+Runtime.install({ logger: sdkLogger(log.child('temporal')) });
 // main.ts already refused to start without these; the checks stay here so this module is safe to run directly.
 const databaseUrl = process.env['DATABASE_URL'];
 if (!databaseUrl) {
