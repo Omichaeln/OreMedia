@@ -59,6 +59,17 @@ export function headersFor(op: Operation, opts: ClientOptions): Record<string, s
   return headers;
 }
 
+/**
+ * A batch goes out with one set of headers (the first operation's), so only operations bound for the same tenant may
+ * share one: a query that names a tenant other than the URL's (the portfolio asking each company) goes on its own.
+ */
+export function needsOwnRequest(op: Operation, opts: ClientOptions): boolean {
+  if (op.type === 'mutation') return true;
+  const ctx = op.context as { tenantId?: unknown };
+  if (typeof ctx.tenantId !== 'string' || !ctx.tenantId) return false;
+  return ctx.tenantId !== tenantFromPath((opts.pathname ?? (() => window.location.pathname))());
+}
+
 export function createClient(opts: ClientOptions = {}): TRPCClient<AppRouter> {
   const url = opts.url ?? apiUrl();
   const baseFetch = opts.fetch ?? ((input, init) => fetch(input, init));
@@ -68,8 +79,8 @@ export function createClient(opts: ClientOptions = {}): TRPCClient<AppRouter> {
   return createTRPCClient<AppRouter>({
     links: [
       splitLink({
-        // Mutations are never batched: each carries its own Idempotency-Key header.
-        condition: (op) => op.type === 'mutation',
+        // Mutations are never batched (each carries its own Idempotency-Key header), nor is a query for another tenant.
+        condition: (op) => needsOwnRequest(op, opts),
         true: httpLink({
           url,
           transformer: superjson,

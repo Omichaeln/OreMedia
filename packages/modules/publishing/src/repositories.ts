@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import type { PublicationState } from '@oremedia/contracts/publishing';
@@ -117,6 +117,8 @@ export class ChannelConnectionRepository extends BrandScopedRepository<typeof ch
   }
 }
 
+const NEEDS_PERSON: readonly PublicationState[] = ['failed', 'outcome_unknown', 'held'];
+
 export class PublicationRepository extends BrandScopedRepository<typeof publications> {
   constructor() {
     super(publications);
@@ -169,6 +171,38 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
       .orderBy(desc(publications.id))
       .limit(page.limit + 1);
     return pageOf(rows, page);
+  }
+  /**
+   * Portfolio summary, per brand of `brandIds`: publications that need a person (failed, outcome unknown or held)
+   * and publications scheduled in [now, until). The tenant scope still applies.
+   */
+  async countAttentionByBrand(brandIds: 'all' | readonly string[], now: Date, until: Date, tx?: Tx) {
+    if (brandIds !== 'all' && brandIds.length === 0) return [];
+    const needsPerson = inArray(publications.state, [...NEEDS_PERSON]);
+    const upcoming = and(
+      eq(publications.state, 'scheduled'),
+      gte(publications.scheduledFor, now),
+      lt(publications.scheduledFor, until),
+    ) as SQL;
+    const either = or(needsPerson, upcoming) as SQL;
+    const rows = await this.conn(tx)
+      .select({
+        brandId: publications.brandId,
+        needsPerson: sql`sum(case when ${needsPerson} then 1 else 0 end)`,
+        upcoming: sql`sum(case when ${upcoming} then 1 else 0 end)`,
+      })
+      .from(publications)
+      .where(
+        this.scope(
+          brandIds === 'all' ? either : (and(inArray(publications.brandId, [...brandIds]), either) as SQL),
+        ),
+      )
+      .groupBy(publications.brandId);
+    return rows.map((r) => ({
+      brandId: r.brandId,
+      needsPerson: Number(r.needsPerson ?? 0),
+      upcoming: Number(r.upcoming ?? 0),
+    }));
   }
   /** Spec 13.4 mandate_daily_quota: publications a mandate scheduled on the UTC day of `at` (all states but cancelled). */
   async countForMandateOnDay(mandateId: string, at: Date, tx?: Tx): Promise<number> {

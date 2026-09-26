@@ -502,6 +502,20 @@ describe('review module (spec 13) against MySQL 8', () => {
       expect((await auditOf(tenantA, 'review.request.create')).length).toBe(1);
     });
 
+    it('counts an open request past its due time as overdue, for its own brand and tenant only', async () => {
+      const due = new Date(Date.now() + 3600_000);
+      await tdb.db.update(reviewRequests).set({ dueAt: due }).where(eq(reviewRequests.id, requestId));
+      const after = new Date(due.getTime() + 1000);
+      expect(await runA(() => reviewService.inbox.overdueByBrand(manager.actor, new Date()))).toEqual([]);
+      expect(await runA(() => reviewService.inbox.overdueByBrand(manager.actor, after))).toEqual([
+        { brandId: brandA, count: 1 },
+      ]);
+      expect(
+        await run(tenantB, managerB.id, () => reviewService.inbox.overdueByBrand(managerB.actor, after)),
+      ).toEqual([]);
+      await tdb.db.update(reviewRequests).set({ dueAt: null }).where(eq(reviewRequests.id, requestId));
+    });
+
     it('refuses a second open request on the same revision and a request on a revision without variants', async () => {
       await expect(
         runA((tx) => reviewService.requests.create(manager.actor, requestFor(revisionId), tx)),
@@ -1211,6 +1225,11 @@ describe('review module (spec 13) against MySQL 8', () => {
       const created = await runA((tx) => reviewService.mandates.create(owner, mandateInput(), tx));
       mandateId = created.mandateId;
       expect(created.state).toBe('active');
+      // The brand's mandate list shows it to anyone who can read the brand.
+      const listed = await runA((tx) =>
+        reviewService.mandates.list(manager.actor, { brandId: brandA, page: { limit: 50 } }, tx),
+      );
+      expect(listed.items.map((m) => m.id)).toContain(mandateId);
       expect((await eventsOf(tenantA, 'mandate.changed')).length).toBe(1);
       const pub = pubFor({ authority: 'mandate', mandateId });
       expect(await runA(() => evaluateRelease(pub, at))).toEqual({ allow: true });
