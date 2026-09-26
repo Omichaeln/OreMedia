@@ -8,7 +8,7 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p time-skipping/tsconfig.json",
     "test:replay": "cd ../.. && pnpm test:replay"
   },
   "dependencies": {

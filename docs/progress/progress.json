@@ -2179,8 +2179,8 @@
           "Temporal time-skipping tests: durable waits, cancel races, reschedule, crash at each activity boundary, replay",
           "critical",
           "19.1",
-          "blocked",
-          "@temporalio/testing downloads its test server from GitHub releases, which the environment proxy blocks (403). Activities can be tested with MockActivityEnvironment."
+          "complete",
+          "PR #28: packages/workflows/time-skipping runs publicationWorkflowV1 on Temporal’s time-skipping test server in CI (job Temporal time-skipping tests, about 40 s): the durable three-day wait re-reading the row and publishing once, a cancel during the wait, an earlier reschedule waking the wait, a cancel landing during evaluateRelease, a worker lost after each of five activity boundaries (the next worker, without a workflow cache, resumes from history and nothing runs twice), and replay of the recorded histories. The test-server download is blocked in the agent environment, so locally the same tests run against a Temporal CLI dev server (TEMPORAL_CLI_PATH) in scaled real time."
         ],
         [
           "T.5",
