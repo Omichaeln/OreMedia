@@ -493,17 +493,6 @@
                           "type": "string"
                         }
                       },
-                      "retention": {
-                        "type": "string",
-                        "enum": ["zero", "standard_30d"]
-                      },
-                      "dataClasses": {
-                        "type": "array",
-                        "items": {
-                          "type": "string",
-                          "enum": ["brand_content", "customer_voice", "pii"]
-                        }
-                      },
                       "deniedModels": {
                         "type": "array",
                         "items": {
@@ -8384,17 +8373,6 @@
                   "type": "array",
                   "items": {
                     "type": "string"
-                  }
-                },
-                "retention": {
-                  "type": "string",
-                  "enum": ["zero", "standard_30d"]
-                },
-                "dataClasses": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "enum": ["brand_content", "customer_voice", "pii"]
                   }
                 },
                 "deniedModels": {

@@ -273,8 +273,6 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
       defaultModel: 'fake-model',
       permittedVendors: ['fake'],
       permittedRegions: [],
-      retention: 'standard_30d',
-      dataClasses: ['brand_content'],
       deniedModels: [],
     });
     configureAgentModel(modelConfig);

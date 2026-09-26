@@ -3,7 +3,7 @@ import { ModelRoutingPolicy, ModelVendor } from '@oremedia/contracts/agents';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 
 /**
- * Spec 12.7: tenant model-routing policy (permitted vendors, regions, retention, data classes), checked before
+ * Spec 12.7: tenant model-routing policy (permitted vendors, inference regions, denied models), checked before
  * EVERY model call. The model id is configuration (MODEL_ROUTING_POLICY_REF / OREMEDIA_MODEL_ID), never a literal at
  * a call site. The policy document itself is a contract (packages/contracts agents: the agents router accepts it,
  * this module enforces it) and is re-exported here for existing callers.
@@ -76,20 +76,38 @@ export function registerRoutingPolicySource(source: RoutingPolicySource): void {
 /** Test seam. */
 export function resetRoutingPolicies(): void {
   platformPolicy = builtIn();
+  regionOverride = undefined;
   tenantPolicies.clear();
   policySource = noStoredPolicy;
+}
+
+/**
+ * The inference region this deployment's model calls run in (OREMEDIA_MODEL_REGION, as the vendor names it), or
+ * null when it is not configured. configureModelRegion overrides it (tests; the composition root if ever needed).
+ */
+let regionOverride: string | null | undefined;
+export function configureModelRegion(region: string | null | undefined): void {
+  regionOverride = region;
+}
+export function modelRegion(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (regionOverride !== undefined) return regionOverride;
+  return env['OREMEDIA_MODEL_REGION']?.trim() || null;
 }
 
 export async function routingPolicyFor(tenantId: string): Promise<ModelRoutingPolicy> {
   return (await policySource(tenantId)) ?? tenantPolicies.get(tenantId) ?? platformPolicy;
 }
 
-/** Throws FORBIDDEN(model_routing_denied) when the tenant's policy does not permit the vendor, model or region. */
+/**
+ * Throws FORBIDDEN(model_routing_denied) when the tenant's policy does not permit the vendor, model or region. The
+ * region is the deployment's (modelRegion) unless a caller names one. A policy that restricts regions fails closed:
+ * with no region configured it cannot be shown to hold, so the call is refused.
+ */
 export async function assertRoutingAllowed(
   tenantId: string,
   provider: string,
   model: string,
-  region?: string,
+  region: string | null = modelRegion(),
 ): Promise<ModelRoutingPolicy> {
   const policy = await routingPolicyFor(tenantId);
   const vendor = ModelVendor.safeParse(provider);
@@ -100,6 +118,11 @@ export async function assertRoutingAllowed(
     );
   if (policy.deniedModels.includes(model))
     throw new PolicyDeniedError('model_routing_denied', `Model ${model} is not permitted for this company`);
+  if (policy.permittedRegions.length && !region)
+    throw new PolicyDeniedError(
+      'model_routing_denied',
+      'The inference region is not configured, so this company’s region restriction cannot be met',
+    );
   if (region && policy.permittedRegions.length && !policy.permittedRegions.includes(region))
     throw new PolicyDeniedError('model_routing_denied', `Region ${region} is not permitted for this company`);
   return policy;

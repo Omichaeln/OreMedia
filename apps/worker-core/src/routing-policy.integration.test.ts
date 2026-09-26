@@ -26,8 +26,6 @@ const denyOpus: ModelRoutingPolicy = {
   defaultModel: 'claude-sonnet-5',
   permittedVendors: ['anthropic'],
   permittedRegions: [],
-  retention: 'zero',
-  dataClasses: ['brand_content'],
   deniedModels: [MODEL],
 };
 
@@ -95,7 +93,7 @@ describe('tenant model-routing policy is stored, audited and enforced (ledger 4.
     ).rejects.toMatchObject({ reason: 'model_routing_denied' });
     await expect(
       inTenant(tenantA, () => assertRoutingAllowed(tenantA, 'anthropic', 'claude-sonnet-5')),
-    ).resolves.toMatchObject({ retention: 'zero' });
+    ).resolves.toMatchObject({ deniedModels: [MODEL] });
     // Another tenant is unaffected: no stored row, the platform policy applies.
     await expect(
       inTenant(tenantB, () => assertRoutingAllowed(tenantB, 'anthropic', MODEL)),
