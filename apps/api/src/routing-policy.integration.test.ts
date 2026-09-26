@@ -20,7 +20,8 @@ describe('agents.routingPolicy through tRPC (spec 12.7)', () => {
   let tenantA: SeededTenant;
   let tenantB: SeededTenant;
   // The model agents.runs.start routes to (configuration, never a literal at a call site).
-  const { model } = modelConfigFromEnv();
+  const { model, provider } = modelConfigFromEnv();
+  const inUse = { provider, model };
   const denyConfigured: ModelRoutingPolicy = {
     schemaVersion: 1,
     defaultModel: `${model}-alt`,
@@ -55,13 +56,13 @@ describe('agents.routingPolicy through tRPC (spec 12.7)', () => {
     const before = await startRun(tenantA);
     expect(before.error?.message).not.toBe(routingDenied.message);
     expect(await callPath(owner(tenantA), 'agents.routingPolicy.get', undefined)).toEqual({
-      data: { policy: null, version: null, stored: false },
+      data: { policy: null, version: null, stored: false, inUse },
     });
 
     const set = await callPath(owner(tenantA), 'agents.routingPolicy.set', { policy: denyConfigured });
     expect(set).toEqual({ data: { policy: denyConfigured, version: 0 } });
     expect(await callPath(owner(tenantA), 'agents.routingPolicy.get', undefined)).toEqual({
-      data: { policy: denyConfigured, version: 0, stored: true },
+      data: { policy: denyConfigured, version: 0, stored: true, inUse },
     });
 
     expect((await startRun(tenantA)).error).toMatchObject(routingDenied);
