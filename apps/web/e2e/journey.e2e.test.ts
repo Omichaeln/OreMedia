@@ -411,6 +411,32 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     });
   }, 60_000);
 
+  it('switching company in the app never renders the previous company’s cached rows', async () => {
+    // A's company page and brand home fill the query cache; the switch below is client-side (no reload).
+    await open(`/c/${encodeURIComponent(E2E.tenantId)}`);
+    await expect
+      .poll(() => page.getByRole('list', { name: 'Brands' }).textContent(), { timeout: 15_000 })
+      .toContain(BRAND_2.name);
+    await page.evaluate(
+      (markers) => {
+        const w = window as unknown as { leaked: string[] };
+        w.leaked = [];
+        new MutationObserver(() => {
+          if (!location.pathname.includes('ten_e2e_b')) return;
+          const text = document.querySelector('main')?.textContent ?? '';
+          for (const m of markers) if (text.includes(m)) w.leaked.push(m);
+        }).observe(document.body, { childList: true, subtree: true, characterData: true });
+      },
+      [E2E.brandName, BRAND_2.name],
+    );
+    await page.getByRole('link', { name: 'Oremedia' }).click();
+    await page.getByRole('region', { name: E2E_B.companyName }).getByRole('link', { name: 'Open' }).click();
+    await expect
+      .poll(() => page.getByRole('list', { name: 'Brands' }).textContent(), { timeout: 15_000 })
+      .toContain(E2E_B.brandName);
+    expect(await page.evaluate(() => (window as unknown as { leaked: string[] }).leaked)).toEqual([]);
+  }, 60_000);
+
   it('switching to company B shows none of company A’s rows on any screen', async () => {
     const requestsBefore = companyB.requests.length;
     await open('/portfolio');
