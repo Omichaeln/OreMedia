@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { PolicyDeniedError } from '@oremedia/contracts/errors';
+import { assertRoutingAllowed } from '../routing-policy';
 import { ToolDeniedError } from '../tool-dispatcher';
 import type { ToolDefinition } from '../tool-registry';
 
@@ -27,6 +29,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * images.generate: draft (costed), creative.edit. Generated images are pending assets (provenance generated), never
  * logos. The provider job id is persisted before waiting so a retried activity polls instead of resubmitting.
  * Without IMAGE_GEN_PROVIDER (and a registered generator) the tool denies provider_not_configured: no fake bytes.
+ * The company routing policy is checked in `availability`, before the charge (spec 12.7); the brand's generation
+ * restrictions from the run's context snapshot (resolved for each step) go with the submission (ADR-11 (5)).
  */
 export const imagesGenerate: ToolDefinition<z.infer<typeof GenerateInput>, z.infer<typeof GenerateOutput>> = {
   name: 'images.generate',
@@ -48,7 +52,18 @@ export const imagesGenerate: ToolDefinition<z.infer<typeof GenerateInput>, z.inf
   effect: 'draft',
   costKind: 'image_generation',
   costEstimateMicros: (input) => input.count * IMAGE_COST_MICROS,
-  availability: ({ services }) => (services.images ? null : 'provider_not_configured'),
+  // A submission is a model call: the company routing policy (vendor, model, region) is checked here, before the
+  // charge, so a refused generation costs nothing (spec 12.7).
+  async availability({ services, run }) {
+    if (!services.images) return 'provider_not_configured';
+    try {
+      await assertRoutingAllowed(run.tenantId, services.images.provider, services.images.model);
+    } catch (err) {
+      if (err instanceof PolicyDeniedError) return err.reason;
+      throw err;
+    }
+    return null;
+  },
   timeoutMs: 180_000,
   async run(input, ctx) {
     const generator = ctx.services.images;
@@ -71,6 +86,7 @@ export const imagesGenerate: ToolDefinition<z.infer<typeof GenerateInput>, z.inf
         aspect: input.aspect,
         actor: ctx.actor,
         autonomyMode: ctx.run.policy.autonomyMode,
+        restrictions: ctx.snapshot?.brand.policy.generation ?? null,
       });
       jobId = submitted.jobId;
       // Before waiting, and committed on its own: the tool's unit of work rolls back on a timeout, the job id must not.

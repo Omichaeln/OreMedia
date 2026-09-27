@@ -1235,7 +1235,7 @@
           "production",
           "ADR-11, 9",
           "in_progress",
-          "PR #8 (merged 25 September 2026): OpenRouterImageGenerator hands each image to asset ingest as a generated upload (scan, sanitise, derivatives), catalogued pending_review with generated provenance (model, prompt hash, run) in generated_uploads (migration 0004); agents authorised as creative.edit under the run's autonomy mode. Unit, integration and roll-forward tests. Production: IMAGE_GEN_PROVIDER=openrouter, OREMEDIA_IMAGE_MODEL_ID=google/gemini-3.1-flash-image. Not yet verified: a live generation."
+          "PR #8 (merged 25 September 2026): OpenRouterImageGenerator hands each image to asset ingest as a generated upload (scan, sanitise, derivatives), catalogued pending_review with generated provenance (model, prompt hash, run) in generated_uploads (migration 0004); agents authorised as creative.edit under the run's autonomy mode. Unit, integration and roll-forward tests. Production: IMAGE_GEN_PROVIDER=openrouter, OREMEDIA_IMAGE_MODEL_ID=google/gemini-3.1-flash-image. Not yet verified: a live generation. 27 September 2026 (branch claude/media-generation): images.generate now passes the company routing policy (vendor, model, region) before the charge, like every other model call; before this it was not checked, so a company that denied the gateway or the image model could still generate."
         ],
         [
           "4.25",
@@ -1258,8 +1258,8 @@
           "Per-brand provider allowlist and no-retention routing for generated content",
           "critical",
           "ADR-11, 18",
-          "open",
-          "Decided 25 September 2026."
+          "complete",
+          "Decided 25 September 2026. Branch claude/media-generation: a brand’s policy document (policy_versions) carries optional generation restrictions (permittedProviders, deniedProviders, zeroRetention; absent on existing documents, so their snapshot hashes are unchanged), set through brand.policy.createVersion and shown under Settings > Policy. Every generation request sends OpenRouter data_collection deny always, plus only / ignore / zdr from the brand’s restrictions as the step’s context snapshot resolved them (openRouterProviderPreferences). Image generation is the only generator today; video and audio (4.25, 4.26) must use the same helper. No policy editor in the app yet: a new version is created through the API."
         ]
       ]
     },

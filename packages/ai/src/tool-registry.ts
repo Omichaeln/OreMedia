@@ -53,8 +53,11 @@ export interface ToolDefinition<I, O> {
   costKind?: z.infer<typeof UsageKind>;
   /** The policy resource of a call; defaults to the run's brand. */
   resource?: (input: I, run: AgentRunContext) => PolicyResource;
-  /** A denial reason when the tool cannot run in this deployment or phase (checked after policy, before spend). */
-  availability?: (ctx: Pick<ToolContext, 'services' | 'run'>) => string | null;
+  /**
+   * A denial reason when the tool cannot run in this deployment, phase or company policy (checked after policy,
+   * before spend, so a call refused here is never charged).
+   */
+  availability?: (ctx: Pick<ToolContext, 'services' | 'run'>) => string | null | Promise<string | null>;
   timeoutMs?: number;
   run(input: I, ctx: ToolContext): Promise<O | ProposalRequest>;
 }

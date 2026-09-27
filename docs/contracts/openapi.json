@@ -1528,6 +1528,27 @@
                       },
                       "mfaRequired": {
                         "type": "boolean"
+                      },
+                      "generation": {
+                        "type": "object",
+                        "properties": {
+                          "permittedProviders": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deniedProviders": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "zeroRetention": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": []
                       }
                     },
                     "required": ["schemaVersion", "reviewThresholds"]
@@ -9156,6 +9177,27 @@
                 },
                 "mfaRequired": {
                   "type": "boolean"
+                },
+                "generation": {
+                  "type": "object",
+                  "properties": {
+                    "permittedProviders": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deniedProviders": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "zeroRetention": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": []
                 }
               },
               "required": ["schemaVersion", "reviewThresholds"]

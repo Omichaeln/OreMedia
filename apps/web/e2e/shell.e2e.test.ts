@@ -231,6 +231,8 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => policy.textContent(), { timeout: 15_000 })
       .toContain('defaults below are in force');
     expect(await policy.textContent()).toContain('Hold on revoked facts');
+    // No restriction set: generation may use any provider, never one that trains on the brand's content.
+    expect(await policy.textContent()).toMatch(/Generation providers.*Any provider/);
     // Engage agent starts for this brand, with a reason.
     const brandRow = page.getByTestId('kill-agent_starts-brand');
     await brandRow.getByRole('button', { name: 'Engage' }).click();

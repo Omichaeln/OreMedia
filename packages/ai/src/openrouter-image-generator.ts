@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { withTransaction } from '@oremedia/db';
 import { assetService } from '@oremedia/module-assets';
 import { logger } from '@oremedia/observability';
-import { openRouterApiKeyFromEnv } from './openrouter-adapter';
+import { openRouterApiKeyFromEnv, openRouterProviderPreferences } from './openrouter-adapter';
 import type { ImageGenerator } from './tools/services';
 
 type GeneratedUpload = Parameters<typeof assetService.uploadGenerated>[1];
@@ -51,10 +52,12 @@ const DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s;
  * synchronously, so `submit` generates, then hands each image to the asset pipeline as a generated upload, each in
  * its own committed transaction so a retried tool call finds them; the job id names those upload intents. `poll`
  * reports done once ingest has accepted every image, failed if any was rejected. Providers that collect prompts are
- * excluded. Prompts are never logged; provenance records the prompt's hash, the model and the run.
+ * excluded, and the brand's restrictions narrow the rest (openRouterProviderPreferences). Prompts are never logged;
+ * provenance records the prompt's hash, the model and the run.
  */
 export class OpenRouterImageGenerator implements ImageGenerator {
   readonly provider = 'openrouter';
+  readonly model: string;
   private readonly baseURL: string;
   private readonly fetchImpl: typeof fetch;
   private readonly assets: GeneratedAssetSink;
@@ -63,6 +66,7 @@ export class OpenRouterImageGenerator implements ImageGenerator {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.fetchImpl = opts.fetch ?? fetch;
     this.assets = opts.assets ?? assetSink;
+    this.model = opts.model;
   }
 
   async submit(input: {
@@ -74,11 +78,12 @@ export class OpenRouterImageGenerator implements ImageGenerator {
     aspect: string;
     actor: ResolvedActor;
     autonomyMode: AutonomyMode;
+    restrictions: GenerationRestrictions | null;
   }): Promise<{ jobId: string }> {
     const images: Array<{ mime: string; bytes: Buffer }> = [];
     // One request per image: image models return one image per completion.
     for (let i = 0; i < input.count; i++)
-      images.push(await this.generateOne(input.prompt, input.aspect, input.runId));
+      images.push(await this.generateOne(input.prompt, input.aspect, input.runId, input.restrictions));
     const promptHash = createHash('sha256').update(input.prompt).digest('hex');
     const intentIds: string[] = [];
     for (const [i, img] of images.entries()) {
@@ -128,6 +133,7 @@ export class OpenRouterImageGenerator implements ImageGenerator {
     prompt: string,
     aspect: string,
     runId: string,
+    restrictions: GenerationRestrictions | null,
   ): Promise<{ mime: string; bytes: Buffer }> {
     let res: Response;
     try {
@@ -139,7 +145,7 @@ export class OpenRouterImageGenerator implements ImageGenerator {
           modalities: ['image', 'text'],
           image_config: { aspect_ratio: aspect },
           messages: [{ role: 'user', content: prompt }],
-          provider: { data_collection: 'deny' },
+          provider: openRouterProviderPreferences(restrictions),
           user: runId,
         }),
         signal: AbortSignal.timeout(this.opts.timeoutMs ?? 120_000),

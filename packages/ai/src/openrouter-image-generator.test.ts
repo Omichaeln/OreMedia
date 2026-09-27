@@ -24,6 +24,7 @@ const submitInput = {
   aspect: '4:5',
   actor,
   autonomyMode: 'create' as const,
+  restrictions: null,
 };
 
 function fakeFetch(status = 200, body: unknown = imageBody) {
@@ -84,6 +85,30 @@ describe('OpenRouterImageGenerator (ADR-11)', () => {
       user: 'run_1',
     });
     expect(jobId).toBe('gen:upi_1,upi_2');
+  });
+
+  it('the brand restrictions narrow the providers: allowlist as only, objections as ignore, zero retention as zdr', async () => {
+    const f = fakeFetch();
+    await new OpenRouterImageGenerator({
+      apiKey: 'k',
+      model: 'vendor/image-model',
+      fetch: f.fetch,
+      assets: fakeSink().sink,
+    }).submit({
+      ...submitInput,
+      count: 1,
+      restrictions: {
+        permittedProviders: ['google-vertex', 'google-ai-studio'],
+        deniedProviders: ['objected-provider'],
+        zeroRetention: true,
+      },
+    });
+    expect(f.calls[0]!.body['provider']).toEqual({
+      data_collection: 'deny',
+      only: ['google-vertex', 'google-ai-studio'],
+      ignore: ['objected-provider'],
+      zdr: true,
+    });
   });
 
   it('hands each image to asset ingest as a generated upload under the run actor, recording provenance', async () => {

@@ -13,8 +13,10 @@ export {
 export {
   OpenRouterModelAdapter,
   openRouterApiKeyFromEnv,
+  openRouterProviderPreferences,
   createOpenRouterAdapterFromEnv,
   type OpenRouterAdapterOptions,
+  type OpenRouterProviderPreferences,
 } from './openrouter-adapter';
 export {
   OpenRouterImageGenerator,

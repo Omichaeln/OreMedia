@@ -1,3 +1,4 @@
+import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import type { ResolvedActorServicePrincipal } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import type { Tx } from '@oremedia/db';
@@ -7,7 +8,10 @@ import { creativeService } from '@oremedia/module-creative';
 
 /** Provider job protocol for generated images (spec 12.2 model-call recovery): submit once, then poll by job id. */
 export interface ImageGenerator {
+  /** The gateway, checked as the model vendor against the company routing policy (spec 12.7). */
   readonly provider: string;
+  /** The model id the generator calls, checked against the policy's denied models. */
+  readonly model: string;
   submit(input: {
     tenantId: string;
     brandId: string;
@@ -18,6 +22,8 @@ export interface ImageGenerator {
     /** The run's principal and mode: a generator that catalogues its output acts as them (policy, audit). */
     actor: ResolvedActorServicePrincipal;
     autonomyMode: AutonomyMode;
+    /** The brand's restrictions from its active policy (ADR-11 (5)); null when it sets none. */
+    restrictions: GenerationRestrictions | null;
   }): Promise<{ jobId: string }>;
   poll(jobId: string): Promise<
     | { status: 'pending' }

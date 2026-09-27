@@ -203,7 +203,7 @@ export async function dispatchToolDetailed(
     );
     if (!decision.allowed) return finish(deny(decision.reason), 'denied', decision.reason, 'denied');
 
-    const unavailable = def.availability?.({ services: deps.services, run }) ?? null;
+    const unavailable = (await def.availability?.({ services: deps.services, run })) ?? null;
     if (unavailable) return finish(deny(unavailable), 'allowed', unavailable, 'denied');
 
     if (def.costEstimateMicros) {

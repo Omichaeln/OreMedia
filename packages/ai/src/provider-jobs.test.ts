@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ModelToolCall } from '@oremedia/contracts/agents';
 import type { ResolvedActorServicePrincipal } from '@oremedia/contracts/policy';
 import type { TenantContext, Tx } from '@oremedia/db';
 import { MemoryProviderJobStore } from './provider-jobs';
+import { resetRoutingPolicies, setTenantRoutingPolicy } from './routing-policy';
 import {
   dispatchToolDetailed,
   toolCallChargeKey,
@@ -64,10 +65,13 @@ function harness(poll: ImageGenerator['poll']) {
   const submits: string[] = [];
   const polls: string[] = [];
   const charges: Array<{ sourceRef: string; idempotencyKey: string | undefined }> = [];
+  const restrictions: Array<Parameters<ImageGenerator['submit']>[0]['restrictions']> = [];
   const generator: ImageGenerator = {
-    provider: 'fake-images',
+    provider: 'fake',
+    model: 'fake-image',
     async submit(input) {
       submits.push(input.prompt);
+      restrictions.push(input.restrictions);
       return { jobId: `job_${submits.length}` };
     },
     async poll(jobId) {
@@ -88,10 +92,21 @@ function harness(poll: ImageGenerator['poll']) {
     providerJobs: new MemoryProviderJobStore(),
     transaction: (fn) => fn({} as Tx),
   };
-  return { deps, submits, polls, charges };
+  return { deps, submits, polls, charges, restrictions };
 }
 
+const permitFake = (deniedModels: string[] = []) =>
+  setTenantRoutingPolicy('ten_A', {
+    schemaVersion: 1,
+    defaultModel: 'fake-model',
+    permittedVendors: ['fake'],
+    permittedRegions: [],
+    deniedModels,
+  });
+
 describe('images.generate through provider jobs: retry after acceptance polls, never resubmits', () => {
+  beforeAll(() => permitFake());
+  afterAll(() => resetRoutingPolicies());
   afterEach(() => vi.useRealTimers());
 
   it('the provider accepted, then the poll timed out: the retried activity polls the same job; one submission', async () => {
@@ -185,5 +200,47 @@ describe('images.generate through provider jobs: retry after acceptance polls, n
     expect(keyA).not.toBe(keyB);
     expect(keyA).not.toBe(toolCallChargeKey(run('step_8'), a)); // the same tool_use id in another step
     expect(keyA.length).toBeLessThanOrEqual(200); // usage_ledger.idempotency_key
+  });
+});
+
+describe('images.generate under the company routing policy and the brand restrictions (spec 12.7, ADR-11 (5))', () => {
+  afterEach(() => resetRoutingPolicies());
+
+  it('a company that denies the image model refuses the call before any charge or submission', async () => {
+    permitFake(['fake-image']);
+    const h = harness(async () => DONE);
+    const out = await dispatchToolDetailed(call, run('step_r1'), h.deps);
+    expect(out.result).toEqual({ kind: 'denied', reason: 'model_routing_denied' });
+    expect(h.submits).toHaveLength(0);
+    expect(h.charges).toHaveLength(0);
+  });
+
+  it('a company that does not permit the gateway refuses the call too', async () => {
+    setTenantRoutingPolicy('ten_A', {
+      schemaVersion: 1,
+      defaultModel: 'claude-opus-5',
+      permittedVendors: ['anthropic'],
+      permittedRegions: [],
+      deniedModels: [],
+    });
+    const h = harness(async () => DONE);
+    expect((await dispatchToolDetailed(call, run('step_r2'), h.deps)).result).toEqual({
+      kind: 'denied',
+      reason: 'model_routing_denied',
+    });
+    expect(h.charges).toHaveLength(0);
+  });
+
+  it('the brand restrictions in the step context snapshot go with the submission; none set is null', async () => {
+    permitFake();
+    const generation = { permittedProviders: ['google-vertex'], deniedProviders: [], zeroRetention: true };
+    const withPolicy = {
+      ...run('step_r3'),
+      snapshot: { brand: { policy: { generation } } } as unknown as AgentRunContext['snapshot'],
+    };
+    const h = harness(async () => DONE);
+    await dispatchToolDetailed(call, withPolicy, h.deps);
+    await dispatchToolDetailed(call, run('step_r4'), h.deps);
+    expect(h.restrictions).toEqual([generation, null]);
   });
 });

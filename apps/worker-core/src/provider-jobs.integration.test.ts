@@ -15,6 +15,7 @@ import {
   defaultDispatchDeps,
   dispatchToolDetailed,
   registerProviderJobStore,
+  setTenantRoutingPolicy,
   type AgentRunContext,
   type DispatchDeps,
   type ImageGenerator,
@@ -36,7 +37,8 @@ function fakeProvider() {
   const polls: string[] = [];
   let crashNextPoll = false;
   const generator = (): ImageGenerator => ({
-    provider: 'fake-images',
+    provider: 'fake',
+    model: 'fake-image',
     async submit(input) {
       submissions.push(input.prompt);
       return { jobId: `job_${submissions.length}` };
@@ -173,9 +175,18 @@ describe('provider job ids are durable across a worker restart; each tool call c
       status: 'active',
       createdByUserId: ownerId,
     });
+    // The company permits the test gateway (the images.generate availability check, spec 12.7).
+    setTenantRoutingPolicy(tenantId, {
+      schemaVersion: 1,
+      defaultModel: 'fake',
+      permittedVendors: ['fake'],
+      permittedRegions: [],
+      deniedModels: [],
+    });
   });
   afterEach(() => composeModules());
   afterAll(async () => {
+    setTenantRoutingPolicy(tenantId, null);
     await tdb?.drop();
   });
 
@@ -194,7 +205,7 @@ describe('provider job ids are durable across a worker restart; each tool call c
         stepId: run.stepId,
         toolName: 'images.generate',
         toolCallId: 'toolu_crash',
-        provider: 'fake-images',
+        provider: 'fake',
         providerJobId: 'job_1',
         status: 'submitted',
       },

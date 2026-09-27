@@ -143,6 +143,20 @@ export const EvidenceRef = z.object({
 });
 export type EvidenceRef = z.infer<typeof EvidenceRef>;
 
+/**
+ * ADR-11 (5), ledger 4.27: which underlying providers may process this brand's generated content, applied to every
+ * generation request through the gateway. Provider names are OpenRouter provider slugs (for example `google-vertex`).
+ * permittedProviders [] permits any provider; deniedProviders excludes providers the client objects to;
+ * zeroRetention routes only to providers that keep nothing (OpenRouter `zdr`). Training and storage of prompts are
+ * always refused (`data_collection: deny`), whatever the brand sets.
+ */
+export const GenerationRestrictions = z.object({
+  permittedProviders: z.array(z.string().min(1).max(80)).max(50).default([]),
+  deniedProviders: z.array(z.string().min(1).max(80)).max(50).default([]),
+  zeroRetention: z.boolean().default(false),
+});
+export type GenerationRestrictions = z.infer<typeof GenerationRestrictions>;
+
 /** Spec 6.3 policy_versions. */
 export const PolicyDocumentV1 = z.object({
   schemaVersion: z.literal(1),
@@ -155,6 +169,11 @@ export const PolicyDocumentV1 = z.object({
   requireDistinctApprover: z.boolean().default(false),
   holdOnDependencyRevocation: z.boolean().default(true), // spec 8.2 default: hold
   mfaRequired: z.boolean().default(false),
+  /**
+   * Absent on documents written before 27 September 2026 and on brands with no restriction: no default is filled
+   * in, so those documents (and the snapshot hashes recorded from them) are unchanged.
+   */
+  generation: GenerationRestrictions.optional(),
 });
 export type PolicyDocumentV1 = z.infer<typeof PolicyDocumentV1>;
 

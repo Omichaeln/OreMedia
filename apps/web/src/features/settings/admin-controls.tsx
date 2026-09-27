@@ -39,6 +39,21 @@ function policyRows(p: PolicyDocumentV1): Array<[label: string, hint: string, va
     ['MFA to approve', 'Approvers must have multi-factor authentication.', yesNo(p.mfaRequired)],
     ['Restricted topics', 'Topics that need review wherever they appear.', listOrNone(p.restrictedTopics)],
     ['Prohibited terms', 'Terms the release policy refuses outright.', listOrNone(p.prohibitedTerms)],
+    [
+      'Generation providers',
+      'The providers that may generate media for this brand; training on its content is always refused.',
+      p.generation?.permittedProviders.length ? p.generation.permittedProviders.join(', ') : 'Any provider',
+    ],
+    [
+      'Excluded providers',
+      'Providers this brand’s generated media never goes to.',
+      listOrNone(p.generation?.deniedProviders ?? []),
+    ],
+    [
+      'Zero retention',
+      'Generation only through providers that keep nothing.',
+      yesNo(p.generation?.zeroRetention ?? false),
+    ],
   ];
 }
 

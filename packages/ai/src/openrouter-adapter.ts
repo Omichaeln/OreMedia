@@ -6,6 +6,7 @@ import type {
   ModelRequest,
   ModelToolCall,
 } from '@oremedia/contracts/agents';
+import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
 import type { ModelAdapter } from './model-adapter';
@@ -180,6 +181,29 @@ function rejected(status: number): ValidationFailedError {
     [{ path: 'model', issue: `provider rejected the request (${status})` }],
     'The model provider rejected the request',
   );
+}
+
+/** OpenRouter's provider-routing object for one request (only / ignore / data_collection / zdr). */
+export interface OpenRouterProviderPreferences {
+  data_collection: 'deny';
+  only?: string[];
+  ignore?: string[];
+  zdr?: true;
+}
+
+/**
+ * ADR-11 (5): the provider object for a generation request made for a brand. Collection is always denied; the
+ * brand's restrictions (its active policy, as the step's context snapshot resolved it) narrow which providers may
+ * serve it.
+ */
+export function openRouterProviderPreferences(
+  restrictions: GenerationRestrictions | null | undefined,
+): OpenRouterProviderPreferences {
+  const prefs: OpenRouterProviderPreferences = { data_collection: 'deny' };
+  if (restrictions?.permittedProviders.length) prefs.only = [...restrictions.permittedProviders];
+  if (restrictions?.deniedProviders.length) prefs.ignore = [...restrictions.deniedProviders];
+  if (restrictions?.zeroRetention) prefs.zdr = true;
+  return prefs;
 }
 
 /** OPENROUTER_API_KEY_REF (ADR-11): a mounted secret file path, or the key material itself. */

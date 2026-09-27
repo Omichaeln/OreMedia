@@ -4,6 +4,7 @@ import type { PolicyResource, ResolvedActorServicePrincipal } from '@oremedia/co
 import type { TenantContext, Tx } from '@oremedia/db';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { MemoryProviderJobStore } from '../provider-jobs';
+import { resetRoutingPolicies, setTenantRoutingPolicy } from '../routing-policy';
 import { PersonCompletedProposal, type AnyToolDefinition } from '../tool-registry';
 import { dispatchToolDetailed, type AgentRunContext, type DispatchDeps } from '../tool-dispatcher';
 import { CreateBriefInput, DraftCopyInput } from './content';
@@ -96,16 +97,27 @@ describe('Release 1 tools (spec 12.4 table)', () => {
     }
   });
 
-  it('no tool is unavailable once every source is registered (nothing denies unconditionally)', () => {
+  it('no tool is unavailable once every source is registered (nothing denies unconditionally)', async () => {
     const services = {
       intelligence: {},
       content: {},
       review: {},
       publishing: {},
-      images: {},
+      images: { provider: 'fake', model: 'fake-image' },
     } as unknown as ToolServices;
-    for (const def of RELEASE_1_TOOLS as AnyToolDefinition[])
-      expect(def.availability?.({ services, run }) ?? null, def.name).toBeNull();
+    setTenantRoutingPolicy(run.tenantId, {
+      schemaVersion: 1,
+      defaultModel: 'fake-model',
+      permittedVendors: ['fake'],
+      permittedRegions: [],
+      deniedModels: [],
+    });
+    try {
+      for (const def of RELEASE_1_TOOLS as AnyToolDefinition[])
+        expect((await def.availability?.({ services, run })) ?? null, def.name).toBeNull();
+    } finally {
+      resetRoutingPolicies();
+    }
   });
 
   it('input schemas: strict, bounded, and the model sees the same required keys', () => {
