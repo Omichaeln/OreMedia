@@ -25,10 +25,14 @@ import {
   isoToLocalInput,
   localInputToIso,
   outcomeUnknownReasonText,
+  plainLength,
   publicationChip,
+  remoteChangeNoun,
+  remoteChangeStatus,
   CHANNEL_CHIP,
 } from './publication-state';
 import {
+  useChannelVariant,
   usePublication,
   useRevisionPublications,
   type CancelResultDto,
@@ -92,6 +96,9 @@ function Loaded({
   const [cancelResult, setCancelResult] = useState<CancelResultDto | null>(null);
   const [lastError, setLastError] = useState<unknown>(null);
   const siblings = useRevisionPublications(brandId, p.contentRevisionId);
+  const remote = remoteChangeStatus(p.remote.changes);
+  const deletedAt =
+    p.remote.changes.find((c) => c.kind === 'delete' && c.state === 'succeeded')?.finishedAt ?? null;
 
   const refresh = () => {
     void queryClient.invalidateQueries(trpc.publishing.publications.pathFilter());
@@ -237,6 +244,52 @@ function Loaded({
           description="No attempt was made on the channel."
         />
       )}
+      {remote.open && (
+        <StatusBanner
+          tone="info"
+          title={`${remote.open.kind === 'edit' ? 'Text edit' : 'Deletion'} requested: being carried out on the channel`}
+          data-testid="remote-change-status"
+          description={`Requested ${when(remote.open.requestedAt)}. This screen updates when the channel confirms it; nothing else can be changed on the live post meanwhile.`}
+        />
+      )}
+      {remote.stale && (
+        <StatusBanner
+          tone="warning"
+          title={`The ${remoteChangeNoun(remote.stale.kind)} has no confirmation from the channel`}
+          data-testid="remote-change-status"
+          description={`Requested ${when(remote.stale.requestedAt)}, and no outcome was recorded in time. Check the post on the channel; you can ask again, which closes this request.`}
+        />
+      )}
+      {remote.failed && (
+        <StatusBanner
+          tone="critical"
+          title={`The channel did not accept the ${remoteChangeNoun(remote.failed.kind)}`}
+          data-testid="remote-change-status"
+          description={
+            <>
+              <p>The live post was left as it was. The reason, as recorded:</p>
+              <p className="mt-1">
+                <code>{remote.failed.errorCode}</code>
+                {remote.failed.errorDetail && <> — {remote.failed.errorDetail}</>}
+              </p>
+            </>
+          }
+        />
+      )}
+      {p.state === 'removed' && (
+        <StatusBanner
+          tone="neutral"
+          title="Deleted from the channel"
+          data-testid="remote-change-status"
+          description={`The post was deleted on the channel${deletedAt ? ` on ${when(deletedAt)}` : ''}. The publication record and its evidence stay.`}
+        />
+      )}
+      {p.state === 'published' && !p.remote.edit && !p.remote.delete && (
+        <p className="text-xs text-muted-foreground" data-testid="remote-change-unsupported">
+          This channel does not let Oremedia edit or delete a published post; change or delete it on the
+          platform itself.
+        </p>
+      )}
       {lastError !== null && <RequestError error={lastError} />}
 
       <div className="flex flex-wrap gap-2" aria-label="Actions">
@@ -258,7 +311,10 @@ function Loaded({
         {actions.reconcile && (
           <ReconcileAction publication={p} onDone={refresh} onError={fail('Reconcile failed')} />
         )}
-        {actions.deleteRemote && (
+        {actions.editRemote && p.remote.edit && p.remote.allowed.edit && !remote.open && (
+          <EditRemoteAction publication={p} onDone={refresh} onError={fail('Edit request failed')} />
+        )}
+        {actions.deleteRemote && p.remote.delete && p.remote.allowed.delete && !remote.open && (
           <DeleteRemoteAction publication={p} onDone={refresh} onError={fail('Delete request failed')} />
         )}
       </div>
@@ -653,8 +709,7 @@ function DeleteRemoteAction({
         toast({
           tone: 'info',
           title: 'Deletion requested',
-          description:
-            'The request is recorded; the channel adapter carries it out when it supports deletion.',
+          description: 'The post is deleted on the channel shortly; this screen shows when it is done.',
         });
       },
       onError,
@@ -668,7 +723,7 @@ function DeleteRemoteAction({
       <DialogContent
         role="alertdialog"
         title="Delete the live post?"
-        description="Deleting a live remote post is a separate, recorded action (spec 13.5); it is never an automatic rollback. Give the reason that will be audited."
+        description="The post is deleted on the channel and cannot be brought back from here. Deleting a live post is a separate, recorded action, never an automatic rollback. Give the reason that will be audited."
       >
         <form
           onSubmit={(e) => {
@@ -693,6 +748,132 @@ function DeleteRemoteAction({
             </DialogClose>
             <Button type="submit" variant="danger" disabled={del.isPending || !reason.trim()}>
               Request deletion
+            </Button>
+          </DialogActions>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditRemoteAction({
+  publication: p,
+  onDone,
+  onError,
+}: {
+  publication: PublicationDto;
+  onDone: () => void;
+  onError: (err: unknown) => void;
+}) {
+  const trpc = useTRPC();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const variant = useChannelVariant(open && p.remote.currentText === null ? p.channelVariantId : null);
+  const live = p.remote.currentText ?? variant.data?.text ?? null;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const text = draft ?? live ?? '';
+  const length = plainLength(text);
+  const limit = p.remote.textMaxLength;
+  const over = limit !== null && !p.remote.textWeighted && length > limit;
+  const unchanged = live !== null && text.trimEnd() === live.trimEnd();
+  const intent = useIntentKey();
+  const edit = useMutation(
+    trpc.publishing.publications.editRemote.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setOpen(false);
+        setDraft(null);
+        setReason('');
+        onDone();
+        toast({
+          tone: 'info',
+          title: 'Text edit requested',
+          description: 'The new text is sent to the channel shortly; this screen shows when it is live.',
+        });
+      },
+      onError: (err) => {
+        setError(toUiError(err).message);
+        onError(err);
+      },
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) {
+      setError('Enter the new text.');
+      return;
+    }
+    if (over || unchanged) return;
+    setError(null);
+    edit.mutate({ publicationId: p.id, text, reason: reason.trim() || undefined });
+  };
+  const count =
+    limit === null
+      ? `${length} characters`
+      : `${length} / ${limit} characters${p.remote.textWeighted ? ' (the channel weighs some characters; checked on save)' : ''}`;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setError(null);
+      }}
+    >
+      <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
+        Edit text
+      </Button>
+      <DialogContent
+        title="Edit the live post’s text"
+        description="The new text replaces the post’s text on the channel; its media and link stay as they are. It is checked against the channel’s rules and the change is recorded with its evidence."
+      >
+        <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+          {live === null && variant.isPending && <Skeleton label="Loading the current text" lines={3} />}
+          {live === null && variant.isError && (
+            <RequestError error={variant.error} onRetry={() => void variant.refetch()} />
+          )}
+          {(live !== null || variant.isError) && (
+            <Field
+              label="Text"
+              htmlFor={`edit-text-${p.id}`}
+              hint={count}
+              error={
+                error ??
+                (over
+                  ? `The text is ${length - (limit ?? 0)} characters over the channel’s limit.`
+                  : undefined)
+              }
+            >
+              <Textarea
+                id={`edit-text-${p.id}`}
+                value={text}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={6}
+                required
+                data-testid="edit-remote-text"
+              />
+            </Field>
+          )}
+          <Field label="Reason (optional)" htmlFor={`edit-reason-${p.id}`}>
+            <Textarea
+              id={`edit-reason-${p.id}`}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={500}
+            />
+          </Field>
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="ghost">Back</Button>
+            </DialogClose>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={edit.isPending || over || unchanged || !text.trim()}
+            >
+              {edit.isPending ? 'Saving…' : 'Save to the channel'}
             </Button>
           </DialogActions>
         </form>

@@ -1,0 +1,131 @@
+{
+  "provider": "linkedin_page",
+  "scenarios": {
+    "delete_success": {
+      "description": "DELETE /rest/posts/{urn} with X-RestLi-Method: DELETE",
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 204
+          }
+        }
+      ]
+    },
+    "delete_already_gone": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 404,
+            "json": {
+              "status": 404,
+              "message": "Not Found"
+            }
+          }
+        }
+      ]
+    },
+    "delete_throttled": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 429,
+            "headers": {
+              "retry-after": "30"
+            },
+            "json": {
+              "status": 429,
+              "message": "Resource level throttle limit"
+            }
+          }
+        }
+      ]
+    },
+    "delete_forbidden": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "status": 403,
+              "serviceErrorCode": 100,
+              "message": "Not enough permissions to access: partialUpdate.DELETE.20260101"
+            }
+          }
+        }
+      ]
+    },
+    "edit_success": {
+      "description": "PARTIAL_UPDATE of commentary",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001",
+            "bodyIncludes": ["{\"patch\":{\"$set\":{\"commentary\":\"Corrected price: 40 EUR\"}}}"]
+          },
+          "response": {
+            "status": 204
+          }
+        }
+      ]
+    },
+    "edit_rejected": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 422,
+            "json": {
+              "status": 422,
+              "serviceErrorCode": 100,
+              "message": "commentary is too long"
+            }
+          }
+        }
+      ]
+    },
+    "edit_server_error": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/posts/urn:li:share:7001"
+          },
+          "response": {
+            "status": 503,
+            "json": {
+              "status": 503,
+              "message": "Service Unavailable"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

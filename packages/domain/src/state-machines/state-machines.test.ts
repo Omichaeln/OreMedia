@@ -33,6 +33,8 @@ const PUBLICATION_TABLE: Array<[string, PublicationEvent, string]> = [
   // Spec 17.6 restore rule: only the in-flight states that can still be unsent; never a terminal or a hold-resolving one.
   ['scheduled', 'restored_from_backup', 'held'],
   ['dispatching', 'restored_from_backup', 'held'],
+  // publication.delete_remote carried out on the platform (the only way out of published).
+  ['published', 'remote_deleted', 'removed'],
 ];
 
 describe('publication state machine', () => {
@@ -53,10 +55,14 @@ describe('publication state machine', () => {
       publicationMachine.states.length * publicationMachine.events.length - PUBLICATION_TABLE.length,
     );
   });
-  it('published, failed and cancelled are terminal', () => {
-    for (const s of ['published', 'failed', 'cancelled'] as const) {
+  it('failed, cancelled and removed are terminal; published leaves only by a remote deletion', () => {
+    for (const s of ['failed', 'cancelled', 'removed'] as const) {
       for (const e of publicationMachine.events) expect(publicationMachine.can(s, e)).toBe(false);
     }
+    expect(publicationMachine.terminal).toEqual(['failed', 'cancelled', 'removed']);
+    expect(publicationMachine.events.filter((e) => publicationMachine.can('published', e))).toEqual([
+      'remote_deleted',
+    ]);
   });
   it('the restore hold applies only to scheduled and dispatching (spec 17.6); a sent row goes to reconciliation', () => {
     const from = publicationMachine.states.filter((s) => publicationMachine.can(s, 'restored_from_backup'));

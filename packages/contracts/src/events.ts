@@ -57,5 +57,7 @@ export const EVENT_TYPES = {
   'mandate.changed': 1,
   // Phase 5 brand change impact (appended; additive only): a flagged publication kept its state (spec 8.2)
   'publication.needs_attention': 1,
+  // Remote edit of a published post (appended; additive only). Deletion reuses publication.delete_remote_requested.
+  'publication.edit_remote_requested': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

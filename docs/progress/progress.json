@@ -1392,7 +1392,7 @@
           "critical",
           "13.5",
           "complete",
-          "cancel: scheduled → cancelled race-safe; dispatching returns { prevented: false } and signals; cancelIfNotStarted honoured before the attempt opens, never after send. publishing.integration.test.ts, publication.workflow.v1.test.ts, worker-core e2e"
+          "cancel: scheduled → cancelled race-safe; dispatching returns { prevented: false } and signals; cancelIfNotStarted honoured before the attempt opens, never after send. publishing.integration.test.ts, publication.workflow.v1.test.ts, worker-core e2e. Merged #41 (claude/remote-edit-delete): delete_remote is now carried out (and edit_remote added): the request is a publication_remote_changes row (one open per post, migration 0011; lost requests closed by the hourly remoteChangeSweepWorkflowV1), publication.delete_remote_requested / edit_remote_requested start publicationRemoteDeleteWorkflowV1 / publicationRemoteEditWorkflowV1 (provider call on publish-<providerKey>, bounded retries, outcome recorded on core with insert-only remote_deletion / remote_edit evidence; a confirmed deletion moves published → removed). Adapters: facebook_page and linkedin_page edit and delete, x delete, instagram_business neither (platform limitation); endpoints are fixture-tested, live certification open. publishing.integration.test.ts, publication-remote-change.workflow.v1 tests (unit and time-skipping), remote-changes e2e"
         ],
         [
           "5.12",

@@ -21,6 +21,9 @@ import {
   createPublicationSweepActivities,
   createPublishControlActivities,
   createPublishProviderActivities,
+  createRemoteChangeControlActivities,
+  createRemoteChangeProviderActivities,
+  createRemoteChangeSweepActivities,
   createTokenRefreshActivities,
 } from '@oremedia/activities';
 import {
@@ -29,6 +32,8 @@ import {
   CORE_TASK_QUEUE,
   PUBLICATION_SWEEPER_WORKFLOW_ID,
   PUBLICATION_SWEEPER_WORKFLOW_TYPE,
+  REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
+  REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE,
   configureCredentialBroker,
   createKmsFromEnv,
   createPublishingRuntime,
@@ -43,8 +48,8 @@ import { operationsActivities } from './operations-worker';
 import type { TemporalConfig } from './temporal';
 
 /**
- * Spec 4.4: worker-core hosts task queue `core` (publicationWorkflowV1, its reconcile and signal relay, the
- * sweeper, tokenRefreshWorkflowV1 and brandChangeImpactWorkflowV1) and one activity-only `publish-<providerKey>` queue per registered provider,
+ * Spec 4.4: worker-core hosts task queue `core` (publicationWorkflowV1, its reconcile and signal relay, the remote
+ * edit and delete workflows, the sweeper, tokenRefreshWorkflowV1 and brandChangeImpactWorkflowV1) and one activity-only `publish-<providerKey>` queue per registered provider,
  * so a slow or rate-limited platform cannot starve the others. This is the only process (with worker-ingest)
  * whose KMS may decrypt: the credential broker is composed here with a decrypting key (spec 14.7). Workflow code
  * is pre-bundled at build time (tsup.config.ts → dist/workflows.core.js), as the agents queue is.
@@ -96,6 +101,9 @@ export async function startPublishingWorkers(
     ...workflowsFor(CORE_TASK_QUEUE, production),
     activities: {
       ...createPublishControlActivities(runtime.control),
+      // publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1 record their outcome here
+      ...createRemoteChangeControlActivities(runtime.remoteChangeControl),
+      ...createRemoteChangeSweepActivities(runtime.remoteChangeSweep),
       ...createTokenRefreshActivities(runtime.tokenRefresh),
       ...createPublicationSweepActivities(runtime.sweep),
       ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),
@@ -116,7 +124,10 @@ export async function startPublishingWorkers(
         connection,
         namespace: cfg.namespace,
         taskQueue: publishTaskQueue(p.key),
-        activities: createPublishProviderActivities(runtime.provider),
+        activities: {
+          ...createPublishProviderActivities(runtime.provider),
+          ...createRemoteChangeProviderActivities(runtime.remoteChangeProvider),
+        },
         maxConcurrentActivityTaskExecutions: Number(env['PUBLISH_CONCURRENCY'] ?? 4),
       }),
     ),
@@ -165,6 +176,30 @@ export async function ensureConnectChoicePurgeScheduleRunning(client: Client): P
       policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
     });
     logger().info({ status: CONNECT_CHOICE_PURGE_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
+}
+
+/**
+ * remoteChangeSweepWorkflowV1 every hour (one schedule per namespace, joined if it exists): a remote edit or delete
+ * whose workflow was lost is closed after the stale threshold, so the post can be changed again.
+ */
+export async function ensureRemoteChangeSweepScheduled(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
+      spec: { intervals: [{ every: '1 hour' }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE,
+        taskQueue: CORE_TASK_QUEUE,
+        args: [],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
+    });
+    logger().info({ status: REMOTE_CHANGE_SWEEP_SCHEDULE_ID }, 'schedule created');
   } catch (err) {
     if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
     throw err;

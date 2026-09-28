@@ -65,23 +65,24 @@ Source of truth: `requiredScopes` in `packages/providers/src/facebook_page/capab
 `packages/providers/src/instagram_business/capability.ts`. A connection that lacks any of them is not usable, so
 every one must be approved or removed from the capability.
 
-| Permission                  | Adapter(s)         | What the product does with it                                                                                                    | Screencast |
-| --------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `pages_show_list`           | both               | Reads the Pages the person manages (`/me/accounts`) and the Instagram professional account linked to each, to connect the brand. | A          |
-| `pages_manage_posts`        | facebook_page      | Publishes approved posts (text, photos, video) to the connected Page at the scheduled time.                                      | B          |
-| `pages_read_engagement`     | both               | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                    | B, D       |
-| `pages_manage_engagement`   | facebook_page      | **Not used by the product; see below.**                                                                                          | –          |
-| `read_insights`             | facebook_page      | Reads post and Page metrics (views, clicks, reactions, follows) for the brand's performance reports.                             | C          |
-| `instagram_basic`           | instagram_business | Reads the professional account's id and username, and its recent media to confirm a publish landed.                              | A, B       |
-| `instagram_content_publish` | instagram_business | Publishes approved images, carousels and Reels to the account at the scheduled time.                                             | B          |
-| `instagram_manage_comments` | instagram_business | Reads comments on published media, which the product groups by theme and sentiment for the brand.                                | D          |
-| `instagram_manage_insights` | instagram_business | Reads media and account metrics (views, reach, saves, shares, interactions) for performance reports.                             | C          |
-| `business_management`       | both               | **Not used by any endpoint; see below.**                                                                                         | –          |
+| Permission                  | Adapter(s)         | What the product does with it                                                                                                                                                | Screencast |
+| --------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `pages_show_list`           | both               | Reads the Pages the person manages (`/me/accounts`) and the Instagram professional account linked to each, to connect the brand.                                             | A          |
+| `pages_manage_posts`        | facebook_page      | Publishes approved posts (text, photos, video) to the connected Page at the scheduled time; on the brand's instruction, edits the text of a post it published or deletes it. | B, E       |
+| `pages_read_engagement`     | both               | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                | B, D       |
+| `pages_manage_engagement`   | facebook_page      | **Not used by the product; see below.**                                                                                                                                      | –          |
+| `read_insights`             | facebook_page      | Reads post and Page metrics (views, clicks, reactions, follows) for the brand's performance reports.                                                                         | C          |
+| `instagram_basic`           | instagram_business | Reads the professional account's id and username, and its recent media to confirm a publish landed.                                                                          | A, B       |
+| `instagram_content_publish` | instagram_business | Publishes approved images, carousels and Reels to the account at the scheduled time.                                                                                         | B          |
+| `instagram_manage_comments` | instagram_business | Reads comments on published media, which the product groups by theme and sentiment for the brand.                                                                            | D          |
+| `instagram_manage_insights` | instagram_business | Reads media and account metrics (views, reach, saves, shares, interactions) for performance reports.                                                                         | C          |
+| `business_management`       | both               | **Not used by any endpoint; see below.**                                                                                                                                     | –          |
 
 Wording for every justification: "Ore & Tar is a social media agency. Our platform publishes content that the
 Page's own team has written and approved, at the time they choose, and reports how it performed and what its
 audience said. Only people with a role on the Page can connect it; when they manage several Pages they choose which
-Page the brand connects, and they can disconnect it at any time."
+Page the brand connects, and they can disconnect it at any time." For `pages_manage_posts` add: "On the Page team's
+instruction it also edits the text of a post it published, or deletes it."
 
 ### What the product does not do yet
 
@@ -96,8 +97,12 @@ gaps bear on the submission; close them or remove the scope before submitting:
   During certification, check whether business-owned client Pages appear without it: if they do, remove it from both
   capabilities; if not, keep it and show a business-owned Page in screencast A.
 
-Published posts are not edited or deleted from the product (`deleteRemote` records the request but has no route),
-so no justification may mention either.
+**Editing and deleting published posts.** On the brand's instruction (a person holding `publication.edit_remote` or
+`publication.delete_remote`, never an agent), the product edits the text of a Facebook Page post it published
+(`POST /{post-id}` with `message`) or deletes it (`DELETE /{post-id}`); both run under `pages_manage_posts` and are
+recorded with the platform's confirmation as evidence (screencast E). Instagram cannot: the Graph API has no edit or
+delete for published media, so `instagram_business` declares neither and the product tells the person to delete an
+Instagram post on Instagram. No Instagram justification may mention editing or deleting.
 
 ## Review tenant and reviewer access
 
@@ -143,6 +148,14 @@ used. One video per letter; the App Review form lets you attach the same video t
 1. From a separate personal account, comment on the post from B on both platforms.
 2. After the next comment sync, open Intelligence for the brand and show the comments grouped under "Comment
    clusters" (the product shows kinds and counts, never the commenter).
+
+**E. Edit and delete (pages_manage_posts)**
+
+1. Open the calendar, select the Facebook publication from B and choose Edit text; change a word and save.
+2. Show the request, then the edit confirmed; open the live post on Facebook and show the new text.
+3. Choose Request remote deletion, give a reason, confirm; show the publication as "Deleted from channel" and the
+   post gone from the Page.
+4. Select the Instagram publication from B: show that it offers neither action and says to delete it on Instagram.
 
 ## Security questions (Data Protection Assessment)
 

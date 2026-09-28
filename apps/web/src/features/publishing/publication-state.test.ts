@@ -4,6 +4,10 @@ import { RELEASE_CHECK_KEYS } from '@oremedia/contracts/review';
 import {
   actionsFor,
   channelOutcomeSummary,
+  plainLength,
+  remoteChangeStatus,
+  wasReleased,
+  type RemoteChangeLike,
   dayKey,
   groupByDay,
   holdReasonText,
@@ -74,7 +78,8 @@ describe('actionsFor', () => {
     expect(actionsFor('outcome_unknown')).toMatchObject({ reconcile: true, cancelInFlight: true });
     expect(actionsFor('held')).toMatchObject({ cancel: true, release: true, reconcile: true });
     expect(actionsFor('retry_eligible')).toMatchObject({ release: true, cancel: false });
-    expect(actionsFor('published')).toMatchObject({ cancel: false, deleteRemote: true });
+    expect(actionsFor('published')).toMatchObject({ cancel: false, deleteRemote: true, editRemote: true });
+    expect(actionsFor('removed')).toMatchObject({ cancel: false, deleteRemote: false, editRemote: false });
     expect(actionsFor('failed')).toMatchObject({ cancel: false, reschedule: false, release: false });
     expect(actionsFor('cancelled')).toMatchObject({ cancel: false, reschedule: false });
   });
@@ -159,5 +164,50 @@ describe('channelOutcomeSummary', () => {
   });
   it('does not count a cancelled channel against success', () => {
     expect(channelOutcomeSummary([{ state: 'published' }, { state: 'cancelled' }]).partial).toBe(false);
+  });
+  it('a post deleted from its channel was still released (its metrics stay on Performance)', () => {
+    expect(['published', 'removed', 'failed', 'cancelled'].map(wasReleased)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+  it('names a post deleted from its channel and does not count it as a failure', () => {
+    const s = channelOutcomeSummary([{ state: 'published' }, { state: 'removed' }]);
+    expect(s.partial).toBe(false);
+    expect(s.text).toBe('1 published, 1 deleted from the channel of 2 channels.');
+  });
+});
+
+describe('remote changes of a published post', () => {
+  const change = (over: Partial<RemoteChangeLike>): RemoteChangeLike => ({
+    kind: 'edit',
+    state: 'succeeded',
+    errorCode: null,
+    errorDetail: null,
+    requestedAt: '2026-09-24T10:00:00.000Z',
+    finishedAt: '2026-09-24T10:00:05.000Z',
+    ...over,
+  });
+  it('an open change blocks the actions; a failure shows only while it is the latest', () => {
+    expect(remoteChangeStatus([])).toEqual({ open: null, stale: null, failed: null });
+    const open = change({ kind: 'delete', state: 'requested', finishedAt: null });
+    expect(remoteChangeStatus([open, change({ state: 'failed' })])).toEqual({
+      open,
+      stale: null,
+      failed: null,
+    });
+    const failed = change({ state: 'failed', errorCode: 'content_policy' });
+    expect(remoteChangeStatus([failed, change({})]).failed).toBe(failed);
+    expect(remoteChangeStatus([change({}), failed]).failed).toBeNull();
+  });
+  it('a stale request (no outcome in time) no longer blocks: it is reported as stale, not open', () => {
+    const stale = change({ kind: 'edit', state: 'requested', finishedAt: null, stale: true });
+    expect(remoteChangeStatus([stale])).toEqual({ open: null, stale, failed: null });
+  });
+  it('counts characters the way the capability check does (NFC code points)', () => {
+    expect(plainLength('e\u0301')).toBe(1);
+    expect(plainLength('👍 ok')).toBe(4);
   });
 });

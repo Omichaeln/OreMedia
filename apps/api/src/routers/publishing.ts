@@ -7,6 +7,7 @@ import {
   ChannelDisconnect,
   ChannelList,
   PublicationDeleteRemote,
+  PublicationEditRemote,
   PublicationEvidence,
   PublicationGet,
   PublicationHoldRestored,
@@ -108,6 +109,12 @@ export const publishingRouter = router({
         idempotent(mutationCtx(ctx, 72), (tx) =>
           publicationService.deleteRemote(ctx.tenant.actor, input, tx),
         ),
+      ),
+    /** New text for a live post where the channel allows edits (publication.edit_remote); carried out by a workflow. */
+    editRemote: tenantMutation
+      .input(PublicationEditRemote)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx, 72), (tx) => publicationService.editRemote(ctx.tenant.actor, input, tx)),
       ),
   }),
 });

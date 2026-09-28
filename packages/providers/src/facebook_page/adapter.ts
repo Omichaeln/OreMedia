@@ -13,9 +13,16 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RefreshResult,
+  RemoteMutationOutcome,
   ValidationResult,
 } from '@oremedia/contracts/providers';
-import type { CommentRequest, ProviderAdapter, PublishRequest } from '../contract';
+import type {
+  CommentRequest,
+  DeletePostRequest,
+  EditPostRequest,
+  ProviderAdapter,
+  PublishRequest,
+} from '../contract';
 import { ProviderTransportError, type ProviderIO } from '../io';
 import { plainMeasure, validateVariantAgainstCapability } from '../capability';
 import {
@@ -30,8 +37,10 @@ import {
   num,
   outcomeFromResponse,
   reconcileFromScan,
+  remoteMutationFromResponse,
   runCheck,
   runPublish,
+  runRemoteMutation,
   str,
   summarise,
   sumValue,
@@ -44,8 +53,10 @@ import {
   MetaGraphError,
   alternativesFrom,
   classifyMetaError,
+  graphDelete,
   graphGet,
   graphPost,
+  isMetaObjectUnavailable,
   listPages,
   metaAuthorizationUrl,
   metaExchangeCode,
@@ -277,6 +288,42 @@ export class FacebookPageAdapter implements ProviderAdapter {
       const id = str(get(res.json, 'id'));
       if (!id) return { outcome: 'unknown', code: 'missing_comment_id', message: summarise(res, 200) };
       return { outcome: 'accepted', remotePostId: id, remoteUrl: postUrl(id) };
+    });
+  }
+
+  /**
+   * DELETE /{post-id} with the page token (pages_manage_posts). A post Meta no longer returns counts as deleted,
+   * but only once a read confirms it is gone: the same error also means the token may not touch it.
+   */
+  async deletePost(
+    req: DeletePostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    return runRemoteMutation(async () => {
+      const res = await graphDelete(io, `/${req.remotePostId}`, creds.accessToken);
+      if (res.status === 200) return { outcome: 'done' };
+      if (isMetaObjectUnavailable(res)) {
+        const read = await graphGet(io, `/${req.remotePostId}`, creds.accessToken, { fields: 'id' });
+        if (read.status === 200)
+          return { outcome: 'rejected', code: 'meta_delete_not_permitted', message: summarise(res) };
+        if (isMetaObjectUnavailable(read)) return { outcome: 'already_absent' };
+        return remoteMutationFromResponse((i) => this.classifyError(i), read, metaRetryAfterMs);
+      }
+      return remoteMutationFromResponse((i) => this.classifyError(i), res, metaRetryAfterMs);
+    });
+  }
+
+  /** POST /{post-id} with the new message; the post keeps its media, link and permalink. */
+  async editPost(
+    req: EditPostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    return runRemoteMutation(async () => {
+      const res = await graphPost(io, `/${req.remotePostId}`, creds.accessToken, { message: req.text });
+      if (res.status === 200) return { outcome: 'done' };
+      return remoteMutationFromResponse((i) => this.classifyError(i), res, metaRetryAfterMs);
     });
   }
 

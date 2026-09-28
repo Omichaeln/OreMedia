@@ -317,6 +317,7 @@
                             "publication.schedule",
                             "publication.cancel",
                             "publication.delete_remote",
+                            "publication.edit_remote",
                             "channel.connect",
                             "channel.manage",
                             "mandate.manage",
@@ -5415,6 +5416,33 @@
         }
       }
     },
+    "/trpc/publishing.publications.editRemote": {
+      "post": {
+        "operationId": "publishing.publications.editRemote",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "publicationId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": ["publicationId", "text"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/publishing.publications.evidence": {
       "get": {
         "operationId": "publishing.publications.evidence",
@@ -5505,7 +5533,8 @@
                       "outcome_unknown",
                       "retry_eligible",
                       "cancelled",
-                      "held"
+                      "held",
+                      "removed"
                     ]
                   },
                   "page": {
@@ -7723,7 +7752,8 @@
                 "outcome_unknown",
                 "retry_eligible",
                 "cancelled",
-                "held"
+                "held",
+                "removed"
               ]
             }
           },
@@ -8337,6 +8367,7 @@
                       "publication.schedule",
                       "publication.cancel",
                       "publication.delete_remote",
+                      "publication.edit_remote",
                       "channel.connect",
                       "channel.manage",
                       "mandate.manage",
@@ -12372,6 +12403,24 @@
           "required": ["publicationId", "reason"]
         }
       },
+      "publishing.publications.editRemote": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "publicationId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["publicationId", "text"]
+        }
+      },
       "publishing.publications.evidence": {
         "type": "query",
         "input": {
@@ -12430,7 +12479,8 @@
                 "outcome_unknown",
                 "retry_eligible",
                 "cancelled",
-                "held"
+                "held",
+                "removed"
               ]
             },
             "page": {

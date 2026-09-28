@@ -47,6 +47,7 @@ a breaking change creates a new event type or schema version with dual publishin
 | `review.request_stale`                | 1              |
 | `mandate.changed`                     | 1              |
 | `publication.needs_attention`         | 1              |
+| `publication.edit_remote_requested`   | 1              |
 
 ## Error codes (spec 7.2)
 

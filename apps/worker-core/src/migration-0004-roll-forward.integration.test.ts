@@ -7,7 +7,7 @@ import * as schema from '@oremedia/db/schema';
 import { generatedUploads, uploadIntents } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
-import { pendingChannelGrants } from '@oremedia/db/schema/publishing';
+import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { MemoryStorageProvider, assetService, configureStorage } from '@oremedia/module-assets';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -21,9 +21,14 @@ const PREVIOUS_HEAD = '0003_external_identities_auth_events';
 const NEW_TABLES: MySqlTable[] = [generatedUploads];
 /**
  * Added by later migrations (0005 provider review statuses; 0006: migration-0006-roll-forward.integration.test.ts;
- * 0010: migration-0010-roll-forward.integration.test.ts).
+ * 0010 and 0011: their migration-*-roll-forward tests).
  */
-const LATER_TABLES: MySqlTable[] = [providerReviewStatuses, brandGuidelineAuthors, pendingChannelGrants];
+const LATER_TABLES: MySqlTable[] = [
+  providerReviewStatuses,
+  brandGuidelineAuthors,
+  pendingChannelGrants,
+  publicationRemoteChanges,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

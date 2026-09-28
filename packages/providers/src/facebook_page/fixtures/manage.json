@@ -1,0 +1,227 @@
+{
+  "provider": "facebook_page",
+  "scenarios": {
+    "delete_success": {
+      "description": "DELETE /{post-id} with the page token",
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "success": true
+            }
+          }
+        }
+      ]
+    },
+    "delete_already_gone": {
+      "description": "Meta answers 100/33 and a read confirms the post is gone",
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 400,
+            "json": {
+              "error": {
+                "message": "Unsupported delete request. Object with ID 'p_100_5001' does not exist, cannot be loaded due to missing permissions, or does not support this operation.",
+                "type": "GraphMethodException",
+                "code": 100,
+                "error_subcode": 33
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001",
+            "query": {
+              "fields": "id"
+            }
+          },
+          "response": {
+            "status": 400,
+            "json": {
+              "error": {
+                "message": "Unsupported get request. Object with ID 'p_100_5001' does not exist, cannot be loaded due to missing permissions, or does not support this operation.",
+                "type": "GraphMethodException",
+                "code": 100,
+                "error_subcode": 33
+              }
+            }
+          }
+        }
+      ]
+    },
+    "delete_not_permitted": {
+      "description": "100/33 on delete while the post is still readable: the token may not delete it",
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 400,
+            "json": {
+              "error": {
+                "message": "Unsupported delete request.",
+                "type": "GraphMethodException",
+                "code": 100,
+                "error_subcode": 33
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001",
+            "query": {
+              "fields": "id"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": "p_100_5001"
+            }
+          }
+        }
+      ]
+    },
+    "delete_rate_limited": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 400,
+            "headers": {
+              "x-business-use-case-usage": "{\"p_100\":[{\"type\":\"pages\",\"call_count\":100,\"estimated_time_to_regain_access\":3}]}"
+            },
+            "json": {
+              "error": {
+                "message": "Page request limit reached",
+                "type": "OAuthException",
+                "code": 32
+              }
+            }
+          }
+        }
+      ]
+    },
+    "delete_server_error": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 500,
+            "json": {
+              "error": {
+                "message": "An unknown error occurred",
+                "type": "OAuthException",
+                "code": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "delete_revoked": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 400,
+            "json": {
+              "error": {
+                "message": "Error validating access token: The user has not authorized application.",
+                "type": "OAuthException",
+                "code": 190,
+                "error_subcode": 458
+              }
+            }
+          }
+        }
+      ]
+    },
+    "edit_success": {
+      "description": "POST /{post-id} with the new message",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001",
+            "bodyIncludes": ["\"message\":\"Corrected price: 40 EUR\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "success": true
+            }
+          }
+        }
+      ]
+    },
+    "edit_rejected": {
+      "description": "The post no longer exists: an edit cannot converge",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "response": {
+            "status": 400,
+            "json": {
+              "error": {
+                "message": "Unsupported post request.",
+                "type": "GraphMethodException",
+                "code": 100,
+                "error_subcode": 33
+              }
+            }
+          }
+        }
+      ]
+    },
+    "edit_timeout": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100_5001"
+          },
+          "behaviour": "hang"
+        }
+      ]
+    }
+  }
+}

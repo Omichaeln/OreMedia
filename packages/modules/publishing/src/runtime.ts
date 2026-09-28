@@ -7,9 +7,11 @@ import {
 } from '@oremedia/contracts/errors';
 import {
   PendingState,
+  type DecryptedCredentials,
   type PendingCheck,
   type PublishOutcome,
   type ReconcileResult,
+  type RemoteMutationOutcome,
 } from '@oremedia/contracts/providers';
 import type {
   AttemptInputV1,
@@ -25,15 +27,24 @@ import type {
   HoldInputV1,
   MarkPublishedInputV1,
   OutcomeUnknownInputV1,
+  PublicationRemoteChangeInputV1,
   PublicationSweepInputV1,
+  RemoteChangeSweepInputV1,
+  RemoteChangeSweepResultV1,
+  RemoteChangeSweepRuntimeV1,
   PublicationWorkflowInputV1,
   PublishControlRuntimeV1,
   PublishOnceInputV1,
   PublishProviderRuntimeV1,
   PublicationSweepRuntimeV1,
   ReadScheduleResultV1,
+  RecordRemoteChangeInputV1,
+  RecordRemoteChangeResultV1,
   RefreshCredentialsResultV1,
   ReleaseEvaluationResultV1,
+  RemoteChangeAttemptResultV1,
+  RemoteChangeControlRuntimeV1,
+  RemoteChangeProviderRuntimeV1,
   RetryResultV1,
   SweepResultV1,
   TokenRefreshRuntimeV1,
@@ -44,6 +55,8 @@ import { requireTenant, runAsPlatform, runInTenant, withTransaction, type Tx } f
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { PublicationEvent } from '@oremedia/domain/state-machines/publication';
+import type { ResolvedActor } from '@oremedia/contracts/policy';
+import { policy } from '@oremedia/module-access';
 import { MemoryRateLimiterStore, audit, outbox, type RateLimiterStore } from '@oremedia/module-operations';
 import { METRIC, count, logger, record } from '@oremedia/observability';
 import {
@@ -56,7 +69,10 @@ import {
 } from '@oremedia/providers';
 import { credentialBroker } from './broker';
 import {
+  REMOTE_CHANGE_STALE_MS,
+  STALE_CLOSURE_CODES,
   forRelease,
+  publicationResource,
   reconcileWorkflowId,
   transition,
   workflowIdOf,
@@ -71,8 +87,10 @@ import {
   PURGE_BATCH,
   PendingChannelGrantPurgeRepository,
   PublicationAttemptRepository,
+  PublicationRemoteChangeRepository,
   PublicationRepository,
   PublicationSweepRepository,
+  RemoteChangeSweepRepository,
   RemoteEvidenceRepository,
 } from './repositories';
 
@@ -89,6 +107,11 @@ export interface PublishingRuntime {
   provider: PublishProviderRuntimeV1;
   tokenRefresh: TokenRefreshRuntimeV1;
   sweep: PublicationSweepRuntimeV1;
+  /** publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1: `core` and `publish-<providerKey>`. */
+  remoteChangeControl: RemoteChangeControlRuntimeV1;
+  remoteChangeProvider: RemoteChangeProviderRuntimeV1;
+  /** remoteChangeSweepWorkflowV1 (`core`, hourly schedule). */
+  remoteChangeSweep: RemoteChangeSweepRuntimeV1;
   connectChoicePurge: ConnectChoicePurgeRuntimeV1;
 }
 
@@ -98,6 +121,8 @@ const evidenceRepo = new RemoteEvidenceRepository();
 const connectionsRepo = new ChannelConnectionRepository();
 const credentialsRepo = new CredentialRefRepository();
 const sweepRepo = new PublicationSweepRepository();
+const changesRepo = new PublicationRemoteChangeRepository();
+const remoteSweepRepo = new RemoteChangeSweepRepository();
 const pendingPurgeRepo = new PendingChannelGrantPurgeRepository();
 
 /** The actor the workflow carries; every write is audited as that actor (spec 5.2 re-resolved by the host). */
@@ -996,6 +1021,256 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
   };
 
+  /** Loads a remote change with its publication; a change of another publication is NOT_FOUND. */
+  async function loadRemoteChange(
+    input: Pick<PublicationRemoteChangeInputV1, 'publicationId' | 'changeId'>,
+    tx?: Tx,
+  ) {
+    const row = await publicationsRepo.getById(input.publicationId, tx);
+    const change = await changesRepo.getById(input.changeId, tx);
+    if (change.publicationId !== row.id) throw new NotFoundError('PublicationRemoteChange', input.changeId);
+    return { row, change };
+  }
+
+  /**
+   * One platform call for a requested change. Nothing is sent once the change was recorded (a repeat after the
+   * outcome, or a superseded workflow); a publication that is no longer published is refused without a call.
+   */
+  async function applyRemoteChange(
+    input: PublicationRemoteChangeInputV1,
+    kind: 'edit' | 'delete',
+    actor: ResolvedActor,
+    hooks: ActivityHooks | undefined,
+  ): Promise<RemoteChangeAttemptResultV1> {
+    const { row, change } = await loadRemoteChange(input);
+    if (change.kind !== kind)
+      throw new ValidationFailedError([{ path: 'changeId', issue: `remote_change_kind:${change.kind}` }]);
+    if (change.state !== 'requested') return { outcome: 'skipped', reason: `change_${change.state}` };
+    if (row.state !== 'published' || !row.remotePostId)
+      return {
+        outcome: 'rejected',
+        code: `not_published:${row.state}`,
+        message: 'the publication is no longer published',
+      };
+    // Spec 5.2: the requester must still hold the permission now, not only when they asked.
+    const decision = await policy.decide(
+      actor,
+      kind === 'edit' ? 'publication.edit_remote' : 'publication.delete_remote',
+      publicationResource(row),
+    );
+    if (!decision.allowed)
+      return {
+        outcome: 'rejected',
+        code: `policy_denied:${decision.reason}`.slice(0, 80),
+        message: 'the requester no longer holds the permission for this change',
+      };
+    const remotePostId = row.remotePostId;
+    const connection = await connectionsRepo.getById(row.channelConnectionId);
+    const adapter = adapterFor(connection.providerKey);
+    const deletePost = adapter.deletePost?.bind(adapter);
+    const editPost = adapter.editPost?.bind(adapter);
+    const call:
+      ((creds: DecryptedCredentials, io: ProviderIO) => Promise<RemoteMutationOutcome>) | undefined =
+      kind === 'delete'
+        ? deletePost && ((creds, io) => deletePost({ remotePostId }, creds, io))
+        : editPost &&
+          ((creds, io) =>
+            editPost({ remotePostId, text: change.text ?? '', idempotencyKey: change.id }, creds, io));
+    if (!call)
+      return {
+        outcome: 'rejected',
+        code: `${kind}_not_supported`,
+        message: `the channel cannot ${kind} posts`,
+      };
+    try {
+      return await credentialBroker.withCredentials(input.tenantId, connection.id, (creds) => {
+        hooks?.heartbeat(`remote-${kind}:${change.id}:send`);
+        return call(creds, providerIO(adapter.key, input.tenantId, hooks));
+      });
+    } catch (err) {
+      // Before any send (rate limiter, a destroyed credential): retry later, or refuse what cannot change.
+      if (err instanceof ProviderRateLimitWaitExceeded || err instanceof ProviderTransportError)
+        return { outcome: 'retryable_error', code: 'pre_send', message: truncateForTemporal(err, 300) };
+      if (err instanceof PolicyDeniedError)
+        return { outcome: 'rejected', code: err.reason, message: truncateForTemporal(err, 300) };
+      throw err;
+    }
+  }
+
+  const remoteChangeProvider: RemoteChangeProviderRuntimeV1 = {
+    deleteRemotePost: (input, actor, hooks) => applyRemoteChange(input, 'delete', actor, hooks),
+    editRemotePost: (input, actor, hooks) => applyRemoteChange(input, 'edit', actor, hooks),
+  };
+
+  const remoteChangeControl: RemoteChangeControlRuntimeV1 = {
+    /**
+     * Records a change's outcome once: the change moves out of `requested`, insert-only evidence is added for what
+     * the platform confirmed, and a confirmed deletion moves the publication published → removed by the machine.
+     * A failure leaves the publication as it was, with the reason on the change. A repeat changes nothing.
+     */
+    recordRemoteChangeOutcome: ({
+      publicationId,
+      changeId,
+      result,
+    }: RecordRemoteChangeInputV1): Promise<RecordRemoteChangeResultV1> =>
+      withTransaction(async (tx) => {
+        const row = await publicationsRepo.lock(publicationId, tx);
+        const { change } = await loadRemoteChange({ publicationId, changeId }, tx);
+        const at = now();
+        const succeeded = result.outcome === 'done' || result.outcome === 'already_absent';
+        // A confirmation for a change already closed as stale: the platform did change the post, so the record
+        // follows it (evidence, removal or current text) and the late arrival is logged and audited.
+        const late =
+          succeeded &&
+          change.state === 'failed' &&
+          (STALE_CLOSURE_CODES as readonly string[]).includes(change.errorCode ?? '');
+        if (change.state !== 'requested' && !late)
+          return { state: change.state, publicationState: row.state, changed: false };
+        if (late) {
+          await changesRepo.recordLateSuccess(change.id, STALE_CLOSURE_CODES, at, tx);
+          log.warn(
+            { tenantId: row.tenantId, publicationId: row.id, changeId: change.id },
+            'remote change confirmed after it was closed as stale; recorded as succeeded',
+          );
+          await audit.record(
+            workflowActor(),
+            `publication.${change.kind}_remote_confirmed_late`,
+            { type: 'publication', id: row.id },
+            'allowed',
+            tx,
+            { brandId: row.brandId, publicationId: row.id, reason: change.errorCode },
+          );
+        }
+        if (!succeeded) {
+          const failure = result as Exclude<RemoteMutationOutcome, { outcome: 'done' | 'already_absent' }>;
+          await changesRepo.recordOutcome(
+            change.id,
+            {
+              state: 'failed',
+              errorCode: failure.code.slice(0, 80),
+              errorDetail: truncateForTemporal(failure.message).slice(0, 2000),
+            },
+            at,
+            tx,
+          );
+          await audit.record(
+            workflowActor(),
+            `publication.${change.kind}_remote_failed`,
+            { type: 'publication', id: row.id },
+            'allowed',
+            tx,
+            { brandId: row.brandId, publicationId: row.id, reason: failure.code.slice(0, 80) },
+          );
+          count(METRIC.publicationOutcomes, 1, { outcome: `remote_${change.kind}_failed` });
+          return { state: 'failed', publicationState: row.state, changed: true };
+        }
+        if (!late)
+          await changesRepo.recordOutcome(
+            change.id,
+            { state: 'succeeded', errorCode: null, errorDetail: null },
+            at,
+            tx,
+          );
+        const kind = change.kind === 'delete' ? 'remote_deletion' : 'remote_edit';
+        const payload = {
+          changeId: change.id,
+          remotePostId: row.remotePostId,
+          outcome: result.outcome,
+          ...(change.textHash ? { textHash: change.textHash } : {}),
+          ...(late ? { confirmedAfterStale: true } : {}),
+        };
+        await evidenceRepo.create(
+          {
+            id: newId('remoteEvidence'),
+            publicationId: row.id,
+            attemptId: null,
+            kind,
+            remotePostId: row.remotePostId,
+            remoteUrl: row.remoteUrl,
+            payload,
+            payloadHash: hashCanonical(payload),
+            capturedAt: at,
+          },
+          tx,
+        );
+        count(METRIC.publicationOutcomes, 1, { outcome: `remote_${change.kind}` });
+        if (change.kind === 'delete' && row.state === 'published') {
+          const moved = await move(
+            row,
+            'remote_deleted',
+            { stateReason: result.outcome === 'already_absent' ? 'remote_already_absent' : 'remote_deleted' },
+            'publication.removed',
+            result.outcome,
+            tx,
+          );
+          return { state: 'succeeded', publicationState: moved.state, changed: true };
+        }
+        await audit.record(
+          workflowActor(),
+          `publication.${change.kind}_remote_applied`,
+          { type: 'publication', id: row.id },
+          'allowed',
+          tx,
+          { brandId: row.brandId, publicationId: row.id, reason: result.outcome },
+        );
+        return { state: 'succeeded', publicationState: row.state, changed: true };
+      }),
+  };
+
+  const remoteChangeSweep: RemoteChangeSweepRuntimeV1 = {
+    /**
+     * Closes requested changes with no outcome past the stale threshold (a lost workflow), each in its own tenant
+     * context and transaction, so the post can be edited or deleted again. A confirmation that still arrives is
+     * recorded by recordRemoteChangeOutcome.
+     */
+    async sweepStaleRemoteChanges(input: RemoteChangeSweepInputV1): Promise<RemoteChangeSweepResultV1> {
+      const before = new Date(new Date(input.now).getTime() - REMOTE_CHANGE_STALE_MS);
+      const stale = await runAsPlatform('remote-change-sweeper', input.correlationId, () =>
+        remoteSweepRepo.findStale(before),
+      );
+      let closed = 0;
+      for (const ref of stale)
+        await runInTenant(
+          {
+            tenantId: ref.tenantId,
+            actor: { kind: 'service_principal', id: 'remote-change-sweeper' },
+            brandIds: 'all',
+            correlationId: input.correlationId,
+          },
+          () =>
+            withTransaction(async (tx) => {
+              const row = await publicationsRepo.lock(ref.publicationId, tx);
+              const change = await changesRepo.getById(ref.changeId, tx);
+              if (change.state !== 'requested' || change.requestedAt >= before) return;
+              await changesRepo.recordOutcome(
+                change.id,
+                {
+                  state: 'failed',
+                  errorCode: 'stale_no_outcome',
+                  errorDetail: 'no outcome was recorded in time; the request can be made again',
+                },
+                now(),
+                tx,
+              );
+              await audit.record(
+                workflowActor(),
+                `publication.${change.kind}_remote_failed`,
+                { type: 'publication', id: row.id },
+                'allowed',
+                tx,
+                { brandId: row.brandId, publicationId: row.id, reason: 'stale_no_outcome' },
+              );
+              closed += 1;
+              log.warn(
+                { tenantId: row.tenantId, publicationId: row.id, changeId: change.id },
+                'remote change sweeper closed a change with no outcome (its workflow was lost)',
+              );
+            }),
+        );
+      return { closed };
+    },
+  };
+
   const connectChoicePurge: ConnectChoicePurgeRuntimeV1 = {
     /**
      * Spec 14.7: expired account choices hold sealed long-lived user tokens; they are shredded and deleted across
@@ -1016,5 +1291,14 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
   };
 
-  return { control, provider, tokenRefresh, sweep, connectChoicePurge };
+  return {
+    control,
+    provider,
+    tokenRefresh,
+    sweep,
+    remoteChangeControl,
+    remoteChangeProvider,
+    remoteChangeSweep,
+    connectChoicePurge,
+  };
 }

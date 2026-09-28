@@ -1,5 +1,6 @@
 import {
   PublicationReconcileInputV1,
+  PublicationRemoteChangeInputV1,
   PublicationSignalV1,
   PublicationWorkflowInputV1,
   TokenRefreshWorkflowInputV1,
@@ -13,6 +14,11 @@ export const PUBLICATION_RECONCILE_WORKFLOW_TYPE = 'publicationReconcileWorkflow
 export const PUBLICATION_SIGNAL_RELAY_WORKFLOW_TYPE = 'publicationSignalRelayV1';
 export const TOKEN_REFRESH_WORKFLOW_TYPE = 'tokenRefreshWorkflowV1';
 export const PUBLICATION_SWEEPER_WORKFLOW_TYPE = 'publicationSweeperWorkflowV1';
+export const PUBLICATION_REMOTE_DELETE_WORKFLOW_TYPE = 'publicationRemoteDeleteWorkflowV1';
+export const PUBLICATION_REMOTE_EDIT_WORKFLOW_TYPE = 'publicationRemoteEditWorkflowV1';
+/** Hourly Temporal schedule closing remote changes whose workflow was lost (one per namespace). */
+export const REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE = 'remoteChangeSweepWorkflowV1';
+export const REMOTE_CHANGE_SWEEP_SCHEDULE_ID = 'remote-change-sweep';
 /** One always-on sweeper per namespace. */
 export const PUBLICATION_SWEEPER_WORKFLOW_ID = 'publication-sweeper';
 /** Spec 14.7: the periodic purge of expired account choices, one Temporal schedule per namespace. */
@@ -75,6 +81,35 @@ export function registerPublishingOutboxRoutes(): void {
       args: [input],
     };
   });
+  // A remote change (publication.delete_remote / edit_remote) runs in its own workflow per request; an event
+  // recorded before changes were carried out has no changeId and stays informational (nothing to start).
+  const remoteChange =
+    (workflowType: string) => (evt: Parameters<Parameters<typeof registerOutboxRoute>[1]>[0]) => {
+      const p = evt.payload;
+      if (typeof p['changeId'] !== 'string') return null;
+      const input = PublicationRemoteChangeInputV1.parse({
+        tenantId: evt.tenantId,
+        actor: { kind: p['requestedByKind'], id: p['requestedById'] },
+        correlationId: evt.correlationId,
+        publicationId: p['publicationId'],
+        changeId: p['changeId'],
+        providerKey: p['providerKey'],
+      });
+      return {
+        workflowType,
+        taskQueue: CORE_TASK_QUEUE,
+        workflowId: String(p['workflowId']),
+        args: [input],
+      };
+    };
+  registerOutboxRoute(
+    'publication.delete_remote_requested',
+    remoteChange(PUBLICATION_REMOTE_DELETE_WORKFLOW_TYPE),
+  );
+  registerOutboxRoute(
+    'publication.edit_remote_requested',
+    remoteChange(PUBLICATION_REMOTE_EDIT_WORKFLOW_TYPE),
+  );
   registerOutboxRoute('channel.connected', (evt) => {
     const p = evt.payload;
     const input = TokenRefreshWorkflowInputV1.parse({

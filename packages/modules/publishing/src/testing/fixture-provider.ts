@@ -8,6 +8,7 @@ import type {
   PublishOutcome,
   ReconcileResult,
   RefreshResult,
+  RemoteMutationOutcome,
 } from '@oremedia/contracts/providers';
 import {
   ProviderAuthError,
@@ -15,6 +16,8 @@ import {
   classifyByStatus,
   plainMeasure,
   validateVariantAgainstCapability,
+  type DeletePostRequest,
+  type EditPostRequest,
   type ProviderAdapter,
   type ProviderIO,
   type PublishMedia,
@@ -66,7 +69,7 @@ export const fixtureCapability = (over: Partial<ProviderCapabilityV1> = {}): Pro
   reconciliation: 'by_recent_posts_scan',
   analytics: { post: [], account: [], latencyHours: 1 },
   comments: { read: false, reply: false },
-  edit: false,
+  edit: true,
   delete: true,
   rateLimits: [],
   requiredScopes: ['w_post'],
@@ -89,6 +92,13 @@ export type PublishBehaviour =
   /** The platform records the post, then the response is lost (crash after send). */
   | { kind: 'crash_after_send' };
 
+/**
+ * How the fixture platform answers the next edits and deletes of live posts, one entry per call (then `apply`):
+ * `apply` changes the in-memory post; the others answer without touching it.
+ */
+export type RemoteMutationBehaviour =
+  { kind: 'apply' } | { kind: 'retryable'; code?: string } | { kind: 'reject'; code?: string };
+
 export interface FixturePost {
   id: string;
   text: string;
@@ -98,6 +108,8 @@ export interface FixturePost {
   media: PublishMedia[];
   createdAt: Date;
   finalised: boolean;
+  /** Set when the post was deleted on the platform (deletePost). */
+  deleted: boolean;
 }
 
 let endpoint: Promise<string> | null = null;
@@ -141,6 +153,7 @@ export class FixtureProviderAdapter implements ProviderAdapter {
   };
   reconcileBehaviour: 'scan' | 'cannot_determine' = 'scan';
   pendingChecks: PendingCheck['status'][] = ['processing', 'ready'];
+  remoteMutations: RemoteMutationBehaviour[] = [];
   grant: AccountGrant = {
     remoteAccountId: 'acct_fixture',
     displayName: 'Fixture account',
@@ -293,8 +306,56 @@ export class FixtureProviderAdapter implements ProviderAdapter {
         }
       : { status: 'definitely_absent' };
   }
+  async deletePost(
+    req: DeletePostRequest,
+    _creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    this.calls.push(`deletePost:${req.remotePostId}`);
+    return this.mutate(req.remotePostId, io, (post) => {
+      if (!post || post.deleted) return { outcome: 'already_absent' };
+      post.deleted = true;
+      return { outcome: 'done' };
+    });
+  }
+  async editPost(
+    req: EditPostRequest,
+    _creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    this.calls.push(`editPost:${req.remotePostId}`);
+    return this.mutate(req.remotePostId, io, (post) => {
+      if (!post || post.deleted)
+        return { outcome: 'rejected', code: 'not_found', message: 'the post is deleted' };
+      post.text = req.text;
+      return { outcome: 'done' };
+    });
+  }
   classifyError(input: Parameters<ProviderAdapter['classifyError']>[0]) {
     return classifyByStatus(input);
+  }
+
+  /** The live-post mutation goes through the real ProviderIO (loopback) like publish, then the script decides. */
+  private async mutate(
+    remotePostId: string,
+    io: ProviderIO,
+    apply: (post: FixturePost | undefined) => RemoteMutationOutcome,
+  ): Promise<RemoteMutationOutcome> {
+    await io.request(
+      `${await fixtureEndpoint()}/posts/${encodeURIComponent(remotePostId)}`,
+      { method: 'POST', body: '{}' },
+      { mutation: true },
+    );
+    const b = this.remoteMutations.shift() ?? { kind: 'apply' };
+    if (b.kind === 'retryable')
+      return {
+        outcome: 'retryable_error',
+        code: b.code ?? 'fixture_retryable',
+        message: 'fixture retryable',
+      };
+    if (b.kind === 'reject')
+      return { outcome: 'rejected', code: b.code ?? 'fixture_rejected', message: 'rejected by fixture' };
+    return apply(this.posts.find((p) => p.id === remotePostId));
   }
 
   private record(req: PublishRequest): FixturePost {
@@ -306,6 +367,7 @@ export class FixtureProviderAdapter implements ProviderAdapter {
       media: req.media.map((m) => ({ ...m })),
       createdAt: new Date(),
       finalised: false,
+      deleted: false,
     };
     this.posts.push(post);
     return post;

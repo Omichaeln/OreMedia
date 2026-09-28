@@ -579,14 +579,21 @@ export const channelService = {
     }
   },
 
-  /** Spec 13.4 `providers.validateVariant`: pure, capability-driven, against the variant's connection. */
-  async validateVariantDetailed(variantId: string, tx?: Tx): Promise<ValidationResult> {
+  /**
+   * Spec 13.4 `providers.validateVariant`: pure, capability-driven, against the variant's connection. `text`
+   * replaces the variant's text (publication.edit_remote checks new text of a live post with the same rules).
+   */
+  async validateVariantDetailed(
+    variantId: string,
+    tx?: Tx,
+    override: { text?: string } = {},
+  ): Promise<ValidationResult> {
     const variant = await variants.get(variantId, tx);
     const connection = await connectionsRepo.getById(variant.channelConnectionId, tx);
     const adapter = adapterFor(connection.providerKey);
     const media = await publishMedia.describeForVariant(variant, tx); // dimensions only: nothing is minted
     const input: ChannelVariantInput = {
-      text: variant.text,
+      text: override.text ?? variant.text,
       altTexts: variant.altTexts,
       media: media.map((m) => ({ mime: m.mime, width: m.width, height: m.height, bytes: m.bytes })),
       settings: variant.settings,

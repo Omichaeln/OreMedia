@@ -10,6 +10,7 @@ import { registry } from './providers';
 import type {
   ChannelConnectionRepository,
   PublicationAttemptRepository,
+  PublicationRemoteChangeRepository,
   PublicationRepository,
   RemoteEvidenceRepository,
 } from './repositories';
@@ -18,8 +19,19 @@ export type ConnectionRow = Awaited<ReturnType<ChannelConnectionRepository['getB
 export type PublicationRow = Awaited<ReturnType<PublicationRepository['getById']>>;
 export type AttemptRow = Awaited<ReturnType<PublicationAttemptRepository['getById']>>;
 export type EvidenceRow = Awaited<ReturnType<RemoteEvidenceRepository['getById']>>;
+export type RemoteChangeRow = Awaited<ReturnType<PublicationRemoteChangeRepository['getById']>>;
 
 export const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
+
+/** The policy resource of a publication (spec 5.5: its state and channel take part in the decision). */
+export const publicationResource = (p: PublicationRow) => ({
+  type: 'publication',
+  tenantId: p.tenantId,
+  brandId: p.brandId,
+  id: p.id,
+  channelId: p.channelConnectionId,
+  state: p.state,
+});
 
 /** Spec 13.1: state is written only by transition(); an illegal move is rejected as a validation failure. */
 export function transition(from: PublicationState, event: PublicationEvent, path: string): PublicationState {
@@ -46,6 +58,9 @@ export const publicationWorkflowId = (publicationId: string, generation: number)
   generation === 0 ? `pub:${publicationId}` : `pub:${publicationId}:r${generation}`;
 export const reconcileWorkflowId = (publicationId: string, version: number): string =>
   `pub:${publicationId}:reconcile:${version}`;
+/** One workflow per remote change request: `pub:<publicationId>:remote:<changeId>` (the outbox starts it USE_EXISTING). */
+export const remoteChangeWorkflowId = (publicationId: string, changeId: string): string =>
+  `pub:${publicationId}:remote:${changeId}`;
 const RUN_ID_SUFFIX = /:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const workflowIdOf = (row: Pick<PublicationRow, 'id' | 'claimant'>): string =>
   row.claimant ? row.claimant.replace(RUN_ID_SUFFIX, '') : publicationWorkflowId(row.id, 0);
@@ -121,6 +136,36 @@ export const toAttemptDto = (a: AttemptRow) => ({
   errorDetail: a.errorDetail,
   remoteJobId: a.remoteJobId,
   remotePostId: a.remotePostId,
+});
+
+/**
+ * A requested remote change with no outcome after this long is stale: its workflow bounds itself to well under it
+ * (five attempts with backoff), so it was lost. The remote change sweeper closes it; a new request closes it too.
+ */
+export const REMOTE_CHANGE_STALE_MS = 6 * 3600 * 1000;
+/** Failure codes of a change closed as stale; a platform confirmation that arrives afterwards is still recorded. */
+export const STALE_CLOSURE_CODES = ['superseded_stale', 'stale_no_outcome'] as const;
+export const isStaleRequest = (
+  c: Pick<RemoteChangeRow, 'state' | 'requestedAt'>,
+  now = Date.now(),
+): boolean => c.state === 'requested' && now - c.requestedAt.getTime() >= REMOTE_CHANGE_STALE_MS;
+
+/** The request and its outcome; the text of an edit is returned only as the publication's current text. */
+export const toRemoteChangeDto = (c: RemoteChangeRow) => ({
+  id: c.id,
+  publicationId: c.publicationId,
+  kind: c.kind,
+  state: c.state,
+  reason: c.reason,
+  textHash: c.textHash,
+  requestedByKind: c.requestedByKind,
+  requestedById: c.requestedById,
+  requestedAt: c.requestedAt.toISOString(),
+  finishedAt: c.finishedAt ? c.finishedAt.toISOString() : null,
+  errorCode: c.errorCode,
+  errorDetail: c.errorDetail,
+  /** Requested, but no outcome was recorded in time: it no longer blocks a new request (which closes it). */
+  stale: isStaleRequest(c),
 });
 
 export const toEvidenceDto = (e: EvidenceRow) => ({

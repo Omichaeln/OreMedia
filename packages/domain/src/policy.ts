@@ -21,7 +21,7 @@ const STATE_DENIALS: Partial<Record<Action, readonly string[]>> = {
   'content.edit': ['approved', 'superseded', 'in_review'],
   'brand.edit_standards': ['published', 'retired'],
   'review.decide': ['stale', 'decided', 'cancelled'],
-  'publication.cancel': ['published', 'failed', 'cancelled'],
+  'publication.cancel': ['published', 'failed', 'cancelled', 'removed'],
   'asset.approve': ['retired'],
   'agent.cancel_run': [
     'completed',
@@ -165,6 +165,7 @@ export function authorize(input: PolicyInput): Decision {
           'review.decide',
           'publication.schedule',
           'publication.delete_remote',
+          'publication.edit_remote',
           'billing.manage',
           'channel.connect',
         ].includes(action)

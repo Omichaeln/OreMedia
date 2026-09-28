@@ -369,4 +369,24 @@ describe('X adapter (spec 14.5, 14.8; D-04 open, X built as the fourth channel)'
       remoteUrl: 'https://x.com/oremedia/status/1900000000000000022',
     });
   });
+
+  it("deletePost: DELETE /2/tweets/:id; 404 is already_absent; another user's post is refused; no editPost", async () => {
+    const req = { remotePostId: '1800000000000000001' };
+    load('manage', 'delete_success');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'done' });
+    expect(io.calls).toEqual([expect.objectContaining({ method: 'DELETE', mutation: true })]);
+    load('manage', 'delete_already_gone');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'already_absent' });
+    load('manage', 'delete_rate_limited');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'retryable_error',
+      code: 'rate_limited',
+    });
+    load('manage', 'delete_not_owner');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'x_forbidden',
+    });
+    expect('editPost' in adapter).toBe(false);
+  });
 });

@@ -4,7 +4,7 @@ import { Button, Skeleton } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { Tooltip } from '../../components/tooltip';
-import { dayKey, trailingRange } from '../publishing/publication-state';
+import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, type CalendarPublicationDto } from '../publishing/use-publishing';
 import {
   groupValue,
@@ -31,7 +31,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 const publishedIn = (list: CalendarPublicationDto[] | undefined, channelFilter: string | null) =>
   (list ?? [])
-    .filter((p) => p.state === 'published' && (!channelFilter || p.channelConnectionId === channelFilter))
+    .filter((p) => wasReleased(p.state) && (!channelFilter || p.channelConnectionId === channelFilter))
     .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));
 
 /**

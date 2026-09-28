@@ -10,6 +10,8 @@ export const PublicationState = z.enum([
   'retry_eligible',
   'cancelled',
   'held',
+  // Appended (additive): the live post was deleted on its platform through the product (publication.delete_remote).
+  'removed',
 ]);
 export type PublicationState = z.infer<typeof PublicationState>;
 
@@ -95,7 +97,13 @@ export const MandateCreate = z.object({
 import { PAGE_MAX, PageRequest } from './pagination';
 import { TenantContextInput } from './tenancy';
 import type { ActivityHooks } from './agents';
-import type { ChannelConnectionStatus, PendingCheck, ReconcileResult } from './providers';
+import type { ResolvedActor } from './policy';
+import type {
+  ChannelConnectionStatus,
+  PendingCheck,
+  ReconcileResult,
+  RemoteMutationOutcome,
+} from './providers';
 
 // ---- router DTOs (spec 7.5 publishing router) ----
 export const ChannelList = z.object({ brandId: z.string() });
@@ -111,6 +119,16 @@ export const PublicationList = z.object({
 });
 export const PublicationEvidence = z.object({ publicationId: z.string() });
 export const PublicationDeleteRemote = z.object({ publicationId: z.string(), reason: z.string().max(500) });
+/**
+ * Replaces the text of a live post on a platform that allows it (publication.edit_remote). The text is checked
+ * against the channel capability's text rules like a variant; media and settings stay as published. The request
+ * is idempotent through the Idempotency-Key of the call, like every publication command.
+ */
+export const PublicationEditRemote = z.object({
+  publicationId: z.string(),
+  text: z.string().min(1).max(70_000),
+  reason: z.string().max(500).optional(),
+});
 /**
  * Spec 17.6 restore rule (runbook "restore a single tenant", step 5): the restored tenant's in-flight publications,
  * or one brand's (`brandId` is required; null means the whole tenant). One call handles at most `limit` rows in its
@@ -342,4 +360,79 @@ export interface PublishProviderRuntimeV1 {
 }
 export type TokenRefreshRuntimeV1 = TokenRefreshActivitiesV1;
 export type PublicationSweepRuntimeV1 = PublicationSweepActivitiesV1;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Remote edit and deletion of published posts (appended; additive only). The API records a remote change and emits
+// publication.edit_remote_requested / publication.delete_remote_requested; the outbox starts
+// publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1 on task queue `core`, which call the provider
+// activity on `publish-<providerKey>` and record the outcome on `core`.
+// ---------------------------------------------------------------------------------------------------------------
+export const RemoteChangeKind = z.enum(['edit', 'delete']);
+export type RemoteChangeKind = z.infer<typeof RemoteChangeKind>;
+/** requested → succeeded | failed; a publication has at most one requested change at a time. */
+export const RemoteChangeState = z.enum(['requested', 'succeeded', 'failed']);
+export type RemoteChangeState = z.infer<typeof RemoteChangeState>;
+
+/** Workflow input: references only (spec 14.7 R5); the text of an edit is read from the change row. */
+export const PublicationRemoteChangeInputV1 = PublicationWorkflowInputV1.extend({
+  changeId: z.string(),
+  /** Chooses the `publish-<providerKey>` queue; a key, never a connection object (R5). */
+  providerKey: z.string(),
+});
+export type PublicationRemoteChangeInputV1 = z.infer<typeof PublicationRemoteChangeInputV1>;
+
+/** `skipped`: the change is no longer requested (already recorded, or superseded); nothing was sent. */
+export type RemoteChangeAttemptResultV1 = RemoteMutationOutcome | { outcome: 'skipped'; reason: string };
+export type RecordRemoteChangeInputV1 = PublicationRemoteChangeInputV1 & { result: RemoteMutationOutcome };
+/** Idempotent: a repeat reports `changed: false` and what it found. */
+export interface RecordRemoteChangeResultV1 {
+  state: RemoteChangeState;
+  publicationState: PublicationState;
+  changed: boolean;
+}
+
+/** Task queue `publish-<providerKey>`: one platform call each; the workflow bounds the retries. */
+export interface RemoteChangeProviderActivitiesV1 {
+  deleteRemotePost(input: PublicationRemoteChangeInputV1): Promise<RemoteChangeAttemptResultV1>;
+  editRemotePost(input: PublicationRemoteChangeInputV1): Promise<RemoteChangeAttemptResultV1>;
+}
+/** Task queue `core`. */
+export interface RemoteChangeControlActivitiesV1 {
+  recordRemoteChangeOutcome(input: RecordRemoteChangeInputV1): Promise<RecordRemoteChangeResultV1>;
+}
+/**
+ * `actor` is the requester re-resolved by the activity host at the point of effect (spec 5.2): the runtime re-checks
+ * publication.edit_remote / delete_remote for it before anything is sent.
+ */
+export interface RemoteChangeProviderRuntimeV1 {
+  deleteRemotePost(
+    input: PublicationRemoteChangeInputV1,
+    actor: ResolvedActor,
+    hooks?: ActivityHooks,
+  ): Promise<RemoteChangeAttemptResultV1>;
+  editRemotePost(
+    input: PublicationRemoteChangeInputV1,
+    actor: ResolvedActor,
+    hooks?: ActivityHooks,
+  ): Promise<RemoteChangeAttemptResultV1>;
+}
+export type RemoteChangeControlRuntimeV1 = RemoteChangeControlActivitiesV1;
+
+/**
+ * remoteChangeSweepWorkflowV1 (task queue `core`, started hourly by the Temporal schedule `remote-change-sweep`):
+ * requested remote changes with no outcome past the stale threshold are closed as failed (`stale_no_outcome`), so
+ * a lost workflow never leaves a post blocked. Platform-level like the publication sweeper: no tenant in the input.
+ */
+export const RemoteChangeSweepInputV1 = z.object({
+  correlationId: z.string(),
+  now: z.string().datetime(),
+});
+export type RemoteChangeSweepInputV1 = z.infer<typeof RemoteChangeSweepInputV1>;
+export interface RemoteChangeSweepResultV1 {
+  closed: number;
+}
+export interface RemoteChangeSweepActivitiesV1 {
+  sweepStaleRemoteChanges(input: RemoteChangeSweepInputV1): Promise<RemoteChangeSweepResultV1>;
+}
+export type RemoteChangeSweepRuntimeV1 = RemoteChangeSweepActivitiesV1;
 export type ConnectChoicePurgeRuntimeV1 = ConnectChoicePurgeActivitiesV1;

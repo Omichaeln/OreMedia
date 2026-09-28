@@ -13,6 +13,7 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RefreshResult,
+  RemoteMutationOutcome,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
@@ -40,6 +41,19 @@ export interface PublishRequest {
   /** Fingerprints recorded on the attempt so reconciliation can match a remote post. */
   textFingerprint: string;
   mediaFingerprints: string[];
+}
+
+/** A live post to remove (publication.delete_remote). */
+export interface DeletePostRequest {
+  remotePostId: string;
+}
+
+/** New text for a live post (publication.edit_remote); media and settings stay as published. */
+export interface EditPostRequest {
+  remotePostId: string;
+  text: string;
+  /** The remote change id; platforms that accept a client token use it, the others ignore it. */
+  idempotencyKey: string;
 }
 
 export interface CommentRequest {
@@ -99,6 +113,19 @@ export interface ProviderAdapter {
   checkStatus?(pending: PendingState, creds: DecryptedCredentials, io: ProviderIO): Promise<PendingCheck>; // read-only
   finalize?(pending: PendingState, creds: DecryptedCredentials, io: ProviderIO): Promise<PendingCheck>; // once done, checkStatus must return 'completed'
   comment?(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome>;
+
+  // Changing a live post. Present exactly when capability.delete / capability.edit is true (registry test).
+  // Both converge on a repeat, so an ambiguous failure is retryable; deleting a post that is gone is already_absent.
+  deletePost?(
+    req: DeletePostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome>;
+  editPost?(
+    req: EditPostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome>;
 
   // Reconciliation
   findRemotePost(

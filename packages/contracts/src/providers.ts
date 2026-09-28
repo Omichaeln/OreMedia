@@ -52,6 +52,18 @@ export type PublishOutcome =
   | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number } // only when phase === 'before_send' or platform guarantees no effect
   | { outcome: 'unknown'; code: string; message: string };
 
+/**
+ * The classified result of changing or removing a post that is already live (ProviderAdapter.editPost/deletePost).
+ * Both mutations converge (repeating a delete or an edit leaves the same remote state), so an ambiguous failure
+ * after send is `retryable_error`, never a separate unknown outcome. A delete of a post that is already gone is
+ * `already_absent`, which counts as success.
+ */
+export type RemoteMutationOutcome =
+  | { outcome: 'done' }
+  | { outcome: 'already_absent' }
+  | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
+  | { outcome: 'rejected'; code: string; message: string };
+
 export type ProviderErrorClass =
   | { kind: 'refresh_token' }
   | { kind: 'reconnect_required' }

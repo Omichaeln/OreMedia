@@ -4,7 +4,11 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { channelConnections, pendingChannelGrants } from '@oremedia/db/schema/publishing';
+import {
+  channelConnections,
+  pendingChannelGrants,
+  publicationRemoteChanges,
+} from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   FIXTURE_PROVIDER_KEY,
@@ -27,9 +31,11 @@ import { composeModules } from './composition';
  */
 const PREVIOUS_HEAD = '0009_brand_classification';
 const NEW_TABLES: MySqlTable[] = [pendingChannelGrants];
+/** Added by later migrations (0011: migration-0011-roll-forward.integration.test.ts). */
+const LATER_TABLES: MySqlTable[] = [publicationRemoteChanges];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0010 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

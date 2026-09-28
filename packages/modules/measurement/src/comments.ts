@@ -35,6 +35,8 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
     async pullComments(input: PullCommentsInputV1, hooks?: ActivityHooks): Promise<PullCommentsResultV1> {
       const { tenantId, publicationId } = input;
       const { row, connection } = await loadPublication(publicationId);
+      // Deleted from the channel through the product: no comments left to read; what was ingested stays.
+      if (row.state === 'removed') return { ingested: 0, duplicates: 0, nextCursor: null };
       const adapter = adapterFor(connection.providerKey);
       const fetchComments = adapter.fetchComments?.bind(adapter);
       if (!fetchComments || !adapter.capability.comments.read || !row.remotePostId)

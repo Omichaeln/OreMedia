@@ -7,6 +7,7 @@ import {
   json,
   mysqlEnum,
   mysqlTable,
+  text,
   uniqueIndex,
   varbinary,
   varchar,
@@ -138,6 +139,7 @@ export const publications = mysqlTable(
       'retry_eligible',
       'cancelled',
       'held',
+      'removed',
     ]).notNull(),
     stateReason: varchar('state_reason', { length: 120 }),
     holdReasons: json('hold_reasons').$type<string[]>(),
@@ -223,6 +225,8 @@ export const remoteEvidence = mysqlTable(
       'reconciliation',
       'human_confirmation',
       'metrics_readback',
+      'remote_edit', // the platform accepted a text edit made through the product (publication_remote_changes)
+      'remote_deletion', // the platform confirmed the post is deleted (or was already gone)
     ]).notNull(),
     remotePostId: varchar('remote_post_id', { length: 200 }),
     remoteUrl: varchar('remote_url', { length: 1000 }),
@@ -232,6 +236,46 @@ export const remoteEvidence = mysqlTable(
     createdAt: createdAt(),
   },
   (t) => [index('ix_remote_evidence_publication').on(t.tenantId, t.publicationId, t.capturedAt)],
+);
+
+/**
+ * An edit or deletion of a live post requested through the product (publication.edit_remote / delete_remote).
+ * Append-plus-outcome like publication_attempts: the request (kind, text, who, why) is written once; only the
+ * outcome columns move, once, from `requested`. The text of an edit lives here, never over the variant or the
+ * release evidence; a succeeded edit is the post's current text.
+ */
+export const publicationRemoteChanges = mysqlTable(
+  'publication_remote_changes',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    publicationId: ref('publication_id').notNull(),
+    kind: mysqlEnum('kind', ['edit', 'delete']).notNull(),
+    state: mysqlEnum('state', ['requested', 'succeeded', 'failed']).notNull(),
+    text: text('text'), // edits only
+    textHash: hash('text_hash'),
+    reason: varchar('reason', { length: 500 }),
+    requestedByKind: mysqlEnum('requested_by_kind', ['user', 'service_principal']).notNull(),
+    requestedById: ref('requested_by_id').notNull(),
+    requestedAt: ts('requested_at').notNull(),
+    finishedAt: ts('finished_at'),
+    errorCode: varchar('error_code', { length: 80 }),
+    errorDetail: varchar('error_detail', { length: 2000 }), // truncated, redacted
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_remote_change_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_remote_change_publication').on(t.tenantId, t.publicationId, t.requestedAt),
+    index('ix_remote_change_open').on(t.state, t.requestedAt), // the stale-change sweeper
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.publicationId],
+      foreignColumns: [publications.tenantId, publications.brandId, publications.id],
+      name: 'fk_remote_change_publication',
+    }),
+  ],
 );
 
 /** Global register (spec 14.6). Listed in GLOBAL_TABLES. */

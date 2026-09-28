@@ -1,0 +1,80 @@
+{
+  "provider": "x",
+  "scenarios": {
+    "delete_success": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.x.com",
+            "path": "/2/tweets/1800000000000000001"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "data": {
+                "deleted": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "delete_already_gone": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.x.com",
+            "path": "/2/tweets/1800000000000000001"
+          },
+          "response": {
+            "status": 404,
+            "json": {
+              "title": "Not Found Error",
+              "type": "https://api.twitter.com/2/problems/resource-not-found",
+              "detail": "Could not find tweet with id: [1800000000000000001]."
+            }
+          }
+        }
+      ]
+    },
+    "delete_rate_limited": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.x.com",
+            "path": "/2/tweets/1800000000000000001"
+          },
+          "response": {
+            "status": 429,
+            "json": {
+              "title": "Too Many Requests",
+              "status": 429
+            }
+          }
+        }
+      ]
+    },
+    "delete_not_owner": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "api.x.com",
+            "path": "/2/tweets/1800000000000000001"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "title": "Forbidden",
+              "detail": "You are not allowed to delete a Tweet that belongs to another user.",
+              "status": 403
+            }
+          }
+        }
+      ]
+    }
+  }
+}

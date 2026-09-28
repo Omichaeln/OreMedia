@@ -53,6 +53,12 @@ const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
   ...publication(ctx, f),
   attempt: { attemptId: f['publicationAttemptId'], outcome, remotePostId: 'foreign-remote-post' },
 });
+/** A remote edit/delete of the foreign publication (the change id is never reached: the publication is not found). */
+const remoteChange = (ctx: ActivityContext, f: Ids) => ({
+  ...publication(ctx, f),
+  changeId: 'prc_01HARNESS0000000000000000',
+  providerKey: 'fixture_provider',
+});
 const providerCall = (ctx: ActivityContext, f: Ids) => ({
   ...publication(ctx, f),
   fencingToken: 1,
@@ -135,6 +141,11 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.openAttempt': { buildInput: (ctx, f) => ({ ...publication(ctx, f), fencingToken: 1 }) },
     'core.markProcessing': { buildInput: (ctx, f) => attempt(ctx, f, 'pending') },
     'core.markPublished': { buildInput: (ctx, f) => attempt(ctx, f, 'accepted') },
+    'core.sweepStaleRemoteChanges': { buildInput: null, reason: PLATFORM_SWEEP },
+    // publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1
+    'core.recordRemoteChangeOutcome': {
+      buildInput: (ctx, f) => ({ ...remoteChange(ctx, f), result: { outcome: 'done' } }),
+    },
     'core.markFailed': { buildInput: (ctx, f) => attempt(ctx, f, 'rejected') },
     'core.markOutcomeUnknown': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), attemptId: f['publicationAttemptId'] }),
@@ -230,6 +241,8 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'publish-<provider>.publishOnce': { buildInput: providerCall },
     'publish-<provider>.checkStatus': { buildInput: providerCall },
     'publish-<provider>.finalize': { buildInput: providerCall },
+    'publish-<provider>.deleteRemotePost': { buildInput: remoteChange },
+    'publish-<provider>.editRemotePost': { buildInput: remoteChange },
     'publish-<provider>.findRemotePost': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), attemptId: f['publicationAttemptId'] }),
     },

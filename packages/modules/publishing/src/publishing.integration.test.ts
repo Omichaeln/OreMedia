@@ -23,6 +23,7 @@ import {
   credentialRefs,
   pendingChannelGrants,
   publicationAttempts,
+  publicationRemoteChanges,
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
@@ -1567,7 +1568,11 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       const del = await run(tenantA, (tx) =>
         publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'wrong price' }, tx),
       );
-      expect(del).toMatchObject({ accepted: true, remotePostId: result.remotePostId });
+      expect(del).toMatchObject({
+        accepted: true,
+        remotePostId: result.remotePostId,
+        changeId: expect.stringMatching(/^prc_/),
+      });
       expect(
         (await eventsOf(tenantA, 'publication.delete_remote_requested')).some(
           (e) => e.payload['publicationId'] === pub.id,
@@ -1662,6 +1667,412 @@ describe('publishing module (spec 14) against MySQL 8', () => {
           )
         ).state,
       ).toBe('cancelled');
+    });
+  });
+
+  describe('remote edit and delete of a published post (publication.edit_remote / delete_remote)', () => {
+    /** A publication taken through dispatch to published, on the fixture platform. */
+    const published = async (text = 'Hello from the fixture') => {
+      const v = newVariant(tenantA, brandA, connA, text);
+      const pub = await schedule(tenantA, v.id);
+      const { attemptId } = await dispatch(pub.id);
+      const result = await inTenant(tenantA, () =>
+        runtime.provider.publishOnce({ ...wfInput(pub.id), attemptId, fencingToken: 1 }),
+      );
+      await inTenant(tenantA, () => runtime.control.markPublished({ ...wfInput(pub.id), attempt: result }));
+      return { pub, variant: v, remotePostId: result.remotePostId! };
+    };
+    const changeInput = (publicationId: string, changeId: string) => ({
+      ...wfInput(publicationId),
+      changeId,
+      providerKey: FIXTURE_PROVIDER_KEY,
+    });
+    const changesOf = (publicationId: string) =>
+      tdb.db
+        .select()
+        .from(publicationRemoteChanges)
+        .where(eq(publicationRemoteChanges.publicationId, publicationId));
+    const issueOf = async (p: Promise<unknown>) => {
+      const err = await p.then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(ValidationFailedError);
+      return (err as ValidationFailedError).details?.[0]?.issue;
+    };
+
+    it('delete: recorded, emitted with the change, carried out once; the publication becomes removed with evidence', async () => {
+      const { pub, remotePostId } = await published();
+      const del = await run(tenantA, (tx) =>
+        publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'wrong price' }, tx),
+      );
+      const [change] = await changesOf(pub.id);
+      expect(change).toMatchObject({
+        id: del.changeId,
+        kind: 'delete',
+        state: 'requested',
+        reason: 'wrong price',
+      });
+      const evt = (await eventsOf(tenantA, 'publication.delete_remote_requested')).find(
+        (e) => e.payload['changeId'] === del.changeId,
+      );
+      expect(evt?.payload).toMatchObject({
+        publicationId: pub.id,
+        remotePostId,
+        requestedByKind: 'user',
+        requestedById: USER,
+        changeId: del.changeId,
+        providerKey: FIXTURE_PROVIDER_KEY,
+        workflowId: `pub:${pub.id}:remote:${del.changeId}`,
+      });
+      // One change at a time: a second delete, or an edit racing the delete, is refused while it is open.
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'again' }, tx),
+          ),
+        ),
+      ).toBe('remote_change_in_progress');
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.editRemote(A, { publicationId: pub.id, text: 'Edited' }, tx),
+          ),
+        ),
+      ).toBe('remote_change_in_progress');
+
+      const input = changeInput(pub.id, del.changeId);
+      expect(await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A))).toEqual({
+        outcome: 'done',
+      });
+      expect(fixture.posts.find((p) => p.id === remotePostId)?.deleted).toBe(true);
+      const recorded = await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: { outcome: 'done' } }),
+      );
+      expect(recorded).toEqual({ state: 'succeeded', publicationState: 'removed', changed: true });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: { outcome: 'done' } }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'removed', changed: false });
+      // A repeated provider activity after the outcome sends nothing.
+      const callsBefore = fixture.calls.length;
+      expect(await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A))).toEqual({
+        outcome: 'skipped',
+        reason: 'change_succeeded',
+      });
+      expect(fixture.calls.length).toBe(callsBefore);
+
+      expect((await row(pub.id)).state).toBe('removed');
+      expect((await row(pub.id)).stateReason).toBe('remote_deleted');
+      const evidence = await evidenceOf(pub.id);
+      expect(evidence.map((e) => e.kind).sort()).toEqual(['accepted_response', 'remote_deletion']);
+      expect(evidence.find((e) => e.kind === 'remote_deletion')?.payload).toMatchObject({
+        changeId: del.changeId,
+        remotePostId,
+        outcome: 'done',
+      });
+      expect(
+        (await eventsOf(tenantA, 'publication.state_changed')).some(
+          (e) => e.payload['publicationId'] === pub.id && e.payload['toState'] === 'removed',
+        ),
+      ).toBe(true);
+      // Removed is terminal for remote changes; the approval it went out under stays spent.
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+          ),
+        ),
+      ).toBe('not_published');
+      expect(
+        await inTenant(tenantA, () =>
+          publicationService.publishedElsewhereForApprovalChannel(pub.approvalId!, connA, 'pub_other'),
+        ),
+      ).toBe(true);
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto.remote.changes[0]).toMatchObject({ id: del.changeId, kind: 'delete', state: 'succeeded' });
+    });
+
+    it('a post already gone on the platform counts as deleted', async () => {
+      const { pub, remotePostId } = await published();
+      fixture.posts.find((p) => p.id === remotePostId)!.deleted = true;
+      const del = await run(tenantA, (tx) =>
+        publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'cleanup' }, tx),
+      );
+      const input = changeInput(pub.id, del.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A));
+      expect(result).toEqual({ outcome: 'already_absent' });
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({
+          ...input,
+          result: { outcome: 'already_absent' },
+        }),
+      );
+      expect(await row(pub.id)).toMatchObject({ state: 'removed', stateReason: 'remote_already_absent' });
+    });
+
+    it('edit: checked like a variant, stored on the change, carried out; evidence is added, never rewritten', async () => {
+      const { pub, remotePostId } = await published('Launch price 50 EUR');
+      const before = await evidenceOf(pub.id);
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.editRemote(A, { publicationId: pub.id, text: 'x'.repeat(281) }, tx),
+          ),
+        ),
+      ).toBe('text_too_long:281>280');
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.editRemote(A, { publicationId: pub.id, text: 'Launch price 50 EUR  ' }, tx),
+          ),
+        ),
+      ).toBe('text_unchanged');
+      const edit = await run(tenantA, (tx) =>
+        publicationService.editRemote(
+          A,
+          { publicationId: pub.id, text: 'Launch price 40 EUR', reason: 'typo in the price' },
+          tx,
+        ),
+      );
+      const [change] = await changesOf(pub.id);
+      expect(change).toMatchObject({
+        id: edit.changeId,
+        kind: 'edit',
+        state: 'requested',
+        text: 'Launch price 40 EUR',
+        reason: 'typo in the price',
+      });
+      const evt = (await eventsOf(tenantA, 'publication.edit_remote_requested')).find(
+        (e) => e.payload['changeId'] === edit.changeId,
+      );
+      expect(evt?.payload).toMatchObject({
+        publicationId: pub.id,
+        providerKey: FIXTURE_PROVIDER_KEY,
+        textHash: change!.textHash,
+        workflowId: `pub:${pub.id}:remote:${edit.changeId}`,
+      });
+      expect(JSON.stringify(evt?.payload)).not.toContain('40 EUR'); // references only in events
+
+      const input = changeInput(pub.id, edit.changeId);
+      expect(await inTenant(tenantA, () => runtime.remoteChangeProvider.editRemotePost(input, A))).toEqual({
+        outcome: 'done',
+      });
+      expect(fixture.posts.find((p) => p.id === remotePostId)?.text).toBe('Launch price 40 EUR');
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: { outcome: 'done' } }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'published', changed: true });
+
+      const after = await evidenceOf(pub.id);
+      expect(after.filter((e) => before.some((b) => b.id === e.id))).toEqual(before); // untouched
+      expect(after.find((e) => e.kind === 'remote_edit')?.payload).toMatchObject({
+        changeId: edit.changeId,
+        textHash: change!.textHash,
+      });
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto.state).toBe('published');
+      expect(dto.remote).toMatchObject({
+        edit: true,
+        delete: true,
+        textMaxLength: 280,
+        currentText: 'Launch price 40 EUR',
+      });
+      // The edited text is now the live text: the same text again is unchanged, the old text is a real change.
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.editRemote(A, { publicationId: pub.id, text: 'Launch price 40 EUR' }, tx),
+          ),
+        ),
+      ).toBe('text_unchanged');
+    });
+
+    it('a failure leaves the post published with the reason on the change; a new request may follow', async () => {
+      const { pub } = await published();
+      const edit = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: 'Something else' }, tx),
+      );
+      fixture.remoteMutations = [{ kind: 'reject', code: 'content_policy' }];
+      const input = changeInput(pub.id, edit.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.editRemotePost(input, A));
+      expect(result).toMatchObject({ outcome: 'rejected', code: 'content_policy' });
+      if (result.outcome !== 'rejected') throw new Error('expected a rejection');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+      );
+      expect((await changesOf(pub.id))[0]).toMatchObject({
+        state: 'failed',
+        errorCode: 'content_policy',
+        errorDetail: 'rejected by fixture',
+      });
+      expect((await row(pub.id)).state).toBe('published');
+      expect((await evidenceOf(pub.id)).map((e) => e.kind)).toEqual(['accepted_response']);
+      const again = await run(tenantA, (tx) =>
+        publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'give up' }, tx),
+      );
+      expect(again.changeId).not.toBe(edit.changeId);
+    });
+
+    it('a confirmation that arrives after the change was closed as stale is still recorded: the post is removed', async () => {
+      const { pub, remotePostId } = await published();
+      const del = await run(tenantA, (tx) =>
+        publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'lost workflow' }, tx),
+      );
+      const input = changeInput(pub.id, del.changeId);
+      expect(await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A))).toEqual({
+        outcome: 'done',
+      });
+      // The workflow is lost before it records; the sweeper closes the change once it is stale.
+      await tdb.db
+        .update(publicationRemoteChanges)
+        .set({ requestedAt: new Date(Date.now() - 7 * 3600_000) })
+        .where(eq(publicationRemoteChanges.id, del.changeId));
+      const listed = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(listed.remote.changes[0]).toMatchObject({ id: del.changeId, state: 'requested', stale: true });
+      const swept = await runtime.remoteChangeSweep.sweepStaleRemoteChanges({
+        correlationId: 'corr_sweep',
+        now: new Date().toISOString(),
+      });
+      expect(swept.closed).toBeGreaterThanOrEqual(1);
+      expect((await changesOf(pub.id))[0]).toMatchObject({ state: 'failed', errorCode: 'stale_no_outcome' });
+      expect((await row(pub.id)).state).toBe('published');
+      // The workflow comes back and records the confirmation: the record follows the platform.
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: { outcome: 'done' } }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'removed', changed: true });
+      expect((await changesOf(pub.id))[0]).toMatchObject({
+        state: 'succeeded',
+        errorCode: 'confirmed_after_stale',
+      });
+      expect((await evidenceOf(pub.id)).find((e) => e.kind === 'remote_deletion')?.payload).toMatchObject({
+        changeId: del.changeId,
+        remotePostId,
+        confirmedAfterStale: true,
+      });
+      const audits = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.resourceId, pub.id)));
+      expect(audits.map((a) => a.action)).toEqual(
+        expect.arrayContaining([
+          'publication.delete_remote_failed',
+          'publication.delete_remote_confirmed_late',
+        ]),
+      );
+      // A failure that arrives late changes nothing.
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({
+            ...input,
+            result: { outcome: 'rejected', code: 'x', message: 'x' },
+          }),
+        ),
+      ).toMatchObject({ changed: false });
+    });
+
+    it('the requester must still hold the permission when the change is carried out', async () => {
+      const { pub } = await published();
+      const edit = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: 'Revised text' }, tx),
+      );
+      const creator: ResolvedActor = { ...A, role: 'creator' } as ResolvedActor;
+      const callsBefore = fixture.calls.length;
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeProvider.editRemotePost(changeInput(pub.id, edit.changeId), creator),
+        ),
+      ).toMatchObject({ outcome: 'rejected', code: 'policy_denied:role_missing' });
+      expect(fixture.calls.length).toBe(callsBefore); // nothing was sent
+    });
+
+    it('a request with no recorded outcome for hours is closed as stale when the next one comes; its activity then sends nothing', async () => {
+      const { pub } = await published();
+      const stale = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: 'Never carried out' }, tx),
+      );
+      await tdb.db
+        .update(publicationRemoteChanges)
+        .set({ requestedAt: new Date(Date.now() - 7 * 3600_000) })
+        .where(eq(publicationRemoteChanges.id, stale.changeId));
+      await run(tenantA, (tx) =>
+        publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+      );
+      expect((await changesOf(pub.id)).find((c) => c.id === stale.changeId)).toMatchObject({
+        state: 'failed',
+        errorCode: 'superseded_stale',
+      });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeProvider.editRemotePost(changeInput(pub.id, stale.changeId), A),
+        ),
+      ).toEqual({ outcome: 'skipped', reason: 'change_failed' });
+    });
+
+    it('refused: channels without the capability, unpublished rows, agents, and other tenants', async () => {
+      const { pub } = await published();
+      const cap = fixture.capability as { edit: boolean };
+      cap.edit = false;
+      try {
+        await expect(
+          run(tenantA, (tx) => publicationService.editRemote(A, { publicationId: pub.id, text: 'New' }, tx)),
+        ).rejects.toBeInstanceOf(CapabilityUnsupportedError);
+      } finally {
+        cap.edit = true;
+      }
+      const v = newVariant(tenantA, brandA, connA);
+      const scheduled = await schedule(tenantA, v.id, new Date(Date.now() + 3600_000));
+      expect(
+        await issueOf(
+          run(tenantA, (tx) =>
+            publicationService.editRemote(A, { publicationId: scheduled.id, text: 'New' }, tx),
+          ),
+        ),
+      ).toBe('not_published');
+      const agent: ResolvedActorServicePrincipal = {
+        kind: 'service_principal',
+        id: 'sp_publishing_tools',
+        tenantId: tenantA,
+        status: 'active',
+        maxAutonomy: 'managed_autopublish',
+        grants: [
+          { action: 'publication.edit_remote', brandIds: 'all', channelConnectionIds: 'all' },
+          { action: 'publication.delete_remote', brandIds: 'all', channelConnectionIds: 'all' },
+        ],
+      };
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.editRemote(agent, { publicationId: pub.id, text: 'New' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.deleteRemote(agent, { publicationId: pub.id, reason: 'x' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      // Another tenant cannot see the publication, let alone change it or run its change activities.
+      await expect(
+        run(tenantB, (tx) => publicationService.editRemote(B, { publicationId: pub.id, text: 'New' }, tx)),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      const own = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: 'Tenant A text' }, tx),
+      );
+      await expect(
+        inTenant(tenantB, () =>
+          runtime.remoteChangeProvider.editRemotePost(
+            {
+              ...changeInput(pub.id, own.changeId),
+              tenantId: tenantB,
+            },
+            A,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect((await changesOf(pub.id)).every((c) => c.tenantId === tenantA)).toBe(true);
     });
   });
 

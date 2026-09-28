@@ -68,6 +68,8 @@ export const ID_PREFIXES = {
   publication: 'pub',
   publicationAttempt: 'att',
   remoteEvidence: 're',
+  /** An edit or deletion of a published post on its platform, requested through the product. */
+  publicationRemoteChange: 'prc',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',

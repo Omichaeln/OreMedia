@@ -15,6 +15,7 @@ import {
   credentialRefs,
   pendingChannelGrants,
   publicationAttempts,
+  publicationRemoteChanges,
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
@@ -186,6 +187,8 @@ export class ChannelConnectionRepository extends BrandScopedRepository<typeof ch
 }
 
 const NEEDS_PERSON: readonly PublicationState[] = ['failed', 'outcome_unknown', 'held'];
+/** Went out under its approval: a post deleted afterwards through the product still spent it (spec 13.1). */
+const RELEASED: readonly PublicationState[] = ['published', 'removed'];
 
 export class PublicationRepository extends BrandScopedRepository<typeof publications> {
   constructor() {
@@ -307,7 +310,9 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
       .selectDistinct({ channelConnectionId: publications.channelConnectionId })
       .from(publications)
       .where(
-        this.scope(and(eq(publications.approvalId, approvalId), eq(publications.state, 'published')) as SQL),
+        this.scope(
+          and(eq(publications.approvalId, approvalId), inArray(publications.state, [...RELEASED])) as SQL,
+        ),
       );
     return rows.map((r) => r.channelConnectionId);
   }
@@ -326,7 +331,7 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
           and(
             eq(publications.approvalId, approvalId),
             eq(publications.channelConnectionId, channelConnectionId),
-            eq(publications.state, 'published'),
+            inArray(publications.state, [...RELEASED]),
             ne(publications.id, exceptPublicationId),
           ) as SQL,
         ),
@@ -478,6 +483,110 @@ export class PublicationAttemptRepository extends TenantScopedRepository<typeof 
   }
 }
 
+/**
+ * Append-plus-outcome, like the attempt ledger: a change is inserted `requested` and its outcome is written once
+ * (requested → succeeded | failed); the request columns (kind, text, reason, requester) never change.
+ */
+export class PublicationRemoteChangeRepository extends BrandScopedRepository<
+  typeof publicationRemoteChanges
+> {
+  constructor() {
+    super(publicationRemoteChanges);
+  }
+  async create(values: Omit<typeof publicationRemoteChanges.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  /** Newest first (ids are time-ordered); bounded, a publication collects few changes. */
+  async listForPublication(publicationId: string, tx?: Tx, limit = 20) {
+    return this.conn(tx)
+      .select()
+      .from(publicationRemoteChanges)
+      .where(this.scope(eq(publicationRemoteChanges.publicationId, publicationId)))
+      .orderBy(desc(publicationRemoteChanges.id))
+      .limit(limit);
+  }
+  /**
+   * The live text: the edit the platform confirmed last (by when it was confirmed, so a late confirmation of an
+   * older request that landed after a newer one is what the post shows).
+   */
+  async latestSucceededEdit(publicationId: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(publicationRemoteChanges)
+      .where(
+        this.scope(
+          and(
+            eq(publicationRemoteChanges.publicationId, publicationId),
+            eq(publicationRemoteChanges.kind, 'edit'),
+            eq(publicationRemoteChanges.state, 'succeeded'),
+          ) as SQL,
+        ),
+      )
+      .orderBy(desc(publicationRemoteChanges.finishedAt), desc(publicationRemoteChanges.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /** The change still waiting on the platform, if any (at most one per publication, checked under the row lock). */
+  async findOpenForPublication(publicationId: string, tx: Tx) {
+    const rows = await tx
+      .select()
+      .from(publicationRemoteChanges)
+      .where(
+        this.scope(
+          and(
+            eq(publicationRemoteChanges.publicationId, publicationId),
+            eq(publicationRemoteChanges.state, 'requested'),
+          ) as SQL,
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /**
+   * The one correction of a written outcome: a change closed as stale (no outcome in time) whose workflow later
+   * got the platform's confirmation. The post did change, so the record follows the platform; the stale closure
+   * stays in the audit log.
+   */
+  async recordLateSuccess(id: string, staleCodes: readonly string[], at: Date, tx: Tx): Promise<boolean> {
+    const res = await tx
+      .update(publicationRemoteChanges)
+      .set({
+        state: 'succeeded',
+        errorCode: 'confirmed_after_stale',
+        errorDetail: null,
+        finishedAt: at,
+        version: sql`${publicationRemoteChanges.version} + 1`,
+      })
+      .where(
+        this.scope(
+          and(
+            eq(publicationRemoteChanges.id, id),
+            eq(publicationRemoteChanges.state, 'failed'),
+            inArray(publicationRemoteChanges.errorCode, [...staleCodes]),
+          ) as SQL,
+        ),
+      );
+    return affectedRows(res) === 1;
+  }
+  /** The outcome is written once; a repeat (activity retry) changes nothing and reports false. */
+  async recordOutcome(
+    id: string,
+    values: Pick<typeof publicationRemoteChanges.$inferInsert, 'state' | 'errorCode' | 'errorDetail'>,
+    at: Date,
+    tx: Tx,
+  ): Promise<boolean> {
+    const res = await tx
+      .update(publicationRemoteChanges)
+      .set({ ...values, finishedAt: at, version: sql`${publicationRemoteChanges.version} + 1` })
+      .where(
+        this.scope(
+          and(eq(publicationRemoteChanges.id, id), eq(publicationRemoteChanges.state, 'requested')) as SQL,
+        ),
+      );
+    return affectedRows(res) === 1;
+  }
+}
+
 /** Insert-only (spec 6.1). */
 export class RemoteEvidenceRepository extends TenantScopedRepository<typeof remoteEvidence> {
   constructor() {
@@ -516,6 +625,36 @@ export class RemoteEvidenceRepository extends TenantScopedRepository<typeof remo
       )
       .limit(1);
     return rows.length === 1;
+  }
+}
+
+/** A remote change with no outcome past the stale threshold, as the remote change sweeper sees it: references only. */
+export interface StaleRemoteChangeRef {
+  tenantId: string;
+  brandId: string;
+  publicationId: string;
+  changeId: string;
+}
+
+/** Platform-level like PublicationSweepRepository: finds references across tenants, writes nothing. */
+export class RemoteChangeSweepRepository extends PlatformRepository {
+  async findStale(requestedBefore: Date, limit = 200): Promise<StaleRemoteChangeRef[]> {
+    return this.conn()
+      .select({
+        tenantId: publicationRemoteChanges.tenantId,
+        brandId: publicationRemoteChanges.brandId,
+        publicationId: publicationRemoteChanges.publicationId,
+        changeId: publicationRemoteChanges.id,
+      })
+      .from(publicationRemoteChanges)
+      .where(
+        and(
+          eq(publicationRemoteChanges.state, 'requested'),
+          lt(publicationRemoteChanges.requestedAt, requestedBefore),
+        ),
+      )
+      .orderBy(asc(publicationRemoteChanges.requestedAt))
+      .limit(limit);
   }
 }
 

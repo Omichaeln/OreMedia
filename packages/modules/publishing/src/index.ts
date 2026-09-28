@@ -57,7 +57,7 @@ export {
   registry as providerRegistryInUse,
   type PublishingProviderOptions,
 } from './providers';
-export { publicationWorkflowId, reconcileWorkflowId, workflowIdOf } from './common';
+export { publicationWorkflowId, reconcileWorkflowId, remoteChangeWorkflowId, workflowIdOf } from './common';
 export {
   registerPublishingOutboxRoutes,
   publishTaskQueue,
@@ -69,6 +69,10 @@ export {
   TOKEN_REFRESH_WORKFLOW_TYPE,
   PUBLICATION_SWEEPER_WORKFLOW_TYPE,
   PUBLICATION_SWEEPER_WORKFLOW_ID,
+  PUBLICATION_REMOTE_DELETE_WORKFLOW_TYPE,
+  PUBLICATION_REMOTE_EDIT_WORKFLOW_TYPE,
+  REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE,
+  REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
   CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
   CONNECT_CHOICE_PURGE_SCHEDULE_ID,
 } from './outbox-routes';
@@ -79,6 +83,7 @@ export {
   PendingChannelGrantPurgeRepository,
   PublicationRepository,
   PublicationAttemptRepository,
+  PublicationRemoteChangeRepository,
   RemoteEvidenceRepository,
 } from './repositories';
 /** Test fixtures only (an in-memory platform); never registered by a production composition root. */
@@ -88,4 +93,5 @@ export {
   fixtureCapability,
   FIXTURE_PROVIDER_KEY,
   type PublishBehaviour,
+  type RemoteMutationBehaviour,
 } from './testing/fixture-provider';

@@ -9,6 +9,7 @@ import { ensureIntelligenceSchedulesRunning } from './intelligence-worker';
 import { ensureRetentionScheduleRunning } from './operations-worker';
 import {
   TemporalWorkflowProbe,
+  ensureRemoteChangeSweepScheduled,
   ensureConnectChoicePurgeScheduleRunning,
   ensureSweeperRunning,
   startPublishingWorkers,
@@ -65,6 +66,7 @@ let publishingWorkers;
 try {
   publishingWorkers = await startPublishingWorkers(temporalConfig);
   await ensureSweeperRunning(client);
+  await ensureRemoteChangeSweepScheduled(client); // closes remote edits/deletes whose workflow was lost
   await ensureConnectChoicePurgeScheduleRunning(client); // spec 14.7 expired account choices, every 15 minutes
   await ensureIntelligenceSchedulesRunning(client); // spec 16.3 weekly analyst, 16.8 monthly baseline comparison
   await ensureRetentionScheduleRunning(client); // spec 17.5 daily TTL sweep (dry run unless RETENTION_SWEEP_APPLY)

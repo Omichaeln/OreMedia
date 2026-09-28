@@ -11,6 +11,7 @@ import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
 import {
   CancelCommand,
   PublicationDeleteRemote,
+  PublicationEditRemote,
   PublicationEvidence,
   PublicationGet,
   PublicationHoldRestored,
@@ -24,7 +25,7 @@ import {
 } from '@oremedia/contracts/publishing';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
-import { hashCanonical } from '@oremedia/domain/hash';
+import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { PublicationEvent } from '@oremedia/domain/state-machines/publication';
 import { policy } from '@oremedia/module-access';
@@ -32,20 +33,26 @@ import { audit, outbox } from '@oremedia/module-operations';
 import {
   actorRef,
   forRelease,
+  isStaleRequest,
+  publicationResource,
   publicationWorkflowId,
   reconcileWorkflowId,
+  remoteChangeWorkflowId,
   toAttemptDto,
   toEvidenceDto,
   toPublicationDto,
+  toRemoteChangeDto,
   transition,
   workflowIdOf,
   type PublicationRow,
 } from './common';
+import { channelService } from './channels';
 import { approvals, assertBrandExists, review, revisions, variants } from './hooks';
 import { registry } from './providers';
 import {
   ChannelConnectionRepository,
   PublicationAttemptRepository,
+  PublicationRemoteChangeRepository,
   PublicationRepository,
   RemoteEvidenceRepository,
 } from './repositories';
@@ -54,6 +61,7 @@ const publicationsRepo = new PublicationRepository();
 const attemptsRepo = new PublicationAttemptRepository();
 const evidenceRepo = new RemoteEvidenceRepository();
 const connectionsRepo = new ChannelConnectionRepository();
+const changesRepo = new PublicationRemoteChangeRepository();
 
 /** The portfolio summary's upcoming window. */
 const UPCOMING_DAYS = 7;
@@ -67,14 +75,6 @@ const brandResource = (brandId: string) => {
   const { tenantId } = requireTenant();
   return { type: 'brand', tenantId, brandId, id: brandId };
 };
-const publicationResource = (p: PublicationRow) => ({
-  type: 'publication',
-  tenantId: p.tenantId,
-  brandId: p.brandId,
-  id: p.id,
-  channelId: p.channelConnectionId,
-  state: p.state,
-});
 
 /** Spec 17.6 restore rule: the state (and hold) reason of a publication moved by holdRestored. */
 const RESTORED_FROM_BACKUP = 'restored_from_backup';
@@ -215,6 +215,48 @@ async function holdWhereReleaseFails(rows: PublicationRow[], reason: string, tx:
     held.push(row.id);
   }
   return { held, unchanged };
+}
+
+/**
+ * The preconditions of changing a live post (publication.edit_remote / delete_remote), under the publication row
+ * lock: published with a remote id, the channel's capability allows the change, and no other change of this post
+ * is still waiting on the platform (so an edit never races a delete, and a delete is never requested twice).
+ */
+async function assertRemoteChangeAllowed(row: PublicationRow, kind: 'edit' | 'delete', tx: Tx) {
+  if (row.state !== 'published' || !row.remotePostId)
+    throw new ValidationFailedError(
+      [{ path: 'publicationId', issue: 'not_published' }],
+      `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : 'deleted'} remotely`,
+    );
+  const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
+  const cap = registry().capability(connection.providerKey);
+  if (!cap?.[kind])
+    throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: `${kind}_not_supported` }]);
+  const open = await changesRepo.findOpenForPublication(row.id, tx);
+  if (open && !isStaleRequest(open))
+    throw new ValidationFailedError(
+      [{ path: 'publicationId', issue: 'remote_change_in_progress' }],
+      'Another edit or deletion of this post is still being carried out on the channel',
+    );
+  // A request its workflow never recorded is closed, so it cannot block this post: its activity checks the change
+  // is still requested before sending, and a confirmation that still arrives is recorded (recordRemoteChangeOutcome).
+  if (open) {
+    await changesRepo.recordOutcome(
+      open.id,
+      { state: 'failed', errorCode: 'superseded_stale', errorDetail: 'no outcome was recorded in time' },
+      new Date(),
+      tx,
+    );
+    await audit.record(
+      requireTenant().actor,
+      `publication.${open.kind}_remote_failed`,
+      { type: 'publication', id: row.id },
+      'allowed',
+      tx,
+      { brandId: row.brandId, publicationId: row.id, reason: 'superseded_stale' },
+    );
+  }
+  return { connection, remotePostId: row.remotePostId };
 }
 
 export const publicationService = {
@@ -630,7 +672,28 @@ export const publicationService = {
     const row = await publicationsRepo.getById(parsed.publicationId, tx);
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
     const attempts = await attemptsRepo.listForPublication(row.id, tx);
-    return { ...toPublicationDto(row), attempts: attempts.map(toAttemptDto) };
+    const changes = await changesRepo.listForPublication(row.id, tx);
+    const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
+    const cap = registry().capability(connection.providerKey);
+    return {
+      ...toPublicationDto(row),
+      attempts: attempts.map(toAttemptDto),
+      /** Changing the live post: what the channel allows, the current text after an edit, the recent requests. */
+      remote: {
+        edit: cap?.edit ?? false,
+        delete: cap?.delete ?? false,
+        /** Whether this caller holds the permissions (brand-level grants included); the commands re-check. */
+        allowed: {
+          edit: policy.allows(actor, 'publication.edit_remote', publicationResource(row)),
+          delete: policy.allows(actor, 'publication.delete_remote', publicationResource(row)),
+        },
+        textMaxLength: cap?.text.maxLength ?? null,
+        textWeighted: cap?.text.weighted ?? false,
+        /** The text of the latest edit that went through; null while the post shows the variant's text. */
+        currentText: (await changesRepo.latestSucceededEdit(row.id, tx))?.text ?? null,
+        changes: changes.map(toRemoteChangeDto),
+      },
+    };
   },
 
   async list(actor: ResolvedActor, input: z.infer<typeof PublicationList>, tx?: Tx) {
@@ -775,21 +838,29 @@ export const publicationService = {
 
   /**
    * Spec 13.5: deleting a live remote post is its own action (publication.delete_remote), never automatic. The
-   * request is recorded and emitted; the adapter contract carries no delete call yet, so the event has no route.
+   * request is recorded as a remote change and emitted; publicationRemoteDeleteWorkflowV1 carries it out on the
+   * provider's queue and records the outcome (published → removed, or the failure reason on the change).
    */
   async deleteRemote(actor: ResolvedActor, input: z.infer<typeof PublicationDeleteRemote>, tx: Tx) {
     const cmd = PublicationDeleteRemote.parse(input);
     const row = await publicationsRepo.lock(cmd.publicationId, tx);
     await policy.assert(actor, 'publication.delete_remote', publicationResource(row), {}, tx);
-    if (row.state !== 'published' || !row.remotePostId)
-      throw new ValidationFailedError(
-        [{ path: 'publicationId', issue: 'not_published' }],
-        'Only a published post with a remote id can be deleted remotely',
-      );
-    const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
-    const cap = registry().capability(connection.providerKey);
-    if (!cap?.delete)
-      throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: 'delete_not_supported' }]);
+    const { connection, remotePostId } = await assertRemoteChangeAllowed(row, 'delete', tx);
+    const changeId = newId('publicationRemoteChange');
+    await changesRepo.create(
+      {
+        id: changeId,
+        brandId: row.brandId,
+        publicationId: row.id,
+        kind: 'delete',
+        state: 'requested',
+        reason: cmd.reason,
+        requestedByKind: scheduledByOf(actor),
+        requestedById: actor.id,
+        requestedAt: new Date(),
+      },
+      tx,
+    );
     await audit.record(
       actorRef(actor),
       'publication.delete_remote',
@@ -798,19 +869,96 @@ export const publicationService = {
       tx,
       { brandId: row.brandId, publicationId: row.id, channelConnectionId: connection.id, reason: cmd.reason },
     );
+    // The v1 payload is kept as it was; the change, provider key and workflow id are appended (additive).
     await outbox.add(
       'publication.delete_remote_requested',
       { type: 'publication', id: row.id, version: row.version },
       {
         publicationId: row.id,
-        remotePostId: row.remotePostId,
+        remotePostId,
+        requestedByKind: actor.kind,
+        requestedById: actor.id,
+        changeId,
+        providerKey: connection.providerKey,
+        workflowId: remoteChangeWorkflowId(row.id, changeId),
+      },
+      tx,
+      { brandId: row.brandId },
+    );
+    return { accepted: true, publicationId: row.id, remotePostId, changeId };
+  },
+
+  /**
+   * publication.edit_remote: new text for a live post on a channel whose capability allows edits. The text passes
+   * the same capability check as a variant; it is stored on the remote change (never over the variant or the
+   * release evidence) and publicationRemoteEditWorkflowV1 carries it out and records the outcome.
+   */
+  async editRemote(actor: ResolvedActor, input: z.infer<typeof PublicationEditRemote>, tx: Tx) {
+    const cmd = PublicationEditRemote.parse(input);
+    const row = await publicationsRepo.lock(cmd.publicationId, tx);
+    await policy.assert(actor, 'publication.edit_remote', publicationResource(row), {}, tx);
+    const { connection } = await assertRemoteChangeAllowed(row, 'edit', tx);
+    if (cmd.text.trim() === '')
+      throw new ValidationFailedError([{ path: 'text', issue: 'text_empty' }], 'The new text is empty');
+    const current =
+      (await changesRepo.latestSucceededEdit(row.id, tx))?.text ??
+      (await variants.get(row.channelVariantId, tx)).text;
+    if (hashText(current) === hashText(cmd.text))
+      throw new ValidationFailedError(
+        [{ path: 'text', issue: 'text_unchanged' }],
+        'The new text is the same as the live text',
+      );
+    const check = await channelService.validateVariantDetailed(row.channelVariantId, tx, { text: cmd.text });
+    const textIssues = check.issues.filter((i) => i.path === 'text');
+    if (textIssues.length > 0)
+      throw new ValidationFailedError(textIssues, 'The new text does not pass the channel capability check');
+    const changeId = newId('publicationRemoteChange');
+    const textHash = hashText(cmd.text);
+    await changesRepo.create(
+      {
+        id: changeId,
+        brandId: row.brandId,
+        publicationId: row.id,
+        kind: 'edit',
+        state: 'requested',
+        text: cmd.text,
+        textHash,
+        reason: cmd.reason ?? null,
+        requestedByKind: scheduledByOf(actor),
+        requestedById: actor.id,
+        requestedAt: new Date(),
+      },
+      tx,
+    );
+    await audit.record(
+      actorRef(actor),
+      'publication.edit_remote',
+      { type: 'publication', id: row.id },
+      'allowed',
+      tx,
+      {
+        brandId: row.brandId,
+        publicationId: row.id,
+        channelConnectionId: connection.id,
+        reason: cmd.reason ?? null,
+      },
+    );
+    await outbox.add(
+      'publication.edit_remote_requested',
+      { type: 'publication', id: row.id, version: row.version },
+      {
+        publicationId: row.id,
+        changeId,
+        textHash,
+        providerKey: connection.providerKey,
+        workflowId: remoteChangeWorkflowId(row.id, changeId),
         requestedByKind: actor.kind,
         requestedById: actor.id,
       },
       tx,
       { brandId: row.brandId },
     );
-    return { accepted: true, publicationId: row.id, remotePostId: row.remotePostId };
+    return { accepted: true, publicationId: row.id, changeId };
   },
 
   /** Review module release checker (spec 13.4 mandate_daily_quota). */

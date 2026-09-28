@@ -401,4 +401,55 @@ describe('LinkedIn Page adapter (spec 14.5, 14.8)', () => {
       remoteUrl: 'https://www.linkedin.com/feed/update/urn:li:share:7001',
     });
   });
+
+  it('deletePost: DELETE /rest/posts/{urn} with the version headers; 404 is already_absent; throttles retry', async () => {
+    const req = { remotePostId: 'urn:li:share:7001' };
+    load('manage', 'delete_success');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'done' });
+    expect(server.requests[0]?.headers).toMatchObject({
+      'linkedin-version': '202601',
+      'x-restli-protocol-version': '2.0.0',
+      'x-restli-method': 'DELETE',
+      authorization: 'Bearer at_1_fake',
+    });
+    expect(io.calls[0]?.url).toContain('/rest/posts/urn%3Ali%3Ashare%3A7001');
+    load('manage', 'delete_already_gone');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'already_absent' });
+    load('manage', 'delete_throttled');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'retryable_error',
+      code: 'rate_limited',
+      retryAfterMs: 30_000,
+    });
+    load('manage', 'delete_forbidden');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'reconnect_required',
+    });
+  });
+
+  it('editPost: PARTIAL_UPDATE of the commentary; a validation error is final, a 5xx is retryable', async () => {
+    const req = {
+      remotePostId: 'urn:li:share:7001',
+      text: 'Corrected price: 40 EUR',
+      idempotencyKey: 'prc_1',
+    };
+    load('manage', 'edit_success');
+    expect(await adapter.editPost(req, creds, io)).toEqual({ outcome: 'done' });
+    expect(server.requests[0]?.headers['x-restli-method']).toBe('PARTIAL_UPDATE');
+    expect(server.requests[0]?.headers['linkedin-version']).toBe('202601');
+    expect(JSON.parse(server.requests[0]?.body ?? '{}')).toEqual({
+      patch: { $set: { commentary: 'Corrected price: 40 EUR' } },
+    });
+    load('manage', 'edit_rejected');
+    expect(await adapter.editPost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'linkedin_100',
+    });
+    load('manage', 'edit_server_error');
+    expect(await adapter.editPost(req, creds, io)).toMatchObject({
+      outcome: 'retryable_error',
+      code: 'http_503',
+    });
+  });
 });

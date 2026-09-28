@@ -14,9 +14,16 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RefreshResult,
+  RemoteMutationOutcome,
   ValidationResult,
 } from '@oremedia/contracts/providers';
-import type { CommentRequest, ProviderAdapter, PublishMedia, PublishRequest } from '../contract';
+import type {
+  CommentRequest,
+  DeletePostRequest,
+  ProviderAdapter,
+  PublishMedia,
+  PublishRequest,
+} from '../contract';
 import { ProviderTransportError, type ProviderIO } from '../io';
 import { classifyByStatus } from '../base';
 import { validateVariantAgainstCapability } from '../capability';
@@ -38,9 +45,11 @@ import {
   outcomeFromResponse,
   readResponse,
   reconcileFromScan,
+  remoteMutationFromResponse,
   runCheck,
   runFinalize,
   runPublish,
+  runRemoteMutation,
   str,
   summarise,
   withIssues,
@@ -310,6 +319,29 @@ export class XAdapter implements ProviderAdapter {
     );
   }
 
+  /** DELETE /2/tweets/:id. X has no edit endpoint for API clients (capability.edit is false), so there is no editPost. */
+  async deletePost(
+    req: DeletePostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    return runRemoteMutation(async () => {
+      const res = await this.api(
+        io,
+        'DELETE',
+        `/tweets/${encodeURIComponent(req.remotePostId)}`,
+        creds.accessToken,
+        undefined,
+        true,
+      );
+      if (res.status === 200 && get(res.json, 'data', 'deleted') === true) return { outcome: 'done' };
+      if (res.status === 404) return { outcome: 'already_absent' };
+      if (res.status === 200)
+        return { outcome: 'retryable_error', code: 'x_delete_not_confirmed', message: summarise(res, 200) };
+      return remoteMutationFromResponse((i) => this.classifyError(i), res, XAdapter.retryAfter);
+    });
+  }
+
   async findRemotePost(
     req: {
       publicationId: string;
@@ -473,7 +505,7 @@ export class XAdapter implements ProviderAdapter {
 
   private async api(
     io: ProviderIO,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     token: string,
     body?: unknown,

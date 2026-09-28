@@ -78,6 +78,13 @@
       "when": 1790609559201,
       "tag": "0010_pending_channel_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1790617604101,
+      "tag": "0011_remote_post_changes",
+      "breakpoints": true
     }
   ]
 }

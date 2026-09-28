@@ -42,15 +42,19 @@ PROVIDER_LINKEDIN_PAGE_SECRET_REF    = <Primary Client Secret>
 
 Source of truth: `requiredScopes` in `packages/providers/src/linkedin_page/capability.ts`.
 
-| Scope                   | What the product does with it                                                                                                                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                        |
-| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) so they choose which Page the brand connects, and reads post and Page statistics (share statistics, followers, page views) for performance reports. |
-| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time.                                                                                                                                   |
-| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                                                                        |
+| Scope                   | What the product does with it                                                                                                                                                                                                                                    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                                                    |
+| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) so they choose which Page the brand connects, and reads post and Page statistics (share statistics, followers, page views) for performance reports.                             |
+| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time; on the brand's instruction, edits the commentary of a post it published (`PARTIAL_UPDATE` on `/rest/posts/{urn}`) or deletes it (`DELETE /rest/posts/{urn}`). |
+| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                                                                                                    |
 
-**Not in the product yet:** replies to comments, and editing or deleting published posts. Neither may appear in the
-application or the screencast. A member who administers several Pages chooses which one the brand connects; record
+**Editing and deleting published posts** is in the product: a person holding `publication.edit_remote` or
+`publication.delete_remote` (never an agent) asks for it on the publication, and the platform's confirmation is
+recorded as evidence. Show it in the screencast after the publish: edit the text, then delete the post.
+
+**Not in the product yet:** replies to comments. It may not appear in the application or the screencast. A member
+who administers several Pages chooses which one the brand connects; record
 with a member who administers the Ore & Tar Page and at least one other, so the choice is shown.
 
 **Verify before applying:** LinkedIn has required the Community Management API to be the only product on its app.
@@ -79,7 +83,10 @@ Screencast (one video, 1280 × 800 or larger, captions naming each scope as it i
 5. From another member, comment on the post. After the next comment sync, open Intelligence and show it counted
    under "Comment clusters".
 6. Open Performance and show the post and Page statistics (record this part a day later).
-7. Open Settings, then Channels, and disconnect the Page.
+7. Open the calendar, select the publication, choose Edit text, change a word and save; show the edit confirmed and
+   the new text on the Page (`w_organization_social`). Then choose Request remote deletion, give a reason and show
+   the publication as "Deleted from channel" and the post gone from the Page.
+8. Open Settings, then Channels, and disconnect the Page.
 
 ## Security questions
 

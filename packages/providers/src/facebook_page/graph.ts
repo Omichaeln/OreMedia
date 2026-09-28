@@ -80,6 +80,15 @@ export async function graphPost(
   return readResponse(res);
 }
 
+export async function graphDelete(io: ProviderIO, path: string, token: string): Promise<ProviderResponse> {
+  const { res } = await io.request(
+    `${META_GRAPH}${path}`,
+    { method: 'DELETE', headers: bearer(token) },
+    { mutation: true },
+  );
+  return readResponse(res);
+}
+
 /** Query-string oauth call; ProviderIO logs only the path, never the secret-bearing query. */
 async function oauthAccessToken(io: ProviderIO, params: Record<string, string>): Promise<ProviderResponse> {
   const { res } = await io.request(
@@ -281,6 +290,16 @@ export function metaRetryAfterMs(headers: IOResponse['headers']): number | undef
   }
   return undefined;
 }
+
+/**
+ * Graph error 100 subcode 33: "Object with ID … does not exist, cannot be loaded due to missing permissions, or does
+ * not support this operation". The same answer covers a deleted post and a post the token may not touch, so the
+ * adapter reads the post before calling a delete that got it `already_absent`.
+ */
+export const isMetaObjectUnavailable = (res: ProviderResponse): boolean => {
+  const e = metaError(res.body);
+  return res.status === 404 || (e.code === 100 && e.subcode === 33);
+};
 
 export function metaRefreshFailure(res: ProviderResponse): RefreshResult {
   const cls = classifyMetaError({ status: res.status, body: res.body, phase: 'after_send' });

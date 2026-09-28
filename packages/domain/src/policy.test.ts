@@ -152,6 +152,15 @@ describe('authorize: ordered checks (spec 5.5)', () => {
         context: ctx(),
       }).reason,
     ).toBe('resource_state');
+    // A post deleted from its channel is past cancelling, like a published one.
+    expect(
+      authorize({
+        actor: user({ role: 'publisher' }),
+        action: 'publication.cancel',
+        resource: { type: 'publication', tenantId: T, brandId: B, state: 'removed' },
+        context: ctx(),
+      }).reason,
+    ).toBe('resource_state');
   });
   it('6. entitlement: channel limit reached', () => {
     const full: EntitlementSet = { ...ent, usage: { ...ent.usage, channels: 3 } };
@@ -363,6 +372,15 @@ describe('authorize: ordered checks (spec 5.5)', () => {
         context: ctx(),
       }).reason,
     ).toBe('support_never');
+    for (const action of ['publication.delete_remote', 'publication.edit_remote'] as const)
+      expect(
+        authorize({
+          actor: { ...op, mode: 'escalated' },
+          action,
+          resource: { type: 'publication', tenantId: T, brandId: B },
+          context: ctx(),
+        }).reason,
+      ).toBe('support_never');
     expect(
       authorize({
         actor: { ...op, expired: true },
@@ -381,6 +399,12 @@ describe('authorize: ordered checks (spec 5.5)', () => {
     // skill.read follows brand.read: every role reads the registry; authoring and publishing stay narrower.
     expect(DEFAULT_ROLE_GRANTS['skill.read']).toEqual(DEFAULT_ROLE_GRANTS['brand.read']);
     expect(DEFAULT_ROLE_GRANTS['skill.author']).toEqual(['owner', 'admin', 'brand_manager']);
+    // Changing or removing a live post: the same people who may delete it; never an agent, never support.
+    expect(DEFAULT_ROLE_GRANTS['publication.edit_remote']).toEqual(['owner', 'admin', 'publisher']);
+    expect(DEFAULT_ROLE_GRANTS['publication.edit_remote']).toEqual(
+      DEFAULT_ROLE_GRANTS['publication.delete_remote'],
+    );
+    expect(AGENT_NEVER.has('publication.edit_remote')).toBe(true);
   });
   it('skill.read: a reader role, an agent with the grant (assist) and a read-only support session may read; without the grant an agent may not', () => {
     expect(

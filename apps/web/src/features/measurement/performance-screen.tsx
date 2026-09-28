@@ -8,7 +8,7 @@ import { brandPath, useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
-import { dayKey, trailingRange } from '../publishing/publication-state';
+import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
 import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
 
@@ -67,7 +67,7 @@ export function PerformanceScreen() {
   const published = useMemo(
     () =>
       (calendar.data?.publications ?? [])
-        .filter((p) => p.state === 'published' && (!channelFilter || p.channelConnectionId === channelFilter))
+        .filter((p) => wasReleased(p.state) && (!channelFilter || p.channelConnectionId === channelFilter))
         .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor)),
     [calendar.data, channelFilter],
   );

@@ -1,4 +1,11 @@
-export type { ProviderAdapter, PublishRequest, PublishMedia, CommentRequest } from './contract';
+export type {
+  ProviderAdapter,
+  PublishRequest,
+  PublishMedia,
+  CommentRequest,
+  DeletePostRequest,
+  EditPostRequest,
+} from './contract';
 export {
   createProviderIO,
   sendTracking,

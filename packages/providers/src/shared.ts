@@ -6,6 +6,7 @@ import type {
   PublishOutcome,
   RawMetricPoint,
   ReconcileResult,
+  RemoteMutationOutcome,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import { outcomeFromClass, redactBody, retryAfterMs, truncateForTemporal } from './base';
@@ -256,6 +257,58 @@ export function finalizeFailure(classify: Classifier, res: ProviderResponse): Pe
         `finalise returned HTTP ${res.status}: ${summarise(res, 200)}`,
         res.status,
       );
+  }
+}
+
+/**
+ * Maps a non-2xx response of a live-post edit or delete to an outcome with the adapter's own classification. The
+ * mutation converges on a repeat, so what would be `unknown` for a publish (5xx, a throttle after send) is
+ * retryable here; a refresh-token failure is retried after the refresh workflow ran; reconnect and definitive
+ * rejections are final.
+ */
+export function remoteMutationFromResponse(
+  classify: Classifier,
+  res: ProviderResponse,
+  retryAfter?: (headers: IOResponse['headers']) => number | undefined,
+): RemoteMutationOutcome {
+  const cls = classify({ status: res.status, body: res.body, phase: 'after_send' });
+  const message = summarise(res);
+  switch (cls.kind) {
+    case 'rejected':
+      return { outcome: 'rejected', code: cls.code, message };
+    case 'reconnect_required':
+      return { outcome: 'rejected', code: 'reconnect_required', message };
+    case 'refresh_token':
+      return { outcome: 'retryable_error', code: 'refresh_token', message };
+    case 'rate_limited':
+      return {
+        outcome: 'retryable_error',
+        code: 'rate_limited',
+        message,
+        retryAfterMs:
+          cls.retryAfterMs ??
+          retryAfter?.(res.headers) ??
+          retryAfterMs(res.headers.get('retry-after'), 60_000),
+      };
+    case 'unknown':
+      return { outcome: 'retryable_error', code: `http_${res.status}`, message };
+  }
+}
+
+/** Runs a live-post edit or delete: a transport failure (before or after send) is retryable, the call converges. */
+export async function runRemoteMutation(
+  fn: () => Promise<RemoteMutationOutcome>,
+): Promise<RemoteMutationOutcome> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ProviderTransportError)
+      return {
+        outcome: 'retryable_error',
+        code: `transport_${err.phase}`,
+        message: truncateForTemporal(err.message, 300),
+      };
+    throw err;
   }
 }
 

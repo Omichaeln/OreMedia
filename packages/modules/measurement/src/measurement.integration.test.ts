@@ -440,6 +440,19 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
       expect(rows.every((r) => r.value === null && r.completeness === 'unavailable')).toBe(true);
       expect(rows.some((r) => r.value === 0)).toBe(false);
     });
+    it('a post deleted from its channel is not pulled again; what was collected stays', async () => {
+      const removed = await publishedPublication(tenantA, brandA, connA);
+      await tdb.db.update(publications).set({ state: 'removed' }).where(eq(publications.id, removed));
+      const calls = fixture.metricCalls.length;
+      expect(await pull(removed, 0, 2)).toEqual({ written: 0, skipped: 0, unavailable: 0 });
+      expect(fixture.metricCalls.length).toBe(calls);
+      expect(await snapshotsOf(removed)).toEqual([]);
+      expect(
+        await inTenant(tenantA, () =>
+          ingestion.pullComments({ ...wfInput(removed), pullIndex: 0, since: null, cursor: null }),
+        ),
+      ).toEqual({ ingested: 0, duplicates: 0, nextCursor: null });
+    });
     it('a foreign publication is NOT_FOUND before any credential is opened', async () => {
       const calls = fixture.metricCalls.length;
       await expect(pull(pubB, 0, 2)).rejects.toBeInstanceOf(NotFoundError);

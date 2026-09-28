@@ -27,6 +27,11 @@ export {
   createPublicationSweepActivities,
 } from './publish-control';
 export { createPublishProviderActivities } from './publish-provider';
+export {
+  createRemoteChangeControlActivities,
+  createRemoteChangeProviderActivities,
+  createRemoteChangeSweepActivities,
+} from './remote-change';
 export { createTokenRefreshActivities } from './token-refresh';
 export { createBrandChangeImpactActivities } from './brand-change-impact';
 export { createMetricCollectionActivities } from './metric-collection';

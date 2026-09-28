@@ -47,6 +47,8 @@ export function createMetricCollectionRuntime(opts: MetricCollectionOptions = {}
     async pullMetrics(input: PullMetricsInputV1, hooks?: ActivityHooks): Promise<PullMetricsResultV1> {
       const { tenantId, publicationId } = input;
       const { row, connection, brandTimezone } = await loadPublication(publicationId);
+      // Deleted from the channel through the product: nothing left to measure; what was collected stays.
+      if (row.state === 'removed') return { written: 0, skipped: 0, unavailable: 0 };
       const adapter = adapterFor(connection.providerKey);
       const window = { start: input.windowStart, end: input.windowEnd };
       const windowStart = new Date(window.start);

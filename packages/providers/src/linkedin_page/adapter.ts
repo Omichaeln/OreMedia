@@ -13,9 +13,17 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RefreshResult,
+  RemoteMutationOutcome,
   ValidationResult,
 } from '@oremedia/contracts/providers';
-import type { CommentRequest, ProviderAdapter, PublishMedia, PublishRequest } from '../contract';
+import type {
+  CommentRequest,
+  DeletePostRequest,
+  EditPostRequest,
+  ProviderAdapter,
+  PublishMedia,
+  PublishRequest,
+} from '../contract';
 import { ProviderTransportError, type ProviderIO } from '../io';
 import { classifyByStatus, retryAfterMs } from '../base';
 import { plainMeasure, validateVariantAgainstCapability } from '../capability';
@@ -37,9 +45,11 @@ import {
   outcomeFromResponse,
   readResponse,
   reconcileFromScan,
+  remoteMutationFromResponse,
   runCheck,
   runFinalize,
   runPublish,
+  runRemoteMutation,
   str,
   summarise,
   textFingerprint,
@@ -363,6 +373,49 @@ export class LinkedInPageAdapter implements ProviderAdapter {
     });
   }
 
+  /** DELETE /rest/posts/{urn}: 204, also for a post already deleted (LinkedIn documents the delete as idempotent). */
+  async deletePost(
+    req: DeletePostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    return runRemoteMutation(async () => {
+      const res = await this.rest(
+        io,
+        'DELETE',
+        `/rest/posts/${encodeURIComponent(req.remotePostId)}`,
+        creds.accessToken,
+        undefined,
+        true,
+        { 'x-restli-method': 'DELETE' },
+      );
+      if (res.status === 204 || res.status === 200) return { outcome: 'done' };
+      if (res.status === 404 || res.status === 410) return { outcome: 'already_absent' };
+      return remoteMutationFromResponse((i) => this.classifyError(i), res);
+    });
+  }
+
+  /** PARTIAL_UPDATE of the commentary on /rest/posts/{urn}; media, visibility and distribution stay as published. */
+  async editPost(
+    req: EditPostRequest,
+    creds: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RemoteMutationOutcome> {
+    return runRemoteMutation(async () => {
+      const res = await this.rest(
+        io,
+        'POST',
+        `/rest/posts/${encodeURIComponent(req.remotePostId)}`,
+        creds.accessToken,
+        { patch: { $set: { commentary: req.text } } },
+        true,
+        { 'x-restli-method': 'PARTIAL_UPDATE' },
+      );
+      if (res.status === 204 || res.status === 200) return { outcome: 'done' };
+      return remoteMutationFromResponse((i) => this.classifyError(i), res);
+    });
+  }
+
   async findRemotePost(
     req: {
       publicationId: string;
@@ -515,15 +568,20 @@ export class LinkedInPageAdapter implements ProviderAdapter {
 
   private async rest(
     io: ProviderIO,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     path: string,
     token: string,
     body?: unknown,
     mutation = false,
+    extraHeaders: Record<string, string> = {},
   ): Promise<ProviderResponse> {
     const { res } = await io.request(
       `${LINKEDIN_API}${path}`,
-      { method, headers: restHeaders(token), ...(body !== undefined ? { body: JSON.stringify(body) } : {}) },
+      {
+        method,
+        headers: { ...restHeaders(token), ...extraHeaders },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      },
       { mutation },
     );
     return readResponse(res);

@@ -87,4 +87,19 @@ export async function stillHas(
   return d.allowed;
 }
 
-export const policy = { decide, assert, stillHas };
+/**
+ * Whether a control should be offered (a UI hint): the same pure decision, not audited because nothing was
+ * attempted, never thrown. The command still calls assert. Only for actions that do not read entitlements.
+ */
+export function allows(
+  actor: ResolvedActor,
+  action: Action,
+  resource: PolicyResource,
+  now = new Date(),
+): boolean {
+  if (ENTITLEMENT_GATED_ACTIONS.has(action))
+    throw new Error(`policy.allows cannot preview ${action}: its decision reads entitlements`);
+  return authorize({ actor, action, resource, context: { entitlements: NO_ENTITLEMENTS, now } }).allowed;
+}
+
+export const policy = { decide, assert, stillHas, allows };

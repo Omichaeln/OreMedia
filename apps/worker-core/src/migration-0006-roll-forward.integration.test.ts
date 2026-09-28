@@ -5,7 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
-import { pendingChannelGrants } from '@oremedia/db/schema/publishing';
+import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -17,8 +17,8 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0005_lazy_redwing';
 const NEW_TABLES: MySqlTable[] = [brandGuidelineAuthors];
-/** Added by later migrations (0010: migration-0010-roll-forward.integration.test.ts). */
-const LATER_TABLES: MySqlTable[] = [pendingChannelGrants];
+/** Added by later migrations (0010 and 0011: their migration-*-roll-forward tests). */
+const LATER_TABLES: MySqlTable[] = [pendingChannelGrants, publicationRemoteChanges];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

@@ -43,6 +43,19 @@ describe('Release 1 registry (spec 14.6, 14.8): registered, none enabled for ten
   });
 });
 
+describe('capability flags agree with the adapter methods (edit and delete of live posts)', () => {
+  it.each(KEYS)('%s: capability.delete ⇔ deletePost, capability.edit ⇔ editPost', (key) => {
+    const adapter = providerRegistry.forCertification(key)!;
+    expect(typeof adapter.deletePost === 'function', 'delete').toBe(adapter.capability.delete);
+    expect(typeof adapter.editPost === 'function', 'edit').toBe(adapter.capability.edit);
+  });
+  it('Instagram cannot edit or delete a published post through the API (platform limitation)', () => {
+    const ig = providerRegistry.forCertification('instagram_business')!;
+    expect(ig.capability.edit).toBe(false);
+    expect(ig.capability.delete).toBe(false);
+  });
+});
+
 describe('account choice (spec 14.7): the connect flow offers alternatives only through the contract', () => {
   it('every adapter whose exchangeCode returns alternatives defines selectAccount and accountGrants', () => {
     let returning = 0;

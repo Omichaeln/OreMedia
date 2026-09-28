@@ -347,4 +347,51 @@ describe('Facebook Page adapter (spec 14.5, 14.8)', () => {
       await adapter.comment({ remotePostId: 'c_1', text: 'Thanks Bea', idempotencyKey: 'k' }, creds, io),
     ).toEqual({ outcome: 'accepted', remotePostId: 'c_3', remoteUrl: 'https://www.facebook.com/c_3' });
   });
+
+  it('deletePost: DELETE /{post-id}; gone (confirmed by a read) is already_absent; 100/33 on a readable post is refused', async () => {
+    const req = { remotePostId: 'p_100_5001' };
+    load('manage', 'delete_success');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'done' });
+    expect(server.requests[0]?.headers['authorization']).toBe('Bearer page_100_fake');
+    expect(io.calls).toEqual([expect.objectContaining({ method: 'DELETE', mutation: true })]);
+    load('manage', 'delete_already_gone');
+    expect(await adapter.deletePost(req, creds, io)).toEqual({ outcome: 'already_absent' });
+    expect(server.remaining()).toHaveLength(0);
+    load('manage', 'delete_not_permitted');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'meta_delete_not_permitted',
+    });
+    load('manage', 'delete_rate_limited');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'retryable_error',
+      code: 'rate_limited',
+      retryAfterMs: 180_000,
+    });
+    // A delete converges on a repeat: an ambiguous 5xx is retried, never reported unknown.
+    load('manage', 'delete_server_error');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({ outcome: 'retryable_error' });
+    load('manage', 'delete_revoked');
+    expect(await adapter.deletePost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'reconnect_required',
+    });
+  });
+
+  it('editPost: POST /{post-id} with the new message; a missing post is rejected; a timeout is retryable', async () => {
+    const req = { remotePostId: 'p_100_5001', text: 'Corrected price: 40 EUR', idempotencyKey: 'prc_1' };
+    load('manage', 'edit_success');
+    expect(await adapter.editPost(req, creds, io)).toEqual({ outcome: 'done' });
+    expect(server.remaining()).toHaveLength(0);
+    load('manage', 'edit_rejected');
+    expect(await adapter.editPost(req, creds, io)).toMatchObject({
+      outcome: 'rejected',
+      code: 'meta_100_33',
+    });
+    load('manage', 'edit_timeout');
+    expect(await adapter.editPost(req, creds, io)).toMatchObject({
+      outcome: 'retryable_error',
+      code: 'transport_after_send',
+    });
+  });
 });

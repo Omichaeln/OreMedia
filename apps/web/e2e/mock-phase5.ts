@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError, type AnyTRPCProcedure } from '@trpc/server';
-import { z } from 'zod';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
 import { CalendarRange, ChannelVariantGet, ContentRevisionGet } from '@oremedia/contracts/content';
 import {
@@ -12,6 +11,8 @@ import {
 import {
   CancelCommand,
   ChannelList,
+  PublicationDeleteRemote,
+  PublicationEditRemote,
   PublicationEvidence,
   PublicationGet,
   PublicationList,
@@ -174,7 +175,38 @@ export interface Publication {
   updatedAt: string;
   version: number;
   attempts: Attempt[];
+  /** Edits and deletions of the live post requested through the product, newest first. */
+  remoteChanges: RemoteChange[];
+  /** The text of the latest edit that went through; null while the post shows the variant's text. */
+  currentText: string | null;
 }
+export interface RemoteChange {
+  id: string;
+  publicationId: string;
+  kind: 'edit' | 'delete';
+  state: 'requested' | 'succeeded' | 'failed';
+  reason: string | null;
+  textHash: string | null;
+  requestedByKind: 'user';
+  requestedById: string;
+  requestedAt: string;
+  finishedAt: string | null;
+  errorCode: string | null;
+  errorDetail: string | null;
+  /** Requested with no outcome past the stale threshold (the API computes it from requestedAt). */
+  stale: boolean;
+  /** Mock-only: what an edit sends; the API returns it only as the publication's current text. */
+  text: string | null;
+}
+/** What each seeded channel allows on a live post (the capability register's edit/delete/text rules). */
+const LIVE_POST_RULES: Record<
+  string,
+  { edit: boolean; delete: boolean; textMaxLength: number; textWeighted: boolean }
+> = {
+  linkedin: { edit: true, delete: true, textMaxLength: 3000, textWeighted: false },
+  x: { edit: false, delete: true, textMaxLength: 280, textWeighted: true },
+  instagram: { edit: false, delete: false, textMaxLength: 2200, textWeighted: false },
+};
 interface Request {
   id: string;
   brandId: string;
@@ -320,6 +352,99 @@ export class Phase5Backend {
   }
 
   /** Test backdoor: the workflow moved the publication (published, held with reasons, outcome unknown, ...). */
+  /**
+   * Test backdoor: the remote edit/delete workflow finished every requested change of a publication, as the channel
+   * answered: `done` applies it (a deletion moves the publication to removed), a failure records its reason.
+   */
+  settleRemoteChanges(
+    publicationId: string,
+    outcome: 'done' | { code: string; message: string },
+  ): Publication {
+    const p = this.publication(publicationId);
+    for (const c of p.remoteChanges.filter((x) => x.state === 'requested')) {
+      if (outcome === 'done') {
+        Object.assign(c, { state: 'succeeded', finishedAt: now() });
+        if (c.kind === 'delete') this.transition(p.id, { state: 'removed', stateReason: 'remote_deleted' });
+        else p.currentText = c.text;
+      } else
+        Object.assign(c, {
+          state: 'failed',
+          finishedAt: now(),
+          errorCode: outcome.code,
+          errorDetail: outcome.message,
+        });
+    }
+    return p;
+  }
+
+  /** Test backdoor: the requested change's workflow was lost; past the stale threshold it no longer blocks. */
+  makeRemoteChangeStale(publicationId: string): void {
+    for (const c of this.publication(publicationId).remoteChanges)
+      if (c.state === 'requested')
+        Object.assign(c, { stale: true, requestedAt: new Date(Date.now() - 7 * 3600_000).toISOString() });
+  }
+
+  /** publishing.publications.get's `remote` block for a publication, for a caller with `role`. */
+  remoteOf(p: Publication, role?: string) {
+    const providerKey = this.channels.get(p.channelConnectionId)?.providerKey ?? '';
+    const rules = LIVE_POST_RULES[providerKey] ?? {
+      edit: false,
+      delete: false,
+      textMaxLength: 0,
+      textWeighted: false,
+    };
+    const allowed = role === 'owner' || role === 'admin' || role === 'publisher';
+    return {
+      ...rules,
+      allowed: { edit: allowed, delete: allowed },
+      currentText: p.currentText,
+      changes: p.remoteChanges.map(({ text: _text, ...c }) => c),
+    };
+  }
+
+  /** The preconditions the API checks under the row lock before a remote edit or delete is recorded. */
+  requestRemoteChange(
+    publicationId: string,
+    kind: 'edit' | 'delete',
+    by: string,
+    extra: { reason?: string; text?: string },
+  ): RemoteChange {
+    const p = this.publication(publicationId);
+    if (p.state !== 'published' || !p.remotePostId)
+      throw new ValidationFailedError(
+        [{ path: 'publicationId', issue: 'not_published' }],
+        `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : 'deleted'} remotely`,
+      );
+    if (!this.remoteOf(p, 'owner')[kind])
+      throw new ValidationFailedError([{ path: 'providerKey', issue: `${kind}_not_supported` }]);
+    for (const c of p.remoteChanges)
+      if (c.state === 'requested' && c.stale)
+        Object.assign(c, { state: 'failed', finishedAt: now(), errorCode: 'superseded_stale', stale: false });
+    if (p.remoteChanges.some((c) => c.state === 'requested'))
+      throw new ValidationFailedError(
+        [{ path: 'publicationId', issue: 'remote_change_in_progress' }],
+        'Another edit or deletion of this post is still being carried out on the channel',
+      );
+    const change: RemoteChange = {
+      id: rid('prc'),
+      publicationId: p.id,
+      kind,
+      state: 'requested',
+      reason: extra.reason ?? null,
+      textHash: extra.text !== undefined ? hash(extra.text) : null,
+      requestedByKind: 'user',
+      requestedById: by,
+      requestedAt: now(),
+      finishedAt: null,
+      errorCode: null,
+      errorDetail: null,
+      stale: false,
+      text: extra.text ?? null,
+    };
+    p.remoteChanges.unshift(change);
+    return change;
+  }
+
   transition(publicationId: string, patch: Partial<Publication>): Publication {
     const p = this.publication(publicationId);
     Object.assign(p, patch, { updatedAt: now(), version: p.version + 1 });
@@ -545,6 +670,8 @@ export class Phase5Backend {
       updatedAt: now(),
       version: 1,
       attempts: [],
+      remoteChanges: [],
+      currentText: null,
       ...extra,
     });
   }
@@ -804,7 +931,11 @@ export class Phase5Backend {
   }
 }
 
-const withoutAttempts = ({ attempts: _a, ...p }: Publication) => p;
+const withoutAttempts = ({ attempts: _a, remoteChanges: _r, currentText: _c, ...p }: Publication) => p;
+/** Spec 5.5 default grants of publication.edit_remote / delete_remote (the API decides through policy). */
+const assertMayChangeLivePost = (role: string | undefined, action: string) => {
+  if (role !== 'owner' && role !== 'admin' && role !== 'publisher') throw new PolicyDeniedError(action);
+};
 const revisionStateFor = (b: Phase5Backend, r: Request) =>
   (b.revisions.get(r.contentRevisionId) as Revision).state;
 const linksFor = (b: Phase5Backend, requestId: string) =>
@@ -948,6 +1079,8 @@ export function phase5Routers(
           updatedAt: now(),
           version: 0,
           attempts: [],
+          remoteChanges: [],
+          currentText: null,
         };
         b.publications.set(id, row);
         return withoutAttempts(row);
@@ -985,7 +1118,11 @@ export function phase5Routers(
         });
         return withoutAttempts(p);
       }),
-      get: query.input(PublicationGet).query(({ input }) => b.publication(input.publicationId)),
+      get: query.input(PublicationGet).query(({ ctx, input }) => {
+        const p = b.publication(input.publicationId);
+        const { remoteChanges: _r, currentText: _c, ...dto } = p;
+        return { ...dto, remote: b.remoteOf(p, ctx.member?.role) };
+      }),
       list: query.input(PublicationList).query(({ input }) => {
         const i = input;
         brandOf(i.brandId);
@@ -1033,12 +1170,36 @@ export function phase5Routers(
         }
         return withoutAttempts(p);
       }),
-      deleteRemote: mutation
-        .input(z.object({ publicationId: z.string(), reason: z.string() }))
-        .mutation(({ input }) => {
-          const p = b.publication(input.publicationId);
-          return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId };
-        }),
+      deleteRemote: mutation.input(PublicationDeleteRemote).mutation(({ ctx, input }) => {
+        assertMayChangeLivePost(ctx.member?.role, 'publication.delete_remote');
+        const change = b.requestRemoteChange(input.publicationId, 'delete', ctx.member?.userId ?? 'usr_e2e', {
+          reason: input.reason,
+        });
+        const p = b.publication(input.publicationId);
+        return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
+      }),
+      editRemote: mutation.input(PublicationEditRemote).mutation(({ ctx, input }) => {
+        assertMayChangeLivePost(ctx.member?.role, 'publication.edit_remote');
+        const p = b.publication(input.publicationId);
+        const rules = b.remoteOf(p, ctx.member?.role);
+        const live = p.currentText ?? b.variants.get(p.channelVariantId)?.text ?? '';
+        if (live.trimEnd() === input.text.trimEnd())
+          throw new ValidationFailedError(
+            [{ path: 'text', issue: 'text_unchanged' }],
+            'The new text is the same as the live text',
+          );
+        const length = [...input.text.normalize('NFC')].length;
+        if (rules.edit && length > rules.textMaxLength)
+          throw new ValidationFailedError(
+            [{ path: 'text', issue: `text_too_long:${length}>${rules.textMaxLength}` }],
+            'The new text does not pass the channel capability check',
+          );
+        const change = b.requestRemoteChange(p.id, 'edit', ctx.member?.userId ?? 'usr_e2e', {
+          text: input.text,
+          ...(input.reason ? { reason: input.reason } : {}),
+        });
+        return { accepted: true, publicationId: p.id, changeId: change.id };
+      }),
     }),
   });
 

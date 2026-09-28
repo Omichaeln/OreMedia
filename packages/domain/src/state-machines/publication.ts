@@ -28,7 +28,8 @@ export type PublicationEvent =
   | 'reschedule' // human or policy re-schedules (new attempt, same occurrence)
   | 'hold_resolved_schedule' // human resolves the hold → scheduled
   | 'hold_resolved_cancel' // human resolves the hold → cancelled
-  | 'restored_from_backup'; // spec 17.6 restore rule: restored, never sent → waits for a person
+  | 'restored_from_backup' // spec 17.6 restore rule: restored, never sent → waits for a person
+  | 'remote_deleted'; // publication.delete_remote carried out: the platform confirmed the post is gone
 
 export const publicationMachine = defineMachine<PublicationState, PublicationEvent>({
   name: 'publication',
@@ -42,6 +43,7 @@ export const publicationMachine = defineMachine<PublicationState, PublicationEve
     'retry_eligible',
     'cancelled',
     'held',
+    'removed',
   ],
   events: [
     'claim',
@@ -63,6 +65,7 @@ export const publicationMachine = defineMachine<PublicationState, PublicationEve
     'hold_resolved_schedule',
     'hold_resolved_cancel',
     'restored_from_backup',
+    'remote_deleted',
   ],
   table: {
     scheduled: {
@@ -88,9 +91,11 @@ export const publicationMachine = defineMachine<PublicationState, PublicationEve
     },
     retry_eligible: { reschedule: 'scheduled' },
     held: { hold_resolved_schedule: 'scheduled', hold_resolved_cancel: 'cancelled' },
-    published: {},
+    // A published post stays published until a person deletes it on the platform through the product (spec 13.5).
+    published: { remote_deleted: 'removed' },
     failed: {},
     cancelled: {},
+    removed: {},
   },
-  terminal: ['published', 'failed', 'cancelled'],
+  terminal: ['failed', 'cancelled', 'removed'],
 });

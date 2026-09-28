@@ -20,6 +20,7 @@ export const Action = z.enum([
   'publication.schedule',
   'publication.cancel',
   'publication.delete_remote',
+  'publication.edit_remote',
   'channel.connect',
   'channel.manage',
   'mandate.manage',

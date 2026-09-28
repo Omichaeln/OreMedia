@@ -46,6 +46,12 @@ export const PUBLICATION_CHIP: Record<PublicationStateT, StateChip> = {
     detail: 'Reconciliation proved the post is absent; it can be released again as a new attempt.',
   },
   cancelled: { tone: 'neutral', label: 'Cancelled', detail: 'Cancelled before dispatch.' },
+  removed: {
+    tone: 'neutral',
+    label: 'Deleted from channel',
+    detail:
+      'The post was deleted on the channel at the brand’s request. The publication, its attempts and its evidence are kept.',
+  },
 };
 
 const UNKNOWN_CHIP: StateChip = {
@@ -139,6 +145,8 @@ export interface PublicationActions {
   release: boolean;
   reconcile: boolean;
   deleteRemote: boolean;
+  /** The live post's text can be replaced (where the channel allows it, publication.edit_remote). */
+  editRemote: boolean;
 }
 
 export function actionsFor(state: string): PublicationActions {
@@ -152,8 +160,47 @@ export function actionsFor(state: string): PublicationActions {
     release: s === 'held' || s === 'retry_eligible',
     reconcile: s === 'outcome_unknown' || s === 'held',
     deleteRemote: s === 'published',
+    editRemote: s === 'published',
   };
 }
+
+/** Went out on its channel (published, or published and since deleted through the product): its metrics count. */
+export const wasReleased = (state: string): boolean => state === 'published' || state === 'removed';
+
+export interface RemoteChangeLike {
+  kind: 'edit' | 'delete';
+  state: 'requested' | 'succeeded' | 'failed';
+  errorCode: string | null;
+  errorDetail: string | null;
+  requestedAt: string;
+  finishedAt: string | null;
+  /** Requested but no outcome was recorded in time (the server closes it; a new request is allowed). */
+  stale?: boolean;
+}
+
+export interface RemoteChangeStatus<C extends RemoteChangeLike = RemoteChangeLike> {
+  /** The change still being carried out on the channel; nothing else can be requested meanwhile. */
+  open: C | null;
+  /** A request that never got an outcome in time: it no longer blocks, and nothing is polled for it. */
+  stale: C | null;
+  /** The latest change when it failed (and nothing newer is open): the post was left as it was. */
+  failed: C | null;
+}
+
+/** Changes arrive newest first (publishing.publications.get `remote.changes`). */
+export function remoteChangeStatus<C extends RemoteChangeLike>(changes: readonly C[]): RemoteChangeStatus<C> {
+  const requested = changes.find((c) => c.state === 'requested') ?? null;
+  const open = requested && !requested.stale ? requested : null;
+  const stale = requested?.stale ? requested : null;
+  const latest = changes[0] ?? null;
+  return { open, stale, failed: !requested && latest?.state === 'failed' ? latest : null };
+}
+
+export const remoteChangeNoun = (kind: RemoteChangeLike['kind']): string =>
+  kind === 'edit' ? 'text edit' : 'deletion';
+
+/** Unweighted characters as the capability's plain counting does it (NFC code points); weighted channels say so. */
+export const plainLength = (text: string): number => [...text.normalize('NFC')].length;
 
 /** `YYYY-MM-DD` of an instant in a time zone (the brand's), for grouping and grid lookups. */
 export function dayKey(iso: string | Date, timeZone: string): string {
@@ -301,6 +348,8 @@ export interface ChannelOutcomeSummary {
   unknown: number;
   pending: number;
   cancelled: number;
+  /** Deleted from the channel through the product after publishing (a deliberate removal, not a failure). */
+  removed: number;
   /** True when at least one channel published and at least one did not succeed (spec 14.4 partial success). */
   partial: boolean;
   text: string;
@@ -314,6 +363,7 @@ export function channelOutcomeSummary(publications: ReadonlyArray<{ state: strin
   const held = count(['held']);
   const unknown = count(['outcome_unknown', 'retry_eligible']);
   const cancelled = count(['cancelled']);
+  const removed = count(['removed']);
   const pending = count(['scheduled', 'dispatching', 'processing']);
   const total = publications.length;
   const parts: string[] = [];
@@ -323,10 +373,11 @@ export function channelOutcomeSummary(publications: ReadonlyArray<{ state: strin
   if (unknown) parts.push(`${unknown} with an unknown outcome`);
   if (pending) parts.push(`${pending} pending`);
   if (cancelled) parts.push(`${cancelled} cancelled`);
-  const partial = published > 0 && published < total - cancelled;
+  if (removed) parts.push(`${removed} deleted from the channel`);
+  const partial = published > 0 && published < total - cancelled - removed;
   const text =
     total === 0 ? 'No channels.' : `${parts.join(', ')} of ${total} channel${total === 1 ? '' : 's'}.`;
-  return { total, published, failed, held, unknown, pending, cancelled, partial, text };
+  return { total, published, failed, held, unknown, pending, cancelled, removed, partial, text };
 }
 
 /** `datetime-local` value (local wall clock) → ISO instant; empty or invalid → null. */

@@ -11,6 +11,7 @@ export type ChannelDto = inferOutput<Trpc['publishing']['channels']['list']>[num
 export type ConnectResultDto = inferOutput<Trpc['publishing']['channels']['connect']['complete']>;
 export type ChannelVariantDto = inferOutput<Trpc['content']['variants']['get']>;
 export type CancelResultDto = inferOutput<Trpc['publishing']['publications']['cancel']>;
+export type RemoteChangeDto = PublicationDto['remote']['changes'][number];
 
 /** In-flight states change without a user action, so the calendar keeps polling while any is shown. */
 const IN_FLIGHT = new Set(['dispatching', 'processing', 'outcome_unknown']);
@@ -37,7 +38,11 @@ export function usePublication(publicationId: string | null) {
   return useQuery({
     ...trpc.publishing.publications.get.queryOptions({ publicationId: publicationId ?? '' }),
     enabled: publicationId !== null,
-    refetchInterval: (q) => pollWhileInFlight(q.state.data ? [q.state.data.state] : undefined),
+    // A requested edit or deletion of the live post is carried out by a workflow: poll until it is recorded.
+    refetchInterval: (q) =>
+      q.state.data?.remote.changes.some((c) => c.state === 'requested' && !c.stale)
+        ? 10_000
+        : pollWhileInFlight(q.state.data ? [q.state.data.state] : undefined),
   });
 }
 
