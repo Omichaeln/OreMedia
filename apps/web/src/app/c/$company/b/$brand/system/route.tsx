@@ -90,6 +90,7 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
     key: 'typography',
     label: 'Typography & layout',
     description: 'Type roles bound to font files, spacing and radii.',
+    kit: 'typography',
   },
   {
     key: 'voice',

@@ -20,11 +20,13 @@
     "@oremedia/module-brand": "workspace:*",
     "@oremedia/module-operations": "workspace:*",
     "@oremedia/observability": "workspace:*",
+    "@oremedia/providers": "workspace:*",
     "drizzle-orm": "^0.45.3",
     "file-type": "^22.1.1",
     "fontkit": "^2.0.4",
     "isomorphic-dompurify": "^4.3.0",
     "sharp": "^0.35.4",
+    "undici": "^8.11.0",
     "zod": "^3.25.76"
   }
 }

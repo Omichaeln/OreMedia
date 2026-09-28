@@ -6,6 +6,8 @@ import {
   AssetSearch,
   AssetUsagesList,
   AssetVersionsList,
+  BrandFontsList,
+  GoogleFontImport,
   MediaSignedUrlRequest,
   UploadIntentComplete,
   UploadIntentCreate,
@@ -70,6 +72,20 @@ export const assetsRouter = router({
       .input(AssetGrantCreate)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => assetService.createGrant(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+  /** Brand kit typography: the brand's font faces, and a family imported from Google Fonts into them. */
+  fonts: router({
+    list: tenantQuery
+      .input(BrandFontsList)
+      .query(({ ctx, input }) => assetService.listFonts(ctx.tenant.actor, input)),
+    importGoogle: tenantMutation
+      .input(GoogleFontImport)
+      // The download runs outside any transaction; only recording the intents is the idempotent command.
+      .mutation(({ ctx, input }) =>
+        assetService.importGoogleFont(ctx.tenant.actor, input, (command) =>
+          idempotent(mutationCtx(ctx), command),
+        ),
       ),
   }),
   /** Spec 9.3 media endpoint: re-checks authorisation and returns a 5-minute signed GET. */

@@ -368,8 +368,75 @@ function nameRecord(f: FontLike, key: string): string | null {
   return clip(first, 500);
 }
 
+/**
+ * Largest font a compressed file (WOFF, WOFF2) may expand to. A compressed font declares the size of every table it
+ * holds, and fontkit decompresses into buffers of exactly those sizes, so bounding the declared sizes bounds the
+ * work: a small file that claims to expand to gigabytes (a decompression bomb) is refused before any decompression.
+ */
+export const MAX_FONT_EXPANDED_BYTES = 32 * 1024 * 1024;
+
+function readBase128(b: Buffer, at: number): { value: number; next: number } | null {
+  let value = 0;
+  for (let i = 0; i < 5; i++) {
+    const byte = b[at + i];
+    if (byte === undefined || (i === 0 && byte === 0x80) || value & 0xfe000000) return null;
+    value = value * 128 + (byte & 0x7f);
+    if ((byte & 0x80) === 0) return { value, next: at + i + 1 };
+  }
+  return null;
+}
+
+/**
+ * The size a WOFF or WOFF2 file declares it expands to (the larger of its header's total and the sum of its table
+ * sizes, as fontkit allocates them), null for an uncompressed font, NaN for a header too short or malformed to read.
+ * Reads only the header and table directory; nothing is decompressed.
+ */
+export function declaredFontExpansion(bytes: Buffer): number | null {
+  const tag = bytes.toString('latin1', 0, 4);
+  if (tag === 'wOFF') {
+    if (bytes.length < 44) return NaN;
+    const numTables = bytes.readUInt16BE(12);
+    if (bytes.length < 44 + 20 * numTables) return NaN;
+    let sum = 0;
+    for (let i = 0; i < numTables; i++) sum += bytes.readUInt32BE(44 + 20 * i + 12);
+    return Math.max(sum, bytes.readUInt32BE(16));
+  }
+  if (tag === 'wOF2') {
+    if (bytes.length < 48) return NaN;
+    const numTables = bytes.readUInt16BE(12);
+    let at = 48;
+    let sum = 0;
+    for (let i = 0; i < numTables; i++) {
+      const flags = bytes[at];
+      if (flags === undefined) return NaN;
+      at += (flags & 0x3f) === 0x3f ? 5 : 1;
+      const length = readBase128(bytes, at);
+      if (!length) return NaN;
+      at = length.next;
+      const index = flags & 0x3f;
+      const version = flags >>> 6;
+      // glyf (10) and loca (11) are transformed at version 0; every other table at a non-zero version.
+      const transformed = index === 10 || index === 11 ? version === 0 : version !== 0;
+      let size = length.value;
+      if (transformed) {
+        const t = readBase128(bytes, at);
+        if (!t) return NaN;
+        at = t.next;
+        size = Math.max(size, t.value);
+      }
+      sum += size;
+    }
+    return Math.max(sum, bytes.readUInt32BE(16));
+  }
+  return null;
+}
+
 /** Fonts: parsed with fontkit; family and licence metadata recorded; anything unparsable is rejected. */
 function sanitiseFont(bytes: Buffer, mime: string): IngestStepResult<SanitisedFile> {
+  const expanded = declaredFontExpansion(bytes);
+  if (expanded !== null && Number.isNaN(expanded)) return reject('font_unparsable', 'truncated header');
+  if (expanded !== null && expanded > MAX_FONT_EXPANDED_BYTES)
+    return reject('exceeds_cap', `expands to ${expanded} bytes, more than ${MAX_FONT_EXPANDED_BYTES}`);
   let font: unknown;
   try {
     font = fontkit.create(bytes);

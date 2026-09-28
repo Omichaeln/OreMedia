@@ -48,6 +48,9 @@ export interface EligibilityFilter {
   text?: string;
 }
 
+/** A brand holds at most this many font files in its typography listing (imported faces are one file per subset). */
+export const BRAND_FONT_FILES_MAX = 300;
+
 export class AssetRepository extends BrandScopedRepository<typeof assets> {
   constructor() {
     super(assets);
@@ -130,7 +133,42 @@ export class AssetRepository extends BrandScopedRepository<typeof assets> {
     const next = rows.length > req.limit ? rows[req.limit] : undefined;
     return { items, nextCursor: next ? encodeCursor({ id: next.asset.id }) : null };
   }
+  /**
+   * The brand's own font assets that are usable or on their way (approved or pending review) with their current
+   * versions: the typography listing. Bounded by BRAND_FONT_FILES_MAX, newest first.
+   */
+  async listFontFiles(
+    brandId: string,
+    tx?: Tx,
+  ): Promise<Array<{ asset: AssetRow; version: AssetVersionRow }>> {
+    return this.fontFiles(this.brandScope(brandId, fontFileFilter()), tx);
+  }
+  /**
+   * The same files of a brand, tenant-scoped rather than brand-filtered: the render worker completes a face whose
+   * brand may be another brand's grant; each file is still authorised for use (authoriseUse) before it is pinned.
+   */
+  async listFontFilesInTenant(
+    brandId: string,
+    tx?: Tx,
+  ): Promise<Array<{ asset: AssetRow; version: AssetVersionRow }>> {
+    return this.fontFiles(this.scope(and(eq(assets.brandId, brandId), fontFileFilter()) as SQL), tx);
+  }
+  private async fontFiles(where: SQL, tx?: Tx) {
+    return this.conn(tx)
+      .select({ asset: assets, version: assetVersions })
+      .from(assets)
+      .innerJoin(
+        assetVersions,
+        and(eq(assetVersions.tenantId, assets.tenantId), eq(assetVersions.id, assets.currentVersionId)),
+      )
+      .where(where)
+      .orderBy(desc(assets.id))
+      .limit(BRAND_FONT_FILES_MAX);
+  }
 }
+
+const fontFileFilter = (): SQL =>
+  and(eq(assets.kind, 'font'), inArray(assets.state, ['approved', 'pending_review'])) as SQL;
 
 /** Insert-only (spec 6.1): versions are never updated; a new upload becomes a new version. */
 export class AssetVersionRepository extends BrandScopedRepository<typeof assetVersions> {
@@ -148,14 +186,32 @@ export class AssetVersionRepository extends BrandScopedRepository<typeof assetVe
       .limit(1);
     return rows[0] ?? null;
   }
-  /** Dedupe within the brand (spec 9.1 step 5): index ix_asset_version_hash (tenant, brand, hash). */
-  async findByHash(brandId: string, contentHash: string, tx?: Tx): Promise<AssetVersionRow | null> {
+  /**
+   * Dedupe within the brand (spec 9.1 step 5, index ix_asset_version_hash) against what the brand can still use: the current version of a live (approved or pending review) asset
+   * of the given kinds with these bytes. A retired or rejected asset's bytes may come in again as a new asset.
+   */
+  async findLiveByHash(
+    brandId: string,
+    contentHash: string,
+    kinds: readonly AssetKind[] | null,
+    tx?: Tx,
+  ): Promise<AssetVersionRow | null> {
+    const clauses: SQL[] = [
+      eq(assetVersions.contentHash, contentHash),
+      inArray(assets.state, ['approved', 'pending_review']),
+    ];
+    if (kinds) clauses.push(inArray(assets.kind, [...kinds]));
     const rows = await this.conn(tx)
-      .select()
+      .select({ version: assetVersions })
       .from(assetVersions)
-      .where(this.brandScope(brandId, eq(assetVersions.contentHash, contentHash)))
+      .innerJoin(
+        assets,
+        and(eq(assets.tenantId, assetVersions.tenantId), eq(assets.currentVersionId, assetVersions.id)),
+      )
+      .where(this.brandScope(brandId, and(...clauses) as SQL))
+      .orderBy(assetVersions.id)
       .limit(1);
-    return rows[0] ?? null;
+    return rows[0]?.version ?? null;
   }
   async listForAsset(assetId: string, req: PageRequest, tx?: Tx): Promise<Page<AssetVersionRow>> {
     const cursor = req.cursor ? decodeCursor(req.cursor) : null;

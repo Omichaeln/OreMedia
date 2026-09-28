@@ -21,7 +21,7 @@ import { briefs, channelVariants, contentPackages, contentRevisions } from '@ore
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { creativeService, registerAssetAuthoriser } from '@oremedia/module-creative';
 import {
   contentService,
@@ -218,6 +218,12 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
   }
 
   beforeAll(async () => {
+    // The brand documents here name the placeholder font ast_font; a draft's type roles must name fonts of the
+    // brand, so the brand module is told it is one (no asset rows are seeded in this suite).
+    registerBrandAssetKindSource(
+      async (_brandId, ids) =>
+        new Map(ids.filter((id) => id === 'ast_font').map((id) => [id, 'font' as const])),
+    );
     tdb = await createTestDatabase();
     await tdb.db.insert(tenants).values([
       { id: tenantA, name: 'A', slug: 'content-a-' + tenantA.slice(-6).toLowerCase() },

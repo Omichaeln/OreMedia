@@ -290,7 +290,11 @@ describe('creative module (spec 11) against MySQL 8', () => {
   beforeAll(async () => {
     tdb = await createTestDatabase();
     // The fixture brand document names its logo by a fixture id; the assets module is not composed here.
-    registerBrandAssetKindSource(async (_brandId, ids) => new Map(ids.map((id) => [id, 'logo' as const])));
+    // Every referenced asset is a logo of the brand, except the placeholder font the type roles name.
+    registerBrandAssetKindSource(
+      async (_brandId, ids) =>
+        new Map(ids.map((id) => [id, id === 'ast_font' ? ('font' as const) : ('logo' as const)])),
+    );
     await tdb.db.insert(tenants).values([
       { id: tenantA, name: 'A', slug: 'creative-a-' + tenantA.slice(-6).toLowerCase() },
       { id: tenantB, name: 'B', slug: 'creative-b-' + tenantB.slice(-6).toLowerCase() },

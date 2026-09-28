@@ -35,6 +35,11 @@ export const ASSETS_INPUTS: Record<string, CrossTenantFixture> = {
   'assets.grants.create': {
     buildInput: (f) => ({ assetId: f['assetId'], granteeBrandId: f['brandId2'], purpose: 'creative' }),
   },
+  'assets.fonts.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
+  // A foreign brand is NOT_FOUND before anything is fetched from Google Fonts.
+  'assets.fonts.importGoogle': {
+    buildInput: (f) => ({ brandId: f['brandId'], family: 'Inter', weights: [400], styles: ['normal'] }),
+  },
   'assets.media.signedUrl': {
     buildInput: (f) => ({ assetVersionId: f['assetVersionId'], derivative: 'original' }),
   },

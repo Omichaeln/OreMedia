@@ -174,7 +174,11 @@ export function createChromiumRenderer(opts: ChromiumRendererOptions = {}): Chro
       const browserInput: RenderInput = {
         page,
         format,
-        fonts: input.fonts.map((f) => ({ family: f.family, url: dataUrl(f.mime, f.bytes) })),
+        fonts: input.fonts.map((f) => ({
+          family: f.family,
+          url: dataUrl(f.mime, f.bytes),
+          ...(f.unicodeRange ? { unicodeRange: f.unicodeRange } : {}),
+        })),
         assets: Object.fromEntries(input.assets.map((a) => [a.assetVersionId, dataUrl(a.mime, a.bytes)])),
         colours: Object.fromEntries(input.snapshot.document.tokens.colours.map((c) => [c.key, c.value])),
       };

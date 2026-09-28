@@ -32,7 +32,7 @@ import {
 } from '@oremedia/ai';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import { MemoryTranscriptStore, configureAgentModel, createAgentRunRuntime } from '@oremedia/module-agents';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { createIntelligenceRuntime } from './analyst';
 import {
   registerExperimentDesigner,
@@ -284,6 +284,12 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
   }
 
   beforeAll(async () => {
+    // The brand documents here name the placeholder font ast_font; a draft's type roles must name fonts of the
+    // brand, so the brand module is told it is one (no asset rows are seeded in this suite).
+    registerBrandAssetKindSource(
+      async (_brandId, ids) =>
+        new Map(ids.filter((id) => id === 'ast_font').map((id) => [id, 'font' as const])),
+    );
     tdb = await createTestDatabase();
     await tdb.db.insert(tenants).values([
       { id: tenantA, name: 'A', slug: 'int-a-' + tenantA.slice(-6).toLowerCase() },

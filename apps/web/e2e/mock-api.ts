@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, RequestListener } from 'node:http';
 import { initTRPC, TRPCError } from '@trpc/server';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
@@ -23,7 +24,17 @@ import {
   type OperationBatch,
 } from '@oremedia/contracts/creative';
 import { RoutingPolicySet, RunGet, RunSteps, type ModelRoutingPolicy } from '@oremedia/contracts/agents';
-import { AssetGet, AssetSearch, MediaSignedUrlRequest } from '@oremedia/contracts/assets';
+import {
+  AssetGet,
+  AssetSearch,
+  BrandFontsList,
+  GOOGLE_FONTS_LICENCE_NOTE,
+  GoogleFontImport,
+  MediaSignedUrlRequest,
+  UploadIntentComplete,
+  UploadIntentCreate,
+  type BrandFontFace,
+} from '@oremedia/contracts/assets';
 import {
   BrandClassify,
   BrandVersionGet,
@@ -204,11 +215,62 @@ const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).dige
 const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
+/** A real OFL font (tooling/test-fixtures) served as every font file, so previews load a genuine FontFace. */
+const FONT_DATA_URL = `data:font/ttf;base64,${readFileSync(
+  new URL('../../../tooling/test-fixtures/fonts/karla/Karla[wght].ttf', import.meta.url),
+).toString('base64')}`;
+
+const fontFace = (
+  assetId: string,
+  family: string,
+  weight: number,
+  source: BrandFontFace['source'],
+  subsets: Array<[string | null, string | null]> = [[null, null]],
+  weightRange: { min: number; max: number } | null = null,
+): BrandFontFace => ({
+  key:
+    source === 'google_fonts' ? `google_fonts:${family.toLowerCase()}:${weight}:normal` : `asset:${assetId}`,
+  assetId,
+  assetVersionId: `av_font_${assetId}`,
+  name: `${family}.woff2`,
+  state: 'approved',
+  family,
+  subfamily: 'Regular',
+  weight,
+  weightRange,
+  style: 'normal',
+  format: source === 'google_fonts' ? 'woff2' : 'ttf',
+  source,
+  licence: source === 'google_fonts' ? GOOGLE_FONTS_LICENCE_NOTE : 'SIL Open Font License 1.1',
+  files: subsets.map(([subset, unicodeRange], i) => ({
+    assetId: i === 0 ? assetId : `${assetId}_${subset}`,
+    assetVersionId: i === 0 ? `av_font_${assetId}` : `av_font_${assetId}_${subset}`,
+    mime: source === 'google_fonts' ? 'font/woff2' : 'font/ttf',
+    bytes: 94016,
+    subset,
+    unicodeRange,
+  })),
+});
+
 export class MockBackend {
+  /**
+   * The brand's font faces (assets.fonts.list): the fixture brand's type roles name `ast_font`. Uploads and Google
+   * Fonts imports are catalogued at once here (the real ingest runs in a worker).
+   */
+  readonly fonts: BrandFontFace[] = [fontFace('ast_font', 'Karla', 400, 'upload')];
+  /** Upload intents issued through assets.uploads.createIntent, by id. */
+  readonly fontIntents = new Map<string, { originalFilename: string; declaredMime: string }>();
+  /** Google Fonts imports received (tests read what the editor asked for). */
+  readonly googleImports: unknown[] = [];
   /** The last brand draft document saved through brand.versions.update (tests read what the editor sent). */
   brandDraftDocument: { voice?: unknown } | null = null;
   lastBrandDraftVoice(): unknown {
     return this.brandDraftDocument?.voice ?? null;
+  }
+  lastBrandDraftTypeRoles(): unknown {
+    return (
+      (this.brandDraftDocument as { tokens?: { typeRoles?: unknown } } | null)?.tokens?.typeRoles ?? null
+    );
   }
   readonly tenantId: string;
   readonly brandId: string;
@@ -1020,8 +1082,71 @@ export function createMockRouter(backend: MockBackend) {
           version: 1,
         };
       }),
+      uploads: t.router({
+        createIntent: mutation.input(UploadIntentCreate).mutation(({ input }) => {
+          if (input.kind !== 'font')
+            throw new ValidationFailedError([{ path: 'kind', issue: 'mock_fonts_only' }]);
+          const intentId = rid('upi');
+          backend.fontIntents.set(intentId, input);
+          return {
+            intentId,
+            uploadUrl: `/e2e-upload/${intentId}`,
+            expiresAt: new Date(Date.now() + 3600_000),
+            maxBytes: 10 * 1024 * 1024,
+          };
+        }),
+        complete: mutation.input(UploadIntentComplete).mutation(({ input }) => {
+          const intent = backend.fontIntents.get(input.intentId);
+          if (!intent) throw new NotFoundError('UploadIntent', input.intentId);
+          const family = intent.originalFilename.replace(/\.[a-z0-9]+$/i, '');
+          backend.fonts.push(fontFace(rid('ast'), family, 400, 'upload'));
+          return { intentId: input.intentId, state: 'uploaded' as const };
+        }),
+      }),
+      fonts: t.router({
+        list: query.input(BrandFontsList).query(() => ({ items: backend.fonts })),
+        importGoogle: mutation.input(GoogleFontImport).mutation(({ input }) => {
+          backend.googleImports.push(input);
+          if (input.family !== 'Inter')
+            throw new ValidationFailedError(
+              [{ path: 'family', issue: 'google_fonts_family_unknown' }],
+              `Google Fonts has no family "${input.family}" with those weights and styles`,
+            );
+          // Inter is a variable family: css2 names one file per subset for every weight asked for.
+          const assetId = 'ast_inter_var';
+          const range = { min: 100, max: 900 };
+          if (!backend.fonts.some((f) => f.assetId === assetId))
+            backend.fonts.push(
+              fontFace(
+                assetId,
+                'Inter',
+                100,
+                'google_fonts',
+                [
+                  ['latin', 'U+0000-00FF'],
+                  ['latin-ext', 'U+0100-02AF'],
+                ],
+                range,
+              ),
+            );
+          const files = ['latin', 'latin-ext'].map((subset) => ({
+            weight: 100,
+            weightRange: range,
+            style: 'normal' as const,
+            subset,
+            unicodeRange: subset === 'latin' ? 'U+0000-00FF' : 'U+0100-02AF',
+            contentHash: hash(`${assetId}:${subset}`),
+            outcome: 'queued' as const,
+            assetId: null,
+            intentId: rid('upi'),
+          }));
+          return { family: 'Inter', files };
+        }),
+      }),
       media: t.router({
         signedUrl: query.input(MediaSignedUrlRequest).query(({ input }) => {
+          if (input.assetVersionId.startsWith('av_font_'))
+            return { url: FONT_DATA_URL, expiresAt: new Date(Date.now() + 300_000), mime: 'font/ttf' };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
           return { url: pngDataUrl, expiresAt: new Date(Date.now() + 300_000), mime: 'image/png' };

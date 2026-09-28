@@ -16,7 +16,8 @@ import { memberships, tenants, users } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
 import { channelVariants } from '@oremedia/db/schema/content';
 import { featureFlags } from '@oremedia/db/schema/operations';
-import { brandService } from '@oremedia/module-brand';
+import { assetService } from '@oremedia/module-assets';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { contentService, registerChannelResolver } from '@oremedia/module-content';
 import { creativeService } from '@oremedia/module-creative';
 import { evaluateRelease, registerReleaseCheckers, reviewService } from '@oremedia/module-review';
@@ -181,6 +182,13 @@ describe('a preview export is never bound or released (ledger 3.10)', () => {
   beforeAll(async () => {
     tdb = await createTestDatabase();
     composeModules();
+    // The brand documents here name the placeholder font ast_font (no asset rows are seeded): a draft's type roles
+    // must name fonts of the brand, so the composed asset source is told it is one.
+    registerBrandAssetKindSource(async (brandId, ids, tx) => {
+      const kinds = await assetService.kindsForBrand(brandId, ids, tx);
+      if (ids.includes('ast_font')) kinds.set('ast_font', 'font');
+      return kinds;
+    });
     // Hooks the tests stand in for: one known channel, permissive channel checks (not what is under test here).
     registerChannelResolver(async (id) =>
       id === channelId ? { brandId, providerKey: 'fixture_provider', capabilityVersion: 1 } : null,

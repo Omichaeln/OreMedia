@@ -11,6 +11,16 @@ export type UploadStep =
   | { kind: 'queued'; intentId: string }
   | { kind: 'failed'; message: string; details: string[] };
 
+/** Browsers often report no type for font files; the extension names it (ingest checks the content either way). */
+const FONT_MIMES: Record<string, string> = {
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+};
+const mimeFromName = (name: string): string =>
+  FONT_MIMES[name.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+
 /**
  * Spec 9.1: intent → PUT to the signed URL → complete; processing continues in the ingest workflow, so the asset
  * appears (approved, or pending review for someone without asset.approve) once scanning and derivatives finish.
@@ -20,11 +30,12 @@ export function useAssetUpload(brandId: string) {
   const [step, setStep] = useState<UploadStep>({ kind: 'idle' });
   const mutation = useMutation({
     mutationFn: async ({ file, kind }: { file: File; kind: AssetKind }) => {
+      const mime = file.type || mimeFromName(file.name);
       const intent = await client.assets.uploads.createIntent.mutate(
         {
           brandId,
           kind,
-          declaredMime: file.type,
+          declaredMime: mime,
           declaredBytes: file.size,
           originalFilename: file.name,
         },
@@ -33,7 +44,7 @@ export function useAssetUpload(brandId: string) {
       const put = await fetch(intent.uploadUrl, {
         method: 'PUT',
         body: file,
-        headers: { 'content-type': file.type },
+        headers: { 'content-type': mime },
       });
       if (!put.ok) throw new Error(`Upload failed with HTTP ${put.status}`);
       return client.assets.uploads.complete.mutate(

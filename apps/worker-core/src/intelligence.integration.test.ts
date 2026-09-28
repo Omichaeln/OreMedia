@@ -26,7 +26,8 @@ import {
 } from '@oremedia/ai';
 import { createBaselineComparisonActivities } from '@oremedia/activities';
 import { configureAgentModel } from '@oremedia/module-agents';
-import { brandService } from '@oremedia/module-brand';
+import { assetService } from '@oremedia/module-assets';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { contentService } from '@oremedia/module-content';
 import { experimentsService } from '@oremedia/module-experiments';
 import {
@@ -209,6 +210,13 @@ describe('Phase 6 gate: recommendation → brief, variant, experiment and a clos
   beforeAll(async () => {
     tdb = await createTestDatabase();
     composeModules();
+    // The brand documents here name the placeholder font ast_font (no asset rows are seeded): a draft's type roles
+    // must name fonts of the brand, so the composed asset source is told it is one.
+    registerBrandAssetKindSource(async (brandId, ids, tx) => {
+      const kinds = await assetService.kindsForBrand(brandId, ids, tx);
+      if (ids.includes('ast_font')) kinds.set('ast_font', 'font');
+      return kinds;
+    });
     await tdb.db
       .insert(tenants)
       .values({ id: tenantA, name: 'Gate', slug: 'gate-' + tenantA.slice(-6).toLowerCase() });

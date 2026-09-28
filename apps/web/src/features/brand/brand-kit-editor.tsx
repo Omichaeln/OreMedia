@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type ReactNode } from 'react';
+import { useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
@@ -7,7 +7,8 @@ import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
 import { AssetThumb } from '../assets/asset-thumb';
-import { useAsset, useBrandAssetsOfKind } from '../assets/use-assets';
+import { useAsset, useBrandAssetsOfKind, useBrandFonts, type BrandFontFaceDto } from '../assets/use-assets';
+import { useFontFaces } from '../assets/use-font-faces';
 import { useAssetUpload, type UploadStep } from '../assets/use-upload';
 import { useBrandContext } from './brand-context';
 import type { BrandVersionDto } from './use-brand';
@@ -20,6 +21,8 @@ type Doc = BrandSystemDocumentV1;
 type Colour = Doc['tokens']['colours'][number];
 type LogoRule = Doc['logoRules'][number];
 type LogoVariant = LogoRule['variant'];
+type TypeRole = Doc['tokens']['typeRoles'][number];
+type TypeRoleKey = TypeRole['role'];
 
 const COLOUR_ROLES: Colour['role'][] = [
   'primary',
@@ -40,6 +43,15 @@ const LOGO_VARIANTS: Array<{ variant: LogoVariant; label: string; hint: string }
     hint: 'The symbol without the wordmark, for avatars and favicons.',
   },
 ];
+const TYPE_ROLES: Array<{ role: TypeRoleKey; label: string; minSizePx: number; sample: string }> = [
+  { role: 'display', label: 'Display', minSizePx: 40, sample: 'Built to last' },
+  { role: 'heading', label: 'Heading', minSizePx: 28, sample: 'The quick brown fox' },
+  { role: 'body', label: 'Body', minSizePx: 16, sample: 'The quick brown fox jumps over the lazy dog.' },
+  { role: 'label', label: 'Label', minSizePx: 14, sample: 'Shop the range' },
+  { role: 'caption', label: 'Caption', minSizePx: 12, sample: 'Photographed on site, 2026' },
+];
+const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+const FONT_ACCEPT = '.woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf';
 /** Reference imagery lives in the document as one pattern with this key; other patterns are kept as they are. */
 const REFERENCE_PATTERN = 'reference-imagery';
 const REFERENCE_KINDS: AssetKind[] = ['photo', 'illustration'];
@@ -63,13 +75,13 @@ export const contrast = (a: string, b: string): number | null => {
 };
 
 /**
- * Spec 8.1 brand kit: palette, voice, logo variants and reference imagery of a draft (or in-review) brand version,
+ * Spec 8.1 brand kit: palette, typography, voice, logo variants and reference imagery of a draft (or in-review) brand version,
  * edited locally and saved as one document through brand.versions.update. The server checks every reference (hex
  * colours, unique keys, logos and images of this brand) and reports all problems at once; publishing stays a
  * separate, reviewed step.
  */
 /** The kit's editable sections; the brand system shows one at a time, the versions list shows them all. */
-export type KitSection = 'guidelines' | 'palette' | 'voice' | 'logos' | 'imagery';
+export type KitSection = 'guidelines' | 'palette' | 'typography' | 'voice' | 'logos' | 'imagery';
 
 export function BrandKitEditor({ version, only }: { version: BrandVersionDto; only?: KitSection }) {
   const { brandId } = useBrandContext();
@@ -159,6 +171,7 @@ export function BrandKitEditor({ version, only }: { version: BrandVersionDto; on
         </GuidelinesSection>
       )}
       {show('palette') && <PaletteSection doc={doc} onChange={change} />}
+      {show('typography') && <TypographySection doc={doc} onChange={change} />}
       {show('voice') && <VoiceSection doc={doc} onChange={change} />}
       {show('logos') && <LogosSection doc={doc} onChange={change} />}
       {show('imagery') && <ReferenceImagerySection doc={doc} onChange={change} />}
@@ -560,6 +573,341 @@ function UploadStatus({ step }: { step: UploadStep }) {
       />
     );
   return null;
+}
+
+/** A face's weight as people read it: one weight, or the range a variable face covers (400–700). */
+const faceWeight = (f: BrandFontFaceDto) =>
+  f.weightRange ? `${f.weightRange.min}–${f.weightRange.max}` : (f.weight ?? '');
+
+/** How a face is named in lists and pickers: family, weight, style and format. */
+const faceLabel = (f: BrandFontFaceDto) =>
+  `${f.family ?? f.name} ${faceWeight(f)}${f.style === 'italic' ? ' italic' : ''} (${f.format}${f.weightRange ? ', variable' : ''})`.replace(
+    /\s+/g,
+    ' ',
+  );
+
+/** The weights a role may take with a face: any for a static face (synthesised), the axis range for a variable one. */
+const weightsFor = (f: BrandFontFaceDto | undefined) => {
+  const range = f?.weightRange;
+  return range ? WEIGHTS.filter((w) => w >= range.min && w <= range.max) : WEIGHTS;
+};
+
+/**
+ * Typography (spec 8.1 type roles): the brand's fonts (uploaded files, or a family imported from Google Fonts,
+ * each file an asset with its provenance and licence) and, per type role, the face, weight and minimum size, with a
+ * preview line drawn in the chosen font loaded from its pinned files. Saved with the rest of the draft.
+ */
+function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
+  const { brandId } = useBrandContext();
+  const fonts = useBrandFonts(brandId);
+  const faces = fonts.data?.items ?? [];
+  const roles = doc.tokens.typeRoles;
+  const setRole = (role: TypeRoleKey, next: TypeRole | null) =>
+    onChange({
+      ...doc,
+      tokens: {
+        ...doc.tokens,
+        typeRoles: TYPE_ROLES.flatMap(({ role: r }) => {
+          if (r === role) return next ? [next] : [];
+          const current = roles.find((x) => x.role === r);
+          return current ? [current] : [];
+        }),
+      },
+    });
+  // Every face a role uses is loaded once, under its representative file's version id.
+  const used = useMemo(
+    () =>
+      faces
+        .filter((f) => roles.some((r) => r.fontAssetId === f.assetId))
+        .flatMap((f) =>
+          f.files.map((x) => ({
+            family: f.assetVersionId,
+            assetVersionId: x.assetVersionId,
+            unicodeRange: f.files.length > 1 ? x.unicodeRange : null,
+          })),
+        ),
+    [faces, roles],
+  );
+  const loaded = useFontFaces(used);
+  return (
+    <Section
+      title="Typography"
+      hint="Upload font files (WOFF2, WOFF, TTF or OTF) or import a family from Google Fonts, then give each type role a font, weight and minimum size. Creative work and exports use these files, never system fonts."
+    >
+      <div className="flex flex-wrap items-start gap-3">
+        <UploadButton label="Upload font" kind="font" accept={FONT_ACCEPT} />
+        <Button size="sm" variant="ghost" onClick={() => void fonts.refetch()}>
+          Refresh
+        </Button>
+      </div>
+      <GoogleFontImportForm onImported={() => void fonts.refetch()} />
+      {fonts.isPending && <Skeleton label="Loading fonts" lines={2} />}
+      {fonts.isError && <RequestError error={fonts.error} onRetry={() => void fonts.refetch()} />}
+      {fonts.isSuccess && faces.length === 0 && (
+        <EmptyState
+          title="No fonts yet"
+          description="Upload the brand's font files or import a family from Google Fonts."
+        />
+      )}
+      {faces.length > 0 && (
+        <ul
+          className="flex flex-col divide-y divide-border rounded-md border border-border text-sm"
+          aria-label="Brand fonts"
+        >
+          {faces.map((f) => (
+            <li key={f.key} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <span className="min-w-0">
+                <span className="font-medium">{f.family ?? f.name}</span>{' '}
+                <span className="text-xs text-muted-foreground">
+                  {f.weightRange ? `weights ${faceWeight(f)} (variable)` : (f.weight ?? 'weight unknown')} ·{' '}
+                  {f.style} · {f.format}
+                  {f.files.length > 1 ? ` · ${f.files.map((x) => x.subset ?? 'all').join(', ')}` : ''}
+                </span>
+              </span>
+              <span className="flex flex-wrap items-center gap-1">
+                <Badge tone="neutral" glyph={false}>
+                  {f.source === 'google_fonts'
+                    ? 'Google Fonts'
+                    : f.source === 'upload'
+                      ? 'Uploaded'
+                      : 'Imported'}
+                </Badge>
+                {f.state !== 'approved' && <Badge tone="warning">Awaiting approval</Badge>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <ul className="grid gap-3 md:grid-cols-2" aria-label="Type roles">
+        {TYPE_ROLES.map((r) => (
+          <TypeRoleSlot
+            key={r.role}
+            spec={r}
+            value={roles.find((x) => x.role === r.role)}
+            faces={faces}
+            loadedFamily={(assetId) => {
+              const face = faces.find((f) => f.assetId === assetId);
+              return face && loaded.has(face.assetVersionId) ? face.assetVersionId : null;
+            }}
+            onChange={(next) => setRole(r.role, next)}
+          />
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function TypeRoleSlot({
+  spec,
+  value,
+  faces,
+  loadedFamily,
+  onChange,
+}: {
+  spec: (typeof TYPE_ROLES)[number];
+  value: TypeRole | undefined;
+  faces: BrandFontFaceDto[];
+  loadedFamily: (assetId: string) => string | null;
+  onChange: (next: TypeRole | null) => void;
+}) {
+  const known = value ? faces.some((f) => f.assetId === value.fontAssetId) : true;
+  const options = [
+    ...faces.map((f) => ({ value: f.assetId, label: faceLabel(f) })),
+    ...(value && !known
+      ? [{ value: value.fontAssetId, label: 'A font not in this brand', disabled: true }]
+      : []),
+  ];
+  const family = value ? loadedFamily(value.fontAssetId) : null;
+  const id = `kit-type-${spec.role}`;
+  return (
+    <li className="flex flex-col gap-2 rounded-md border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-sm font-medium">{spec.label}</h4>
+        {value && (
+          <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
+            Clear
+          </Button>
+        )}
+      </div>
+      {faces.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Add a font above to assign it here.</p>
+      ) : (
+        <Select
+          aria-label={`${spec.label} font`}
+          placeholder="Choose a font"
+          value={value?.fontAssetId ?? ''}
+          onValueChange={(assetId) => {
+            const face = faces.find((f) => f.assetId === assetId);
+            const allowed = weightsFor(face);
+            const wanted = value?.weight ?? face?.weight ?? 400;
+            onChange({
+              role: spec.role,
+              fontAssetId: assetId,
+              weight: allowed.includes(wanted) ? wanted : (face?.weight ?? allowed[0] ?? 400),
+              minSizePx: value?.minSizePx ?? spec.minSizePx,
+              ...(value?.tracking !== undefined ? { tracking: value.tracking } : {}),
+            });
+          }}
+          options={options}
+        />
+      )}
+      {value && (
+        <>
+          {!known && (
+            <p className="text-xs text-status-critical">
+              <span aria-hidden="true">! </span>This role names a font that is not one of the brand&apos;s
+              fonts.
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Weight" htmlFor={`${id}-weight`}>
+              <Select
+                id={`${id}-weight`}
+                aria-label={`${spec.label} weight`}
+                value={String(value.weight)}
+                onValueChange={(w) => onChange({ ...value, weight: Number(w) })}
+                options={[
+                  ...new Set([
+                    ...weightsFor(faces.find((f) => f.assetId === value.fontAssetId)),
+                    value.weight,
+                  ]),
+                ]
+                  .sort((a, b) => a - b)
+                  .map((w) => ({ value: String(w), label: String(w) }))}
+              />
+            </Field>
+            <Field label="Minimum size (px)" htmlFor={`${id}-min`}>
+              <Input
+                id={`${id}-min`}
+                type="number"
+                min={1}
+                value={value.minSizePx}
+                onChange={(e) => onChange({ ...value, minSizePx: Number(e.target.value) || 0 })}
+              />
+            </Field>
+          </div>
+          <p
+            data-testid={`type-preview-${spec.role}`}
+            className="truncate rounded-sm bg-muted px-2 py-1"
+            style={{
+              fontFamily: family ? `"${family}", sans-serif` : 'sans-serif',
+              fontWeight: value.weight,
+              fontSize: Math.min(Math.max(value.minSizePx, 12), 40),
+            }}
+          >
+            {spec.sample}
+          </p>
+          {!family && known && (
+            <p className="text-xs text-muted-foreground">Loading the font for the preview…</p>
+          )}
+        </>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Google Fonts import: the server fetches the family's WOFF2 files (latin and latin-ext) from Google and ingests
+ * each as a font asset recording the source and licence. Files the brand already holds are reused, not duplicated.
+ */
+function GoogleFontImportForm({ onImported }: { onImported: () => void }) {
+  const { brandId } = useBrandContext();
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [family, setFamily] = useState('');
+  const [weights, setWeights] = useState<number[]>([400, 700]);
+  const [italic, setItalic] = useState(false);
+  const run = useMutation(
+    trpc.assets.fonts.importGoogle.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        void queryClient.invalidateQueries(trpc.assets.pathFilter());
+        onImported();
+      },
+      onError: () => intent.renew(),
+    }),
+  );
+  const error = run.error ? toUiError(run.error) : null;
+  const queued = run.data?.files.filter((f) => f.outcome === 'queued').length ?? 0;
+  const existing = run.data?.files.filter((f) => f.outcome === 'existing').length ?? 0;
+  return (
+    <form
+      className="flex flex-col gap-2 rounded-md border border-border p-3"
+      aria-labelledby="kit-google-fonts"
+      onSubmit={(e) => {
+        e.preventDefault();
+        run.mutate({
+          brandId,
+          family: family.trim(),
+          weights,
+          styles: italic ? ['normal', 'italic'] : ['normal'],
+        });
+      }}
+    >
+      <h4 id="kit-google-fonts" className="text-sm font-medium">
+        Import from Google Fonts
+      </h4>
+      <Field
+        label="Family"
+        htmlFor="kit-google-family"
+        hint="As fonts.google.com names it, for example Inter or IBM Plex Sans. Google Fonts families are open source (SIL Open Font License or Apache 2.0)."
+      >
+        <Input
+          id="kit-google-family"
+          value={family}
+          maxLength={100}
+          onChange={(e) => setFamily(e.target.value)}
+          placeholder="Inter"
+        />
+      </Field>
+      <fieldset className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        <legend className="mb-1 text-muted-foreground">Weights</legend>
+        {WEIGHTS.map((w) => (
+          <label key={w} className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={weights.includes(w)}
+              onChange={(e) =>
+                setWeights(
+                  e.target.checked ? [...weights, w].sort((a, b) => a - b) : weights.filter((x) => x !== w),
+                )
+              }
+            />
+            {w}
+          </label>
+        ))}
+      </fieldset>
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} />
+        Include italics
+      </label>
+      <div>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={run.isPending || family.trim().length === 0 || weights.length === 0}
+        >
+          {run.isPending ? 'Importing…' : 'Import family'}
+        </Button>
+      </div>
+      {error && (
+        <StatusBanner
+          tone="critical"
+          title="Not imported"
+          description={[error.message, ...error.details.map((d) => d.issue.replaceAll('_', ' '))].join(' · ')}
+        />
+      )}
+      {run.isSuccess && (
+        <StatusBanner
+          tone="good"
+          title={`${run.data.family}: ${queued} file${queued === 1 ? '' : 's'} importing`}
+          description={`${existing ? `${existing} already in the brand. ` : ''}New files are scanned and appear in the list within a minute; use Refresh if they have not.`}
+        />
+      )}
+    </form>
+  );
 }
 
 function LogosSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {

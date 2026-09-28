@@ -10,7 +10,11 @@ import {
   AssetSearch,
   AssetUsagesList,
   AssetVersionsList,
+  BrandFontsList,
   EligibilityQuery,
+  GOOGLE_FONTS_LICENCE_NOTE,
+  GOOGLE_FONTS_SOURCE,
+  GoogleFontImport,
   KIND_MIME_GROUPS,
   KINDS_NOT_PROCESSABLE,
   MediaSignedUrlRequest,
@@ -23,7 +27,10 @@ import {
   type AssetKind,
   type AssetPurpose,
   type AssetRef,
+  type BrandFontFace,
   type DerivativePurpose,
+  type GoogleFontImportFile,
+  type GoogleFontImportResult,
   type Provenance,
 } from '@oremedia/contracts/assets';
 import {
@@ -43,6 +50,8 @@ import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
 import { compatibleKinds, evaluateEligibility, rightsExpiryThreshold, rightsRequired } from './eligibility';
+import { fontFileIdentity, groupFontFaces, isFaceFile, type FontFileRow } from './fonts';
+import { fetchGoogleFontFiles, type GoogleFontFile } from './google-fonts';
 import {
   AssetDerivativeRepository,
   AssetGrantRepository,
@@ -95,6 +104,19 @@ const toRef = (a: AssetRow, v: AssetVersionRow): AssetRef => ({
   width: v.width,
   height: v.height,
 });
+
+const fontFileRow = (r: { asset: AssetRow; version: AssetVersionRow }): FontFileRow => ({
+  assetId: r.asset.id,
+  assetName: r.asset.name,
+  assetState: r.asset.state,
+  assetVersionId: r.version.id,
+  mime: r.version.mime,
+  bytes: r.version.bytes,
+  provenance: r.version.provenance,
+});
+
+/** Provenance a server-side upload records with its intent (generated media, imported files). */
+type IntentProvenance = Extract<Provenance, { kind: 'generated' | 'imported' }>;
 
 const versionView = (v: AssetVersionRow) => ({
   id: v.id,
@@ -230,6 +252,103 @@ export const assetService = {
       });
     }
     return out;
+  },
+
+  /**
+   * Brand kit typography: the brand's font faces (spec 8.1 type roles name one). An imported face's subset files are
+   * one face; an uploaded file is a face of its own, its family and style read from the file at ingest.
+   */
+  async listFonts(
+    actor: ResolvedActor,
+    input: z.infer<typeof BrandFontsList>,
+    tx?: Tx,
+  ): Promise<{ items: BrandFontFace[] }> {
+    const { brandId } = BrandFontsList.parse(input);
+    await brandService.assertExist([brandId], tx);
+    assetsRepo.assertBrandVisible(brandId);
+    await policy.assert(actor, 'asset.read', brandResource(brandId), {}, tx);
+    const rows = await assetsRepo.listFontFiles(brandId, tx);
+    return { items: groupFontFaces(rows.map(fontFileRow)) };
+  },
+
+  /**
+   * Imports a family from Google Fonts into the brand's fonts: the css2 stylesheet names one WOFF2 file per face and
+   * unicode subset (latin and latin-ext unless the input names others; a variable family one file per subset for
+   * all its weights), each downloaded from fonts.gstatic.com (google-fonts.ts: two hosts only, SSRF-safe, capped)
+   * and handed to the asset pipeline like an upload, so ingest scans, parses and catalogues it as a font asset whose
+   * provenance records the source, face, subset, unicode-range, source URL and licence note. The same permission as
+   * editing the brand kit; agents may not.
+   *
+   * Three steps, so no database connection is held while Google answers: (1) a short transaction checks the brand
+   * and the permission; (2) every file is downloaded, outside any transaction (a failure part-way writes nothing);
+   * (3) `run` (the router's idempotent wrapper) records one upload intent per new file with its provenance and the
+   * audit event; then (4) each intent still `issued` gets its bytes in quarantine and is completed in its own short
+   * transaction, which starts ingest, exactly as a browser upload does. A replay of the same request re-runs (4) for
+   * the recorded intents, so an interrupted import finishes; an intent never completed expires like an abandoned
+   * upload. A file whose bytes a live font asset of the brand already holds is reported as existing, not ingested.
+   */
+  async importGoogleFont(
+    actor: ResolvedActor,
+    input: z.input<typeof GoogleFontImport>,
+    run: <T>(command: (tx: Tx) => Promise<T>) => Promise<T> = (command) => withTransaction(command),
+  ): Promise<GoogleFontImportResult> {
+    const parsed = GoogleFontImport.parse(input);
+    await withTransaction(async (tx) => {
+      await brandService.assertExist([parsed.brandId], tx);
+      assetsRepo.assertBrandVisible(parsed.brandId);
+      const decision = await policy.assert(
+        actor,
+        'brand.edit_standards',
+        brandResource(parsed.brandId),
+        {},
+        tx,
+      );
+      if (decision.obligations?.some((o) => o.type === 'propose_only'))
+        throw new PolicyDeniedError('propose_only', 'Agents may only propose; a brand manager imports fonts');
+    });
+    const downloaded = (await fetchGoogleFontFiles(parsed)).map((f) => ({
+      ...f,
+      contentHash: sha256(f.bytes),
+    }));
+    const result = await run((tx) => recordFontImport(actor, parsed.brandId, parsed.family, downloaded, tx));
+    const bytesByHash = new Map(downloaded.map((f) => [f.contentHash, f.bytes]));
+    for (const f of result.files) {
+      const bytes = bytesByHash.get(f.contentHash);
+      if (f.outcome !== 'queued' || !f.intentId || !bytes) continue;
+      const intent = await intentsRepo.getById(f.intentId);
+      if (intent.state !== 'issued') continue;
+      await storage().putObject(intent.storageKey, bytes, { contentType: intent.declaredMime });
+      await withTransaction(async (tx) => {
+        const current = await intentsRepo.getById(intent.id, tx);
+        if (current.state === 'issued') await markUploaded(actor, current, tx);
+      });
+    }
+    return result;
+  },
+
+  /**
+   * For the render worker (spec 11.5): the files of the face an asset version belongs to, in the version's own brand
+   * (the version itself first). An uploaded font is its only file; an imported face adds its other subset files.
+   */
+  async fontFaceFiles(assetVersionId: string, tx?: Tx): Promise<string[]> {
+    const version = await versionsRepo.findInTenant(assetVersionId, tx);
+    if (!version) throw new NotFoundError('AssetVersion', assetVersionId);
+    if (!isFaceFile(version.provenance)) return [version.id];
+    const own = fontFileIdentity(version.assetId, version.provenance);
+    const rows = await assetsRepo.listFontFilesInTenant(version.brandId, tx);
+    // One file per other subset of the same face (the key includes the source's release), in a stable order: the
+    // same pinned document always resolves the same files for as long as those assets are live.
+    const bySubset = new Map<string, string>();
+    for (const r of rows
+      .map((r) => ({
+        id: r.version.id,
+        assetId: r.asset.id,
+        ...fontFileIdentity(r.asset.id, r.version.provenance),
+      }))
+      .filter((r) => r.key === own.key && r.subset !== own.subset)
+      .sort((a, b) => (a.subset ?? '').localeCompare(b.subset ?? '') || a.assetId.localeCompare(b.assetId)))
+      if (!bySubset.has(r.subset ?? '')) bySubset.set(r.subset ?? '', r.id);
+    return [version.id, ...bySubset.values()];
   },
 
   /**
@@ -698,12 +817,13 @@ export const assetService = {
 
 /**
  * Issues an upload intent once the caller has authorised it: the kind's mime list and size cap are checked, the
- * quarantine key is allocated and the intent is recorded and audited. Generated uploads carry their provenance.
+ * quarantine key is allocated and the intent is recorded and audited. Generated and imported uploads carry their
+ * provenance.
  */
 async function issueIntent(
   actor: ResolvedActor,
   parsed: z.infer<typeof UploadIntentCreate>,
-  provenance: Extract<Provenance, { kind: 'generated' }> | null,
+  provenance: IntentProvenance | null,
   tx: Tx,
 ) {
   const { tenantId } = requireTenant();
@@ -742,6 +862,76 @@ async function issueIntent(
     brandId: parsed.brandId,
   });
   return { id, storageKey, mime, maxBytes, expiresAt };
+}
+
+/**
+ * Step (3) of importGoogleFont, in the caller's (idempotent) transaction: an upload intent per downloaded file the
+ * brand does not already hold as a live font, carrying the import's provenance, and the audit event. The first file
+ * of a batch with the same bytes stands for the others.
+ */
+async function recordFontImport(
+  actor: ResolvedActor,
+  brandId: string,
+  family: string,
+  downloaded: ReadonlyArray<GoogleFontFile & { contentHash: string }>,
+  tx: Tx,
+): Promise<GoogleFontImportResult> {
+  const files: GoogleFontImportFile[] = [];
+  for (const f of downloaded) {
+    const face = {
+      weight: f.weight,
+      weightRange: f.weightRange,
+      style: f.style,
+      subset: f.subset,
+      unicodeRange: f.unicodeRange,
+      contentHash: f.contentHash,
+    };
+    const existing = await versionsRepo.findLiveByHash(brandId, f.contentHash, ['font'], tx);
+    if (existing) {
+      files.push({ ...face, outcome: 'existing', assetId: existing.assetId, intentId: null });
+      continue;
+    }
+    const queued = files.find((x) => x.contentHash === f.contentHash);
+    if (queued) {
+      files.push({ ...face, outcome: 'queued', assetId: null, intentId: queued.intentId });
+      continue;
+    }
+    const slug = f.family.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const weights = f.weightRange ? `${f.weightRange.min}-${f.weightRange.max}` : `${f.weight}`;
+    const { id } = await issueIntent(
+      actor,
+      UploadIntentCreate.parse({
+        brandId,
+        kind: 'font',
+        declaredMime: 'font/woff2',
+        declaredBytes: f.bytes.length,
+        originalFilename: `${slug}-${weights}${f.style === 'italic' ? '-italic' : ''}-${f.subset ?? 'all'}.woff2`,
+      }),
+      {
+        kind: 'imported',
+        source: GOOGLE_FONTS_SOURCE,
+        externalRef: f.url,
+        font: {
+          family: f.family,
+          weight: f.weight,
+          ...(f.weightRange ? { weightRange: f.weightRange } : {}),
+          style: f.style,
+          subset: f.subset,
+          unicodeRange: f.unicodeRange,
+        },
+        licence: GOOGLE_FONTS_LICENCE_NOTE,
+      },
+      tx,
+    );
+    files.push({ ...face, outcome: 'queued', assetId: null, intentId: id });
+  }
+  const name = downloaded[0]?.family ?? family;
+  await audit.record(actorRef(actor), 'asset.font_imported', { type: 'brand', id: brandId }, 'allowed', tx, {
+    brandId,
+    reason: `${GOOGLE_FONTS_SOURCE}:${name}`,
+    count: files.filter((f) => f.outcome === 'queued').length,
+  });
+  return { family: name, files };
 }
 
 /** issued → uploaded once the caller has authorised it; the outbox event starts assetIngestWorkflowV1. */

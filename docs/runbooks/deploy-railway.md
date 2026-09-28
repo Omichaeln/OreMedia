@@ -22,7 +22,8 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both);
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
-   - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OREMEDIA_DEPLOYMENT_BRAND`
+   - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OBJECT_STORE_PUBLIC_ORIGIN`
+     (runtime: the object store origin allowed in `font-src` and `connect-src`, section 1b; uploads fail without it), `OREMEDIA_DEPLOYMENT_BRAND`
      (runtime, D-12: the brand pack in `apps/web/deployment-brands`, `ore-and-tar` for this deployment; unset is the
      neutral product brand; the pack also serves the public legal pages at `/legal/*`), `VITE_REVIEW_PORTAL_ORIGIN`
      (build arg). `VITE_API_URL` stays unset: the app calls `/trpc` on its own origin.
@@ -116,6 +117,26 @@ There is no self-sign-up: every person is either the owner created here or invit
 4. The owner invites everyone else from the company's settings (`access.members.invite`). An invited person signs
    in with Google using the invited address; the invitation is accepted on that first sign-in. Anyone else sees
    "This Google account has not been invited".
+
+## 1b. Brand fonts: Google Fonts egress and the font CSP
+
+The brand kit imports font families from Google Fonts (`assets.fonts.importGoogle`, in the `api` request) and
+shows previews of the brand's own font files in the browser.
+
+1. **Egress from `api`:** HTTPS (443) to `fonts.googleapis.com` (the css2 stylesheet) and `fonts.gstatic.com` (the
+   WOFF2 files). No other host is contacted: a stylesheet naming any other source is refused, redirects are not
+   followed, and every request goes through the SSRF-safe dispatcher. If egress is filtered, allow exactly these two
+   hosts; blocked, an import fails with `PROVIDER_UNAVAILABLE` and nothing is written. Nothing about the person or
+   the company is sent: the request carries the family, weights and styles, and a desktop browser User-Agent so
+   Google lists WOFF2 files.
+2. **`web`:** set `OBJECT_STORE_PUBLIC_ORIGIN` to the object store's origin as its signed URLs carry it (scheme and
+   host only, e.g. `https://<account>.r2.cloudflarestorage.com`). The Caddyfile adds it to `font-src` (the brand kit
+   and studio load font files from signed URLs) and to `connect-src` (the web app uploads files by PUT to a signed
+   upload URL). Unset, the CSP blocks both: every upload from the web app fails, and font previews fall back to the
+   system font (exports are unaffected, the render worker never uses the CSP).
+3. **Verify:** in a brand kit draft, Typography → Import from Google Fonts → `Inter`, weights 400 and 700; the
+   banner reports four files importing and, after ingest, the list shows Inter 400 and 700 from Google Fonts. Assign
+   one to Body: the preview line is drawn in Inter (no CSP violation in the browser console).
 
 ## 2. Deploy
 

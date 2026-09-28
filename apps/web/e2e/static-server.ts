@@ -39,6 +39,15 @@ export async function startStaticServer(
 ): Promise<{ server: Server; origin: string; close: () => Promise<void> }> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
+    // Stands in for the object store's presigned PUT (the mock's upload intents point here): accepted, discarded.
+    if (req.method === 'PUT' && url.pathname.startsWith('/e2e-upload/')) {
+      req.resume();
+      req.on('end', () => {
+        res.statusCode = 200;
+        res.end();
+      });
+      return;
+    }
     if (url.pathname.startsWith('/trpc/')) {
       if (opts.trpcHandler) return opts.trpcHandler(req, res);
       if (opts.apiOrigin) return proxy(req, res, opts.apiOrigin);

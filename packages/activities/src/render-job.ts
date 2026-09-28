@@ -27,6 +27,7 @@ import {
   AssetVersionRepository,
   assetService,
   parseStorageKey,
+  renderFontFaces,
   storage,
   type StorageProvider,
 } from '@oremedia/module-assets';
@@ -83,7 +84,8 @@ export interface RenderTargetInput {
   /** The page's own format differs from formatKey: the renderer reflows it (spec 11.3 createFormatVariant). */
   reflow: boolean;
   snapshot: BrandSnapshot;
-  fonts: Array<{ family: string; mime: string; bytes: Buffer }>;
+  /** Registered under `family`; `unicodeRange` limits a file of a multi-file face to the characters it covers. */
+  fonts: Array<{ family: string; mime: string; bytes: Buffer; unicodeRange?: string }>;
   assets: Array<{ assetVersionId: string; mime: string; bytes: Buffer }>;
   limits?: { maxBytes?: number; maxWidth?: number; maxHeight?: number };
 }
@@ -269,14 +271,29 @@ export function createRenderJobActivities(deps: RenderJobDeps): RenderJobActivit
         const fonts: RenderFontRef[] = [];
         const assets: RenderAssetRef[] = [];
         try {
-          for (const id of refs.fonts) {
-            const v = await pin(id, 'font', input.brandId);
+          const pinnedFonts = new Set<string>();
+          const pinFont = (v: Awaited<ReturnType<typeof pin>>) => {
+            if (pinnedFonts.has(v.id)) return;
+            pinnedFonts.add(v.id);
             fonts.push({
               assetVersionId: v.id,
               storageKey: v.storageKey,
               contentHash: v.contentHash,
               mime: v.mime,
             });
+          };
+          for (const id of refs.fonts) {
+            pinFont(await pin(id, 'font', input.brandId));
+            // An imported face is one file per unicode subset: its other files are pinned (and listed in the
+            // manifest) with it. One the brand may not use is left out; the referenced file still renders.
+            const [, ...siblings] = await assetService.fontFaceFiles(id);
+            for (const sibling of siblings) {
+              try {
+                pinFont(await pin(sibling, 'font', input.brandId));
+              } catch (err) {
+                if (!(err instanceof RightsIneligibleError)) throw err;
+              }
+            }
           }
           for (const [ids, purpose] of [
             [refs.images, 'creative'],
@@ -340,9 +357,28 @@ export function createRenderJobActivities(deps: RenderJobDeps): RenderJobActivit
           versionId: input.brandVersionId,
         });
         // Inputs come from the object store only (the worker has no other egress) and must still hash as pinned.
+        // Each document font ref is a family; the other pinned files of its face join it with their unicode range
+        // (read from the versions' recorded provenance, so the same pins always register the same faces).
+        const fontBytes = new Map<string, Buffer>();
+        for (const f of input.fonts) fontBytes.set(f.assetVersionId, await readPinned(f));
+        const pinnedFonts = [];
+        for (const f of input.fonts) {
+          const v = await versionsRepo.findInTenant(f.assetVersionId);
+          if (!v) throw new NotFoundError('AssetVersion', f.assetVersionId);
+          pinnedFonts.push({ ref: f, assetVersionId: v.id, assetId: v.assetId, provenance: v.provenance });
+        }
         const fonts = [];
-        for (const f of input.fonts)
-          fonts.push({ family: f.assetVersionId, mime: f.mime, bytes: await readPinned(f) });
+        for (const face of renderFontFaces(referencedAssets(doc).fonts, pinnedFonts)) {
+          const ref = pinnedFonts.find((p) => p.assetVersionId === face.assetVersionId)?.ref;
+          const bytes = fontBytes.get(face.assetVersionId);
+          if (!ref || !bytes) continue;
+          fonts.push({
+            family: face.family,
+            mime: ref.mime,
+            bytes,
+            ...(face.unicodeRange ? { unicodeRange: face.unicodeRange } : {}),
+          });
+        }
         const assets = [];
         for (const a of input.assets)
           assets.push({ assetVersionId: a.assetVersionId, mime: a.mime, bytes: await readPinned(a) });

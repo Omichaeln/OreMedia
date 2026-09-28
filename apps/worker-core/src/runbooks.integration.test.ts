@@ -31,9 +31,9 @@ import {
   createPublishControlActivities,
   createPublishProviderActivities,
 } from '@oremedia/activities';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { contentService } from '@oremedia/module-content';
-import { MemoryStorageProvider, configureStorage } from '@oremedia/module-assets';
+import { MemoryStorageProvider, configureStorage, assetService } from '@oremedia/module-assets';
 import {
   DEAD_LETTER_ATTEMPTS,
   createOperationsRuntime,
@@ -265,6 +265,13 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
     };
     // The worker's composition root; only the seams a test controls are re-registered afterwards.
     composeModules();
+    // The brand documents here name the placeholder font ast_font (no asset rows are seeded): a draft's type roles
+    // must name fonts of the brand, so the composed asset source is told it is one.
+    registerBrandAssetKindSource(async (brandId, ids, tx) => {
+      const kinds = await assetService.kindsForBrand(brandId, ids, tx);
+      if (ids.includes('ast_font')) kinds.set('ast_font', 'font');
+      return kinds;
+    });
     configurePublishingProviders({ registry, insecureAllowLoopback: true });
     configureCredentialBroker({ kms: new LocalKms('runbook-rehearsal-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));

@@ -15,7 +15,8 @@ import { publications } from '@oremedia/db/schema/publishing';
 import { releaseApprovals } from '@oremedia/db/schema/review';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { createBrandChangeImpactActivities } from '@oremedia/activities';
-import { brandService } from '@oremedia/module-brand';
+import { assetService } from '@oremedia/module-assets';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { contentService } from '@oremedia/module-content';
 import { outboxRouteFor } from '@oremedia/module-operations';
 import {
@@ -265,6 +266,13 @@ describe('brand change impact end to end (worker-core composition, real activiti
     // The real composition root (routes, the release evaluator and every cross-module hook); only the seams a
     // test controls (providers, KMS, client secrets) are re-registered afterwards, as the worker does.
     composeModules();
+    // The brand documents here name the placeholder font ast_font (no asset rows are seeded): a draft's type roles
+    // must name fonts of the brand, so the composed asset source is told it is one.
+    registerBrandAssetKindSource(async (brandId, ids, tx) => {
+      const kinds = await assetService.kindsForBrand(brandId, ids, tx);
+      if (ids.includes('ast_font')) kinds.set('ast_font', 'font');
+      return kinds;
+    });
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('e2e-brand-change-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));

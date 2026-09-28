@@ -9,7 +9,11 @@ import type { SceneMetrics } from './metrics';
 export interface RenderInput {
   page: CreativePage;
   format: FormatDefinition;
-  fonts: Array<{ family: string; url: string }>;
+  /**
+   * Every file is registered under `family`; a face served as several files (one per unicode subset) lists each file
+   * with its `unicodeRange`, so the browser picks the file that covers each character.
+   */
+  fonts: Array<{ family: string; url: string; unicodeRange?: string }>;
   assets: Record<string, string>;
   colours: Record<string, string>;
 }

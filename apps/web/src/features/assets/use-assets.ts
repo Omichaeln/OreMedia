@@ -5,6 +5,7 @@ import { useTRPC, type Trpc } from '../../lib/trpc';
 
 export type AssetDto = inferOutput<Trpc['assets']['get']>;
 export type AssetRefDto = inferOutput<Trpc['assets']['search']>['items'][number];
+export type BrandFontFaceDto = inferOutput<Trpc['assets']['fonts']['list']>['items'][number];
 
 /** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. */
 export function useAssetSearch(brandId: string, purpose: AssetPurpose, query?: string) {
@@ -51,12 +52,18 @@ export function useSignedUrl(
   });
 }
 
-/** Signed URLs for every asset version a document references, as one map (a single useQueries call). */
-export function useAssetUrls(assetVersionIds: string[]): Map<string, string> {
+/**
+ * Signed URLs for every asset version a document references, as one map (a single useQueries call). Images use the
+ * web derivative; fonts have no derivatives, so their files are fetched as the original.
+ */
+export function useAssetUrls(
+  assetVersionIds: string[],
+  derivative: 'web' | 'original' = 'web',
+): Map<string, string> {
   const trpc = useTRPC();
   const results = useQueries({
     queries: assetVersionIds.map((assetVersionId) => ({
-      ...trpc.assets.media.signedUrl.queryOptions({ assetVersionId, derivative: 'web' as const }),
+      ...trpc.assets.media.signedUrl.queryOptions({ assetVersionId, derivative }),
       staleTime: 4 * 60_000,
       refetchInterval: 4 * 60_000,
       retry: false,
@@ -68,4 +75,10 @@ export function useAssetUrls(assetVersionIds: string[]): Map<string, string> {
     if (id && r.data?.url) map.set(id, r.data.url);
   });
   return map;
+}
+
+/** Brand kit typography: the brand's font faces (an imported face's subset files are one face). */
+export function useBrandFonts(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.assets.fonts.list.queryOptions({ brandId }));
 }

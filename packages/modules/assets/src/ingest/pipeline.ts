@@ -17,6 +17,7 @@ import {
   type IngestSniffResult,
   type IngestStepResult,
   type IngestVerifyResult,
+  type Provenance,
   type UploadIntentState,
 } from '@oremedia/contracts/assets';
 import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
@@ -83,6 +84,15 @@ async function objectOrMissing(
 ): Promise<Buffer | { ok: false; reason: 'object_missing' }> {
   const bytes = await storage.getObject(key, range);
   return bytes ?? { ok: false, reason: 'object_missing' };
+}
+
+function withFontMetadata(
+  recorded: Provenance | undefined,
+  input: Pick<IngestCatalogueInput, 'fontMetadata'>,
+): Provenance | undefined {
+  if (recorded?.kind === 'imported' && input.fontMetadata)
+    return { ...recorded, fontMetadata: input.fontMetadata };
+  return recorded;
 }
 
 export const assetIngest = {
@@ -172,7 +182,8 @@ export const assetIngest = {
     if (!Buffer.isBuffer(bytes)) return bytes;
     return steps.hashAndDedupe(
       bytes,
-      async (contentHash) => (await versionsRepo.findByHash(intent.brandId, contentHash))?.assetId ?? null,
+      async (contentHash) =>
+        (await versionsRepo.findLiveByHash(intent.brandId, contentHash, null))?.assetId ?? null,
     );
   },
 
@@ -275,8 +286,9 @@ export const assetIngest = {
           width: input.width,
           height: input.height,
           colourProfile: input.colourProfile,
-          // ADR-11: a generated upload keeps the provenance recorded with its intent.
-          provenance: (await generatedRepo.findById(intent.id, tx))?.provenance ?? {
+          // ADR-11: a generated or imported upload keeps the provenance recorded with its intent; an imported
+          // font also records what the file itself declared, as an upload does.
+          provenance: withFontMetadata((await generatedRepo.findById(intent.id, tx))?.provenance, input) ?? {
             kind: 'upload',
             uploadedByUserId: intent.createdByUserId,
             originalFilename: intent.originalFilename,

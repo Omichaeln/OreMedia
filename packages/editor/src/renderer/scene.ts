@@ -89,6 +89,16 @@ export function isFontLoaded(family: string): boolean {
   return false;
 }
 
+/**
+ * FontFace descriptors for a pinned font file. Every weight resolves to the pinned file (a variable font covers the
+ * range; a static one is synthesised deterministically, where a system font would not be pinned), and a file that
+ * is one subset of a face is limited to its unicode range, so the browser takes each character from the file that
+ * covers it. Used by the render bundle and the web app alike.
+ */
+export function fontFaceDescriptors(unicodeRange?: string | null): { weight: string; unicodeRange?: string } {
+  return unicodeRange ? { weight: '100 900', unicodeRange } : { weight: '100 900' };
+}
+
 interface Box {
   x: number;
   y: number;

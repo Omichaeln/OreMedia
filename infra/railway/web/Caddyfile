@@ -53,6 +53,11 @@
 		file_server
 	}
 
+	# The object store's origin is allowed in two places, both for its short-lived signed URLs: font-src, because the
+	# brand kit and the studio load a brand's own font files (pinned asset versions) as FontFace; and connect-src,
+	# because browser uploads PUT straight to a signed upload URL (apps/web/src/features/assets/use-upload.ts).
+	# OBJECT_STORE_PUBLIC_ORIGIN is that origin exactly as signed URLs carry it (scheme and host, no path), e.g.
+	# https://<account>.r2.cloudflarestorage.com; unset, the browser refuses both, so uploads from the web app fail.
 	handle {
 		root * /srv
 		header {
@@ -60,7 +65,7 @@
 			Referrer-Policy no-referrer
 			X-Frame-Options DENY
 			Strict-Transport-Security "max-age=31536000; includeSubDomains"
-			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com {$OBJECT_STORE_PUBLIC_ORIGIN}; img-src 'self' data: blob: https:; connect-src 'self' {$OBJECT_STORE_PUBLIC_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 		}
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"

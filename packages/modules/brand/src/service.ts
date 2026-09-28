@@ -171,12 +171,15 @@ const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 /**
  * A draft's references must hold together before it is saved: colours are hex with unique keys, a logo rule names a
- * logo of this brand and colour keys the palette defines, and pattern examples are assets of this brand. Every
- * problem is reported at once.
+ * logo of this brand and colour keys the palette defines, pattern examples are assets of this brand, and a type role
+ * whose font is new or changed names a font of this brand. Type roles the draft already held are not re-checked, so
+ * drafts written before the check (some carry placeholder font ids) still save; rendering authorises every font at
+ * the point of effect either way. Every problem is reported at once.
  */
 async function assertDocumentReferences(
   brandId: string,
   document: BrandSystemDocumentV1,
+  previous: BrandSystemDocumentV1 | null,
   tx: Tx,
 ): Promise<void> {
   const issues: ErrorDetail[] = [];
@@ -190,7 +193,12 @@ async function assertDocumentReferences(
   });
   const logoIds = document.logoRules.map((r) => r.assetId);
   const exampleIds = document.patterns.flatMap((p) => p.exampleAssetIds);
-  const ids = [...new Set([...logoIds, ...exampleIds])];
+  const held = new Map(previous?.tokens.typeRoles.map((r) => [r.role, r.fontAssetId]) ?? []);
+  const changedRoles = document.tokens.typeRoles
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => held.get(r.role) !== r.fontAssetId);
+  const fontIds = changedRoles.map(({ r }) => r.fontAssetId);
+  const ids = [...new Set([...logoIds, ...exampleIds, ...fontIds])];
   const kinds = ids.length ? await brandAssetKindSource(brandId, ids, tx) : new Map<string, AssetKind>();
   document.logoRules.forEach((r, i) => {
     if (kinds.get(r.assetId) !== 'logo')
@@ -206,6 +214,9 @@ async function assertDocumentReferences(
         issues.push({ path: `patterns.${i}.exampleAssetIds.${j}`, issue: 'not_an_asset_of_this_brand' });
     }),
   );
+  for (const { r, i } of changedRoles)
+    if (kinds.get(r.fontAssetId) !== 'font')
+      issues.push({ path: `tokens.typeRoles.${i}.fontAssetId`, issue: 'not_a_font_of_this_brand' });
   if (issues.length) throw new ValidationFailedError(issues, 'The brand system draft has invalid references');
 }
 
@@ -575,7 +586,7 @@ export const brandService = {
         tx,
       );
       const document = BrandSystemDocumentV1.parse(parsed.document);
-      await assertDocumentReferences(brand.id, document, tx);
+      await assertDocumentReferences(brand.id, document, BrandSystemDocumentV1.parse(v.document), tx);
       const contentHash = hashCanonical(document);
       await versionsRepo.update(v.id, parsed.expectedVersion, { document, contentHash }, tx);
       if (guidelinesKey(BrandSystemDocumentV1.parse(v.document)) !== guidelinesKey(document))

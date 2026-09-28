@@ -91,6 +91,13 @@ const document = (summary = 'Plain and confident'): BrandSystemDocumentV1 => ({
   },
 });
 
+/**
+ * The asset source outside the brand kit tests: the documents here name the placeholder font ast_font, and a draft's
+ * type roles must name fonts of the brand, so it answers that ast_font is one and knows nothing else.
+ */
+const fixtureFonts = async (_brandId: string, ids: string[]) =>
+  new Map(ids.filter((id) => id === 'ast_font').map((id) => [id, 'font' as const]));
+
 const HOUR = 3600_000;
 const evidence = [{ kind: 'other' as const, ref: 'test' }];
 
@@ -126,6 +133,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       .where(and(eq(outboxEvents.tenantId, tenantA), eq(outboxEvents.eventType, type)));
 
   beforeAll(async () => {
+    registerBrandAssetKindSource(fixtureFonts);
     tdb = await createTestDatabase();
     await tdb.db.insert(tenants).values([
       { id: tenantA, name: 'A', slug: 'brand-a-' + tenantA.slice(-6).toLowerCase() },
@@ -879,16 +887,18 @@ describe('brand module (spec 8) against MySQL 8', () => {
         const own = new Map([
           ['ast_logo', 'logo'],
           ['ast_photo', 'photo'],
+          ['ast_font', 'font'],
+          ['ast_font_2', 'font'],
         ] as const);
         return new Map(ids.flatMap((id) => (own.has(id as never) ? [[id, own.get(id as never)!]] : [])));
       });
     });
-    afterAll(() => resetBrandAssetKindSource());
+    afterAll(() => registerBrandAssetKindSource(fixtureFonts));
 
     it('saves a draft whose logos and reference images are assets of this brand', async () => {
       const saved = await save(kit());
       version = saved.version;
-      expect(asked.at(-1)).toEqual({ brandId: brandKit, ids: ['ast_logo', 'ast_photo'] });
+      expect(asked.at(-1)).toEqual({ brandId: brandKit, ids: ['ast_logo', 'ast_photo', 'ast_font'] });
       const got = await runInTenant(ctx(tenantA), () =>
         brandService.versions.get(A, { brandId: brandKit, versionId: draft }),
       );
@@ -933,6 +943,33 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(got.version).toBe(version);
     });
 
+    it('a type role whose font is new or changed must name a font of this brand; one it already held is kept', async () => {
+      const roles = (fontAssetId: string, caption = 'ast_font') => ({
+        ...document().tokens,
+        typeRoles: [
+          { role: 'body' as const, fontAssetId: 'ast_font', weight: 400, minSizePx: 16 },
+          { role: 'heading' as const, fontAssetId, weight: 700, minSizePx: 28 },
+          { role: 'caption' as const, fontAssetId: caption, weight: 400, minSizePx: 12 },
+        ],
+      });
+      expect(await issuesOf(kit({ tokens: roles('ast_photo', 'ast_other_brand') }))).toEqual([
+        'tokens.typeRoles.1.fontAssetId not_a_font_of_this_brand',
+        'tokens.typeRoles.2.fontAssetId not_a_font_of_this_brand',
+      ]);
+      version = (await save(kit({ tokens: roles('ast_font_2') }))).version;
+      // A draft written before the check holds a placeholder id: saving it again, unchanged, still works.
+      await tdb.db
+        .update(brandVersions)
+        .set({ document: kit({ tokens: roles('ast_font_2', 'ast_legacy_placeholder') }) })
+        .where(eq(brandVersions.id, draft));
+      version = (await save(kit({ tokens: roles('ast_font_2', 'ast_legacy_placeholder') }))).version;
+      // Changing the heading's font re-checks that role only.
+      expect(await issuesOf(kit({ tokens: roles('ast_logo', 'ast_legacy_placeholder') }))).toEqual([
+        'tokens.typeRoles.1.fontAssetId not_a_font_of_this_brand',
+      ]);
+      version = (await save(kit())).version;
+    });
+
     it('without a registered asset source a draft naming assets is refused (fail closed)', async () => {
       resetBrandAssetKindSource();
       try {
@@ -944,7 +981,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
         const saved = await save(document());
         version = saved.version;
       } finally {
-        registerBrandAssetKindSource(async () => new Map());
+        registerBrandAssetKindSource(fixtureFonts);
       }
     });
   });

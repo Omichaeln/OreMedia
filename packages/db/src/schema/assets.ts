@@ -69,7 +69,7 @@ export const assetVersions = mysqlTable(
     colourProfile: varchar('colour_profile', { length: 40 }),
     focalPoint: json('focal_point').$type<{ x: number; y: number }>(),
     altText: varchar('alt_text', { length: 1000 }),
-    provenance: json('provenance').$type<Provenance>().notNull(), // upload/generated: model, prompt hash, inputs
+    provenance: json('provenance').$type<Provenance>().notNull(), // upload/generated/imported: see contracts Provenance
     createdAt: createdAt(),
   },
   (t) => [
@@ -232,9 +232,10 @@ export const uploadIntents = mysqlTable(
 );
 
 /**
- * ADR-11: one row per upload intent whose bytes a generation provider produced (id = the intent's id). Catalogue
- * records this provenance (model, prompt hash, run) on the asset version instead of the uploader's. Kept beside
- * upload_intents rather than as a column on it so the intent's shape is unchanged.
+ * ADR-11: one row per upload intent whose bytes the server put there (id = the intent's id): a generation provider's
+ * output (model, prompt hash, run) or a file imported from a font service (source, face, source URL, licence).
+ * Catalogue records this provenance on the asset version instead of the uploader's. Kept beside upload_intents
+ * rather than as a column on it so the intent's shape is unchanged.
  */
 export const generatedUploads = mysqlTable(
   'generated_uploads',
@@ -242,7 +243,7 @@ export const generatedUploads = mysqlTable(
     id: id(),
     tenantId: tenantId(),
     brandId: brandId(),
-    provenance: json('provenance').$type<Extract<Provenance, { kind: 'generated' }>>().notNull(),
+    provenance: json('provenance').$type<Extract<Provenance, { kind: 'generated' | 'imported' }>>().notNull(),
     createdAt: createdAt(),
   },
   (t) => [

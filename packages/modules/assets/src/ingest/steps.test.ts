@@ -4,10 +4,13 @@ import { randomBytes } from 'node:crypto';
 import sharp from 'sharp';
 import { runInTenant, type TenantContext } from '@oremedia/db';
 import { MemoryStorageProvider } from '../storage';
+import { karlaTtf, toWoff, toWoff2, woff2Bomb } from './font.fixtures';
 import { mp4, wav } from './media.fixtures';
 import { FakeScanner, ScannerUnavailableError, type Scanner } from './scanner';
 import {
+  MAX_FONT_EXPANDED_BYTES,
   SNIFF_BYTES,
+  declaredFontExpansion,
   derivatives,
   hashAndDedupe,
   initialAssetState,
@@ -292,6 +295,45 @@ describe('ingest step 4: sanitise fonts and PDFs', () => {
       expect(r.sanitised).toBe(false);
     },
   );
+  it('accepts WOFF2, WOFF and TrueType by magic and parses each with its name table', async () => {
+    const ttf = karlaTtf();
+    for (const [bytes, mime] of [
+      [toWoff2(ttf), 'font/woff2'],
+      [toWoff(ttf), 'font/woff'],
+      [ttf, 'font/ttf'],
+    ] as const) {
+      expect(await sniffType(bytes.subarray(0, SNIFF_BYTES), { kind: 'font', mime })).toEqual({
+        ok: true,
+        mime,
+        group: 'font',
+      });
+      const r = await sanitise(bytes, mime, 'font');
+      expect(r).toMatchObject({ ok: true, mime, sanitised: false });
+      if (!r.ok) return;
+      expect(r.fontMetadata).toMatchObject({ family: 'Karla', subfamily: 'Regular' });
+      expect(r.fontMetadata?.licence).toContain('SIL Open Font License');
+    }
+    // A WOFF signature over garbage is still unparsable.
+    const fake = Buffer.concat([Buffer.from('wOFF', 'latin1'), randomBytes(300)]);
+    expect(await sanitise(fake, 'font/woff', 'font')).toMatchObject({ ok: false, reason: 'font_unparsable' });
+  }, 30_000);
+  it('refuses a compressed font that declares more than the expansion cap, before decompressing it', async () => {
+    const ttf = karlaTtf();
+    expect(declaredFontExpansion(ttf)).toBeNull();
+    expect(declaredFontExpansion(toWoff2(ttf))).toBeGreaterThanOrEqual(ttf.length - 16 * 64);
+    expect(declaredFontExpansion(toWoff(ttf))).toBeLessThan(MAX_FONT_EXPANDED_BYTES);
+    expect(declaredFontExpansion(Buffer.from('wOF2', 'latin1'))).toBeNaN();
+    const bomb = woff2Bomb(256 * 1024 * 1024);
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+    const started = Date.now();
+    expect(await sanitise(bomb, 'font/woff2', 'font')).toMatchObject({ ok: false, reason: 'exceeds_cap' });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // Under the cap it is decompressed into a buffer of exactly the declared size, and fails as unparsable.
+    expect(await sanitise(woff2Bomb(1024 * 1024), 'font/woff2', 'font')).toMatchObject({
+      ok: false,
+      reason: 'font_unparsable',
+    });
+  }, 30_000);
   it('accepts a PDF by header and rejects anything else', async () => {
     expect(await sanitise(Buffer.from('%PDF-1.4\n%âãÏÓ\n'), 'application/pdf', 'pdf')).toMatchObject({
       ok: true,

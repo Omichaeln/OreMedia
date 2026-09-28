@@ -37,6 +37,34 @@ export const FontMetadata = z.object({
 });
 export type FontMetadata = z.infer<typeof FontMetadata>;
 
+export const FontStyle = z.enum(['normal', 'italic']);
+export type FontStyle = z.infer<typeof FontStyle>;
+
+/** CSS unicode-range syntax (U+0000-00FF, U+0131, U+02??): what a subset file covers, used as the FontFace descriptor. */
+export const UNICODE_RANGE =
+  /^U\+[0-9A-F?]{1,6}(?:-[0-9A-F]{1,6})?(?:,\s*U\+[0-9A-F?]{1,6}(?:-[0-9A-F]{1,6})?)*$/i;
+
+/**
+ * One file of a font face imported from a font service. Google Fonts serves a face as one file per unicode subset;
+ * files with the same source, family, weight and style are one face, registered together under one family name.
+ */
+export const ImportedFontFace = z.object({
+  family: z.string().min(1).max(100),
+  weight: z.number().int().min(1).max(1000),
+  style: FontStyle,
+  /**
+   * A variable file serves a range of weights (css2 names the same file for every weight requested): the range it
+   * covers, `weight` being its low end. Absent for a static file of one weight.
+   */
+  weightRange: z
+    .object({ min: z.number().int().min(1).max(1000), max: z.number().int().min(1).max(1000) })
+    .optional(),
+  /** The subset the source names (latin, latin-ext); null when it names none. */
+  subset: z.string().max(40).nullable(),
+  unicodeRange: z.string().max(4000).regex(UNICODE_RANGE).nullable(),
+});
+export type ImportedFontFace = z.infer<typeof ImportedFontFace>;
+
 /** Spec 9.1: accepted kinds and caps (recommended defaults). */
 export const UPLOAD_CAPS_BYTES: Record<string, number> = {
   image: 50 * 1024 * 1024,
@@ -54,6 +82,8 @@ export const ACCEPTED_MIMES: Record<string, readonly string[]> = {
     'font/otf',
     'font/ttf',
     'font/woff2',
+    'font/woff',
+    'application/font-woff',
     'application/font-sfnt',
     'application/x-font-ttf',
     'application/x-font-otf',
@@ -80,7 +110,17 @@ export const Provenance = z.discriminatedUnion('kind', [
     agentRunId: z.string().optional(),
   }),
   z.object({ kind: z.literal('derived'), fromAssetVersionId: z.string(), transform: z.string() }),
-  z.object({ kind: z.literal('imported'), source: z.string(), externalRef: z.string() }),
+  z.object({
+    kind: z.literal('imported'),
+    source: z.string(),
+    externalRef: z.string(),
+    /** A font face imported from a font service (Google Fonts): which face, and the unicode subset this file covers. */
+    font: ImportedFontFace.optional(),
+    /** The licence as the source states it; recorded, never inferred. */
+    licence: z.string().max(500).optional(),
+    /** Recorded by the ingest pipeline from the file itself, as for an upload. */
+    fontMetadata: FontMetadata.optional(),
+  }),
 ]);
 export type Provenance = z.infer<typeof Provenance>;
 
@@ -398,4 +438,101 @@ export interface AssetIngestActivitiesV1 {
   moveToImmutable(input: IngestMoveInput): Promise<IngestMoveResult>;
   catalogueAsset(input: IngestCatalogueInput): Promise<IngestCatalogueResult>;
   finaliseUpload(input: IngestFinaliseInput): Promise<void>;
+}
+
+// ---- Brand fonts (brand kit typography): the brand's font faces, and importing a family from Google Fonts --------
+
+/** Provenance `source` of files imported from Google Fonts. */
+export const GOOGLE_FONTS_SOURCE = 'google_fonts';
+/** Recorded as the licence of every Google Fonts file: the service publishes each family's licence (OFL or Apache 2.0). */
+export const GOOGLE_FONTS_LICENCE_NOTE =
+  'Open-source licence (SIL Open Font License or Apache 2.0) per fonts.google.com';
+/** The subsets kept when an import names none: css2 answers one file per subset. */
+export const GOOGLE_FONTS_DEFAULT_SUBSETS: readonly string[] = ['latin', 'latin-ext'];
+/** At most this many files per import (weights × styles × subsets). */
+export const GOOGLE_FONTS_MAX_FILES = 40;
+
+/**
+ * Import a family from Google Fonts into the brand's fonts. Family names are letters, digits, spaces and hyphens as
+ * fonts.google.com shows them (e.g. "IBM Plex Sans"); weights are the static instances wanted.
+ */
+export const GoogleFontImport = z.object({
+  brandId: z.string(),
+  family: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 -]*$/, 'letters, digits, spaces and hyphens only'),
+  weights: z
+    .array(
+      z
+        .number()
+        .int()
+        .min(100)
+        .max(900)
+        .refine((w) => w % 100 === 0, 'a multiple of 100'),
+    )
+    .min(1)
+    .max(9),
+  styles: z.array(FontStyle).min(1).max(2).default(['normal']),
+  /** Unicode subsets to keep; default latin and latin-ext. */
+  subsets: z
+    .array(z.string().regex(/^[a-z0-9-]{1,40}$/))
+    .min(1)
+    .max(10)
+    .optional(),
+});
+export type GoogleFontImport = z.infer<typeof GoogleFontImport>;
+
+export const BrandFontsList = z.object({ brandId: z.string() });
+
+/** What an import did with each file: already in the brand (reused), or queued for ingest as a new asset. */
+export interface GoogleFontImportFile {
+  weight: number;
+  /** A variable file: the weights it covers (one file, one asset, whatever weights were asked for). */
+  weightRange: { min: number; max: number } | null;
+  style: FontStyle;
+  subset: string | null;
+  unicodeRange: string | null;
+  contentHash: string;
+  outcome: 'existing' | 'queued';
+  assetId: string | null;
+  intentId: string | null;
+}
+export interface GoogleFontImportResult {
+  family: string;
+  files: GoogleFontImportFile[];
+}
+
+/** One file of a brand font face (a subset file of an imported face, or the whole of an uploaded one). */
+export interface BrandFontFile {
+  assetId: string;
+  assetVersionId: string;
+  mime: string;
+  bytes: number;
+  subset: string | null;
+  unicodeRange: string | null;
+}
+
+/**
+ * A brand font face: the unit a type role chooses. `assetId` is the file a role names (the latin subset of an
+ * imported face, else its first file); every file of the face is registered under one family name for rendering.
+ */
+export interface BrandFontFace {
+  key: string;
+  assetId: string;
+  assetVersionId: string;
+  name: string;
+  state: AssetState;
+  family: string | null;
+  subfamily: string | null;
+  weight: number | null;
+  /** A variable face: every weight in the range renders from its files. */
+  weightRange: { min: number; max: number } | null;
+  style: FontStyle;
+  format: string;
+  source: 'upload' | 'google_fonts' | 'other';
+  licence: string | null;
+  files: BrandFontFile[];
 }

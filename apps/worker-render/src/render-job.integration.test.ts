@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
+import type { Provenance } from '@oremedia/contracts/assets';
 import type { CreativeDocumentV1, Element } from '@oremedia/contracts/creative';
 import { ValidationFailedError } from '@oremedia/contracts/errors';
 import { ID_PREFIXES, type IdKind } from '@oremedia/contracts/ids';
@@ -13,7 +14,7 @@ import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brandVersions, brands } from '@oremedia/db/schema/brand';
 import { renderJobs, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { createRenderJobActivities } from '@oremedia/activities';
+import { createRenderJobActivities, type RenderTargetInput } from '@oremedia/activities';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
 import { FIXTURE_FONTS } from '@oremedia/editor/renderer/fixtures';
 import { MemoryStorageProvider, assetService, configureStorage, storageKeys } from '@oremedia/module-assets';
@@ -210,6 +211,7 @@ describe('render job end to end (MySQL + creative module + Chromium)', () => {
     bytes: Buffer,
     w: number | null,
     h: number | null,
+    provenance: Provenance = { kind: 'upload', uploadedByUserId: ownerA, originalFilename: key },
   ) {
     const id = newId('asset');
     const versionId = newId('assetVersion');
@@ -236,7 +238,7 @@ describe('render job end to end (MySQL + creative module + Chromium)', () => {
       bytes: bytes.length,
       width: w,
       height: h,
-      provenance: { kind: 'upload', uploadedByUserId: ownerA, originalFilename: key },
+      provenance,
     });
     await tdb.db.insert(usageRights).values({
       id: newId('usageRights'),
@@ -405,6 +407,82 @@ describe('render job end to end (MySQL + creative module + Chromium)', () => {
     const a = await read(() => mem.getObject(rows[0]!.storageKey));
     const b = await read(() => mem.getObject(rows[1]!.storageKey));
     expect(a!.equals(b!)).toBe(true);
+  }, 300_000);
+
+  it('an imported face split by unicode subset is pinned whole and each file registered with its range', async () => {
+    // Two files of one imported face: Karla stands in for the latin subset, Noto Naskh for an arabic one.
+    const face = (subset: string, unicodeRange: string): Provenance => ({
+      kind: 'imported',
+      source: 'google_fonts',
+      externalRef: `https://fonts.gstatic.com/s/face/v1/${subset}.woff2`,
+      font: { family: 'Face', weight: 400, style: 'normal', subset, unicodeRange },
+      licence: 'per fonts.google.com',
+    });
+    const karla = await loadFixtureFont(FIXTURE_FONTS.karla);
+    const naskh = await loadFixtureFont(FIXTURE_FONTS.naskh);
+    await seedAsset('face-latin', 'font', karla.mime, karla.bytes, null, null, face('latin', 'U+0000-00FF'));
+    await seedAsset(
+      'face-arabic',
+      'font',
+      naskh.mime,
+      naskh.bytes,
+      null,
+      null,
+      face('arabic', 'U+0600-06FF'),
+    );
+    const seen: Array<RenderTargetInput['fonts']> = [];
+    const spy = createRenderJobActivities({
+      store: creativeRenderJobStore(),
+      renderer: {
+        render: (input) => {
+          seen.push(input.fonts);
+          return renderer.render(input);
+        },
+      },
+      rendererVersion: RENDERER_VERSION,
+      storage: mem,
+    });
+    const base = studioDocument(brandVersionId, { ...refs(), font: seeded['face-latin']!.versionId });
+    const doc: CreativeDocumentV1 = {
+      ...base,
+      pages: base.pages.map((p) => ({
+        ...p,
+        elements: p.elements.map((e) => (e.type === 'text' ? { ...e, text: 'Offer مرحبا' } : e)),
+      })),
+    };
+    const renderOnce = async () => {
+      const { revisionId, renderJobId } = await createAndRequest(doc, ['square_1080']);
+      expect((await runRenderJob(spy, inputFor(renderJobId))).outcome).toBe('ready');
+      return (await exportRows(revisionId))[0]!;
+    };
+    const whole = await renderOnce();
+    expect(whole.manifest.fonts.map((f) => f.assetVersionId)).toEqual([
+      seeded['face-latin']!.versionId,
+      seeded['face-arabic']!.versionId,
+    ]);
+    const family = seeded['face-latin']!.versionId;
+    expect(seen.at(-1)?.map((f) => [f.family, f.unicodeRange, f.bytes.length])).toEqual([
+      [family, 'U+0000-00FF', karla.bytes.length],
+      [family, 'U+0600-06FF', naskh.bytes.length],
+    ]);
+    expect(whole.validation.findings.map((f) => f.code)).not.toContain('missing_font');
+    // Without the arabic file (retired) the face is the latin file alone, registered whole as before, and the
+    // arabic words fall back: a different export.
+    await tdb.db
+      .update(assets)
+      .set({ state: 'retired' })
+      .where(eq(assets.id, seeded['face-arabic']!.assetId));
+    try {
+      const latinOnly = await renderOnce();
+      expect(latinOnly.manifest.fonts.map((f) => f.assetVersionId)).toEqual([family]);
+      expect(seen.at(-1)?.map((f) => [f.family, f.unicodeRange])).toEqual([[family, undefined]]);
+      expect(latinOnly.contentHash).not.toBe(whole.contentHash);
+    } finally {
+      await tdb.db
+        .update(assets)
+        .set({ state: 'approved' })
+        .where(eq(assets.id, seeded['face-arabic']!.assetId));
+    }
   }, 300_000);
 
   it('an asset that becomes ineligible before rendering fails the job with rights_ineligible and no export', async () => {

@@ -46,3 +46,21 @@ export {
   UploadIntentRepository,
 } from './repositories';
 export { registerAssetOutboxRoutes, MEDIA_TASK_QUEUE } from './outbox-routes';
+export {
+  fontFileIdentity,
+  groupFontFaces,
+  renderFontFaces,
+  styleFromSubfamily,
+  weightFromSubfamily,
+  type FontFileRow,
+  type RenderFontFace,
+} from './fonts';
+export {
+  configureGoogleFonts,
+  css2Url,
+  fetchGoogleFontFiles,
+  parseCss2,
+  type GoogleFontFaceSource,
+  type GoogleFontFile,
+  type GoogleFontsOptions,
+} from './google-fonts';

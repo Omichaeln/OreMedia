@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
 import type { AssetIngestInputV1, IngestSanitiseResult, IngestStepResult } from '@oremedia/contracts/assets';
 import {
   NotFoundError,
   PolicyDeniedError,
+  ProviderUnavailableError,
   RightsIneligibleError,
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
@@ -17,12 +20,15 @@ import {
   assetDerivatives,
   assetVersions,
   assets,
+  generatedUploads,
   uploadIntents,
   usageRights,
 } from '@oremedia/db/schema/assets';
 import { outboxEvents } from '@oremedia/db/schema/operations';
 import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { configureGoogleFonts } from './google-fonts';
+import { karlaTtf, notoNaskhTtf, toWoff2, woff2Bomb } from './ingest/font.fixtures';
 import { assetIngest, type IngestDeps } from './ingest/pipeline';
 import { mp4 } from './ingest/media.fixtures';
 import { FakeScanner } from './ingest/scanner';
@@ -971,6 +977,308 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         const usages = await assetService.listUsages(ownerA, { assetId: a.id, page: { limit: 10 } });
         expect(usages.items).toMatchObject([{ usedByType: 'publication', usedById: 'pub_1' }]);
       });
+    });
+  });
+
+  describe('brand fonts: Google Fonts import and typography listing', () => {
+    const brandF = newId('brand');
+    // Distinct valid WOFF2 files: Karla and Noto Naskh stand in for the subset files of every fixture family.
+    const FILES: Record<string, Buffer> = {
+      '/s/karla/v31/lat.woff2': toWoff2(karlaTtf()),
+      '/s/karla/v31/ext.woff2': toWoff2(notoNaskhTtf()),
+      '/s/vari/v7/lat.woff2': toWoff2(karlaTtf(), 5),
+      '/s/vari/v7/ext.woff2': toWoff2(notoNaskhTtf(), 5),
+      '/s/twin/v1/lat.woff2': toWoff2(karlaTtf(), 6),
+      '/s/twin/v1/ext.woff2': toWoff2(notoNaskhTtf(), 6),
+      '/s/gone/v1/lat.woff2': toWoff2(karlaTtf(), 7),
+    };
+    let css: Server;
+    let files: Server;
+    let fontOrigin = '';
+    const fontHits: string[] = [];
+    const listen = async (server: Server) => {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    };
+    const block = (family: string, subset: string, path: string, range: string, weight = 400) =>
+      `/* ${subset} */\n@font-face {\n  font-family: '${family}';\n  font-style: normal;\n  font-weight: ${weight};\n  font-display: swap;\n  src: url(${fontOrigin}${path}) format('woff2');\n  unicode-range: ${range};\n}\n`;
+    const LAT = 'U+0000-00FF';
+    const EXT = 'U+0100-02AF';
+    /** css2 answers: Karla static (one file per subset); Vari variable (the same file for 400 and 700). */
+    const stylesheet = (family: string): string | null => {
+      const slug = family.toLowerCase();
+      const version = { karla: 'v31', vari: 'v7', twin: 'v1', gone: 'v1' }[slug];
+      if (!version) return null;
+      const base = `/s/${slug}/${version}`;
+      if (slug === 'vari')
+        return [400, 700]
+          .map(
+            (w) =>
+              block('Vari', 'latin-ext', `${base}/ext.woff2`, EXT, w) +
+              block('Vari', 'latin', `${base}/lat.woff2`, LAT, w),
+          )
+          .join('');
+      const name = family[0]?.toUpperCase() + slug.slice(1);
+      return (
+        block(name, 'cyrillic', `${base}/cyr.woff2`, 'U+0400-045F') +
+        block(name, 'latin-ext', `${base}/ext.woff2`, EXT) +
+        block(name, 'latin', `${base}/lat.woff2`, LAT)
+      );
+    };
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandF,
+        tenantId: tenantA,
+        name: 'F',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'active',
+      });
+      files = createServer((req, res) => {
+        fontHits.push(req.url ?? '');
+        const body = FILES[req.url ?? ''];
+        if (!body) return res.writeHead(404).end();
+        res.writeHead(200, { 'content-type': 'font/woff2' }).end(body);
+      });
+      fontOrigin = await listen(files);
+      css = createServer((req, res) => {
+        const family = /^\/css2\?family=([A-Za-z]+):/.exec(req.url ?? '')?.[1];
+        const body = family ? stylesheet(family) : null;
+        if (!body) return res.writeHead(400).end();
+        res.writeHead(200, { 'content-type': 'text/css' }).end(body);
+      });
+      configureGoogleFonts({ cssOrigin: await listen(css), fontOrigin, insecureAllowLoopback: true });
+    });
+    afterAll(() => {
+      configureGoogleFonts({});
+      css?.close();
+      files?.close();
+    });
+
+    const importAs = (a: ResolvedActor, family = 'Karla', weights = [400]) =>
+      runInTenant(ctxFor(a), () =>
+        assetService.importGoogleFont(a, { brandId: brandF, family, weights, styles: ['normal'] }),
+      );
+    const ingest = (intentId: string) =>
+      runInTenant(ctxFor(ownerA), () =>
+        runPipeline(
+          {
+            tenantId: tenantA,
+            actor: { kind: 'user', id: ownerA.id },
+            correlationId: 'corr_font_import',
+            intentId,
+            brandId: brandF,
+          },
+          true,
+        ),
+      );
+    const recordedIntents = async () =>
+      (await tdb.db.select().from(generatedUploads).where(eq(generatedUploads.brandId, brandF))).length;
+
+    it('needs the brand kit permission, refuses agents and foreign tenants, and an unknown family is a validation error', async () => {
+      const creatorF = actor(tenantA, newId('user'), 'creator', [brandF]);
+      await expect(importAs(creatorF)).rejects.toBeInstanceOf(PolicyDeniedError);
+      const agent: ResolvedActor = {
+        kind: 'service_principal',
+        id: newId('servicePrincipal'),
+        tenantId: tenantA,
+        status: 'active',
+        maxAutonomy: 'create',
+        grants: [
+          { action: 'brand.edit_standards', brandIds: [brandF] },
+          { action: 'asset.upload', brandIds: [brandF] },
+        ],
+      };
+      await expect(
+        runInTenant(ctxFor(agent), () =>
+          assetService.importGoogleFont(agent, {
+            brandId: brandF,
+            family: 'Karla',
+            weights: [400],
+            styles: ['normal'],
+          }),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(importAs(ownerB)).rejects.toBeInstanceOf(NotFoundError);
+      await expect(importAs(ownerA, 'Nope')).rejects.toMatchObject({
+        details: [{ path: 'family', issue: 'google_fonts_family_unknown' }],
+      });
+      expect(fontHits).toEqual([]);
+    });
+
+    it('a file that fails part-way (404) leaves nothing behind', async () => {
+      const objectsBefore = mem.keys().length;
+      await expect(importAs(ownerA, 'Gone')).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fontHits).toContain('/s/gone/v1/ext.woff2'); // the missing file was asked for
+      expect(await recordedIntents()).toBe(0);
+      expect(mem.keys().length).toBe(objectsBefore);
+    });
+
+    it('holds no connection while downloading: the command runs after every file is in hand', async () => {
+      let seenAtCommand = -1;
+      const result = await runInTenant(ctxFor(ownerA), () =>
+        assetService.importGoogleFont(
+          ownerA,
+          { brandId: brandF, family: 'Karla', weights: [400], styles: ['normal'] },
+          (command) => {
+            seenAtCommand = fontHits.length;
+            return withTransaction(command);
+          },
+        ),
+      );
+      expect(seenAtCommand).toBe(fontHits.length); // no download happened inside or after the command
+      for (const f of result.files) {
+        const [intent] = await tdb.db.select().from(uploadIntents).where(eq(uploadIntents.id, f.intentId!));
+        expect(intent?.state).toBe('uploaded'); // bytes in quarantine and completed after the command committed
+      }
+      // Ingest them so the next test starts from a brand holding Karla.
+      for (const f of result.files) expect(await ingest(f.intentId!)).toMatchObject({ outcome: 'accepted' });
+    });
+
+    it('ingests each kept subset as a font asset with provenance, and a second import reuses them', async () => {
+      const again = await importAs(ownerA);
+      expect(again.files.map((f) => [f.subset, f.outcome, f.intentId])).toEqual([
+        ['latin-ext', 'existing', null],
+        ['latin', 'existing', null],
+      ]);
+      for (const f of again.files) {
+        const [version] = await tdb.db
+          .select()
+          .from(assetVersions)
+          .where(eq(assetVersions.contentHash, f.contentHash));
+        expect(version?.assetId).toBe(f.assetId);
+        expect(version).toMatchObject({ mime: 'font/woff2' });
+        expect(version?.provenance).toMatchObject({
+          kind: 'imported',
+          source: 'google_fonts',
+          externalRef: `${fontOrigin}/s/karla/v31/${f.subset === 'latin' ? 'lat' : 'ext'}.woff2`,
+          font: {
+            family: 'Karla',
+            weight: 400,
+            style: 'normal',
+            subset: f.subset,
+            unicodeRange: f.unicodeRange,
+          },
+          licence: expect.stringContaining('fonts.google.com'),
+          // What the file itself declares is recorded too, as for an upload.
+          fontMetadata: { family: f.subset === 'latin' ? 'Karla' : 'Noto Naskh Arabic' },
+        });
+      }
+      expect(await recordedIntents()).toBe(2);
+    });
+
+    it('a retired font with the same bytes is not "existing": the file is ingested anew', async () => {
+      const [latin] = await tdb.db
+        .select()
+        .from(assetVersions)
+        .where(eq(assetVersions.contentHash, sha256Hex(FILES['/s/karla/v31/lat.woff2']!)));
+      await tdb.db.update(assets).set({ state: 'retired' }).where(eq(assets.id, latin!.assetId));
+      const result = await importAs(ownerA);
+      expect(result.files.map((f) => [f.subset, f.outcome])).toEqual([
+        ['latin-ext', 'existing'],
+        ['latin', 'queued'],
+      ]);
+      const renewed = await ingest(result.files[1]!.intentId!);
+      expect(renewed).toMatchObject({ outcome: 'accepted' });
+      if (renewed.outcome === 'accepted') expect(renewed.assetId).not.toBe(latin!.assetId);
+    });
+
+    it('a variable family is one file per subset covering its weight range, however many weights were asked for', async () => {
+      const result = await importAs(ownerA, 'Vari', [400, 700]);
+      // Karla's wght axis runs 200–800: the range is the file's own, not just the weights asked for.
+      expect(result.files.map((f) => [f.subset, f.outcome, f.weight, f.weightRange])).toEqual([
+        ['latin-ext', 'queued', 400, { min: 400, max: 700 }],
+        ['latin', 'queued', 200, { min: 200, max: 800 }],
+      ]);
+      expect(fontHits.filter((h) => h.startsWith('/s/vari/'))).toHaveLength(2); // each file fetched once
+      for (const f of result.files) expect(await ingest(f.intentId!)).toMatchObject({ outcome: 'accepted' });
+    });
+
+    it('two concurrent imports (different idempotency keys) end with one asset per file', async () => {
+      const [a, b] = await Promise.all([importAs(ownerA, 'Twin'), importAs(ownerA, 'Twin')]);
+      const outcomes = [];
+      for (const f of [...a.files, ...b.files]) if (f.intentId) outcomes.push(await ingest(f.intentId));
+      expect(outcomes.filter((o) => o.outcome === 'accepted')).toHaveLength(2);
+      expect(outcomes.filter((o) => o.outcome !== 'accepted')).toEqual(
+        outcomes
+          .filter((o) => o.outcome !== 'accepted')
+          .map(() => expect.objectContaining({ outcome: 'rejected', reason: 'duplicate_of' })),
+      );
+      const faces = await runInTenant(ctxFor(ownerA), () =>
+        assetService.listFonts(ownerA, { brandId: brandF }),
+      );
+      expect(faces.items.filter((f) => f.family === 'Twin').map((f) => f.files.length)).toEqual([2]);
+    });
+
+    it('lists imported subsets as one face beside an uploaded font; the render worker gets the whole face', async () => {
+      const uploaded = await seedAsset({ brandId: brandF, kind: 'font', name: 'Brand Serif.ttf' });
+      const faces = await runInTenant(ctxFor(ownerA), () =>
+        assetService.listFonts(ownerA, { brandId: brandF }),
+      );
+      const karla = faces.items.find((f) => f.family === 'Karla');
+      expect(karla).toMatchObject({
+        source: 'google_fonts',
+        weight: 400,
+        weightRange: null,
+        style: 'normal',
+        format: 'woff2',
+      });
+      expect(karla?.files.map((f) => f.subset)).toEqual(['latin', 'latin-ext']);
+      expect(karla?.assetId).toBe(karla?.files[0]?.assetId);
+      // Vari's two subset files carry different axis ranges here (the fixtures are two different fonts), so they
+      // are two faces; a real variable family's subset files share one range and list as one face.
+      const vari = faces.items.filter((f) => f.family === 'Vari');
+      expect(vari.map((f) => f.weightRange)).toEqual([
+        { min: 200, max: 800 },
+        { min: 400, max: 700 },
+      ]);
+      expect(faces.items.find((f) => f.assetId === uploaded.id)).toMatchObject({
+        source: 'upload',
+        weightRange: null,
+        files: [{}],
+      });
+      await runInTenant(ctxFor(ownerA), async () => {
+        const whole = await assetService.fontFaceFiles(karla?.assetVersionId as string);
+        expect(whole).toEqual(karla?.files.map((f) => f.assetVersionId));
+        // The same ref resolves the same files every time.
+        expect(await assetService.fontFaceFiles(karla?.assetVersionId as string)).toEqual(whole);
+        expect(await assetService.fontFaceFiles(uploaded.versionId)).toEqual([uploaded.versionId]);
+      });
+      await expect(
+        runInTenant(ctxFor(ownerB), () => assetService.listFonts(ownerB, { brandId: brandF })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        runInTenant(ctxFor(creatorA1), () => assetService.listFonts(creatorA1, { brandId: brandF })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('a WOFF2 decompression bomb under the upload cap is refused at once, never decompressed', async () => {
+      const bomb = woff2Bomb(256 * 1024 * 1024);
+      expect(bomb.length).toBeLessThan(1024 * 1024);
+      const intentId = await runInTenant(ctxFor(ownerA), async () => {
+        const intent = await withTransaction((tx) =>
+          assetService.createIntent(
+            ownerA,
+            {
+              brandId: brandF,
+              kind: 'font',
+              declaredMime: 'font/woff2',
+              declaredBytes: bomb.length,
+              originalFilename: 'bomb.woff2',
+            },
+            tx,
+          ),
+        );
+        await mem.putObject(storageKeys.quarantine(tenantA, intent.intentId), bomb, {
+          contentType: 'font/woff2',
+        });
+        await withTransaction((tx) => assetService.completeUpload(ownerA, { intentId: intent.intentId }, tx));
+        return intent.intentId;
+      });
+      const started = Date.now();
+      expect(await ingest(intentId)).toMatchObject({ outcome: 'rejected', reason: 'exceeds_cap' });
+      expect(Date.now() - started).toBeLessThan(5_000);
     });
   });
 

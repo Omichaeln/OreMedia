@@ -15,6 +15,7 @@ export {
   type TemplateDocument,
 } from './reduce';
 export { guardProtected, guardLogoInsertion } from './guard';
+export { fontFaceDescriptors } from './renderer/scene';
 export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
 export { invertBatch, type InvertResult } from './invert';

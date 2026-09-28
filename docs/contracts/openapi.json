@@ -680,6 +680,70 @@
         }
       }
     },
+    "/trpc/assets.fonts.importGoogle": {
+      "post": {
+        "operationId": "assets.fonts.importGoogle",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "family": {
+                    "type": "string"
+                  },
+                  "weights": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  },
+                  "styles": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["normal", "italic"]
+                    }
+                  },
+                  "subsets": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["brandId", "family", "weights"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/assets.fonts.list": {
+      "get": {
+        "operationId": "assets.fonts.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/assets.get": {
       "get": {
         "operationId": "assets.get",
@@ -8630,6 +8694,52 @@
             }
           },
           "required": ["assetId", "expectedVersion"]
+        }
+      },
+      "assets.fonts.importGoogle": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "family": {
+              "type": "string"
+            },
+            "weights": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "styles": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["normal", "italic"]
+              }
+            },
+            "subsets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["brandId", "family", "weights"]
+        }
+      },
+      "assets.fonts.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
         }
       },
       "assets.get": {

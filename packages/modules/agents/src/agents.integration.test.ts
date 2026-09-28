@@ -30,7 +30,7 @@ import {
   type FakeModelStep,
 } from '@oremedia/ai';
 import { budgets } from '@oremedia/module-billing';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { clearOutboxRoutes, killSwitch, outboxRouteFor } from '@oremedia/module-operations';
 import { registerAgentOutboxRoutes } from './outbox-routes';
 import { createAgentRunRuntime } from './runtime';
@@ -244,6 +244,12 @@ describe('agents module (spec 12) against MySQL 8', () => {
     (await tdb.db.select().from(agentRuns).where(eq(agentRuns.id, runId)))[0]!;
 
   beforeAll(async () => {
+    // The brand documents here name the placeholder font ast_font; a draft's type roles must name fonts of the
+    // brand, so the brand module is told it is one (no asset rows are seeded in this suite).
+    registerBrandAssetKindSource(
+      async (_brandId, ids) =>
+        new Map(ids.filter((id) => id === 'ast_font').map((id) => [id, 'font' as const])),
+    );
     tdb = await createTestDatabase();
     await tdb.db.insert(tenants).values([
       {

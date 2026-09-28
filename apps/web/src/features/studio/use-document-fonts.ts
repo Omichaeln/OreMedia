@@ -1,38 +1,30 @@
-import { useEffect, useState } from 'react';
-import { useAssetUrls } from '../assets/use-assets';
+import { useMemo } from 'react';
+import { useBrandContext } from '../brand/brand-context';
+import { useBrandFonts } from '../assets/use-assets';
+import { useFontFaces } from '../assets/use-font-faces';
 
 /**
  * Spec 11.5: document fonts are asset versions (pinned files), never system fonts. Each ref is loaded as a FontFace
- * under its own id; the scene falls back and reports missingFont for refs that are not loaded.
+ * under its own id, joined by the other subset files of its face when the brand's fonts list one (an imported face),
+ * as the render worker does; the scene falls back and reports missingFont for refs that are not loaded.
  */
 export function useDocumentFonts(fontRefs: string[]): (ref: string) => string | null {
-  const urls = useAssetUrls(fontRefs);
-  const [loaded, setLoaded] = useState<ReadonlySet<string>>(new Set());
-  const entries = [...urls.entries()].map(([ref, url]) => `${ref}\u0000${url}`).join('\n');
-  useEffect(() => {
-    let cancelled = false;
-    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
-    if (!fonts || entries.length === 0) return;
-    void Promise.all(
-      entries.split('\n').map(async (line) => {
-        const [ref, url] = line.split('\u0000');
-        if (!ref || !url) return null;
-        try {
-          const face = new FontFace(ref, `url(${url})`, { weight: '100 900' });
-          await face.load();
-          fonts.add(face);
-          return ref;
-        } catch {
-          return null;
-        }
+  const { brandId } = useBrandContext();
+  const faces = useBrandFonts(brandId);
+  const files = useMemo(
+    () =>
+      fontRefs.flatMap((ref) => {
+        const face = faces.data?.items.find((f) => f.files.some((x) => x.assetVersionId === ref));
+        if (!face || face.files.length <= 1)
+          return [{ family: ref, assetVersionId: ref, unicodeRange: null }];
+        return face.files.map((x) => ({
+          family: ref,
+          assetVersionId: x.assetVersionId,
+          unicodeRange: x.unicodeRange,
+        }));
       }),
-    ).then((refs) => {
-      if (cancelled) return;
-      setLoaded(new Set(refs.filter((r): r is string => r !== null)));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [entries]);
+    [fontRefs, faces.data],
+  );
+  const loaded = useFontFaces(files);
   return (ref) => (loaded.has(ref) ? ref : null);
 }

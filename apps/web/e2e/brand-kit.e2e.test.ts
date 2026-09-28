@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
 
 /**
- * Brand kit: voice and vocabulary extraction (spec 8.2 onboarding). The BUILT app at phone width against the
+ * Brand kit: voice and vocabulary extraction (spec 8.2 onboarding), and typography (fonts uploaded or imported from
+ * Google Fonts, assigned to type roles with a live preview in the chosen font). The BUILT app at phone width against the
  * in-process mock transport: a draft carrying imported guidelines offers "Extract voice and vocabulary"; a known
  * agent principal starts a run and the page links to it; an unknown principal is refused in text; unsaved edits
  * must be saved or discarded first. Opt-in like the other smokes (`OREMEDIA_E2E=1`).
@@ -82,6 +83,87 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
     await page.getByRole('button', { name: 'Discard changes' }).click();
     await expect.poll(() => extract().getAttribute('aria-disabled'), { timeout: 15_000 }).toBeNull();
   }, 45_000);
+
+  it('typography: upload a font, import a Google Fonts family, assign it to a role and preview it', async () => {
+    const base = systemPath.replace('?section=versions', '');
+    await page.goto(`${origin}${base}?section=typography`);
+    await page
+      .getByRole('group', { name: 'Version shown' })
+      .getByRole('button', { name: /proposed/ })
+      .click({ timeout: 15_000 });
+    const fonts = page.getByRole('list', { name: 'Brand fonts' });
+    await fonts.getByText('Karla').waitFor({ timeout: 15_000 });
+
+    // Upload: a TTF whose browser type is empty is declared by its extension.
+    await page.locator('input[type="file"][accept^=".woff2"]').setInputFiles({
+      name: 'Brand Serif.ttf',
+      mimeType: '',
+      buffer: readFileSync(
+        new URL('../../../tooling/test-fixtures/fonts/karla/Karla[wght].ttf', import.meta.url),
+      ),
+    });
+    await page.getByText('Processing').first().waitFor({ timeout: 15_000 });
+    expect([...backend.fontIntents.values()]).toContainEqual(
+      expect.objectContaining({
+        originalFilename: 'Brand Serif.ttf',
+        declaredMime: 'font/ttf',
+        kind: 'font',
+      }),
+    );
+    await page.getByRole('button', { name: 'Refresh' }).first().click();
+    await fonts.getByText('Brand Serif').waitFor({ timeout: 15_000 });
+
+    // Google Fonts: an unknown family is refused in text; a known one lists its faces.
+    await page.getByLabel('Family', { exact: true }).fill('Nope Sans');
+    await page.getByRole('button', { name: 'Import family' }).click();
+    await page
+      .getByText('Google Fonts has no family "Nope Sans"', { exact: false })
+      .waitFor({ timeout: 15_000 });
+    await page.getByLabel('Family', { exact: true }).fill('Inter');
+    await page.getByRole('button', { name: 'Import family' }).click();
+    await page.getByText('Inter: 2 files importing').waitFor({ timeout: 15_000 });
+    expect(backend.googleImports.at(-1)).toEqual({
+      brandId: E2E.brandId,
+      family: 'Inter',
+      weights: [400, 700],
+      styles: ['normal'],
+    });
+    // A variable family is one face covering its weight range, not one face per weight asked for.
+    await expect.poll(() => fonts.getByText('Inter').count(), { timeout: 15_000 }).toBe(1);
+    expect(await fonts.getByText('weights 100–900 (variable)', { exact: false }).count()).toBe(1);
+    expect(await fonts.getByText('Google Fonts').count()).toBe(1);
+
+    // Assign Inter at 700 to the body role; the preview line is drawn in it (both subset files registered).
+    await page.getByLabel('Body font').click();
+    await page.getByRole('option', { name: 'Inter 100–900 (woff2, variable)' }).click();
+    await page.getByLabel('Body weight').click();
+    await page.getByRole('option', { name: '700', exact: true }).click();
+    const family = 'av_font_ast_inter_var';
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            (f) =>
+              [...document.fonts]
+                .filter((x) => x.family.replace(/"/g, '') === f && x.status === 'loaded')
+                .map((x) => x.unicodeRange),
+            family,
+          ),
+        { timeout: 15_000 },
+      )
+      .toHaveLength(2);
+    const preview = page.getByTestId('type-preview-body');
+    await expect
+      .poll(() => preview.evaluate((el) => getComputedStyle(el).fontFamily), { timeout: 15_000 })
+      .toContain(family);
+    expect(await preview.evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
+    expect(await page.evaluate((f) => document.fonts.check(`700 16px "${f}"`, 'Aą'), family)).toBe(true);
+
+    await page.getByRole('button', { name: 'Save brand kit' }).click();
+    await expect
+      .poll(() => backend.lastBrandDraftTypeRoles(), { timeout: 15_000 })
+      .toContainEqual({ role: 'body', fontAssetId: 'ast_inter_var', weight: 700, minSizePx: 18 });
+  }, 60_000);
 
   it('brand system: overview tiles open a section; the draft opens it in the editor and saves every voice field', async () => {
     const base = systemPath.replace('?section=versions', '');

@@ -33,7 +33,7 @@ import { bindingHash } from '@oremedia/domain/approval-binding';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
 import { authenticate, resolveTenantContext } from '@oremedia/module-access';
-import { brandService } from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import {
   contentService,
   registerChannelResolver,
@@ -343,6 +343,12 @@ describe('review module (spec 13) against MySQL 8', () => {
   const requestFor = (contentRevisionId: string) => ({ contentRevisionId, assigneeUserIds: [], timing });
 
   beforeAll(async () => {
+    // The brand documents here name the placeholder font ast_font; a draft's type roles must name fonts of the
+    // brand, so the brand module is told it is one (no asset rows are seeded in this suite).
+    registerBrandAssetKindSource(
+      async (_brandId, ids) =>
+        new Map(ids.filter((id) => id === 'ast_font').map((id) => [id, 'font' as const])),
+    );
     tdb = await createTestDatabase();
     await tdb.db.insert(tenants).values([
       { id: tenantA, name: 'A', slug: 'review-a-' + tenantA.slice(-6).toLowerCase() },

@@ -1,6 +1,6 @@
 import Konva from 'konva';
 import type { RenderInput, RenderOutput } from './protocol';
-import { buildScene } from './scene';
+import { buildScene, fontFaceDescriptors } from './scene';
 import { RENDERER_VERSION } from './version';
 
 /**
@@ -8,15 +8,15 @@ import { RENDERER_VERSION } from './version';
  * tsup.renderer.config.ts into dist/renderer.iife.js). It exposes one function, window.__oremediaRender, that takes
  * everything already resolved (fonts and assets as data: URLs, the page, the format, the brand colours) so the page
  * never fetches anything: the worker has no network egress except the object store (spec 11.5 render isolation).
- * Fonts are registered under the family the caller names (the worker uses the font asset version id), so the
- * document's font refs map to pinned assets, never to system fonts. Input/output types: ./protocol.ts.
+ * Fonts are registered under the family the caller names (the worker uses the document's font asset version id,
+ * with the other subset files of an imported face under the same family), so the document's font refs map to
+ * pinned assets, never to system fonts. Input/output types: ./protocol.ts.
  */
 async function registerFonts(fonts: RenderInput['fonts']): Promise<void> {
   await Promise.all(
     fonts.map(async (f) => {
-      // A variable font covers the whole weight range; a static one is declared the same way so every weight
-      // resolves to this pinned file (synthesised bold is deterministic; a system font is not pinned).
-      const face = new FontFace(f.family, `url(${f.url})`, { weight: '100 900' });
+      // Several files under one family are one face split by unicode range (fontFaceDescriptors).
+      const face = new FontFace(f.family, `url(${f.url})`, fontFaceDescriptors(f.unicodeRange));
       document.fonts.add(face);
       await face.load();
     }),
