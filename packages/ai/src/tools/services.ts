@@ -82,6 +82,36 @@ export interface VideoGenerator {
   >;
 }
 
+/**
+ * Provider job protocol for generated speech (ADR-11): the same shape as images. The provider answers synchronously,
+ * so `submit` generates and hands the audio to ingest; the job id names that upload and `poll` reports its state.
+ */
+export interface SpeechGenerator {
+  /** The gateway, checked as the model vendor against the company routing policy (spec 12.7). */
+  readonly provider: string;
+  /** The model id the generator calls, checked against the policy's denied models. */
+  readonly model: string;
+  submit(input: {
+    tenantId: string;
+    brandId: string;
+    runId: string;
+    text: string;
+    /** A voice the model offers; null leaves the generator's configured default. */
+    voice: string | null;
+    actor: ResolvedActorServicePrincipal;
+    autonomyMode: AutonomyMode;
+    /** The brand's restrictions from its active policy (ADR-11 (5)); null when it sets none. */
+    restrictions: GenerationRestrictions | null;
+  }): Promise<{ jobId: string }>;
+  poll(
+    jobId: string,
+  ): Promise<
+    | { status: 'pending' }
+    | { status: 'failed'; reason: string }
+    | { status: 'done'; audio: { storageKey: string; contentHash: string } }
+  >;
+}
+
 /** A hook-backed tool whose module has not registered its source at composition denies with this reason. */
 export const NOT_AVAILABLE_YET = 'tool_not_available_yet';
 
@@ -240,6 +270,8 @@ export interface ToolServices {
   images: ImageGenerator | null;
   /** null until VIDEO_GEN_PROVIDER names a registered generator: videos.generate then denies provider_not_configured. */
   videos: VideoGenerator | null;
+  /** null until SPEECH_GEN_PROVIDER names a registered generator: speech.generate then denies provider_not_configured. */
+  speech: SpeechGenerator | null;
   /** Engineering flags (spec 22.1), evaluated server-side for the run's tenant. */
   flags: Pick<typeof featureFlag, 'isEnabled'>;
   /** null until the intelligence module registers (Phase 6): its tools then deny tool_not_available_yet. */
@@ -270,6 +302,16 @@ export function videoGeneratorFromEnv(env: NodeJS.ProcessEnv = process.env): Vid
   return provider ? (videoGenerators.get(provider) ?? null) : null;
 }
 
+const speechGenerators = new Map<string, SpeechGenerator>();
+/** Providers register here at composition (ADR-11: openrouter); there is no fake audio. */
+export const registerSpeechGenerator = (g: SpeechGenerator): void => {
+  speechGenerators.set(g.provider, g);
+};
+export function speechGeneratorFromEnv(env: NodeJS.ProcessEnv = process.env): SpeechGenerator | null {
+  const provider = env['SPEECH_GEN_PROVIDER'];
+  return provider ? (speechGenerators.get(provider) ?? null) : null;
+}
+
 export function defaultToolServices(env: NodeJS.ProcessEnv = process.env): ToolServices {
   return {
     brand: brandService,
@@ -285,6 +327,9 @@ export function defaultToolServices(env: NodeJS.ProcessEnv = process.env): ToolS
     },
     get videos() {
       return videoGeneratorFromEnv(env);
+    },
+    get speech() {
+      return speechGeneratorFromEnv(env);
     },
     flags: featureFlag,
     get intelligence() {

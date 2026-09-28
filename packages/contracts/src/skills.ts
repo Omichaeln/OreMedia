@@ -71,6 +71,7 @@ export const TOOL_NAMES_RELEASE_1 = [
   'images.generate',
   'videos.generate',
   'videos.status',
+  'speech.generate',
   'review.runBrandReview',
   'review.request',
   'experiments.proposeDesign',

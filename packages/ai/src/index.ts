@@ -25,6 +25,11 @@ export {
 } from './openrouter-image-generator';
 export { type GeneratedAssetSink } from './generated-asset-sink';
 export {
+  OpenRouterSpeechGenerator,
+  createOpenRouterSpeechGeneratorFromEnv,
+  type OpenRouterSpeechGeneratorOptions,
+} from './openrouter-speech-generator';
+export {
   OpenRouterVideoGenerator,
   createOpenRouterVideoGeneratorFromEnv,
   type OpenRouterVideoGeneratorOptions,

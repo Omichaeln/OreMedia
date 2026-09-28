@@ -44,6 +44,7 @@ export const FeatureFlagKey = z.enum([
   'experiments.randomised',
   'creative.preview_render',
   'creative.video_generation',
+  'creative.audio_generation',
 ]);
 export type FeatureFlagKey = z.infer<typeof FeatureFlagKey>;
 

@@ -49,6 +49,7 @@ import {
 import {
   createEvaluationRunnerFromEnv,
   createOpenRouterImageGeneratorFromEnv,
+  createOpenRouterSpeechGeneratorFromEnv,
   createOpenRouterVideoGeneratorFromEnv,
   createReleaseOneRegistry,
   registerContentToolSource,
@@ -59,6 +60,7 @@ import {
   registerReviewToolSource,
   registerRoutingPolicySource,
   registerSkillResolver,
+  registerSpeechGenerator,
   registerVideoGenerator,
 } from '@oremedia/ai';
 import {
@@ -209,6 +211,9 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // videos.generate likewise with VIDEO_GEN_PROVIDER=openrouter, and only for tenants with creative.video_generation.
   const videoGenerator = createOpenRouterVideoGeneratorFromEnv();
   if (videoGenerator) registerVideoGenerator(videoGenerator);
+  // speech.generate likewise with SPEECH_GEN_PROVIDER=openrouter, and only for tenants with creative.audio_generation.
+  const speechGenerator = createOpenRouterSpeechGeneratorFromEnv();
+  if (speechGenerator) registerSpeechGenerator(speechGenerator);
   registerRevisionVariantSource((contentRevisionId, tx) =>
     contentService.revisions.withVariants(contentRevisionId, tx),
   );

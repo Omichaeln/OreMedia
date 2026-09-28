@@ -57,6 +57,13 @@
       "when": 1790584591601,
       "tag": "0007_usage_video_generation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1790587823237,
+      "tag": "0008_usage_audio_generation",
+      "breakpoints": true
     }
   ]
 }

@@ -1250,8 +1250,8 @@
           "Audio generation through OpenRouter (speech and music) as a durable job, behind a feature flag",
           "production",
           "ADR-11",
-          "open",
-          "Decided 25 September 2026 (D-06); new Release 1 scope. Prerequisite (branch claude/media-ingest): asset ingest accepts generated video (MP4, MOV) and audio (MP3, WAV, M4A). Sanitise checks the container structurally from first byte to last, reads duration and a video’s size, caps duration (video 120 s, audio 600 s), stores the bytes unchanged and builds no derivatives; a person’s own video or audio upload is still refused until Release 2 (spec 9.1)."
+          "in_progress",
+          "Decided 25 September 2026 (D-06). Speech, branch claude/speech-generation: speech.generate (draft, creative.edit, charged per started 1,000 characters as usage kind audio_generation, migration 0008) behind flag creative.audio_generation (default off). OpenRouterSpeechGenerator calls POST /audio/speech for MP3 with the brand’s provider restrictions and hands the file to ingest as a generated upload; the job id names that upload, as for images. Not yet verified against the live OpenRouter API (openrouter.ai unreachable from the build environment; whether /audio/speech honours the provider object is unconfirmed). Music remains open: no documented OpenRouter endpoint for music models found yet. Prerequisite (merged, #31): ingest accepts generated audio (MP3, WAV, M4A), checked structurally and capped at 600 s."
         ],
         [
           "4.27",

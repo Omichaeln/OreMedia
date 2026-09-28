@@ -19,7 +19,7 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      (wrap-only permission), `OBJECT_STORE_*`, `LINK_REDIRECT_DOMAIN`, per-provider `PROVIDER_<KEY>_CLIENT_ID_REF`;
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
-     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `OBJECT_STORE_*`, provider secrets `PROVIDER_<KEY>_SECRET_REF`;
+     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider secrets `PROVIDER_<KEY>_SECRET_REF`;
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `VITE_REVIEW_PORTAL_ORIGIN`
      (build arg). `VITE_API_URL` stays unset: the app calls `/trpc` on its own origin.
@@ -147,6 +147,11 @@ Rollout order for video generation (migration 0007, flag `creative.video_generat
 4. Enable `creative.video_generation` (feature_flags row: tenant allowlist first, then `enabled_default`). A skill
    that should generate video lists both `videos.generate` and `videos.status` in its allowed tools. Turning the
    flag off stops new generations; `videos.status` still collects clips already paid for.
+
+Rollout order for speech generation (migration 0008, flag `creative.audio_generation`, default off; ADR-11, ledger
+4.26): apply migration 0008 (adds `audio_generation` to `usage_ledger.kind`, appended, metadata only) before the
+workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
+`worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
 Rollout order for Google sign-in (migration 0003, D-03):
 

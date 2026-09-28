@@ -102,6 +102,14 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
       '95 % of video generations land as pending assets; no clip rejected by the scanner for size',
     enabledDefault: false,
   },
+  {
+    // ADR-11 speech generation (ledger 4.26): off until the pilot brands opt in.
+    key: 'creative.audio_generation',
+    owner: 'creative',
+    removalDate: '2027-03-31',
+    successMetric: '95 % of speech generations land as pending assets',
+    enabledDefault: false,
+  },
 ];
 
 class FlagRepository extends PlatformRepository {

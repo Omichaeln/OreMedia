@@ -1,0 +1,1 @@
+ALTER TABLE `usage_ledger` MODIFY COLUMN `kind` enum('model_tokens','tool_call','image_generation','render_minutes','storage_bytes','video_generation','audio_generation') NOT NULL;
