@@ -1,9 +1,11 @@
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
+import { configureConnectCallback } from '@oremedia/module-publishing';
 import { createServer } from './server';
 import { configureRateLimiter } from './trpc';
 import { composeModules } from './composition';
 import { authConfigFromEnv, type AuthConfig } from './auth/config';
+import { webOriginFromEnv } from './web-origin';
 
 const log = startTelemetry({ service: 'oremedia-api', version: process.env['OREMEDIA_VERSION'] });
 const url = process.env['DATABASE_URL'];
@@ -19,8 +21,22 @@ try {
   process.exit(2);
 }
 if (!auth) log.warn({}, 'AUTH_CLIENT_ID not set: Google sign-in unavailable (non-production only)');
+let webOrigin: string | null;
+try {
+  webOrigin = webOriginFromEnv();
+} catch (err) {
+  log.error(
+    { errorMessage: err instanceof Error ? err.message : String(err) },
+    'web origin configuration invalid',
+  );
+  process.exit(2);
+}
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 10) });
 composeModules();
+// Spec 14.7: providers return to the one callback registered with them; unset, the client's redirect is used.
+configureConnectCallback(webOrigin);
+if (!webOrigin)
+  log.warn({}, 'WEB_ORIGIN not set: channel connect uses the redirect the browser sends (development only)');
 
 if (process.env['REDIS_URL']) {
   const { default: Redis } = await import('ioredis');
@@ -32,7 +48,7 @@ if (process.env['REDIS_URL']) {
 
 const port = Number(process.env['PORT'] ?? 3001);
 const app = createServer({
-  webOrigin: process.env['WEB_ORIGIN'],
+  webOrigin: webOrigin ?? undefined,
   reviewPortalOrigin: process.env['REVIEW_PORTAL_ORIGIN'],
   auth,
 });

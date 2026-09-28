@@ -60,7 +60,11 @@ export interface AttemptResult {
 export const ChannelConnectStart = z.object({
   brandId: z.string(),
   providerKey: z.string(),
-  redirectUri: z.string().url(),
+  /**
+   * Used only where the server has no public web origin (development, tests). A deployment with WEB_ORIGIN always
+   * sends the provider back to its one registered callback, `${WEB_ORIGIN}/connect/callback`, whatever this says.
+   */
+  redirectUri: z.string().url().optional(),
 });
 export const ChannelConnectComplete = z.object({ state: z.string(), code: z.string() });
 

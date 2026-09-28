@@ -1598,7 +1598,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         b.connectStates.set(state, { brandId: input.brandId, providerKey: input.providerKey });
         const url = new URL('https://provider.example/oauth/authorize');
         url.searchParams.set('state', state);
-        url.searchParams.set('redirect_uri', input.redirectUri);
+        url.searchParams.set('redirect_uri', input.redirectUri ?? '');
         return { state, url: url.toString(), expiresAt: iso(new Date(Date.now() + 600_000)) };
       }),
       complete: mutation.input(ChannelConnectComplete).mutation(({ input }) => {

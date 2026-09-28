@@ -61,6 +61,18 @@ export const configureConnectStateStore = (store: ConnectStateStore): void => {
 /** Short TTL: a person completes the provider's consent screen in minutes, not hours. */
 export const CONNECT_STATE_TTL_MS = 10 * 60 * 1000;
 
+/** The web app's path providers return to; registered once per platform app (spec 14.7, exact redirect matching). */
+const CONNECT_CALLBACK_PATH = '/connect/callback';
+let connectCallbackUri: string | null = null;
+/**
+ * The deployment's public web origin (WEB_ORIGIN). Set, every connect flow uses the one callback the platforms have
+ * registered and the client's redirectUri is ignored, so a caller cannot send a provider's code anywhere else.
+ * Unset (development, tests), the client's redirectUri is used as given.
+ */
+export const configureConnectCallback = (webOrigin: string | null | undefined): void => {
+  connectCallbackUri = webOrigin ? new URL(CONNECT_CALLBACK_PATH, webOrigin).toString() : null;
+};
+
 const brandResource = (brandId: string) => {
   const { tenantId } = requireTenant();
   return { type: 'brand', tenantId, brandId, id: brandId };
@@ -81,6 +93,12 @@ export const channelService = {
       await assertBrandExists(parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'channel.connect', brandResource(parsed.brandId), {}, tx);
       const adapter = adapterFor(parsed.providerKey); // CAPABILITY_UNSUPPORTED unless certified (spec 14.6)
+      const redirectUri = connectCallbackUri ?? parsed.redirectUri;
+      if (!redirectUri)
+        throw new ValidationFailedError(
+          [{ path: 'redirectUri', issue: 'required_without_web_origin' }],
+          'No callback is configured for this deployment; send redirectUri',
+        );
       const { tenantId } = requireTenant();
       const state = randomBytes(32).toString('base64url');
       const codeVerifier = randomBytes(48).toString('base64url');
@@ -88,14 +106,14 @@ export const channelService = {
       const { url } = await adapter.authorizationUrl({
         state,
         codeVerifier,
-        redirectUri: parsed.redirectUri,
+        redirectUri,
         client: providerClientFor(adapter.key),
       });
       await stateStore.put(state, {
         tenantId,
         brandId: parsed.brandId,
         providerKey: adapter.key,
-        redirectUri: parsed.redirectUri,
+        redirectUri,
         codeVerifier,
         actorId: actor.id,
         expiresAt,

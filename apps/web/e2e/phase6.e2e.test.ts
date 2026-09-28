@@ -464,12 +464,14 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await link.getAttribute('rel')).toContain('noopener');
     const href = (await link.getAttribute('href')) ?? '';
     expect(href.startsWith('https://provider.example/oauth/authorize')).toBe(true);
-    expect(new URL(href).searchParams.get('redirect_uri')).toBe(`${origin}${brandPath('settings')}`);
+    // One callback for every brand: Meta and LinkedIn only accept redirect URIs registered exactly.
+    expect(new URL(href).searchParams.get('redirect_uri')).toBe(`${origin}/connect/callback`);
     expect(await page.locator('iframe').count()).toBe(0);
     const state = new URL(href).searchParams.get('state') ?? '';
-    // The provider sends the person back to the settings page with state and code.
-    await open(`settings?state=${encodeURIComponent(state)}&code=auth_code_1`);
+    // The provider sends the person to the callback, which hands state and code to this brand's settings page.
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_1`);
     await expect.poll(() => count('connect-callback'), { timeout: 15_000 }).toBe(1);
+    expect(page.url()).toContain(`${brandPath('settings')}?state=`);
     await page.getByRole('button', { name: 'Finish connecting' }).click();
     await expect.poll(() => count('connect-completed'), { timeout: 15_000 }).toBe(1);
     expect(await text('connect-completed')).toContain('Connected: Acme LinkedIn Page (linkedin_page)');
@@ -484,7 +486,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => row.getByTestId('authorise-link').count(), { timeout: 15_000 }).toBe(1);
     const href = (await row.getByTestId('authorise-link').getAttribute('href')) ?? '';
     const state = new URL(href).searchParams.get('state') ?? '';
-    await open(`settings?state=${encodeURIComponent(state)}&code=auth_code_2`);
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_2`);
+    await expect.poll(() => count('connect-callback'), { timeout: 15_000 }).toBe(1);
     await page.getByRole('button', { name: 'Finish connecting' }).click();
     await expect.poll(() => count('connect-completed'), { timeout: 15_000 }).toBe(1);
     await expect
@@ -493,6 +496,12 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
       })
       .toBe('active');
   }, 45_000);
+
+  it('a callback this browser did not start is not finished anywhere: the person is asked to start again', async () => {
+    await page.goto(`${origin}/connect/callback?state=st_unknown&code=auth_code_x`);
+    await expect.poll(() => count('connect-callback-unknown'), { timeout: 15_000 }).toBe(1);
+    expect(await count('connect-callback')).toBe(0);
+  }, 30_000);
 
   it('disconnect asks for confirmation, then the channel shows Disconnected', async () => {
     await open('settings');

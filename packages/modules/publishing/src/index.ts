@@ -7,6 +7,7 @@ export { credentialBroker, configureCredentialBroker, createKmsFromEnv, type Con
 export {
   channelService,
   configureConnectStateStore,
+  configureConnectCallback,
   MemoryConnectStateStore,
   CONNECT_STATE_TTL_MS,
   type ConnectState,

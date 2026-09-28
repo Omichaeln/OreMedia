@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { createBrowserRouter, redirect, type LoaderFunctionArgs } from 'react-router';
 import type { Trpc } from '../lib/trpc';
 import { RootLayout } from './root';
+import { ConnectCallbackRoute } from './connect/callback/route';
 import { RouteErrorBoundary, NotFoundRoute } from './error';
 import { SignInRoute } from './sign-in/route';
 import { PortfolioRoute } from './portfolio/route';
@@ -47,6 +48,7 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
       children: [
         { index: true, loader: () => redirect('/portfolio') },
         { path: 'sign-in', Component: SignInRoute },
+        { path: 'connect/callback', Component: ConnectCallbackRoute },
         {
           path: 'portfolio',
           Component: PortfolioRoute,

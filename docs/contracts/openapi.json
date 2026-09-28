@@ -5270,7 +5270,7 @@
                     "type": "string"
                   }
                 },
-                "required": ["brandId", "providerKey", "redirectUri"]
+                "required": ["brandId", "providerKey"]
               }
             }
           }
@@ -12240,7 +12240,7 @@
               "type": "string"
             }
           },
-          "required": ["brandId", "providerKey", "redirectUri"]
+          "required": ["brandId", "providerKey"]
         }
       },
       "publishing.channels.disconnect": {

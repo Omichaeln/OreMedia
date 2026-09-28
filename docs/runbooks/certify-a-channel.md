@@ -14,7 +14,8 @@ Release 1 adapters (spec 14.8; decision D-04 still open): `linkedin_page`, `inst
 
 1. Create the platform app, request the scopes listed in the adapter's `capability.requiredScopes`, complete app
    review where the platform requires it, and store the client id and secret in the secret manager (Appendix A);
-   adapters never read environment variables.
+   adapters never read environment variables. Register the product's channel callback as the app's redirect URI:
+   `https://<web domain>/connect/callback`, the same for every brand and tenant (`WEB_ORIGIN` on the api).
 2. Re-derive the pinned API versions from the platform's current docs and update the constant if needed:
    `LINKEDIN_VERSION` (`linkedin_page/adapter.ts`, YYYYMM, sunset after ~12 months), `META_GRAPH_VERSION`
    (`facebook_page/graph.ts`, shared with Instagram), X API v2 base (`x/adapter.ts`).

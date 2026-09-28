@@ -9,12 +9,13 @@ import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
-import { brandPath, useBrandContext } from '../brand/brand-context';
+import { useBrandContext } from '../brand/brand-context';
 import {
   callbackError,
   callbackParams,
   providerLabel,
-  redirectUriFor,
+  connectRedirectUri,
+  rememberConnect,
   RELEASE_1_PROVIDERS,
   unavailableReason,
 } from './channel-connect';
@@ -42,11 +43,16 @@ function ConnectButton({
 }) {
   const trpc = useTRPC();
   const deployment = useDeploymentBrand();
+  const { companyId } = useBrandContext();
   const intent = useIntentKey();
   const start = useMutation(
     trpc.publishing.channels.connect.start.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: () => intent.renew(),
+      onSuccess: (data) => {
+        intent.renew();
+        // The provider returns to the shared callback; this is how it finds its way back to this brand.
+        rememberConnect(data.state, { companyId, brandId, expiresAt: data.expiresAt });
+      },
       onError: (err) => {
         const reason = unavailableReason(toUiError(err).details);
         if (reason) onUnavailable?.(reason);
@@ -279,14 +285,13 @@ function FinishConnect({ state, code, onDone }: { state: string; code: string; o
  * it as its Channels tab.
  */
 export function ChannelSettings() {
-  const { companyId, brandId, brand } = useBrandContext();
+  const { brandId, brand } = useBrandContext();
   const channels = useChannels(brandId);
   const [params, setParams] = useSearchParams();
   const callback = callbackParams(params.toString());
   const providerError = callbackError(params.toString());
   const [unavailable, setUnavailable] = useState<Record<string, string>>({});
-  const settingsPath = brandPath(companyId, brandId, 'settings');
-  const redirectUri = redirectUriFor(window.location.origin, settingsPath);
+  const redirectUri = connectRedirectUri(window.location.origin);
   const clearCallback = () => setParams({}, { replace: true });
   const listUi = channels.isError ? toUiError(channels.error) : null;
 

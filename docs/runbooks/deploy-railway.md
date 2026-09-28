@@ -50,8 +50,13 @@ policy layer authorises. Values below are never written into the repository; sec
    - `web`: `API_INTERNAL_URL=http://api.railway.internal:<api PORT>` (the private DNS name Railway shows for the
      `api` service). Unset or wrong, the proxied paths answer 503 and the `web` deploy health check (`/health`,
      proxied to the api) fails.
-   - `api`: `WEB_ORIGIN=https://<web domain>`. Same-origin browser calls need no CORS; the value only admits
-     cross-origin callers from that origin.
+   - `api`: `WEB_ORIGIN=https://<web domain>`. Same-origin browser calls need no CORS; the value admits
+     cross-origin callers from that origin, and it fixes the channel-connect callback: every provider returns to
+     `${WEB_ORIGIN}/connect/callback`, the one redirect URI registered with Meta and LinkedIn (spec 14.7). Unset,
+     the API uses the redirect the browser sends (development only). The value must be a bare origin (no path or
+     trailing slash; https in production) or the api refuses to start. Channels can be connected only from that
+     address: a flow started on another hostname of the app (the Railway domain beside a custom one) cannot find its
+     brand at the callback, so point people at the WEB_ORIGIN address.
    - Client addresses (audit hashes, the per-address rate limit on `/auth/*`): Caddy trusts `X-Forwarded-For` only
      from private and 100.64.0.0/10 peers and, with `trusted_proxies_strict`, takes the right-most untrusted entry,
      so a value the browser sends is ignored **if Railway's edge appends** the client address to an incoming

@@ -29,7 +29,7 @@ import { newId } from '@oremedia/domain/ids';
 import { createLogger } from '@oremedia/observability';
 import { ProviderRegistry, ProviderTransportError } from '@oremedia/providers';
 import { configureCredentialBroker, credentialBroker } from './broker';
-import { channelService } from './channels';
+import { channelService, configureConnectCallback } from './channels';
 import { publicationWorkflowId } from './common';
 import {
   registerBrandChecker,
@@ -310,6 +310,33 @@ describe('publishing module (spec 14) against MySQL 8', () => {
           ),
         ),
       ).rejects.toBeInstanceOf(CapabilityUnsupportedError);
+    });
+
+    it('with a web origin configured the provider always returns to its one callback, whatever the client sends', async () => {
+      const start = (redirectUri?: string) =>
+        run(tenantA, (tx) =>
+          channelService.connect.start(
+            A,
+            { brandId: brandA, providerKey: FIXTURE_PROVIDER_KEY, ...(redirectUri ? { redirectUri } : {}) },
+            tx,
+          ),
+        );
+      configureConnectCallback('https://app.oreandtar.test');
+      try {
+        const redirected = new URL((await start('https://attacker.example/steal')).url);
+        expect(redirected.searchParams.get('redirect_uri')).toBe(
+          'https://app.oreandtar.test/connect/callback',
+        );
+        const omitted = new URL((await start()).url);
+        expect(omitted.searchParams.get('redirect_uri')).toBe('https://app.oreandtar.test/connect/callback');
+      } finally {
+        configureConnectCallback(null);
+      }
+      // Without an origin (development), the client's redirect is used; with neither there is nowhere to return to.
+      expect(new URL((await start('https://app.example/cb')).url).searchParams.get('redirect_uri')).toBe(
+        'https://app.example/cb',
+      );
+      await expect(start()).rejects.toBeInstanceOf(ValidationFailedError);
     });
 
     it('a used or foreign-tenant connect state is refused', async () => {
