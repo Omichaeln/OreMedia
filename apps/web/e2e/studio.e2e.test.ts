@@ -282,6 +282,12 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   it('an agent proposal renders as an overlay diff and Accept commits it as an agent revision', async () => {
     const documentId = documentIdFromUrl();
     const n = await headNumber(documentId);
+    // The proposal is based on the revision the page holds: wait until it has caught up with the server's head (the
+    // previous test ends on a redo), or the propose call carries a stale base and is refused.
+    await waitSaved();
+    await expect
+      .poll(() => page.getByTestId('save-state').textContent(), { timeout: 15_000 })
+      .toContain(`revision ${n}`);
     await page.getByRole('tab', { name: /^Agent/ }).click();
     await page.getByTestId('simulate-proposal').click();
     await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);

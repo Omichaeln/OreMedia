@@ -85,6 +85,13 @@
       "when": 1790617604101,
       "tag": "0011_remote_post_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1790619544364,
+      "tag": "0012_comment_replies",
+      "breakpoints": true
     }
   ]
 }

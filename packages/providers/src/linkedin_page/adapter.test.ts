@@ -387,7 +387,9 @@ describe('LinkedIn Page adapter (spec 14.5, 14.8)', () => {
     expect(page.items[1]).toMatchObject({
       parentRemoteId: 'urn:li:comment:(urn:li:share:7001,1)',
       text: 'Thanks',
+      authorRemoteId: '2001', // the organisation's actor URN in the connection's remoteAccountId form
     });
+    expect(page.items[0]!.authorRemoteId).toBe('urn:li:person:p1');
     expect(page.nextCursor).toBeUndefined();
     load('read', 'comment_reply');
     const out = await adapter.comment(
@@ -400,6 +402,39 @@ describe('LinkedIn Page adapter (spec 14.5, 14.8)', () => {
       remotePostId: 'urn:li:comment:(urn:li:share:7001,3)',
       remoteUrl: 'https://www.linkedin.com/feed/update/urn:li:share:7001',
     });
+  });
+
+  it('a created comment is keyed by its URN, as comment reads key it, even when x-restli-id is the bare id', async () => {
+    load('read', 'comment_header_id_only');
+    const out = await adapter.comment(
+      { remotePostId: 'urn:li:share:7001', text: 'Welcome', idempotencyKey: 'rdft_2' },
+      creds,
+      io,
+    );
+    expect(out).toMatchObject({
+      outcome: 'accepted',
+      remotePostId: 'urn:li:comment:(urn:li:share:7001,7188000000000000005)',
+    });
+  });
+
+  it('comment with replyToRemoteId creates a nested comment: parent comment path, object = post, parentComment', async () => {
+    load('read', 'comment_reply_to_comment');
+    const out = await adapter.comment(
+      {
+        remotePostId: 'urn:li:share:7001',
+        replyToRemoteId: 'urn:li:comment:(urn:li:share:7001,1)',
+        text: 'Thank you!',
+        idempotencyKey: 'rdft_1',
+      },
+      creds,
+      io,
+    );
+    expect(out).toEqual({
+      outcome: 'accepted',
+      remotePostId: 'urn:li:comment:(urn:li:share:7001,4)',
+      remoteUrl: 'https://www.linkedin.com/feed/update/urn:li:share:7001',
+    });
+    expect(server.unmatched).toEqual([]);
   });
 
   it('deletePost: DELETE /rest/posts/{urn} with the version headers; 404 is already_absent; throttles retry', async () => {

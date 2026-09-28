@@ -94,6 +94,17 @@ type UploadedMedia = PendingData['media'][number];
 
 const postUrl = (urn: string): string => `https://www.linkedin.com/feed/update/${urn}`;
 const orgUrn = (id: string): string => `urn:li:organization:${id}`;
+/**
+ * The created comment's id in the form comment reads key it by (`$URN`, `urn:li:comment:(<post>,<id>)`): the body's
+ * `$URN` when present, else a URN header, else the bare id (x-restli-id is the numeric comment id) on its post.
+ */
+const commentUrnOf = (id: string | null | undefined, postUrn: string): string | null => {
+  if (!id) return null;
+  const decoded = decodeURIComponent(id);
+  return decoded.startsWith('urn:li:comment:') ? decoded : `urn:li:comment:(${postUrn},${decoded})`;
+};
+/** A comment actor in the form of a connection's remoteAccountId: an organisation's numeric id, else the URN. */
+const accountIdOfActor = (actor: string): string => /^urn:li:organization:(\d+)$/.exec(actor)?.[1] ?? actor;
 const orgIdFrom = (urn: string): string => urn.split(':').pop() ?? urn;
 
 /**
@@ -341,8 +352,14 @@ export class LinkedInPageAdapter implements ProviderAdapter {
     });
   }
 
+  /**
+   * Community Management API comments. A nested comment (a reply) is created on the parent comment's social
+   * actions, `POST /rest/socialActions/{comment-urn}/comments`, with `object` the post it belongs to and
+   * `parentComment` the comment URN being answered (w_organization_social).
+   */
   async comment(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome> {
     const boundary = new EffectBoundary();
+    const target = req.replyToRemoteId ?? req.remotePostId;
     return runPublish(boundary, async () => {
       const actor = creds.extra?.['organizationUrn'];
       if (!actor)
@@ -355,18 +372,22 @@ export class LinkedInPageAdapter implements ProviderAdapter {
       const res = await this.rest(
         io,
         'POST',
-        `/rest/socialActions/${encodeURIComponent(req.remotePostId)}/comments`,
+        `/rest/socialActions/${encodeURIComponent(target)}/comments`,
         creds.accessToken,
         {
           actor,
           object: req.remotePostId,
           message: { text: req.text },
+          ...(req.replyToRemoteId ? { parentComment: req.replyToRemoteId } : {}),
         },
         true,
       );
       if (res.status !== 201 && res.status !== 200)
         return outcomeFromResponse((i) => this.classifyError(i), res, boundary);
-      const id = res.headers.get('x-restli-id') ?? str(get(res.json, '$URN')) ?? str(get(res.json, 'id'));
+      const id = commentUrnOf(
+        str(get(res.json, '$URN')) ?? res.headers.get('x-restli-id') ?? str(get(res.json, 'id')),
+        req.remotePostId,
+      );
       if (!id)
         return { outcome: 'unknown', code: 'missing_comment_id', message: 'comment created without an id' };
       return { outcome: 'accepted', remotePostId: id, remoteUrl: postUrl(req.remotePostId) };
@@ -516,6 +537,7 @@ export class LinkedInPageAdapter implements ProviderAdapter {
       .map((c) => ({
         remoteCommentId: str(get(c, '$URN')) ?? str(get(c, 'id')) ?? '',
         authorHandle: str(get(c, 'actor')) ?? '',
+        ...(str(get(c, 'actor')) ? { authorRemoteId: accountIdOfActor(str(get(c, 'actor')) ?? '') } : {}),
         text: str(get(c, 'message', 'text')) ?? '',
         createdAt: new Date(num(get(c, 'created', 'time')) ?? 0).toISOString(),
         ...(str(get(c, 'parentComment')) ? { parentRemoteId: str(get(c, 'parentComment')) } : {}),

@@ -247,6 +247,14 @@ export async function seedApiClient(
  */
 export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   brands: ['classification'], // 0009
+  messages: ['parent_remote_message_id'], // 0012
+  response_drafts: [
+    'reply_to_message_id',
+    'sent_at',
+    'outbound_message_id',
+    'failure_code',
+    'failure_detail',
+  ], // 0012
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */

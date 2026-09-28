@@ -1958,8 +1958,8 @@
           "Unified inbox and community assistant (drafts only for agents; human sends)",
           "production",
           "16.10",
-          "open",
-          "Release 2"
+          "in_progress",
+          "First slice, merged #43 (claude/comment-replies): the comment inbox. Brand screen Inbox lists comment conversations (newest activity first, counts) and threads each by parent (messages.parent_remote_message_id, migration 0012); handles only with inbox.respond. A person replies (community.reply: inbox.respond, channel text limit, response draft queued with community.reply_requested in one transaction); communityReplyWorkflowV1 sends once on publish-<provider> (CommentRequest.replyToRemoteId in every adapter, draft id as idempotency key, sending committed before the call, the sender's inbox.respond and the channel re-checked there) and records the outbound message or the failure; ingestion stores the connected account's own comments outbound (CommentPage authorRemoteId) and confirms a reply whose outcome was unknown. Verified by community.integration.test.ts, adapter fixtures, community-reply time-skipping test and inbox.e2e.test.ts. Open: assignments, SLA timers, escalation rules, agent-proposed drafts, and live certification of each platform's reply endpoint."
         ],
         [
           "8.2",

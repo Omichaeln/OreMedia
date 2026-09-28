@@ -25,6 +25,8 @@ import { EXPERIMENTS_INPUTS } from './inputs/experiments';
 import { EXPERIMENTS_SEED } from './inputs/experiments-seed';
 import { MEASUREMENT_INPUTS } from './inputs/measurement';
 import { MEASUREMENT_SEED } from './inputs/measurement-seed';
+import { COMMUNITY_INPUTS } from './inputs/community';
+import { COMMUNITY_SEED } from './inputs/community-seed';
 export { MCP_CROSS_TENANT_INPUTS, type McpCrossTenantFixture } from './inputs/mcp';
 
 /**
@@ -60,6 +62,7 @@ export const CROSS_TENANT_INPUTS: Record<string, CrossTenantFixture> = {
   ...REVIEW_INPUTS,
   ...PUBLISHING_INPUTS,
   ...MEASUREMENT_INPUTS,
+  ...COMMUNITY_INPUTS,
   ...INTELLIGENCE_INPUTS,
   ...EXPERIMENTS_INPUTS,
 };
@@ -75,6 +78,7 @@ export const SEED_EXTENSIONS: SeedExtension[] = [
   REVIEW_SEED,
   PUBLISHING_SEED,
   MEASUREMENT_SEED,
+  COMMUNITY_SEED,
   INTELLIGENCE_SEED,
   EXPERIMENTS_SEED,
 ].filter((s): s is SeedExtension => s !== null);

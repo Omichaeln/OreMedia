@@ -157,6 +157,11 @@ export interface CommentPage {
     text: string;
     createdAt: string;
     parentRemoteId?: string;
+    /**
+     * The author's platform id in the form of a connection's `remoteAccountId`, so a comment written by the connected
+     * account itself (the brand's own reply) is recognised as outbound. Absent when the platform does not say.
+     */
+    authorRemoteId?: string;
   }>;
   nextCursor?: string;
 }

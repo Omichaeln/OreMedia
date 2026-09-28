@@ -387,12 +387,19 @@ export class MessageRepository extends BrandScopedRepository<typeof messages> {
       .orderBy(asc(messages.remoteCreatedAt), asc(messages.id))
       .limit(5000);
   }
-  /** Newest remote timestamp of a conversation: the `since` of the next comment pull. */
+  /**
+   * Newest remote timestamp of a conversation's inbound comments: the `since` of the next comment pull. The brand's
+   * own replies (outbound, stamped when sent) are left out, so a comment posted before a reply is never skipped.
+   */
   async latestRemoteCreatedAt(conversationId: string, tx?: Tx): Promise<Date | null> {
     const rows = await this.conn(tx)
       .select({ at: sql<Date | string | null>`max(${messages.remoteCreatedAt})` })
       .from(messages)
-      .where(this.scope(eq(messages.conversationId, conversationId)));
+      .where(
+        this.scope(
+          and(eq(messages.conversationId, conversationId), eq(messages.direction, 'inbound')) as SQL,
+        ),
+      );
     const at = rows[0]?.at;
     return at ? new Date(at) : null;
   }

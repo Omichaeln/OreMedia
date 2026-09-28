@@ -324,11 +324,16 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
     });
   }
 
+  /**
+   * A top-level comment is `POST /{ig-media-id}/comments`; a reply to a comment is `POST /{ig-comment-id}/replies`
+   * (instagram_manage_comments). Instagram threads are one level deep, so a reply is always to the top comment.
+   */
   async comment(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome> {
     const boundary = new EffectBoundary();
+    const path = req.replyToRemoteId ? `/${req.replyToRemoteId}/replies` : `/${req.remotePostId}/comments`;
     return runPublish(boundary, async () => {
       boundary.cross();
-      const res = await graphPost(io, `/${req.remotePostId}/comments`, creds.accessToken, {
+      const res = await graphPost(io, path, creds.accessToken, {
         message: req.text,
       });
       if (res.status !== 200)
@@ -431,7 +436,8 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
     io: ProviderIO,
   ): Promise<CommentPage> {
     const res = await graphGet(io, `/${req.remotePostId}/comments`, creds.accessToken, {
-      fields: 'id,text,username,timestamp,replies{id,text,username,timestamp}',
+      fields:
+        'id,text,username,from{id,username},timestamp,replies{id,text,username,from{id,username},timestamp}',
       limit: '50',
       ...(req.cursor ? { after: req.cursor } : {}),
     });
@@ -439,6 +445,7 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
     const toItem = (c: unknown, parent?: string): CommentPage['items'][number] => ({
       remoteCommentId: str(get(c, 'id')) ?? '',
       authorHandle: str(get(c, 'username')) ?? '',
+      ...(str(get(c, 'from', 'id')) ? { authorRemoteId: str(get(c, 'from', 'id')) } : {}),
       text: str(get(c, 'text')) ?? '',
       createdAt: new Date(str(get(c, 'timestamp')) ?? 0).toISOString(),
       ...(parent ? { parentRemoteId: parent } : {}),

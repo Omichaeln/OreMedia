@@ -343,6 +343,7 @@ describe('X adapter (spec 14.5, 14.8; D-04 open, X built as the fourth channel)'
       {
         remoteCommentId: '1900000000000000020',
         authorHandle: 'bea',
+        authorRemoteId: 'u_7',
         text: '@oremedia congrats',
         createdAt: '2026-09-24T01:00:00.000Z',
         parentRemoteId: '1900000000000000001',
@@ -350,6 +351,7 @@ describe('X adapter (spec 14.5, 14.8; D-04 open, X built as the fourth channel)'
       {
         remoteCommentId: '1900000000000000021',
         authorHandle: 'oremedia',
+        authorRemoteId: 'u_42', // the connected account itself: the brand's own reply
         text: 'thanks!',
         createdAt: '2026-09-24T01:05:00.000Z',
         parentRemoteId: '1900000000000000020',
@@ -368,6 +370,27 @@ describe('X adapter (spec 14.5, 14.8; D-04 open, X built as the fourth channel)'
       remotePostId: '1900000000000000022',
       remoteUrl: 'https://x.com/oremedia/status/1900000000000000022',
     });
+  });
+
+  it('comment with replyToRemoteId replies to that reply (in_reply_to_tweet_id), not to the post', async () => {
+    load('read', 'comment_reply_to_comment');
+    expect(
+      await adapter.comment(
+        {
+          remotePostId: '1900000000000000001',
+          replyToRemoteId: '1900000000000000020',
+          text: 'Cheers Bea',
+          idempotencyKey: 'rdft_1',
+        },
+        creds,
+        io,
+      ),
+    ).toEqual({
+      outcome: 'accepted',
+      remotePostId: '1900000000000000023',
+      remoteUrl: 'https://x.com/oremedia/status/1900000000000000023',
+    });
+    expect(server.unmatched).toEqual([]);
   });
 
   it("deletePost: DELETE /2/tweets/:id; 404 is already_absent; another user's post is refused; no editPost", async () => {

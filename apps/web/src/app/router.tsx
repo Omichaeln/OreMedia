@@ -17,6 +17,7 @@ import { ReviewInboxRoute } from './c/$company/b/$brand/review/route';
 import { AgentRunsRoute } from './c/$company/b/$brand/agents/route';
 import { IntelligenceRoute } from './c/$company/b/$brand/intelligence/route';
 import { PerformanceRoute } from './c/$company/b/$brand/performance/route';
+import { InboxRoute } from './c/$company/b/$brand/inbox/route';
 import { ExperimentsRoute } from './c/$company/b/$brand/experiments/route';
 import { CampaignsRoute } from './c/$company/b/$brand/campaigns/route';
 import { SettingsRoute } from './c/$company/b/$brand/settings/route';
@@ -132,6 +133,19 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                   queryClient.ensureQueryData(
                     trpcFor(param(args, 'company')).publishing.channels.list.queryOptions(
                       { brandId: param(args, 'brand') },
+                      { trpc: { context: { tenantId: param(args, 'company') } } },
+                    ),
+                  ),
+                ),
+            },
+            {
+              path: 'inbox',
+              Component: InboxRoute,
+              loader: (args) =>
+                prefetch(
+                  queryClient.ensureQueryData(
+                    trpcFor(param(args, 'company')).community.conversations.list.queryOptions(
+                      { brandId: param(args, 'brand'), page: { limit: 50 } },
                       { trpc: { context: { tenantId: param(args, 'company') } } },
                     ),
                   ),

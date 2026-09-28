@@ -9,7 +9,9 @@ const OWNERSHIP = {
   skills: ['skills'],
   agents: ['agents'],
   publishing: ['publishing'],
-  // Comment ingestion (spec 16.5, Release 1) writes the community tables until the inbox module exists (Release 2).
+  // Comment ingestion (spec 16.5) writes conversations and ingested messages; the community module (the comment
+  // inbox) owns the tables and everything else written to them (replies, drafts). Ingestion moving onto the
+  // community module's service would remove this entry.
   measurement: ['measurement', 'community'],
   intelligence: ['intelligence'],
   experiments: ['experiments'],

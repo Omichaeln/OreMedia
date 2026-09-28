@@ -42,20 +42,30 @@ PROVIDER_LINKEDIN_PAGE_SECRET_REF    = <Primary Client Secret>
 
 Source of truth: `requiredScopes` in `packages/providers/src/linkedin_page/capability.ts`.
 
-| Scope                   | What the product does with it                                                                                                                                                                                                                                    |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                                                    |
-| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) so they choose which Page the brand connects, and reads post and Page statistics (share statistics, followers, page views) for performance reports.                             |
-| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time; on the brand's instruction, edits the commentary of a post it published (`PARTIAL_UPDATE` on `/rest/posts/{urn}`) or deletes it (`DELETE /rest/posts/{urn}`). |
-| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                                                                                                    |
+| Scope                   | What the product does with it                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                                                                                                                                                   |
+| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) so they choose which Page the brand connects, and reads post and Page statistics (share statistics, followers, page views) for performance reports.                                                                                                                            |
+| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time; on the brand's instruction, edits the commentary of a post it published (`PARTIAL_UPDATE` on `/rest/posts/{urn}`) or deletes it (`DELETE /rest/posts/{urn}`); and posts as the Page the reply a team member writes in the Inbox to a comment on those posts. |
+| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published into the Inbox.                                                                                                                                                                                                                                    |
 
 **Editing and deleting published posts** is in the product: a person holding `publication.edit_remote` or
 `publication.delete_remote` (never an agent) asks for it on the publication, and the platform's confirmation is
 recorded as evidence. Show it in the screencast after the publish: edit the text, then delete the post.
 
-**Not in the product yet:** replies to comments. It may not appear in the application or the screencast. A member
-who administers several Pages chooses which one the brand connects; record
-with a member who administers the Ore & Tar Page and at least one other, so the choice is shown.
+A member who administers several Pages chooses which one the brand connects; record with a member who administers
+the Ore & Tar Page and at least one other, so the choice is shown.
+
+**Comment replies, to certify:** a reply is a nested comment, created on the parent comment
+(`POST /rest/socialActions/{comment URN}/comments` with `object` = the post URN and `parentComment` = the comment URN),
+and the product keys it by the `$URN` in the response (or `urn:li:comment:(<post URN>,<x-restli-id>)` when only the
+header carries the id), the form comment reads use. Confirm during certification: that `object` must be the post URN
+(not the activity URN) for a nested comment; that the created comment's `$URN` matches what
+`GET /rest/socialActions/{post}/comments` returns; and whether that read returns nested comments at all. The product
+reads only the post's comment list, so if nested comments are not in it, other members' replies to a comment and the
+brand's own replies are not ingested from LinkedIn (the Inbox still shows the brand's reply from the send record, and
+an `outcome_unknown` reply cannot be confirmed from a later read). Reading each comment's replies would be a further
+change to the adapter.
 
 **Verify before applying:** LinkedIn has required the Community Management API to be the only product on its app.
 `openid` and `profile` come from the "Sign In with LinkedIn using OpenID Connect" product. If LinkedIn will not grant
@@ -80,8 +90,9 @@ Screencast (one video, 1280 × 800 or larger, captions naming each scope as it i
    connected (and only that Page).
 3. In Studio, create a post; submit it for review and approve it; schedule it two minutes ahead to the Page.
 4. Show the calendar entry move to published, and the post live on the Page.
-5. From another member, comment on the post. After the next comment sync, open Intelligence and show it counted
-   under "Comment clusters".
+5. From another member, comment on the post. After the next comment sync, open Inbox and show the comment; choose
+   Reply, send an answer, show it move to Sent, and show the reply under the comment on the Page. Then open
+   Intelligence and show the comment counted under "Comment clusters".
 6. Open Performance and show the post and Page statistics (record this part a day later).
 7. Open the calendar, select the publication, choose Edit text, change a word and save; show the edit confirmed and
    the new text on the Page (`w_organization_social`). Then choose Request remote deletion, give a reason and show

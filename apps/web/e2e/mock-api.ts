@@ -62,6 +62,7 @@ import { SkillList } from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
+import { CommunityBackend, communityRouters } from './mock-community';
 
 /**
  * A UI-only transport for the studio smoke test: the same procedure paths, input DTOs, error envelope and header
@@ -280,6 +281,8 @@ export class MockBackend {
   readonly phase5: Phase5Backend;
   /** Phase 6: intelligence, experiments, campaigns, briefs, packages and channel connections (mock-phase6.ts). */
   readonly phase6: Phase6Backend;
+  /** Comment inbox: conversations, threaded comments and replies (mock-community.ts). */
+  readonly community: CommunityBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*, listed through operations.audit.query). */
@@ -353,6 +356,7 @@ export class MockBackend {
     this.brandName = company.brandName;
     this.phase5 = new Phase5Backend(company.tenantId, company.brandId, seed);
     this.phase6 = new Phase6Backend(this.phase5, seed);
+    this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
@@ -749,6 +753,7 @@ export function createMockRouter(backend: MockBackend) {
     intelligence: p6.intelligence,
     experiments: p6.experiments,
     measurement: p6.measurement,
+    community: communityRouters(backend.community, { router: t.router, query, mutation }),
     access: t.router({
       members: t.router({
         list: query.query(({ ctx }) => {

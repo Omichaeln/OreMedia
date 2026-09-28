@@ -326,7 +326,12 @@ describe('Instagram Business adapter (spec 14.5, 14.8, 20.3)', () => {
     load('read', 'comments_page');
     const page = await adapter.fetchComments({ remotePostId: 'media_555' }, creds, io);
     expect(page.items.map((i) => i.remoteCommentId)).toEqual(['ic_1', 'ic_2']);
-    expect(page.items[1]).toMatchObject({ parentRemoteId: 'ic_1', authorHandle: 'oremedia' });
+    expect(page.items[1]).toMatchObject({
+      parentRemoteId: 'ic_1',
+      authorHandle: 'oremedia',
+      authorRemoteId: 'ig_900',
+    });
+    expect(page.items[0]!.authorRemoteId).toBe('igsid_bea');
     expect(page.nextCursor).toBe('ig_after_1');
     load('read', 'comment_reply');
     expect(
@@ -340,5 +345,26 @@ describe('Instagram Business adapter (spec 14.5, 14.8, 20.3)', () => {
       remotePostId: 'ic_3',
       remoteUrl: 'https://www.instagram.com/p/AbCdEf/',
     });
+  });
+
+  it('comment with replyToRemoteId posts to /{ig-comment-id}/replies, not a new comment on the media', async () => {
+    load('read', 'comment_reply_to_comment');
+    expect(
+      await adapter.comment(
+        {
+          remotePostId: 'media_555',
+          replyToRemoteId: 'ic_1',
+          text: 'Thank you Bea',
+          idempotencyKey: 'rdft_1',
+        },
+        creds,
+        io,
+      ),
+    ).toEqual({
+      outcome: 'accepted',
+      remotePostId: 'ic_4',
+      remoteUrl: 'https://www.instagram.com/p/AbCdEf/',
+    });
+    expect(server.unmatched).toEqual([]);
   });
 });

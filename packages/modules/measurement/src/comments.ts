@@ -7,6 +7,7 @@ import type {
 import { withTransaction } from '@oremedia/db';
 import { tenantKeyedHash } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { confirmIngestedOwnReply, outboundAuthorHash } from '@oremedia/module-community';
 import { adapterFor, credentialBroker, providerIO } from '@oremedia/module-publishing';
 import { collectionPlan, loadPublication } from './common';
 import { authorHashSecretInUse, classifyComment, notifyCommentSinks, type IngestedComment } from './hooks';
@@ -65,9 +66,19 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
           providerIO(adapter.key, tenantId, hooks),
         ),
       );
+      // The connected account's own comments (the brand's replies) are not customer voice: stored outbound, never
+      // classified or handed to the sinks.
+      // The comment it answers; a reply to the post itself (X threads) is a top-level comment.
+      const parentOf = (item: (typeof page.items)[number]) =>
+        item.parentRemoteId && item.parentRemoteId !== remotePostId
+          ? item.parentRemoteId.slice(0, 200)
+          : null;
+      const isOwn = (item: (typeof page.items)[number]) =>
+        !!item.authorRemoteId && item.authorRemoteId === connection.remoteAccountId;
       // A retried pull does not pay for a model call on a comment it already stored.
       const classifications = new Map<string, IngestedComment['classification']>();
       for (const item of page.items) {
+        if (isOwn(item)) continue;
         if (known && (await messagesRepo.existsRemote(known.id, item.remoteCommentId))) continue;
         classifications.set(
           item.remoteCommentId,
@@ -95,6 +106,7 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
           conversation = await conversationsRepo.getById(id, tx);
         }
         const ingested: IngestedComment[] = [];
+        let ownReplies = 0;
         let duplicates = 0;
         let latest = conversation.lastMessageAt;
         for (const item of page.items) {
@@ -104,7 +116,10 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
           }
           const id = newId('message');
           const remoteCreatedAt = new Date(item.createdAt);
-          const hash = authorHash(secret, tenantId, item.authorHandle);
+          const own = isOwn(item);
+          const hash = own
+            ? outboundAuthorHash(connection.id)
+            : authorHash(secret, tenantId, item.authorHandle);
           const classification = classifications.get(item.remoteCommentId) ?? null;
           await messagesRepo.create(
             {
@@ -112,7 +127,8 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
               brandId: row.brandId,
               conversationId: conversation.id,
               remoteMessageId: item.remoteCommentId,
-              direction: 'inbound',
+              parentRemoteMessageId: parentOf(item),
+              direction: own ? 'outbound' : 'inbound',
               authorHash: hash,
               authorHandle: item.authorHandle.slice(0, 200),
               text: item.text,
@@ -125,6 +141,20 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
             tx,
           );
           if (!latest || remoteCreatedAt > latest) latest = remoteCreatedAt;
+          if (own) {
+            // A reply whose send ended unknown (or is still being recorded) was posted: confirm it.
+            await confirmIngestedOwnReply(
+              {
+                conversationId: conversation.id,
+                messageId: id,
+                parentRemoteMessageId: parentOf(item),
+                text: item.text,
+              },
+              tx,
+            );
+            ownReplies += 1;
+            continue;
+          }
           ingested.push({
             messageId: id,
             conversationId: conversation.id,
@@ -137,7 +167,11 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
             classification,
           });
         }
-        if (ingested.length && latest && latest.getTime() !== conversation.lastMessageAt?.getTime())
+        if (
+          ingested.length + ownReplies > 0 &&
+          latest &&
+          latest.getTime() !== conversation.lastMessageAt?.getTime()
+        )
           await conversationsRepo.update(
             conversation.id,
             conversation.version,
@@ -145,7 +179,7 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
             tx,
           );
         await notifyCommentSinks(ingested, tx);
-        return { ingested: ingested.length, duplicates, nextCursor: page.nextCursor ?? null };
+        return { ingested: ingested.length + ownReplies, duplicates, nextCursor: page.nextCursor ?? null };
       });
     },
   };

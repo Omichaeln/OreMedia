@@ -114,7 +114,9 @@
                         "measurement:read",
                         "measurement:write",
                         "operations:read",
-                        "operations:write"
+                        "operations:write",
+                        "community:read",
+                        "community:write"
                       ]
                     }
                   },
@@ -2139,6 +2141,84 @@
                   }
                 },
                 "required": ["brandId", "versionId", "expectedVersion", "document"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/community.conversations.list": {
+      "get": {
+        "operationId": "community.conversations.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/community.messages.list": {
+      "get": {
+        "operationId": "community.messages.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "conversationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["conversationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/community.reply": {
+      "post": {
+        "operationId": "community.reply",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["messageId", "text"]
               }
             }
           }
@@ -8279,7 +8359,9 @@
                   "measurement:read",
                   "measurement:write",
                   "operations:read",
-                  "operations:write"
+                  "operations:write",
+                  "community:read",
+                  "community:write"
                 ]
               }
             },
@@ -9860,6 +9942,57 @@
             }
           },
           "required": ["brandId", "versionId", "expectedVersion", "document"]
+        }
+      },
+      "community.conversations.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "community.messages.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "conversationId": {
+              "type": "string"
+            }
+          },
+          "required": ["conversationId"]
+        }
+      },
+      "community.reply": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": ["messageId", "text"]
         }
       },
       "content.briefs.accept": {

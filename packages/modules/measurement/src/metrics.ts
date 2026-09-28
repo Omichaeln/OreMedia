@@ -182,11 +182,14 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       };
       const impressions = fromGroup('impressions');
       const conversations = await conversationsRepo.listForPublication(parsed.brandId, publication.id, tx);
-      const messages = await messagesRepo.listForConversations(
-        parsed.brandId,
-        conversations.map((c) => c.id),
-        tx,
-      );
+      // Customer comments only: the brand's own replies (outbound) are neither engagement nor a repeat engager.
+      const messages = (
+        await messagesRepo.listForConversations(
+          parsed.brandId,
+          conversations.map((c) => c.id),
+          tx,
+        )
+      ).filter((m) => m.direction === 'inbound');
       const classified = messages.filter((m) => m.substantive !== null);
       const substantive = classified.filter((m) => m.substantive === 'yes');
       const byAuthor = new Map<string, number>();

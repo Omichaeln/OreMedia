@@ -84,6 +84,7 @@
                   "id": "ic_1",
                   "text": "Love it",
                   "username": "bea",
+                  "from": { "id": "igsid_bea", "username": "bea" },
                   "timestamp": "2026-09-24T01:00:00+0000",
                   "replies": {
                     "data": [
@@ -91,6 +92,7 @@
                         "id": "ic_2",
                         "text": "Thank you",
                         "username": "oremedia",
+                        "from": { "id": "ig_900", "username": "oremedia" },
                         "timestamp": "2026-09-24T01:05:00+0000"
                       }
                     ]
@@ -125,6 +127,41 @@
             "query": { "fields": "permalink" }
           },
           "response": { "status": 200, "json": { "permalink": "https://www.instagram.com/p/AbCdEf/" } }
+        }
+      ]
+    },
+    "comment_reply_to_comment": {
+      "description": "A reply to comment ic_1 is POST /{ig-comment-id}/replies, never a new top-level comment on the media.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/ic_1/replies",
+            "bodyIncludes": ["\"message\":\"Thank you Bea\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": "ic_4"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/media_555",
+            "query": {
+              "fields": "permalink"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "permalink": "https://www.instagram.com/p/AbCdEf/"
+            }
+          }
         }
       ]
     }

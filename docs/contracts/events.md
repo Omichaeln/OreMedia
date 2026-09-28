@@ -48,6 +48,7 @@ a breaking change creates a new event type or schema version with dual publishin
 | `mandate.changed`                     | 1              |
 | `publication.needs_attention`         | 1              |
 | `publication.edit_remote_requested`   | 1              |
+| `community.reply_requested`           | 1              |
 
 ## Error codes (spec 7.2)
 
@@ -110,7 +111,7 @@ its tRPC procedure through the same middleware chain (tenant resolution, per-key
 
 ## API client key scopes (spec 7.6)
 
-`access:read`, `access:write`, `brands:read`, `brands:write`, `assets:read`, `assets:write`, `creative:read`, `creative:write`, `content:read`, `content:write`, `review:read`, `review:write`, `channels:read`, `channels:write`, `publications:read`, `publications:write`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `insights:read`, `insights:write`, `experiments:read`, `experiments:write`, `measurement:read`, `measurement:write`, `operations:read`, `operations:write`.
+`access:read`, `access:write`, `brands:read`, `brands:write`, `assets:read`, `assets:write`, `creative:read`, `creative:write`, `content:read`, `content:write`, `review:read`, `review:write`, `channels:read`, `channels:write`, `publications:read`, `publications:write`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `insights:read`, `insights:write`, `experiments:read`, `experiments:write`, `measurement:read`, `measurement:write`, `operations:read`, `operations:write`, `community:read`, `community:write`.
 
 A query needs `<area>:read`, a mutation `<area>:write` (tRPC and REST alike; the area follows the router map). A key
 with an empty scope list may read and not write. Scopes narrow a key; the service principal's grants and the policy

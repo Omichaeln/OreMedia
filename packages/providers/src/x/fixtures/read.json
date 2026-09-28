@@ -156,6 +156,30 @@
           "response": { "status": 201, "json": { "data": { "id": "1900000000000000022" } } }
         }
       ]
+    },
+    "comment_reply_to_comment": {
+      "description": "A reply to reply 1900000000000000020 of post 1900000000000000001 answers that reply, not the post.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.x.com",
+            "path": "/2/tweets",
+            "bodyIncludes": [
+              "\"reply\":{\"in_reply_to_tweet_id\":\"1900000000000000020\"}",
+              "\"text\":\"Cheers Bea\""
+            ]
+          },
+          "response": {
+            "status": 201,
+            "json": {
+              "data": {
+                "id": "1900000000000000023"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

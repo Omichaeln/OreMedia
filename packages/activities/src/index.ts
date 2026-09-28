@@ -37,6 +37,10 @@ export { createBrandChangeImpactActivities } from './brand-change-impact';
 export { createMetricCollectionActivities } from './metric-collection';
 export { createCommentIngestionActivities } from './comment-ingestion';
 export {
+  createCommunityReplyControlActivities,
+  createCommunityReplyProviderActivities,
+} from './community-reply';
+export {
   createBrandAnalystActivities,
   createAnalystSweepActivities,
   createBaselineComparisonActivities,

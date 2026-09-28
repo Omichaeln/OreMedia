@@ -49,6 +49,7 @@ const skillEvaluation = (ctx: ActivityContext, f: Ids) => ({
   runs: 3,
 });
 const publication = (ctx: ActivityContext, f: Ids) => ({ ...ctx, publicationId: f['publicationId'] });
+const reply = (ctx: ActivityContext, f: Ids) => ({ ...ctx, responseDraftId: f['responseDraftId'] });
 const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
   ...publication(ctx, f),
   attempt: { attemptId: f['publicationAttemptId'], outcome, remotePostId: 'foreign-remote-post' },
@@ -229,6 +230,14 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.beginDeletion': { buildInput: deletion },
     'core.runDeletionHandler': { buildInput: (ctx, f) => ({ ...deletion(ctx, f), handler: 'assets' }) },
     'core.finishDeletion': { buildInput: deletion },
+    // communityReplyWorkflowV1 (comment inbox)
+    'core.readReplyRoute': { buildInput: reply },
+    'core.recordReplyOutcome': {
+      buildInput: (ctx, f) => ({
+        ...reply(ctx, f),
+        result: { outcome: 'accepted', remoteMessageId: 'foreign-remote-comment', remoteUrl: null },
+      }),
+    },
     'core.listRetentionTenants': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.applyRetention': {
       buildInput: null,
@@ -246,6 +255,7 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'publish-<provider>.findRemotePost': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), attemptId: f['publicationAttemptId'] }),
     },
+    'publish-<provider>.sendReplyOnce': { buildInput: reply },
   },
 
   'worker-ingest': {

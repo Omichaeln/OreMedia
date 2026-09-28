@@ -43,7 +43,8 @@ export const ServicePrincipalRevoke = z.object({
  * Spec 7.6 per-key scopes for API client keys (public REST, MCP and bearer tRPC calls). A scope is
  * `<area>:<read|write>`: `read` covers queries, `write` covers mutations of that area. Scopes narrow a key; they
  * never widen the service principal's grants (the policy engine still decides every action). A key with an empty
- * scope list (every key issued before scopes were enforced) keeps read access only: every `*:read`, no `*:write`.
+ * scope list (every key issued before scopes were enforced) keeps read access only: every `*:read`, no `*:write`,
+ * and never `community:read` (customer comments and their authors are personal data: an explicit scope only).
  */
 export const API_SCOPE_AREAS = [
   'access',
@@ -60,6 +61,7 @@ export const API_SCOPE_AREAS = [
   'experiments',
   'measurement',
   'operations',
+  'community',
 ] as const;
 export type ApiScopeArea = (typeof API_SCOPE_AREAS)[number];
 export const ApiScope = z.enum(

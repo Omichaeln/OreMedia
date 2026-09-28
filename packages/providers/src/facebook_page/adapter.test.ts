@@ -340,12 +340,33 @@ describe('Facebook Page adapter (spec 14.5, 14.8)', () => {
     load('read', 'comments_page');
     const page = await adapter.fetchComments({ remotePostId: 'p_100_5001' }, creds, io);
     expect(page.items).toHaveLength(2);
-    expect(page.items[1]).toMatchObject({ parentRemoteId: 'c_1', authorHandle: 'Ore Media' });
+    expect(page.items[1]).toMatchObject({
+      parentRemoteId: 'c_1',
+      authorHandle: 'Ore Media',
+      authorRemoteId: 'p_100',
+    });
     expect(page.nextCursor).toBe('aft_2');
     load('read', 'comment_reply');
     expect(
       await adapter.comment({ remotePostId: 'c_1', text: 'Thanks Bea', idempotencyKey: 'k' }, creds, io),
     ).toEqual({ outcome: 'accepted', remotePostId: 'c_3', remoteUrl: 'https://www.facebook.com/c_3' });
+  });
+
+  it('comment with replyToRemoteId answers that comment (POST /{comment-id}/comments), not the post', async () => {
+    load('read', 'comment_reply_to_comment');
+    expect(
+      await adapter.comment(
+        {
+          remotePostId: 'p_100_5001',
+          replyToRemoteId: 'c_1',
+          text: 'Glad you like it',
+          idempotencyKey: 'rdft_1',
+        },
+        creds,
+        io,
+      ),
+    ).toEqual({ outcome: 'accepted', remotePostId: 'c_4', remoteUrl: 'https://www.facebook.com/c_4' });
+    expect(server.unmatched).toEqual([]);
   });
 
   it('deletePost: DELETE /{post-id}; gone (confirmed by a read) is already_absent; 100/33 on a readable post is refused', async () => {

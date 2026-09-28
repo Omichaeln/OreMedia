@@ -9,8 +9,11 @@ describe('API client key scopes (spec 7.6)', () => {
     expect(apiKeyAllows(['brands:read'], 'publications:write')).toBe(false);
   });
 
-  it('an empty scope list (keys issued before enforcement) allows reads only', () => {
-    for (const scope of ApiScope.options) expect(apiKeyAllows([], scope)).toBe(scope.endsWith(':read'));
+  it('an empty scope list (keys issued before enforcement) allows reads only, never comment inbox reads', () => {
+    for (const scope of ApiScope.options)
+      expect(apiKeyAllows([], scope)).toBe(scope.endsWith(':read') && !scope.startsWith('community:'));
+    expect(apiKeyAllows([], 'community:read')).toBe(false); // customer comments are personal data
+    expect(apiKeyAllows(['community:read'], 'community:read')).toBe(true);
   });
 
   it('a stored value outside the vocabulary grants nothing', () => {

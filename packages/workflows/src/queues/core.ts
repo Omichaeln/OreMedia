@@ -19,3 +19,5 @@ export { baselineComparisonWorkflowV1 } from '../baseline-comparison.workflow.v1
 // Spec 17.5: deletion fan-out and the retention TTL sweep.
 export { deletionRequestWorkflowV1 } from '../deletion-request.workflow.v1';
 export { retentionSweepWorkflowV1 } from '../retention-sweep.workflow.v1';
+// Comment inbox: one reply posted on the channel's provider queue.
+export { communityReplyWorkflowV1 } from '../community-reply.workflow.v1';

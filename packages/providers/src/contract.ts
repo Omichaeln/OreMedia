@@ -57,9 +57,15 @@ export interface EditPostRequest {
 }
 
 export interface CommentRequest {
+  /** The published post the comment belongs to (the thread). */
   remotePostId: string;
   text: string;
   idempotencyKey: string;
+  /**
+   * The remote comment being answered (a `CommentPage` item's `remoteCommentId`). Absent: a top-level comment on
+   * `remotePostId`, exactly as before. Each adapter maps it to its platform's reply call.
+   */
+  replyToRemoteId?: string;
 }
 
 /**

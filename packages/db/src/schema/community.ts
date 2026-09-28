@@ -48,6 +48,8 @@ export const messages = mysqlTable(
     brandId: brandId(),
     conversationId: ref('conversation_id').notNull(),
     remoteMessageId: varchar('remote_message_id', { length: 200 }).notNull(),
+    /** The remote comment this one answers (null: a top-level comment on the post, or a row ingested before 0012). */
+    parentRemoteMessageId: varchar('parent_remote_message_id', { length: 200 }),
     direction: mysqlEnum('direction', ['inbound', 'outbound']).notNull(),
     authorHash: varchar('author_hash', { length: 64 }).notNull(), // per-tenant salted
     authorHandle: varchar('author_handle', { length: 200 }), // shown only with inbox.respond
@@ -108,8 +110,27 @@ export const responseDrafts = mysqlTable(
     authorId: ref('author_id').notNull(),
     text: text('text').notNull(),
     factRefs: json('fact_refs').$type<string[]>().notNull(),
-    state: mysqlEnum('state', ['draft', 'sent', 'discarded']).notNull().default('draft'),
+    // Values after 'discarded' were appended by 0012 (a human send's lifecycle, contracts ResponseDraftState).
+    state: mysqlEnum('state', [
+      'draft',
+      'sent',
+      'discarded',
+      'queued',
+      'sending',
+      'failed',
+      'outcome_unknown',
+    ])
+      .notNull()
+      .default('draft'),
     sentByUserId: ref('sent_by_user_id'),
+    /** The inbound message a reply answers (null: a conversation-level draft). */
+    replyToMessageId: ref('reply_to_message_id'),
+    /** Committed immediately before the platform call; once set the reply is never sent again. */
+    sentAt: ts('sent_at'),
+    /** The outbound message row recorded when the platform accepted the reply. */
+    outboundMessageId: ref('outbound_message_id'),
+    failureCode: varchar('failure_code', { length: 100 }),
+    failureDetail: varchar('failure_detail', { length: 500 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

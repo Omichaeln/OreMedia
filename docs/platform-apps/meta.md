@@ -69,12 +69,12 @@ every one must be approved or removed from the capability.
 | --------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | `pages_show_list`           | both               | Reads the Pages the person manages (`/me/accounts`) and the Instagram professional account linked to each, to connect the brand.                                             | A          |
 | `pages_manage_posts`        | facebook_page      | Publishes approved posts (text, photos, video) to the connected Page at the scheduled time; on the brand's instruction, edits the text of a post it published or deletes it. | B, E       |
-| `pages_read_engagement`     | both               | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                | B, D       |
-| `pages_manage_engagement`   | facebook_page      | **Not used by the product; see below.**                                                                                                                                      | –          |
+| `pages_read_engagement`     | both               | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published into the Inbox.                                                 | B, D       |
+| `pages_manage_engagement`   | facebook_page      | Posts the reply a person on the brand's team writes in the Inbox to a comment on a post the product published.                                                               | D          |
 | `read_insights`             | facebook_page      | Reads post and Page metrics (views, clicks, reactions, follows) for the brand's performance reports.                                                                         | C          |
 | `instagram_basic`           | instagram_business | Reads the professional account's id and username, and its recent media to confirm a publish landed.                                                                          | A, B       |
 | `instagram_content_publish` | instagram_business | Publishes approved images, carousels and Reels to the account at the scheduled time.                                                                                         | B          |
-| `instagram_manage_comments` | instagram_business | Reads comments on published media, which the product groups by theme and sentiment for the brand.                                                                            | D          |
+| `instagram_manage_comments` | instagram_business | Reads comments on published media into the Inbox (and groups them by theme), and posts a team member's reply to a comment.                                                   | D          |
 | `instagram_manage_insights` | instagram_business | Reads media and account metrics (views, reach, saves, shares, interactions) for performance reports.                                                                         | C          |
 | `business_management`       | both               | **Not used by any endpoint; see below.**                                                                                                                                     | –          |
 
@@ -87,12 +87,12 @@ instruction it also edits the text of a post it published, or deletes it."
 ### What the product does not do yet
 
 Meta rejects a permission it cannot see in use, and the justifications above say only what the code does. Two
-gaps bear on the submission; close them or remove the scope before submitting:
+points bear on the submission; close them or remove the scope before submitting:
 
-- **Replies to comments.** The adapters can reply (`comment`), but nothing in the product calls them and there is no
-  comment inbox. Either build the reply flow or remove `pages_manage_engagement` from
-  `facebook_page/capability.ts` (no connections exist yet, so nothing needs migrating). Recommended: remove it for
-  the first submission and request it with the feature.
+- **Comment authors.** The brand's own replies are recognised in comment reads by the author id (`from.id`) equal to
+  the connected Page or Instagram account id. Instagram returns `from` on comments in recent Graph versions; confirm
+  during certification that a reply posted through `/{comment-id}/replies` reads back with `from.id` = the account id,
+  otherwise it is stored as a customer comment until the reply's own record corrects it.
 - **business_management.** Requested so that `/me/accounts` returns Pages reached through a business portfolio.
   During certification, check whether business-owned client Pages appear without it: if they do, remove it from both
   capabilities; if not, keep it and show a business-owned Page in screencast A.
@@ -143,11 +143,15 @@ used. One video per letter; the App Review form lets you attach the same video t
 1. Open Performance for the brand. Show the metrics for the post published in B and the account metrics.
 2. Say in a caption that metrics arrive with Meta's own delay (up to 24 hours). Record C a day after B.
 
-**D. Comments (pages_read_engagement, instagram_manage_comments)**
+**D. Comments and replies (pages_read_engagement, pages_manage_engagement, instagram_manage_comments)**
 
 1. From a separate personal account, comment on the post from B on both platforms.
-2. After the next comment sync, open Intelligence for the brand and show the comments grouped under "Comment
-   clusters" (the product shows kinds and counts, never the commenter).
+2. After the next comment sync, open Inbox for the brand (as a user with the `community` or `admin` role). Show the
+   conversation for the post from B on each platform with the comment and who wrote it.
+3. Choose Reply on the comment, write an answer and send it. Show the reply move from Sending to Sent in the Inbox,
+   then open the post on Facebook and on Instagram in another tab and show the reply under the comment.
+4. Open Intelligence and show the comments grouped under "Comment clusters" (kinds and counts, never the
+   commenter).
 
 **E. Edit and delete (pages_manage_posts)**
 

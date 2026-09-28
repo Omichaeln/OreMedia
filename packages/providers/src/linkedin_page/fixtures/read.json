@@ -148,6 +148,53 @@
           }
         }
       ]
+    },
+    "comment_reply_to_comment": {
+      "description": "A nested comment: created on the parent comment's socialActions with object = the post and parentComment = the comment URN. x-restli-id carries the numeric id; the body's $URN is the id comment reads key by.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/socialActions/urn:li:comment:(urn:li:share:7001,1)/comments",
+            "bodyIncludes": [
+              "\"actor\":\"urn:li:organization:2001\"",
+              "\"object\":\"urn:li:share:7001\"",
+              "\"parentComment\":\"urn:li:comment:(urn:li:share:7001,1)\"",
+              "\"text\":\"Thank you!\""
+            ]
+          },
+          "response": {
+            "status": 201,
+            "headers": {
+              "x-restli-id": "7188000000000000004"
+            },
+            "json": {
+              "id": "7188000000000000004",
+              "$URN": "urn:li:comment:(urn:li:share:7001,4)"
+            }
+          }
+        }
+      ]
+    },
+    "comment_header_id_only": {
+      "description": "Create answered with the numeric id in x-restli-id only: the adapter keys the reply as urn:li:comment:(<post>,<id>), the form comment reads use.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/socialActions/urn:li:share:7001/comments",
+            "bodyIncludes": ["\"text\":\"Welcome\""]
+          },
+          "response": {
+            "status": 201,
+            "headers": {
+              "x-restli-id": "7188000000000000005"
+            }
+          }
+        }
+      ]
     }
   }
 }

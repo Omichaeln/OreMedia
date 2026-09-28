@@ -17,6 +17,8 @@ import {
 } from '@temporalio/client';
 import {
   createBrandChangeImpactActivities,
+  createCommunityReplyControlActivities,
+  createCommunityReplyProviderActivities,
   createConnectChoicePurgeActivities,
   createPublicationSweepActivities,
   createPublishControlActivities,
@@ -40,6 +42,7 @@ import {
   publishTaskQueue,
   type WorkflowProbe,
 } from '@oremedia/module-publishing';
+import { createCommunityReplyRuntime } from '@oremedia/module-community';
 import { logger } from '@oremedia/observability';
 import { providerRegistry } from '@oremedia/providers';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
@@ -49,7 +52,9 @@ import type { TemporalConfig } from './temporal';
 
 /**
  * Spec 4.4: worker-core hosts task queue `core` (publicationWorkflowV1, its reconcile and signal relay, the remote
- * edit and delete workflows, the sweeper, tokenRefreshWorkflowV1 and brandChangeImpactWorkflowV1) and one activity-only `publish-<providerKey>` queue per registered provider,
+ * edit and delete workflows, the sweeper, tokenRefreshWorkflowV1, brandChangeImpactWorkflowV1 and
+ * communityReplyWorkflowV1) and one activity-only `publish-<providerKey>` queue per registered provider (publishing,
+ * remote edits and deletes, and comment replies),
  * so a slow or rate-limited platform cannot starve the others. This is the only process (with worker-ingest)
  * whose KMS may decrypt: the credential broker is composed here with a decrypting key (spec 14.7). Workflow code
  * is pre-bundled at build time (tsup.config.ts → dist/workflows.core.js), as the agents queue is.
@@ -93,6 +98,7 @@ export async function startPublishingWorkers(
   const production = (env['NODE_ENV'] ?? 'development') === 'production';
   configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: true }, env) }); // loud without a key
   const runtime = createPublishingRuntime();
+  const replies = createCommunityReplyRuntime();
   const connection = await NativeConnection.connect(await connectionOptions(cfg));
   const core = await Worker.create({
     connection,
@@ -113,6 +119,8 @@ export async function startPublishingWorkers(
       ...intelligenceActivities(),
       // deletionRequestWorkflowV1 / retentionSweepWorkflowV1 (spec 17.5)
       ...operationsActivities(),
+      // communityReplyWorkflowV1 (comment inbox): the route and the recorded outcome
+      ...createCommunityReplyControlActivities(replies),
     },
     maxConcurrentActivityTaskExecutions: Number(env['CORE_CONCURRENCY'] ?? 16),
   });
@@ -127,6 +135,8 @@ export async function startPublishingWorkers(
         activities: {
           ...createPublishProviderActivities(runtime.provider),
           ...createRemoteChangeProviderActivities(runtime.remoteChangeProvider),
+          // A comment reply is sent where the channel's credentials open, beside publishOnce.
+          ...createCommunityReplyProviderActivities(replies),
         },
         maxConcurrentActivityTaskExecutions: Number(env['PUBLISH_CONCURRENCY'] ?? 4),
       }),

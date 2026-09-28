@@ -21,6 +21,7 @@ import { outboxEvents } from '@oremedia/db/schema/operations';
 import { publications, remoteEvidence } from '@oremedia/db/schema/publishing';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { outboundAuthorHash } from '@oremedia/module-community';
 import { outboxRouteFor } from '@oremedia/module-operations';
 import {
   FIXTURE_PROVIDER_KEY,
@@ -637,6 +638,7 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
               authorHandle: '@alice',
               text: 'Thanks!',
               createdAt: new Date(T0.getTime() + 120_000).toISOString(),
+              parentRemoteId: 'c1', // a reply in c1's thread
             },
           ],
         },
@@ -655,6 +657,12 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
       expect(again).toEqual({ ingested: 0, duplicates: 2, nextCursor: '1' });
       const stored = await tdb.db.select().from(messages).where(eq(messages.tenantId, tenantA));
       expect(stored).toHaveLength(3);
+      // The thread is kept: the comment each one answers (the comment inbox threads by it).
+      expect(Object.fromEntries(stored.map((m) => [m.remoteMessageId, m.parentRemoteMessageId]))).toEqual({
+        c1: null,
+        c2: null,
+        c3: 'c1',
+      });
       const alice = authorHash('author-hash-secret', tenantA, '@Alice');
       expect(stored.filter((m) => m.authorHash === alice)).toHaveLength(2); // case-insensitive, same person
       expect(stored.every((m) => m.authorHash !== '@Alice' && m.authorHash.length === 64)).toBe(true);
@@ -670,6 +678,59 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
           ingestion.pullComments({ ...wfInput(pubB), pullIndex: 0, since: null, cursor: null }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
+    });
+    it("the connected account's own reply is stored outbound: never classified, never in the sink", async () => {
+      fixture.commentPages = [
+        {
+          items: [
+            {
+              remoteCommentId: 'c4',
+              authorHandle: 'Fixture account',
+              authorRemoteId: 'acct_A', // connA's remoteAccountId: the brand answering c1
+              text: 'It ships worldwide.',
+              createdAt: new Date(T0.getTime() + 180_000).toISOString(),
+              parentRemoteId: 'c1',
+            },
+            {
+              remoteCommentId: 'c5',
+              authorHandle: '@erin',
+              authorRemoteId: 'u_erin',
+              text: 'Great, ordering now',
+              createdAt: new Date(T0.getTime() + 240_000).toISOString(),
+            },
+          ],
+        },
+      ];
+      const sinkBefore = sinkCalls.flat().length;
+      const classified: string[] = [];
+      registerCommentClassifier(async ({ text }) => {
+        classified.push(text);
+        return 'other';
+      });
+      try {
+        const out = await inTenant(tenantA, () =>
+          ingestion.pullComments({ ...wfInput(pubA), pullIndex: 2, since: null, cursor: null }),
+        );
+        expect(out).toMatchObject({ ingested: 2 });
+      } finally {
+        registerCommentClassifier(null);
+      }
+      const rows = await tdb.db.select().from(messages).where(eq(messages.tenantId, tenantA));
+      const own = rows.find((m) => m.remoteMessageId === 'c4')!;
+      expect(own).toMatchObject({
+        direction: 'outbound',
+        parentRemoteMessageId: 'c1',
+        authorHash: outboundAuthorHash(connA),
+        classification: null,
+      });
+      expect(rows.find((m) => m.remoteMessageId === 'c5')?.direction).toBe('inbound');
+      expect(classified).toEqual(['Great, ordering now']);
+      expect(
+        sinkCalls
+          .flat()
+          .slice(sinkBefore)
+          .map((c) => c.text),
+      ).toEqual(['Great, ordering now']);
     });
     it('fetches the page and classifies new comments with no transaction open; a retry makes neither write nor model call', async () => {
       // Count the transactions open on the pool while the adapter and the classifier (a model call) run.

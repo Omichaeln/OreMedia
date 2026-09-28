@@ -307,13 +307,15 @@ export class XAdapter implements ProviderAdapter {
     });
   }
 
+  /** A comment is a reply tweet: to the post, or to the reply being answered (`in_reply_to_tweet_id`). */
   async comment(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome> {
     const boundary = new EffectBoundary();
+    const inReplyTo = req.replyToRemoteId ?? req.remotePostId;
     return runPublish(boundary, () =>
       this.createTweet(
         io,
         creds.accessToken,
-        { text: req.text, mediaIds: [], inReplyTo: req.remotePostId, username: creds.extra?.['username'] },
+        { text: req.text, mediaIds: [], inReplyTo, username: creds.extra?.['username'] },
         boundary,
       ),
     );
@@ -439,6 +441,7 @@ export class XAdapter implements ProviderAdapter {
         return {
           remoteCommentId: id,
           authorHandle: users.get(str(get(t, 'author_id')) ?? '') ?? str(get(t, 'author_id')) ?? '',
+          ...(str(get(t, 'author_id')) ? { authorRemoteId: str(get(t, 'author_id')) } : {}),
           text: str(get(t, 'text')) ?? '',
           createdAt: new Date(str(get(t, 'created_at')) ?? 0).toISOString(),
           ...(str(get(parent, 'id')) ? { parentRemoteId: str(get(parent, 'id')) } : {}),

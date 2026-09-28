@@ -87,6 +87,7 @@ import {
   reviewService,
   reviewToolSource,
 } from '@oremedia/module-review';
+import { registerCommunityOutboxRoutes } from '@oremedia/module-community';
 import {
   channelService,
   publicationService,
@@ -190,6 +191,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // creative attributes are captured here too because agents run content commands in this process.
   registerMeasurementOutboxRoutes();
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
+  // Comment inbox: community.reply_requested starts communityReplyWorkflowV1 on `core`.
+  registerCommunityOutboxRoutes();
   configureLinkTracking(linkTrackingFromEnv());
   registerLinkTracker((input, tx) => linkService.trackVariantLinks(input, tx));
   registerAttributeCapturer(async (input, tx) => {

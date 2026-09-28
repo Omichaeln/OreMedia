@@ -24,3 +24,4 @@ export { brandAnalystWorkflowV1, brandAnalystSweepWorkflowV1 } from './brand-ana
 export { baselineComparisonWorkflowV1 } from './baseline-comparison.workflow.v1';
 export { deletionRequestWorkflowV1 } from './deletion-request.workflow.v1';
 export { retentionSweepWorkflowV1 } from './retention-sweep.workflow.v1';
+export { communityReplyWorkflowV1 } from './community-reply.workflow.v1';

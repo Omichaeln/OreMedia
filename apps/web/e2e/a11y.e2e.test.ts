@@ -6,6 +6,7 @@ import { auditPage, dialogFocusTrap, focusNotObscured, formatViolations, keyboar
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { P5 } from './mock-phase5';
 import { P6 } from './mock-phase6';
+import { PC } from './mock-community';
 import { startStaticServer } from './static-server';
 
 /**
@@ -111,6 +112,11 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       name: 'calendar',
       path: () => brandPath(`calendar?day=${todayKey()}&publication=${P5.publications.published}`),
       ready: (page) => testId(page, 'channel-outcomes'),
+    },
+    {
+      name: 'comment inbox',
+      path: () => brandPath(`inbox?conversation=${PC.conversations.launch}`),
+      ready: (page) => testId(page, 'thread'),
     },
     {
       name: 'review inbox',

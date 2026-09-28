@@ -16,6 +16,7 @@ export * from './agents';
 export * from './assets';
 export * from './content';
 export * from './measurement';
+export * from './community';
 export * from './intelligence';
 export * from './experiments';
 export * from './billing';

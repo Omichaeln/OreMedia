@@ -59,5 +59,7 @@ export const EVENT_TYPES = {
   'publication.needs_attention': 1,
   // Remote edit of a published post (appended; additive only). Deletion reuses publication.delete_remote_requested.
   'publication.edit_remote_requested': 1,
+  // Comment inbox (appended; additive only): a person answered a comment; communityReplyWorkflowV1 posts it
+  'community.reply_requested': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

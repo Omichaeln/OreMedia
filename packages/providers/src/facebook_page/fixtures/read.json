@@ -115,6 +115,25 @@
           "response": { "status": 200, "json": { "id": "c_3" } }
         }
       ]
+    },
+    "comment_reply_to_comment": {
+      "description": "A reply to comment c_1 on post p_100_5001 is a comment on the comment (POST /{comment-id}/comments).",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/c_1/comments",
+            "bodyIncludes": ["\"message\":\"Glad you like it\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": "c_4"
+            }
+          }
+        }
+      ]
     }
   }
 }

@@ -276,11 +276,13 @@ export class FacebookPageAdapter implements ProviderAdapter {
     });
   }
 
+  /** A reply is a comment on the comment: Graph API `POST /{comment-id}/comments` (pages_manage_engagement). */
   async comment(req: CommentRequest, creds: DecryptedCredentials, io: ProviderIO): Promise<PublishOutcome> {
     const boundary = new EffectBoundary();
+    const target = req.replyToRemoteId ?? req.remotePostId;
     return runPublish(boundary, async () => {
       boundary.cross();
-      const res = await graphPost(io, `/${req.remotePostId}/comments`, creds.accessToken, {
+      const res = await graphPost(io, `/${target}/comments`, creds.accessToken, {
         message: req.text,
       });
       if (res.status !== 200)
@@ -412,6 +414,7 @@ export class FacebookPageAdapter implements ProviderAdapter {
       .map((c) => ({
         remoteCommentId: str(get(c, 'id')) ?? '',
         authorHandle: str(get(c, 'from', 'name')) ?? str(get(c, 'from', 'id')) ?? '',
+        ...(str(get(c, 'from', 'id')) ? { authorRemoteId: str(get(c, 'from', 'id')) } : {}),
         text: str(get(c, 'message')) ?? '',
         createdAt: new Date(str(get(c, 'created_time')) ?? 0).toISOString(),
         ...(str(get(c, 'parent', 'id')) ? { parentRemoteId: str(get(c, 'parent', 'id')) } : {}),
