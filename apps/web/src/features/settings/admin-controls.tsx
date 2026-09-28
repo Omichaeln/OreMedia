@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ModelRoutingPolicy, ModelVendor } from '@oremedia/contracts/agents';
-import { defaultPolicyDocument, type PolicyDocumentV1 } from '@oremedia/contracts/brand';
+import { BrandClassification, defaultPolicyDocument, type PolicyDocumentV1 } from '@oremedia/contracts/brand';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
+import { Select } from '../../components/select';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { CLASSIFICATION_LABEL } from '../brand/brand-classification';
 import { useKillSwitch, useReleasePolicy, useRoutingPolicy, type KillSwitchScope } from './use-settings';
 
 const yesNo = (b: boolean) => (b ? 'Yes' : 'No');
@@ -57,12 +59,72 @@ function policyRows(p: PolicyDocumentV1): Array<[label: string, hint: string, va
   ];
 }
 
+/**
+ * D-11: the brand's type. Everyone sees it; those who may activate a release policy (owners, admins, brand managers)
+ * change it, as the server checks (brand.publish_version, never an agent).
+ */
+export function BrandType({ canManage }: { canManage: boolean }) {
+  const { brand } = useBrandContext();
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [next, setNext] = useState<BrandClassification>(brand.classification);
+  const classify = useMutation(
+    trpc.brand.classify.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        void queryClient.invalidateQueries(trpc.brand.get.pathFilter());
+        void queryClient.invalidateQueries(trpc.brand.list.pathFilter());
+      },
+    }),
+  );
+  return (
+    <Section id="brand-type-heading" title="Brand type" testId="brand-type">
+      <p className="text-sm">
+        <span className="font-medium">{CLASSIFICATION_LABEL[brand.classification].label}.</span>{' '}
+        <span className="text-muted-foreground">{CLASSIFICATION_LABEL[brand.classification].hint}</span>
+      </p>
+      {canManage && (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            classify.mutate({ brandId: brand.id, classification: next, expectedVersion: brand.version });
+          }}
+        >
+          <Field label="Change the type" htmlFor="brand-type-select" className="min-w-48">
+            <Select
+              id="brand-type-select"
+              value={next}
+              onValueChange={(v) => setNext(BrandClassification.parse(v))}
+              options={BrandClassification.options.map((c) => ({
+                value: c,
+                label: CLASSIFICATION_LABEL[c].label,
+              }))}
+            />
+          </Field>
+          <Button type="submit" disabled={classify.isPending || next === brand.classification}>
+            {classify.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </form>
+      )}
+      {classify.isError && <RequestError error={classify.error} />}
+    </Section>
+  );
+}
+
 /** Spec 8.1: the release policy in force. Every brand member can read it; a new version is activated by an admin. */
 export function ReleasePolicy() {
-  const { brandId } = useBrandContext();
+  const { brandId, brand } = useBrandContext();
   const policy = useReleasePolicy(brandId);
   const ui = policy.isError ? toUiError(policy.error) : null;
-  const doc = policy.data?.document ?? (ui?.kind === 'not_found' ? defaultPolicyDocument() : null);
+  // Without an active version the defaults apply, and the distinct-approver default follows the brand type (D-11).
+  const doc =
+    policy.data?.document ??
+    (ui?.kind === 'not_found'
+      ? { ...defaultPolicyDocument(), requireDistinctApprover: brand.classification === 'client' }
+      : null);
   return (
     <Section id="release-policy-heading" title="Release policy" testId="release-policy">
       {doc && (

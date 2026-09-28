@@ -615,7 +615,7 @@
           "production",
           "6.3",
           "complete",
-          "policy.{createVersion,activate,get}; policyVersionMachine (draft → active → retired); activation retires the previous active version. Integration test verifies. Ranking gate consumption is Phase 6."
+          "policy.{createVersion,activate,get}; policyVersionMachine (draft → active → retired); activation retires the previous active version. Integration test verifies. Ranking gate consumption is Phase 6. D-11 (branch claude/sod-client-brands): brands carry a classification, client or internal (migration 0009; existing brands backfilled internal, the column default; the API's BrandCreate defaults to client). Without an active policy a client brand needs a distinct approver and an internal one does not (brandService.distinctApproverRequired, used by review decisions); a policy version that leaves requireDistinctApprover out takes the brand's classification; an active policy decides. brand.classify changes it (brand.publish_version: owners, admins and brand managers, never an agent; audited; the same type again writes nothing); Settings > Policy shows the brand type and lets those roles change it; the create form asks for it. docs/contracts/openapi.json regenerated (additive)."
         ],
         [
           "2.8",

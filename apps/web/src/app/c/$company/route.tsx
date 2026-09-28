@@ -1,13 +1,16 @@
 import { useState, type ComponentProps, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { BrandClassification } from '@oremedia/contracts/brand';
 import { Badge, Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
 import { TopBar } from '../../root';
 import { RequestError } from '../../../components/request-state';
+import { Select } from '../../../components/select';
 import { Section } from '../../../components/section';
 import { SummaryCounts } from '../../../features/portfolio/summary-counts';
 import { useCompanies } from '../../../features/portfolio/use-companies';
 import { useBrandSummary, useBrands } from '../../../features/brand/use-brand';
+import { CLASSIFICATION_LABEL } from '../../../features/brand/brand-classification';
 import { brandPath } from '../../../features/brand/brand-context';
 import { useTRPC } from '../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../lib/intent-key';
@@ -109,12 +112,14 @@ function CreateBrand() {
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [name, setName] = useState('');
+  const [classification, setClassification] = useState<BrandClassification>('client');
   const create = useMutation(
     trpc.brand.create.mutationOptions({
       ...mutationIntent(intent.key),
       onSuccess: () => {
         intent.renew();
         setName('');
+        setClassification('client');
         void queryClient.invalidateQueries(trpc.brand.list.pathFilter());
         void queryClient.invalidateQueries(trpc.brand.summary.pathFilter());
       },
@@ -122,7 +127,8 @@ function CreateBrand() {
   );
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (name.trim()) create.mutate({ name: name.trim(), timezone: 'UTC', defaultLocale: 'en' });
+    if (name.trim())
+      create.mutate({ name: name.trim(), timezone: 'UTC', defaultLocale: 'en', classification });
   };
   return (
     <Section id="create-brand-heading" title="Create a brand">
@@ -141,10 +147,22 @@ function CreateBrand() {
             maxLength={200}
           />
         </Field>
+        <Field label="Brand type" htmlFor="brand-classification" className="min-w-48">
+          <Select
+            id="brand-classification"
+            value={classification}
+            onValueChange={(v) => setClassification(BrandClassification.parse(v))}
+            options={BrandClassification.options.map((c) => ({
+              value: c,
+              label: CLASSIFICATION_LABEL[c].label,
+            }))}
+          />
+        </Field>
         <Button type="submit" variant="primary" disabled={create.isPending || !name.trim()}>
           {create.isPending ? 'Creating…' : 'Create brand'}
         </Button>
       </form>
+      <p className="mt-2 text-xs text-muted-foreground">{CLASSIFICATION_LABEL[classification].hint}</p>
     </Section>
   );
 }

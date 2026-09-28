@@ -64,6 +64,13 @@
       "when": 1790587823237,
       "tag": "0008_usage_audio_generation",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1790591785848,
+      "tag": "0009_brand_classification",
+      "breakpoints": true
     }
   ]
 }

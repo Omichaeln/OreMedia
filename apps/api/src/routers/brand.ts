@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  BrandClassify,
   BrandCreate,
   BrandGuidelinesImport,
   BrandVersionCreateDraft,
@@ -36,6 +37,12 @@ export const brandRouter = router({
     .input(BrandCreate)
     .mutation(({ ctx, input }) =>
       idempotent(mutationCtx(ctx), (tx) => brandService.create(ctx.tenant.actor, input, tx)),
+    ),
+  /** D-11: client or internal; decides whether a distinct approver is needed when no release policy says. */
+  classify: tenantMutation
+    .input(BrandClassify)
+    .mutation(({ ctx, input }) =>
+      idempotent(mutationCtx(ctx), (tx) => brandService.classify(ctx.tenant.actor, input, tx)),
     ),
   list: tenantQuery.query(({ ctx }) => brandService.list(ctx.tenant.actor)),
   get: tenantQuery

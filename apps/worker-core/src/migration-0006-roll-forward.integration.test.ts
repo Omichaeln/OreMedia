@@ -7,7 +7,7 @@ import * as schema from '@oremedia/db/schema';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
-import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0006 (brand skill import): on a database populated at the previous head (0005) the
@@ -30,7 +30,7 @@ describe('migration 0006 rolls forward on a populated database (ledger 1.g4)', (
     for (const table of TABLES) {
       const columns = getTableColumns(table) as Record<string, MySqlColumn>;
       const order = Object.values(columns).find((c) => c.name === 'id') ?? Object.values(columns)[0]!;
-      out[getTableName(table)] = await tdb.db.select().from(table).orderBy(asc(order));
+      out[getTableName(table)] = await tdb.db.select(snapshotColumns(table)).from(table).orderBy(asc(order));
     }
     return JSON.stringify(out);
   }

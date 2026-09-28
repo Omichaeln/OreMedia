@@ -1,0 +1,1 @@
+ALTER TABLE `brands` ADD `classification` enum('client','internal') DEFAULT 'internal' NOT NULL;

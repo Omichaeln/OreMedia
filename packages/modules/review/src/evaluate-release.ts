@@ -456,12 +456,15 @@ export async function factRevocationScope(brandId: string, factId: string, tx?: 
   return { hold: doc.holdOnDependencyRevocation, contentRevisionIds: revisions.map((r) => r.id) };
 }
 
-/** Spec 5.5 obligations for decisions: the brand's active policy (distinct approver, MFA), or the defaults. */
+/**
+ * Spec 5.5 obligations for decisions: the brand's active policy (distinct approver, MFA), or the defaults. Without an
+ * active policy a client brand still needs a distinct approver (D-11); the brand module owns that rule.
+ */
 export async function decisionPolicyOptions(brandId: string, tx?: Tx) {
   const active = await policyVersionsRepo.findActive(brandId, tx);
   const doc = active ? PolicyDocumentV1.parse(active.document) : null;
   return {
-    requireDistinctApprover: doc?.requireDistinctApprover ?? false,
+    requireDistinctApprover: await brandService.distinctApproverRequired(brandId, tx),
     mfaRequired: doc?.mfaRequired ?? false,
   };
 }

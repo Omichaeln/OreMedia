@@ -233,6 +233,20 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await policy.textContent()).toContain('Hold on revoked facts');
     // No restriction set: generation may use any provider, never one that trains on the brand's content.
     expect(await policy.textContent()).toMatch(/Generation providers.*Any provider/);
+    // D-11: a client brand without an active policy needs a distinct approver; an admin can make it internal.
+    const brandType = page.getByTestId('brand-type');
+    expect(await brandType.textContent()).toContain('Client brand.');
+    expect(await policy.textContent()).toMatch(/Distinct approver.*Yes/);
+    await page.getByLabel('Change the type').click();
+    await page.getByRole('option', { name: 'Internal brand' }).click();
+    await brandType.getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => brandType.textContent(), { timeout: 15_000 }).toContain('Internal brand.');
+    await expect.poll(() => policy.textContent(), { timeout: 15_000 }).toMatch(/Distinct approver.*No/);
+    expect(backend.brands.find((b) => b.id === E2E.brandId)?.classification).toBe('internal');
+    await page.getByLabel('Change the type').click();
+    await page.getByRole('option', { name: 'Client brand' }).click();
+    await brandType.getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => brandType.textContent(), { timeout: 15_000 }).toContain('Client brand.');
     // Engage agent starts for this brand, with a reason.
     const brandRow = page.getByTestId('kill-agent_starts-brand');
     await brandRow.getByRole('button', { name: 'Engage' }).click();

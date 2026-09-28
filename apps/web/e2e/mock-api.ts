@@ -25,6 +25,7 @@ import {
 import { RoutingPolicySet, RunGet, RunSteps, type ModelRoutingPolicy } from '@oremedia/contracts/agents';
 import { AssetGet, AssetSearch, MediaSignedUrlRequest } from '@oremedia/contracts/assets';
 import {
+  BrandClassify,
   BrandVersionGet,
   BrandVersionList,
   BrandVersionUpdate,
@@ -101,6 +102,8 @@ interface BrandRow {
   id: string;
   name: string;
   publishedVersionId: string | null;
+  classification?: 'client' | 'internal';
+  version?: number;
 }
 
 /** Agent runs as agents.runs.get returns them (the steps are served by agents.runs.steps). */
@@ -872,8 +875,9 @@ export function createMockRouter(backend: MockBackend) {
             timezone: 'UTC',
             defaultLocale: 'en',
             status: 'active' as const,
+            classification: b.classification ?? ('client' as const),
             publishedVersionId: b.publishedVersionId,
-            version: 1,
+            version: b.version ?? 1,
           })),
       ),
       // As the API: per visible brand, open requests past due, publications needing a person, and those due this week.
@@ -910,10 +914,21 @@ export function createMockRouter(backend: MockBackend) {
           timezone: 'UTC',
           defaultLocale: 'en',
           status: 'active' as const,
+          classification: b.classification ?? ('client' as const),
           publishedVersionId: b.publishedVersionId,
           activePolicyVersionId: null,
-          version: 1,
+          version: b.version ?? 1,
         };
+      }),
+      // As the API: optimistic on the brand's version (the mock does not check who may reclassify).
+      classify: mutation.input(BrandClassify).mutation(({ input }) => {
+        const b = backend.brands.find((x) => x.id === input.brandId);
+        if (!b) throw new NotFoundError('Brand', input.brandId);
+        if (input.expectedVersion !== (b.version ?? 1))
+          throw new ConflictError('Brand', b.id, input.expectedVersion);
+        b.classification = input.classification;
+        b.version = (b.version ?? 1) + 1;
+        return { brandId: b.id, classification: input.classification, version: b.version };
       }),
       versions: t.router({
         list: query

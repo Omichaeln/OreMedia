@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import {
+  BrandClassify,
   BrandCreate,
   BrandSnapshotResolve,
   BrandSystemDocumentV1,
@@ -453,6 +454,7 @@ export const brandService = {
         timezone: parsed.timezone,
         defaultLocale: parsed.defaultLocale,
         status: 'setup',
+        classification: parsed.classification,
       },
       tx,
     );
@@ -475,6 +477,7 @@ export const brandService = {
       timezone: b.timezone,
       defaultLocale: b.defaultLocale,
       status: b.status,
+      classification: b.classification,
       publishedVersionId: b.publishedVersionId,
       version: b.version,
     }));
@@ -490,10 +493,45 @@ export const brandService = {
       timezone: b.timezone,
       defaultLocale: b.defaultLocale,
       status: b.status,
+      classification: b.classification,
       publishedVersionId: b.publishedVersionId,
       activePolicyVersionId: b.activePolicyVersionId,
       version: b.version,
     };
+  },
+
+  /**
+   * D-11: a client brand needs a distinct approver by default; an internal brand does not. Reclassifying can switch
+   * separation of duties off, so it takes the authority that activates a release policy (which can switch it off too):
+   * owners, admins and brand managers, never an agent.
+   */
+  async classify(actor: ResolvedActor, input: z.infer<typeof BrandClassify>, tx: Tx) {
+    const parsed = BrandClassify.parse(input);
+    const brand = await brandsRepo.lock(parsed.brandId, tx);
+    const decision = await policy.assert(actor, 'brand.publish_version', brandResource(brand), {}, tx);
+    assertMayDecide(decision);
+    // Already that type: nothing changes, so nothing is written or audited.
+    if (brand.classification === parsed.classification)
+      return { brandId: brand.id, classification: brand.classification, version: brand.version };
+    await brandsRepo.update(brand.id, parsed.expectedVersion, { classification: parsed.classification }, tx);
+    await audit.record(actorRef(actor), 'brand.classify', { type: 'brand', id: brand.id }, 'allowed', tx, {
+      brandId: brand.id,
+      from: brand.classification,
+      to: parsed.classification,
+    });
+    return { brandId: brand.id, classification: parsed.classification, version: parsed.expectedVersion + 1 };
+  },
+
+  /**
+   * D-11: whether a review decision on this brand needs an approver other than the author. The active release policy
+   * decides when there is one; without one, client brands do and internal brands do not.
+   */
+  async distinctApproverRequired(brandId: string, tx?: Tx): Promise<boolean> {
+    const brand = await brandsRepo.getById(brandId, tx);
+    const active = await policiesRepo.findActive(brand.id, tx);
+    return active
+      ? PolicyDocumentV1.parse(active.document).requireDistinctApprover
+      : brand.classification === 'client';
   },
 
   /** Spec 8.2 lifecycle: draft → in_review → published → retired; exactly one published version per brand. */
@@ -860,7 +898,10 @@ export const brandService = {
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       if (actor.kind !== 'user')
         throw new PolicyDeniedError('agent_never', 'Only a person can author a release policy');
-      const document = PolicyDocumentV1.parse(parsed.document);
+      const document = PolicyDocumentV1.parse({
+        ...parsed.document,
+        requireDistinctApprover: parsed.document.requireDistinctApprover ?? brand.classification === 'client',
+      });
       const id = newId('policyVersion');
       const number = await policiesRepo.nextNumber(brand.id, tx);
       await policiesRepo.create(

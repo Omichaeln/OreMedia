@@ -16,7 +16,7 @@ import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
 import { creativeService } from '@oremedia/module-creative';
-import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4: the new migration rolls forward on a populated database. The database is migrated to the previous
@@ -57,7 +57,7 @@ describe('migrations roll forward on a populated database (ledger 1.g4)', () => 
     for (const table of TABLES) {
       const name = getTableName(table);
       const columns = Object.fromEntries(
-        Object.entries(getTableColumns(table)).filter(
+        Object.entries(snapshotColumns(table)).filter(
           ([, c]) => !(ADDED_COLUMNS[name] ?? []).includes(c.name),
         ),
       ) as Record<string, MySqlColumn>;

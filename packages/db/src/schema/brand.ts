@@ -29,6 +29,13 @@ export const brands = mysqlTable(
     publishedVersionId: ref('published_version_id'),
     activePolicyVersionId: ref('active_policy_version_id'),
     status: mysqlEnum('status', ['setup', 'active', 'archived']).notNull(),
+    /**
+     * D-11: a client brand needs a distinct approver unless its active release policy says otherwise; an internal
+     * brand does not. The column default is internal, so brands that existed before migration 0009 keep their
+     * approval behaviour; the API's BrandCreate defaults to client, so every brand created through it is a client
+     * brand unless the creator chooses internal.
+     */
+    classification: mysqlEnum('classification', ['client', 'internal']).notNull().default('internal'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

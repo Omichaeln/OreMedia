@@ -329,6 +329,7 @@ function createRouter(backend: Backend) {
     timezone: 'UTC',
     defaultLocale: 'en',
     status: 'active' as const,
+    classification: 'client' as const,
     publishedVersionId: 'bv_e2e',
     activePolicyVersionId: null,
     version: 1,

@@ -230,10 +230,20 @@ export const BrandSnapshotV1 = z.object({
 export type BrandSnapshot = z.infer<typeof BrandSnapshotV1>;
 
 // ---- router DTOs ----
+/** D-11: separation of duties is on by default for client brands and off for internal ones. */
+export const BrandClassification = z.enum(['client', 'internal']);
+export type BrandClassification = z.infer<typeof BrandClassification>;
+
 export const BrandCreate = z.object({
   name: z.string().min(1).max(200),
   timezone: z.string().min(1).max(64),
   defaultLocale: z.string().min(2).max(16),
+  classification: BrandClassification.default('client'),
+});
+export const BrandClassify = z.object({
+  brandId: z.string(),
+  classification: BrandClassification,
+  expectedVersion: z.number().int(),
 });
 export const BrandVersionCreateDraft = z.object({ brandId: z.string() });
 export const BrandVersionUpdate = z.object({
@@ -288,7 +298,14 @@ export const ObjectiveList = z.object({
   activeOnly: z.boolean().default(false),
   page: PageRequest,
 });
-export const PolicyVersionCreate = z.object({ brandId: z.string(), document: PolicyDocumentV1 });
+/**
+ * A new policy version may leave requireDistinctApprover out: it then follows the brand's classification (D-11, on
+ * for client brands, off for internal ones). The stored document always carries the value.
+ */
+export const PolicyVersionCreate = z.object({
+  brandId: z.string(),
+  document: PolicyDocumentV1.extend({ requireDistinctApprover: z.boolean().optional() }),
+});
 export const PolicyVersionActivate = z.object({
   brandId: z.string(),
   policyVersionId: z.string(),

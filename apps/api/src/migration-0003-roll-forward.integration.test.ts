@@ -9,7 +9,7 @@ import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService } from '@oremedia/module-access';
 // Relative import: a workspace dependency here would create an api ↔ test-fixtures cycle (test-fixtures imports the router).
-import { seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0003 (D-03 Google sign-in): on a database populated at the previous head (0002) the
@@ -34,7 +34,7 @@ describe('migration 0003 rolls forward on a populated database (ledger 1.g4)', (
     for (const table of TABLES) {
       const columns = getTableColumns(table) as Record<string, MySqlColumn>;
       const order = Object.values(columns).find((c) => c.name === 'id') ?? Object.values(columns)[0]!;
-      out[getTableName(table)] = await tdb.db.select().from(table).orderBy(asc(order));
+      out[getTableName(table)] = await tdb.db.select(snapshotColumns(table)).from(table).orderBy(asc(order));
     }
     return JSON.stringify(out);
   }

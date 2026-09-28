@@ -7,7 +7,7 @@ import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
 import { ChannelSettings } from '../publishing/channel-settings';
 import { useCompanies } from '../portfolio/use-companies';
-import { KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
+import { BrandType, KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
 import { Mandates, Members } from './members-mandates';
 import { useSkills, type SkillDto } from './use-settings';
 
@@ -24,6 +24,8 @@ type SettingsTab = (typeof TABS)[number][0];
 
 /** Owners and admins hold audit.read and billing.manage (the kill switches and model routing); the server re-checks. */
 const ADMIN_ROLES = new Set(['owner', 'admin']);
+/** Who may activate a release policy, and so change the brand type (brand.publish_version). */
+const POLICY_ROLES = new Set(['owner', 'admin', 'brand_manager']);
 
 const SCOPE_LABEL: Record<SkillDto['scope'], string> = {
   platform: 'Built in',
@@ -128,6 +130,7 @@ export function SettingsScreen() {
           <Mandates canManage={isAdmin} />
         </TabPanel>
         <TabPanel value="policy" className="flex flex-col gap-8">
+          <BrandType canManage={role !== null && POLICY_ROLES.has(role)} />
           <ReleasePolicy />
           {isAdmin && <KillSwitches />}
         </TabPanel>

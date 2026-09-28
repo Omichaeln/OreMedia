@@ -47,6 +47,7 @@ import {
 import { killSwitch } from '@oremedia/module-operations';
 import {
   buildLiveBinding,
+  decisionPolicyOptions,
   evaluateRelease,
   registerAssetAuthoriser,
   registerReleaseCheckers,
@@ -611,6 +612,31 @@ describe('review module (spec 13) against MySQL 8', () => {
     let requestId = '';
     let manifestHash = '';
     let approvalId = '';
+
+    it('D-11: without an active policy a client brand needs a distinct approver and an internal one does not; a policy decides over both', async () => {
+      const fresh = newId('brand');
+      await tdb.db.insert(brands).values({
+        id: fresh,
+        tenantId: tenantB,
+        name: 'Fresh',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+        classification: 'client',
+      });
+      const options = (brandId: string) =>
+        run(tenantB, managerB.id, (tx) => decisionPolicyOptions(brandId, tx));
+      await expect(options(fresh)).resolves.toMatchObject({ requireDistinctApprover: true });
+      await tdb.db.update(brands).set({ classification: 'internal' }).where(eq(brands.id, fresh));
+      await expect(options(fresh)).resolves.toMatchObject({ requireDistinctApprover: false });
+      // brandB has an active policy (setup) that does not require one: making it a client brand changes nothing.
+      await tdb.db.update(brands).set({ classification: 'client' }).where(eq(brands.id, brandB));
+      try {
+        await expect(options(brandB)).resolves.toMatchObject({ requireDistinctApprover: false });
+      } finally {
+        await tdb.db.update(brands).set({ classification: 'internal' }).where(eq(brands.id, brandB));
+      }
+    });
 
     it('request_changes moves the revision to changes_requested and records an insert-only decision with hashed origin', async () => {
       const req = await runA((tx) =>

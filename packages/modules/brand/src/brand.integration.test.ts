@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
+  BrandCreate,
   defaultPolicyDocument,
   emptyBrandSystemDocument,
   type BrandSystemDocumentV1,
@@ -1294,6 +1295,132 @@ describe('brand module (spec 8) against MySQL 8', () => {
       );
       await expect(propose(runId)).rejects.toBeInstanceOf(ValidationFailedError);
       expect((await versionOf(draftId)).document.voice.summary).toBe('Edited by a person.');
+    });
+  });
+  describe('brand classification and the distinct-approver default (D-11)', () => {
+    const clientBrand = newId('brand');
+    const internalBrand = newId('brand');
+    const insertBrand = (id: string, classification?: 'client' | 'internal') =>
+      tdb.db.insert(brands).values({
+        id,
+        tenantId: tenantA,
+        name: id,
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+        ...(classification ? { classification } : {}),
+      });
+    const brandRow = async (id: string) => (await tdb.db.select().from(brands).where(eq(brands.id, id)))[0]!;
+    const required = (id: string) =>
+      runInTenant(ctx(tenantA), () => withTransaction((tx) => brandService.distinctApproverRequired(id, tx)));
+    const createPolicy = (brandId: string, extra: { requireDistinctApprover?: boolean } = {}) =>
+      run(tenantA, (tx) =>
+        brandService.policy.createVersion(A, { brandId, document: { ...withoutRule, ...extra } }, tx),
+      );
+    // The defaults without the rule itself, so a version can leave it out (it then follows the classification).
+    const { requireDistinctApprover: _rule, ...withoutRule } = defaultPolicyDocument();
+    const storedPolicy = async (policyVersionId: string) =>
+      (await tdb.db.select().from(policyVersions).where(eq(policyVersions.id, policyVersionId)))[0]!.document;
+
+    beforeAll(async () => {
+      await insertBrand(clientBrand, 'client');
+      await insertBrand(internalBrand); // the column default: what every pre-existing brand became
+    });
+
+    it('the API defaults a new brand to client; a row written without one is internal', async () => {
+      expect(BrandCreate.parse({ name: 'x', timezone: 'UTC', defaultLocale: 'en' }).classification).toBe(
+        'client',
+      );
+      expect((await brandRow(internalBrand)).classification).toBe('internal');
+      const listed = await runInTenant(ctx(tenantA), () => brandService.list(A));
+      expect(listed.find((b) => b.id === clientBrand)?.classification).toBe('client');
+      const got = await runInTenant(ctx(tenantA), () => brandService.get(A, internalBrand));
+      expect(got.classification).toBe('internal');
+    });
+
+    it('without an active policy a client brand needs a distinct approver and an internal brand does not', async () => {
+      await expect(required(clientBrand)).resolves.toBe(true);
+      await expect(required(internalBrand)).resolves.toBe(false);
+    });
+
+    it('a policy version that leaves the rule out follows the classification; an explicit value is kept', async () => {
+      const onClient = await createPolicy(clientBrand);
+      const onInternal = await createPolicy(internalBrand);
+      const explicitOff = await createPolicy(clientBrand, { requireDistinctApprover: false });
+      expect(await storedPolicy(onClient.policyVersionId)).toMatchObject({ requireDistinctApprover: true });
+      expect(await storedPolicy(onInternal.policyVersionId)).toMatchObject({
+        requireDistinctApprover: false,
+      });
+      expect(await storedPolicy(explicitOff.policyVersionId)).toMatchObject({
+        requireDistinctApprover: false,
+      });
+    });
+
+    it('an active policy decides over the classification', async () => {
+      const off = await createPolicy(clientBrand, { requireDistinctApprover: false });
+      await run(tenantA, (tx) =>
+        brandService.policy.activate(
+          A,
+          { brandId: clientBrand, policyVersionId: off.policyVersionId, expectedVersion: 0 },
+          tx,
+        ),
+      );
+      await expect(required(clientBrand)).resolves.toBe(false);
+    });
+
+    it('a person reclassifies with the current version, audited; an agent, a stale version or a foreign tenant cannot', async () => {
+      const before = await brandRow(internalBrand);
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.classify(
+            agent(tenantA),
+            { brandId: internalBrand, classification: 'client', expectedVersion: before.version },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.classify(
+            A,
+            { brandId: internalBrand, classification: 'client', expectedVersion: before.version + 5 },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ConflictError);
+      await expect(
+        run(tenantB, (tx) =>
+          brandService.classify(
+            manager(tenantB),
+            { brandId: internalBrand, classification: 'client', expectedVersion: before.version },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      const res = await run(tenantA, (tx) =>
+        brandService.classify(
+          A,
+          { brandId: internalBrand, classification: 'client', expectedVersion: before.version },
+          tx,
+        ),
+      );
+      expect(res).toEqual({ brandId: internalBrand, classification: 'client', version: before.version + 1 });
+      await expect(required(internalBrand)).resolves.toBe(true);
+      // The same type again changes nothing: no version bump, no second audit entry.
+      const again = await run(tenantA, (tx) =>
+        brandService.classify(
+          A,
+          { brandId: internalBrand, classification: 'client', expectedVersion: before.version + 1 },
+          tx,
+        ),
+      );
+      expect(again.version).toBe(before.version + 1);
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'brand.classify')));
+      expect(audited).toHaveLength(1);
+      expect(audited[0]).toMatchObject({ decision: 'allowed' });
     });
   });
 });

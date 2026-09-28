@@ -1074,6 +1074,34 @@
         }
       }
     },
+    "/trpc/brand.classify": {
+      "post": {
+        "operationId": "brand.classify",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "classification": {
+                    "type": "string",
+                    "enum": ["client", "internal"]
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "classification", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/brand.create": {
       "post": {
         "operationId": "brand.create",
@@ -1092,6 +1120,10 @@
                   },
                   "defaultLocale": {
                     "type": "string"
+                  },
+                  "classification": {
+                    "type": "string",
+                    "enum": ["client", "internal"]
                   }
                 },
                 "required": ["name", "timezone", "defaultLocale"]
@@ -8829,6 +8861,25 @@
           "required": ["assetId", "page"]
         }
       },
+      "brand.classify": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "classification": {
+              "type": "string",
+              "enum": ["client", "internal"]
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "classification", "expectedVersion"]
+        }
+      },
       "brand.create": {
         "type": "mutation",
         "input": {
@@ -8842,6 +8893,10 @@
             },
             "defaultLocale": {
               "type": "string"
+            },
+            "classification": {
+              "type": "string",
+              "enum": ["client", "internal"]
             }
           },
           "required": ["name", "timezone", "defaultLocale"]

@@ -103,24 +103,13 @@ async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
       allBrands: false,
     },
   ]);
-  await db.insert(brands).values([
-    {
-      id: brandIds[0],
-      tenantId,
-      name: `${label} brand 1`,
-      timezone: 'UTC',
-      defaultLocale: 'en',
-      status: 'active',
-    },
-    {
-      id: brandIds[1],
-      tenantId,
-      name: `${label} brand 2`,
-      timezone: 'UTC',
-      defaultLocale: 'en',
-      status: 'active',
-    },
-  ]);
+  // Written with sql``, not insert(brands).values(): Drizzle lists every column of the current schema object (unset
+  // ones as `default`), and the migration roll-forward suites seed databases at earlier heads that lack the columns
+  // added since (brands.classification, 0009). These columns exist at every head; later columns take their defaults.
+  for (const [i, brandId] of brandIds.entries())
+    await db.execute(
+      sql`insert into ${brands} (id, tenant_id, name, timezone, default_locale, status, created_at, updated_at) values (${brandId}, ${tenantId}, ${`${label} brand ${i + 1}`}, 'UTC', 'en', 'active', ${new Date()}, ${new Date()})`,
+    );
   // The creator is restricted to brand 1 only.
   await db.insert(brandGrants).values({
     id: newId('brandGrant'),
@@ -250,6 +239,24 @@ export async function seedApiClient(
     scopes: opts.scopes,
   });
   return { servicePrincipalId, apiClientId, key: key.token };
+}
+
+/**
+ * Columns added to tables that already existed, after the migrations the roll-forward suites start from. A suite that
+ * seeds an earlier head selects its snapshot without them (Drizzle would name them, and they do not exist yet).
+ */
+export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  brands: ['classification'], // 0009
+};
+
+/** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
+export function snapshotColumns(table: MySqlTable): Record<string, MySqlColumn> {
+  const later = LATER_COLUMNS[getTableName(table)] ?? [];
+  return Object.fromEntries(
+    Object.entries(getTableColumns(table) as Record<string, MySqlColumn>).filter(
+      ([, c]) => !later.includes(c.name),
+    ),
+  );
 }
 
 export async function seedTwoTenants(db: Db): Promise<{ tenantA: SeededTenant; tenantB: SeededTenant }> {
