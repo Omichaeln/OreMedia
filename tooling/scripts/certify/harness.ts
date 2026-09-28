@@ -135,10 +135,8 @@ function reportGrant(deps: CertifyDeps, grant: AccountGrant): void {
 export async function selectAccount(deps: CertifyDeps, remoteAccountId: string): Promise<void> {
   const session = deps.load();
   const grant = requireGrant(session);
-  const select = (deps.adapter as { selectAccount?: SelectAccount }).selectAccount;
-  if (!select) throw new Error(`${deps.adapter.key} has no account selection`);
-  const next = await select.call(
-    deps.adapter,
+  if (!deps.adapter.selectAccount) throw new Error(`${deps.adapter.key} has no account selection`);
+  const next = await deps.adapter.selectAccount(
     grant.credentials,
     remoteAccountId,
     deps.io,
@@ -147,12 +145,6 @@ export async function selectAccount(deps: CertifyDeps, remoteAccountId: string):
   deps.save({ ...session, grant: next });
   reportGrant(deps, next);
 }
-type SelectAccount = (
-  credentials: DecryptedCredentials,
-  remoteAccountId: string,
-  io: ProviderIO,
-  grantedScopes?: string[],
-) => Promise<AccountGrant>;
 
 /** Runbook step 7: refresh; after revoking the app on the platform, the same command must report reconnect_required. */
 export async function refresh(deps: CertifyDeps): Promise<void> {

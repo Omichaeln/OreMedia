@@ -15,6 +15,9 @@ export const TOKEN_REFRESH_WORKFLOW_TYPE = 'tokenRefreshWorkflowV1';
 export const PUBLICATION_SWEEPER_WORKFLOW_TYPE = 'publicationSweeperWorkflowV1';
 /** One always-on sweeper per namespace. */
 export const PUBLICATION_SWEEPER_WORKFLOW_ID = 'publication-sweeper';
+/** Spec 14.7: the periodic purge of expired account choices, one Temporal schedule per namespace. */
+export const CONNECT_CHOICE_PURGE_WORKFLOW_TYPE = 'connectChoicePurgeWorkflowV1';
+export const CONNECT_CHOICE_PURGE_SCHEDULE_ID = 'connect-choice-purge';
 
 /** Spec 4.4: one activity queue per provider so a slow platform cannot starve the others. */
 export const publishTaskQueue = (providerKey: string): string => `publish-${providerKey}`;

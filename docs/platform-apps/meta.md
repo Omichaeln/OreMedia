@@ -80,11 +80,12 @@ every one must be approved or removed from the capability.
 
 Wording for every justification: "Ore & Tar is a social media agency. Our platform publishes content that the
 Page's own team has written and approved, at the time they choose, and reports how it performed and what its
-audience said. Only people with a role on the Page can connect it, and they can disconnect it at any time."
+audience said. Only people with a role on the Page can connect it; when they manage several Pages they choose which
+Page the brand connects, and they can disconnect it at any time."
 
 ### What the product does not do yet
 
-Meta rejects a permission it cannot see in use, and the justifications above say only what the code does. Three
+Meta rejects a permission it cannot see in use, and the justifications above say only what the code does. Two
 gaps bear on the submission; close them or remove the scope before submitting:
 
 - **Replies to comments.** The adapters can reply (`comment`), but nothing in the product calls them and there is no
@@ -94,9 +95,6 @@ gaps bear on the submission; close them or remove the scope before submitting:
 - **business_management.** Requested so that `/me/accounts` returns Pages reached through a business portfolio.
   During certification, check whether business-owned client Pages appear without it: if they do, remove it from both
   capabilities; if not, keep it and show a business-owned Page in screencast A.
-- **Choosing a Page.** A login that manages several Pages connects the first one returned. The adapters return the
-  others (`alternatives`, `selectAccount`), but the connect flow does not offer them yet. Reviewers usually expect a
-  Page picker; connect with a login that manages only the test Page, or build the picker first.
 
 Published posts are not edited or deleted from the product (`deleteRemote` records the request but has no route),
 so no justification may mention either.
@@ -124,9 +122,10 @@ used. One video per letter; the App Review form lets you attach the same video t
 2. Open Ore & Tar Review, then Settings, then Channels.
 3. Under "Connect a channel", choose Connect Facebook Page. Facebook Login opens in a new tab.
 4. Show the consent screen with each permission listed; continue.
-5. Back on the product, finish connecting; show the channel listed as connected with the Page's name and its
-   granted permissions.
-6. Repeat with Connect Instagram Business, showing the Instagram professional account linked to the Page.
+5. Back on the product, finish connecting. With a login that manages several Pages (record with one), the product
+   lists them: choose the test Page and Connect selected. Show the channel listed as connected with the Page's name
+   and its granted permissions, and that the other Pages were not connected.
+6. Repeat with Connect Instagram Business, choosing the Instagram professional account linked to the test Page.
 
 **B. Publish (pages_manage_posts, pages_read_engagement, instagram_basic, instagram_content_publish)**
 

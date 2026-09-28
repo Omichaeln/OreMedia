@@ -7,6 +7,8 @@ export type CalendarPublicationDto = CalendarRangeDto['publications'][number];
 export type PublicationDto = inferOutput<Trpc['publishing']['publications']['get']>;
 export type PublicationSummaryDto = inferOutput<Trpc['publishing']['publications']['list']>['items'][number];
 export type ChannelDto = inferOutput<Trpc['publishing']['channels']['list']>[number];
+/** `connect.complete`: the connection (outcome 'connected') or the accounts to choose from (outcome 'choose'). */
+export type ConnectResultDto = inferOutput<Trpc['publishing']['channels']['connect']['complete']>;
 export type ChannelVariantDto = inferOutput<Trpc['content']['variants']['get']>;
 export type CancelResultDto = inferOutput<Trpc['publishing']['publications']['cancel']>;
 

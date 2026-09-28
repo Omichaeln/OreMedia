@@ -57,6 +57,7 @@ import {
   registerPublishMediaSource,
   registerReleaseEvaluator,
   registerVariantSource,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { createLogger } from '@oremedia/observability';
 import { ProviderRegistry, ProviderTransportError } from '@oremedia/providers';
@@ -235,7 +236,11 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
       ),
     );
     connectionId = (
-      await run((tx) => channelService.connect.complete(actor, { state: started.state, code: 'good' }, tx))
+      await run((tx) =>
+        channelService.connect
+          .complete(actor, { state: started.state, code: 'good' }, tx)
+          .then(connectedChannel),
+      )
     ).id;
 
     // Agents: one pinned skill and the fake model, routed for this tenant.

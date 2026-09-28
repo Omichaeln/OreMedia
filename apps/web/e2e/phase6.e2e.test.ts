@@ -480,6 +480,53 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => page.url()).not.toContain('code=');
   }, 45_000);
 
+  it('a login that manages several Pages: the person chooses one, only that one connects', async () => {
+    const row = page.getByTestId('provider-linkedin_page');
+    await row.getByRole('button', { name: 'Connect LinkedIn Page' }).click();
+    await expect.poll(() => row.getByTestId('authorise-link').count(), { timeout: 15_000 }).toBe(1);
+    const href = (await row.getByTestId('authorise-link').getAttribute('href')) ?? '';
+    const state = new URL(href).searchParams.get('state') ?? '';
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_multi`);
+    await expect.poll(() => count('connect-callback'), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('button', { name: 'Finish connecting' }).click();
+    await expect.poll(() => count('connect-choose'), { timeout: 15_000 }).toBe(1);
+    const choose = page.getByTestId('connect-choose');
+    expect(await choose.getByRole('group', { name: 'Choose the account this brand connects' }).count()).toBe(
+      1,
+    );
+    expect(await choose.getByRole('radio').count()).toBe(2);
+    expect(await choose.getByRole('radio', { name: 'Ore Studio (LinkedIn Page)' }).count()).toBe(1);
+    expect(await count('connect-completed')).toBe(0); // nothing connected before the choice
+    const connectSelected = choose.getByRole('button', { name: 'Connect selected' });
+    expect(await connectSelected.getAttribute('aria-disabled')).toBe('true');
+    await choose.getByRole('radio', { name: 'Tar Studio (LinkedIn Page)' }).check();
+    await connectSelected.click();
+    await expect.poll(() => count('connect-completed'), { timeout: 15_000 }).toBe(1);
+    expect(await text('connect-completed')).toContain('Connected: Tar Studio (linkedin_page)');
+    await expect.poll(() => text('channels'), { timeout: 15_000 }).toContain('Tar Studio');
+    expect(await text('channels')).not.toContain('Ore Studio');
+    expect(backend.phase6.connectChoices.size).toBe(0); // one-shot: the choice is consumed
+    await page.getByRole('button', { name: 'Done' }).click();
+    await expect.poll(() => page.url()).not.toContain('code=');
+  }, 45_000);
+
+  it('cancelling the choice discards it and connects nothing', async () => {
+    const row = page.getByTestId('provider-linkedin_page');
+    await row.getByRole('button', { name: 'Connect LinkedIn Page' }).click();
+    await expect.poll(() => row.getByTestId('authorise-link').count(), { timeout: 15_000 }).toBe(1);
+    const href = (await row.getByTestId('authorise-link').getAttribute('href')) ?? '';
+    const state = new URL(href).searchParams.get('state') ?? '';
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_multi`);
+    await expect.poll(() => count('connect-callback'), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('button', { name: 'Finish connecting' }).click();
+    await expect.poll(() => count('connect-choose'), { timeout: 15_000 }).toBe(1);
+    await page.getByTestId('connect-choose').getByRole('button', { name: 'Cancel' }).click();
+    await expect.poll(() => count('connect-choose'), { timeout: 15_000 }).toBe(0);
+    await expect.poll(() => page.url()).not.toContain('code=');
+    expect(backend.phase6.connectChoices.size).toBe(0);
+    expect(await text('channels')).not.toContain('Ore Studio');
+  }, 45_000);
+
   it('reconnect rotates the expired channel back to Connected', async () => {
     const row = page.getByTestId(`channel-${P5.channels.expired}`);
     await row.getByRole('button', { name: 'Reconnect' }).click();

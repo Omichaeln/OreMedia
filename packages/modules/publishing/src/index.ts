@@ -10,6 +10,7 @@ export {
   configureConnectCallback,
   MemoryConnectStateStore,
   CONNECT_STATE_TTL_MS,
+  type ChannelConnectResult,
   type ConnectState,
   type ConnectStateStore,
 } from './channels';
@@ -68,10 +69,14 @@ export {
   TOKEN_REFRESH_WORKFLOW_TYPE,
   PUBLICATION_SWEEPER_WORKFLOW_TYPE,
   PUBLICATION_SWEEPER_WORKFLOW_ID,
+  CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
+  CONNECT_CHOICE_PURGE_SCHEDULE_ID,
 } from './outbox-routes';
 export {
   ChannelConnectionRepository,
   CredentialRefRepository,
+  PendingChannelGrantRepository,
+  PendingChannelGrantPurgeRepository,
   PublicationRepository,
   PublicationAttemptRepository,
   RemoteEvidenceRepository,
@@ -79,6 +84,7 @@ export {
 /** Test fixtures only (an in-memory platform); never registered by a production composition root. */
 export {
   FixtureProviderAdapter,
+  connectedChannel,
   fixtureCapability,
   FIXTURE_PROVIDER_KEY,
   type PublishBehaviour,

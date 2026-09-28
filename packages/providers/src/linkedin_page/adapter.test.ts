@@ -75,6 +75,56 @@ describe('LinkedIn Page adapter (spec 14.5, 14.8)', () => {
     expect(u.searchParams.has('code_challenge')).toBe(false);
   });
 
+  it('accountGrants: every administered organisation from one listing, paged by start/count; selectAccount picks one', async () => {
+    const acl = (n: number, role = 'ADMINISTRATOR') => ({
+      organization: `urn:li:organization:${n}`,
+      role,
+      state: 'APPROVED',
+      'organization~': { localizedName: `Org ${n}` },
+    });
+    const first = Array.from({ length: 100 }, (_, i) => acl(5000 + i, i % 2 ? 'ANALYST' : 'ADMINISTRATOR'));
+    const listing = () => {
+      server.load({
+        exchanges: [
+          {
+            request: {
+              method: 'GET',
+              host: 'api.linkedin.com',
+              path: '/rest/organizationAcls',
+              query: { q: 'roleAssignee', start: '0', count: '100' },
+            },
+            response: { status: 200, json: { elements: first } },
+          },
+          {
+            request: {
+              method: 'GET',
+              host: 'api.linkedin.com',
+              path: '/rest/organizationAcls',
+              query: { q: 'roleAssignee', start: '100', count: '100' },
+            },
+            response: { status: 200, json: { elements: [acl(9001, 'CONTENT_ADMINISTRATOR')] } },
+          },
+        ],
+      });
+      io.calls.length = 0;
+    };
+    listing();
+    const grants = await adapter.accountGrants(creds, io, ['rw_organization_admin']);
+    expect(grants).toHaveLength(51); // 50 administered on the first page, one on the second; analysts ignored
+    const last = grants.find((g) => g.remoteAccountId === '9001');
+    expect(last).toMatchObject({
+      displayName: 'Org 9001',
+      grantedScopes: ['rw_organization_admin'],
+      credentials: { accessToken: 'at_1_fake', extra: { organizationUrn: 'urn:li:organization:9001' } },
+    });
+    expect(io.calls).toHaveLength(2);
+    expect(server.remaining()).toEqual([]);
+    listing();
+    expect((await adapter.selectAccount(creds, '5000', io, [])).credentials.extra).toMatchObject({
+      organizationUrn: 'urn:li:organization:5000',
+    });
+  });
+
   it('exchangeCode: tokens, identity, administered organisations sorted with alternatives; missingScopes works on the grant', async () => {
     load('auth', 'exchange');
     const grant = await adapter.exchangeCode(

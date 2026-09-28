@@ -46,6 +46,7 @@ import {
   createPublishingRuntime,
   registerProviderClients,
   registerWorkflowProbe,
+  connectedChannel,
 } from '../../packages/modules/publishing/src/index';
 import { reviewService } from '../../packages/modules/review/src/index';
 import { ProviderRegistry } from '../../packages/providers/src/index';
@@ -177,7 +178,11 @@ export async function openBurstLanes(seeded: SeededTenant[]): Promise<Lane[]> {
       ),
     );
     const connectionId = (
-      await run((tx) => channelService.connect.complete(owner, { state: started.state, code: 'good' }, tx))
+      await run((tx) =>
+        channelService.connect
+          .complete(owner, { state: started.state, code: 'good' }, tx)
+          .then(connectedChannel),
+      )
     ).id;
     lanes.push({
       tenant: t,

@@ -5226,6 +5226,27 @@
         }
       }
     },
+    "/trpc/publishing.channels.connect.cancel": {
+      "post": {
+        "operationId": "publishing.channels.connect.cancel",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pendingId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["pendingId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/publishing.channels.connect.complete": {
       "post": {
         "operationId": "publishing.channels.connect.complete",
@@ -5244,6 +5265,30 @@
                   }
                 },
                 "required": ["state", "code"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/publishing.channels.connect.select": {
+      "post": {
+        "operationId": "publishing.channels.connect.select",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pendingId": {
+                    "type": "string"
+                  },
+                  "remoteAccountId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["pendingId", "remoteAccountId"]
               }
             }
           }
@@ -12210,6 +12255,18 @@
           "required": ["eventId"]
         }
       },
+      "publishing.channels.connect.cancel": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "pendingId": {
+              "type": "string"
+            }
+          },
+          "required": ["pendingId"]
+        }
+      },
       "publishing.channels.connect.complete": {
         "type": "mutation",
         "input": {
@@ -12223,6 +12280,21 @@
             }
           },
           "required": ["state", "code"]
+        }
+      },
+      "publishing.channels.connect.select": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "pendingId": {
+              "type": "string"
+            },
+            "remoteAccountId": {
+              "type": "string"
+            }
+          },
+          "required": ["pendingId", "remoteAccountId"]
         }
       },
       "publishing.channels.connect.start": {

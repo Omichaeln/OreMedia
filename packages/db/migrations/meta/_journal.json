@@ -71,6 +71,13 @@
       "when": 1790591785848,
       "tag": "0009_brand_classification",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1790609559201,
+      "tag": "0010_pending_channel_grants",
+      "breakpoints": true
     }
   ]
 }

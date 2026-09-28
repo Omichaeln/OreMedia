@@ -108,25 +108,35 @@ export class FacebookPageAdapter implements ProviderAdapter {
     };
   }
 
-  /** Re-targets a grant at another page using the stored user token (connect flow "choose a page"); not part of the contract. */
+  /** Re-targets a grant at another page using the stored user token (the connect flow's account choice). */
   async selectAccount(
     credentials: DecryptedCredentials,
     remoteAccountId: string,
     io: ProviderIO,
     grantedScopes: string[] = [],
   ): Promise<AccountGrant> {
+    const grants = await this.accountGrants(credentials, io, grantedScopes);
+    const chosen = grants.find((g) => g.remoteAccountId === remoteAccountId);
+    if (!chosen) throw new ProviderAuthError(this.key, 'account_not_found', remoteAccountId);
+    return chosen;
+  }
+
+  /** Every Page the user token manages, each with its own Page token, from one `/me/accounts` listing. */
+  async accountGrants(
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    grantedScopes: string[] = [],
+  ): Promise<AccountGrant[]> {
     const userToken = credentials.extra?.['userAccessToken'] ?? credentials.accessToken;
     const pages = await this.pages(io, userToken);
-    const chosen = pages.find((p) => p.id === remoteAccountId);
-    if (!chosen) throw new ProviderAuthError(this.key, 'account_not_found', remoteAccountId);
-    return {
-      remoteAccountId: chosen.id,
-      displayName: chosen.name,
+    return pages.map((page) => ({
+      remoteAccountId: page.id,
+      displayName: page.name,
       grantedScopes,
-      credentials: this.pageCredentials(chosen.accessToken, userToken, chosen.id, credentials.expiresAt),
+      credentials: this.pageCredentials(page.accessToken, userToken, page.id, credentials.expiresAt),
       ...(credentials.expiresAt ? { tokenExpiresAt: credentials.expiresAt } : {}),
-      alternatives: alternativesFrom(pages, chosen.id),
-    };
+      alternatives: alternativesFrom(pages, page.id),
+    }));
   }
 
   async refresh(

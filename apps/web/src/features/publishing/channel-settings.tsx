@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Skeleton, StatusBanner } from '@oremedia/ui';
@@ -20,7 +20,10 @@ import {
   unavailableReason,
 } from './channel-connect';
 import { CHANNEL_CHIP } from './publication-state';
-import { useChannels, type ChannelDto } from './use-publishing';
+import { useChannels, type ChannelDto, type ConnectResultDto } from './use-publishing';
+
+type ConnectChoice = Extract<ConnectResultDto, { outcome: 'choose' }>;
+type ConnectedChannel = Extract<ConnectResultDto, { outcome: 'connected' }>;
 
 /**
  * Spec 14.7 connect start: the server returns the provider's authorisation URL; it opens in a new tab as a link (never
@@ -219,6 +222,116 @@ function ChannelRow({
   );
 }
 
+/** The connection a completed flow made (or rotated), with the scopes the grant is missing. */
+function ConnectedBanner({ channel, onDone }: { channel: ConnectedChannel; onDone: () => void }) {
+  return (
+    <StatusBanner
+      tone="good"
+      title={`Connected: ${channel.displayName} (${channel.providerKey})`}
+      description={
+        channel.missingScopes.length
+          ? `The grant is missing scopes: ${channel.missingScopes.join(', ')}.`
+          : 'The credential is sealed and stored; the channel can publish.'
+      }
+      actions={
+        <Button size="sm" onClick={onDone}>
+          Done
+        </Button>
+      }
+      data-testid="connect-completed"
+    />
+  );
+}
+
+/**
+ * Spec 14.7 account choice: the login manages several accounts, so the person picks the one this brand connects.
+ * Nothing is connected until they do; cancelling discards the sealed grants.
+ */
+function ChooseAccount({ choice, onDone }: { choice: ConnectChoice; onDone: () => void }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [selected, setSelected] = useState<string | null>(null);
+  const select = useMutation(
+    trpc.publishing.channels.connect.select.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        void queryClient.invalidateQueries(trpc.publishing.channels.pathFilter());
+      },
+    }),
+  );
+  const cancel = useMutation(
+    trpc.publishing.channels.connect.cancel.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        onDone();
+      },
+    }),
+  );
+  if (select.data) return <ConnectedBanner channel={select.data} onDone={onDone} />;
+  const kind = providerLabel(choice.providerKey);
+  const busy = select.isPending || cancel.isPending;
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (selected) select.mutate({ pendingId: choice.pendingId, remoteAccountId: selected });
+  };
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="flex flex-col gap-3 rounded-md border border-border p-3"
+      noValidate
+      data-testid="connect-choose"
+    >
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-semibold">Choose the account this brand connects</legend>
+        <p className="text-xs text-muted-foreground">
+          Only the account you choose is connected; the choice expires{' '}
+          {new Date(choice.expiresAt).toLocaleTimeString()}.
+          {choice.unavailable > 0 &&
+            ` ${choice.unavailable} more ${choice.unavailable === 1 ? 'account' : 'accounts'} could not be read from the provider; start again to retry.`}
+        </p>
+        {choice.options.map((option) => (
+          <label key={option.remoteAccountId} className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name={`connect-account-${choice.pendingId}`}
+              value={option.remoteAccountId}
+              checked={selected === option.remoteAccountId}
+              onChange={() => setSelected(option.remoteAccountId)}
+            />
+            <span>
+              {option.displayName} <span className="text-muted-foreground">({kind})</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          type="submit"
+          disabled={busy || !selected}
+          disabledReason={selected ? undefined : 'Choose an account first'}
+        >
+          {select.isPending ? 'Connecting…' : 'Connect selected'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => cancel.mutate({ pendingId: choice.pendingId })}
+          disabled={busy}
+        >
+          Cancel
+        </Button>
+      </div>
+      {select.isError && <RequestError error={select.error} title="The account was not connected" />}
+      {cancel.isError && <RequestError error={cancel.error} title="The choice was not cancelled" />}
+    </form>
+  );
+}
+
 /** Spec 14.7 completion: the provider sent the person back here with `state` and `code`; exchanging them is explicit. */
 function FinishConnect({ state, code, onDone }: { state: string; code: string; onDone: () => void }) {
   const trpc = useTRPC();
@@ -233,24 +346,8 @@ function FinishConnect({ state, code, onDone }: { state: string; code: string; o
       },
     }),
   );
-  if (complete.data)
-    return (
-      <StatusBanner
-        tone="good"
-        title={`Connected: ${complete.data.displayName} (${complete.data.providerKey})`}
-        description={
-          complete.data.missingScopes.length
-            ? `The grant is missing scopes: ${complete.data.missingScopes.join(', ')}.`
-            : 'The credential is sealed and stored; the channel can publish.'
-        }
-        actions={
-          <Button size="sm" onClick={onDone}>
-            Done
-          </Button>
-        }
-        data-testid="connect-completed"
-      />
-    );
+  if (complete.data?.outcome === 'choose') return <ChooseAccount choice={complete.data} onDone={onDone} />;
+  if (complete.data) return <ConnectedBanner channel={complete.data} onDone={onDone} />;
   return (
     <div className="flex flex-col gap-2">
       <StatusBanner

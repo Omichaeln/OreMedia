@@ -47,7 +47,9 @@ import {
 } from '@oremedia/contracts/intelligence';
 import { MetricDefinitionList, MetricsQueryV1 } from '@oremedia/contracts/measurement';
 import {
+  ChannelConnectCancel,
   ChannelConnectComplete,
+  ChannelConnectSelect,
   ChannelConnectStart,
   ChannelDisconnect,
 } from '@oremedia/contracts/publishing';
@@ -240,6 +242,11 @@ export class Phase6Backend {
   readonly briefs = new Map<string, Brief>();
   readonly packages = new Map<string, Package>();
   readonly connectStates = new Map<string, { brandId: string; providerKey: string }>();
+  /** Account choices `connect.complete` offered (spec 14.7), one-shot, keyed by pending id. */
+  readonly connectChoices = new Map<
+    string,
+    { brandId: string; providerKey: string; options: Array<{ remoteAccountId: string; displayName: string }> }
+  >();
   /** The brand objective (null: ranking refused, spec 16.1). */
   objective: { primaryMetricKey: string; guardrailMetricKeys: string[] } | null = {
     primaryMetricKey: 'qualified_enquiries',
@@ -1585,7 +1592,45 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
     }),
   } satisfies Phase5Extensions['variants'];
 
-  /** Added to phase 5's `publishing.channels`: connect start/complete (spec 14.7) and disconnect. */
+  /** A reconnect of a known remote account rotates the credential of the same connection (spec 14.7). */
+  const connectAccount = (
+    pending: { brandId: string; providerKey: string },
+    remoteAccountId: string,
+    displayName: string,
+  ): Channel => {
+    const existing = [...p5.channels.values()].find(
+      (c) =>
+        c.providerKey === pending.providerKey &&
+        (remoteAccountId === 'acct_new' || c.remoteAccountId === remoteAccountId),
+    );
+    const row: Channel = existing ?? {
+      id: rid('cc'),
+      brandId: pending.brandId,
+      providerKey: pending.providerKey,
+      remoteAccountId,
+      displayName,
+      grantedScopes: ['publish'],
+      missingScopes: [],
+      status: 'active',
+      tokenExpiresAt: daysFromNow(60),
+      capabilityVersion: 1,
+      usable: true,
+      createdAt: now(),
+      updatedAt: now(),
+      version: 0,
+    };
+    Object.assign(row, {
+      status: 'active',
+      usable: true,
+      tokenExpiresAt: daysFromNow(60),
+      updatedAt: now(),
+    });
+    row.version += existing ? 1 : 0;
+    p5.channels.set(row.id, row);
+    return row;
+  };
+
+  /** Added to phase 5's `publishing.channels`: connect start/complete/select/cancel (spec 14.7) and disconnect. */
   const channels = {
     connect: router({
       start: mutation.input(ChannelConnectStart).mutation(({ input }) => {
@@ -1609,33 +1654,55 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
             [{ path: 'state', issue: 'connect_state_invalid_or_expired' }],
             'The connect flow has expired; start again',
           );
-        // A reconnect of a known remote account rotates the credential of the same connection (spec 14.7).
-        const existing = [...p5.channels.values()].find((c) => c.providerKey === pending.providerKey);
-        const row: Channel = existing ?? {
-          id: rid('cc'),
-          brandId: pending.brandId,
-          providerKey: pending.providerKey,
-          remoteAccountId: 'acct_new',
-          displayName: 'Acme LinkedIn Page',
-          grantedScopes: ['publish'],
-          missingScopes: [],
-          status: 'active',
-          tokenExpiresAt: daysFromNow(60),
-          capabilityVersion: 1,
-          usable: true,
-          createdAt: now(),
-          updatedAt: now(),
-          version: 0,
+        // A login that manages several Pages (code `auth_code_multi`): nothing connects until the person chooses.
+        if (input.code === 'auth_code_multi') {
+          const pendingId = rid('pcg');
+          const options = [
+            { remoteAccountId: 'org_ore', displayName: 'Ore Studio' },
+            { remoteAccountId: 'org_tar', displayName: 'Tar Studio' },
+          ];
+          b.connectChoices.set(pendingId, { ...pending, options });
+          return {
+            outcome: 'choose' as const,
+            pendingId,
+            brandId: pending.brandId,
+            providerKey: pending.providerKey,
+            options,
+            unavailable: 0,
+            expiresAt: iso(new Date(Date.now() + 600_000)),
+          };
+        }
+        return {
+          outcome: 'connected' as const,
+          ...connectAccount(pending, 'acct_new', 'Acme LinkedIn Page'),
         };
-        Object.assign(row, {
-          status: 'active',
-          usable: true,
-          tokenExpiresAt: daysFromNow(60),
-          updatedAt: now(),
-        });
-        row.version += existing ? 1 : 0;
-        p5.channels.set(row.id, row);
-        return row;
+      }),
+      select: mutation.input(ChannelConnectSelect).mutation(({ input }) => {
+        const choice = b.connectChoices.get(input.pendingId);
+        if (!choice)
+          throw new ValidationFailedError(
+            [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+            'The connect flow has expired; start again',
+          );
+        const option = choice.options.find((o) => o.remoteAccountId === input.remoteAccountId);
+        if (!option)
+          throw new ValidationFailedError(
+            [{ path: 'remoteAccountId', issue: 'account_not_offered' }],
+            'Choose one of the accounts offered',
+          );
+        b.connectChoices.delete(input.pendingId);
+        return {
+          outcome: 'connected' as const,
+          ...connectAccount(choice, option.remoteAccountId, option.displayName),
+        };
+      }),
+      cancel: mutation.input(ChannelConnectCancel).mutation(({ input }) => {
+        if (!b.connectChoices.delete(input.pendingId))
+          throw new ValidationFailedError(
+            [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+            'The connect flow has expired; start again',
+          );
+        return { pendingId: input.pendingId, cancelled: true as const };
       }),
     }),
     disconnect: mutation.input(ChannelDisconnect).mutation(({ input }) => {

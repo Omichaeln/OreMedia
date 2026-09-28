@@ -56,6 +56,7 @@ import {
   publicationService,
   registerProviderClients,
   registerWorkflowProbe,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { evaluateRelease, reviewService } from '@oremedia/module-review';
 import { METRIC, count } from '@oremedia/observability';
@@ -180,7 +181,11 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
       ),
     );
     return (
-      await run((tx) => channelService.connect.complete(owner, { state: started.state, code: 'good' }, tx))
+      await run((tx) =>
+        channelService.connect
+          .complete(owner, { state: started.state, code: 'good' }, tx)
+          .then(connectedChannel),
+      )
     ).id;
   }
 

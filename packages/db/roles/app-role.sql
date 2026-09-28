@@ -15,6 +15,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`assets` TO '__APP_USER__'
 GRANT SELECT, INSERT ON `__DB_NAME__`.`audit_events` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`auth_events` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_grants` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_guideline_authors` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_objectives` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_versions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brands` TO '__APP_USER__'@'%';
@@ -48,6 +49,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_identities` TO '
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_refs` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`external_reviewer_links` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`feature_flags` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`generated_uploads` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`idempotency_keys` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`incidents` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`insights` TO '__APP_USER__'@'%';
@@ -61,6 +63,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`metric_definitions` TO '_
 GRANT SELECT, INSERT ON `__DB_NAME__`.`metric_snapshots` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`model_routing_policies` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`outbox_events` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`pending_channel_grants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`plans` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`playbook_entries` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`policy_versions` TO '__APP_USER__'@'%';

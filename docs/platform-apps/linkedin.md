@@ -42,17 +42,16 @@ PROVIDER_LINKEDIN_PAGE_SECRET_REF    = <Primary Client Secret>
 
 Source of truth: `requiredScopes` in `packages/providers/src/linkedin_page/capability.ts`.
 
-| Scope                   | What the product does with it                                                                                                                                                                                                                       |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                                       |
-| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) to connect the brand to one (the first returned; see below), and reads post and Page statistics (share statistics, followers, page views) for performance reports. |
-| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time.                                                                                                                                                  |
-| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                                                                                       |
+| Scope                   | What the product does with it                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `openid`, `profile`     | Identifies the member who connects (`/v2/userinfo`, the `sub` only) so the connection records who granted it.                                                                                                                        |
+| `rw_organization_admin` | Lists the Pages the member administers (`organizationAcls`, approved roles only) so they choose which Page the brand connects, and reads post and Page statistics (share statistics, followers, page views) for performance reports. |
+| `w_organization_social` | Uploads images and video and publishes approved posts to the connected Page at the scheduled time.                                                                                                                                   |
+| `r_organization_social` | Reads the Page's recent posts to confirm a publish landed, and reads comments on posts the product published.                                                                                                                        |
 
-**Not in the product yet:** replies to comments, editing or deleting published posts, and choosing among several
-Pages (a member who administers several connects the first one returned; the adapter returns the others, but the
-connect flow does not offer them). None may appear in the application or the screencast. Record with a member who
-administers only the Ore & Tar Page.
+**Not in the product yet:** replies to comments, and editing or deleting published posts. Neither may appear in the
+application or the screencast. A member who administers several Pages chooses which one the brand connects; record
+with a member who administers the Ore & Tar Page and at least one other, so the choice is shown.
 
 **Verify before applying:** LinkedIn has required the Community Management API to be the only product on its app.
 `openid` and `profile` come from the "Sign In with LinkedIn using OpenID Connect" product. If LinkedIn will not grant
@@ -66,13 +65,15 @@ last 60 days, and each connection goes to `reconnect_needed` when its token expi
 
 Use case, as the form asks for it: "Ore & Tar is a social media agency in Zimbabwe. Our platform lets the teams
 behind LinkedIn Pages plan, approve and schedule posts, see what their audience says about them, and see how they
-performed. Only Page administrators can connect a Page, and they can disconnect it at any time."
+performed. Only Page administrators can connect a Page, choosing which Page when they administer several, and they
+can disconnect it at any time."
 
 Screencast (one video, 1280 × 800 or larger, captions naming each scope as it is used):
 
 1. Sign in to the product with Google, as a user with the `admin` role (it connects, approves and schedules); open the brand, then Settings, then Channels.
-2. Choose Connect LinkedIn Page. Show LinkedIn's consent screen with the scopes, then the channel
-   listed as connected.
+2. Choose Connect LinkedIn Page. Show LinkedIn's consent screen with the scopes; back on the product, finish
+   connecting, choose the Ore & Tar Page among the Pages listed and Connect selected; show the channel listed as
+   connected (and only that Page).
 3. In Studio, create a post; submit it for review and approve it; schedule it two minutes ahead to the Page.
 4. Show the calendar entry move to published, and the post live on the Page.
 5. From another member, comment on the post. After the next comment sync, open Intelligence and show it counted

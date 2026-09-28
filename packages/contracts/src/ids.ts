@@ -63,6 +63,8 @@ export const ID_PREFIXES = {
   modelRoutingPolicy: 'mrp',
   channelConnection: 'cc',
   credentialRef: 'cr',
+  /** A sealed grant waiting for the person to choose which account it connects (spec 14.7, one row per option). */
+  pendingChannelGrant: 'pcg',
   publication: 'pub',
   publicationAttempt: 'att',
   remoteEvidence: 're',

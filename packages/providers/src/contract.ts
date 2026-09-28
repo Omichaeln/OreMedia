@@ -67,6 +67,27 @@ export interface ProviderAdapter {
     input: { code: string; codeVerifier: string; redirectUri: string; client: ClientConfig },
     io: ProviderIO,
   ): Promise<AccountGrant>;
+  /**
+   * Re-targets a grant at one of the other accounts exchangeCode listed in `alternatives` (a Page, a professional
+   * account, an organisation): the grant for that account, with its own token where the platform issues one. An id
+   * the login cannot address is ProviderAuthError('account_not_found'). Required of every adapter whose
+   * exchangeCode returns alternatives; the connect flow offers the choice only where it is defined.
+   */
+  selectAccount?(
+    credentials: DecryptedCredentials,
+    remoteAccountId: string,
+    io: ProviderIO,
+    grantedScopes: string[],
+  ): Promise<AccountGrant>;
+  /**
+   * Every account the grant can address, each with its own grant, from one listing (the connect flow seals them all
+   * when it offers a choice). Optional: without it the flow calls selectAccount once per account.
+   */
+  accountGrants?(
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    grantedScopes: string[],
+  ): Promise<AccountGrant[]>;
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult>;
 
   // Validation: pure, capability-driven, no network

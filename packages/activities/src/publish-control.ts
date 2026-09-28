@@ -1,4 +1,6 @@
 import type {
+  ConnectChoicePurgeActivitiesV1,
+  ConnectChoicePurgeRuntimeV1,
   PublicationSweepActivitiesV1,
   PublicationSweepRuntimeV1,
   PublishControlActivitiesV1,
@@ -51,5 +53,15 @@ export function createPublicationSweepActivities(
   return {
     sweepPublications: (input) =>
       withLogContext({ correlationId: input.correlationId }, () => runtime.sweepPublications(input)),
+  };
+}
+
+/** The connect-choice purge is platform-level (no tenant input); the runtime declares the platform job itself. */
+export function createConnectChoicePurgeActivities(
+  runtime: ConnectChoicePurgeRuntimeV1,
+): ConnectChoicePurgeActivitiesV1 {
+  return {
+    purgeExpiredConnectChoices: (input) =>
+      withLogContext({ correlationId: input.correlationId }, () => runtime.purgeExpiredConnectChoices(input)),
   };
 }

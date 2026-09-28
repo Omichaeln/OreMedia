@@ -2,27 +2,38 @@ import { randomBytes } from 'node:crypto';
 import type { z } from 'zod';
 import { ConflictError, NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
-import type { ChannelVariantInput, ValidationResult } from '@oremedia/contracts/providers';
+import type { AccountGrant, ChannelVariantInput, ValidationResult } from '@oremedia/contracts/providers';
 import {
+  ChannelConnectCancel,
   ChannelConnectStart,
   ChannelConnectComplete,
+  ChannelConnectSelect,
   ChannelDisconnect,
   ChannelList,
+  type ChannelConnectChoice,
 } from '@oremedia/contracts/publishing';
-import { requireTenant, type Tx } from '@oremedia/db';
+import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
-import { missingScopes } from '@oremedia/providers';
+import { logger } from '@oremedia/observability';
+import { missingScopes, type ProviderAdapter, type ProviderIO } from '@oremedia/providers';
 import { credentialBroker } from './broker';
 import { actorRef, connectionUsable, toConnectionDto, transition, type ConnectionRow } from './common';
+import type { EnvelopeRow } from './envelope';
 import { assertBrandExists, providerClientFor, publishMedia, variants } from './hooks';
 import { adapterFor, providerIO } from './providers';
-import { ChannelConnectionRepository, CredentialRefRepository, PublicationRepository } from './repositories';
+import {
+  ChannelConnectionRepository,
+  CredentialRefRepository,
+  PendingChannelGrantRepository,
+  PublicationRepository,
+} from './repositories';
 
 const connectionsRepo = new ChannelConnectionRepository();
 const credentialsRepo = new CredentialRefRepository();
 const publicationsRepo = new PublicationRepository();
+const pendingRepo = new PendingChannelGrantRepository();
 
 /**
  * PKCE state for an OAuth connect flow, stored server-side with a short TTL and consumed once. The memory store
@@ -85,6 +96,204 @@ const connectionResource = (c: ConnectionRow) => ({
   channelId: c.id,
 });
 
+/** `connect.complete` and `connect.select`: the connection, marked connected, or the accounts to choose from. */
+export type ChannelConnectResult =
+  ({ outcome: 'connected' } & ReturnType<typeof toConnectionDto>) | ChannelConnectChoice;
+
+const anotherBrand = (path: string) =>
+  new ValidationFailedError(
+    [{ path, issue: 'remote_account_connected_to_another_brand' }],
+    'This account is already connected to another brand',
+  );
+
+/** Where an account would land in this brand: the known connection to rotate, else a new id; null in another brand. */
+interface ConnectionTarget {
+  channelConnectionId: string;
+  existing: ConnectionRow | null;
+}
+async function connectionTarget(
+  providerKey: string,
+  brandId: string,
+  remoteAccountId: string,
+  tx: Tx,
+): Promise<ConnectionTarget | null> {
+  const existing = await connectionsRepo.findByRemoteAccount(providerKey, remoteAccountId, tx);
+  if (existing && existing.brandId !== brandId) return null;
+  return { channelConnectionId: existing?.id ?? newId('channelConnection'), existing };
+}
+
+/** An account's grant sealed for the connection it becomes; what a connection write needs, never plaintext. */
+interface SealedAccount {
+  remoteAccountId: string;
+  displayName: string;
+  grantedScopes: string[];
+  tokenExpiresAt: Date | null;
+  channelConnectionId: string;
+  envelope: EnvelopeRow;
+}
+async function sealAccount(
+  tenantId: string,
+  grant: AccountGrant,
+  target: ConnectionTarget,
+): Promise<SealedAccount> {
+  return {
+    remoteAccountId: grant.remoteAccountId,
+    displayName: grant.displayName,
+    grantedScopes: grant.grantedScopes,
+    tokenExpiresAt: grant.tokenExpiresAt ? new Date(grant.tokenExpiresAt) : null,
+    channelConnectionId: target.channelConnectionId,
+    envelope: await credentialBroker.seal(tenantId, target.channelConnectionId, grant.credentials),
+  };
+}
+
+/**
+ * The one connection write (spec 14.7): stores the sealed grant as a new credential_refs row, creates the
+ * connection or, for a known remote account, rotates its credential and reactivates it; audited, with the event.
+ */
+async function connectAccount(
+  actor: ResolvedActor,
+  brandId: string,
+  adapter: ProviderAdapter,
+  account: SealedAccount,
+  existing: ConnectionRow | null,
+  tx: Tx,
+) {
+  const connectionId = account.channelConnectionId;
+  const credentialRefId = newId('credentialRef');
+  await credentialsRepo.create({ id: credentialRefId, ...account.envelope }, tx);
+  const values = {
+    displayName: account.displayName,
+    credentialRefId,
+    grantedScopes: account.grantedScopes,
+    missingScopes: missingScopes(adapter.capability.requiredScopes, account.grantedScopes),
+    status: 'active' as const,
+    tokenExpiresAt: account.tokenExpiresAt,
+    capabilityVersion: adapter.capability.version,
+  };
+  let fromState: string | null = null;
+  if (existing) {
+    const locked = await connectionsRepo.lock(existing.id, tx);
+    fromState = locked.status;
+    await connectionsRepo.update(locked.id, locked.version, values, tx);
+    const old = await credentialsRepo.getById(locked.credentialRefId, tx);
+    if (!old.destroyedAt) await credentialsRepo.destroy(old.id, old.version, 'rotated', tx);
+  } else {
+    await connectionsRepo.create(
+      {
+        id: connectionId,
+        brandId,
+        providerKey: adapter.key,
+        remoteAccountId: account.remoteAccountId,
+        ...values,
+      },
+      tx,
+    );
+  }
+  const row = await connectionsRepo.getById(connectionId, tx);
+  await audit.record(
+    actorRef(actor),
+    existing ? 'channel.reconnect' : 'channel.connect',
+    { type: 'channel_connection', id: connectionId },
+    'allowed',
+    tx,
+    { brandId, channelConnectionId: connectionId, fromState, toState: 'active' },
+  );
+  await outbox.add(
+    'channel.connected',
+    { type: 'channel_connection', id: connectionId, version: row.version },
+    {
+      channelConnectionId: connectionId,
+      providerKey: adapter.key,
+      actorKind: actor.kind,
+      actorId: actor.id,
+      reconnect: existing !== null,
+    },
+    tx,
+    { brandId },
+  );
+  return toConnectionDto(row);
+}
+
+/**
+ * Expired choices are deleted, sealed grants with them, whenever a connect flow runs in the tenant (the periodic
+ * purge, connectChoicePurgeWorkflowV1, catches tenants that never connect again). It commits on its own so a refused
+ * (rolled back) choice still leaves nothing expired behind; a failure here is logged and never fails the request.
+ */
+async function destroyExpiredChoices(): Promise<void> {
+  try {
+    await withTransaction((tx) => pendingRepo.deleteExpired(new Date(), tx));
+  } catch (err) {
+    logger()
+      .child('publishing')
+      .warn(
+        { errorName: (err as Error)?.name, errorCode: (err as { code?: string })?.code },
+        'expired connect choices not purged; the periodic purge will remove them',
+      );
+  }
+}
+
+/**
+ * The grants a choice seals: the exchanged account's, then every other account's from one listing (accountGrants),
+ * else one selectAccount each. An account the provider no longer returns, or fails for, is left out and counted:
+ * one Page failing (gone, timed out, rate limited) never loses the others or the consumed connect state.
+ */
+async function grantsForChoice(
+  adapter: ProviderAdapter,
+  grant: AccountGrant,
+  io: ProviderIO,
+): Promise<{ grants: AccountGrant[]; unavailable: number }> {
+  const wanted = [...new Set((grant.alternatives ?? []).map((a) => a.remoteAccountId))].filter(
+    (id) => id !== grant.remoteAccountId,
+  );
+  const grants: AccountGrant[] = [grant];
+  const leftOut = (err: unknown) =>
+    logger()
+      .child('publishing')
+      .warn(
+        {
+          providerKey: adapter.key,
+          errorName: (err as Error)?.name,
+          errorCode: (err as { code?: string })?.code,
+        },
+        'an account of the connect choice is unavailable; left out',
+      );
+  if (adapter.accountGrants) {
+    let listed: AccountGrant[] = [];
+    try {
+      listed = await adapter.accountGrants(grant.credentials, io, grant.grantedScopes);
+    } catch (err) {
+      leftOut(err);
+    }
+    for (const id of wanted) {
+      const found = listed.find((g) => g.remoteAccountId === id);
+      if (found) grants.push(found);
+    }
+  } else if (adapter.selectAccount) {
+    for (const id of wanted) {
+      try {
+        grants.push(await adapter.selectAccount(grant.credentials, id, io, grant.grantedScopes));
+      } catch (err) {
+        leftOut(err);
+      }
+    }
+  }
+  return { grants, unavailable: wanted.length + 1 - grants.length };
+}
+
+/** The rows of a live choice made by this actor, locked; anything else is the same refusal (nothing is revealed). */
+async function takeChoice(actor: ResolvedActor, pendingId: string, tx: Tx) {
+  await destroyExpiredChoices();
+  const rows = await pendingRepo.lockPending(pendingId, tx);
+  const first = rows[0];
+  if (!first || first.actorKind !== actor.kind || first.actorId !== actor.id || first.expiresAt <= new Date())
+    throw new ValidationFailedError(
+      [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      'The connect flow has expired; start again',
+    );
+  await policy.assert(actor, 'channel.connect', brandResource(first.brandId), {}, tx);
+  return { brandId: first.brandId, rows };
+}
+
 export const channelService = {
   connect: {
     /** Spec 14.7: the authorization URL with a server-side PKCE verifier; uncertified providers are refused. */
@@ -133,8 +342,17 @@ export const channelService = {
      * Spec 14.7 on connect: the code is exchanged, the grant sealed with a per-record data key (AAD binds it to
      * tenant and connection) and stored as a new credential_refs row; a reconnect of a known remote account rotates
      * the credential and reactivates the connection. Plaintext never reaches the DB, logs or events.
+     *
+     * A grant that can address several accounts (the adapter lists `alternatives` and can select among them)
+     * connects nothing yet: each account this brand may connect is resolved and sealed for the connection it would
+     * become, and the person chooses with `select` (outcome 'choose'), even when only one of them remains. A grant
+     * for one account connects as before.
      */
-    async complete(actor: ResolvedActor, input: z.infer<typeof ChannelConnectComplete>, tx: Tx) {
+    async complete(
+      actor: ResolvedActor,
+      input: z.infer<typeof ChannelConnectComplete>,
+      tx: Tx,
+    ): Promise<ChannelConnectResult> {
       const parsed = ChannelConnectComplete.parse(input);
       const { tenantId } = requireTenant();
       const pending = await stateStore.take(parsed.state);
@@ -144,7 +362,9 @@ export const channelService = {
           'The connect flow has expired; start again',
         );
       await policy.assert(actor, 'channel.connect', brandResource(pending.brandId), {}, tx);
+      await destroyExpiredChoices();
       const adapter = adapterFor(pending.providerKey);
+      const io = providerIO(adapter.key, tenantId);
       const grant = await adapter.exchangeCode(
         {
           code: parsed.code,
@@ -152,70 +372,129 @@ export const channelService = {
           redirectUri: pending.redirectUri,
           client: providerClientFor(adapter.key),
         },
-        providerIO(adapter.key, tenantId),
+        io,
       );
-      const existing = await connectionsRepo.findByRemoteAccount(adapter.key, grant.remoteAccountId, tx);
-      if (existing && existing.brandId !== pending.brandId)
-        throw new ValidationFailedError(
-          [{ path: 'providerKey', issue: 'remote_account_connected_to_another_brand' }],
-          'This account is already connected to another brand',
-        );
-      const connectionId = existing?.id ?? newId('channelConnection');
-      const sealed = await credentialBroker.seal(tenantId, connectionId, grant.credentials);
-      const credentialRefId = newId('credentialRef');
-      await credentialsRepo.create({ id: credentialRefId, ...sealed }, tx);
-      const scopesMissing = missingScopes(adapter.capability.requiredScopes, grant.grantedScopes);
-      const values = {
-        displayName: grant.displayName,
-        credentialRefId,
-        grantedScopes: grant.grantedScopes,
-        missingScopes: scopesMissing,
-        status: 'active' as const,
-        tokenExpiresAt: grant.tokenExpiresAt ? new Date(grant.tokenExpiresAt) : null,
-        capabilityVersion: adapter.capability.version,
-      };
-      let fromState: string | null = null;
-      if (existing) {
-        const locked = await connectionsRepo.lock(existing.id, tx);
-        fromState = locked.status;
-        await connectionsRepo.update(locked.id, locked.version, values, tx);
-        const old = await credentialsRepo.getById(locked.credentialRefId, tx);
-        if (!old.destroyedAt) await credentialsRepo.destroy(old.id, old.version, 'rotated', tx);
-      } else {
-        await connectionsRepo.create(
-          {
-            id: connectionId,
-            brandId: pending.brandId,
-            providerKey: adapter.key,
-            remoteAccountId: grant.remoteAccountId,
-            ...values,
-          },
-          tx,
-        );
+      const canChoose = Boolean(adapter.accountGrants ?? adapter.selectAccount);
+      if (!canChoose || !grant.alternatives?.length) {
+        const target = await connectionTarget(adapter.key, pending.brandId, grant.remoteAccountId, tx);
+        if (!target) throw anotherBrand('providerKey');
+        const account = await sealAccount(tenantId, grant, target);
+        const connected = await connectAccount(actor, pending.brandId, adapter, account, target.existing, tx);
+        return { outcome: 'connected', ...connected };
       }
-      const row = await connectionsRepo.getById(connectionId, tx);
-      await audit.record(
-        actorRef(actor),
-        existing ? 'channel.reconnect' : 'channel.connect',
-        { type: 'channel_connection', id: connectionId },
-        'allowed',
-        tx,
-        { brandId: pending.brandId, channelConnectionId: connectionId, fromState, toState: 'active' },
-      );
-      await outbox.add(
-        'channel.connected',
-        { type: 'channel_connection', id: connectionId, version: row.version },
-        {
-          channelConnectionId: connectionId,
+
+      // Several accounts: always an explicit choice, even when only one of them can be connected to this brand.
+      const { grants, unavailable } = await grantsForChoice(adapter, grant, io);
+      const pendingId = newId('pendingChannelGrant');
+      const expiresAt = new Date(Date.now() + CONNECT_STATE_TTL_MS);
+      const rows = [];
+      let excluded = 0;
+      for (const account of grants) {
+        const target = await connectionTarget(adapter.key, pending.brandId, account.remoteAccountId, tx);
+        if (!target) {
+          excluded += 1; // connected to another brand: not offered here
+          continue;
+        }
+        const sealed = await sealAccount(tenantId, account, target);
+        rows.push({
+          id: newId('pendingChannelGrant'),
+          brandId: pending.brandId,
+          pendingId,
           providerKey: adapter.key,
           actorKind: actor.kind,
           actorId: actor.id,
-          reconnect: existing !== null,
-        },
+          position: rows.length,
+          remoteAccountId: sealed.remoteAccountId,
+          displayName: sealed.displayName,
+          channelConnectionId: sealed.channelConnectionId,
+          grantedScopes: sealed.grantedScopes,
+          tokenExpiresAt: sealed.tokenExpiresAt,
+          ...sealed.envelope,
+          expiresAt,
+        });
+      }
+      if (rows.length === 0) throw anotherBrand('providerKey');
+      await pendingRepo.createMany(rows, tx);
+      await audit.record(
+        actorRef(actor),
+        'channel.connect.choose',
+        { type: 'brand', id: pending.brandId },
+        'allowed',
         tx,
-        { brandId: pending.brandId },
+        {
+          brandId: pending.brandId,
+          count: rows.length,
+          evidence: `offered=${rows.length},unavailable=${unavailable},other_brand=${excluded}`,
+        },
       );
-      return toConnectionDto(row);
+      return {
+        outcome: 'choose',
+        pendingId,
+        brandId: pending.brandId,
+        providerKey: adapter.key,
+        options: rows.map((r) => ({ remoteAccountId: r.remoteAccountId, displayName: r.displayName })),
+        unavailable,
+        expiresAt: expiresAt.toISOString(),
+      };
+    },
+
+    /**
+     * Spec 14.7 account choice: connects the account the person chose among those `complete` offered, through the
+     * same write as a single-account connect. Only the actor who completed the flow, in its tenant and brand, can
+     * choose, once, before it expires; every sealed grant of the choice is deleted with it.
+     */
+    async select(actor: ResolvedActor, input: z.infer<typeof ChannelConnectSelect>, tx: Tx) {
+      const parsed = ChannelConnectSelect.parse(input);
+      const { rows } = await takeChoice(actor, parsed.pendingId, tx);
+      const chosen = rows.find((r) => r.remoteAccountId === parsed.remoteAccountId);
+      if (!chosen)
+        throw new ValidationFailedError(
+          [{ path: 'remoteAccountId', issue: 'account_not_offered' }],
+          'Choose one of the accounts offered',
+        );
+      const adapter = adapterFor(chosen.providerKey);
+      const target = await connectionTarget(adapter.key, chosen.brandId, chosen.remoteAccountId, tx);
+      if (!target) throw anotherBrand('remoteAccountId');
+      // The grant is sealed for the connection it was offered as; one connected or removed since cannot take it.
+      if (target.channelConnectionId !== chosen.channelConnectionId && target.existing)
+        throw new ValidationFailedError(
+          [{ path: 'pendingId', issue: 'connect_choice_stale' }],
+          'The accounts changed while you were choosing; start again',
+        );
+      await pendingRepo.deletePending(parsed.pendingId, tx);
+      const { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad } = chosen;
+      const connected = await connectAccount(
+        actor,
+        chosen.brandId,
+        adapter,
+        {
+          remoteAccountId: chosen.remoteAccountId,
+          displayName: chosen.displayName,
+          grantedScopes: chosen.grantedScopes,
+          tokenExpiresAt: chosen.tokenExpiresAt,
+          channelConnectionId: chosen.channelConnectionId,
+          envelope: { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad },
+        },
+        target.existing,
+        tx,
+      );
+      return { outcome: 'connected' as const, ...connected };
+    },
+
+    /** Discards a choice: every sealed grant it holds is deleted. Same actor, tenant and brand as `select`. */
+    async cancel(actor: ResolvedActor, input: z.infer<typeof ChannelConnectCancel>, tx: Tx) {
+      const parsed = ChannelConnectCancel.parse(input);
+      const { brandId } = await takeChoice(actor, parsed.pendingId, tx);
+      const count = await pendingRepo.deletePending(parsed.pendingId, tx);
+      await audit.record(
+        actorRef(actor),
+        'channel.connect.cancel',
+        { type: 'brand', id: brandId },
+        'allowed',
+        tx,
+        { brandId, count },
+      );
+      return { pendingId: parsed.pendingId, cancelled: true as const };
     },
   },
 

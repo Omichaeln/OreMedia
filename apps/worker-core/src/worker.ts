@@ -7,7 +7,12 @@ import { startAgentsWorker } from './agents-worker';
 import { runDispatchLoop } from './dispatch-loop';
 import { ensureIntelligenceSchedulesRunning } from './intelligence-worker';
 import { ensureRetentionScheduleRunning } from './operations-worker';
-import { TemporalWorkflowProbe, ensureSweeperRunning, startPublishingWorkers } from './publishing-worker';
+import {
+  TemporalWorkflowProbe,
+  ensureConnectChoicePurgeScheduleRunning,
+  ensureSweeperRunning,
+  startPublishingWorkers,
+} from './publishing-worker';
 import { TemporalWorkflowStarter, connectTemporal, temporalConfigFromEnv } from './temporal';
 
 const log = startTelemetry({ service: 'oremedia-worker-core', version: process.env['OREMEDIA_VERSION'] });
@@ -60,6 +65,7 @@ let publishingWorkers;
 try {
   publishingWorkers = await startPublishingWorkers(temporalConfig);
   await ensureSweeperRunning(client);
+  await ensureConnectChoicePurgeScheduleRunning(client); // spec 14.7 expired account choices, every 15 minutes
   await ensureIntelligenceSchedulesRunning(client); // spec 16.3 weekly analyst, 16.8 monthly baseline comparison
   await ensureRetentionScheduleRunning(client); // spec 17.5 daily TTL sweep (dry run unless RETENTION_SWEEP_APPLY)
 } catch (err) {

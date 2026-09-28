@@ -1,6 +1,8 @@
 import {
   CancelCommand,
+  ChannelConnectCancel,
   ChannelConnectComplete,
+  ChannelConnectSelect,
   ChannelConnectStart,
   ChannelDisconnect,
   ChannelList,
@@ -37,6 +39,16 @@ export const publishingRouter = router({
         .input(ChannelConnectComplete)
         .mutation(({ ctx, input }) =>
           idempotent(mutationCtx(ctx), (tx) => channelService.connect.complete(ctx.tenant.actor, input, tx)),
+        ),
+      select: tenantMutation
+        .input(ChannelConnectSelect)
+        .mutation(({ ctx, input }) =>
+          idempotent(mutationCtx(ctx), (tx) => channelService.connect.select(ctx.tenant.actor, input, tx)),
+        ),
+      cancel: tenantMutation
+        .input(ChannelConnectCancel)
+        .mutation(({ ctx, input }) =>
+          idempotent(mutationCtx(ctx), (tx) => channelService.connect.cancel(ctx.tenant.actor, input, tx)),
         ),
     }),
     list: tenantQuery

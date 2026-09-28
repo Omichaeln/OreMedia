@@ -10,6 +10,7 @@ export {
   publicationSignalRelayV1,
 } from './publication.workflow.v1';
 export { publicationSweeperWorkflowV1 } from './publication-sweeper.workflow.v1';
+export { connectChoicePurgeWorkflowV1 } from './connect-choice-purge.workflow.v1';
 export { tokenRefreshWorkflowV1 } from './token-refresh.workflow.v1';
 export { brandChangeImpactWorkflowV1 } from './brand-change-impact.workflow.v1';
 export { metricCollectionWorkflowV1 } from './metric-collection.workflow.v1';

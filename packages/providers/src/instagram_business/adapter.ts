@@ -124,24 +124,34 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
     };
   }
 
-  /** Re-targets a grant at another connected Instagram account; not part of the contract. */
+  /** Re-targets a grant at another connected Instagram account (the connect flow's account choice). */
   async selectAccount(
     credentials: DecryptedCredentials,
     remoteAccountId: string,
     io: ProviderIO,
     grantedScopes: string[] = [],
   ): Promise<AccountGrant> {
-    const accounts = await this.igAccounts(io, credentials.accessToken);
-    const chosen = accounts.find((a) => a.id === remoteAccountId);
+    const grants = await this.accountGrants(credentials, io, grantedScopes);
+    const chosen = grants.find((g) => g.remoteAccountId === remoteAccountId);
     if (!chosen) throw new ProviderAuthError(this.key, 'account_not_found', remoteAccountId);
-    return {
-      remoteAccountId: chosen.id,
-      displayName: chosen.name,
+    return chosen;
+  }
+
+  /** Every professional account linked to a Page the user manages, from one `/me/accounts` listing. */
+  async accountGrants(
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    grantedScopes: string[] = [],
+  ): Promise<AccountGrant[]> {
+    const accounts = await this.igAccounts(io, credentials.accessToken);
+    return accounts.map((account) => ({
+      remoteAccountId: account.id,
+      displayName: account.name,
       grantedScopes,
-      credentials: this.igCredentials(credentials.accessToken, chosen, credentials.expiresAt),
+      credentials: this.igCredentials(credentials.accessToken, account, credentials.expiresAt),
       ...(credentials.expiresAt ? { tokenExpiresAt: credentials.expiresAt } : {}),
-      alternatives: alternativesFrom(accounts, chosen.id),
-    };
+      alternatives: alternativesFrom(accounts, account.id),
+    }));
   }
 
   async refresh(

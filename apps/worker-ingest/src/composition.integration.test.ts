@@ -22,6 +22,7 @@ import {
   configurePublishingProviders,
   fixtureCapability,
   registerProviderClients,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
 import { composeModules } from './composition';
@@ -122,7 +123,9 @@ describe('worker-ingest composition: comment ingestion feeds the customer-voice 
       ),
     );
     const connection = await run((tx) =>
-      channelService.connect.complete(owner, { state: started.state, code: 'good' }, tx),
+      channelService.connect
+        .complete(owner, { state: started.state, code: 'good' }, tx)
+        .then(connectedChannel),
     );
     publicationId = newId('pub');
     await tdb.db.insert(publications).values({

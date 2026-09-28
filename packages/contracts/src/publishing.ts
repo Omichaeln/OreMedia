@@ -121,6 +121,38 @@ export const PublicationHoldRestored = z.object({
   limit: z.number().int().min(1).max(PAGE_MAX).default(PAGE_MAX),
 });
 
+/**
+ * Choosing the account (spec 14.7): when the person's grant addresses several accounts (Facebook Pages, Instagram
+ * professional accounts, LinkedIn Pages), `connect.complete` connects nothing and answers `outcome: 'choose'` with a
+ * one-shot `pendingId`; `connect.select` connects the chosen one, `connect.cancel` discards the choice. Both are
+ * bound to the tenant, brand and actor that completed the flow and expire with it (CONNECT_STATE_TTL_MS).
+ */
+export const ChannelConnectSelect = z.object({
+  pendingId: z.string().max(32),
+  remoteAccountId: z.string().min(1).max(200),
+});
+export const ChannelConnectCancel = z.object({ pendingId: z.string().max(32) });
+
+/** One account the grant can connect: names only, never tokens. */
+export interface ChannelConnectOption {
+  remoteAccountId: string;
+  displayName: string;
+}
+/**
+ * `connect.complete`'s answer when the person must choose. The connected answer is the channel connection itself
+ * with `outcome: 'connected'` added, so a client written before the choice existed reads it unchanged.
+ */
+export interface ChannelConnectChoice {
+  outcome: 'choose';
+  pendingId: string;
+  brandId: string;
+  providerKey: string;
+  options: ChannelConnectOption[];
+  /** Accounts the grant listed that the provider did not return a grant for (left out, not an error). */
+  unavailable: number;
+  expiresAt: string;
+}
+
 /** Spec 13.5: the cancel response; `prevented: false` means dispatch already started and the outcome is reconciled. */
 export type CancelResult =
   | { prevented: true; state: PublicationState; version: number }
@@ -282,6 +314,24 @@ export interface PublicationSweepActivitiesV1 {
   sweepPublications(input: PublicationSweepInputV1): Promise<SweepResultV1>;
 }
 
+/**
+ * Spec 14.7 account choice: the periodic purge of expired pending choices (connectChoicePurgeWorkflowV1, a Temporal
+ * schedule on task queue `core`). Platform-level: it spans tenants and carries none.
+ */
+export const ConnectChoicePurgeInputV1 = z.object({ correlationId: z.string(), now: z.string().datetime() });
+export type ConnectChoicePurgeInputV1 = z.infer<typeof ConnectChoicePurgeInputV1>;
+export interface ConnectChoicePurgeArgsV1 {
+  correlationId?: string;
+  now?: string;
+}
+export interface ConnectChoicePurgeResultV1 {
+  /** Pending grant rows shredded and deleted. */
+  rows: number;
+}
+export interface ConnectChoicePurgeActivitiesV1 {
+  purgeExpiredConnectChoices(input: ConnectChoicePurgeInputV1): Promise<ConnectChoicePurgeResultV1>;
+}
+
 /** The module-side implementations the activities wrap (tenant context is established by the activity host). */
 export type PublishControlRuntimeV1 = PublishControlActivitiesV1;
 export interface PublishProviderRuntimeV1 {
@@ -292,3 +342,4 @@ export interface PublishProviderRuntimeV1 {
 }
 export type TokenRefreshRuntimeV1 = TokenRefreshActivitiesV1;
 export type PublicationSweepRuntimeV1 = PublicationSweepActivitiesV1;
+export type ConnectChoicePurgeRuntimeV1 = ConnectChoicePurgeActivitiesV1;

@@ -14,6 +14,16 @@ export const PUBLISHING_INPUTS: Record<string, CrossTenantFixture> = {
     reason:
       'the PKCE state is server-side and tenant-bound; an unknown or foreign state is VALIDATION_FAILED',
   },
+  'publishing.channels.connect.select': {
+    buildInput: () => ({ pendingId: 'pcg_01J00000000000000000000000', remoteAccountId: 'acct_foreign' }),
+    reason:
+      'a pending account choice is tenant-, brand- and actor-bound (covered with real rows in the publishing suite); an unknown or foreign one is VALIDATION_FAILED',
+  },
+  'publishing.channels.connect.cancel': {
+    buildInput: () => ({ pendingId: 'pcg_01J00000000000000000000000' }),
+    reason:
+      'a pending account choice is tenant-, brand- and actor-bound (covered with real rows in the publishing suite); an unknown or foreign one is VALIDATION_FAILED',
+  },
   'publishing.channels.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'publishing.channels.disconnect': {
     buildInput: (f) => ({ channelConnectionId: f['publishingChannelConnectionId'], expectedVersion: 0 }),

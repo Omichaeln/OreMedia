@@ -26,6 +26,7 @@ import {
   registerApprovalConsumer,
   registerReleaseEvaluator,
   registerVariantSource,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
 import { runPublication, type PublicationHost } from '@oremedia/workflows/publication.workflow.v1';
@@ -235,7 +236,9 @@ describe('publish media source end to end (worker-core composition, fake Tempora
     connA = (
       await inTenant(() =>
         withTransaction((tx) =>
-          channelService.connect.complete(publisher(tenantA), { state: started.state, code: 'good' }, tx),
+          channelService.connect
+            .complete(publisher(tenantA), { state: started.state, code: 'good' }, tx)
+            .then(connectedChannel),
         ),
       )
     ).id;

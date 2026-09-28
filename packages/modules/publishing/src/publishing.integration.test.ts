@@ -21,15 +21,18 @@ import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import {
   channelConnections,
   credentialRefs,
+  pendingChannelGrants,
   publicationAttempts,
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
+import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { idempotent } from '@oremedia/module-operations';
 import { createLogger } from '@oremedia/observability';
 import { ProviderRegistry, ProviderTransportError } from '@oremedia/providers';
 import { configureCredentialBroker, credentialBroker } from './broker';
-import { channelService, configureConnectCallback } from './channels';
+import { channelService, configureConnectCallback, type ChannelConnectResult } from './channels';
 import { publicationWorkflowId } from './common';
 import {
   registerBrandChecker,
@@ -50,10 +53,19 @@ import {
 import { LocalKms, WrapOnlyKms } from './kms';
 import { configurePublishingProviders } from './providers';
 import { publicationService } from './publications';
-import { PublicationAttemptRepository, PublicationRepository } from './repositories';
+import {
+  PendingChannelGrantRepository,
+  PublicationAttemptRepository,
+  PublicationRepository,
+} from './repositories';
 import { createPublishingRuntime } from './runtime';
 import { publishingToolSource } from './tools';
-import { FIXTURE_PROVIDER_KEY, FixtureProviderAdapter, fixtureCapability } from './testing/fixture-provider';
+import {
+  FIXTURE_PROVIDER_KEY,
+  FixtureProviderAdapter,
+  connectedChannel,
+  fixtureCapability,
+} from './testing/fixture-provider';
 
 /**
  * The publishing module against MySQL 8 (spec 14.1, 14.3 control/provider runtime, 14.7, 13.5): channel connect
@@ -212,8 +224,10 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         tx,
       ),
     );
-    return run(tenantId, (tx) =>
-      channelService.connect.complete(manager(tenantId), { state: started.state, code: 'good' }, tx),
+    return connectedChannel(
+      await run(tenantId, (tx) =>
+        channelService.connect.complete(manager(tenantId), { state: started.state, code: 'good' }, tx),
+      ),
     );
   };
 
@@ -410,6 +424,379 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect(await inTenant(tenantA, () => channelService.validateVariantDetailed(long.id))).toMatchObject({
         ok: false,
       });
+    });
+  });
+
+  describe('choosing the account when the grant addresses several (spec 14.7)', () => {
+    const OTHER_USER = 'usr_publishing_other';
+    let seq = 0;
+    /** Starts and completes a flow whose login manages `primary` plus the given alternatives. */
+    const completeWith = async (
+      primary: string,
+      alternatives: string[],
+      actor: ResolvedActor = A,
+    ): Promise<ChannelConnectResult> => {
+      const saved = fixture.grant;
+      fixture.grant = {
+        ...saved,
+        remoteAccountId: primary,
+        displayName: `Page ${primary}`,
+        alternatives: alternatives.map((id) => ({ remoteAccountId: id, displayName: `Page ${id}` })),
+      };
+      try {
+        const started = await run(tenantA, (tx) =>
+          channelService.connect.start(
+            actor,
+            { brandId: brandA, providerKey: FIXTURE_PROVIDER_KEY, redirectUri: 'https://app.example/cb' },
+            tx,
+          ),
+        );
+        return await run(tenantA, (tx) =>
+          channelService.connect.complete(actor, { state: started.state, code: 'good' }, tx),
+        );
+      } finally {
+        fixture.grant = saved;
+      }
+    };
+    /** A choice among three fresh accounts; the fixture must still list them when `select` runs. */
+    const choose = async () => {
+      seq += 1;
+      const ids = [`acct_choice_${seq}_1`, `acct_choice_${seq}_2`, `acct_choice_${seq}_3`];
+      const result = await completeWith(ids[0]!, ids.slice(1));
+      if (result.outcome !== 'choose') throw new Error('expected a choice');
+      return { ...result, ids };
+    };
+    const pendingRows = (pendingId: string) =>
+      tdb.db.select().from(pendingChannelGrants).where(eq(pendingChannelGrants.pendingId, pendingId));
+    const connectionsFor = (remoteAccountId: string) =>
+      tdb.db
+        .select()
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.tenantId, tenantA),
+            eq(channelConnections.remoteAccountId, remoteAccountId),
+          ),
+        );
+    const select = (
+      pendingId: string,
+      remoteAccountId: string,
+      actor: ResolvedActor = A,
+      tenantId = tenantA,
+    ) => run(tenantId, (tx) => channelService.connect.select(actor, { pendingId, remoteAccountId }, tx));
+
+    it('one account: connects as before, outcome connected, nothing pending', async () => {
+      const result = await completeWith('acct_single_only', []);
+      expect(result).toMatchObject({
+        outcome: 'connected',
+        remoteAccountId: 'acct_single_only',
+        status: 'active',
+      });
+      expect(await tdb.db.select().from(pendingChannelGrants)).toEqual([]);
+    });
+
+    it('several: nothing is connected; each account is offered and sealed for its own connection', async () => {
+      const choice = await choose();
+      expect(choice.options).toEqual(
+        choice.ids.map((id) => ({ remoteAccountId: id, displayName: `Page ${id}` })),
+      );
+      expect(choice).toMatchObject({ brandId: brandA, providerKey: FIXTURE_PROVIDER_KEY, unavailable: 0 });
+      expect(Date.parse(choice.expiresAt) - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+      for (const id of choice.ids) expect(await connectionsFor(id)).toEqual([]);
+      const rows = await pendingRows(choice.pendingId);
+      expect(rows.map((r) => r.remoteAccountId)).toEqual(choice.ids);
+      for (const r of rows) {
+        expect(r).toMatchObject({ tenantId: tenantA, brandId: brandA, actorKind: 'user', actorId: USER });
+        expect(r.aad).toBe(`${tenantA}:${r.channelConnectionId}`);
+        for (const col of [r.ciphertext, r.wrappedDataKey])
+          expect(Buffer.from(col, 'base64').toString('utf8')).not.toMatch(/at_fixture_secret|at_page_/);
+      }
+      // The answer carries names only: no token, no credential reference, no connection id.
+      expect(JSON.stringify(choice)).not.toMatch(/at_fixture_secret|at_page_|cc_|cr_/);
+    });
+
+    it('select connects the chosen account with its own token, in the API process (no decrypt), once', async () => {
+      const choice = await choose();
+      const chosen = choice.ids[1]!;
+      configureCredentialBroker({ kms: new WrapOnlyKms(kms) });
+      let connected;
+      try {
+        connected = await select(choice.pendingId, chosen);
+      } finally {
+        configureCredentialBroker({ kms });
+      }
+      expect(connected).toMatchObject({
+        outcome: 'connected',
+        remoteAccountId: chosen,
+        displayName: `Page ${chosen}`,
+      });
+      expect(connected.missingScopes).toEqual([]);
+      for (const other of [choice.ids[0]!, choice.ids[2]!]) expect(await connectionsFor(other)).toEqual([]);
+      const token = await inTenant(tenantA, () =>
+        credentialBroker.withCredentials(tenantA, connected.id, async (creds) => creds.accessToken),
+      );
+      expect(token).toBe(`at_page_${chosen}`);
+      expect(await pendingRows(choice.pendingId)).toEqual([]); // every sealed grant of the choice is gone
+      expect(
+        (await eventsOf(tenantA, 'channel.connected')).map((e) => e.payload['channelConnectionId']),
+      ).toContain(connected.id);
+      // One-shot: the same choice cannot connect again, not even another of its accounts.
+      await expect(select(choice.pendingId, choice.ids[2]!)).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+    });
+
+    it('choosing an account already connected to the brand rotates that connection', async () => {
+      const first = await completeWith('acct_rotate_me', []);
+      if (first.outcome !== 'connected') throw new Error('expected a connection');
+      const before = await connectionRow(first.id);
+      const result = await completeWith('acct_rotate_other', ['acct_rotate_me']);
+      if (result.outcome !== 'choose') throw new Error('expected a choice');
+      const rows = await pendingRows(result.pendingId);
+      expect(rows.find((r) => r.remoteAccountId === 'acct_rotate_me')?.channelConnectionId).toBe(first.id);
+      const rotated = await select(result.pendingId, 'acct_rotate_me');
+      expect(rotated.id).toBe(first.id);
+      const after = await connectionRow(first.id);
+      expect(after.credentialRefId).not.toBe(before.credentialRefId);
+      expect((await credentialRow(before.credentialRefId)).destroyedAt).not.toBeNull();
+    });
+
+    it('an account the choice did not offer is refused and the choice stays open', async () => {
+      const choice = await choose();
+      await expect(select(choice.pendingId, 'acct_not_offered')).rejects.toMatchObject({
+        details: [{ path: 'remoteAccountId', issue: 'account_not_offered' }],
+      });
+      expect(await pendingRows(choice.pendingId)).toHaveLength(3);
+      await expect(select(choice.pendingId, choice.ids[0]!)).resolves.toMatchObject({ outcome: 'connected' });
+    });
+
+    it('another actor, another tenant or a brand out of scope cannot choose (the choice is not revealed)', async () => {
+      const choice = await choose();
+      const other: ResolvedActor = { ...A, id: OTHER_USER };
+      await expect(select(choice.pendingId, choice.ids[0]!, other)).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      await expect(select(choice.pendingId, choice.ids[0]!, B, tenantB)).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      await expect(
+        runInTenant(ctx(tenantA, new Set([newId('brand')])), () =>
+          withTransaction((tx) =>
+            channelService.connect.select(
+              A,
+              { pendingId: choice.pendingId, remoteAccountId: choice.ids[0]! },
+              tx,
+            ),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      await expect(
+        run(tenantB, (tx) => channelService.connect.cancel(B, { pendingId: choice.pendingId }, tx)),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      expect(await pendingRows(choice.pendingId)).toHaveLength(3); // refused attempts consume nothing
+      for (const id of choice.ids) expect(await connectionsFor(id)).toEqual([]);
+    });
+
+    it('an expired choice is refused and its sealed grants are destroyed', async () => {
+      const choice = await choose();
+      await tdb.db
+        .update(pendingChannelGrants)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(pendingChannelGrants.pendingId, choice.pendingId));
+      await expect(select(choice.pendingId, choice.ids[0]!)).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      expect(await pendingRows(choice.pendingId)).toEqual([]);
+      expect(await connectionsFor(choice.ids[0]!)).toEqual([]);
+    });
+
+    it('any connect flow in the tenant destroys expired choices', async () => {
+      const choice = await choose();
+      await tdb.db
+        .update(pendingChannelGrants)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(pendingChannelGrants.pendingId, choice.pendingId));
+      await completeWith('acct_sweeps_expired', []);
+      expect(await pendingRows(choice.pendingId)).toEqual([]);
+    });
+
+    it('cancel destroys the choice; it cannot be chosen afterwards; cancel is audited', async () => {
+      const choice = await choose();
+      await expect(
+        run(tenantA, (tx) => channelService.connect.cancel(A, { pendingId: choice.pendingId }, tx)),
+      ).resolves.toEqual({ pendingId: choice.pendingId, cancelled: true });
+      expect(await pendingRows(choice.pendingId)).toEqual([]);
+      await expect(select(choice.pendingId, choice.ids[0]!)).rejects.toBeInstanceOf(ValidationFailedError);
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.connect.cancel')));
+      expect(audited.length).toBeGreaterThan(0);
+    });
+
+    it('a stale choice (the account was connected by another flow meanwhile) is refused', async () => {
+      const choice = await choose();
+      const [first, second] = [choice.ids[0]!, choice.ids[1]!];
+      await completeWith(first, []); // connected directly, as a new connection with another id
+      await expect(select(choice.pendingId, first)).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_stale' }],
+      });
+      await expect(select(choice.pendingId, second)).resolves.toMatchObject({ remoteAccountId: second });
+    });
+
+    it('an account the provider no longer returns is left out and counted; the others are still offered', async () => {
+      seq += 1;
+      const ids = [`acct_gone_${seq}_1`, `acct_gone_${seq}_2`, `acct_gone_${seq}_3`];
+      fixture.unavailableAccounts.add(ids[1]!);
+      try {
+        const listed = await completeWith(ids[0]!, ids.slice(1));
+        expect(listed).toMatchObject({ outcome: 'choose', unavailable: 1 });
+        if (listed.outcome !== 'choose') throw new Error('expected a choice');
+        expect(listed.options.map((o) => o.remoteAccountId)).toEqual([ids[0], ids[2]]);
+        // Without a one-listing method the flow asks per account: one failure is left out the same way.
+        Object.defineProperty(fixture, 'accountGrants', { value: undefined, configurable: true });
+        const perAccount = await completeWith(ids[0]!, ids.slice(1));
+        expect(perAccount).toMatchObject({ outcome: 'choose', unavailable: 1 });
+        if (perAccount.outcome !== 'choose') throw new Error('expected a choice');
+        expect(perAccount.options.map((o) => o.remoteAccountId)).toEqual([ids[0], ids[2]]);
+        const audited = await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.connect.choose')));
+        expect(JSON.stringify(audited.map((a) => a.metadata))).toContain('unavailable=1');
+      } finally {
+        delete (fixture as { accountGrants?: unknown }).accountGrants;
+        fixture.unavailableAccounts.clear();
+      }
+    });
+
+    it('the primary account connected to another brand: the person still chooses, even with one account left', async () => {
+      seq += 1;
+      const [elsewhere, here] = [`acct_other_brand_${seq}`, `acct_left_${seq}`];
+      const brandA2 = newId('brand');
+      await tdb.db.insert(brands).values({
+        id: brandA2,
+        tenantId: tenantA,
+        name: 'A2',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'active',
+      });
+      await tdb.db.insert(channelConnections).values({
+        id: newId('channelConnection'),
+        tenantId: tenantA,
+        brandId: brandA2,
+        providerKey: FIXTURE_PROVIDER_KEY,
+        remoteAccountId: elsewhere,
+        displayName: 'Elsewhere',
+        credentialRefId: (await connectionRow(connA)).credentialRefId,
+        grantedScopes: ['w_post'],
+        status: 'active',
+        capabilityVersion: 1,
+      });
+      const result = await completeWith(elsewhere, [here]);
+      expect(result).toMatchObject({ outcome: 'choose', unavailable: 0 });
+      if (result.outcome !== 'choose') throw new Error('expected a choice');
+      expect(result.options).toEqual([{ remoteAccountId: here, displayName: `Page ${here}` }]);
+      expect(await connectionsFor(here)).toEqual([]); // nothing connected silently
+      // Only accounts of other brands: refused as before.
+      await expect(completeWith(elsewhere, [])).rejects.toMatchObject({
+        details: [{ path: 'providerKey', issue: 'remote_account_connected_to_another_brand' }],
+      });
+    });
+
+    it('select replays with the same idempotency key: one connection, the stored answer', async () => {
+      const choice = await choose();
+      const input = { pendingId: choice.pendingId, remoteAccountId: choice.ids[0]! };
+      const call = () =>
+        inTenant(tenantA, () =>
+          idempotent(
+            {
+              idempotency: {
+                key: `idem_select_${choice.pendingId}`,
+                path: 'publishing.channels.connect.select',
+                requestHash: hashCanonical(input),
+              },
+              actor: { kind: 'user', id: USER },
+            },
+            (tx) => channelService.connect.select(A, input, tx),
+          ),
+        );
+      const first = await call();
+      const again = await call();
+      expect(again).toEqual(first);
+      expect(await connectionsFor(choice.ids[0]!)).toHaveLength(1);
+    });
+
+    it('concurrent selects of one choice: exactly one connects', async () => {
+      const choice = await choose();
+      const results = await Promise.allSettled([
+        select(choice.pendingId, choice.ids[0]!),
+        select(choice.pendingId, choice.ids[1]!),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(refused.reason).toBeInstanceOf(ValidationFailedError);
+      const connected = [
+        ...(await connectionsFor(choice.ids[0]!)),
+        ...(await connectionsFor(choice.ids[1]!)),
+      ];
+      expect(connected).toHaveLength(1);
+      expect(await pendingRows(choice.pendingId)).toEqual([]);
+    });
+
+    it('a failing purge of expired choices never fails the connect flow', async () => {
+      const spy = vi
+        .spyOn(PendingChannelGrantRepository.prototype, 'deleteExpired')
+        .mockRejectedValue(Object.assign(new Error('lock wait'), { code: 'ER_LOCK_WAIT_TIMEOUT' }));
+      try {
+        const choice = await choose();
+        await expect(select(choice.pendingId, choice.ids[0]!)).resolves.toMatchObject({
+          outcome: 'connected',
+        });
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('the periodic purge shreds and deletes expired choices in every tenant, and keeps live ones', async () => {
+      const live = await choose();
+      const expired = await choose();
+      const foreignId = newId('pendingChannelGrant');
+      await tdb.db.insert(pendingChannelGrants).values({
+        id: newId('pendingChannelGrant'),
+        tenantId: tenantB,
+        brandId: brandB,
+        pendingId: foreignId,
+        providerKey: FIXTURE_PROVIDER_KEY,
+        actorKind: 'user',
+        actorId: USER,
+        position: 0,
+        remoteAccountId: 'acct_b_expired',
+        displayName: 'B',
+        channelConnectionId: newId('channelConnection'),
+        grantedScopes: [],
+        kmsKeyId: 'k',
+        wrappedDataKey: 'd3JhcHBlZA==',
+        ciphertext: 'Y2lwaGVy',
+        iv: 'iv',
+        authTag: 't',
+        aad: 'x',
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      await tdb.db
+        .update(pendingChannelGrants)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(pendingChannelGrants.pendingId, expired.pendingId));
+      const result = await runtime.connectChoicePurge.purgeExpiredConnectChoices({
+        correlationId: 'corr_purge',
+        now: new Date().toISOString(),
+      });
+      expect(result.rows).toBeGreaterThanOrEqual(4); // three of tenant A, one of tenant B
+      expect(await pendingRows(expired.pendingId)).toEqual([]);
+      expect(await pendingRows(foreignId)).toEqual([]);
+      expect(await pendingRows(live.pendingId)).toHaveLength(3);
     });
   });
 

@@ -112,6 +112,62 @@ describe('Facebook Page adapter (spec 14.5, 14.8)', () => {
     expect(server.remaining()).toEqual([]);
   });
 
+  it('accountGrants: every Page with its own Page token from one listing, following paging.next; selectAccount picks one', async () => {
+    const page = (n: number) => ({ id: `p_${n}`, name: `Page ${n}`, access_token: `page_${n}_fake` });
+    const listing = () => {
+      server.load({
+        exchanges: [
+          {
+            request: { method: 'GET', host: 'graph.facebook.com', path: '/v25.0/me/accounts' },
+            response: {
+              status: 200,
+              json: {
+                data: [page(300), page(100)],
+                paging: { next: 'https://graph.facebook.com/v25.0/me/accounts?after=cursor_2' },
+              },
+            },
+          },
+          {
+            request: {
+              method: 'GET',
+              host: 'graph.facebook.com',
+              path: '/v25.0/me/accounts',
+              query: { after: 'cursor_2' },
+            },
+            response: { status: 200, json: { data: [page(200)] } },
+          },
+        ],
+      });
+      io.calls.length = 0;
+    };
+    const user = {
+      accessToken: 'page_100_fake',
+      extra: { pageId: 'p_100', userAccessToken: 'long_user_fake' },
+    };
+    listing();
+    const grants = await adapter.accountGrants(user, io, ['pages_show_list']);
+    expect(grants.map((g) => [g.remoteAccountId, g.credentials.accessToken])).toEqual([
+      ['p_100', 'page_100_fake'],
+      ['p_200', 'page_200_fake'], // from the second page of the listing
+      ['p_300', 'page_300_fake'],
+    ]);
+    expect(grants[1]).toMatchObject({
+      displayName: 'Page 200',
+      grantedScopes: ['pages_show_list'],
+      credentials: { extra: { pageId: 'p_200', userAccessToken: 'long_user_fake' } },
+    });
+    expect(io.calls).toHaveLength(2); // one listing (two pages of it), not one per Page
+    expect(server.remaining()).toEqual([]);
+    listing();
+    expect((await adapter.selectAccount(user, 'p_300', io, [])).credentials.accessToken).toBe(
+      'page_300_fake',
+    );
+    listing();
+    await expect(adapter.selectAccount(user, 'p_999', io, [])).rejects.toMatchObject({
+      code: 'account_not_found',
+    });
+  });
+
   it('refresh: re-exchanges the user token and re-reads the page token; code 190 → reconnect_required', async () => {
     load('auth', 'refresh_ok');
     expect(await adapter.refresh(creds, client, io)).toMatchObject({

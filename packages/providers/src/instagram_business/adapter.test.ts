@@ -74,6 +74,55 @@ describe('Instagram Business adapter (spec 14.5, 14.8, 20.3)', () => {
     io.calls.length = 0;
   };
 
+  it('accountGrants: every linked professional account from one listing; selectAccount picks one', async () => {
+    server.load({
+      exchanges: [
+        {
+          request: { method: 'GET', host: 'graph.facebook.com', path: '/v25.0/me/accounts' },
+          response: {
+            status: 200,
+            json: {
+              data: [
+                { id: 'p_1', name: 'No IG', access_token: 'pt_1' },
+                {
+                  id: 'p_2',
+                  name: 'Ore',
+                  access_token: 'pt_2',
+                  instagram_business_account: { id: 'ig_2', username: 'ore' },
+                },
+                {
+                  id: 'p_3',
+                  name: 'Tar',
+                  access_token: 'pt_3',
+                  instagram_business_account: { id: 'ig_3', username: 'tar' },
+                },
+              ],
+            },
+          },
+          repeat: true,
+        },
+      ],
+    });
+    io.calls.length = 0;
+    const user = { accessToken: 'long_user_fake', expiresAt: '2026-12-01T00:00:00.000Z' };
+    const grants = await adapter.accountGrants(user, io, ['instagram_basic']);
+    expect(grants.map((g) => [g.remoteAccountId, g.displayName, g.credentials.extra?.['pageId']])).toEqual([
+      ['ig_2', '@ore', 'p_2'],
+      ['ig_3', '@tar', 'p_3'],
+    ]);
+    expect(grants[0]).toMatchObject({
+      tokenExpiresAt: '2026-12-01T00:00:00.000Z',
+      grantedScopes: ['instagram_basic'],
+    });
+    expect(io.calls).toHaveLength(1);
+    expect((await adapter.selectAccount(user, 'ig_3', io, [])).credentials.extra).toMatchObject({
+      igUserId: 'ig_3',
+    });
+    await expect(adapter.selectAccount(user, 'ig_404', io, [])).rejects.toMatchObject({
+      code: 'account_not_found',
+    });
+  });
+
   it('exchangeCode: only pages with a connected Instagram account are eligible; user token kept; all scopes granted', async () => {
     load('auth', 'exchange');
     const grant = await adapter.exchangeCode(

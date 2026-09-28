@@ -9,15 +9,23 @@ import {
   type NativeConnectionOptions,
   type WorkerOptions,
 } from '@temporalio/worker';
-import { WorkflowNotFoundError, type Client } from '@temporalio/client';
+import {
+  ScheduleAlreadyRunning,
+  ScheduleOverlapPolicy,
+  WorkflowNotFoundError,
+  type Client,
+} from '@temporalio/client';
 import {
   createBrandChangeImpactActivities,
+  createConnectChoicePurgeActivities,
   createPublicationSweepActivities,
   createPublishControlActivities,
   createPublishProviderActivities,
   createTokenRefreshActivities,
 } from '@oremedia/activities';
 import {
+  CONNECT_CHOICE_PURGE_SCHEDULE_ID,
+  CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
   CORE_TASK_QUEUE,
   PUBLICATION_SWEEPER_WORKFLOW_ID,
   PUBLICATION_SWEEPER_WORKFLOW_TYPE,
@@ -90,6 +98,7 @@ export async function startPublishingWorkers(
       ...createPublishControlActivities(runtime.control),
       ...createTokenRefreshActivities(runtime.tokenRefresh),
       ...createPublicationSweepActivities(runtime.sweep),
+      ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),
       // brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 (spec 8.2)
       ...createBrandChangeImpactActivities(createBrandChangeImpactRuntime()),
       // brandAnalystWorkflowV1 / brandAnalystSweepWorkflowV1 / baselineComparisonWorkflowV1 (spec 16.3, 16.8)
@@ -136,6 +145,30 @@ export async function ensureSweeperRunning(client: Client): Promise<void> {
     workflowIdConflictPolicy: 'USE_EXISTING',
     workflowIdReusePolicy: 'ALLOW_DUPLICATE',
   });
+}
+
+/** Spec 14.7: every 15 minutes, expired account choices are shredded and deleted (it always applies). */
+export const CONNECT_CHOICE_PURGE_INTERVAL = '15 minutes';
+
+/** The connect-choice purge schedule: created once per namespace, joined when it already exists. */
+export async function ensureConnectChoicePurgeScheduleRunning(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: CONNECT_CHOICE_PURGE_SCHEDULE_ID,
+      spec: { intervals: [{ every: CONNECT_CHOICE_PURGE_INTERVAL }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
+        taskQueue: CORE_TASK_QUEUE,
+        args: [{}],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
+    });
+    logger().info({ status: CONNECT_CHOICE_PURGE_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
 }
 
 /**

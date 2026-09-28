@@ -56,6 +56,9 @@ export const LINKEDIN_VERSION = '202601';
 const SCAN_PAGE = 20;
 const SCAN_PAGES = 3;
 const ALT_TEXT_MAX = 4086;
+/** organizationAcls pages: 100 per request, at most 20 requests (2,000 organisations) per listing. */
+const ORG_ACL_PAGE_SIZE = 100;
+const ORG_ACL_MAX_PAGES = 20;
 
 const restHeaders = (token: string): Record<string, string> => ({
   ...bearer(token),
@@ -155,29 +158,39 @@ export class LinkedInPageAdapter implements ProviderAdapter {
     };
   }
 
-  /** Re-targets a grant at another administered organisation (connect flow "choose a page"); not part of the contract. */
+  /** Re-targets a grant at another administered organisation (the connect flow's account choice). */
   async selectAccount(
     credentials: DecryptedCredentials,
     remoteAccountId: string,
     io: ProviderIO,
     grantedScopes: string[] = [],
   ): Promise<AccountGrant> {
-    const orgs = await this.administeredOrganisations(io, credentials.accessToken);
-    const chosen = orgs.find((o) => o.id === remoteAccountId);
+    const grants = await this.accountGrants(credentials, io, grantedScopes);
+    const chosen = grants.find((g) => g.remoteAccountId === remoteAccountId);
     if (!chosen) throw new ProviderAuthError(this.key, 'account_not_found', remoteAccountId);
-    return {
-      remoteAccountId: chosen.id,
-      displayName: chosen.name,
+    return chosen;
+  }
+
+  /** Every organisation the member administers, from one listing; the member token serves them all. */
+  async accountGrants(
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    grantedScopes: string[] = [],
+  ): Promise<AccountGrant[]> {
+    const orgs = await this.administeredOrganisations(io, credentials.accessToken);
+    return orgs.map((org) => ({
+      remoteAccountId: org.id,
+      displayName: org.name,
       grantedScopes,
       credentials: {
         ...credentials,
-        extra: { ...(credentials.extra ?? {}), organizationUrn: orgUrn(chosen.id) },
+        extra: { ...(credentials.extra ?? {}), organizationUrn: orgUrn(org.id) },
       },
       ...(credentials.expiresAt ? { tokenExpiresAt: credentials.expiresAt } : {}),
       alternatives: orgs
-        .filter((o) => o.id !== chosen.id)
+        .filter((o) => o.id !== org.id)
         .map((o) => ({ remoteAccountId: o.id, displayName: o.name })),
-    };
+    }));
   }
 
   async refresh(
@@ -516,18 +529,28 @@ export class LinkedInPageAdapter implements ProviderAdapter {
     return readResponse(res);
   }
 
+  /**
+   * The organisations the member administers (ADMINISTRATOR or CONTENT_ADMINISTRATOR), every page of
+   * organizationAcls (LinkedIn pages by `start`/`count`), up to ORG_ACL_MAX_PAGES pages.
+   */
   private async administeredOrganisations(
     io: ProviderIO,
     token: string,
   ): Promise<Array<{ id: string; name: string }>> {
-    const res = await this.rest(
-      io,
-      'GET',
-      '/rest/organizationAcls?q=roleAssignee&state=APPROVED&projection=(elements*(*,organization~(localizedName,vanityName)))',
-      token,
-    );
-    if (res.status !== 200) throw new ProviderAuthError(this.key, 'identity_failed', summarise(res));
-    return arr(get(res.json, 'elements'))
+    const elements: unknown[] = [];
+    for (let page = 0; page < ORG_ACL_MAX_PAGES; page += 1) {
+      const res = await this.rest(
+        io,
+        'GET',
+        `/rest/organizationAcls?q=roleAssignee&state=APPROVED&start=${page * ORG_ACL_PAGE_SIZE}&count=${ORG_ACL_PAGE_SIZE}&projection=(elements*(*,organization~(localizedName,vanityName)))`,
+        token,
+      );
+      if (res.status !== 200) throw new ProviderAuthError(this.key, 'identity_failed', summarise(res));
+      const batch = arr(get(res.json, 'elements'));
+      elements.push(...batch);
+      if (batch.length < ORG_ACL_PAGE_SIZE) break;
+    }
+    return elements
       .filter(
         (e) =>
           ['ADMINISTRATOR', 'CONTENT_ADMINISTRATOR'].includes(str(get(e, 'role')) ?? '') &&

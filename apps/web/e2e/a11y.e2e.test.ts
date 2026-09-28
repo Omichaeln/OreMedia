@@ -144,6 +144,19 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       ready: (page) => testId(page, `channel-${P5.channels.expired}`),
     },
     {
+      // Spec 14.7 account choice: the returned login manages several Pages; the radio list is audited.
+      name: 'settings (choose the account)',
+      path: () => {
+        const state = `st_a11y_${Date.now()}`;
+        backend.phase6.connectStates.set(state, { brandId: E2E.brandId, providerKey: 'linkedin_page' });
+        return brandPath(`settings?state=${state}&code=auth_code_multi`);
+      },
+      ready: async (page) => {
+        await page.getByRole('button', { name: 'Finish connecting' }).click({ timeout: 15_000 });
+        await testId(page, 'connect-choose');
+      },
+    },
+    {
       name: 'review portal',
       path: () =>
         `/review-portal/#${new URLSearchParams({

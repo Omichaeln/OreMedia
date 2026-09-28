@@ -15,6 +15,7 @@ import { renderedExports } from '@oremedia/db/schema/creative';
 import { messages } from '@oremedia/db/schema/community';
 import { metricSnapshots } from '@oremedia/db/schema/measurement';
 import { auditEvents, deletionRequests, outboxEvents } from '@oremedia/db/schema/operations';
+import { pendingChannelGrants } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { createDeletionActivities, createRetentionActivities } from '@oremedia/activities';
 import { MemoryStorageProvider, configureStorage } from '@oremedia/module-assets';
@@ -343,6 +344,10 @@ describe('deletion and retention fan-out end to end (spec 17.5, ledger 7.16)', (
       return n;
     };
     expect(await brandRows(brand)).toBeGreaterThan(20);
+    // A pending account choice (sealed grants, spec 14.7) of the brand goes with it.
+    const pendingOf = (brandId: string) =>
+      tdb.db.select().from(pendingChannelGrants).where(eq(pendingChannelGrants.brandId, brandId));
+    expect((await pendingOf(brand)).length).toBeGreaterThan(0);
     const otherBefore = await brandRows(other);
     const res = await callPath(
       { bearer: tenantB.ownerToken, tenantId: tenantB.tenantId },
@@ -370,6 +375,7 @@ describe('deletion and retention fan-out end to end (spec 17.5, ledger 7.16)', (
       if (Number(r?.n ?? 0) > 0) remaining += 1;
     }
     expect(remaining).toBe(0);
+    expect(await pendingOf(brand)).toEqual([]);
     expect(await brandRows(other)).toBe(otherBefore);
     // Children without brand_id followed their brand-owned parent (agent steps of the brand's runs).
     expect(await tdb.db.select().from(agentRuns).where(eq(agentRuns.brandId, brand))).toHaveLength(0);

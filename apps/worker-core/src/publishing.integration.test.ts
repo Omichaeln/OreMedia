@@ -27,6 +27,7 @@ import {
   LocalKms,
   channelService,
   configureCredentialBroker,
+  connectedChannel,
   configurePublishingProviders,
   createPublishingRuntime,
   publicationService,
@@ -229,7 +230,9 @@ describe('publication workflow end to end (worker-core, fake Temporal host)', ()
     connA = (
       await runInTenant(ctx(tenantA), () =>
         withTransaction((tx) =>
-          channelService.connect.complete(publisher(tenantA), { state: started.state, code: 'good' }, tx),
+          channelService.connect
+            .complete(publisher(tenantA), { state: started.state, code: 'good' }, tx)
+            .then(connectedChannel),
         ),
       )
     ).id;

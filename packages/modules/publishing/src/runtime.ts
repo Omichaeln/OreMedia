@@ -16,6 +16,9 @@ import type {
   AttemptResult,
   ClaimInputV1,
   ClaimResultV1,
+  ConnectChoicePurgeInputV1,
+  ConnectChoicePurgeResultV1,
+  ConnectChoicePurgeRuntimeV1,
   FencedInputV1,
   FindRemotePostInputV1,
   HoldForHumanInputV1,
@@ -65,6 +68,8 @@ import { adapterFor, providerIO, registry } from './providers';
 import {
   ChannelConnectionRepository,
   CredentialRefRepository,
+  PURGE_BATCH,
+  PendingChannelGrantPurgeRepository,
   PublicationAttemptRepository,
   PublicationRepository,
   PublicationSweepRepository,
@@ -84,6 +89,7 @@ export interface PublishingRuntime {
   provider: PublishProviderRuntimeV1;
   tokenRefresh: TokenRefreshRuntimeV1;
   sweep: PublicationSweepRuntimeV1;
+  connectChoicePurge: ConnectChoicePurgeRuntimeV1;
 }
 
 const publicationsRepo = new PublicationRepository();
@@ -92,6 +98,7 @@ const evidenceRepo = new RemoteEvidenceRepository();
 const connectionsRepo = new ChannelConnectionRepository();
 const credentialsRepo = new CredentialRefRepository();
 const sweepRepo = new PublicationSweepRepository();
+const pendingPurgeRepo = new PendingChannelGrantPurgeRepository();
 
 /** The actor the workflow carries; every write is audited as that actor (spec 5.2 re-resolved by the host). */
 const workflowActor = () => requireTenant().actor;
@@ -989,5 +996,25 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
   };
 
-  return { control, provider, tokenRefresh, sweep };
+  const connectChoicePurge: ConnectChoicePurgeRuntimeV1 = {
+    /**
+     * Spec 14.7: expired account choices hold sealed long-lived user tokens; they are shredded and deleted across
+     * tenants in bounded batches, whatever the retention sweep's dry-run setting.
+     */
+    async purgeExpiredConnectChoices(input: ConnectChoicePurgeInputV1): Promise<ConnectChoicePurgeResultV1> {
+      const at = new Date(input.now);
+      let rows = 0;
+      for (;;) {
+        const batch = await runAsPlatform('connect-choice-purge', input.correlationId, () =>
+          withTransaction((tx) => pendingPurgeRepo.purgeExpired(at, tx)),
+        );
+        rows += batch;
+        if (batch < PURGE_BATCH) break;
+      }
+      if (rows > 0) log.info({ count: rows }, 'expired connect choices purged');
+      return { rows };
+    },
+  };
+
+  return { control, provider, tokenRefresh, sweep, connectChoicePurge };
 }

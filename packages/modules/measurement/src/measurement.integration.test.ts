@@ -32,6 +32,7 @@ import {
   fixtureCapability,
   registerProviderClients,
   registerPublishingBrandChecker,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
 import { attributeService } from './attributes';
@@ -191,7 +192,9 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
       ),
     );
     return run(tenantId, (tx) =>
-      channelService.connect.complete(analyst(tenantId, 'owner'), { state: started.state, code: 'good' }, tx),
+      channelService.connect
+        .complete(analyst(tenantId, 'owner'), { state: started.state, code: 'good' }, tx)
+        .then(connectedChannel),
     );
   };
   const publishedPublication = async (tenantId: string, brandId: string, channelConnectionId: string) => {

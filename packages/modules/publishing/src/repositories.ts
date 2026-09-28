@@ -13,6 +13,7 @@ import {
 import {
   channelConnections,
   credentialRefs,
+  pendingChannelGrants,
   publicationAttempts,
   publications,
   remoteEvidence,
@@ -51,6 +52,73 @@ export class CredentialRefRepository extends TenantScopedRepository<typeof crede
       },
       tx,
     );
+  }
+}
+
+/**
+ * Spec 14.7 account choice: the sealed grants offered to the person who completed a connect flow, one row per
+ * account. Nothing updates a row: choosing or cancelling deletes the pending id's rows (one-shot), and expired rows
+ * are deleted with them (the data key goes with the row).
+ */
+export class PendingChannelGrantRepository extends BrandScopedRepository<typeof pendingChannelGrants> {
+  constructor() {
+    super(pendingChannelGrants);
+  }
+  async createMany(rows: Array<Omit<typeof pendingChannelGrants.$inferInsert, 'tenantId'>>, tx: Tx) {
+    for (const row of rows) await this.insertBrandScoped(row, tx);
+  }
+  /** The options of one pending id, in the order offered, locked until the transaction ends (one chooser wins). */
+  async lockPending(pendingId: string, tx: Tx) {
+    const rows = await tx
+      .select()
+      .from(pendingChannelGrants)
+      .where(this.scope(eq(pendingChannelGrants.pendingId, pendingId)))
+      .orderBy(asc(pendingChannelGrants.position))
+      .for('update');
+    const ctx = requireTenant();
+    // A brand the actor cannot see behaves like a choice that does not exist.
+    return rows.filter((r) => ctx.brandIds === 'all' || ctx.brandIds.has(r.brandId));
+  }
+  /** Crypto-shred then delete (as CredentialRefRepository.destroy): the wrapped key and ciphertext go first. */
+  async deletePending(pendingId: string, tx: Tx): Promise<number> {
+    const where = this.scope(eq(pendingChannelGrants.pendingId, pendingId));
+    await tx.update(pendingChannelGrants).set(SHREDDED).where(where);
+    return affectedRows(await tx.delete(pendingChannelGrants).where(where));
+  }
+  /** Shreds and deletes the tenant's expired choices; returns how many rows went. */
+  async deleteExpired(now: Date, tx: Tx): Promise<number> {
+    const where = this.scope(lt(pendingChannelGrants.expiresAt, now));
+    await tx.update(pendingChannelGrants).set(SHREDDED).where(where);
+    return affectedRows(await tx.delete(pendingChannelGrants).where(where));
+  }
+}
+
+/** Rows per purge transaction. */
+export const PURGE_BATCH = 1000;
+
+/** What a pending grant row holds once shredded: no wrapped data key, no ciphertext. */
+const SHREDDED = { wrappedDataKey: '', ciphertext: '' };
+
+/**
+ * The periodic purge of expired choices (connectChoicePurgeWorkflowV1) spans tenants like the publication sweeper
+ * and runs as a declared platform job (spec 5.3); it reads and returns no tenant content, only a row count.
+ */
+export class PendingChannelGrantPurgeRepository extends PlatformRepository {
+  /** Shreds and deletes up to `limit` expired rows, oldest expiry first, in the caller's transaction. */
+  async purgeExpired(now: Date, tx: Tx, limit = PURGE_BATCH): Promise<number> {
+    const ids = (
+      await this.conn(tx)
+        .select({ id: pendingChannelGrants.id })
+        .from(pendingChannelGrants)
+        .where(lt(pendingChannelGrants.expiresAt, now))
+        .orderBy(asc(pendingChannelGrants.expiresAt))
+        .limit(limit)
+        .for('update')
+    ).map((r) => r.id);
+    if (ids.length === 0) return 0;
+    const where = inArray(pendingChannelGrants.id, ids);
+    await this.conn(tx).update(pendingChannelGrants).set(SHREDDED).where(where);
+    return affectedRows(await this.conn(tx).delete(pendingChannelGrants).where(where));
   }
 }
 

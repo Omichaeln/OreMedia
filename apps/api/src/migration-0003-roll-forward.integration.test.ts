@@ -6,6 +6,7 @@ import { authEvents, externalIdentities, users } from '@oremedia/db/schema/acces
 import { generatedUploads } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
+import { pendingChannelGrants } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService } from '@oremedia/module-access';
 // Relative import: a workspace dependency here would create an api ↔ test-fixtures cycle (test-fixtures imports the router).
@@ -18,8 +19,13 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0002_provider_jobs_routing_previews_ledger_idempotency';
 const NEW_TABLES: MySqlTable[] = [externalIdentities, authEvents];
-/** Added by later migrations (0004 to 0006; see the migration-*-roll-forward tests in apps/worker-core/src). */
-const LATER_TABLES: MySqlTable[] = [generatedUploads, providerReviewStatuses, brandGuidelineAuthors];
+/** Added by later migrations (0004 to 0010; see the migration-*-roll-forward tests in apps/worker-core/src). */
+const LATER_TABLES: MySqlTable[] = [
+  generatedUploads,
+  providerReviewStatuses,
+  brandGuidelineAuthors,
+  pendingChannelGrants,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

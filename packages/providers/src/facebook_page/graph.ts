@@ -155,6 +155,8 @@ export interface MetaPage {
   igUsername?: string;
 }
 
+/** `/me/accounts` requests per listing: pages of 100 through `paging.next`, so up to 2,000 Pages. */
+export const META_PAGE_LIST_MAX_REQUESTS = 20;
 /** Pages the user administers, with page tokens and any connected Instagram professional account. Follows paging.next (bounded). */
 export async function listPages(io: ProviderIO, userToken: string): Promise<MetaPage[]> {
   const pages: MetaPage[] = [];
@@ -163,7 +165,7 @@ export async function listPages(io: ProviderIO, userToken: string): Promise<Meta
     fields: 'id,name,access_token,instagram_business_account{id,username}',
     limit: '100',
   };
-  for (let i = 0; i < 5 && next; i += 1) {
+  for (let i = 0; i < META_PAGE_LIST_MAX_REQUESTS && next; i += 1) {
     const res: ProviderResponse = await graphGet(io, next, userToken, params);
     if (res.status !== 200) throw new MetaGraphError('me/accounts', res);
     for (const p of arr(get(res.json, 'data'))) {

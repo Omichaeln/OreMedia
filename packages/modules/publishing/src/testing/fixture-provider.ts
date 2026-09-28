@@ -10,6 +10,7 @@ import type {
   RefreshResult,
 } from '@oremedia/contracts/providers';
 import {
+  ProviderAuthError,
   ProviderTransportError,
   classifyByStatus,
   plainMeasure,
@@ -19,6 +20,7 @@ import {
   type PublishMedia,
   type PublishRequest,
 } from '@oremedia/providers';
+import type { ChannelConnectResult } from '../channels';
 
 /**
  * Test fixture only (never registered in production): an in-memory platform whose behaviour a test scripts per
@@ -28,6 +30,12 @@ import {
  * so the send boundary the runtime relies on (sentAt before the first mutation) is exercised, not simulated.
  */
 export const FIXTURE_PROVIDER_KEY = 'fixture_provider';
+
+/** The connection a single-account connect returned; a test that expected no choice fails loudly on one. */
+export function connectedChannel(result: ChannelConnectResult) {
+  if (result.outcome !== 'connected') throw new Error(`expected a connection, got outcome ${result.outcome}`);
+  return result;
+}
 
 export const fixtureCapability = (over: Partial<ProviderCapabilityV1> = {}): ProviderCapabilityV1 => ({
   key: FIXTURE_PROVIDER_KEY,
@@ -157,6 +165,45 @@ export class FixtureProviderAdapter implements ProviderAdapter {
     this.calls.push(`exchangeCode:${input.code}`);
     if (input.code === 'bad') throw new Error('invalid code');
     return this.grant;
+  }
+  /** Accounts the platform no longer returns (gone, or failing): selectAccount refuses them, accountGrants omits them. */
+  readonly unavailableAccounts = new Set<string>();
+  /** The other accounts in `grant.alternatives`, each with its own token (as a Page token is), for the account choice. */
+  async selectAccount(
+    credentials: DecryptedCredentials,
+    remoteAccountId: string,
+    _io: ProviderIO,
+    grantedScopes: string[],
+  ): Promise<AccountGrant> {
+    this.calls.push(`selectAccount:${remoteAccountId}`);
+    const account = this.accountGrant(credentials, remoteAccountId, grantedScopes);
+    if (!account) throw new ProviderAuthError(this.key, 'account_not_found', remoteAccountId);
+    return account;
+  }
+  /** One listing for every account (what Meta's `/me/accounts` gives). */
+  async accountGrants(credentials: DecryptedCredentials, _io: ProviderIO, grantedScopes: string[]) {
+    this.calls.push('accountGrants');
+    return (this.grant.alternatives ?? []).flatMap(
+      (a) => this.accountGrant(credentials, a.remoteAccountId, grantedScopes) ?? [],
+    );
+  }
+  private accountGrant(
+    credentials: DecryptedCredentials,
+    remoteAccountId: string,
+    grantedScopes: string[],
+  ): AccountGrant | null {
+    const account = (this.grant.alternatives ?? []).find((a) => a.remoteAccountId === remoteAccountId);
+    if (!account || this.unavailableAccounts.has(remoteAccountId)) return null;
+    return {
+      remoteAccountId,
+      displayName: account.displayName,
+      grantedScopes,
+      credentials: {
+        accessToken: `at_page_${remoteAccountId}`,
+        extra: { userAccessToken: credentials.accessToken },
+      },
+      ...(this.grant.tokenExpiresAt ? { tokenExpiresAt: this.grant.tokenExpiresAt } : {}),
+    };
   }
   async refresh(credentials: DecryptedCredentials): Promise<RefreshResult> {
     this.calls.push(`refresh:${credentials.refreshToken ?? ''}`);

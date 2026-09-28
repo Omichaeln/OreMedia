@@ -150,6 +150,12 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
       buildInput: (ctx, f) => ({ ...ctx, channelConnectionId: f['publishingChannelConnectionId'] }),
     },
     'core.sweepPublications': { buildInput: null, reason: PLATFORM_SWEEP },
+    'core.purgeExpiredConnectChoices': {
+      buildInput: null,
+      reason:
+        'platform-level: carries no tenant or resource id (only a correlation id and a clock); it deletes expired ' +
+        'pending connect choices in every tenant by design and returns only a row count',
+    },
     // brandChangeImpactWorkflowV1 (spec 8.2): the brand is the only id, so it acts in the foreign brand
     'core.invalidateApprovals': {
       reason: BRAND_CHANGE_NO_OP,

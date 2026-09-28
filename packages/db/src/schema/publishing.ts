@@ -69,6 +69,50 @@ export const channelConnections = mysqlTable(
   ],
 );
 
+/**
+ * Spec 14.7 account choice: a grant that addresses several accounts waits here, one row per account offered, until
+ * the person who completed the connect flow chooses one (or cancels, or it expires). Each row's grant is sealed like
+ * credential_refs, bound to `${tenantId}:${channelConnectionId}` of the connection it would create or rotate, so
+ * the chosen row's envelope becomes the connection's credential without ever being decrypted in the API process.
+ * Rows are one-shot: choosing or cancelling deletes every row of the pending id; expired rows are deleted by the
+ * next connect flow in the tenant and on tenant or brand deletion.
+ */
+export const pendingChannelGrants = mysqlTable(
+  'pending_channel_grants',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    pendingId: ref('pending_id').notNull(),
+    providerKey: varchar('provider_key', { length: 40 }).notNull(),
+    actorKind: varchar('actor_kind', { length: 24 }).notNull(),
+    actorId: ref('actor_id').notNull(),
+    position: int('position').notNull(),
+    remoteAccountId: varchar('remote_account_id', { length: 200 }).notNull(),
+    displayName: varchar('display_name', { length: 200 }).notNull(),
+    channelConnectionId: ref('channel_connection_id').notNull(),
+    grantedScopes: json('granted_scopes').$type<string[]>().notNull(),
+    tokenExpiresAt: ts('token_expires_at'),
+    kmsKeyId: varchar('kms_key_id', { length: 200 }).notNull(),
+    wrappedDataKey: varbinary('wrapped_data_key', { length: 512 }).notNull(),
+    ciphertext: varbinary('ciphertext', { length: 8192 }).notNull(),
+    iv: varbinary('iv', { length: 12 }).notNull(),
+    authTag: varbinary('auth_tag', { length: 16 }).notNull(),
+    aad: varchar('aad', { length: 200 }).notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_pending_grant_option').on(t.tenantId, t.pendingId, t.remoteAccountId),
+    index('ix_pending_grant_expiry').on(t.tenantId, t.expiresAt),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_pending_grant_brand',
+    }),
+  ],
+);
+
 export const publications = mysqlTable(
   'publications',
   {

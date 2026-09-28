@@ -27,6 +27,7 @@ import {
   configurePublishingProviders,
   publicationService,
   registerProviderClients,
+  connectedChannel,
 } from '@oremedia/module-publishing';
 import { BRAND_CHANGE_IMPACT_WORKFLOW_TYPE, reviewService } from '@oremedia/module-review';
 import { ProviderRegistry } from '@oremedia/providers';
@@ -275,7 +276,11 @@ describe('brand change impact end to end (worker-core composition, real activiti
       ),
     );
     connA = (
-      await run((tx) => channelService.connect.complete(actor, { state: started.state, code: 'good' }, tx))
+      await run((tx) =>
+        channelService.connect
+          .complete(actor, { state: started.state, code: 'good' }, tx)
+          .then(connectedChannel),
+      )
     ).id;
     await publishBrandVersion();
     await activatePolicy(true);

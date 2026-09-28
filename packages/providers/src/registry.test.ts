@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { ProviderCapabilityV1 } from '@oremedia/contracts/providers';
@@ -38,5 +40,20 @@ describe('Release 1 registry (spec 14.6, 14.8): registered, none enabled for ten
       expect(typeof a.publish).toBe('function');
     }
     expect(r.list().every((l) => l.certified)).toBe(true);
+  });
+});
+
+describe('account choice (spec 14.7): the connect flow offers alternatives only through the contract', () => {
+  it('every adapter whose exchangeCode returns alternatives defines selectAccount and accountGrants', () => {
+    let returning = 0;
+    for (const { key } of providerRegistry.list()) {
+      const adapter = providerRegistry.forCertification(key)!;
+      const source = readFileSync(path.join(__dirname, key, 'adapter.ts'), 'utf8');
+      if (!/\balternatives\s*:/.test(source)) continue;
+      returning += 1;
+      expect(typeof adapter.selectAccount, `${key} returns alternatives`).toBe('function');
+      expect(typeof adapter.accountGrants, `${key} lists every account in one call`).toBe('function');
+    }
+    expect(returning).toBe(3); // facebook_page, instagram_business, linkedin_page; X has one account per login
   });
 });
