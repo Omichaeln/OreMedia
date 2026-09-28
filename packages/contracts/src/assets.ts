@@ -145,8 +145,18 @@ export const KIND_MIME_GROUPS: Readonly<Record<AssetKind, readonly MimeGroup[]>>
   reference: ['image', 'svg', 'pdf'],
 };
 
-/** Kinds whose processing arrives in Release 2 (spec 9.1): intents for them are refused, not queued. */
+/**
+ * Kinds a person may not upload until Release 2 (spec 9.1): their intents are refused, not queued. Generated media
+ * (ADR-11, D-06) is the exception: a generated video or audio upload is validated structurally (no transcoding) and
+ * catalogued without derivatives.
+ */
 export const KINDS_NOT_PROCESSABLE: readonly AssetKind[] = ['video', 'audio'];
+
+/** Longest generated clip ingest accepts, in seconds, per mime group (a structural check reads the duration). */
+export const MEDIA_DURATION_CAPS_SECONDS: Readonly<Record<'video' | 'audio', number>> = {
+  video: 120,
+  audio: 600,
+};
 
 /** Archives are rejected in Release 1 (spec 9.1); named explicitly so the rejection reason is specific. */
 export const ARCHIVE_MIMES: readonly string[] = [
@@ -250,6 +260,8 @@ export const IngestRejectionReason = z.enum([
   'image_undecodable',
   'format_unsupported',
   'duplicate_of',
+  'media_malformed',
+  'duration_exceeds_cap',
 ]);
 export type IngestRejectionReason = z.infer<typeof IngestRejectionReason>;
 

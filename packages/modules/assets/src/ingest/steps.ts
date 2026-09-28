@@ -7,6 +7,7 @@ import {
   ARCHIVE_MIMES,
   KIND_MIME_GROUPS,
   MAX_IMAGE_PIXELS,
+  MEDIA_DURATION_CAPS_SECONDS,
   type AssetKind,
   type AssetState,
   type DerivativePurpose,
@@ -18,6 +19,7 @@ import {
 } from '@oremedia/contracts/assets';
 import { sha256Hex } from '@oremedia/domain/hash';
 import type { StorageProvider } from '../storage';
+import { inspectMedia } from './media';
 import { ScannerUnavailableError, type Scanner } from './scanner';
 
 /**
@@ -54,6 +56,9 @@ const MIME_EQUIVALENTS: ReadonlyArray<readonly string[]> = [
 ];
 
 const normaliseMime = (m: string): string => (m.split(';')[0] ?? '').trim().toLowerCase();
+
+/** Detector names with an accepted canonical mime (file-type reports M4A audio as audio/x-m4a). */
+const CANONICAL_MIME: Readonly<Record<string, string>> = { 'audio/x-m4a': 'audio/mp4' };
 
 function mimeMatches(declared: string, sniffed: string): boolean {
   const d = normaliseMime(declared);
@@ -105,6 +110,7 @@ export async function sniffType(
   }
   if ((!mime || XML_LIKE.has(mime)) && looksLikeSvg(head)) mime = 'image/svg+xml';
   if (!mime) return reject('type_unrecognised');
+  mime = CANONICAL_MIME[mime] ?? mime;
   if (ARCHIVE_MIMES.includes(mime)) return reject('archive_rejected');
   const group = groupForMime(mime);
   if (!group) return reject('format_unsupported', mime);
@@ -166,8 +172,11 @@ export async function sanitise(
       return sanitiseFont(bytes, mime);
     case 'pdf':
       return checkPdf(bytes, mime);
+    case 'video':
+    case 'audio':
+      return checkMedia(bytes, mime, group);
     default:
-      return reject('format_unsupported', 'processing for this kind arrives in Release 2');
+      return reject('format_unsupported', `no sanitiser for ${group}`);
   }
 }
 
@@ -404,6 +413,28 @@ function checkPdf(bytes: Buffer, mime: string): IngestStepResult<SanitisedFile> 
   if (!bytes.subarray(0, 1024).toString('latin1').includes('%PDF-'))
     return reject('format_unsupported', 'not a pdf');
   return { ok: true, bytes, mime, width: null, height: null, colourProfile: null, sanitised: false };
+}
+
+/**
+ * Video and audio (ADR-11 generated media): the container is checked structurally and the duration capped; the bytes
+ * are stored as delivered (nothing is transcoded, so there is no preview and no derivative).
+ */
+function checkMedia(bytes: Buffer, mime: string, group: 'video' | 'audio'): IngestStepResult<SanitisedFile> {
+  const r = inspectMedia(bytes, mime);
+  if (!r) return reject('format_unsupported', mime);
+  if (!r.ok) return reject('media_malformed', r.detail);
+  const cap = MEDIA_DURATION_CAPS_SECONDS[group];
+  if (r.info.durationSeconds > cap)
+    return reject('duration_exceeds_cap', `${Math.round(r.info.durationSeconds)} s exceeds ${cap} s`);
+  return {
+    ok: true,
+    bytes,
+    mime,
+    width: r.info.width,
+    height: r.info.height,
+    colourProfile: null,
+    sanitised: false,
+  };
 }
 
 // ---- 5. hash and dedupe ---------------------------------------------------------------------------------------

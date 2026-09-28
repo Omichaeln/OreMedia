@@ -24,6 +24,7 @@ import { outboxEvents } from '@oremedia/db/schema/operations';
 import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { assetIngest, type IngestDeps } from './ingest/pipeline';
+import { mp4 } from './ingest/media.fixtures';
 import { FakeScanner } from './ingest/scanner';
 import { assetService } from './service';
 import { MemoryStorageProvider, configureStorage, storageKeys } from './storage';
@@ -581,6 +582,80 @@ describe('assets module against MySQL 8 (spec 9)', () => {
       await expect(generate({})).rejects.toBeInstanceOf(PolicyDeniedError);
       await expect(generate({ autonomyMode: 'assist' })).rejects.toBeInstanceOf(PolicyDeniedError);
       await expect(generate({ autonomyMode: 'create' }, brandA2)).rejects.toBeInstanceOf(PolicyDeniedError);
+    });
+
+    it('a generated video enters ingest (checked structurally, no derivatives); a person still cannot upload video', async () => {
+      await expect(
+        runInTenant(ctxFor(ownerA), () =>
+          withTransaction((tx) =>
+            assetService.createIntent(
+              ownerA,
+              {
+                brandId: brandA1,
+                kind: 'video',
+                declaredMime: 'video/mp4',
+                declaredBytes: 1000,
+                originalFilename: 'clip.mp4',
+              },
+              tx,
+            ),
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'kind', issue: 'processing_not_available_in_release_1' }],
+      });
+      const clip = mp4({ seconds: 6, width: 720, height: 1280 });
+      const { intentId } = await runInTenant(ctxFor(agentA1), () =>
+        withTransaction((tx) =>
+          assetService.uploadGenerated(
+            agentA1,
+            {
+              brandId: brandA1,
+              kind: 'video',
+              mime: 'video/mp4',
+              bytes: clip,
+              originalFilename: 'generated-run_gen_1-1.mp4',
+              provenance,
+            },
+            tx,
+            { autonomyMode: 'create' },
+          ),
+        ),
+      );
+      const result = await runInTenant(ctxFor(ownerA), () =>
+        runPipeline(
+          {
+            tenantId: tenantA,
+            actor: { kind: 'service_principal', id: agentA1.id },
+            correlationId: 'corr_generated_video',
+            intentId,
+            brandId: brandA1,
+          },
+          false,
+        ),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted' });
+      if (result.outcome !== 'accepted') return;
+      const [asset] = await tdb.db.select().from(assets).where(eq(assets.id, result.assetId));
+      expect(asset).toMatchObject({ state: 'pending_review', kind: 'video' });
+      const [version] = await tdb.db
+        .select()
+        .from(assetVersions)
+        .where(eq(assetVersions.id, result.assetVersionId));
+      expect(version).toMatchObject({
+        mime: 'video/mp4',
+        width: 720,
+        height: 1280,
+        bytes: clip.length,
+        contentHash: sha256Hex(clip),
+        provenance,
+      });
+      expect(
+        await tdb.db
+          .select()
+          .from(assetDerivatives)
+          .where(eq(assetDerivatives.assetVersionId, result.assetVersionId)),
+      ).toEqual([]);
     });
   });
 

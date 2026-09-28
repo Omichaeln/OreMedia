@@ -152,14 +152,15 @@ export const assetService = {
    * provenance, the bytes are written to its quarantine key and the intent completes, so assetIngestWorkflowV1 runs
    * every step an upload gets (sniff, scan, sanitise, hash, derivatives) and catalogues a pending asset whose
    * version records the provenance. Authorised as creative.edit, the images tool's action: an agent may not upload
-   * outright (asset.upload is propose_only), and a pending asset is the proposal a person approves. Image kinds only
-   * (video and audio processing is Release 2, spec 9.1).
+   * outright (asset.upload is propose_only), and a pending asset is the proposal a person approves. Video and audio
+   * kinds are accepted here only (D-06): ingest checks them structurally and caps their duration; a person's own
+   * video or audio upload still waits for Release 2 (spec 9.1).
    */
   async uploadGenerated(
     actor: ResolvedActor,
     input: {
       brandId: string;
-      kind: 'photo' | 'illustration';
+      kind: 'photo' | 'illustration' | 'video' | 'audio';
       mime: string;
       bytes: Buffer;
       originalFilename: string;
@@ -709,7 +710,7 @@ async function issueIntent(
   const mime = parsed.declaredMime.toLowerCase();
   if (ARCHIVE_MIMES.includes(mime))
     throw new ValidationFailedError([{ path: 'declaredMime', issue: 'archives_rejected' }]);
-  if (KINDS_NOT_PROCESSABLE.includes(parsed.kind))
+  if (KINDS_NOT_PROCESSABLE.includes(parsed.kind) && !provenance)
     throw new ValidationFailedError([{ path: 'kind', issue: 'processing_not_available_in_release_1' }]);
   const group = KIND_MIME_GROUPS[parsed.kind].find((g) => ACCEPTED_MIMES[g]?.includes(mime));
   if (!group)

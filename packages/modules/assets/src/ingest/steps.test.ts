@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import sharp from 'sharp';
 import { runInTenant, type TenantContext } from '@oremedia/db';
 import { MemoryStorageProvider } from '../storage';
+import { mp4, wav } from './media.fixtures';
 import { FakeScanner, ScannerUnavailableError, type Scanner } from './scanner';
 import {
   SNIFF_BYTES,
@@ -300,10 +301,39 @@ describe('ingest step 4: sanitise fonts and PDFs', () => {
       reason: 'format_unsupported',
     });
   });
-  it('video and audio are not processable in Release 1', async () => {
+  it('video and audio (generated media) are checked structurally, stored unchanged and duration-capped', async () => {
+    const clip = mp4({ seconds: 6, width: 720, height: 1280 });
+    expect(await sanitise(clip, 'video/mp4', 'video')).toEqual({
+      ok: true,
+      bytes: clip,
+      mime: 'video/mp4',
+      width: 720,
+      height: 1280,
+      colourProfile: null,
+      sanitised: false,
+    });
+    expect(await sanitise(wav(2), 'audio/wav', 'audio')).toMatchObject({ ok: true, width: null });
     expect(await sanitise(Buffer.alloc(16), 'video/mp4', 'video')).toMatchObject({
       ok: false,
+      reason: 'media_malformed',
+    });
+    expect(await sanitise(mp4({ seconds: 121 }), 'video/mp4', 'video')).toMatchObject({
+      ok: false,
+      reason: 'duration_exceeds_cap',
+    });
+    expect(await sanitise(Buffer.alloc(16), 'video/webm', 'video')).toMatchObject({
+      ok: false,
       reason: 'format_unsupported',
+    });
+  });
+
+  it('sniffing names M4A audio by its accepted mime', async () => {
+    expect(
+      await sniffType(mp4({ brand: 'M4A ', width: 0, height: 0 }), { kind: 'audio', mime: 'audio/mp4' }),
+    ).toEqual({
+      ok: true,
+      mime: 'audio/mp4',
+      group: 'audio',
     });
   });
 });
