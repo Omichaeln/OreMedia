@@ -8,6 +8,7 @@ export const UsageKind = z.enum([
   'image_generation',
   'render_minutes',
   'storage_bytes',
+  'video_generation',
 ]);
 
 export const PlanLimits = z.object({

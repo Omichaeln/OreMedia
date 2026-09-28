@@ -102,8 +102,9 @@ export function composeModules(): void {
   // Spec 12.7: agents.runs.start checks the tenant's stored model-routing policy before a run is created.
   registerRoutingPolicySource((tenantId) => agentsService.routingPolicy.storedFor(tenantId));
   // No durable provider job store here (worker-core registers it for agent runs): an MCP surface call never submits
-  // a provider job, since images.generate is outside MCP_TOOLS and costed tools are denied without a run's budget
-  // reservation (no_budget_reservation) before they run; a surface call has no agent_runs row for provider_jobs.
+  // a provider job, since images.generate and the videos tools are outside MCP_TOOLS and costed tools are denied
+  // without a run's budget reservation (no_budget_reservation) before they run; a surface call has no agent_runs row
+  // for provider_jobs.
   // Spec 11.4 / 13.2: approvals are invalidated eagerly when a creative document or a content revision changes.
   registerRevisionChangeHook((documentId, tx) =>
     reviewService.approvals.invalidateForCreativeRevisionChange(documentId, tx),

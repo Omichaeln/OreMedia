@@ -19,6 +19,7 @@ import {
   type AgentRunContext,
   type DispatchDeps,
   type ImageGenerator,
+  type VideoGenerator,
 } from '@oremedia/ai';
 import { budgets } from '@oremedia/module-billing';
 import { composeModules } from './composition';
@@ -122,20 +123,26 @@ describe('provider job ids are durable across a worker restart; each tool call c
       correlationId: 'corr_provider_jobs',
       tenantContext,
       principal,
-      policy: { autonomyMode: 'create', allowedTools: ['images.generate'] },
+      policy: { autonomyMode: 'create', allowedTools: ['images.generate', 'videos.generate'] },
       budgetReservationId: reservation.id,
       snapshot: null,
     };
   }
 
   /** What one worker process builds at start: the composition, then the runtime's default dispatch deps. */
-  function startWorker(generator: ImageGenerator): DispatchDeps {
+  function startWorker(generator: ImageGenerator, videos: VideoGenerator | null = null): DispatchDeps {
     composeModules();
     const deps = defaultDispatchDeps(createReleaseOneRegistry());
     return {
       ...deps,
       policy: { decide: async () => ({ allowed: true, reason: 'ok' }) },
-      services: { ...deps.services, images: generator },
+      // creative.video_generation is off by default; the video case turns it on for this worker only.
+      services: {
+        ...deps.services,
+        images: generator,
+        videos,
+        flags: videos ? { isEnabled: async () => true } : deps.services.flags,
+      },
     };
   }
 
@@ -246,5 +253,48 @@ describe('provider job ids are durable across a worker restart; each tool call c
     registerProviderJobStore(new MemoryProviderJobStore()); // the restarted process starts empty
     await dispatchToolDetailed(call('toolu_mem'), run, firstProcess);
     expect(provider.submissions).toHaveLength(2);
+  });
+  it('videos.generate: after the clip was handed to ingest, a fresh process polls the ingest stage; one hand-off, one charge', async () => {
+    const handOffs: string[] = [];
+    let crashIngestPoll = true;
+    const videos = (): VideoGenerator => ({
+      provider: 'fake',
+      model: 'fake-video',
+      submit: async () => ({ jobId: 'render_1' }),
+      async poll(jobId) {
+        if (jobId === 'render_1') {
+          handOffs.push(jobId);
+          return { status: 'pending', next: 'ingest_1' };
+        }
+        if (crashIngestPoll) {
+          crashIngestPoll = false;
+          throw Object.assign(new Error('worker lost while ingest ran'), { code: 'ECONNRESET' });
+        }
+        return {
+          status: 'done',
+          video: { storageKey: 'assets/clip.mp4', contentHash: 'c'.repeat(64), width: 720, height: 1280 },
+        };
+      },
+    });
+    const run = await newRun();
+    const video: ModelToolCall = {
+      id: 'toolu_vid',
+      name: 'videos.generate',
+      arguments: { prompt: 'quarry', seconds: 4 },
+    };
+    await expect(
+      dispatchToolDetailed(video, run, startWorker(fakeProvider().generator(), videos())),
+    ).rejects.toThrow(/worker lost/);
+    expect(await jobsFor(run.runId)).toMatchObject([{ providerJobId: 'ingest_1', status: 'submitted' }]);
+
+    const retried = await dispatchToolDetailed(video, run, startWorker(fakeProvider().generator(), videos()));
+    expect(retried.result).toMatchObject({ kind: 'ok', output: { status: 'done' } });
+    expect(handOffs).toEqual(['render_1']);
+    expect((await jobsFor(run.runId)).map((j) => [j.providerJobId, j.status])).toEqual([
+      ['ingest_1', 'succeeded'],
+    ]);
+    expect((await chargesFor(run.budgetReservationId as string)).map((c) => c.kind)).toEqual([
+      'video_generation',
+    ]);
   });
 });

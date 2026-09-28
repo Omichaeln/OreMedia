@@ -126,6 +126,7 @@ export const usageLedger = mysqlTable(
       'image_generation',
       'render_minutes',
       'storage_bytes',
+      'video_generation',
     ]).notNull(),
     quantity: int('quantity').notNull(),
     unit: varchar('unit', { length: 20 }).notNull(),

@@ -25,6 +25,11 @@ export interface ProviderJobStore {
   /** Records the accepted job; a second persist for the same call keeps the first job. */
   persist(key: ProviderJobKey, job: ProviderJob): Promise<void>;
   find(key: ProviderJobKey): Promise<string | null>;
+  /**
+   * A job with a second stage (a finished video handed to ingest) moves the call on to that stage's job id, only while
+   * the call still holds `from`: a retry then polls the new stage instead of repeating the first one's hand-off.
+   */
+  advance(key: ProviderJobKey, from: string, to: string): Promise<void>;
   /** The provider reported a terminal outcome; a retry still finds (and polls) the job. */
   finish(key: ProviderJobKey, status: ProviderJobStatus): Promise<void>;
 }
@@ -48,6 +53,10 @@ export class MemoryProviderJobStore implements ProviderJobStore {
   async find(key: ProviderJobKey): Promise<string | null> {
     return this.jobs.get(keyOf(key))?.providerJobId ?? null;
   }
+  async advance(key: ProviderJobKey, from: string, to: string): Promise<void> {
+    const job = this.jobs.get(keyOf(key));
+    if (job?.providerJobId === from) job.providerJobId = to;
+  }
   async finish(key: ProviderJobKey, status: ProviderJobStatus): Promise<void> {
     const job = this.jobs.get(keyOf(key));
     if (job) job.status = status;
@@ -67,5 +76,6 @@ export const providerJobs = (): ProviderJobStore => store;
 export const registeredProviderJobStore: ProviderJobStore = {
   persist: (key, job) => store.persist(key, job),
   find: (key) => store.find(key),
+  advance: (key, from, to) => store.advance(key, from, to),
   finish: (key, status) => store.finish(key, status),
 };

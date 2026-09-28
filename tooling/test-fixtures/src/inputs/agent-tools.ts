@@ -30,6 +30,11 @@ export const AGENT_TOOL_INPUTS: Record<string, AgentToolFixture> = {
   'facts.list': { buildArguments: null, reason: RUN_BRAND_ONLY },
   'voice.clusters': { buildArguments: null, reason: RUN_BRAND_ONLY },
   'images.generate': { buildArguments: null, reason: RUN_BRAND_ONLY },
+  'videos.generate': { buildArguments: null, reason: RUN_BRAND_ONLY },
+  'videos.status': {
+    buildArguments: null,
+    reason: 'the job ref names a tool call of the run itself; the lookup is keyed by the run’s own id',
+  },
   'recommendations.create': {
     buildArguments: null,
     reason: 'evidence refs are opaque strings recorded on a recommendation of the run’s brand',

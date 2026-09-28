@@ -69,6 +69,8 @@ export const TOOL_NAMES_RELEASE_1 = [
   'creative.proposeOperations',
   'creative.requestRender',
   'images.generate',
+  'videos.generate',
+  'videos.status',
   'review.runBrandReview',
   'review.request',
   'experiments.proposeDesign',

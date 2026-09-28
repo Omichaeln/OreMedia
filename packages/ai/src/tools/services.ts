@@ -5,6 +5,7 @@ import type { Tx } from '@oremedia/db';
 import { assetService } from '@oremedia/module-assets';
 import { brandService } from '@oremedia/module-brand';
 import { creativeService } from '@oremedia/module-creative';
+import { featureFlag } from '@oremedia/module-operations';
 
 /** Provider job protocol for generated images (spec 12.2 model-call recovery): submit once, then poll by job id. */
 export interface ImageGenerator {
@@ -32,6 +33,52 @@ export interface ImageGenerator {
         status: 'done';
         images: Array<{ storageKey: string; contentHash: string; width: number; height: number }>;
       }
+  >;
+}
+
+/** A generated clip as catalogued: the asset version ingest accepted. */
+export interface GeneratedMedia {
+  storageKey: string;
+  contentHash: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * Provider job protocol for generated video (ADR-11, spec 12.2): submit once, then poll by job id. A provider renders
+ * asynchronously, so a job has two stages: the provider's render, then ingest of the downloaded clip. The poll that
+ * sees the render finish hands the clip to ingest and returns the second stage's job id as `next`; the caller
+ * persists it (ProviderJobStore.advance) and polls that, so a retry after the hand-off is recorded never repeats it
+ * (a worker lost between the two can leave one extra pending asset, never a lost clip).
+ */
+export interface VideoGenerator {
+  /** The gateway, checked as the model vendor against the company routing policy (spec 12.7). */
+  readonly provider: string;
+  /** The model id the generator calls, checked against the policy's denied models. */
+  readonly model: string;
+  submit(input: {
+    tenantId: string;
+    brandId: string;
+    runId: string;
+    prompt: string;
+    seconds: number;
+    aspect: string;
+    /** The brand's restrictions from its active policy (ADR-11 (5)); null when it sets none. */
+    restrictions: GenerationRestrictions | null;
+  }): Promise<{ jobId: string }>;
+  poll(
+    jobId: string,
+    /** Who catalogues the clip when the render has finished: the run's principal, mode and brand (policy, audit). */
+    by: {
+      brandId: string;
+      runId: string;
+      actor: ResolvedActorServicePrincipal;
+      autonomyMode: AutonomyMode;
+    },
+  ): Promise<
+    | { status: 'pending'; next?: string }
+    | { status: 'failed'; reason: string }
+    | { status: 'done'; video: GeneratedMedia }
   >;
 }
 
@@ -191,6 +238,10 @@ export interface ToolServices {
   };
   /** null until IMAGE_GEN_PROVIDER names a registered generator: images.generate then denies provider_not_configured. */
   images: ImageGenerator | null;
+  /** null until VIDEO_GEN_PROVIDER names a registered generator: videos.generate then denies provider_not_configured. */
+  videos: VideoGenerator | null;
+  /** Engineering flags (spec 22.1), evaluated server-side for the run's tenant. */
+  flags: Pick<typeof featureFlag, 'isEnabled'>;
   /** null until the intelligence module registers (Phase 6): its tools then deny tool_not_available_yet. */
   intelligence: IntelligenceToolSource | null;
   /** null until the content, review and publishing modules register their sources (composition roots). */
@@ -209,6 +260,16 @@ export function imageGeneratorFromEnv(env: NodeJS.ProcessEnv = process.env): Ima
   return provider ? (generators.get(provider) ?? null) : null;
 }
 
+const videoGenerators = new Map<string, VideoGenerator>();
+/** Providers register here at composition (ADR-11: openrouter); there are no fake video bytes. */
+export const registerVideoGenerator = (g: VideoGenerator): void => {
+  videoGenerators.set(g.provider, g);
+};
+export function videoGeneratorFromEnv(env: NodeJS.ProcessEnv = process.env): VideoGenerator | null {
+  const provider = env['VIDEO_GEN_PROVIDER'];
+  return provider ? (videoGenerators.get(provider) ?? null) : null;
+}
+
 export function defaultToolServices(env: NodeJS.ProcessEnv = process.env): ToolServices {
   return {
     brand: brandService,
@@ -222,6 +283,10 @@ export function defaultToolServices(env: NodeJS.ProcessEnv = process.env): ToolS
     get images() {
       return imageGeneratorFromEnv(env);
     },
+    get videos() {
+      return videoGeneratorFromEnv(env);
+    },
+    flags: featureFlag,
     get intelligence() {
       return intelligenceSource;
     },

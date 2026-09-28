@@ -179,8 +179,8 @@ export const MCP_TOOLS: readonly McpToolExposure[] = [
 
 /**
  * The MCP registry: the whole Release 1 registry plus the surface tools. Every name is known to the dispatcher, so a
- * call to a registered tool outside MCP_TOOLS (images.generate, publications.proposeSchedule, ...) is denied as
- * tool_not_allowed and audited, exactly as for an agent whose allowlist lacks it.
+ * call to a registered tool outside MCP_TOOLS (images.generate, videos.generate, publications.proposeSchedule, ...)
+ * is denied as tool_not_allowed and audited, exactly as for an agent whose allowlist lacks it.
  */
 export function createMcpRegistry(): ToolRegistry {
   return createReleaseOneRegistry()

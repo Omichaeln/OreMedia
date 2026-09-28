@@ -50,6 +50,13 @@
       "when": 1790346231676,
       "tag": "0006_brand_guideline_authors",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1790584591601,
+      "tag": "0007_usage_video_generation",
+      "breakpoints": true
     }
   ]
 }

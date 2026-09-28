@@ -7,6 +7,7 @@ import { imagesGenerate } from './images';
 import { experimentsProposeDesign, metricsQuery, recommendationsCreate, voiceClusters } from './intelligence';
 import { publicationsProposeSchedule } from './publications';
 import { reviewRequest, reviewRunBrandReview } from './review';
+import { videosGenerate, videosStatus } from './videos';
 
 /** Spec 12.4 Release 1 tool registry, in the order of the table. No tool has an external effect. */
 export const RELEASE_1_TOOLS: readonly AnyToolDefinition[] = [
@@ -21,6 +22,8 @@ export const RELEASE_1_TOOLS: readonly AnyToolDefinition[] = [
   creativeProposeOperations,
   creativeRequestRender,
   imagesGenerate,
+  videosGenerate,
+  videosStatus,
   reviewRunBrandReview,
   reviewRequest,
   experimentsProposeDesign,
@@ -44,6 +47,7 @@ export {
 };
 export { applyProposalBatch, CreativeProposalPayload } from './creative';
 export { imagesGenerate, IMAGE_COST_MICROS } from './images';
+export { videosGenerate, videosStatus, VIDEO_COST_MICROS_PER_SECOND } from './videos';
 export { reviewRunBrandReview, reviewRequest } from './review';
 export { contentCreateBrief, contentDraftCopy } from './content';
 export { publicationsProposeSchedule, ScheduleProposalPayload } from './publications';
@@ -53,11 +57,15 @@ export {
   defaultToolServices,
   imageGeneratorFromEnv,
   registerImageGenerator,
+  registerVideoGenerator,
+  videoGeneratorFromEnv,
   registerIntelligenceToolSource,
   registerContentToolSource,
   registerReviewToolSource,
   registerPublishingToolSource,
   type ImageGenerator,
+  type VideoGenerator,
+  type GeneratedMedia,
   type IntelligenceToolSource,
   type ContentToolSource,
   type ReviewToolSource,

@@ -32,6 +32,8 @@ const TABLE: Record<string, [effect: string, action: string]> = {
   'creative.proposeOperations': ['propose', 'creative.edit'],
   'creative.requestRender': ['draft', 'creative.render'],
   'images.generate': ['draft', 'creative.edit'],
+  'videos.generate': ['draft', 'creative.edit'],
+  'videos.status': ['draft', 'creative.edit'],
   'review.runBrandReview': ['read', 'creative.read'],
   'review.request': ['propose', 'review.request'],
   'experiments.proposeDesign': ['propose', 'experiment.manage'],
@@ -104,6 +106,8 @@ describe('Release 1 tools (spec 12.4 table)', () => {
       review: {},
       publishing: {},
       images: { provider: 'fake', model: 'fake-image' },
+      videos: { provider: 'fake', model: 'fake-video' },
+      flags: { isEnabled: async () => true },
     } as unknown as ToolServices;
     setTenantRoutingPolicy(run.tenantId, {
       schemaVersion: 1,

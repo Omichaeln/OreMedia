@@ -3,30 +3,10 @@ import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { ProviderUnavailableError } from '@oremedia/contracts/errors';
-import { withTransaction } from '@oremedia/db';
-import { assetService } from '@oremedia/module-assets';
 import { logger } from '@oremedia/observability';
+import { generatedAssetSink, type GeneratedAssetSink } from './generated-asset-sink';
 import { openRouterApiKeyFromEnv, openRouterProviderPreferences } from './openrouter-adapter';
 import type { ImageGenerator } from './tools/services';
-
-type GeneratedUpload = Parameters<typeof assetService.uploadGenerated>[1];
-
-/** The asset-module surface the generator needs; a narrow seam so unit tests supply a fake without a database. */
-export interface GeneratedAssetSink {
-  /** Commits on its own: a retried tool call must find the uploads even when the tool's unit of work rolls back. */
-  upload(
-    actor: ResolvedActor,
-    input: GeneratedUpload,
-    opts: { autonomyMode: AutonomyMode },
-  ): Promise<{ intentId: string }>;
-  status: typeof assetService.generatedUploadStatus;
-}
-
-const assetSink: GeneratedAssetSink = {
-  upload: (actor, input, opts) =>
-    withTransaction((tx) => assetService.uploadGenerated(actor, input, tx, opts)),
-  status: (intentIds, tx) => assetService.generatedUploadStatus(intentIds, tx),
-};
 
 export interface OpenRouterImageGeneratorOptions {
   apiKey: string;
@@ -65,7 +45,7 @@ export class OpenRouterImageGenerator implements ImageGenerator {
   constructor(private readonly opts: OpenRouterImageGeneratorOptions) {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.fetchImpl = opts.fetch ?? fetch;
-    this.assets = opts.assets ?? assetSink;
+    this.assets = opts.assets ?? generatedAssetSink;
     this.model = opts.model;
   }
 

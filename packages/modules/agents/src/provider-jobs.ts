@@ -28,6 +28,11 @@ export function durableProviderJobStore(): ProviderJobStore {
     async find(key) {
       return (await jobs.findForCall(key))?.providerJobId ?? null;
     },
+    async advance(key, from, to) {
+      const row = await jobs.findForCall(key);
+      if (!row || row.providerJobId !== from) return;
+      await jobs.update(row.id, row.version, { providerJobId: to });
+    },
     async finish(key, status) {
       const row = await jobs.findForCall(key);
       if (!row || row.status === status) return;

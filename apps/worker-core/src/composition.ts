@@ -49,6 +49,7 @@ import {
 import {
   createEvaluationRunnerFromEnv,
   createOpenRouterImageGeneratorFromEnv,
+  createOpenRouterVideoGeneratorFromEnv,
   createReleaseOneRegistry,
   registerContentToolSource,
   registerImageGenerator,
@@ -58,6 +59,7 @@ import {
   registerReviewToolSource,
   registerRoutingPolicySource,
   registerSkillResolver,
+  registerVideoGenerator,
 } from '@oremedia/ai';
 import {
   contentService,
@@ -204,6 +206,9 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // ADR-11: images.generate reaches OpenRouter when IMAGE_GEN_PROVIDER=openrouter; its output enters asset ingest.
   const imageGenerator = createOpenRouterImageGeneratorFromEnv();
   if (imageGenerator) registerImageGenerator(imageGenerator);
+  // videos.generate likewise with VIDEO_GEN_PROVIDER=openrouter, and only for tenants with creative.video_generation.
+  const videoGenerator = createOpenRouterVideoGeneratorFromEnv();
+  if (videoGenerator) registerVideoGenerator(videoGenerator);
   registerRevisionVariantSource((contentRevisionId, tx) =>
     contentService.revisions.withVariants(contentRevisionId, tx),
   );

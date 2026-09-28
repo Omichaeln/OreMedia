@@ -92,6 +92,16 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
       'every worker-render on the preview-aware build; zero preview jobs writing rendered_exports',
     enabledDefault: false,
   },
+  {
+    // ADR-11 video generation (ledger 4.25): off until the clamav stream limit is confirmed for generated clips and
+    // the pilot brands opt in.
+    key: 'creative.video_generation',
+    owner: 'creative',
+    removalDate: '2027-03-31',
+    successMetric:
+      '95 % of video generations land as pending assets; no clip rejected by the scanner for size',
+    enabledDefault: false,
+  },
 ];
 
 class FlagRepository extends PlatformRepository {

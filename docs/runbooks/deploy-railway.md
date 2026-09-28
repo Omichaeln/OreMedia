@@ -19,7 +19,7 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      (wrap-only permission), `OBJECT_STORE_*`, `LINK_REDIRECT_DOMAIN`, per-provider `PROVIDER_<KEY>_CLIENT_ID_REF`;
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
-     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `OBJECT_STORE_*`, provider secrets `PROVIDER_<KEY>_SECRET_REF`;
+     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `OBJECT_STORE_*`, provider secrets `PROVIDER_<KEY>_SECRET_REF`;
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `VITE_REVIEW_PORTAL_ORIGIN`
      (build arg). `VITE_API_URL` stays unset: the app calls `/trpc` on its own origin.
@@ -134,6 +134,19 @@ worker understands them:
    `previewRender` returns the scene preview only and queues nothing.
 4. Enable `creative.preview_render` (feature_flags row: tenant allowlist first, then `enabled_default`). To roll back
    `worker-render` to a build without previews, disable the flag first and let queued preview jobs finish.
+
+Rollout order for video generation (migration 0007, flag `creative.video_generation`, default off; ADR-11, ledger 4.25):
+
+1. Apply migration 0007 (adds `video_generation` to `usage_ledger.kind`; an enum value appended at the end, so
+   MySQL changes only metadata) with the api pre-deploy command. It must precede the workers: a video charge written
+   against the old enum fails.
+2. Confirm the clamav service's stream limit (`StreamMaxLength`, clamd's documented default 25 MB) covers the clips
+   the chosen model produces at its longest duration; a clip above it fails the scan and stays quarantined. Raise it
+   on the clamav service first if needed.
+3. Set `VIDEO_GEN_PROVIDER=openrouter` and `OREMEDIA_VIDEO_MODEL_ID` on `worker-core` and deploy it.
+4. Enable `creative.video_generation` (feature_flags row: tenant allowlist first, then `enabled_default`). A skill
+   that should generate video lists both `videos.generate` and `videos.status` in its allowed tools. Turning the
+   flag off stops new generations; `videos.status` still collects clips already paid for.
 
 Rollout order for Google sign-in (migration 0003, D-03):
 

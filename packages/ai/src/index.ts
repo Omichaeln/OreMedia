@@ -21,9 +21,14 @@ export {
 export {
   OpenRouterImageGenerator,
   createOpenRouterImageGeneratorFromEnv,
-  type GeneratedAssetSink,
   type OpenRouterImageGeneratorOptions,
 } from './openrouter-image-generator';
+export { type GeneratedAssetSink } from './generated-asset-sink';
+export {
+  OpenRouterVideoGenerator,
+  createOpenRouterVideoGeneratorFromEnv,
+  type OpenRouterVideoGeneratorOptions,
+} from './openrouter-video-generator';
 export { FakeModelAdapter, type FakeModelScript, type FakeModelStep } from './fake-adapter';
 export {
   ModelRoutingPolicy,
