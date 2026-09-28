@@ -11,6 +11,7 @@ import {
   MediaSignedUrlRequest,
   UploadIntentComplete,
   UploadIntentCreate,
+  UploadIntentGet,
   UsageRightsInput,
 } from '@oremedia/contracts/assets';
 import { assetService } from '@oremedia/module-assets';
@@ -35,6 +36,9 @@ export const assetsRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => assetService.completeUpload(ctx.tenant.actor, input, tx)),
       ),
+    get: tenantQuery
+      .input(UploadIntentGet)
+      .query(({ ctx, input }) => assetService.uploadStatus(ctx.tenant.actor, input)),
   }),
   search: tenantQuery
     .input(AssetSearch)

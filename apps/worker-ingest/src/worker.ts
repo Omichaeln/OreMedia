@@ -1,9 +1,15 @@
 import { Runtime } from '@temporalio/worker';
-import { sdkLogger, startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
+import {
+  reportConfiguration,
+  sdkLogger,
+  startHealthServer,
+  startTelemetry,
+  stopTelemetry,
+} from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { definitionService } from '@oremedia/module-measurement';
 import { providerRegistry } from '@oremedia/providers';
-import { composeCredentialBroker, composeModules } from './composition';
+import { composeCredentialBroker, composeModules, workerIngestCapabilities } from './composition';
 import { startIngestWorkers } from './ingest-worker';
 import { temporalConfigFromEnv } from './temporal';
 
@@ -25,6 +31,10 @@ try {
   );
   process.exit(2);
 }
+// One line naming each degraded capability and the settings it lacks (names only); the worker keeps running and its
+// /health lists the capability names, unless OREMEDIA_CONFIG_STRICT=1 (docs/runbooks/deploy-railway.md).
+const config = reportConfiguration(log, workerIngestCapabilities());
+if (config.refuse) process.exit(2);
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 5) });
 
 // Spec 4.4 / 14.7: scheduled pulls with provider rate limits; this process (with worker-core) may decrypt.
@@ -50,7 +60,7 @@ try {
 }
 const ingestRun = ingestWorkers.run();
 // Answer the platform health check only now that the ingest workers started (a failed start exited above).
-const health = await startHealthServer();
+const health = await startHealthServer(undefined, config.degraded);
 
 const shutdown = async () => {
   await health.close();

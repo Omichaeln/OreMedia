@@ -23,6 +23,7 @@ import {
   UPLOAD_INTENT_TTL_SEC,
   UploadIntentComplete,
   UploadIntentCreate,
+  UploadIntentGet,
   UsageRightsInput,
   type AssetKind,
   type AssetPurpose,
@@ -167,6 +168,24 @@ export const assetService = {
     const intent = await intentsRepo.getById(parsed.intentId, tx);
     await policy.assert(actor, 'asset.upload', brandResource(intent.brandId), {}, tx);
     return markUploaded(actor, intent, tx);
+  },
+
+  /**
+   * Where an upload stands (spec 9.1): issued, uploaded, quarantined while ingest runs, then accepted with the asset it
+   * became or rejected with the reason. For the uploader's client (the web app, a smoke check) to follow ingest; the
+   * same read permission as the asset library, in the intent's brand.
+   */
+  async uploadStatus(actor: ResolvedActor, input: z.infer<typeof UploadIntentGet>, tx?: Tx) {
+    const parsed = UploadIntentGet.parse(input);
+    const intent = await intentsRepo.getById(parsed.intentId, tx);
+    assetsRepo.assertBrandVisible(intent.brandId);
+    await policy.assert(actor, 'asset.read', brandResource(intent.brandId), {}, tx);
+    return {
+      intentId: intent.id,
+      state: intent.state,
+      assetId: intent.resultAssetId ?? null,
+      rejectionReason: intent.rejectionReason ?? null,
+    };
   },
 
   /**

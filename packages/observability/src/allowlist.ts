@@ -45,6 +45,9 @@ export const LOG_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
   'errno',
   'queue',
   'taskQueue',
+  // startup configuration report (config-report.ts): capability and setting NAMES, never values
+  'degraded',
+  'missingSettings',
   // Temporal SDK log metadata (sdkLogger)
   'sdkComponent',
   'namespace',

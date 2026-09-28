@@ -36,6 +36,8 @@ export {
   resetPublishMediaSource,
   registerProviderClients,
   providerClientsFromEnv,
+  providerClientSettings,
+  channelCapabilities,
   registerWorkflowProbe,
   registerBrandChecker as registerPublishingBrandChecker,
   type BrandChecker as PublishingBrandChecker,

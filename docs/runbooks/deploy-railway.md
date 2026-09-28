@@ -177,6 +177,41 @@ shows previews of the brand's own font files in the browser.
    banner reports four files importing and, after ingest, the list shows Inter 400 and 700 from Google Fonts. Assign
    one to Body: the preview line is drawn in Inter (no CSP violation in the browser console).
 
+## 1c. Configuration report: what each service can do with its variables
+
+Every Node service checks, at start, the settings each of its **capabilities** needs, using the names the code that
+reads them uses (so the report and the code cannot disagree). A missing setting does **not** stop the service:
+production keeps running with that capability degraded, and the gap is reported.
+
+| Capability      | Settings it needs (names only)                                                                                                                                                   | Checked on                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY` | api, worker-core, worker-render |
+| `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`)                      | api, worker-core, worker-ingest |
+| `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                    | worker-core, worker-ingest      |
+| `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                     | api                             |
+
+- `uploads` on the api signs upload and download URLs; on worker-core it copies media for publishing and deletes
+  objects; on worker-render it ingests uploads and writes renders. `channel:<key>` on the api connects channels; on
+  worker-core it publishes and refreshes tokens; on worker-ingest it refreshes tokens and pulls metrics and comments.
+  `models` on worker-core runs agents and generators; on worker-ingest it classifies comments.
+- The `web` service (Caddy) has no report: its `OBJECT_STORE_PUBLIC_ORIGIN` is checked by the production smoke check
+  (section 3a) through the CSP it serves. The `redirector` has none either: both its settings (`DATABASE_URL`,
+  `LINK_HASH_SECRET_REF`) already stop it at start when missing.
+- **Reading the startup line.** Each service logs exactly one line at start. Configured: level `info`,
+  `configuration complete: every capability is configured`. Otherwise level `error`,
+  `configuration incomplete: capabilities degraded; running without them`, with `degraded` (the capability names) and
+  `missingSettings` (per capability, the setting names to set). Values are never logged. Set the named variables on
+  that service and redeploy it; the line turns `info`.
+- **Health.** The api's `/health` (and each worker's `/health`) answers `{ "ok": true, "degraded": [...] }` with the
+  capability names only (no setting name, no value; `/health` is public through the web origin). It stays 200 while
+  degraded, so Railway's health check still passes; the smoke check (section 3a) fails on a non-empty list. The
+  capability names (for example `uploads`, `channel:x`) are therefore publicly visible to anyone who requests
+  `/health`; no setting name or value ever is.
+- **Strict mode (off by default).** `OREMEDIA_CONFIG_STRICT=1` on a service makes a degraded capability fatal: the
+  same line says `refusing to start` and the process exits 2 (the deploy's health check then fails). Only the exact
+  value `1` turns it on. Turn it on per service once that service's report is clean, so a later deploy that loses a
+  variable fails instead of running degraded.
+
 ## 2. Deploy
 
 Railway builds each service from the Dockerfile on push to the configured branch. The `api` service runs
@@ -235,11 +270,64 @@ Rollout order for Google sign-in (migration 0003, D-03):
 
 ## 3. Verify
 
-1. `GET https://<web domain>/health` returns `{ ok: true }` (served by the api through the web proxy).
+1. `GET https://<web domain>/health` returns `{ "ok": true, "degraded": [] }` (served by the api through the web
+   proxy); a non-empty `degraded` names what is not configured (section 1c).
 2. `https://<web domain>/sign-in` → **Continue with Google** returns to the portfolio signed in; an account that
    was not invited returns to the sign-in page with "This Google account has not been invited".
 3. Worker logs show `worker started` for every task queue.
 4. Dashboards: outbox oldest-undispatched age < 60 s; dispatch lateness p99 < 60 s; no `outcome_unknown` growth.
+
+## 3a. Production smoke check
+
+`pnpm smoke:prod` checks a deployed environment from outside, through the web origin as a browser reaches it, and
+prints one line per check (`PASS`, `FAIL` or `SKIP` with a detail); it exits 1 when any check fails. It prints no
+password, no session token and no signed URL query string.
+
+| Check                                  | Passes when                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `health`                               | `GET /health` is 200 with `ok` and an empty `degraded` (section 1c)                                                                                                                                                                                                                                                                                                    |
+| `csp`                                  | the page's CSP admits the object store origin in `connect-src` and `font-src` (exactly `SMOKE_EXPECT_STORE_ORIGIN` if set)                                                                                                                                                                                                                                             |
+| `legal:privacy`, `legal:data-deletion` | `/legal/privacy` and `/legal/data-deletion` answer 200 HTML                                                                                                                                                                                                                                                                                                            |
+| `brand.json`                           | `/deployment-brand/brand.json` is a pack the web app accepts                                                                                                                                                                                                                                                                                                           |
+| `upload:*`                             | with the smoke user's credentials: sign in, upload intent, the CSP admits the signed URL's origin, the store answers the CORS preflight for the web origin (bucket CORS), PUT a small PNG, complete, then ingest accepts it (`assets.uploads.get`) within `SMOKE_INGEST_TIMEOUT_MS` (default 120 s), and `upload:cleanup` retires the accepted asset (`assets.retire`) |
+
+The upload stops at the first failing step and names it (`upload:cors` means the R2 bucket's CORS policy must allow
+`PUT` and `GET` from the web origin with the `content-type` header). It signs the smoke user out at the end. The
+upload uses a person's password sign-in, not a REST API key: an API key acts as a service principal, which may only
+propose uploads (`asset.upload` is propose-only for agents), so `assets.uploads.createIntent` refuses it.
+
+**Run it by hand:** `SMOKE_BASE_URL=https://<web domain> pnpm smoke:prod` (add the variables below for the upload).
+
+**Scheduled run:** `.github/workflows/smoke.yml` runs every 6 hours and on demand (Actions → Production smoke check
+→ Run workflow). It never runs on pull requests. It reads these repository secrets (Settings → Secrets and variables
+→ Actions → New repository secret):
+
+| Secret                      | Value                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `SMOKE_BASE_URL`            | the web origin, exactly `WEB_ORIGIN` (required)                                             |
+| `SMOKE_EXPECT_STORE_ORIGIN` | optional: the object store origin, as set in the web service's `OBJECT_STORE_PUBLIC_ORIGIN` |
+| `SMOKE_EMAIL`               | optional (all four or no upload): the smoke user's email address                            |
+| `SMOKE_PASSWORD`            | the smoke user's password                                                                   |
+| `SMOKE_TENANT_ID`           | the smoke company's id (`ten_…`)                                                            |
+| `SMOKE_BRAND_ID`            | the smoke brand's id (`brd_…`)                                                              |
+
+**Creating the smoke company, brand and user (the owner does this; the credentials go straight into the secrets and
+pass through no one else):**
+
+1. Create a dedicated company with the owner's own account as its owner (section "First owner", with
+   `--company "Oremedia smoke" --slug oremedia-smoke`); note the company id it prints (`SMOKE_TENANT_ID`).
+2. Sign in as that owner, switch to the smoke company and create one brand, `Smoke`; its id is in the address bar
+   (`/c/<company>/b/<brand>/…`, `SMOKE_BRAND_ID`). This company and brand are dedicated and throwaway: uploads land
+   only here, and each run retires the image it uploaded (retired assets leave the library, though their rows and stored files remain, one small PNG per run).
+3. Invite a dedicated address in an allowed domain (`AUTH_ALLOWED_DOMAINS`), e.g. `oremedia-smoke@<domain>`, with the
+   **brand manager** role (it uploads and retires its own smoke image, which needs the asset approve permission; the
+   smoke company has no channels, so it can publish nothing), then Settings → Members → **Password link** for it.
+   Open the link yourself and choose a long random password (a password manager); this link password stays in the
+   smoke company only (section 1a step 6). Never reuse it anywhere.
+4. Put the address and password into `SMOKE_EMAIL` and `SMOKE_PASSWORD`, and the two ids into their secrets. Run the
+   workflow once by hand and read its log.
+5. To rotate: issue a new Password link for the smoke user, set a new password and update `SMOKE_PASSWORD`. To stop
+   the upload check, delete `SMOKE_PASSWORD`; to stop the workflow, disable it in the Actions tab.
 
 ## 4. Rollback
 

@@ -1147,6 +1147,27 @@
         }
       }
     },
+    "/trpc/assets.uploads.get": {
+      "get": {
+        "operationId": "assets.uploads.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["intentId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/assets.usages.list": {
       "get": {
         "operationId": "assets.usages.list",
@@ -9194,6 +9215,18 @@
             }
           },
           "required": ["brandId", "kind", "declaredMime", "declaredBytes", "originalFilename"]
+        }
+      },
+      "assets.uploads.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "intentId": {
+              "type": "string"
+            }
+          },
+          "required": ["intentId"]
         }
       },
       "assets.usages.list": {

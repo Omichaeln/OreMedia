@@ -1,3 +1,4 @@
+import type { CapabilityCheck } from '@oremedia/observability';
 import { createAnthropicAdapterFromEnv } from './anthropic-adapter';
 import { FakeModelAdapter } from './fake-adapter';
 import type { ModelAdapter } from './model-adapter';
@@ -22,3 +23,18 @@ export function createModelAdapterFromEnv(env: NodeJS.ProcessEnv = process.env):
       : 'OPENROUTER_API_KEY_REF (or ANTHROPIC_API_KEY_REF) is required (set OREMEDIA_FAKE_MODEL=1 for the scripted fake outside production)',
   );
 }
+
+/**
+ * Configuration report capability `models` (agents, the voice classifier, generators), following the selection above:
+ * the OpenRouter key needs its default model (OREMEDIA_MODEL_ID, or a mounted routing policy) as routingPolicyFromEnv
+ * requires; the direct Anthropic key stands alone. With neither, the default gateway's names are reported (ADR-11).
+ */
+export const modelsCapability: CapabilityCheck = {
+  capability: 'models',
+  missing: (env) => {
+    if (env['OPENROUTER_API_KEY_REF'])
+      return env['OREMEDIA_MODEL_ID'] || env['MODEL_ROUTING_POLICY_REF'] ? [] : ['OREMEDIA_MODEL_ID'];
+    if (env['ANTHROPIC_API_KEY_REF']) return [];
+    return ['OPENROUTER_API_KEY_REF', 'OREMEDIA_MODEL_ID'];
+  },
+};

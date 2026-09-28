@@ -69,6 +69,9 @@
 		}
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"
+		# The pre-paint theme script (apps/web/public/theme-init.js) is not content-hashed: always revalidated.
+		@theme path /theme-init.js
+		header @theme Cache-Control no-cache
 		try_files {path} /index.html
 		file_server
 	}

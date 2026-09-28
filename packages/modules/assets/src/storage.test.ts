@@ -6,9 +6,11 @@ import {
   S3StorageProvider,
   assertTenantKey,
   createStorageFromEnv,
+  objectStoreMissingSettings,
   parseStorageKey,
   readS3Config,
   storageKeys,
+  uploadsCapability,
 } from './storage';
 
 const A = 'ten_01ARZ3NDEKTSV4RRFFQ69G5FAA';
@@ -150,5 +152,41 @@ describe('createStorageFromEnv (spec 9.1: no local storage in production)', () =
   });
   it('falls back to memory outside production', () => {
     expect(createStorageFromEnv({ NODE_ENV: 'test' })).toBeInstanceOf(MemoryStorageProvider);
+  });
+});
+
+describe('uploads capability (startup configuration report)', () => {
+  const full = {
+    OBJECT_STORE_BUCKET_ASSETS: 'a',
+    OBJECT_STORE_BUCKET_RELEASES: 'r',
+    OBJECT_STORE_ENDPOINT: 'https://example.r2.cloudflarestorage.com',
+    OBJECT_STORE_ACCESS_KEY_ID: 'id-value',
+    OBJECT_STORE_SECRET_ACCESS_KEY: 'secret-value',
+  };
+
+  it('is configured exactly when the reader has a store and the access key pair is set', () => {
+    expect(uploadsCapability.capability).toBe('uploads');
+    expect(objectStoreMissingSettings(full)).toEqual([]);
+    expect(readS3Config(full)).not.toBeNull();
+    const { OBJECT_STORE_ENDPOINT: _endpoint, ...regionOnly } = full;
+    expect(objectStoreMissingSettings({ ...regionOnly, OBJECT_STORE_REGION: 'eu-west-1' })).toEqual([]);
+  });
+
+  it('names every missing setting (the production gap: nothing set) and never a value', () => {
+    expect(objectStoreMissingSettings({})).toEqual([
+      'OBJECT_STORE_BUCKET_ASSETS',
+      'OBJECT_STORE_BUCKET_RELEASES',
+      'OBJECT_STORE_ENDPOINT',
+      'OBJECT_STORE_ACCESS_KEY_ID',
+      'OBJECT_STORE_SECRET_ACCESS_KEY',
+    ]);
+    // Buckets and endpoint without keys: readS3Config builds a client, yet the store refuses every signed URL.
+    const { OBJECT_STORE_ACCESS_KEY_ID: _id, OBJECT_STORE_SECRET_ACCESS_KEY: _secret, ...noKeys } = full;
+    expect(readS3Config(noKeys)).not.toBeNull();
+    const missing = uploadsCapability.missing(noKeys);
+    expect(missing).toEqual(['OBJECT_STORE_ACCESS_KEY_ID', 'OBJECT_STORE_SECRET_ACCESS_KEY']);
+    expect(
+      JSON.stringify(uploadsCapability.missing({ ...full, OBJECT_STORE_BUCKET_ASSETS: '' })),
+    ).not.toMatch(/value|example/);
   });
 });

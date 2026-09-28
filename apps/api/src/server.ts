@@ -28,6 +28,11 @@ export interface ServerOptions {
   reviewPortalOrigin?: string;
   /** D-03 Google sign-in; null or absent = the sign-in routes answer "unavailable" (never outside development). */
   auth?: AuthConfig | null;
+  /**
+   * Capability names the startup configuration report found degraded (reportConfiguration), served on /health. Names
+   * only: never a setting name or value, since /health is public through the web origin.
+   */
+  degraded?: readonly string[];
 }
 
 /** Spec 4.3 request path and spec 18 security headers. */
@@ -79,7 +84,9 @@ export function createServer(opts: ServerOptions = {}): Express {
     next();
   });
 
-  app.get('/health', (_req, res) => res.json({ ok: true }));
+  // Always 200 while the process serves (the platform health check); `degraded` says what cannot work yet.
+  const health = { ok: true, degraded: [...(opts.degraded ?? [])] };
+  app.get('/health', (_req, res) => res.json(health));
 
   app.use(
     '/trpc',

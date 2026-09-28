@@ -13,7 +13,7 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
-import { assetService } from '@oremedia/module-assets';
+import { assetService, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
@@ -52,6 +52,7 @@ import {
   publishingToolSource,
   registerProviderClients,
   providerClientsFromEnv,
+  channelCapabilities,
   registerPublishMediaSource,
   registerRevisionVariantSource,
   registerApprovalConsumer,
@@ -75,6 +76,8 @@ import {
   registerSkillResolver,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
+import type { CapabilityCheck } from '@oremedia/observability';
+import { webOriginCapability } from './web-origin';
 
 /** Wires cross-module hooks so modules never import each other's tables. Called by main and by tests. */
 export function composeModules(): void {
@@ -257,3 +260,14 @@ export function composeModules(): void {
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }
+
+/**
+ * What the startup configuration report checks for the api (docs/runbooks/deploy-railway.md, "Configuration
+ * report"): the web origin, uploads (it signs upload and download URLs) and every provider's app credentials (it
+ * connects channels).
+ */
+export const apiCapabilities = (): CapabilityCheck[] => [
+  webOriginCapability,
+  uploadsCapability,
+  ...channelCapabilities(),
+];

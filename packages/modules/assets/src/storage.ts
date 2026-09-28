@@ -9,7 +9,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import { requireTenant } from '@oremedia/db';
-import { logger } from '@oremedia/observability';
+import { logger, type CapabilityCheck } from '@oremedia/observability';
 
 /**
  * Spec 9.1 / 20.2: the storage abstraction ported as a pattern from the reference upload interface, with tenant-prefixed
@@ -275,20 +275,52 @@ export class MemoryStorageProvider extends TenantPrefixedStorage {
 
 type Env = Record<string, string | undefined>;
 
+/** The object store settings readS3Config reads (Appendix A names); the configuration report checks these same names. */
+export const OBJECT_STORE_SETTINGS = {
+  bucketAssets: 'OBJECT_STORE_BUCKET_ASSETS',
+  bucketReleases: 'OBJECT_STORE_BUCKET_RELEASES',
+  endpoint: 'OBJECT_STORE_ENDPOINT',
+  region: 'OBJECT_STORE_REGION',
+  accessKeyId: 'OBJECT_STORE_ACCESS_KEY_ID',
+  secretAccessKey: 'OBJECT_STORE_SECRET_ACCESS_KEY',
+} as const;
+const S = OBJECT_STORE_SETTINGS;
+
 export function readS3Config(env: Env): S3StorageConfig | null {
-  const assets = env['OBJECT_STORE_BUCKET_ASSETS'];
-  const releases = env['OBJECT_STORE_BUCKET_RELEASES'];
-  const endpoint = env['OBJECT_STORE_ENDPOINT'];
-  const region = env['OBJECT_STORE_REGION'];
+  const assets = env[S.bucketAssets];
+  const releases = env[S.bucketReleases];
+  const endpoint = env[S.endpoint];
+  const region = env[S.region];
   if (!assets || !releases || (!endpoint && !region)) return null;
   return {
     ...(endpoint ? { endpoint } : {}),
     region: region ?? 'auto',
-    accessKeyId: env['OBJECT_STORE_ACCESS_KEY_ID'],
-    secretAccessKey: env['OBJECT_STORE_SECRET_ACCESS_KEY'],
+    accessKeyId: env[S.accessKeyId],
+    secretAccessKey: env[S.secretAccessKey],
     buckets: { assets, releases },
   };
 }
+
+/**
+ * The object store settings a deployment lacks (names only). Beyond what readS3Config needs to build a client, the
+ * access key pair is required: Railway has no ambient cloud credentials, so without it every signed URL is refused by
+ * the store (R2 and S3 alike). The endpoint is named when neither it nor a region is set (R2 is the production store).
+ */
+export function objectStoreMissingSettings(env: Env): string[] {
+  const missing: string[] = [];
+  if (!env[S.bucketAssets]) missing.push(S.bucketAssets);
+  if (!env[S.bucketReleases]) missing.push(S.bucketReleases);
+  if (!env[S.endpoint] && !env[S.region]) missing.push(S.endpoint);
+  if (!env[S.accessKeyId]) missing.push(S.accessKeyId);
+  if (!env[S.secretAccessKey]) missing.push(S.secretAccessKey);
+  return missing;
+}
+
+/** Configuration report capability: uploads, and every process that signs, reads or writes stored objects. */
+export const uploadsCapability: CapabilityCheck = {
+  capability: 'uploads',
+  missing: objectStoreMissingSettings,
+};
 
 /**
  * Production requires the S3 configuration and fails at startup otherwise (spec 9.1: no local-disk storage in

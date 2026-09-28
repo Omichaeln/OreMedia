@@ -1,9 +1,9 @@
-import { startTelemetry, stopTelemetry } from '@oremedia/observability';
+import { reportConfiguration, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { configureConnectCallback } from '@oremedia/module-publishing';
 import { createServer } from './server';
 import { configureRateLimiter } from './trpc';
-import { composeModules } from './composition';
+import { apiCapabilities, composeModules } from './composition';
 import { authConfigFromEnv, type AuthConfig } from './auth/config';
 import { webOriginFromEnv } from './web-origin';
 
@@ -31,6 +31,10 @@ try {
   );
   process.exit(2);
 }
+// One line naming each degraded capability and the settings it lacks (names only); the api keeps serving, and /health
+// lists the capability names, unless OREMEDIA_CONFIG_STRICT=1 (docs/runbooks/deploy-railway.md).
+const config = reportConfiguration(log, apiCapabilities());
+if (config.refuse) process.exit(2);
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 10) });
 composeModules();
 // Spec 14.7: providers return to the one callback registered with them; unset, the client's redirect is used.
@@ -51,6 +55,7 @@ const app = createServer({
   webOrigin: webOrigin ?? undefined,
   reviewPortalOrigin: process.env['REVIEW_PORTAL_ORIGIN'],
   auth,
+  degraded: config.degraded,
 });
 const server = app.listen(port, () => log.info({ status: port }, 'api listening'));
 

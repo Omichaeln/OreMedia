@@ -2030,7 +2030,7 @@
           "production",
           "3.1",
           "in_progress",
-          "Documented in infra/railway/README.md and the runbook; StorageProvider for R2 arrives with Phase 2 assets. Live: managed MySQL and Redis on Railway (24 September 2026); migrations 0000-0003 applied by the api pre-deploy step. Object store endpoint, region and buckets are set on worker-render; its access keys and an upload round trip are not yet verified."
+          "Documented in infra/railway/README.md and the runbook; StorageProvider for R2 arrives with Phase 2 assets. Live: managed MySQL and Redis on Railway (24 September 2026); migrations 0000-0003 applied by the api pre-deploy step. Object store endpoint, region and buckets are set on worker-render; its access keys and an upload round trip are not yet verified. 28 September 2026, merged #45 (claude/deploy-verification): `pnpm smoke:prod` (.github/workflows/smoke.yml, every 6 hours, runbook section 3a) checks health, the CSP's store origin, bucket CORS and a browser-shaped upload through ingest; the e2e suite now serves the production CSP parsed from the Caddyfile (apps/web/e2e/csp.e2e.test.ts). Open until the owner sets the smoke secrets and a scheduled run passes."
         ],
         [
           "R.4",
@@ -2046,7 +2046,7 @@
           "critical",
           "Appendix A",
           "in_progress",
-          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases. Live status 25 September 2026: api and web complete (sign-in works); worker-core needs ANTHROPIC_API_KEY_REF (its agents worker cannot start) and worker-ingest needs COMMENT_AUTHOR_HASH_SECRET_REF or LINK_HASH_SECRET_REF; both now fail their health-checked deploys until set."
+          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases. Live status 25 September 2026: api and web complete (sign-in works); worker-core needs ANTHROPIC_API_KEY_REF (its agents worker cannot start) and worker-ingest needs COMMENT_AUTHOR_HASH_SECRET_REF or LINK_HASH_SECRET_REF; both now fail their health-checked deploys until set. 28 September 2026, merged #45 (claude/deploy-verification): every Node service now reports at start, per capability (uploads, channel:<provider>, models, web_origin), the settings it lacks, by name only, in one error line, keeps running, and lists the degraded capability names on /health (packages/observability/src/config-report.ts, runbook section 1c; OREMEDIA_CONFIG_STRICT=1 refuses to start, off by default). Not verified live: what the deployed services report."
         ],
         [
           "R.6",

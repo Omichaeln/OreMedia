@@ -1,3 +1,5 @@
+import type { CapabilityCheck } from '@oremedia/observability';
+
 /**
  * WEB_ORIGIN: the web app's public origin. It admits cross-origin callers (CORS) and fixes the channel-connect callback
  * (spec 14.7): every provider returns to `${WEB_ORIGIN}/connect/callback`, the one redirect URI registered with Meta
@@ -38,3 +40,9 @@ export function webOriginFromEnv(env: NodeJS.ProcessEnv = process.env): string |
     throw new WebOriginConfigError('WEB_ORIGIN must be https in production');
   return url.origin;
 }
+
+/** Configuration report capability `web_origin`: the name webOriginFromEnv reads (validation stays there). */
+export const webOriginCapability: CapabilityCheck = {
+  capability: 'web_origin',
+  missing: (env) => (env['WEB_ORIGIN']?.trim() ? [] : ['WEB_ORIGIN']),
+};

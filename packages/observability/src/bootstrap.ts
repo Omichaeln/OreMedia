@@ -76,13 +76,19 @@ export interface HealthServer {
 /**
  * Worker readiness for the platform health check. A worker calls this only once its Temporal workers are running,
  * so a worker that cannot start never answers `/health` and its deploy fails, instead of showing healthy while
- * nothing polls. Listens on `port` (default `PORT`); with neither set (local runs) nothing listens.
+ * nothing polls. Listens on `port` (default `PORT`); with neither set (local runs) nothing listens. The body names the
+ * capabilities the startup configuration report found degraded (`degraded`), as the api's /health does.
  */
-export async function startHealthServer(port = process.env['PORT']): Promise<HealthServer> {
+export async function startHealthServer(
+  port = process.env['PORT'],
+  degraded: readonly string[] = [],
+): Promise<HealthServer> {
   if (port === undefined || port === '') return { port: 0, close: async () => {} };
+  // `degraded`: the startup configuration report's capability names (config-report.ts), names only, still 200.
+  const body = JSON.stringify({ ok: true, degraded });
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
-      res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+      res.writeHead(200, { 'content-type': 'application/json' }).end(body);
       return;
     }
     res.writeHead(404).end();

@@ -96,10 +96,18 @@ describe('worker health server', () => {
     const base = `http://127.0.0.1:${health.port}`;
     const ok = await fetch(`${base}/health`);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ ok: true });
+    expect(await ok.json()).toEqual({ ok: true, degraded: [] });
     expect((await fetch(`${base}/other`)).status).toBe(404);
     await health.close();
     await expect(fetch(`${base}/health`)).rejects.toThrow();
+  });
+
+  it('names the degraded capabilities from the configuration report and still answers 200', async () => {
+    const health = await startHealthServer('0', ['uploads', 'channel:x']);
+    const res = await fetch(`http://127.0.0.1:${health.port}/health`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, degraded: ['uploads', 'channel:x'] });
+    await health.close();
   });
 
   it('listens on nothing when no port is configured (local runs and tests)', async () => {

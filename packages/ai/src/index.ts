@@ -2,7 +2,7 @@
 // the tool registry and dispatcher, the Release 1 tools and the evaluation harness. Durable run state and the
 // Temporal workflow live in @oremedia/module-agents, @oremedia/workflows and @oremedia/activities.
 export { type ModelAdapter, type ModelConfig, modelConfigFromEnv, estimateCostMicros } from './model-adapter';
-export { createModelAdapterFromEnv } from './adapter-factory';
+export { createModelAdapterFromEnv, modelsCapability } from './adapter-factory';
 export {
   AnthropicModelAdapter,
   anthropicApiKeyFromEnv,

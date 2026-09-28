@@ -1,3 +1,4 @@
+import { modelsCapability } from '@oremedia/ai';
 import { registerBrandChecker } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { intelligenceService } from '@oremedia/module-intelligence';
@@ -14,9 +15,11 @@ import {
   configureCredentialBroker,
   createKmsFromEnv,
   providerClientsFromEnv,
+  channelCapabilities,
   registerProviderClients,
   registerPublishingBrandChecker,
 } from '@oremedia/module-publishing';
+import type { CapabilityCheck } from '@oremedia/observability';
 
 /**
  * Wires what the ingest worker needs (same shape as apps/worker-core/src/composition.ts, smaller): brand checks
@@ -57,3 +60,10 @@ export function composeModules(env: NodeJS.ProcessEnv = process.env): void {
 export function composeCredentialBroker(env: NodeJS.ProcessEnv = process.env): void {
   configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: true }, env) });
 }
+
+/**
+ * What the startup configuration report checks for worker-ingest (docs/runbooks/deploy-railway.md, "Configuration
+ * report"): every provider's app credentials (token refresh, metrics and comment pulls) and the models (the voice
+ * classifier runs on ingested comments).
+ */
+export const workerIngestCapabilities = (): CapabilityCheck[] => [...channelCapabilities(), modelsCapability];

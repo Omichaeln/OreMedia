@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
-import { startStaticServer } from './static-server';
+import { startStaticServer, watchCspViolations, type CspViolation } from './static-server';
 
 /**
  * Brand shell and home (the v3 prototype's navigation on this app's design language): a sidebar from 1024 px with
@@ -25,8 +25,16 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
   let close: () => Promise<void> = async () => {};
   let browser: Browser;
 
+  // Every screen here is served with the production security headers (static-server.ts reads the Caddyfile).
+  const cspViolations: CspViolation[] = [];
   const signedIn = async (width: number): Promise<Page> => {
-    const page = await browser.newPage({ viewport: { width, height: 900 } });
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const seen = await watchCspViolations(context);
+    const page = await context.newPage();
+    page.on('close', () => {
+      cspViolations.push(...seen);
+      void context.close();
+    });
     await page.goto(`${origin}/sign-in`);
     await page.getByLabel('Session token').fill(E2E.token);
     await page.getByRole('button', { name: 'Continue' }).click();
@@ -372,4 +380,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => findings.textContent(), { timeout: 15_000 }).toContain('Never write “cheap”');
     await page.close();
   }, 45_000);
+
+  // Runs last: the screens above (home, switcher, portfolio, menu, assets, performance, settings, brand system) under
+  // the production CSP.
+  it('no screen above triggered a Content-Security-Policy violation', () => {
+    expect(cspViolations).toEqual([]);
+  });
 });

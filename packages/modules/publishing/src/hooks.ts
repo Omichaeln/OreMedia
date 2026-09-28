@@ -2,7 +2,8 @@ import type { ClientConfig } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing, PublicationForRelease } from '@oremedia/contracts/publishing';
 import type { ReleaseDecision } from '@oremedia/contracts/review';
 import type { Tx } from '@oremedia/db';
-import type { PublishMedia } from '@oremedia/providers';
+import type { CapabilityCheck } from '@oremedia/observability';
+import { providerRegistry, type PublishMedia } from '@oremedia/providers';
 
 /**
  * Cross-module hooks (same pattern as registerAssetAuthoriser in the creative module: modules never import each
@@ -164,16 +165,32 @@ export const registerProviderClients = (fn: ProviderClientSource): void => {
 export const providerClientFor = (providerKey: string): ClientConfig => providerClients(providerKey);
 
 /** Appendix A names: PROVIDER_<KEY_UPPER>_CLIENT_ID_REF and PROVIDER_<KEY_UPPER>_SECRET_REF. */
+export const providerClientSettings = (providerKey: string): { clientId: string; clientSecret: string } => {
+  const upper = providerKey.toUpperCase();
+  return { clientId: `PROVIDER_${upper}_CLIENT_ID_REF`, clientSecret: `PROVIDER_${upper}_SECRET_REF` };
+};
+
 export const providerClientsFromEnv =
   (env: NodeJS.ProcessEnv = process.env): ProviderClientSource =>
   (providerKey) => {
-    const upper = providerKey.toUpperCase();
-    const clientId = env[`PROVIDER_${upper}_CLIENT_ID_REF`];
-    const clientSecret = env[`PROVIDER_${upper}_SECRET_REF`];
+    const names = providerClientSettings(providerKey);
+    const clientId = env[names.clientId];
+    const clientSecret = env[names.clientSecret];
     if (!clientId || !clientSecret)
-      throw new Error(`PROVIDER_${upper}_CLIENT_ID_REF and PROVIDER_${upper}_SECRET_REF are required`);
+      throw new Error(`${names.clientId} and ${names.clientSecret} are required`);
     return { clientId, clientSecret };
   };
+
+/**
+ * Configuration report capabilities `channel:<providerKey>`, one per registered provider: the app credentials
+ * providerClientsFromEnv reads. Every process that connects channels, refreshes their tokens or pulls from them
+ * (api, worker-core, worker-ingest) needs both names, or that provider's work fails there.
+ */
+export const channelCapabilities = (): CapabilityCheck[] =>
+  providerRegistry.list().map(({ key }) => ({
+    capability: `channel:${key}`,
+    missing: (env) => Object.values(providerClientSettings(key)).filter((name) => !env[name]),
+  }));
 
 /** Brand ids named in inputs are verified through the brand module (spec 4.2), as the skills module does. */
 export interface BrandChecker {

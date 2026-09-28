@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WebOriginConfigError, webOriginFromEnv } from './web-origin';
+import { WebOriginConfigError, webOriginCapability, webOriginFromEnv } from './web-origin';
 
 describe('WEB_ORIGIN (CORS and the channel-connect callback, spec 14.7)', () => {
   it('is a bare origin; unset is null', () => {
@@ -26,5 +26,14 @@ describe('WEB_ORIGIN (CORS and the channel-connect callback, spec 14.7)', () => 
       'https://app.example.com',
     );
     expect(webOriginFromEnv({ NODE_ENV: 'test' })).toBeNull();
+  });
+});
+
+describe('web_origin capability (startup configuration report)', () => {
+  it('names WEB_ORIGIN when unset or blank, as the reader treats it', () => {
+    expect(webOriginCapability.capability).toBe('web_origin');
+    expect(webOriginCapability.missing({})).toEqual(['WEB_ORIGIN']);
+    expect(webOriginCapability.missing({ WEB_ORIGIN: '  ' })).toEqual(['WEB_ORIGIN']);
+    expect(webOriginCapability.missing({ WEB_ORIGIN: 'https://app.example.com' })).toEqual([]);
   });
 });

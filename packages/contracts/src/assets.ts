@@ -237,6 +237,9 @@ export type DerivativePurpose = z.infer<typeof DerivativePurpose>;
 
 export const UploadIntentComplete = z.object({ intentId: z.string() });
 
+/** Where an upload stands: an intent's state, the asset it became once accepted, or why it was rejected (spec 9.1). */
+export const UploadIntentGet = z.object({ intentId: z.string() });
+
 export const AssetGet = z.object({ assetId: z.string() });
 
 export const AssetVersionsList = z.object({ assetId: z.string(), page: PageRequest });

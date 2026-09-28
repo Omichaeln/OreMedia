@@ -1,0 +1,44 @@
+# Production smoke check (docs/runbooks/deploy-railway.md, "Production smoke check"): the deployed web origin answers
+# health with nothing degraded, its CSP admits the object store, the legal pages and brand pack are served and, with
+# the smoke user's credentials, a browser-shaped upload reaches an ingested asset. Runs on demand and every 6 hours;
+# never on pull requests (it holds production credentials). Secrets come from the repository's Actions secrets and
+# are passed to the script as environment variables only; the script prints no secret and no signed URL query.
+name: Production smoke check
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Smoke check against production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm smoke:prod
+        run: pnpm smoke:prod
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          SMOKE_EXPECT_STORE_ORIGIN: ${{ secrets.SMOKE_EXPECT_STORE_ORIGIN }}
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+          SMOKE_TENANT_ID: ${{ secrets.SMOKE_TENANT_ID }}
+          SMOKE_BRAND_ID: ${{ secrets.SMOKE_BRAND_ID }}

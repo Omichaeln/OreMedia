@@ -21,6 +21,7 @@ export const ASSETS_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'assets.uploads.complete': { buildInput: (f) => ({ intentId: f['uploadIntentId'] }) },
+  'assets.uploads.get': { buildInput: (f) => ({ intentId: f['uploadIntentId'] }) },
   'assets.search': {
     buildInput: (f) => ({ query: { brandId: f['brandId'], purpose: 'creative' }, page: { limit: 50 } }),
   },

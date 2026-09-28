@@ -21,7 +21,7 @@ import {
 import { runInTenant } from '@oremedia/db';
 import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
-import { assetService, registerAssetOutboxRoutes } from '@oremedia/module-assets';
+import { assetService, registerAssetOutboxRoutes, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
@@ -52,6 +52,7 @@ import {
   createOpenRouterSpeechGeneratorFromEnv,
   createOpenRouterVideoGeneratorFromEnv,
   createReleaseOneRegistry,
+  modelsCapability,
   registerContentToolSource,
   registerImageGenerator,
   registerIntelligenceToolSource,
@@ -88,6 +89,7 @@ import {
   reviewToolSource,
 } from '@oremedia/module-review';
 import { registerCommunityOutboxRoutes } from '@oremedia/module-community';
+import type { CapabilityCheck } from '@oremedia/observability';
 import {
   channelService,
   publicationService,
@@ -95,6 +97,7 @@ import {
   registerProviderClients,
   registerRevisionVariantSource,
   providerClientsFromEnv,
+  channelCapabilities,
   registerPublishingOutboxRoutes,
   registerPublishMediaSource,
   registerApprovalConsumer,
@@ -328,3 +331,14 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     return targets;
   });
 }
+
+/**
+ * What the startup configuration report checks for worker-core (docs/runbooks/deploy-railway.md, "Configuration
+ * report"): uploads (publishing copies media to release keys, deletion removes objects), every provider's app
+ * credentials (publishing and token refresh) and the models (agents, generators).
+ */
+export const workerCoreCapabilities = (): CapabilityCheck[] => [
+  uploadsCapability,
+  ...channelCapabilities(),
+  modelsCapability,
+];

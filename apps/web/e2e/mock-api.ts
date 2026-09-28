@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import { initTRPC, TRPCError } from '@trpc/server';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
@@ -222,11 +221,6 @@ const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).dige
 const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
-/** A real OFL font (tooling/test-fixtures) served as every font file, so previews load a genuine FontFace. */
-const FONT_DATA_URL = `data:font/ttf;base64,${readFileSync(
-  new URL('../../../tooling/test-fixtures/fonts/karla/Karla[wght].ttf', import.meta.url),
-).toString('base64')}`;
-
 const fontFace = (
   assetId: string,
   family: string,
@@ -265,6 +259,12 @@ export class MockBackend {
    * Fonts imports are catalogued at once here (the real ingest runs in a worker).
    */
   readonly fonts: BrandFontFace[] = [fontFace('ast_font', 'Karla', 400, 'upload')];
+  /**
+   * The object store's origin in the signed URLs this mock issues (upload PUTs and font files): '' is the web server's
+   * own stand-in (static-server.ts); a test sets a fake store's origin to exercise the production CSP (connect-src and
+   * font-src) and the store's CORS.
+   */
+  objectStoreOrigin = '';
   /** Upload intents issued through assets.uploads.createIntent, by id. */
   readonly fontIntents = new Map<string, { originalFilename: string; declaredMime: string }>();
   /** Google Fonts imports received (tests read what the editor asked for). */
@@ -1197,7 +1197,7 @@ export function createMockRouter(backend: MockBackend) {
           backend.fontIntents.set(intentId, input);
           return {
             intentId,
-            uploadUrl: `/e2e-upload/${intentId}`,
+            uploadUrl: `${backend.objectStoreOrigin}/e2e-upload/${intentId}`,
             expiresAt: new Date(Date.now() + 3600_000),
             maxBytes: 10 * 1024 * 1024,
           };
@@ -1253,7 +1253,11 @@ export function createMockRouter(backend: MockBackend) {
       media: t.router({
         signedUrl: query.input(MediaSignedUrlRequest).query(({ input }) => {
           if (input.assetVersionId.startsWith('av_font_'))
-            return { url: FONT_DATA_URL, expiresAt: new Date(Date.now() + 300_000), mime: 'font/ttf' };
+            return {
+              url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}`,
+              expiresAt: new Date(Date.now() + 300_000),
+              mime: 'font/ttf',
+            };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
           return { url: pngDataUrl, expiresAt: new Date(Date.now() + 300_000), mime: 'image/png' };

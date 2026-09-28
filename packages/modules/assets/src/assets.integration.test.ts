@@ -283,6 +283,10 @@ describe('assets module against MySQL 8 (spec 9)', () => {
       expect(derivs.map((d) => d.purpose).sort()).toEqual(['preview', 'thumbnail', 'web']);
       const [intent] = await tdb.db.select().from(uploadIntents).where(eq(uploadIntents.id, intentId));
       expect(intent).toMatchObject({ state: 'accepted', resultAssetId: result.assetId });
+      // The uploader's client follows the intent to its asset (assets.uploads.get).
+      await expect(
+        runInTenant(ctxFor(ownerA), () => assetService.uploadStatus(ownerA, { intentId })),
+      ).resolves.toEqual({ intentId, state: 'accepted', assetId: result.assetId, rejectionReason: null });
       // Storage: immutable keys exist, quarantine is empty.
       expect(mem.has(storageKeys.original(tenantA, brandA1, result.assetId, result.assetVersionId))).toBe(
         true,
@@ -360,6 +364,14 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         state: 'rejected',
         rejectionReason: 'svg_unsafe_content',
         resultAssetId: null,
+      });
+      await expect(
+        runInTenant(ctxFor(ownerA), () => assetService.uploadStatus(ownerA, { intentId: badIntent })),
+      ).resolves.toEqual({
+        intentId: badIntent,
+        state: 'rejected',
+        assetId: null,
+        rejectionReason: 'svg_unsafe_content',
       });
       expect(mem.keys().filter((k) => k.includes(badIntent))).toEqual([]);
       expect((await tdb.db.select().from(assets).where(eq(assets.name, 'evil.svg'))).length).toBe(0);

@@ -12,9 +12,15 @@ import {
 import { createAssetIngestActivities, createRenderJobActivities } from '@oremedia/activities';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
-import { configureStorage, createStorageFromEnv, storage } from '@oremedia/module-assets';
+import { configureStorage, createStorageFromEnv, storage, uploadsCapability } from '@oremedia/module-assets';
 import { Runtime } from '@temporalio/worker';
-import { sdkLogger, startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
+import {
+  reportConfiguration,
+  sdkLogger,
+  startHealthServer,
+  startTelemetry,
+  stopTelemetry,
+} from '@oremedia/observability';
 import { createChromiumRenderer } from './chromium-renderer';
 import { creativeRenderJobStore } from './creative-store';
 
@@ -40,6 +46,10 @@ if (!temporalAddress) {
   log.error({}, 'TEMPORAL_ADDRESS is required');
   process.exit(2);
 }
+// One line naming each degraded capability and the settings it lacks (names only), before the store is configured
+// (which still refuses a production start without buckets and endpoint); OREMEDIA_CONFIG_STRICT=1 refuses any gap.
+const config = reportConfiguration(log, [uploadsCapability]);
+if (config.refuse) process.exit(2);
 configureDatabase({ url: databaseUrl, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 4) });
 configureStorage(createStorageFromEnv());
 
@@ -104,7 +114,7 @@ const mediaWorker = await Worker.create({
 });
 log.info({ status: RENDERER_VERSION }, 'worker-render polling task queues render and media');
 // Answer the platform health check only now that both workers were created (a failed start throws above).
-const health = await startHealthServer();
+const health = await startHealthServer(undefined, config.degraded);
 
 const shutdown = () => {
   log.info({}, 'worker-render shutting down');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ModelRequest } from '@oremedia/contracts/agents';
-import { createModelAdapterFromEnv } from './adapter-factory';
+import { createModelAdapterFromEnv, modelsCapability } from './adapter-factory';
 import { OpenRouterModelAdapter, toCompletion } from './openrouter-adapter';
 import { routingPolicyFromEnv } from './routing-policy';
 
@@ -173,5 +173,22 @@ describe('adapter selection and routing policy with OpenRouter (ADR-11)', () => 
     expect(() => routingPolicyFromEnv({ OPENROUTER_API_KEY_REF: 'or' })).toThrow(
       /OREMEDIA_MODEL_ID is required/,
     );
+  });
+});
+
+describe('models capability (startup configuration report)', () => {
+  it('follows the adapter selection: OpenRouter needs its model id, Anthropic stands alone', () => {
+    expect(modelsCapability.capability).toBe('models');
+    expect(
+      modelsCapability.missing({ OPENROUTER_API_KEY_REF: 'k', OREMEDIA_MODEL_ID: 'vendor/model-x' }),
+    ).toEqual([]);
+    expect(modelsCapability.missing({ OPENROUTER_API_KEY_REF: 'k' })).toEqual(['OREMEDIA_MODEL_ID']);
+    expect(modelsCapability.missing({ ANTHROPIC_API_KEY_REF: 'k' })).toEqual([]);
+    expect(modelsCapability.missing({})).toEqual(['OPENROUTER_API_KEY_REF', 'OREMEDIA_MODEL_ID']);
+  });
+
+  it('reports a gap exactly where the readers refuse', () => {
+    expect(() => routingPolicyFromEnv({ OPENROUTER_API_KEY_REF: 'k' })).toThrow();
+    expect(() => createModelAdapterFromEnv({ NODE_ENV: 'production' })).toThrow();
   });
 });

@@ -1,8 +1,14 @@
 import { hostname } from 'node:os';
 import { Runtime } from '@temporalio/worker';
-import { sdkLogger, startHealthServer, startTelemetry, stopTelemetry } from '@oremedia/observability';
+import {
+  reportConfiguration,
+  sdkLogger,
+  startHealthServer,
+  startTelemetry,
+  stopTelemetry,
+} from '@oremedia/observability';
 import { configureDatabase, configureRoleDatabase, closeDatabase } from '@oremedia/db';
-import { composeModules } from './composition';
+import { composeModules, workerCoreCapabilities } from './composition';
 import { startAgentsWorker } from './agents-worker';
 import { runDispatchLoop } from './dispatch-loop';
 import { ensureIntelligenceSchedulesRunning } from './intelligence-worker';
@@ -34,6 +40,10 @@ try {
   );
   process.exit(2);
 }
+// One line naming each degraded capability and the settings it lacks (names only); the worker keeps running and its
+// /health lists the capability names, unless OREMEDIA_CONFIG_STRICT=1 (docs/runbooks/deploy-railway.md).
+const config = reportConfiguration(log, workerCoreCapabilities());
+if (config.refuse) process.exit(2);
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 5) });
 // Spec 17.5: retentionSweepWorkflowV1's activities use the retention role (roles/retention-role.sql). Without it the
 // sweep runs on the application role, which the engine refuses DELETE on insert-only tables (a dry run still counts).
@@ -85,7 +95,7 @@ const loop = runDispatchLoop({
   signal: controller.signal,
 });
 // Answer the platform health check only now that every worker started (a failed start exited above).
-const health = await startHealthServer();
+const health = await startHealthServer(undefined, config.degraded);
 
 const shutdown = async () => {
   controller.abort();
