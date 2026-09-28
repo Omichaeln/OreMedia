@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@oremedia/ui';
 import { TooltipProvider } from '../components/tooltip';
 import { ToastProvider } from '../components/toast';
+import { useDeploymentBrand } from '../lib/deployment-brand';
 import { useTheme } from '../lib/theme';
 import { TRPCProvider, keyPrefixFor, tenantFromPath, useTRPCClient } from '../lib/trpc';
 import { SessionControls } from '../features/session/session-controls';
@@ -45,11 +46,12 @@ export function RootLayout() {
 /** The slim top bar used by the portfolio-level screens (brand screens render their own header, spec 11.1). */
 export function TopBar({ title, children }: { title: string; children?: React.ReactNode }) {
   const { theme, toggle } = useTheme();
+  const brand = useDeploymentBrand();
   return (
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 py-2">
       <div className="flex items-center gap-3">
         <Link to="/portfolio" className="text-sm font-semibold">
-          Oremedia
+          {brand.name}
         </Link>
         <span aria-hidden="true" className="text-muted-foreground">
           /

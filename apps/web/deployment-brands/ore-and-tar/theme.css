@@ -1,0 +1,42 @@
+/*
+ * D-12: the Ore & Tar deployment brand (Luxury Nautical: deep navy, teal, champagne gold; Lato as the single face).
+ * It overrides the semantic tokens of packages/ui/src/tokens.css and nothing else. The doubled :root outranks the
+ * neutral light and dark sets whichever stylesheet loads last. Every text pair meets WCAG 1.4.3 (4.5:1): the brand's
+ * teal (#2a9d8f) reaches only 3.3:1 under white text, so the light accent is a deeper teal of the same hue.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap');
+
+:root:root {
+  --font-sans: 'Lato', Helvetica, Arial, sans-serif;
+  --font-mono: 'Lato', Helvetica, Arial, sans-serif;
+  --background: oklch(0.98 0.01 200);
+  --foreground: oklch(0.25 0.05 260);
+  --primary: oklch(0.25 0.05 260);
+  --primary-foreground: oklch(0.98 0.02 95);
+  --secondary: oklch(0.945 0.02 200);
+  --secondary-foreground: oklch(0.25 0.05 260);
+  --accent: oklch(0.48 0.09 190);
+  --accent-foreground: oklch(0.98 0.02 95);
+  --muted: oklch(0.95 0.015 200);
+  --muted-foreground: oklch(0.42 0.05 260);
+  --border: oklch(0.88 0.02 200);
+  --ring: oklch(0.48 0.09 190);
+  --radius: 0.5rem;
+}
+
+/* Navy is invisible on the dark ground, so teal carries primary and accent there (as the brand's dark set does). */
+:root:root.dark,
+:root:root[data-theme='dark'] {
+  --background: oklch(0.2 0.05 240);
+  --foreground: oklch(0.95 0.02 200);
+  --primary: oklch(0.72 0.12 190);
+  --primary-foreground: oklch(0.2 0.05 240);
+  --secondary: oklch(0.3 0.05 240);
+  --secondary-foreground: oklch(0.95 0.02 200);
+  --accent: oklch(0.72 0.12 190);
+  --accent-foreground: oklch(0.2 0.05 240);
+  --muted: oklch(0.25 0.05 240);
+  --muted-foreground: oklch(0.78 0.04 220);
+  --border: oklch(0.38 0.04 240);
+  --ring: oklch(0.72 0.12 190);
+}

@@ -21,7 +21,9 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider secrets `PROVIDER_<KEY>_SECRET_REF`;
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
-   - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `VITE_REVIEW_PORTAL_ORIGIN`
+   - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OREMEDIA_DEPLOYMENT_BRAND`
+     (runtime, D-12: the brand pack in `apps/web/deployment-brands`, `ore-and-tar` for this deployment; unset is the
+     neutral product brand), `VITE_REVIEW_PORTAL_ORIGIN`
      (build arg). `VITE_API_URL` stays unset: the app calls `/trpc` on its own origin.
      No variable disables SSRF protection; there is no such flag in the hosted product.
 5. Apply the application DB role: replace the placeholders in `packages/db/roles/app-role.sql` and run it as the

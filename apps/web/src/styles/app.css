@@ -45,4 +45,12 @@
   .skip-link:focus {
     top: 0.5rem;
   }
+  /* D-12: a deployment brand ships one logo per theme; the one for the other theme stays hidden. */
+  .deployment-logo-dark,
+  [data-theme='dark'] .deployment-logo-light {
+    display: none;
+  }
+  [data-theme='dark'] .deployment-logo-dark {
+    display: block;
+  }
 }

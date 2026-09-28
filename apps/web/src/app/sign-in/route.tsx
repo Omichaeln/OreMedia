@@ -3,7 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Button, Field, Input, Panel, StatusBanner } from '@oremedia/ui';
 import { SignInErrorCode } from '@oremedia/contracts/access';
 import { TopBar } from '../root';
+import { DeploymentLogo } from '../../components/deployment-logo';
 import { PageHeading } from '../../components/request-state';
+import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { useTRPCClient } from '../../lib/trpc';
 import { toUiError } from '../../lib/errors';
 import {
@@ -15,15 +17,14 @@ import {
 } from '../../lib/session';
 
 /** What each refusal code from the callback (`/sign-in?error=…`) tells the person, and what to do next. */
-const REFUSALS: Record<SignInErrorCode, { title: string; description: string }> = {
+const refusals = (product: string): Record<SignInErrorCode, { title: string; description: string }> => ({
   not_invited: {
     title: 'This Google account has not been invited',
-    description:
-      'Oremedia has no self sign-up. Ask a company owner to invite the email address of the Google account you chose, then continue with Google again.',
+    description: `${product} has no self sign-up. Ask a company owner to invite the email address of the Google account you chose, then continue with Google again.`,
   },
   domain_not_allowed: {
     title: 'This Google account is not from an allowed domain',
-    description: 'Sign in with the Google Workspace account your organisation uses for Oremedia.',
+    description: `Sign in with the Google Workspace account your organisation uses for ${product}.`,
   },
   email_not_verified: {
     title: 'Google has not verified this email address',
@@ -46,7 +47,7 @@ const REFUSALS: Record<SignInErrorCode, { title: string; description: string }> 
     title: 'Google sign-in is not available',
     description: 'Google sign-in is not configured on this server. Contact your administrator.',
   },
-};
+});
 
 /** Only a same-origin path is carried to the API as returnTo (the API re-checks it). */
 const safeNext = (value: string | null): string =>
@@ -61,16 +62,20 @@ export function SignInRoute() {
   const [params] = useSearchParams();
   const next = safeNext(params.get('next'));
   const parsed = SignInErrorCode.safeParse(params.get('error'));
+  const brand = useDeploymentBrand();
   const refusal =
-    params.get('error') === null ? null : REFUSALS[parsed.success ? parsed.data : 'sign_in_failed'];
+    params.get('error') === null
+      ? null
+      : refusals(brand.name)[parsed.success ? parsed.data : 'sign_in_failed'];
 
   return (
     <>
       <TopBar title="Sign in" />
       <main id="main" className="mx-auto w-full max-w-lg p-6">
+        <DeploymentLogo className="mb-6 h-20" />
         <PageHeading
-          title="Sign in to Oremedia"
-          description="Use the Google account your company invited. Your company's owners decide what you can do in Oremedia."
+          title={`Sign in to ${brand.name}`}
+          description={`Use the Google account your company invited. Your company's owners decide what you can do in ${brand.name}.`}
         />
         {refusal && (
           <StatusBanner

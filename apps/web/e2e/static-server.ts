@@ -8,7 +8,7 @@ import {
 } from 'node:http';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
-import { URL } from 'node:url';
+import { URL, fileURLToPath } from 'node:url';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -27,7 +27,11 @@ export interface StaticServerOptions {
   trpcHandler?: RequestListener;
   /** ... or an API origin to proxy `/trpc/*` to (real API smoke). */
   apiOrigin?: string;
+  /** The pack served at /deployment-brand/ (OREMEDIA_DEPLOYMENT_BRAND in production); default the neutral one. */
+  deploymentBrand?: string;
 }
+
+const PACKS = fileURLToPath(new URL('../deployment-brands', import.meta.url));
 
 /** Serves the built app (SPA fallback to index.html) and routes /trpc (and /auth) to the mock or the real API. */
 export async function startStaticServer(
@@ -47,6 +51,19 @@ export async function startStaticServer(
       if (opts.apiOrigin) return proxy(req, res, opts.apiOrigin);
       res.statusCode = url.pathname === '/auth/sign-out' && req.method === 'POST' ? 204 : 404;
       res.end();
+      return;
+    }
+    // Mirrors the Caddyfile's /deployment-brand/* route: the chosen pack's files, 404 for anything it lacks.
+    if (url.pathname.startsWith('/deployment-brand/')) {
+      const name = normalize(url.pathname.slice('/deployment-brand/'.length)).replace(/^(\.\.[/\\])+/, '');
+      const packFile = join(PACKS, opts.deploymentBrand ?? 'oremedia', name);
+      if (!existsSync(packFile) || statSync(packFile).isDirectory()) {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      res.setHeader('content-type', MIME[extname(packFile)] ?? 'application/octet-stream');
+      createReadStream(packFile).pipe(res);
       return;
     }
     let file = join(opts.dist, normalize(url.pathname).replace(/^(\.\.[/\\])+/, ''));

@@ -5,6 +5,7 @@ import { Badge, Button, EmptyState, Skeleton, StatusBanner } from '@oremedia/ui'
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
+import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
@@ -40,6 +41,7 @@ function ConnectButton({
   unavailable?: string | null;
 }) {
   const trpc = useTRPC();
+  const deployment = useDeploymentBrand();
   const intent = useIntentKey();
   const start = useMutation(
     trpc.publishing.channels.connect.start.mutationOptions({
@@ -72,8 +74,8 @@ function ConnectButton({
           title="Continue at the provider"
           description={
             <>
-              Authorise Oremedia in the provider&apos;s own window, then return here to finish. The link
-              expires {new Date(start.data.expiresAt).toLocaleTimeString()}.
+              Authorise {deployment.name} in the provider&apos;s own window, then return here to finish. The
+              link expires {new Date(start.data.expiresAt).toLocaleTimeString()}.
             </>
           }
           actions={

@@ -13,6 +13,8 @@ import {
 import { toUiError } from '../../lib/errors';
 import { createQueryClient } from '../../lib/query-client';
 import { TRPCProvider, createClient, createOptionsProxy, keyPrefixFor, useTRPC } from '../../lib/trpc';
+import { DeploymentLogo } from '../../components/deployment-logo';
+import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { useTheme } from '../../lib/theme';
 
 /**
@@ -32,6 +34,7 @@ function readLinkOnce(): PortalLink | null {
 
 export function ReviewPortalRoute({ standalone = false }: { standalone?: boolean }) {
   useTheme();
+  const brand = useDeploymentBrand();
   const [link] = useState<PortalLink | null>(readLinkOnce);
   const runtime = useMemo(() => {
     const queryClient = createQueryClient();
@@ -52,7 +55,10 @@ export function ReviewPortalRoute({ standalone = false }: { standalone?: boolean
           </a>
           <header className="border-b border-border">
             <div className="mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm sm:px-6">
-              <span className="font-semibold">Oremedia review</span>
+              <span className="flex items-center gap-3 font-semibold">
+                <DeploymentLogo className="h-10" />
+                {brand.name} review
+              </span>
               {link?.expiresAt && (
                 <span className="text-muted-foreground">
                   Link expires {new Date(link.expiresAt).toLocaleString()}

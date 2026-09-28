@@ -2109,7 +2109,7 @@
           "production",
           "8.4",
           "complete",
-          "packages/ui/src/tokens.css: semantic CSS custom-property tokens with light and dark palettes (data-theme set from prefers-color-scheme in apps/web/index.html) as neutral placeholders until D-12; apps/web/src/styles/tokens.css maps them to Tailwind utilities."
+          "packages/ui/src/tokens.css: semantic CSS custom-property tokens with light and dark palettes (data-theme set from prefers-color-scheme in apps/web/index.html) as neutral placeholders until D-12; apps/web/src/styles/tokens.css maps them to Tailwind utilities. D-12 (branch claude/deploy-branding): these remain the neutral product brand; each deployment loads its own brand pack at runtime (OREMEDIA_DEPLOYMENT_BRAND on the web service selects apps/web/deployment-brands/<key>, served by Caddy at /deployment-brand/), so one build is promoted unchanged. A pack names the deployment (title, chrome, sign-in, review portal), may override the semantic tokens and ships a logo per theme; missing or unknown packs fall back to the neutral brand. The ore-and-tar pack (navy, teal, Lato; teal deepened in light mode for WCAG 1.4.3) passes the browser a11y audit in both themes (apps/web/e2e/deployment-brand.e2e.test.ts)."
         ],
         [
           "F.4",

@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router';
 import { Button, cn } from '@oremedia/ui';
 import { brandPath } from '../brand/brand-context';
 import { SessionControls } from '../session/session-controls';
+import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { useTheme } from '../../lib/theme';
 import { BrandSwitcher } from './brand-switcher';
 
@@ -38,6 +39,7 @@ export function BrandSidebar({
   onNavigate?: () => void;
 }) {
   const { theme, toggle } = useTheme();
+  const deployment = useDeploymentBrand();
   const item = (n: NavItem) => (
     <li key={n.segment}>
       <NavLink
@@ -75,7 +77,7 @@ export function BrandSidebar({
         >
           <span className="h-2 w-2 rounded-full bg-accent" />
         </span>
-        Oremedia
+        {deployment.name}
       </Link>
       <BrandSwitcher
         companyId={companyId}

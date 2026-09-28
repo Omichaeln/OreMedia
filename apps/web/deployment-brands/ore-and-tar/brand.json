@@ -1,0 +1,5 @@
+{
+  "name": "Ore & Tar",
+  "stylesheet": true,
+  "logo": { "light": "logo.svg", "dark": "logo-dark.svg" }
+}

@@ -24,6 +24,19 @@
 		}
 	}
 
+	# D-12: the deployment's brand pack (name, token stylesheet, logos), chosen at runtime by OREMEDIA_DEPLOYMENT_BRAND
+	# from the packs the image carries (apps/web/deployment-brands), so one build serves every deployment. Unset, the
+	# neutral pack; a key with no pack answers 404 and the app starts in the neutral brand.
+	handle_path /deployment-brand/* {
+		root * /deployment-brands/{$OREMEDIA_DEPLOYMENT_BRAND:oremedia}
+		header {
+			X-Content-Type-Options nosniff
+			Cache-Control no-cache
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:"
+		}
+		file_server
+	}
+
 	handle {
 		root * /srv
 		header {

@@ -18,3 +18,5 @@ RUN pnpm --filter @oremedia/web build
 FROM caddy:2.9-alpine AS runtime
 COPY infra/railway/web/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /src/apps/web/dist /srv
+# D-12: every deployment brand pack; the Caddyfile serves the one OREMEDIA_DEPLOYMENT_BRAND names.
+COPY apps/web/deployment-brands /deployment-brands
