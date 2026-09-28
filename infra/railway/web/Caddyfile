@@ -37,6 +37,22 @@
 		file_server
 	}
 
+	# The deployment's public legal pages (privacy policy, data deletion instructions), which the platform apps link
+	# to, from the pack's legal/ directory as static HTML with clean URLs (/legal/privacy). A pack without them, or a
+	# page it lacks, answers 404.
+	handle_path /legal/* {
+		root * /deployment-brands/{$OREMEDIA_DEPLOYMENT_BRAND:oremedia}/legal
+		try_files {path}.html
+		header {
+			X-Content-Type-Options nosniff
+			Referrer-Policy no-referrer
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
+			Cache-Control no-cache
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		}
+		file_server
+	}
+
 	handle {
 		root * /srv
 		header {

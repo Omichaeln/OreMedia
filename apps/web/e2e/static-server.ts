@@ -54,17 +54,12 @@ export async function startStaticServer(
       return;
     }
     // Mirrors the Caddyfile's /deployment-brand/* route: the chosen pack's files, 404 for anything it lacks.
-    if (url.pathname.startsWith('/deployment-brand/')) {
-      const name = normalize(url.pathname.slice('/deployment-brand/'.length)).replace(/^(\.\.[/\\])+/, '');
-      const packFile = join(PACKS, opts.deploymentBrand ?? 'oremedia', name);
-      if (!existsSync(packFile) || statSync(packFile).isDirectory()) {
-        res.statusCode = 404;
-        res.end();
-        return;
-      }
-      res.setHeader('content-type', MIME[extname(packFile)] ?? 'application/octet-stream');
-      createReadStream(packFile).pipe(res);
-      return;
+    if (url.pathname.startsWith('/deployment-brand/'))
+      return servePackFile(res, opts, url.pathname.slice('/deployment-brand/'.length));
+    // Mirrors its /legal/* route: the pack's legal pages with clean URLs (/legal/privacy is legal/privacy.html).
+    if (url.pathname.startsWith('/legal/')) {
+      const page = url.pathname.slice('/legal/'.length);
+      return servePackFile(res, opts, join('legal', page.endsWith('.html') ? page : `${page}.html`));
     }
     let file = join(opts.dist, normalize(url.pathname).replace(/^(\.\.[/\\])+/, ''));
     if (!existsSync(file) || statSync(file).isDirectory())
@@ -81,6 +76,19 @@ export async function startStaticServer(
     origin: `http://127.0.0.1:${port}`,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
+}
+
+/** A file of the chosen pack (the neutral one by default), or 404 when the pack lacks it. */
+function servePackFile(res: ServerResponse, opts: StaticServerOptions, path: string): void {
+  const name = normalize(path).replace(/^(\.\.[/\\])+/, '');
+  const packFile = join(PACKS, opts.deploymentBrand ?? 'oremedia', name);
+  if (!existsSync(packFile) || statSync(packFile).isDirectory()) {
+    res.statusCode = 404;
+    res.end();
+    return;
+  }
+  res.setHeader('content-type', MIME[extname(packFile)] ?? 'application/octet-stream');
+  createReadStream(packFile).pipe(res);
 }
 
 function proxy(req: IncomingMessage, res: ServerResponse, apiOrigin: string): void {

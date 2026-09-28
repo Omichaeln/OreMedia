@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Data deletion · Ore &amp; Tar</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6fafa;
+        --fg: #1d2640;
+        --muted: #4a5470;
+        --rule: #d5dfe2;
+        --accent: #1f6f66;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111c2b;
+          --fg: #e8f0f2;
+          --muted: #b1bdcc;
+          --rule: #34435a;
+          --accent: #5cc4b6;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          16px/1.6 Helvetica,
+          Arial,
+          sans-serif;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1rem 4rem;
+      }
+      h1 {
+        font-size: 1.875rem;
+        line-height: 1.2;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.125rem;
+        margin: 2.25rem 0 0.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--rule);
+      }
+      p,
+      li {
+        color: var(--fg);
+      }
+      .meta {
+        color: var(--muted);
+        margin: 0 0 2rem;
+      }
+      a {
+        color: var(--accent);
+      }
+      ul {
+        padding-left: 1.25rem;
+      }
+      li + li {
+        margin-top: 0.35rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Data deletion instructions</h1>
+      <p class="meta">Ore &amp; Tar social media platform · Last updated 28 September 2026</p>
+
+      <p>
+        This page explains how to remove the Ore &amp; Tar platform's access to your social accounts and how
+        to have the data we hold about you deleted. What we collect and why is set out in our
+        <a href="/legal/privacy">privacy policy</a>.
+      </p>
+
+      <h2>1. Remove our access to your accounts</h2>
+      <p>Either of these stops the Service from reading or publishing to your account straight away.</p>
+      <ul>
+        <li>
+          <strong>In the Service:</strong> open the brand's Settings, then Channels, and choose Disconnect.
+          The stored access token is destroyed at once.
+        </li>
+        <li>
+          <strong>Facebook and Instagram:</strong> in Facebook, go to Settings &amp; privacy, then Settings,
+          then Business integrations, and remove Ore &amp; Tar. In Instagram, go to Settings, then Apps and
+          websites, and remove it.
+        </li>
+        <li>
+          <strong>LinkedIn:</strong> go to Settings, then Data privacy, then Permitted services, and remove
+          Ore &amp; Tar.
+        </li>
+      </ul>
+
+      <h2>2. Ask us to delete your data</h2>
+      <p>
+        Email <a id="privacy-contact" href="mailto:manenji@oreandtar.com">manenji@oreandtar.com</a> with the
+        subject "Data deletion request" and tell us:
+      </p>
+      <ul>
+        <li>
+          whether you use the Service, manage a connected account, or commented on or clicked a link in a post
+          published through it;
+        </li>
+        <li>the account, Page or profile concerned (a link is enough).</li>
+      </ul>
+      <p>
+        We may ask you to confirm that the account is yours before we act. We handle each request
+        individually, confirm receipt within 5 working days and complete the deletion within 30 days.
+      </p>
+
+      <h2>What is deleted</h2>
+      <ul>
+        <li>
+          <strong>If you use the Service:</strong> your name and email address are removed and your user
+          record is anonymised.
+        </li>
+        <li>
+          <strong>If you manage a connected account:</strong> its access token, and on request the content,
+          performance data and comments held for it.
+        </li>
+        <li>
+          <strong>If you commented on a post:</strong> the text, name or handle and hashed identifier stored
+          for your comments.
+        </li>
+      </ul>
+      <p>
+        Link clicks are stored only as one-way hashes that we cannot look up from your name or account, so we
+        cannot find them from your request. Posts already published stay on the platform until the account's
+        owner deletes them there.
+      </p>
+      <p>
+        After a deletion we keep the record of who did what (the audit log) and evidence of what was approved
+        for publication, as our privacy policy explains. These contain identifiers, not your content. Deleted
+        data also leaves our database backups when those backups expire. If a backup is restored before then,
+        your deletion is applied again.
+      </p>
+    </main>
+  </body>
+</html>

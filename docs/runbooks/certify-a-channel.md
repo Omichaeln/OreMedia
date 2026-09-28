@@ -12,8 +12,9 @@ Release 1 adapters (spec 14.8; decision D-04 still open): `linkedin_page`, `inst
 
 ## Procedure (per channel)
 
-1. Create the platform app, request the scopes listed in the adapter's `capability.requiredScopes`, complete app
-   review where the platform requires it, and store the client id and secret in the secret manager (Appendix A);
+1. Create the platform app (settings, credentials, justifications and screencast scripts: `docs/platform-apps/`),
+   request the scopes listed in the adapter's `capability.requiredScopes`, complete app review where the platform
+   requires it (after certification: the screencasts need the certified provider), and store the client id and secret in the secret manager (Appendix A);
    adapters never read environment variables. Register the product's channel callback as the app's redirect URI:
    `https://<web domain>/connect/callback`, the same for every brand and tenant (`WEB_ORIGIN` on the api).
 2. Re-derive the pinned API versions from the platform's current docs and update the constant if needed:

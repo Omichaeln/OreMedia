@@ -92,6 +92,37 @@ describe.skipIf(!enabled)('deployment brand packs (built app in Chromium, mock t
     await dark.context().close();
   });
 
+  it('the Ore & Tar legal pages name the controller, link to each other and pass the audit; the neutral pack has none', async () => {
+    for (const colorScheme of ['light', 'dark'] as const) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme });
+      const page = await context.newPage();
+      for (const path of ['/legal/privacy', '/legal/data-deletion']) {
+        const res = await page.goto(`${origins['ore-and-tar']}${path}`);
+        expect(res?.status()).toBe(200);
+        await expect(page.getByRole('heading', { level: 1 }).isVisible()).resolves.toBe(true);
+        await expect(
+          page.getByRole('link', { name: 'manenji@oreandtar.com' }).getAttribute('href'),
+        ).resolves.toBe('mailto:manenji@oreandtar.com');
+        const found = await auditPage(page, { narrow: true });
+        expect(found, formatViolations(`${path} (ore-and-tar, ${colorScheme})`, found)).toEqual([]);
+      }
+      await context.close();
+    }
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(`${origins['ore-and-tar']}/legal/privacy`);
+    await expect(
+      page.getByText('Ore and Tar Enterprises (Pvt) Ltd, Harare, Zimbabwe').isVisible(),
+    ).resolves.toBe(true);
+    await page.getByRole('link', { name: 'data deletion instructions' }).click();
+    await page.waitForURL('**/legal/data-deletion');
+    await page.getByRole('link', { name: 'privacy policy' }).click();
+    await page.waitForURL('**/legal/privacy');
+    await context.close();
+    for (const pack of ['oremedia', 'no-such-pack'])
+      expect((await fetch(`${origins[pack]}/legal/privacy`)).status).toBe(404);
+  }, 45_000);
+
   for (const theme of ['light', 'dark'] as const)
     it(`the Ore & Tar tokens pass the audit on sign-in and the portfolio (${theme})`, async () => {
       const page = await open('ore-and-tar', theme);
