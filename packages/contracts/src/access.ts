@@ -132,6 +132,9 @@ export const SignInRefusalReason = z.enum([
   // for: no `hd` equal to the email's domain and not a Gmail address (a consumer account on a company address).
   'email_not_authoritative',
   'internal_error', // an unexpected failure in the sign-in routes (recorded so no attempt goes unaudited)
+  // Password sign-in: unknown email, no password set, or a wrong password (never told apart outside auth_events).
+  'invalid_credentials',
+  'link_invalid', // a password setup link that is unknown, expired, already used or no longer applicable
 ]);
 export type SignInRefusalReason = z.infer<typeof SignInRefusalReason>;
 
@@ -181,3 +184,87 @@ export function googleIsAuthoritativeFor(email: string, hostedDomain: string | u
   if (GOOGLE_CONSUMER_DOMAINS.includes(domain)) return true;
   return Boolean(hostedDomain) && hostedDomain?.trim().toLowerCase() === domain;
 }
+
+/**
+ * Password sign-in, the second login method next to Google. Passwords are 12 to 128 characters counted after Unicode
+ * NFC normalisation (the form that is hashed), with no composition rules, and must not be or contain the local part
+ * of the person's email address (containment is checked from four characters, so a short local part does not rule
+ * out most passwords).
+ */
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;
+export const PasswordPolicyIssue = z.enum(['too_short', 'too_long', 'contains_email']);
+export type PasswordPolicyIssue = z.infer<typeof PasswordPolicyIssue>;
+
+/** The first rule a new password breaks, or null when it is acceptable. Pure: the web checks it before sending. */
+export function passwordPolicyIssue(password: string, email: string | null): PasswordPolicyIssue | null {
+  const normalised = password.normalize('NFC');
+  const length = [...normalised].length; // code points, not UTF-16 units
+  if (length < PASSWORD_MIN_LENGTH) return 'too_short';
+  if (length > PASSWORD_MAX_LENGTH) return 'too_long';
+  const local = email
+    ?.slice(0, Math.max(0, email.lastIndexOf('@')))
+    .normalize('NFC')
+    .toLowerCase();
+  if (local) {
+    const lower = normalised.toLowerCase();
+    if (lower === local || (local.length >= 4 && lower.includes(local))) return 'contains_email';
+  }
+  return null;
+}
+
+/**
+ * Request bodies of the password routes (plain Express JSON, like the Google routes). The password bound here is
+ * only a request-size guard; the policy above is applied where a password is set, never at sign-in.
+ */
+const PasswordInput = z.string().min(1).max(1024);
+export const PasswordSignIn = z.object({
+  email: z.string().trim().email().max(320),
+  password: PasswordInput,
+});
+export type PasswordSignIn = z.infer<typeof PasswordSignIn>;
+export const PasswordSetup = z.object({ token: z.string().min(1).max(200), password: PasswordInput });
+export type PasswordSetup = z.infer<typeof PasswordSetup>;
+
+/**
+ * What the password routes answer. Every credential failure is `invalid_credentials` (an unknown address, a user
+ * without a password, a wrong password, a disabled account or a domain outside the allowlist read the same), so the
+ * response never says whether an account exists. `too_many_attempts` comes with Retry-After; `password_rejected`
+ * carries the policy issue.
+ */
+export const PasswordAuthErrorCode = z.enum([
+  'invalid_credentials',
+  'too_many_attempts',
+  'link_invalid',
+  'password_rejected',
+  'origin_rejected',
+  'sign_in_failed',
+  'busy', // too many password hashes in flight on the server: 503 with Retry-After
+]);
+export type PasswordAuthErrorCode = z.infer<typeof PasswordAuthErrorCode>;
+export const PasswordAuthResponse = z.union([
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), error: PasswordAuthErrorCode, issue: PasswordPolicyIssue.optional() }),
+]);
+export type PasswordAuthResponse = z.infer<typeof PasswordAuthResponse>;
+
+/** access.account.*: the signed-in person's own password (set, change or remove). */
+export const AccountSetPassword = z.object({
+  /** Required when the person already has a password. */
+  currentPassword: PasswordInput.optional(),
+  newPassword: PasswordInput,
+});
+/** Removing the password needs the current one (the person has one, or there is nothing to remove). */
+export const AccountRemovePassword = z.object({ currentPassword: PasswordInput });
+export const AccountSignInMethods = z.object({ hasPassword: z.boolean(), hasGoogle: z.boolean() });
+export type AccountSignInMethods = z.infer<typeof AccountSignInMethods>;
+
+/**
+ * access.members.issuePasswordSetup: a one-time link an owner or admin hands to a member (there is no mailer). The
+ * token travels in the URL fragment, so it never reaches a server log; only its SHA-256 is stored.
+ */
+export const MemberIssuePasswordSetup = z.object({ membershipId: z.string() });
+export const PasswordSetupLink = z.object({ url: z.string(), expiresAt: z.string().datetime() });
+export type PasswordSetupLink = z.infer<typeof PasswordSetupLink>;
+/** How long a password setup link stays valid. */
+export const PASSWORD_SETUP_TTL_MS = 72 * 60 * 60 * 1000;

@@ -15,7 +15,9 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OREMEDIA_APP` (api | worker-core | worker-ingest | redirector);
    - `api`: `AUTH_ISSUER_URL` (optional, default `https://accounts.google.com`), `AUTH_CLIENT_ID`,
      `AUTH_CLIENT_SECRET` (sealed variable), `AUTH_REDIRECT_URI`, optional `AUTH_ALLOWED_DOMAINS` (section 1a),
-     `PORT` (e.g. `3001`), `WEB_ORIGIN`, `REVIEW_PORTAL_ORIGIN`, `KMS_KEY_ID_CREDENTIALS`
+     `PORT` (e.g. `3001`), `WEB_ORIGIN` (required in production), optional `PASSWORD_HASH_CONCURRENCY` (password
+     hashes run at once, default 4; each needs about 128 MiB, so size the service's memory for 4 × 128 MiB = 512 MiB
+     on top of its baseline, or lower it; section 1a step 6), `REVIEW_PORTAL_ORIGIN`, `KMS_KEY_ID_CREDENTIALS`
      (wrap-only permission), `OBJECT_STORE_*`, `LINK_REDIRECT_DOMAIN`, per-provider `PROVIDER_<KEY>_CLIENT_ID_REF` and
      `PROVIDER_<KEY>_SECRET_REF` (sealed; the code exchange needs both, see `docs/platform-apps/`);
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
@@ -98,6 +100,43 @@ policy layer authorises. Values below are never written into the repository; sec
    including `internal_error`) are in `auth_events`. `/auth/*` is rate-limited per client address (30 per minute
    per route, the same limiter and Redis store as the API); over the limit it answers 429 and records nothing.
    Signing out inside a support session (`sup_` bearer) closes that support session.
+6. **Password sign-in (second method).** A person can also sign in with their email address and a password, next to
+   (not instead of) Google. Nothing to configure beyond the variables above, but **`WEB_ORIGIN` is required in
+   production** (the api refuses to start without it: exit 2, log "web origin configuration invalid"): `POST /auth/password/sign-in` and `POST /auth/password/setup` accept a request only when its
+   `Origin` header equals `WEB_ORIGIN` (login CSRF defence; unset, the request's own host is compared, which is for
+   development), and the one-time setup links an owner or admin issues are `${WEB_ORIGIN}/set-password#token=…`
+   (unset, a relative link the Members screen completes with its own address). `AUTH_ALLOWED_DOMAINS` applies to
+   the email domain of password sign-ins too, with or without Google configured.
+   - **Setting a password:** there is no mailer. An owner or admin opens Settings → Members → **Password link** for
+     a member and hands the link over directly (it is shown once; only its SHA-256 is stored, the token is in the
+     URL fragment so it never reaches a log, and the response is not kept for idempotent replay: a retry issues a
+     new link, which replaces the old one). A link works once, for 72 hours; issuing another replaces it; it also
+     serves as the password reset. It is refused for yourself (your own row points to Settings → Account), for an
+     owner or admin unless an owner issues it, and for a person who also belongs to another company. Redeeming one
+     ends every other session of that person.
+   - **Link passwords stay in one company.** Whoever held the link chose that password (possibly the admin who
+     issued it), so it is recorded as `setup_link` (`users.password_origin`) until the person changes it
+     themselves. Signing in with it never accepts invitations to other companies, and the moment the person becomes
+     an active member of a second company (accepting an invitation with Google, or becoming a new company's
+     owner) it is removed and all their sessions end; they sign in with Google or set their own password.
+   - **Own password:** a signed-in person sets, changes or removes their password in Settings → Account. A first
+     password needs a sign-in from the last 15 minutes; a change or a removal needs the current password; removal is
+     offered only while Google is linked. A change ends their other sessions.
+   - **Storage and limits:** passwords are 12 to 128 characters with no composition rules, stored only as salted
+     scrypt hashes (N=2^17, r=8, p=1) in `users.password_hash`. Every failed sign-in answers the same
+     `invalid_credentials` (an unknown address costs the same scrypt as a real one). Besides the per-address limit
+     (20 sign-ins and 10 setups per minute), **ten password attempts for one email address within fifteen minutes
+     without a success lock password sign-in for that address for the rest of the fifteen minutes** (429,
+     `Retry-After`). Anyone who knows the address can trigger this; Google sign-in still works for that person
+     meanwhile. Attempts are counted before they are checked, so concurrent guesses cannot exceed the limit, and a
+     successful sign-in clears the count; the counter lives in the rate limiter's store (Redis in production, so it
+     holds across api instances). The same count guards the current-password check in Settings → Account (per
+     person). At most `PASSWORD_HASH_CONCURRENCY` hashes run at once (about 128 MiB each) and 64 more wait; beyond
+     that a password request answers 503 with `Retry-After` (the app says the server is busy). Outcomes are in
+     `auth_events` with provider `password` (`auth.sign_in`, `auth.password_setup`, `auth.password_set`,
+     `auth.password_remove`); issuing and redeeming a link are also in the company's audit trail.
+   - **Migration:** 0013 adds `password_setup_tokens` and `users.password_origin` (applied by the api's pre-deploy command); the application
+     database role needs its grants (`packages/db/roles/app-role.sql`, regenerated).
 
 ### First owner (once per new company)
 

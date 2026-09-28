@@ -20,6 +20,16 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
   'access.members.setRole': {
     buildInput: (f) => ({ membershipId: f['membershipId'], expectedVersion: 0, role: 'admin' }),
   },
+  'access.members.issuePasswordSetup': { buildInput: (f) => ({ membershipId: f['membershipId'] }) },
+  'access.account.signInMethods': { buildInput: null, reason: "the caller's own user; takes no ids" },
+  'access.account.setPassword': {
+    buildInput: null,
+    reason: "the caller's own password; takes no ids (and no tenant)",
+  },
+  'access.account.removePassword': {
+    buildInput: null,
+    reason: "the caller's own password; takes no ids (and no tenant)",
+  },
   'access.brandGrants.set': {
     buildInput: (f) => ({ membershipId: f['membershipId'], brandId: f['brandId'], roles: [] }),
   },

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { MembershipRole } from '@oremedia/contracts/tenancy';
 import {
   Badge,
@@ -20,6 +21,7 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { useSessionUser } from '../session/use-session-user';
 import { useBrands } from '../brand/use-brand';
 import { useChannels } from '../publishing/use-publishing';
 import { useMandates, useMembers } from './use-settings';
@@ -97,15 +99,127 @@ function InviteMember() {
   );
 }
 
+const expiryText = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+/**
+ * A one-time password setup link for one member (there is no mailer: the owner or admin hands it over). The link is
+ * shown once, with a copy button and its expiry; issuing another replaces it. It is also how a forgotten password is
+ * reset. The API refuses a person who also belongs to another company (they set a password in Settings → Account),
+ * a link for an owner or admin unless an owner asks, and a link for yourself (not offered on your own row).
+ */
+function IssuePasswordLink({ membershipId, who }: { membershipId: string; who: string }) {
+  const trpc = useTRPC();
+  const intent = useIntentKey();
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const issue = useMutation(
+    trpc.access.members.issuePasswordSetup.mutationOptions(mutationIntent(intent.key)),
+  );
+  const ui = issue.isError ? toUiError(issue.error) : null;
+  const link = issue.data
+    ? { url: new URL(issue.data.url, window.location.origin).href, expiresAt: issue.data.expiresAt }
+    : null;
+  const inputId = `password-link-${membershipId}`;
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      // The link is shown once: closing forgets it, and the next issue is a new intent (a new link).
+      issue.reset();
+      intent.renew();
+      setCopied(false);
+    }
+  };
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(true);
+    } catch {
+      document.getElementById(inputId)?.focus();
+    }
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => setOpen(true)}
+        aria-label={`Password link for ${who}`}
+      >
+        Password link
+      </Button>
+      <DialogContent
+        title={`Password link for ${who}`}
+        description="A one-time link to set or reset their password. It works once, for 72 hours, and replaces any link issued before. Give it to them directly; it is shown only now."
+      >
+        {link ? (
+          <div className="flex flex-col gap-3" data-testid="password-link">
+            <Field label="Link" htmlFor={inputId} hint={`Expires ${expiryText(link.expiresAt)}.`}>
+              <Input
+                id={inputId}
+                readOnly
+                value={link.url}
+                spellCheck={false}
+                onFocus={(e) => e.currentTarget.select()}
+              />
+            </Field>
+            {copied && (
+              <p className="text-xs text-muted-foreground" role="status">
+                Copied to the clipboard.
+              </p>
+            )}
+          </div>
+        ) : (
+          ui && (
+            <StatusBanner
+              tone="critical"
+              title={ui.kind === 'forbidden' ? 'No link was issued' : 'The link was not issued'}
+              description={ui.message}
+            />
+          )
+        )}
+        <DialogActions>
+          <DialogClose asChild>
+            <Button variant="ghost">{link ? 'Done' : 'Cancel'}</Button>
+          </DialogClose>
+          {link ? (
+            <Button variant="primary" onClick={() => void copy()}>
+              Copy link
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              disabled={issue.isPending}
+              data-testid="issue-password-link"
+              onClick={() => issue.mutate({ membershipId })}
+            >
+              {issue.isPending ? 'Issuing…' : 'Issue link'}
+            </Button>
+          )}
+        </DialogActions>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Settings → Members (owners and admins): who belongs to the company, their role, status and brand scope. */
 export function Members() {
   const members = useMembers(true);
+  // Your own password is set in Settings → Account (behind the current password), never through a link.
+  const me = useSessionUser(true).data?.userId ?? null;
   const brands = useBrands();
   const brandName = (id: string) => brands.data?.find((b) => b.id === id)?.name ?? id;
   return (
     <Section id="members-heading" title="Members" testId="members">
       <p className="text-xs text-muted-foreground">
-        Everyone with access to this company. A role change signs the person out of every session.
+        Everyone with access to this company. A role change signs the person out of every session. A password
+        link lets a member set or reset a password for signing in with their email address.
       </p>
       {members.isPending && <Skeleton label="Loading members" lines={4} />}
       {members.isError && <RequestError error={members.error} onRetry={() => void members.refetch()} />}
@@ -130,9 +244,21 @@ export function Members() {
                       : 'No brands granted yet'}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge glyph={false}>{roleLabel(m.role)}</Badge>
                 <Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{roleLabel(m.status)}</Badge>
+                {m.status !== 'disabled' && m.userId !== me && (
+                  <IssuePasswordLink membershipId={m.membershipId} who={m.name ?? m.email ?? m.userId} />
+                )}
+                {m.userId === me && (
+                  <Link
+                    to="?tab=account"
+                    className="text-xs text-muted-foreground underline underline-offset-2"
+                    data-testid="own-password-settings"
+                  >
+                    Your password: Settings → Account
+                  </Link>
+                )}
               </div>
             </li>
           ))}

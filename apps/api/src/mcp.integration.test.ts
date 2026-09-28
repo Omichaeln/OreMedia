@@ -768,6 +768,7 @@ describe('MCP server (spec 7.6, 12.4)', () => {
           return chain;
         },
         pexpire: async () => 1,
+        del: async () => 1,
       });
       try {
         const res = await rpc(full.key, { jsonrpc: '2.0', id: 1, method: 'tools/list' });

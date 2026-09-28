@@ -5,6 +5,7 @@ import { RootLayout } from './root';
 import { ConnectCallbackRoute } from './connect/callback/route';
 import { RouteErrorBoundary, NotFoundRoute } from './error';
 import { SignInRoute } from './sign-in/route';
+import { SetPasswordRoute } from './set-password/route';
 import { PortfolioRoute } from './portfolio/route';
 import { CompanyRoute } from './c/$company/route';
 import { BrandLayout } from './c/$company/b/$brand/layout';
@@ -49,6 +50,7 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
       children: [
         { index: true, loader: () => redirect('/portfolio') },
         { path: 'sign-in', Component: SignInRoute },
+        { path: 'set-password', Component: SetPasswordRoute },
         { path: 'connect/callback', Component: ConnectCallbackRoute },
         {
           path: 'portfolio',

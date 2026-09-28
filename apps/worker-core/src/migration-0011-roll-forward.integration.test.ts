@@ -5,6 +5,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import {
   channelConnections,
   credentialRefs,
@@ -44,9 +45,11 @@ const newId = (kind: keyof typeof PREFIX) =>
   `${PREFIX[kind]}_${Array.from({ length: 26 }, () => ULID_ALPHABET[Math.floor(Math.random() * 32)]).join('')}`;
 const hashCanonical = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const NEW_TABLES: MySqlTable[] = [publicationRemoteChanges];
+/** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
+const LATER_TABLES: MySqlTable[] = [passwordSetupTokens];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 const STATES_BEFORE = [
   'scheduled',
   'dispatching',

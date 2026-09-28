@@ -392,6 +392,7 @@ describe('public REST API /v1 (spec 7.6)', () => {
           return chain;
         },
         pexpire: async () => 1,
+        del: async () => 1,
       });
       try {
         const res = await http('GET', '/v1/brands', owner());

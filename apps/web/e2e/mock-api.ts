@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { IncomingHttpHeaders, RequestListener } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import { initTRPC, TRPCError } from '@trpc/server';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
 import superjson from 'superjson';
@@ -60,6 +60,12 @@ import { AuditQuery } from '@oremedia/contracts/operations';
 import { PageRequest } from '@oremedia/contracts/pagination';
 import { SkillList } from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
+import {
+  PasswordSetup,
+  PasswordSignIn,
+  passwordPolicyIssue,
+  type PasswordAuthResponse,
+} from '@oremedia/contracts/access';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
@@ -347,6 +353,19 @@ export class MockBackend {
   failNextApply = false;
   failNextRender = false;
   readonly requests: Array<{ path: string; headers: IncomingHttpHeaders }> = [];
+  /**
+   * Password sign-in as apps/api/src/auth/router.ts answers it, in memory: address → password and the session token
+   * a sign-in opens (set as the `oremedia_session` cookie, which the tRPC mock accepts like a bearer).
+   */
+  readonly passwords = new Map<string, { password: string; sessionToken: string }>();
+  /** Setup links issued through access.members.issuePasswordSetup: token → the member it is for. */
+  readonly setupLinks = new Map<string, { email: string; sessionToken: string; used: boolean }>();
+  /** Whether the default E2E person has a linked Google identity (access.account.signInMethods). */
+  hasGoogle = true;
+  /** Whether the E2E session was signed in within the last 15 minutes (a first password requires it). */
+  recentSignIn = true;
+  /** Every body the password routes received (tests assert what the pages sent). */
+  readonly authRequests: Array<{ path: string; origin: string | undefined; body: unknown }> = [];
 
   /** `seed: false` starts the company empty apart from its brand (a second company seeds its own few rows). */
   constructor(company: CompanyIdentity = E2E, seed = true) {
@@ -602,6 +621,25 @@ export const t = initTRPC.context<Ctx>().create({
 
 const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h);
 
+/** The E2E person's address (access.session) and the members' (access.members.list). */
+export const E2E_EMAIL = 'e2e.person@example.test';
+const MEMBER_ACCOUNTS: Record<string, { email: string; userId: string; role: MembershipRole }> = {
+  mem_owner: { email: E2E_EMAIL, userId: 'usr_e2e', role: 'owner' },
+  mem_creator: { email: 'kofi@example.test', userId: 'usr_creator', role: 'creator' },
+  mem_invited: { email: 'lina@example.test', userId: 'usr_invited', role: 'reviewer' },
+};
+
+/**
+ * The caller's credential as the API reads it (apps/api/src/context.ts): an Authorization bearer, else the session
+ * cookie a password sign-in set, presented the same way.
+ */
+function credentialOf(headers: IncomingHttpHeaders): string | undefined {
+  const bearer = first(headers['authorization']);
+  if (bearer) return bearer;
+  const cookie = /(?:^|;\s*)oremedia_session=([^;]+)/.exec(first(headers['cookie']) ?? '');
+  return cookie ? `Bearer ${decodeURIComponent(cookie[1] as string)}` : undefined;
+}
+
 const domainErrors = t.middleware(async ({ next }) => {
   try {
     return await next();
@@ -633,7 +671,7 @@ const domainErrors = t.middleware(async ({ next }) => {
  */
 export function createBuilders(backend: MockBackend) {
   const authed = t.middleware(({ ctx, next }) => {
-    const bearer = first(ctx.headers['authorization']);
+    const bearer = credentialOf(ctx.headers);
     let reviewer: ReviewerLink | null = null;
     const session = bearer?.startsWith('Bearer ') && backend.sessions.has(bearer.slice(7));
     if (bearer !== `Bearer ${E2E.token}` && !session) {
@@ -646,8 +684,7 @@ export function createBuilders(backend: MockBackend) {
     if (ctx.reviewer) return next();
     const tenant = first(ctx.headers['x-oremedia-tenant']);
     if (!tenant) throw new TRPCError({ code: 'FORBIDDEN', message: 'Select a company first' });
-    const member =
-      tenant === backend.tenantId ? backend.memberFor(first(ctx.headers['authorization'])) : null;
+    const member = tenant === backend.tenantId ? backend.memberFor(credentialOf(ctx.headers)) : null;
     if (!member) throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not a member of this company' });
     return next({ ctx: { ...ctx, member } });
   });
@@ -796,14 +833,79 @@ export function createMockRouter(backend: MockBackend) {
               throw new PolicyDeniedError('membership.manage');
             return { membershipId: rid('mem') };
           }),
+        // As the API: owners and admins; an owner's link only from an owner; shown once (fragment URL).
+        issuePasswordSetup: mutation
+          .input(z.object({ membershipId: z.string() }))
+          .mutation(({ ctx, input }) => {
+            if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+              throw new PolicyDeniedError('membership.manage');
+            const account = MEMBER_ACCOUNTS[input.membershipId];
+            if (!account) throw new NotFoundError('Membership', input.membershipId);
+            if (account.userId === ctx.member.userId)
+              throw new PolicyDeniedError(
+                'self_setup_link',
+                'Set your own password in Settings → Account, not with a setup link',
+              );
+            if ((account.role === 'owner' || account.role === 'admin') && ctx.member.role !== 'owner')
+              throw new PolicyDeniedError(
+                'owner_required',
+                'Only an owner can issue a password setup link for an owner or admin',
+              );
+            for (const link of backend.setupLinks.values())
+              if (link.email === account.email) link.used = true;
+            const token = `pst_e2e_${randomUUID().replace(/-/g, '')}`;
+            const sessionToken = account.userId === 'usr_e2e' ? E2E.token : `ses_e2e_${account.userId}`;
+            backend.setupLinks.set(token, { email: account.email, sessionToken, used: false });
+            if (sessionToken !== E2E.token)
+              backend.sessions.set(sessionToken, {
+                userId: account.userId,
+                memberships: { [backend.tenantId]: { role: account.role, brandIds: null } },
+              });
+            return {
+              url: `/set-password#token=${token}`,
+              expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString(),
+            };
+          }),
+      }),
+      account: t.router({
+        signInMethods: authedOnly.query(() => ({
+          hasPassword: backend.passwords.has(E2E_EMAIL),
+          hasGoogle: backend.hasGoogle,
+        })),
+        setPassword: authedOnly
+          .input(z.object({ currentPassword: z.string().optional(), newPassword: z.string() }))
+          .mutation(({ input }) => {
+            const stored = backend.passwords.get(E2E_EMAIL);
+            if (!stored && !backend.recentSignIn)
+              throw new ValidationFailedError(
+                [{ path: 'session', issue: 'recent_sign_in_required' }],
+                'Sign in again to set a password',
+              );
+            if (stored && !input.currentPassword)
+              throw new ValidationFailedError([{ path: 'currentPassword', issue: 'required' }]);
+            if (stored && stored.password !== input.currentPassword)
+              throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
+            const issue = passwordPolicyIssue(input.newPassword, E2E_EMAIL);
+            if (issue) throw new ValidationFailedError([{ path: 'newPassword', issue }]);
+            backend.passwords.set(E2E_EMAIL, { password: input.newPassword, sessionToken: E2E.token });
+            return { ok: true as const };
+          }),
+        removePassword: authedOnly.input(z.object({ currentPassword: z.string() })).mutation(({ input }) => {
+          if (backend.passwords.get(E2E_EMAIL)?.password !== input.currentPassword)
+            throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
+          if (!backend.hasGoogle)
+            throw new ValidationFailedError([{ path: 'password', issue: 'only_sign_in_method' }]);
+          backend.passwords.delete(E2E_EMAIL);
+          return { ok: true as const };
+        }),
       }),
       session: authedOnly.query(() => ({
         userId: 'usr_e2e',
         name: 'E2E person',
-        email: 'e2e.person@example.test',
+        email: E2E_EMAIL,
       })),
       listCompanies: authedOnly.query(({ ctx }) => {
-        const bearer = first(ctx.headers['authorization']);
+        const bearer = credentialOf(ctx.headers);
         // Every company of the group the caller belongs to, with the role and brand scope of that membership.
         return [backend, ...backend.companies].flatMap((company) => {
           const member = company.memberFor(bearer);
@@ -1360,4 +1462,73 @@ export function createMockHandler(backend: MockBackend): RequestListener {
   );
   const primary = handlers.get(backend.tenantId) as RequestListener;
   return (req, res) => (handlers.get(first(req.headers['x-oremedia-tenant']) ?? '') ?? primary)(req, res);
+}
+
+/**
+ * The password routes of apps/api/src/auth/router.ts for the UI-only smokes, mounted at /auth by the static server:
+ * the same paths, JSON bodies, Origin check and answers (`{ ok: true }` with the session and CSRF cookies set, or
+ * `{ ok: false, error }`), over the backend's in-memory passwords and setup links. Sign-out answers 204 as before.
+ */
+export function createMockAuthHandler(backend: MockBackend): RequestListener {
+  const answer = (res: ServerResponse, status: number, body: PasswordAuthResponse, sessionToken?: string) => {
+    if (sessionToken)
+      res.setHeader('set-cookie', [
+        `oremedia_session=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax`,
+        `oremedia_csrf=csrf_${randomUUID()}; Path=/; SameSite=Lax`,
+      ]);
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  const readJson = (req: IncomingMessage) =>
+    new Promise<unknown>((resolve) => {
+      let raw = '';
+      req.on('data', (chunk: Buffer) => (raw += chunk.toString('utf8')));
+      req.on('end', () => {
+        try {
+          resolve(JSON.parse(raw));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+  return (req, res) => {
+    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
+    if (req.method !== 'POST') return answer(res, 404, { ok: false, error: 'sign_in_failed' });
+    if (path === '/auth/sign-out') {
+      res.writeHead(204, {
+        'set-cookie': ['oremedia_session=; Path=/; Max-Age=0', 'oremedia_csrf=; Path=/; Max-Age=0'],
+      });
+      res.end();
+      return;
+    }
+    void readJson(req).then((body) => {
+      const origin = first(req.headers['origin']);
+      backend.authRequests.push({ path, origin, body });
+      // Login CSRF: the API accepts only its own origin (WEB_ORIGIN, or the request's host).
+      if (!origin || new URL(origin).host !== req.headers['host'])
+        return answer(res, 403, { ok: false, error: 'origin_rejected' });
+      if (path === '/auth/password/sign-in') {
+        const parsed = PasswordSignIn.safeParse(body);
+        const account = parsed.success ? backend.passwords.get(parsed.data.email.toLowerCase()) : undefined;
+        if (!parsed.success || !account || account.password !== parsed.data.password)
+          return answer(res, 401, { ok: false, error: 'invalid_credentials' });
+        return answer(res, 200, { ok: true }, account.sessionToken);
+      }
+      if (path === '/auth/password/setup') {
+        const parsed = PasswordSetup.safeParse(body);
+        const link = parsed.success ? backend.setupLinks.get(parsed.data.token) : undefined;
+        if (!parsed.success || !link || link.used)
+          return answer(res, 400, { ok: false, error: 'link_invalid' });
+        const issue = passwordPolicyIssue(parsed.data.password, link.email);
+        if (issue) return answer(res, 400, { ok: false, error: 'password_rejected', issue });
+        link.used = true;
+        backend.passwords.set(link.email, {
+          password: parsed.data.password,
+          sessionToken: link.sessionToken,
+        });
+        return answer(res, 200, { ok: true }, link.sessionToken);
+      }
+      answer(res, 404, { ok: false, error: 'sign_in_failed' });
+    });
+  };
 }

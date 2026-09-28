@@ -1,31 +1,71 @@
 import { z } from 'zod';
 import {
+  AccountRemovePassword,
+  AccountSetPassword,
   ApiClientCreate,
   ApiClientRotate,
   BrandGrantSet,
   MemberInvite,
+  MemberIssuePasswordSetup,
   MemberSetRole,
   ServicePrincipalCreate,
   ServicePrincipalRevoke,
   SupportSessionEscalate,
 } from '@oremedia/contracts/access';
-import { PolicyDeniedError } from '@oremedia/contracts/errors';
-import { accessService } from '@oremedia/module-access';
+import { PolicyDeniedError, RateLimitedError } from '@oremedia/contracts/errors';
+import { withTransaction } from '@oremedia/db';
+import { PasswordHashingBusyError, accessService } from '@oremedia/module-access';
 import { idempotent } from '@oremedia/module-operations';
 import {
   authedMutation,
   authedProcedure,
+  passwordAttempts,
   router,
   tenantMutation,
   tenantQuery,
   type MutationCtx,
 } from '../trpc';
+import type { RequestContext } from '../context';
+import { webOriginFromEnv } from '../web-origin';
 
 const mutationCtx = (ctx: MutationCtx, ttlHours?: number) => ({
   idempotency: ctx.idempotency,
   actor: { kind: ctx.tenant.actorRef.kind, id: ctx.tenant.actorRef.id },
   ttlHours,
 });
+
+/** The signed-in person's own session (account procedures); API keys and support sessions have no password. */
+function userSession(principal: NonNullable<RequestContext['principal']>) {
+  if (principal.kind !== 'user')
+    throw new PolicyDeniedError('user_session_required', 'Only a signed-in person has a password');
+  return { userId: principal.userId, sessionId: principal.sessionId };
+}
+const originOf = (ctx: RequestContext) => ({
+  correlationId: ctx.correlationId,
+  ipHash: ctx.ipHash,
+  userAgentHash: ctx.userAgentHash,
+});
+
+/**
+ * A password check on the person's own account: counted as an attempt before it runs (concurrent guesses cannot all
+ * pass under the lockout), cleared on success. A busy hasher answers RATE_LIMITED with a short retry-after.
+ */
+async function withPasswordAttempt<T>(
+  ctx: RequestContext & { principal: NonNullable<RequestContext['principal']> },
+  run: (principal: { userId: string; sessionId: string }) => Promise<T>,
+): Promise<T> {
+  const principal = userSession(ctx.principal);
+  const account = `user:${principal.userId}`;
+  await passwordAttempts.consume(account);
+  try {
+    const result = await run(principal);
+    await passwordAttempts.clear(account);
+    return result;
+  } catch (err) {
+    if (err instanceof PasswordHashingBusyError) throw new RateLimitedError(err.retryAfterMs);
+    throw err;
+  }
+}
 
 /** Spec 7.5 access router. */
 export const accessRouter = router({
@@ -68,6 +108,38 @@ export const accessRouter = router({
         return { ok: true };
       }),
     ),
+    /**
+     * A one-time password setup link for a member, shown once to the owner or admin. Deliberately not idempotent: a
+     * replayed response would have to be stored with the live token in it. A retry issues a new link, which expires
+     * the previous one.
+     */
+    issuePasswordSetup: tenantMutation
+      .input(MemberIssuePasswordSetup)
+      .mutation(({ ctx, input }) =>
+        withTransaction((tx) =>
+          accessService.issuePasswordSetup(ctx.tenant.actor, input, webOriginFromEnv(), tx),
+        ),
+      ),
+  }),
+
+  /** The signed-in person's own sign-in methods: a password next to Google (no tenant: they are the person's). */
+  account: router({
+    signInMethods: authedProcedure.query(({ ctx }) =>
+      accessService.accountSignInMethods(userSession(ctx.principal).userId, ctx.correlationId),
+    ),
+    /** Guessing the current password through here is locked out like sign-in (per person, in the same store). */
+    setPassword: authedMutation
+      .input(AccountSetPassword)
+      .mutation(({ ctx, input }) =>
+        withPasswordAttempt(ctx, (principal) => accessService.setPassword(principal, input, originOf(ctx))),
+      ),
+    removePassword: authedMutation
+      .input(AccountRemovePassword)
+      .mutation(({ ctx, input }) =>
+        withPasswordAttempt(ctx, (principal) =>
+          accessService.removePassword(principal, input, originOf(ctx)),
+        ),
+      ),
   }),
 
   brandGrants: router({

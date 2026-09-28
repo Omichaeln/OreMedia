@@ -92,6 +92,13 @@
       "when": 1790619544364,
       "tag": "0012_comment_replies",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1790623650536,
+      "tag": "0013_password_setup_tokens",
+      "breakpoints": true
     }
   ]
 }

@@ -52,7 +52,8 @@ const countsOf = async (t: SeededTenant): Promise<Counts> =>
 
 /**
  * A minimal valid row for any tenant-scoped table: required columns filled by type, tenant and brand set, and
- * every foreign key pointed at an existing parent row of the same tenant (parents are filled first).
+ * every foreign key pointed at an existing parent row of the same tenant (parents are filled first; a user is the
+ * tenant's owner).
  */
 async function fillEmptyTables(tdb: TestDatabase, t: SeededTenant): Promise<string[]> {
   const filled: string[] = [];
@@ -92,12 +93,14 @@ async function fillEmptyTables(tdb: TestDatabase, t: SeededTenant): Promise<stri
       // The parent in the same tenant and, where the key carries the brand, the same brand (brand 1).
       const brandAt = ref.columns.findIndex((c) => c.name === 'brand_id');
       const brandKey = brandAt >= 0 ? ref.foreignColumns[brandAt] : parentBrand;
+      // A global parent is the tenant row itself, or (users) the tenant's owner.
+      const globalParentId = getTableName(parent) === 'users' ? t.ownerUserId : t.tenantId;
       const where = [
         parentTenant
           ? eq(parentTenant, t.tenantId)
           : eq(
               parentCols.find((c) => c.name === 'id')!,
-              t.tenantId,
+              globalParentId,
             ),
         ...(brandKey ? [eq(brandKey, t.brandIds[0])] : []),
       ];

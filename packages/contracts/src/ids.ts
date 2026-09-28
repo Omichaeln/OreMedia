@@ -18,6 +18,8 @@ export const ID_PREFIXES = {
   externalIdentity: 'xid',
   /** A pre-tenant authentication outcome (sign-in, refusal, sign-out). */
   authEvent: 'aue',
+  /** A one-time password setup link issued by an owner or admin (only its hash is stored). */
+  passwordSetupToken: 'pst',
   brand: 'brd',
   brandVersion: 'bv',
   designTokenSet: 'tok',

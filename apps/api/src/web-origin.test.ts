@@ -16,4 +16,15 @@ describe('WEB_ORIGIN (CORS and the channel-connect callback, spec 14.7)', () => 
       /https in production/,
     );
   });
+
+  it('is required in production, as the cookies are Secure there (startup fails naming it)', () => {
+    expect(() => webOriginFromEnv({ NODE_ENV: 'production' })).toThrow(
+      /WEB_ORIGIN is required in production/,
+    );
+    expect(() => webOriginFromEnv({ NODE_ENV: 'production', WEB_ORIGIN: ' ' })).toThrow(WebOriginConfigError);
+    expect(webOriginFromEnv({ NODE_ENV: 'production', WEB_ORIGIN: 'https://app.example.com' })).toBe(
+      'https://app.example.com',
+    );
+    expect(webOriginFromEnv({ NODE_ENV: 'test' })).toBeNull();
+  });
 });

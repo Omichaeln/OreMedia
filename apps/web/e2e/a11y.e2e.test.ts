@@ -67,6 +67,11 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         page.locator(`[data-testid="sign-in-refusal"][data-refusal="${code}"]`).waitFor({ timeout: 15_000 }),
     })),
     {
+      name: 'set password',
+      path: () => '/set-password#token=pst_a11y_audit',
+      ready: (page) => page.getByTestId('set-password').waitFor({ timeout: 15_000 }),
+    },
+    {
       name: 'portfolio',
       path: () => '/portfolio',
       ready: (page) => page.getByRole('list', { name: 'Companies' }).waitFor({ timeout: 15_000 }),
@@ -148,6 +153,16 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       name: 'settings',
       path: () => brandPath('settings'),
       ready: (page) => testId(page, `channel-${P5.channels.expired}`),
+    },
+    {
+      name: 'settings (account)',
+      path: () => brandPath('settings?tab=account'),
+      ready: (page) => testId(page, 'sign-in-methods'),
+    },
+    {
+      name: 'settings (members)',
+      path: () => brandPath('settings?tab=members'),
+      ready: (page) => page.getByRole('list', { name: 'Members' }).waitFor({ timeout: 15_000 }),
     },
     {
       // Spec 14.7 account choice: the returned login manages several Pages; the radio list is audited.

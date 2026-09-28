@@ -73,18 +73,14 @@ async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
     name: `Tenant ${label}`,
     slug: `t-${label}-${tenantId.slice(-8).toLowerCase()}`,
   });
-  await db.insert(users).values([
-    {
-      id: ownerUserId,
-      email: `${label}-owner-${tenantId.slice(-6).toLowerCase()}@example.test`,
-      name: `${label} owner`,
-    },
-    {
-      id: creatorUserId,
-      email: `${label}-creator-${tenantId.slice(-6).toLowerCase()}@example.test`,
-      name: `${label} creator`,
-    },
-  ]);
+  // sql``, not insert(users).values(), for the reason given at the brands below (users.password_origin, 0013).
+  for (const [id, role] of [
+    [ownerUserId, 'owner'],
+    [creatorUserId, 'creator'],
+  ] as const)
+    await db.execute(
+      sql`insert into ${users} (id, email, name, created_at, updated_at) values (${id}, ${`${label}-${role}-${tenantId.slice(-6).toLowerCase()}@example.test`}, ${`${label} ${role}`}, ${new Date()}, ${new Date()})`,
+    );
   await db.insert(memberships).values([
     {
       id: ownerMembershipId,
@@ -255,6 +251,7 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'failure_code',
     'failure_detail',
   ], // 0012
+  users: ['password_origin'], // 0013
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */

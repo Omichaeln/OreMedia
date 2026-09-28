@@ -1,5 +1,11 @@
-import { and, eq, gt, inArray, isNull, or, type SQL } from 'drizzle-orm';
-import { PlatformRepository, TenantScopedRepository, requireTenant, type Tx } from '@oremedia/db';
+import { and, eq, gt, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
+import {
+  PlatformRepository,
+  TenantScopedRepository,
+  affectedRows,
+  requireTenant,
+  type Tx,
+} from '@oremedia/db';
 import {
   apiClients,
   authEvents,
@@ -7,6 +13,7 @@ import {
   externalIdentities,
   externalReviewerLinks,
   memberships,
+  passwordSetupTokens,
   servicePrincipals,
   sessions,
   supportSessions,
@@ -94,6 +101,10 @@ export class UserDirectory extends PlatformRepository {
     if (lastSeenAt && now.getTime() - lastSeenAt.getTime() < SESSION_TOUCH_MS) return;
     await this.conn(tx).update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, id));
   }
+  async sessionById(id: string, tx?: Tx) {
+    const rows = await this.conn(tx).select().from(sessions).where(eq(sessions.id, id)).limit(1);
+    return rows[0] ?? null;
+  }
   async createSession(values: typeof sessions.$inferInsert, tx?: Tx) {
     await this.conn(tx).insert(sessions).values(values);
   }
@@ -122,6 +133,7 @@ export class UserDirectory extends PlatformRepository {
         name: 'Deleted user',
         status: 'deleted',
         passwordHash: null,
+        passwordOrigin: null,
         mfaEnrolled: false,
       })
       .where(eq(users.id, userId));
@@ -141,6 +153,42 @@ export class UserDirectory extends PlatformRepository {
         policy: null,
       })
       .where(eq(tenants.id, tenantId));
+  }
+  /** Every other live session of a user (a password change keeps the session that made it). */
+  async revokeOtherSessionsForUser(userId: string, keepSessionId: string, tx?: Tx) {
+    await this.conn(tx)
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), ne(sessions.id, keepSessionId)));
+  }
+  /** The stored password hash and who chose it (null clears both: the person signs in with Google only). */
+  async setPasswordHash(
+    userId: string,
+    password: { hash: string; origin: 'self' | 'setup_link' } | null,
+    tx?: Tx,
+  ) {
+    await this.conn(tx)
+      .update(users)
+      .set({ passwordHash: password?.hash ?? null, passwordOrigin: password?.origin ?? null })
+      .where(eq(users.id, userId));
+  }
+  /** Clears a password that came from a setup link (never one the person chose); true when there was one. */
+  async clearSetupLinkPassword(userId: string, tx?: Tx): Promise<boolean> {
+    const res = await this.conn(tx)
+      .update(users)
+      .set({ passwordHash: null, passwordOrigin: null })
+      .where(and(eq(users.id, userId), eq(users.passwordOrigin, 'setup_link')));
+    return affectedRows(res) === 1;
+  }
+  /**
+   * Replaces a hash with a stronger one of the same password only if it is still the one that was verified, so a
+   * concurrent password change is never overwritten by a rehash.
+   */
+  async upgradePasswordHash(userId: string, verified: string, passwordHash: string, tx?: Tx) {
+    await this.conn(tx)
+      .update(users)
+      .set({ passwordHash })
+      .where(and(eq(users.id, userId), eq(users.passwordHash, verified)));
   }
   async revokeSession(id: string, tx?: Tx) {
     await this.conn(tx).update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, id));
@@ -225,6 +273,37 @@ export class UserDirectory extends PlatformRepository {
   async lockUser(userId: string, tx: Tx) {
     const rows = await this.conn(tx).select().from(users).where(eq(users.id, userId)).limit(1).for('update');
     return rows[0] ?? null;
+  }
+  /** The providers a user has a linked identity at (the settings screen and password removal read this). */
+  async identitiesOfUser(userId: string, tx?: Tx) {
+    return this.conn(tx).select().from(externalIdentities).where(eq(externalIdentities.userId, userId));
+  }
+  /**
+   * A password setup link by the hash of its token, read before any tenant is selected (like a reviewer link). With
+   * `lock`, a locking read: two redemptions of one link are serialised and the second sees used_at.
+   */
+  async passwordSetupByTokenHash(tokenHash: string, tx?: Tx, lock = false) {
+    const query = this.conn(tx)
+      .select()
+      .from(passwordSetupTokens)
+      .where(eq(passwordSetupTokens.tokenHash, tokenHash))
+      .limit(1);
+    const rows = lock ? await query.for('update') : await query;
+    return rows[0] ?? null;
+  }
+  /** Single use: marks the link used only while it is unused and unexpired; false when it was not. */
+  async consumePasswordSetup(id: string, now: Date, tx: Tx): Promise<boolean> {
+    const res = await this.conn(tx)
+      .update(passwordSetupTokens)
+      .set({ usedAt: now })
+      .where(
+        and(
+          eq(passwordSetupTokens.id, id),
+          isNull(passwordSetupTokens.usedAt),
+          gt(passwordSetupTokens.expiresAt, now),
+        ),
+      );
+    return affectedRows(res) === 1;
   }
   async linkIdentity(values: typeof externalIdentities.$inferInsert, tx?: Tx) {
     await this.conn(tx)
@@ -402,6 +481,31 @@ export class ExternalReviewerLinkRepository extends TenantScopedRepository<typeo
       .select()
       .from(externalReviewerLinks)
       .where(this.scope(eq(externalReviewerLinks.reviewRequestId, reviewRequestId)));
+  }
+}
+
+/** One-time password setup links of the tenant's members (issued by owners and admins). */
+export class PasswordSetupTokenRepository extends TenantScopedRepository<typeof passwordSetupTokens> {
+  constructor() {
+    super(passwordSetupTokens);
+  }
+  async create(values: Omit<typeof passwordSetupTokens.$inferInsert, 'tenantId'>, tx?: Tx) {
+    await this.insertScoped(values, tx);
+  }
+  /** A new link replaces the old ones: every unused, unexpired link of the user in this tenant expires now. */
+  async expireUnusedForUser(userId: string, now: Date, tx?: Tx) {
+    await this.conn(tx)
+      .update(passwordSetupTokens)
+      .set({ expiresAt: now })
+      .where(
+        this.scope(
+          and(
+            eq(passwordSetupTokens.userId, userId),
+            isNull(passwordSetupTokens.usedAt),
+            gt(passwordSetupTokens.expiresAt, now),
+          ),
+        ),
+      );
   }
 }
 

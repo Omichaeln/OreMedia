@@ -224,12 +224,34 @@ export async function consumeRateLimit(
  */
 export async function consumeAuthRateLimit(
   ipHash: string | null,
-  path: 'auth.google.start' | 'auth.google.callback' | 'auth.sign_out',
+  path:
+    | 'auth.google.start'
+    | 'auth.google.callback'
+    | 'auth.sign_out'
+    | 'auth.password.sign_in'
+    | 'auth.password.setup',
 ): Promise<void> {
   if (!limiter) configureRateLimiter();
   const client = ipHash ?? 'unknown';
   await (limiter as RateLimiter).consume(`ip:${client}`, client, path);
 }
+
+/**
+ * Per-account password lockout (on top of the per-address limit): attempts are counted against the account under
+ * attack, whoever sends them, in the same store. `account` is an opaque key (a salted hash of the email address, or
+ * a user id), never the raw address. Each attempt is counted before the password is checked (so concurrent attempts
+ * cannot all pass under the limit) and a success clears the count.
+ */
+export const passwordAttempts = {
+  async consume(account: string): Promise<void> {
+    if (!limiter) configureRateLimiter();
+    await (limiter as RateLimiter).consumeAttempt(account, 'auth.password.attempt');
+  },
+  async clear(account: string): Promise<void> {
+    if (!limiter) configureRateLimiter();
+    await (limiter as RateLimiter).clearAttempts(account, 'auth.password.attempt');
+  },
+};
 
 /** Tenant procedures are limited per tenant and per principal; authed-only procedures per principal. */
 const rateLimited = t.middleware(async ({ ctx, path, next }) => {

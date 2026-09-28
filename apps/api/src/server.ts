@@ -107,11 +107,13 @@ export function createServer(opts: ServerOptions = {}): Express {
     createMcpRouter((cause) => log.error({ path: 'mcp', ...internalErrorFields(cause) }, 'unhandled error')),
   );
 
-  // D-03 browser sign-in and sign-out (pre-tenant: they create or end a session, never read tenant data).
+  // D-03 browser sign-in (Google and password) and sign-out (pre-tenant: they create or end a session, never read
+  // tenant data).
   app.use(
     '/auth',
     createAuthRouter({
       config: opts.auth ?? null,
+      webOrigin: opts.webOrigin ?? null,
       onError: (cause, stage) =>
         log.warn({ path: `auth/${stage}`, ...internalErrorFields(cause) }, 'sign-in step failed'),
     }),
@@ -129,7 +131,15 @@ export function createServer(opts: ServerOptions = {}): Express {
       );
   });
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    log.error(errorFields(err), 'express error');
+    // A body the JSON parser rejected: its message quotes the start of the body (a password, say), so only the kind
+    // of failure is logged.
+    const parseFailure = (err as { type?: unknown } | undefined)?.type;
+    log.error(
+      typeof parseFailure === 'string' && parseFailure.startsWith('entity.')
+        ? { errorName: 'BodyParseError', errorCode: parseFailure }
+        : errorFields(err),
+      'express error',
+    );
     res.status(500).json(toErrorEnvelope(err, 'unknown'));
   });
   return app;

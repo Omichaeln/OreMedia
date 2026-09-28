@@ -63,6 +63,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`metric_definitions` TO '_
 GRANT SELECT, INSERT ON `__DB_NAME__`.`metric_snapshots` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`model_routing_policies` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`outbox_events` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`password_setup_tokens` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`pending_channel_grants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`plans` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`playbook_entries` TO '__APP_USER__'@'%';

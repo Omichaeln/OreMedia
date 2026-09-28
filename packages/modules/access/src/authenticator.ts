@@ -29,3 +29,9 @@ export const hashForAudit = (value: string, salt: string): string =>
 export const SESSION_IDLE_MS = 12 * 60 * 60 * 1000;
 export const SESSION_ABSOLUTE_MS = 7 * 24 * 60 * 60 * 1000;
 export const SESSION_TOUCH_MS = 60 * 1000;
+
+/**
+ * A first password (the person has none, so no current password proves who is asking) needs a session signed in this
+ * recently: a stolen or forgotten-open session cannot add a second way in.
+ */
+export const RECENT_SIGN_IN_MS = 15 * 60 * 1000;

@@ -69,6 +69,57 @@
     }
   },
   "paths": {
+    "/trpc/access.account.removePassword": {
+      "post": {
+        "operationId": "access.account.removePassword",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentPassword": {
+                    "type": "string"
+                  }
+                },
+                "required": ["currentPassword"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/access.account.setPassword": {
+      "post": {
+        "operationId": "access.account.setPassword",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentPassword": {
+                    "type": "string"
+                  },
+                  "newPassword": {
+                    "type": "string"
+                  }
+                },
+                "required": ["newPassword"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/access.account.signInMethods": {
+      "get": {
+        "operationId": "access.account.signInMethods",
+        "x-trpc-type": "query"
+      }
+    },
     "/trpc/access.apiClients.create": {
       "post": {
         "operationId": "access.apiClients.create",
@@ -225,6 +276,27 @@
                   }
                 },
                 "required": ["email", "role"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/access.members.issuePasswordSetup": {
+      "post": {
+        "operationId": "access.members.issuePasswordSetup",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "membershipId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["membershipId"]
               }
             }
           }
@@ -8319,6 +8391,37 @@
   "x-contract": {
     "contractVersion": 3,
     "procedures": {
+      "access.account.removePassword": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "currentPassword": {
+              "type": "string"
+            }
+          },
+          "required": ["currentPassword"]
+        }
+      },
+      "access.account.setPassword": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "currentPassword": {
+              "type": "string"
+            },
+            "newPassword": {
+              "type": "string"
+            }
+          },
+          "required": ["newPassword"]
+        }
+      },
+      "access.account.signInMethods": {
+        "type": "query",
+        "input": null
+      },
       "access.apiClients.create": {
         "type": "mutation",
         "input": {
@@ -8439,6 +8542,18 @@
             }
           },
           "required": ["email", "role"]
+        }
+      },
+      "access.members.issuePasswordSetup": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "membershipId": {
+              "type": "string"
+            }
+          },
+          "required": ["membershipId"]
         }
       },
       "access.members.list": {

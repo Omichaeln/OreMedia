@@ -70,6 +70,13 @@ const CORRELATION_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 /** Salt for origin hashes (AUDIT_HASH_SALT); absent, hashes are still one-way but not keyed. */
 const originSalt = () => process.env['AUDIT_HASH_SALT'] ?? 'oremedia';
 
+/**
+ * The key the per-account password lockout counts failures under: a salted hash of the normalised address, so no raw
+ * address reaches the rate limiter's store, and unknown addresses lock exactly like real ones.
+ */
+export const passwordAccountKey = (email: string): string =>
+  `email:${hashForAudit(email.trim().toLowerCase(), originSalt())}`;
+
 /** Correlation id and salted origin hashes of a request (the fields audit rows and sessions record). */
 export function requestOrigin(
   headers: IncomingHttpHeaders,

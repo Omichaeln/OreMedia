@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { generatedUploads, uploadIntents } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
@@ -21,13 +22,14 @@ const PREVIOUS_HEAD = '0003_external_identities_auth_events';
 const NEW_TABLES: MySqlTable[] = [generatedUploads];
 /**
  * Added by later migrations (0005 provider review statuses; 0006: migration-0006-roll-forward.integration.test.ts;
- * 0010 and 0011: their migration-*-roll-forward tests).
+ * 0010 to 0013: their migration-*-roll-forward tests).
  */
 const LATER_TABLES: MySqlTable[] = [
   providerReviewStatuses,
   brandGuidelineAuthors,
   pendingChannelGrants,
   publicationRemoteChanges,
+  passwordSetupTokens,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

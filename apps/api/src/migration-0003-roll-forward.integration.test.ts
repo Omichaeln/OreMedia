@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
-import { authEvents, externalIdentities, users } from '@oremedia/db/schema/access';
+import { authEvents, externalIdentities, passwordSetupTokens, users } from '@oremedia/db/schema/access';
 import { generatedUploads } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
@@ -19,13 +19,14 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0002_provider_jobs_routing_previews_ledger_idempotency';
 const NEW_TABLES: MySqlTable[] = [externalIdentities, authEvents];
-/** Added by later migrations (0004 to 0011; see the migration-*-roll-forward tests in apps/worker-core/src). */
+/** Added by later migrations (0004 to 0013; see the migration-*-roll-forward tests in apps/worker-core/src). */
 const LATER_TABLES: MySqlTable[] = [
   generatedUploads,
   providerReviewStatuses,
   brandGuidelineAuthors,
   pendingChannelGrants,
   publicationRemoteChanges,
+  passwordSetupTokens,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

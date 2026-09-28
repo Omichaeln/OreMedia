@@ -27,6 +27,8 @@ export interface StaticServerOptions {
   trpcHandler?: RequestListener;
   /** ... or an API origin to proxy `/trpc/*` to (real API smoke). */
   apiOrigin?: string;
+  /** In-process handler for `/auth/*` next to `trpcHandler` (the mock password routes); without it only sign-out answers. */
+  authHandler?: RequestListener;
   /** The pack served at /deployment-brand/ (OREMEDIA_DEPLOYMENT_BRAND in production); default the neutral one. */
   deploymentBrand?: string;
 }
@@ -58,6 +60,7 @@ export async function startStaticServer(
     // Mirrors the production web container (infra/railway/web/Caddyfile): /auth/* is the API's, same origin.
     if (url.pathname.startsWith('/auth/')) {
       if (opts.apiOrigin) return proxy(req, res, opts.apiOrigin);
+      if (opts.authHandler) return opts.authHandler(req, res);
       res.statusCode = url.pathname === '/auth/sign-out' && req.method === 'POST' ? 204 : 404;
       res.end();
       return;

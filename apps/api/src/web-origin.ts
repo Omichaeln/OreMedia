@@ -11,9 +11,18 @@ export class WebOriginConfigError extends Error {
   }
 }
 
-/** The configured origin, or null when unset (the API then takes the browser's redirect: development only). */
+/**
+ * The configured origin, or null when unset outside production (the API then takes the browser's redirect and the
+ * password routes compare Origin with the request's host: development only). Production (NODE_ENV=production, the
+ * condition that makes cookies Secure) requires it: the login-CSRF check and the password setup links depend on it.
+ */
 export function webOriginFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
   const value = env['WEB_ORIGIN']?.trim();
+  const production = (env['NODE_ENV'] ?? 'development') === 'production';
+  if (!value && production)
+    throw new WebOriginConfigError(
+      'WEB_ORIGIN is required in production (https://<web domain>): password sign-in checks Origin against it and setup links point at it',
+    );
   if (!value) return null;
   let url: URL;
   try {

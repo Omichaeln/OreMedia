@@ -8,7 +8,7 @@ import * as schema from '@oremedia/db/schema';
 import { modelRoutingPolicies, providerJobs } from '@oremedia/db/schema/agents';
 import { usageLedger } from '@oremedia/db/schema/billing';
 import { featureFlags } from '@oremedia/db/schema/operations';
-import { authEvents, externalIdentities } from '@oremedia/db/schema/access';
+import { authEvents, externalIdentities, passwordSetupTokens } from '@oremedia/db/schema/access';
 import { generatedUploads } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
@@ -33,7 +33,7 @@ const NEW_TABLES = [providerJobs, modelRoutingPolicies, renderPreviews, previewE
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
-/** Added by later migrations (0003 to 0011). */
+/** Added by later migrations (0003 to 0013). */
 const LATER_TABLES: MySqlTable[] = [
   externalIdentities,
   authEvents,
@@ -42,6 +42,7 @@ const LATER_TABLES: MySqlTable[] = [
   brandGuidelineAuthors,
   pendingChannelGrants,
   publicationRemoteChanges,
+  passwordSetupTokens,
 ];
 
 const TABLES = (Object.values(schema) as unknown[])

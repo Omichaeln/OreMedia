@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -17,8 +18,8 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0005_lazy_redwing';
 const NEW_TABLES: MySqlTable[] = [brandGuidelineAuthors];
-/** Added by later migrations (0010 and 0011: their migration-*-roll-forward tests). */
-const LATER_TABLES: MySqlTable[] = [pendingChannelGrants, publicationRemoteChanges];
+/** Added by later migrations (0010 to 0013: their migration-*-roll-forward tests). */
+const LATER_TABLES: MySqlTable[] = [pendingChannelGrants, publicationRemoteChanges, passwordSetupTokens];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

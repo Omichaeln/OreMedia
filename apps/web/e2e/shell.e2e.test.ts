@@ -224,7 +224,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const tabs = page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab');
     await expect
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
-      .toEqual(['Channels', 'Mandates', 'Policy', 'Skills', 'Members', 'Model routing']);
+      .toEqual(['Channels', 'Mandates', 'Policy', 'Skills', 'Members', 'Model routing', 'Account']);
     await page.getByRole('tab', { name: 'Policy' }).click();
     const policy = page.getByTestId('release-policy');
     await expect

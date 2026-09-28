@@ -12,6 +12,8 @@ export interface RateLimitPolicy {
 
 export interface RateLimiterStore {
   hit(key: string, windowSec: number): Promise<{ count: number; ttlMs: number }>;
+  /** Ends the key's window (the next hit starts a new one). */
+  reset(key: string): Promise<void>;
 }
 
 export class MemoryRateLimiterStore implements RateLimiterStore {
@@ -26,15 +28,15 @@ export class MemoryRateLimiterStore implements RateLimiterStore {
     b.count++;
     return { count: b.count, ttlMs: b.resetAt - now };
   }
+  async reset(key: string) {
+    this.buckets.delete(key);
+  }
 }
 
 export interface RedisLike {
-  multi(): {
-    incr(k: string): RedisMulti;
-    pttl(k: string): RedisMulti;
-    exec(): Promise<Array<[Error | null, unknown]> | null>;
-  };
+  multi(): RedisMulti;
   pexpire(k: string, ms: number): Promise<unknown>;
+  del(k: string): Promise<unknown>;
 }
 interface RedisMulti {
   incr(k: string): RedisMulti;
@@ -54,6 +56,9 @@ export class RedisRateLimiterStore implements RateLimiterStore {
     }
     return { count: c, ttlMs: ttl };
   }
+  async reset(key: string) {
+    await this.redis.del(key);
+  }
 }
 
 const DEFAULT_PRINCIPAL: RateLimitPolicy = { limit: 600, windowSec: 60 };
@@ -68,6 +73,20 @@ const PATH_POLICIES: Record<string, RateLimitPolicy> = {
   'auth.google.start': { limit: 30, windowSec: 60 },
   'auth.google.callback': { limit: 30, windowSec: 60 },
   'auth.sign_out': { limit: 30, windowSec: 60 },
+  'auth.password.sign_in': { limit: 20, windowSec: 60 },
+  'auth.password.setup': { limit: 10, windowSec: 60 },
+  // Each call runs up to two scrypt hashes (128 MiB each): a signed-in person changes a password rarely.
+  'access.account.setPassword': { limit: 10, windowSec: 60 },
+};
+
+/**
+ * Attempt counters, keyed by what is under attack rather than by who asks (a distributed guesser shares one
+ * counter). Every attempt is counted before it is checked, so concurrent attempts cannot all slip under the limit; a
+ * success clears the counter. Ten attempts for one account within fifteen minutes without a success lock password
+ * checks for that account until the window ends.
+ */
+const ATTEMPT_POLICIES: Record<string, RateLimitPolicy> = {
+  'auth.password.attempt': { limit: 10, windowSec: 15 * 60 },
 };
 
 export class RateLimiter {
@@ -89,4 +108,26 @@ export class RateLimiter {
       }
     }
   }
+
+  /** Counts one attempt against `subject`; throws RATE_LIMITED (retry-after = the rest of the window) over the limit. */
+  async consumeAttempt(subject: string, kind: string): Promise<void> {
+    const policy = attemptPolicy(kind);
+    const { count: c, ttlMs } = await this.store.hit(`rl:f:${kind}:${subject}`, policy.windowSec);
+    if (c > policy.limit) {
+      count(METRIC.policyDenials, 1, { reason: 'rate_limited' });
+      throw new RateLimitedError(Math.max(1000, ttlMs));
+    }
+  }
+
+  /** A successful attempt: `subject` starts again with a clean counter. */
+  async clearAttempts(subject: string, kind: string): Promise<void> {
+    attemptPolicy(kind);
+    await this.store.reset(`rl:f:${kind}:${subject}`);
+  }
+}
+
+function attemptPolicy(kind: string): RateLimitPolicy {
+  const policy = ATTEMPT_POLICIES[kind];
+  if (!policy) throw new Error(`no attempt policy for ${kind}`);
+  return policy;
 }

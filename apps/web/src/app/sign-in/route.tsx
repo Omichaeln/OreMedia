@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Button, Field, Input, Panel, StatusBanner } from '@oremedia/ui';
-import { SignInErrorCode } from '@oremedia/contracts/access';
+import { SignInErrorCode, type PasswordAuthErrorCode } from '@oremedia/contracts/access';
 import { TopBar } from '../root';
 import { DeploymentLogo } from '../../components/deployment-logo';
 import { PageHeading } from '../../components/request-state';
@@ -12,6 +12,8 @@ import {
   clearBearerToken,
   googleSignInHref,
   hasCredential,
+  PASSWORD_SIGN_IN_PATH,
+  postPasswordAuth,
   setBearerToken,
   tokenSignInAvailable,
 } from '../../lib/session';
@@ -49,6 +51,25 @@ const refusals = (product: string): Record<SignInErrorCode, { title: string; des
   },
 });
 
+/**
+ * What a refused password sign-in tells the person. Every credential failure reads the same (the API never says
+ * whether an account exists); only the setup route answers link or policy codes, which this form never gets.
+ */
+const passwordSignInMessage = (code: PasswordAuthErrorCode): string => {
+  switch (code) {
+    case 'invalid_credentials':
+      return 'That email and password do not match an account that can sign in with a password.';
+    case 'too_many_attempts':
+      return 'Too many attempts. Wait fifteen minutes, then try again, or continue with Google.';
+    case 'busy':
+      return 'The server is busy. Wait a moment, then try again.';
+    case 'origin_rejected':
+      return 'This sign-in form must be used from the app itself. Reload the page and try again.';
+    default:
+      return 'Sign-in did not complete. Try again.';
+  }
+};
+
 /** Only a same-origin path is carried to the API as returnTo (the API re-checks it). */
 const safeNext = (value: string | null): string =>
   value && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\') ? value : '/portfolio';
@@ -75,7 +96,7 @@ export function SignInRoute() {
         <DeploymentLogo className="mb-6 h-20" />
         <PageHeading
           title={`Sign in to ${brand.name}`}
-          description={`Use the Google account your company invited. Your company's owners decide what you can do in ${brand.name}.`}
+          description={`Use the Google account your company invited, or your email and password if you have set one. Your company's owners decide what you can do in ${brand.name}.`}
         />
         {refusal && (
           <StatusBanner
@@ -97,9 +118,84 @@ export function SignInRoute() {
             </Button>
           </div>
         </Panel>
+        <PasswordSignInForm next={next} />
         {tokenSignInAvailable() && <TokenSignIn next={next} />}
       </main>
     </>
+  );
+}
+
+/**
+ * Email and password (the second sign-in method). The API sets the same session cookies as Google and answers JSON;
+ * the page then navigates. A password is set from a one-time link an owner or admin issues, or in Settings.
+ */
+function PasswordSignInForm({ next }: { next: string }) {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setError('Enter your email address and password.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const result = await postPasswordAuth(PASSWORD_SIGN_IN_PATH, { email: email.trim(), password });
+    setBusy(false);
+    if (result.ok) {
+      navigate(next, { replace: true });
+      return;
+    }
+    setPassword('');
+    setError(passwordSignInMessage(result.error));
+  };
+
+  return (
+    <Panel title="Email and password" className="mb-4">
+      <form
+        onSubmit={(e) => void submit(e)}
+        className="flex flex-col gap-3"
+        noValidate
+        aria-busy={busy}
+        data-testid="password-sign-in"
+      >
+        <Field label="Email" htmlFor="sign-in-email">
+          <Input
+            id="sign-in-email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            spellCheck={false}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={busy}
+          />
+        </Field>
+        <Field label="Password" htmlFor="sign-in-password" error={error ?? undefined}>
+          <Input
+            id="sign-in-password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={busy}
+          />
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          No password yet? Ask an owner or admin of your company for a password setup link.
+        </p>
+        <div>
+          <Button type="submit" variant="primary" disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </div>
+      </form>
+    </Panel>
   );
 }
 

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { conversations, messages, responseDrafts } from '@oremedia/db/schema/community';
 import { channelConnections, credentialRefs } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -15,7 +16,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * through the new states afterwards.
  */
 const PREVIOUS_HEAD = '0011_remote_post_changes';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+/** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
+const LATER_TABLES: MySqlTable[] = [passwordSetupTokens];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t));
 
 describe('migration 0012 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

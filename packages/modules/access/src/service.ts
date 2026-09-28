@@ -1,12 +1,18 @@
 import type { z } from 'zod';
 import {
+  AccountRemovePassword,
+  AccountSetPassword,
   ApiClientCreate,
   ApiClientRotate,
   BrandGrantSet,
   ExternalLinkCreate,
   ExternalLinkRevoke,
   MemberInvite,
+  MemberIssuePasswordSetup,
   MemberSetRole,
+  PASSWORD_SETUP_TTL_MS,
+  PasswordSetup,
+  PasswordSignIn,
   ServicePrincipalCreate,
   ServicePrincipalRevoke,
   SupportSessionEscalate,
@@ -14,23 +20,34 @@ import {
   TenantCreate,
   VerifiedExternalIdentity,
   googleIsAuthoritativeFor,
+  passwordPolicyIssue,
+  type AccountSignInMethods,
+  type PasswordSetupLink,
   type SignInRefusalReason,
 } from '@oremedia/contracts/access';
-import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
+import {
+  ConflictError,
+  NotFoundError,
+  PolicyDeniedError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, runAsPlatform, runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
+import { DEFAULT_ROLE_GRANTS } from '@oremedia/domain/role-grants';
 import { audit, outbox } from '@oremedia/module-operations';
 import {
   ApiClientRepository,
   BrandGrantRepository,
   ExternalReviewerLinkRepository,
   MembershipRepository,
+  PasswordSetupTokenRepository,
   ServicePrincipalRepository,
   SupportSessionRepository,
   UserDirectory,
 } from './repositories';
-import { SESSION_ABSOLUTE_MS, newOpaqueToken } from './authenticator';
+import { RECENT_SIGN_IN_MS, SESSION_ABSOLUTE_MS, hashToken, newOpaqueToken } from './authenticator';
+import { hashPassword, needsRehash, verifyPassword } from './password';
 import { policy } from './policy';
 
 const directory = new UserDirectory();
@@ -40,6 +57,10 @@ const principalsRepo = new ServicePrincipalRepository();
 const apiClientsRepo = new ApiClientRepository();
 const linksRepo = new ExternalReviewerLinkRepository();
 const supportSessionsRepo = new SupportSessionRepository();
+const passwordSetupRepo = new PasswordSetupTokenRepository();
+
+/** auth_events.provider for the password sign-in method (Google identities use their provider name). */
+const PASSWORD_PROVIDER = 'password';
 
 const tenantResource = (actor: ResolvedActor) => ({
   type: 'tenant',
@@ -91,7 +112,13 @@ type Resolution =
 const authEvent = (
   origin: AuthOrigin,
   values: {
-    action: 'auth.sign_in' | 'auth.identity_link' | 'auth.sign_out';
+    action:
+      | 'auth.sign_in'
+      | 'auth.identity_link'
+      | 'auth.sign_out'
+      | 'auth.password_set'
+      | 'auth.password_remove'
+      | 'auth.password_setup';
     provider: string;
     reason?: SignInRefusalReason | null;
     userId?: string | null;
@@ -109,6 +136,134 @@ const authEvent = (
   ipHash: origin.ipHash,
   userAgentHash: origin.userAgentHash,
 });
+
+type MembershipRow = Awaited<ReturnType<UserDirectory['allMembershipsOfUser']>>[number];
+type UserRow = NonNullable<Awaited<ReturnType<UserDirectory['findById']>>>;
+
+const emailDomain = (email: string) => email.slice(email.lastIndexOf('@') + 1).toLowerCase();
+
+/** Every membership of a user, and the invitations a sign-in as `email` accepts (only those sent to that address). */
+async function invitationsFor(userId: string, email: string, tx: Tx) {
+  const memberships = await directory.allMembershipsOfUser(userId, tx);
+  const invitations = memberships.filter(
+    (m) => m.status === 'invited' && m.invitedEmail?.toLowerCase() === email,
+  );
+  return { memberships, invitations };
+}
+
+/**
+ * inviteMember creates a disabled placeholder user for an unknown email; the first sign-in claims it only while it
+ * has never been used: no linked identity and nothing but invitations.
+ */
+const isClaimablePlaceholder = (
+  user: UserRow,
+  memberships: MembershipRow[],
+  invitations: MembershipRow[],
+  linked: boolean,
+): boolean =>
+  !linked &&
+  user.status === 'disabled' &&
+  invitations.length > 0 &&
+  memberships.every((m) => m.status === 'invited');
+
+/**
+ * A password chosen through a setup link (by whoever held the link: possibly the admin who issued it) is confined to
+ * the issuing company. Once the person is an active member of a second company it is cleared, and every session of
+ * theirs ends (one might have been opened with it); they sign in with Google, or set their own password.
+ */
+async function confineSetupLinkPassword(userId: string, origin: AuthOrigin, tx: Tx): Promise<void> {
+  const memberships = await directory.allMembershipsOfUser(userId, tx);
+  const companies = new Set(memberships.filter((m) => m.status === 'active').map((m) => m.tenantId));
+  if (companies.size < 2 || !(await directory.clearSetupLinkPassword(userId, tx))) return;
+  await directory.revokeSessionsForUser(userId, tx);
+  await directory.recordAuthEvent(
+    authEvent(origin, { action: 'auth.password_remove', provider: PASSWORD_PROVIDER, userId }),
+    tx,
+  );
+}
+
+/**
+ * What every successful sign-in does once a method (Google, a password, a password setup link) has resolved the
+ * person, inside that method's transaction: accept the invitations sent to their address, end the session this
+ * browser held (rotation: never an orphan either way), mint a new opaque session and record auth.sign_in.
+ */
+async function completeSignIn(
+  userId: string,
+  invitations: MembershipRow[],
+  provider: string,
+  replaces: { userId: string; sessionId: string } | null | undefined,
+  origin: AuthOrigin,
+  tx: Tx,
+): Promise<{ sessionId: string; token: string; expiresAt: Date }> {
+  for (const m of invitations)
+    await runInTenant(
+      {
+        tenantId: m.tenantId,
+        actor: { kind: 'user', id: userId },
+        brandIds: new Set<string>(),
+        correlationId: origin.correlationId,
+      },
+      async () => {
+        await membershipsRepo.update(m.id, m.version, { status: 'active' }, tx);
+        await audit.record(
+          { kind: 'user', id: userId },
+          'membership.accept',
+          { type: 'membership', id: m.id },
+          'allowed',
+          tx,
+          { fromState: 'invited', toState: 'active' },
+        );
+        await outbox.add(
+          'membership.changed',
+          { type: 'membership', id: m.id, version: m.version + 1 },
+          { membershipId: m.id, change: 'accepted' },
+          tx,
+        );
+      },
+    );
+  if (invitations.length) await confineSetupLinkPassword(userId, origin, tx);
+  if (replaces) {
+    await directory.revokeSession(replaces.sessionId, tx);
+    await directory.recordAuthEvent(
+      authEvent(origin, {
+        action: 'auth.sign_out',
+        provider: 'session',
+        userId: replaces.userId,
+        sessionId: replaces.sessionId,
+      }),
+      tx,
+    );
+  }
+  const now = new Date();
+  const { token, hash } = newOpaqueToken('ses');
+  const sessionId = newId('session');
+  const expiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_MS);
+  await directory.createSession(
+    {
+      id: sessionId,
+      userId,
+      tokenHash: hash,
+      selectedTenantId: null,
+      expiresAt,
+      ipHash: origin.ipHash,
+      userAgentHash: origin.userAgentHash,
+      lastSeenAt: now,
+    },
+    tx,
+  );
+  await directory.recordAuthEvent(
+    authEvent(origin, { action: 'auth.sign_in', provider, userId, sessionId }),
+    tx,
+  );
+  return { sessionId, token, expiresAt };
+}
+
+/** Options every sign-in method takes: the Workspace/email domain allowlist and the session the browser held. */
+export interface SignInOptions {
+  allowedDomains: readonly string[] | null;
+  /** The session this browser held before: ended in the same transaction that creates the new one. */
+  replaces?: { userId: string; sessionId: string } | null;
+}
 
 export const accessService = {
   /** Bootstrap: creates a tenant and its owner membership. Called by sign-up, outside any tenant context. */
@@ -135,6 +290,8 @@ export const accessService = {
           },
           tx,
         );
+        // An existing user becoming owner of a second company: a setup-link password does not follow them.
+        await confineSetupLinkPassword(ownerUserId, { correlationId, ipHash: null, userAgentHash: null }, tx);
       }),
     );
     return { tenantId, membershipId };
@@ -150,11 +307,7 @@ export const accessService = {
    */
   async signInWithExternalIdentity(
     input: VerifiedExternalIdentity,
-    opts: {
-      allowedDomains: readonly string[] | null;
-      /** The session this browser held before: ended in the same transaction that creates the new one. */
-      replaces?: { userId: string; sessionId: string } | null;
-    },
+    opts: SignInOptions,
     origin: AuthOrigin,
   ): Promise<SignInResult> {
     const identity = VerifiedExternalIdentity.parse(input);
@@ -199,17 +352,8 @@ export const accessService = {
               return { refused: 'identity_conflict', userId: user.id };
             alreadyLinked = Boolean(existing); // the same subject, linked by a concurrent sign-in
           }
-          const memberships = await directory.allMembershipsOfUser(user.id, tx);
-          const invitations = memberships.filter(
-            (m) => m.status === 'invited' && m.invitedEmail?.toLowerCase() === email,
-          );
-          // inviteMember creates a disabled placeholder for an unknown email; it is claimed only while it has never
-          // been used: no linked identity and nothing but invitations.
-          const claimPlaceholder =
-            !alreadyLinked &&
-            user.status === 'disabled' &&
-            invitations.length > 0 &&
-            memberships.every((m) => m.status === 'invited');
+          const { memberships, invitations } = await invitationsFor(user.id, email, tx);
+          const claimPlaceholder = isClaimablePlaceholder(user, memberships, invitations, alreadyLinked);
           if (user.status !== 'active' && !claimPlaceholder)
             return { refused: 'account_disabled', userId: user.id };
 
@@ -230,68 +374,8 @@ export const accessService = {
               tx,
             );
           }
-          for (const m of invitations)
-            await runInTenant(
-              {
-                tenantId: m.tenantId,
-                actor: { kind: 'user', id: user.id },
-                brandIds: new Set<string>(),
-                correlationId: origin.correlationId,
-              },
-              async () => {
-                await membershipsRepo.update(m.id, m.version, { status: 'active' }, tx);
-                await audit.record(
-                  { kind: 'user', id: user.id },
-                  'membership.accept',
-                  { type: 'membership', id: m.id },
-                  'allowed',
-                  tx,
-                  { fromState: 'invited', toState: 'active' },
-                );
-                await outbox.add(
-                  'membership.changed',
-                  { type: 'membership', id: m.id, version: m.version + 1 },
-                  { membershipId: m.id, change: 'accepted' },
-                  tx,
-                );
-              },
-            );
-
-          // Rotation: the session this browser held ends with the sign-in, atomically (never an orphan either way).
-          if (opts.replaces) {
-            await directory.revokeSession(opts.replaces.sessionId, tx);
-            await directory.recordAuthEvent(
-              authEvent(origin, {
-                action: 'auth.sign_out',
-                provider: 'session',
-                userId: opts.replaces.userId,
-                sessionId: opts.replaces.sessionId,
-              }),
-              tx,
-            );
-          }
-          const now = new Date();
-          const { token, hash } = newOpaqueToken('ses');
-          const sessionId = newId('session');
-          const expiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_MS);
-          await directory.createSession(
-            {
-              id: sessionId,
-              userId: user.id,
-              tokenHash: hash,
-              selectedTenantId: null,
-              expiresAt,
-              ipHash: origin.ipHash,
-              userAgentHash: origin.userAgentHash,
-              lastSeenAt: now,
-            },
-            tx,
-          );
-          await directory.recordAuthEvent(
-            authEvent(origin, { action: 'auth.sign_in', provider, userId: user.id, sessionId }),
-            tx,
-          );
-          return { refused: null, userId: user.id, sessionId, token, expiresAt };
+          const session = await completeSignIn(user.id, invitations, provider, opts.replaces, origin, tx);
+          return { refused: null, userId: user.id, ...session };
         }),
       );
     } catch (err) {
@@ -301,6 +385,281 @@ export const accessService = {
     if (resolution.refused) return refuse(resolution.refused, resolution.userId);
     const { userId, sessionId, token, expiresAt } = resolution;
     return { ok: true, userId, sessionId, token, expiresAt };
+  },
+
+  /**
+   * Password sign-in, the second login method. The address resolves to an active user whose stored scrypt hash
+   * matches; every other case (unknown address, no password, wrong password, disabled user, a domain outside the
+   * allowlist) is refused with a reason recorded only in auth_events, and the caller answers them all alike. One
+   * scrypt runs whether or not the account exists, so timing does not reveal it either. On success the hash is
+   * upgraded when it was made with weaker parameters, and the shared post-sign-in steps run (invitations, rotation,
+   * session). The per-account lockout is the caller's (apps/api keeps it in the rate limiter's store).
+   */
+  async signInWithPassword(
+    input: PasswordSignIn,
+    opts: SignInOptions,
+    origin: AuthOrigin,
+  ): Promise<SignInResult> {
+    const parsed = PasswordSignIn.parse(input);
+    const email = parsed.email.toLowerCase();
+    const refuse = async (reason: SignInRefusalReason, userId: string | null): Promise<SignInResult> => {
+      await accessService.recordSignInRefusal(PASSWORD_PROVIDER, reason, origin, userId);
+      return { ok: false, reason };
+    };
+    const found = await runAsPlatform('sign-in', origin.correlationId, () => directory.findByEmail(email));
+    // users.email uses an accent-insensitive collation: only the exact address is this person.
+    const user = found && found.email.toLowerCase() === email ? found : null;
+    const stored = user?.passwordHash ?? null;
+    if (!(await verifyPassword(parsed.password, stored)) || !user || !stored)
+      return refuse('invalid_credentials', user?.id ?? null);
+    if (user.status !== 'active') return refuse('account_disabled', user.id);
+    if (opts.allowedDomains?.length && !opts.allowedDomains.includes(emailDomain(email)))
+      return refuse('domain_not_allowed', user.id);
+    // Hashed before the transaction so the users row is not locked for the length of a scrypt.
+    const upgraded = needsRehash(stored) ? await hashPassword(parsed.password) : null;
+    const resolution = await runAsPlatform('sign-in', origin.correlationId, () =>
+      withTransaction(async (tx): Promise<Resolution> => {
+        const locked = await directory.lockUser(user.id, tx);
+        if (!locked || locked.status !== 'active') return { refused: 'account_disabled', userId: user.id };
+        // The password changed (or was removed) since it was checked: the credentials presented are stale.
+        if (locked.passwordHash !== stored) return { refused: 'invalid_credentials', userId: user.id };
+        if (upgraded) await directory.upgradePasswordHash(user.id, stored, upgraded, tx);
+        // A password from a setup link never brings the person into another company: it may have been chosen by
+        // the admin who issued the link. Invitations wait for Google, or for a password the person set themselves.
+        const invitations =
+          locked.passwordOrigin === 'setup_link'
+            ? []
+            : (await invitationsFor(user.id, email, tx)).invitations;
+        const session = await completeSignIn(
+          user.id,
+          invitations,
+          PASSWORD_PROVIDER,
+          opts.replaces,
+          origin,
+          tx,
+        );
+        return { refused: null, userId: user.id, ...session };
+      }),
+    );
+    if (resolution.refused) return refuse(resolution.refused, resolution.userId);
+    const { userId, sessionId, token, expiresAt } = resolution;
+    return { ok: true, userId, sessionId, token, expiresAt };
+  },
+
+  /**
+   * Redeems a one-time password setup link (issuePasswordSetup): sets the password, marks the link used and signs the
+   * person in. It is also the reset path: an owner or admin issues a new link. The link applies only while the person
+   * still belongs to the issuing company alone, as a member that is not disabled, and while the issuer may still
+   * manage members there (a link for an owner or admin only from an owner; never the issuer's own). The password is recorded as
+   * chosen through a link (`setup_link`) until the person changes it themselves. An invitation placeholder is claimed exactly as a
+   * first Google sign-in claims it, and the invitations sent to the address are accepted. Every other session of the
+   * person ends: whoever held the old credentials is signed out. A password that breaks the policy is refused before
+   * the link is used (VALIDATION_FAILED, path `password`), so the person can try again with the same link.
+   */
+  async redeemPasswordSetup(
+    input: PasswordSetup,
+    opts: SignInOptions,
+    origin: AuthOrigin,
+  ): Promise<SignInResult> {
+    const parsed = PasswordSetup.parse(input);
+    const tokenHash = hashToken(parsed.token);
+    const refuse = async (reason: SignInRefusalReason, userId: string | null): Promise<SignInResult> => {
+      await accessService.recordSignInRefusal(PASSWORD_PROVIDER, reason, origin, userId);
+      return { ok: false, reason };
+    };
+    const now = new Date();
+    const pending = await runAsPlatform('password-setup', origin.correlationId, async () => {
+      const link = await directory.passwordSetupByTokenHash(tokenHash);
+      return link ? { link, user: await directory.findById(link.userId) } : null;
+    });
+    if (!pending?.user || pending.link.usedAt || pending.link.expiresAt <= now)
+      return refuse('link_invalid', pending?.user?.id ?? null);
+    const { link, user } = pending;
+    const issue = passwordPolicyIssue(parsed.password, user.email);
+    if (issue) throw new ValidationFailedError([{ path: 'password', issue }]);
+    const email = user.email.toLowerCase();
+    if (opts.allowedDomains?.length && !opts.allowedDomains.includes(emailDomain(email)))
+      return refuse('domain_not_allowed', user.id);
+    const passwordHash = await hashPassword(parsed.password);
+
+    const resolution = await runAsPlatform('password-setup', origin.correlationId, () =>
+      withTransaction(async (tx): Promise<Resolution> => {
+        const refused = (reason: SignInRefusalReason): Resolution => ({ refused: reason, userId: user.id });
+        // Locking read: a second redemption of the same link waits here and then finds it used.
+        const current = await directory.passwordSetupByTokenHash(tokenHash, tx, true);
+        if (!current || current.id !== link.id) return refused('link_invalid');
+        const locked = await directory.lockUser(user.id, tx);
+        if (!locked || locked.email.toLowerCase() !== email) return refused('link_invalid');
+        const { memberships, invitations } = await invitationsFor(locked.id, email, tx);
+        const here = memberships.find((m) => m.tenantId === current.tenantId);
+        // An admin of one company must never set the password of someone who can also reach another company.
+        if (!here || here.status === 'disabled' || memberships.some((m) => m.tenantId !== current.tenantId))
+          return refused('link_invalid');
+        const issuer = await directory.membershipFor(current.createdByUserId, current.tenantId, tx);
+        const issuerRole = issuer?.membership.status === 'active' ? issuer.membership.role : null;
+        if (
+          !issuerRole ||
+          !DEFAULT_ROLE_GRANTS['membership.manage'].includes(issuerRole) ||
+          (DEFAULT_ROLE_GRANTS['membership.manage'].includes(here.role) && issuerRole !== 'owner') ||
+          current.createdByUserId === locked.id
+        )
+          return refused('link_invalid');
+        const linked = (await directory.identitiesOfUser(locked.id, tx)).length > 0;
+        const claim = isClaimablePlaceholder(locked, memberships, invitations, linked);
+        if (locked.status !== 'active' && !claim) return refused('account_disabled');
+        if (!(await directory.consumePasswordSetup(current.id, now, tx))) return refused('link_invalid');
+
+        if (claim) await directory.activateUser(locked.id, locked.name, tx);
+        await directory.setPasswordHash(locked.id, { hash: passwordHash, origin: 'setup_link' }, tx);
+        await directory.revokeSessionsForUser(locked.id, tx);
+        await directory.recordAuthEvent(
+          authEvent(origin, {
+            action: 'auth.password_setup',
+            provider: PASSWORD_PROVIDER,
+            userId: locked.id,
+          }),
+          tx,
+        );
+        await runInTenant(
+          {
+            tenantId: current.tenantId,
+            actor: { kind: 'user', id: locked.id },
+            brandIds: new Set<string>(),
+            correlationId: origin.correlationId,
+          },
+          () =>
+            audit.record(
+              { kind: 'user', id: locked.id },
+              'membership.password_setup_redeem',
+              { type: 'membership', id: here.id },
+              'allowed',
+              tx,
+            ),
+        );
+        const session = await completeSignIn(
+          locked.id,
+          invitations,
+          PASSWORD_PROVIDER,
+          opts.replaces,
+          origin,
+          tx,
+        );
+        return { refused: null, userId: locked.id, ...session };
+      }),
+    );
+    if (resolution.refused) return refuse(resolution.refused, resolution.userId);
+    const { userId, sessionId, token, expiresAt } = resolution;
+    return { ok: true, userId, sessionId, token, expiresAt };
+  },
+
+  /** The sign-in methods of the signed-in person (Settings → Account): a password, a linked Google identity. */
+  async accountSignInMethods(userId: string, correlationId: string): Promise<AccountSignInMethods> {
+    return runAsPlatform('account', correlationId, async () => {
+      const user = await directory.findById(userId);
+      if (!user) throw new NotFoundError('User', userId);
+      const identities = await directory.identitiesOfUser(userId);
+      return {
+        hasPassword: Boolean(user.passwordHash),
+        hasGoogle: identities.some((i) => i.provider === 'google'),
+      };
+    });
+  },
+
+  /**
+   * Sets or changes the signed-in person's own password. Changing one needs the current password (VALIDATION_FAILED
+   * `currentPassword`: `required` or `incorrect`); setting a first one needs a session created within the last 15
+   * minutes (`session`: `recent_sign_in_required`); the new one must meet the policy (`newPassword`). Every other
+   * session of the person ends; the one that made the change stays. Recorded in auth_events (no tenant: a person's
+   * password is not a company's).
+   */
+  async setPassword(
+    principal: { userId: string; sessionId: string },
+    input: z.infer<typeof AccountSetPassword>,
+    origin: AuthOrigin,
+  ): Promise<{ ok: true }> {
+    const parsed = AccountSetPassword.parse(input);
+    const user = await runAsPlatform('account', origin.correlationId, () =>
+      directory.findById(principal.userId),
+    );
+    if (!user || user.status !== 'active') throw new NotFoundError('User', principal.userId);
+    if (!user.passwordHash) {
+      const session = await runAsPlatform('account', origin.correlationId, () =>
+        directory.sessionById(principal.sessionId),
+      );
+      if (!session || session.createdAt.getTime() < Date.now() - RECENT_SIGN_IN_MS)
+        throw new ValidationFailedError(
+          [{ path: 'session', issue: 'recent_sign_in_required' }],
+          'Sign in again to set a password',
+        );
+    } else {
+      if (!parsed.currentPassword)
+        throw new ValidationFailedError([{ path: 'currentPassword', issue: 'required' }]);
+      if (!(await verifyPassword(parsed.currentPassword, user.passwordHash)))
+        throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
+    }
+    const issue = passwordPolicyIssue(parsed.newPassword, user.email);
+    if (issue) throw new ValidationFailedError([{ path: 'newPassword', issue }]);
+    const passwordHash = await hashPassword(parsed.newPassword);
+    await runAsPlatform('account', origin.correlationId, () =>
+      withTransaction(async (tx) => {
+        const locked = await directory.lockUser(user.id, tx);
+        // Changed by another request since it was verified: this one must not overwrite it.
+        if (!locked || locked.passwordHash !== user.passwordHash)
+          throw new ConflictError('User', user.id, user.version);
+        await directory.setPasswordHash(user.id, { hash: passwordHash, origin: 'self' }, tx);
+        await directory.revokeOtherSessionsForUser(user.id, principal.sessionId, tx);
+        await directory.recordAuthEvent(
+          authEvent(origin, {
+            action: 'auth.password_set',
+            provider: PASSWORD_PROVIDER,
+            userId: user.id,
+            sessionId: principal.sessionId,
+          }),
+          tx,
+        );
+      }),
+    );
+    return { ok: true };
+  },
+
+  /**
+   * Removes the signed-in person's password, leaving Google as their sign-in method. It needs the current password
+   * (VALIDATION_FAILED `currentPassword`: `incorrect`), and is refused when no external identity is linked
+   * (`password`: `only_sign_in_method`): nobody can lock themselves out.
+   */
+  async removePassword(
+    principal: { userId: string; sessionId: string },
+    input: z.infer<typeof AccountRemovePassword>,
+    origin: AuthOrigin,
+  ): Promise<{ ok: true }> {
+    const parsed = AccountRemovePassword.parse(input);
+    const user = await runAsPlatform('account', origin.correlationId, () =>
+      directory.findById(principal.userId),
+    );
+    if (!user || user.status !== 'active') throw new NotFoundError('User', principal.userId);
+    // One scrypt whether or not there is a password, like sign-in.
+    if (!(await verifyPassword(parsed.currentPassword, user.passwordHash)))
+      throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
+    await runAsPlatform('account', origin.correlationId, () =>
+      withTransaction(async (tx) => {
+        const locked = await directory.lockUser(user.id, tx);
+        if (!locked || locked.passwordHash !== user.passwordHash)
+          throw new ConflictError('User', user.id, user.version);
+        if ((await directory.identitiesOfUser(locked.id, tx)).length === 0)
+          throw new ValidationFailedError([{ path: 'password', issue: 'only_sign_in_method' }]);
+        await directory.setPasswordHash(locked.id, null, tx);
+        await directory.recordAuthEvent(
+          authEvent(origin, {
+            action: 'auth.password_remove',
+            provider: PASSWORD_PROVIDER,
+            userId: locked.id,
+            sessionId: principal.sessionId,
+          }),
+          tx,
+        );
+      }),
+    );
+    return { ok: true };
   },
 
   /** A refused sign-in, on its own connection (nothing else of the attempt is written). */
@@ -601,6 +960,67 @@ export const accessService = {
       { membershipId: m.id, change: 'role' },
       tx,
     );
+  },
+
+  /**
+   * A one-time link for a member of this company to set a password (there is no mailer; the owner or admin hands it
+   * over). Owners and admins (membership.manage), people only; a link for an owner or admin only from an owner, and never for
+   * yourself (Settings → Account is the way, behind its own checks). Refused for a
+   * person who also belongs to another company: an admin here must never gain a way into that person's other
+   * companies (they set a password themselves in Settings). Only the SHA-256 of the token is stored; issuing expires
+   * the person's unused links. The URL carries the token in its fragment, so it never reaches a server log.
+   */
+  async issuePasswordSetup(
+    actor: ResolvedActor,
+    input: z.infer<typeof MemberIssuePasswordSetup>,
+    webOrigin: string | null,
+    tx: Tx,
+  ): Promise<PasswordSetupLink> {
+    const parsed = MemberIssuePasswordSetup.parse(input);
+    await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+    if (actor.kind !== 'user')
+      throw new PolicyDeniedError('agent_never', 'Only a person can issue a password setup link');
+    const m = await membershipsRepo.getById(parsed.membershipId, tx);
+    // Your own password is changed in Settings → Account, behind the current password or a recent sign-in; a link
+    // for yourself would bypass both (and a stolen session could use it to take the account over).
+    if (m.userId === actor.id)
+      throw new PolicyDeniedError(
+        'self_setup_link',
+        'Set your own password in Settings → Account, not with a setup link',
+      );
+    // A link lets its holder sign in as the member: for anyone who can manage members, only an owner issues one.
+    if (DEFAULT_ROLE_GRANTS['membership.manage'].includes(m.role) && actor.role !== 'owner')
+      throw new PolicyDeniedError(
+        'owner_required',
+        'Only an owner can issue a password setup link for an owner or admin',
+      );
+    if (m.status === 'disabled')
+      throw new ValidationFailedError([{ path: 'membershipId', issue: 'membership_disabled' }]);
+    const elsewhere = await runAsPlatform('password-setup', requireTenant().correlationId, async () =>
+      (await directory.allMembershipsOfUser(m.userId, tx)).some((x) => x.tenantId !== m.tenantId),
+    );
+    if (elsewhere)
+      throw new PolicyDeniedError(
+        'member_of_another_company',
+        'This person also belongs to another company; they can set a password themselves in Settings',
+      );
+    const now = new Date();
+    await passwordSetupRepo.expireUnusedForUser(m.userId, now, tx);
+    const { token, hash } = newOpaqueToken('pst');
+    const id = newId('passwordSetupToken');
+    const expiresAt = new Date(now.getTime() + PASSWORD_SETUP_TTL_MS);
+    await passwordSetupRepo.create(
+      { id, userId: m.userId, createdByUserId: actor.id, tokenHash: hash, expiresAt },
+      tx,
+    );
+    await audit.record(
+      { kind: actor.kind, id: actor.id },
+      'membership.password_setup_issue',
+      { type: 'membership', id: m.id },
+      'allowed',
+      tx,
+    );
+    return { url: `${webOrigin ?? ''}/set-password#token=${token}`, expiresAt: expiresAt.toISOString() };
   },
 
   async setBrandGrant(actor: ResolvedActor, input: z.infer<typeof BrandGrantSet>, tx: Tx) {

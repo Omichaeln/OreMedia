@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import {
   channelConnections,
   pendingChannelGrants,
@@ -31,8 +32,8 @@ import { composeModules } from './composition';
  */
 const PREVIOUS_HEAD = '0009_brand_classification';
 const NEW_TABLES: MySqlTable[] = [pendingChannelGrants];
-/** Added by later migrations (0011: migration-0011-roll-forward.integration.test.ts). */
-const LATER_TABLES: MySqlTable[] = [publicationRemoteChanges];
+/** Added by later migrations (0011 and 0013: their migration-*-roll-forward tests). */
+const LATER_TABLES: MySqlTable[] = [publicationRemoteChanges, passwordSetupTokens];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

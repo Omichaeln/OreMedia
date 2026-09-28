@@ -9,23 +9,40 @@ import express, {
 } from 'express';
 import * as oidc from 'openid-client';
 import {
+  PasswordPolicyIssue,
+  PasswordSetup,
+  PasswordSignIn,
   signInErrorCodeFor,
+  type PasswordAuthErrorCode,
+  type PasswordAuthResponse,
   type SignInErrorCode,
   type SignInRefusalReason,
 } from '@oremedia/contracts/access';
-import { PolicyDeniedError, RateLimitedError, toErrorEnvelope } from '@oremedia/contracts/errors';
+import {
+  PolicyDeniedError,
+  RateLimitedError,
+  ValidationFailedError,
+  toErrorEnvelope,
+} from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
-import { accessService, authenticate, type AuthOrigin } from '@oremedia/module-access';
+import {
+  PasswordHashingBusyError,
+  accessService,
+  authenticate,
+  type AuthOrigin,
+  type SignInResult,
+} from '@oremedia/module-access';
 import {
   cookieNames,
   createContext,
   firstHeader,
   parseCookies,
+  passwordAccountKey,
   requestOrigin,
   sessionCookies,
 } from '../context';
-import { consumeAuthRateLimit } from '../trpc';
-import type { AuthConfig } from './config';
+import { consumeAuthRateLimit, passwordAttempts } from '../trpc';
+import { parseAllowedDomains, type AuthConfig } from './config';
 import {
   FLOW_COOKIE,
   FLOW_COOKIE_PATH,
@@ -37,6 +54,7 @@ import {
 } from './flow';
 
 const PROVIDER = 'google';
+const PASSWORD_PROVIDER = 'password';
 
 /** Google publishes stable OAuth/OIDC endpoints; using them avoids provider discovery being blocked by Railway egress. */
 const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
@@ -100,6 +118,8 @@ async function googleDiscovery(config: AuthConfig): Promise<oidc.Configuration> 
 
 export interface AuthRouterOptions {
   config: AuthConfig | null;
+  /** WEB_ORIGIN: the only Origin the password routes accept when set (login CSRF); unset, the request's own host. */
+  webOrigin?: string | null;
   onError: (cause: unknown, stage: string) => void;
 }
 
@@ -134,9 +154,11 @@ function discoveryFor(config: AuthConfig): () => Promise<oidc.Configuration> {
  *   GET  /auth/google/start?returnTo=/path  → authorization code + PKCE (S256) + state + nonce → Google
  *   GET  /auth/google/callback              → validate, resolve the user (access module), mint a session
  *   POST /auth/sign-out                     → revoke the session (CSRF double-submit for cookie sessions)
+ *   POST /auth/password/sign-in             → email + password → the same session cookies, answered as JSON
+ *   POST /auth/password/setup               → a one-time setup link's token + a new password → signed in
  * These routes run before any tenant is selected: they create or end a session and never read tenant data.
  */
-export function createAuthRouter({ config, onError }: AuthRouterOptions): Router {
+export function createAuthRouter({ config, webOrigin = null, onError }: AuthRouterOptions): Router {
   const router = express.Router();
   const secure = config?.secureCookies ?? process.env['NODE_ENV'] === 'production';
   const names = cookieNames(secure);
@@ -153,11 +175,60 @@ export function createAuthRouter({ config, onError }: AuthRouterOptions): Router
   const toSignIn = (res: Response, code: SignInErrorCode) =>
     res.redirect(303, `/sign-in?error=${encodeURIComponent(code)}`);
   const originOf = (req: Request): AuthOrigin => requestOrigin(req.headers, req.ip);
-  /** An unexpected failure is still an audited sign-in outcome; recording it must not mask the redirect. */
-  const recordInternal = (origin: AuthOrigin) =>
-    accessService.recordSignInRefusal(PROVIDER, 'internal_error', origin).catch((err: unknown) => {
+  /** An unexpected failure is still an audited sign-in outcome; recording it must not mask the response. */
+  const recordInternal = (origin: AuthOrigin, provider = PROVIDER) =>
+    accessService.recordSignInRefusal(provider, 'internal_error', origin).catch((err: unknown) => {
       onError(err, 'audit');
     });
+  /** The same session and CSRF cookies whichever method signed the person in. */
+  const setSessionCookies = (res: Response, result: Extract<SignInResult, { ok: true }>) => {
+    const maxAge = Math.max(0, result.expiresAt.getTime() - Date.now());
+    res.cookie(names.session, result.token, { ...base, httpOnly: true, path: '/', maxAge });
+    res.cookie(names.csrf, randomBytes(32).toString('base64url'), { ...base, path: '/', maxAge });
+  };
+  /** The session this browser holds (rotation: it ends when a new one is minted), or null. */
+  const priorSession = async (req: Request) => {
+    const prior = await authenticate(
+      sessionCookies(parseCookies(firstHeader(req.headers['cookie']))).session,
+    ).catch(() => null);
+    return prior?.kind === 'user' ? { userId: prior.userId, sessionId: prior.sessionId } : null;
+  };
+  /** Google's Workspace allowlist applies to the email domain of a password sign-in too, with or without Google. */
+  const allowedDomains = config
+    ? config.allowedDomains
+    : parseAllowedDomains(process.env['AUTH_ALLOWED_DOMAINS']);
+  const answer = (res: Response, status: number, body: PasswordAuthResponse) => res.status(status).json(body);
+  /** Too many password hashes in flight: nothing was checked or written; the browser tries again shortly. */
+  const busy = (res: Response, err: PasswordHashingBusyError) => {
+    res.setHeader('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+    return answer(res, 503, { ok: false, error: 'busy' });
+  };
+
+  /**
+   * Login CSRF: a password route signs the browser in, so a page on another site must not be able to post to it
+   * (and sign the victim into an attacker's account). Browsers send Origin on every POST; it must be WEB_ORIGIN when
+   * that is configured, and otherwise this request's own host (development). A request without Origin is refused.
+   */
+  const sameOrigin = (req: Request, res: Response, next: NextFunction) => {
+    const origin = firstHeader(req.headers['origin']);
+    let allowed = false;
+    if (origin && webOrigin) allowed = origin === webOrigin;
+    else if (origin)
+      try {
+        allowed = new URL(origin).host === firstHeader(req.headers['host']);
+      } catch {
+        allowed = false;
+      }
+    if (allowed) return next();
+    answer(res, 403, { ok: false, error: 'origin_rejected' });
+  };
+  /**
+   * The JSON body of a password route. A body the parser rejects is answered here with the route's own error code,
+   * never passed on: the parser's message quotes the start of the body, which may be a password.
+   */
+  const jsonBody = express.json({ limit: '8kb' });
+  const passwordBody = (error: PasswordAuthErrorCode) => (req: Request, res: Response, next: NextFunction) =>
+    jsonBody(req, res, (err?: unknown) => (err ? answer(res, 400, { ok: false, error }) : next()));
 
   /**
    * Per client address (m3): over the limit the request is answered 429 with Retry-After and nothing is written
@@ -256,7 +327,7 @@ export function createAuthRouter({ config, onError }: AuthRouterOptions): Router
       if (!claims?.sub) return await refuse('token_invalid');
 
       // Rotation: the session this browser already held is ended in the same transaction that creates the new one.
-      const prior = await authenticate(sessionCookies(raw).session).catch(() => null);
+      const replaces = await priorSession(req);
       const result = await accessService.signInWithExternalIdentity(
         {
           provider: PROVIDER,
@@ -268,15 +339,13 @@ export function createAuthRouter({ config, onError }: AuthRouterOptions): Router
         },
         {
           allowedDomains: config.allowedDomains,
-          replaces: prior?.kind === 'user' ? { userId: prior.userId, sessionId: prior.sessionId } : null,
+          replaces,
         },
         origin,
       );
       if (!result.ok) return toSignIn(res, signInErrorCodeFor(result.reason));
 
-      const maxAge = Math.max(0, result.expiresAt.getTime() - Date.now());
-      res.cookie(names.session, result.token, { ...base, httpOnly: true, path: '/', maxAge });
-      res.cookie(names.csrf, randomBytes(32).toString('base64url'), { ...base, path: '/', maxAge });
+      setSessionCookies(res, result);
       return res.redirect(303, flow.returnTo);
     } catch (err) {
       onError(err, 'callback');
@@ -284,6 +353,78 @@ export function createAuthRouter({ config, onError }: AuthRouterOptions): Router
       return toSignIn(res, 'sign_in_failed');
     }
   });
+
+  router.post(
+    '/password/sign-in',
+    limited('auth.password.sign_in'),
+    sameOrigin,
+    passwordBody('invalid_credentials'),
+    async (req, res) => {
+      const origin = originOf(req);
+      const parsed = PasswordSignIn.safeParse(req.body);
+      if (!parsed.success) return answer(res, 400, { ok: false, error: 'invalid_credentials' });
+      const account = passwordAccountKey(parsed.data.email);
+      try {
+        // Per account, whoever asks, counted before the check: a locked account is not checked at all (no scrypt, no
+        // auth_events row), and concurrent guesses cannot all pass under the limit.
+        await passwordAttempts.consume(account);
+        const result = await accessService.signInWithPassword(
+          parsed.data,
+          { allowedDomains, replaces: await priorSession(req) },
+          origin,
+        );
+        if (!result.ok) {
+          // One answer for every refusal: the response never says whether the account exists or why it failed.
+          return answer(res, 401, { ok: false, error: 'invalid_credentials' });
+        }
+        await passwordAttempts.clear(account);
+        setSessionCookies(res, result);
+        return answer(res, 200, { ok: true });
+      } catch (err) {
+        if (err instanceof RateLimitedError) {
+          if (err.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+          return answer(res, 429, { ok: false, error: 'too_many_attempts' });
+        }
+        if (err instanceof PasswordHashingBusyError) return busy(res, err);
+        onError(err, 'password-sign-in');
+        await recordInternal(origin, PASSWORD_PROVIDER);
+        return answer(res, 500, { ok: false, error: 'sign_in_failed' });
+      }
+    },
+  );
+
+  router.post(
+    '/password/setup',
+    limited('auth.password.setup'),
+    sameOrigin,
+    passwordBody('link_invalid'),
+    async (req, res) => {
+      const origin = originOf(req);
+      const parsed = PasswordSetup.safeParse(req.body);
+      if (!parsed.success) return answer(res, 400, { ok: false, error: 'link_invalid' });
+      try {
+        const result = await accessService.redeemPasswordSetup(
+          parsed.data,
+          { allowedDomains, replaces: await priorSession(req) },
+          origin,
+        );
+        if (!result.ok) return answer(res, 400, { ok: false, error: 'link_invalid' });
+        setSessionCookies(res, result);
+        return answer(res, 200, { ok: true });
+      } catch (err) {
+        if (err instanceof ValidationFailedError) {
+          const issue = PasswordPolicyIssue.safeParse(
+            err.details?.find((d) => d.path === 'password')?.issue,
+          ).data;
+          return answer(res, 400, { ok: false, error: 'password_rejected', ...(issue ? { issue } : {}) });
+        }
+        if (err instanceof PasswordHashingBusyError) return busy(res, err);
+        onError(err, 'password-setup');
+        await recordInternal(origin, PASSWORD_PROVIDER);
+        return answer(res, 500, { ok: false, error: 'sign_in_failed' });
+      }
+    },
+  );
 
   router.post('/sign-out', limited('auth.sign_out'), async (req, res) => {
     try {

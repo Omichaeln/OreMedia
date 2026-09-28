@@ -1,8 +1,14 @@
+import {
+  PasswordAuthResponse,
+  type PasswordAuthErrorCode,
+  type PasswordSetup,
+  type PasswordSignIn,
+} from '@oremedia/contracts/access';
 import { readCookie } from './cookies';
 
 /**
  * How the app authenticates (spec 7.1, D-03, apps/api/src/context.ts and apps/api/src/auth):
- *  - a cookie session set by Google sign-in (`__Host-oremedia_session`, HttpOnly; unprefixed over http in
+ *  - a cookie session set by Google or password sign-in (`__Host-oremedia_session`, HttpOnly; unprefixed over http in
  *    development) plus the CSRF double-submit cookie (`__Host-oremedia_csrf`), both first-party because the web origin proxies /trpc and /auth to the API; or
  *  - development only: a bearer session token (`ses_…`) pasted on the sign-in screen, kept per tab
  *    (sessionStorage), never written to a cookie or localStorage. The e2e suites use it with their mock transport.
@@ -23,6 +29,39 @@ export const HEADER_CSRF = 'x-oremedia-csrf';
 export const googleSignInHref = (next: string): string =>
   `/auth/google/start?returnTo=${encodeURIComponent(next)}`;
 export const SIGN_OUT_PATH = '/auth/sign-out';
+export const PASSWORD_SIGN_IN_PATH = '/auth/password/sign-in';
+export const PASSWORD_SETUP_PATH = '/auth/password/setup';
+
+const failure = (error: PasswordAuthErrorCode): PasswordAuthResponse => ({ ok: false, error });
+
+/**
+ * Password sign-in and password setup (apps/api/src/auth/router.ts): a same-origin JSON POST that answers
+ * `{ ok: true }` with the session cookies set, or a typed error code. A 429 from the per-address limit is
+ * `too_many_attempts` too; anything unreadable is `sign_in_failed`. On success a pasted development token is dropped
+ * so the new cookie session is the one the app uses.
+ */
+export async function postPasswordAuth(
+  path: typeof PASSWORD_SIGN_IN_PATH | typeof PASSWORD_SETUP_PATH,
+  body: PasswordSignIn | PasswordSetup,
+  fetchImpl: typeof fetch = (input, init) => fetch(input, init),
+): Promise<PasswordAuthResponse> {
+  let res: Response;
+  try {
+    res = await fetchImpl(path, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return failure('sign_in_failed');
+  }
+  if (res.status === 429) return failure('too_many_attempts');
+  const parsed = PasswordAuthResponse.safeParse(await res.json().catch(() => null));
+  if (!parsed.success) return failure('sign_in_failed');
+  if (parsed.data.ok) clearBearerToken();
+  return parsed.data;
+}
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 

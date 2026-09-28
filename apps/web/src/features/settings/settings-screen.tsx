@@ -6,6 +6,7 @@ import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
 import { ChannelSettings } from '../publishing/channel-settings';
+import { AccountPassword } from '../session/account-password';
 import { useCompanies } from '../portfolio/use-companies';
 import { BrandType, KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
 import { Mandates, Members } from './members-mandates';
@@ -19,6 +20,7 @@ const TABS = [
   ['skills', 'Skills', false],
   ['members', 'Members', true],
   ['routing', 'Model routing', true],
+  ['account', 'Account', false],
 ] as const;
 type SettingsTab = (typeof TABS)[number][0];
 
@@ -91,7 +93,7 @@ function SkillsSettings() {
 /**
  * Spec 21.1 `settings/`: the brand's settings as tabs (the v3 prototype's arrangement), the tab in the URL. Owners and
  * admins also see the members, the kill switches (on Policy), mandate actions and model routing. Budgets have no
- * API to read, so they are not shown.
+ * API to read, so they are not shown. Account is the signed-in person's own (their password), whatever their role.
  */
 export function SettingsScreen() {
   const { companyName, companyId, brand } = useBrandContext();
@@ -147,6 +149,9 @@ export function SettingsScreen() {
             <ModelRouting />
           </TabPanel>
         )}
+        <TabPanel value="account">
+          <AccountPassword />
+        </TabPanel>
       </Tabs>
     </main>
   );

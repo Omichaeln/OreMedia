@@ -23,6 +23,12 @@ export const users = mysqlTable(
     status: mysqlEnum('status', ['active', 'disabled', 'deleted']).notNull().default('active'),
     mfaEnrolled: boolean('mfa_enrolled').notNull().default(false),
     passwordHash: varchar('password_hash', { length: 255 }),
+    /**
+     * Who chose the password: the person (`self`, Settings → Account) or whoever held a setup link an owner or admin
+     * issued (`setup_link`) until the person changes it. A `setup_link` password is confined to the issuing company:
+     * it is cleared when the person becomes an active member of a second company. Null without a password.
+     */
+    passwordOrigin: mysqlEnum('password_origin', ['self', 'setup_link']),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -222,6 +228,32 @@ export const authEvents = mysqlTable(
     createdAt: createdAt(),
   },
   (t) => [index('ix_auth_event_user').on(t.userId, t.createdAt), index('ix_auth_event_time').on(t.createdAt)],
+);
+
+/**
+ * A one-time link an owner or admin issues so a member can set a password (there is no mailer): single use, 72 hours,
+ * and only the SHA-256 of the token is stored. Issuing a new link for a user expires their unused ones (expires_at
+ * moves to the time of issue); redeeming sets used_at. The redemption runs before any tenant is selected, so it is
+ * read by token hash through the access module's platform directory, like an external reviewer link.
+ */
+export const passwordSetupTokens = mysqlTable(
+  'password_setup_tokens',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    userId: ref('user_id').notNull(),
+    createdByUserId: ref('created_by_user_id').notNull(),
+    tokenHash: hash('token_hash').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    usedAt: ts('used_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_password_setup_token').on(t.tokenHash),
+    index('ix_password_setup_user').on(t.tenantId, t.userId),
+    foreignKey({ columns: [t.tenantId], foreignColumns: [tenants.id], name: 'fk_password_setup_tenant' }),
+    foreignKey({ columns: [t.userId], foreignColumns: [users.id], name: 'fk_password_setup_user' }),
+  ],
 );
 
 export const externalReviewerLinks = mysqlTable(
