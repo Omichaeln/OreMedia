@@ -92,6 +92,24 @@ describe.skipIf(!enabled)('deployment brand packs (built app in Chromium, mock t
     await dark.context().close();
   });
 
+  it('a font host that never answers does not hold the pack: the tokens apply and the font is requested', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const fontRequests: string[] = [];
+    // Leave every font request pending, as a blocked or stalled font host would.
+    await context.route('https://fonts.googleapis.com/**', (route) => {
+      fontRequests.push(route.request().url());
+    });
+    const page = await context.newPage();
+    await page.goto(`${origins['ore-and-tar']}/sign-in`);
+    await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 });
+    await expect(page.title()).resolves.toBe('Ore & Tar');
+    await expect(token(page, '--primary')).resolves.toBe('oklch(0.25 0.05 260)');
+    expect(fontRequests).toEqual([
+      'https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap',
+    ]);
+    await context.close();
+  }, 45_000);
+
   it('the Ore & Tar legal pages name the controller, link to each other and pass the audit; the neutral pack has none', async () => {
     for (const colorScheme of ['light', 'dark'] as const) {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme });

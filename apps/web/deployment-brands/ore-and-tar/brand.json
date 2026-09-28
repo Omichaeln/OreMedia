@@ -1,5 +1,6 @@
 {
   "name": "Ore & Tar",
   "stylesheet": true,
+  "fonts": "https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap",
   "logo": { "light": "logo.svg", "dark": "logo-dark.svg" }
 }

@@ -3,8 +3,9 @@
  * It overrides the semantic tokens of packages/ui/src/tokens.css and nothing else. The doubled :root outranks the
  * neutral light and dark sets whichever stylesheet loads last. Every text pair meets WCAG 1.4.3 (4.5:1): the brand's
  * teal (#2a9d8f) reaches only 3.3:1 under white text, so the light accent is a deeper teal of the same hue.
+ * Lato comes from brand.json's `fonts` stylesheet, loaded beside this file and never awaited: an @import here would
+ * hold this stylesheet's load (and so the first render) until the font host answered.
  */
-@import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap');
 
 :root:root {
   --font-sans: 'Lato', Helvetica, Arial, sans-serif;
