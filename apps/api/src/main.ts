@@ -33,7 +33,7 @@ try {
 }
 // One line naming each degraded capability and the settings it lacks (names only); the api keeps serving, and /health
 // lists the capability names, unless OREMEDIA_CONFIG_STRICT=1 (docs/runbooks/deploy-railway.md).
-const config = reportConfiguration(log, apiCapabilities());
+const config = reportConfiguration(log, apiCapabilities(process.env));
 if (config.refuse) process.exit(2);
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 10) });
 composeModules();

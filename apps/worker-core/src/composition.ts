@@ -337,8 +337,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
  * report"): uploads (publishing copies media to release keys, deletion removes objects), every provider's app
  * credentials (publishing and token refresh) and the models (agents, generators).
  */
-export const workerCoreCapabilities = (): CapabilityCheck[] => [
+export const workerCoreCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   uploadsCapability,
-  ...channelCapabilities(),
+  ...channelCapabilities(env),
   modelsCapability,
 ];

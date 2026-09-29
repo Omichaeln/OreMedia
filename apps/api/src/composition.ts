@@ -266,8 +266,8 @@ export function composeModules(): void {
  * report"): the web origin, uploads (it signs upload and download URLs) and every provider's app credentials (it
  * connects channels).
  */
-export const apiCapabilities = (): CapabilityCheck[] => [
+export const apiCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   webOriginCapability,
   uploadsCapability,
-  ...channelCapabilities(),
+  ...channelCapabilities(env),
 ];

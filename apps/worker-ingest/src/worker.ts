@@ -33,7 +33,7 @@ try {
 }
 // One line naming each degraded capability and the settings it lacks (names only); the worker keeps running and its
 // /health lists the capability names, unless OREMEDIA_CONFIG_STRICT=1 (docs/runbooks/deploy-railway.md).
-const config = reportConfiguration(log, workerIngestCapabilities());
+const config = reportConfiguration(log, workerIngestCapabilities(process.env));
 if (config.refuse) process.exit(2);
 configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 5) });
 

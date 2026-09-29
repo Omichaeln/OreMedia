@@ -182,15 +182,32 @@ export const providerClientsFromEnv =
   };
 
 /**
+ * Production may intentionally deploy only a subset of registered adapters while platform review is pending.
+ * The default is fail-closed: every registered provider remains required unless its key is explicitly listed here.
+ */
+const disabledChannelKeys = (env: NodeJS.ProcessEnv): ReadonlySet<string> =>
+  new Set(
+    (env['OREMEDIA_DISABLED_CHANNELS'] ?? '')
+      .split(',')
+      .map((key) => key.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+/**
  * Configuration report capabilities `channel:<providerKey>`, one per registered provider: the app credentials
  * providerClientsFromEnv reads. Every process that connects channels, refreshes their tokens or pulls from them
  * (api, worker-core, worker-ingest) needs both names, or that provider's work fails there.
  */
-export const channelCapabilities = (): CapabilityCheck[] =>
-  providerRegistry.list().map(({ key }) => ({
-    capability: `channel:${key}`,
-    missing: (env) => Object.values(providerClientSettings(key)).filter((name) => !env[name]),
-  }));
+export const channelCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => {
+  const disabled = disabledChannelKeys(env);
+  return providerRegistry
+    .list()
+    .filter(({ key }) => !disabled.has(key))
+    .map(({ key }) => ({
+      capability: `channel:${key}`,
+      missing: (checkEnv) => Object.values(providerClientSettings(key)).filter((name) => !checkEnv[name]),
+    }));
+};
 
 /** Brand ids named in inputs are verified through the brand module (spec 4.2), as the skills module does. */
 export interface BrandChecker {

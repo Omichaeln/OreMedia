@@ -66,4 +66,7 @@ export function composeCredentialBroker(env: NodeJS.ProcessEnv = process.env): v
  * report"): every provider's app credentials (token refresh, metrics and comment pulls) and the models (the voice
  * classifier runs on ingested comments).
  */
-export const workerIngestCapabilities = (): CapabilityCheck[] => [...channelCapabilities(), modelsCapability];
+export const workerIngestCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
+  ...channelCapabilities(env),
+  modelsCapability,
+];

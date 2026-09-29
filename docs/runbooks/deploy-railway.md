@@ -183,12 +183,12 @@ Every Node service checks, at start, the settings each of its **capabilities** n
 reads them uses (so the report and the code cannot disagree). A missing setting does **not** stop the service:
 production keeps running with that capability degraded, and the gap is reported.
 
-| Capability      | Settings it needs (names only)                                                                                                                                                   | Checked on                      |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY` | api, worker-core, worker-render |
-| `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`)                      | api, worker-core, worker-ingest |
-| `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                    | worker-core, worker-ingest      |
-| `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                     | api                             |
+| Capability      | Settings it needs (names only)                                                                                                                                                                                                                                            | Checked on                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`                                                                                          | api, worker-core, worker-render |
+| `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`), unless the provider key is explicitly listed in comma-separated `OREMEDIA_DISABLED_CHANNELS` on that service | api, worker-core, worker-ingest |
+| `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                                                                                                             | worker-core, worker-ingest      |
+| `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                                                                                                              | api                             |
 
 - `uploads` on the api signs upload and download URLs; on worker-core it copies media for publishing and deletes
   objects; on worker-render it ingests uploads and writes renders. `channel:<key>` on the api connects channels; on
@@ -211,6 +211,11 @@ production keeps running with that capability degraded, and the gap is reported.
   same line says `refusing to start` and the process exits 2 (the deploy's health check then fails). Only the exact
   value `1` turns it on. Turn it on per service once that service's report is clean, so a later deploy that loses a
   variable fails instead of running degraded.
+- **Intentionally unsupported channels.** `OREMEDIA_DISABLED_CHANNELS` is an explicit deployment policy for a
+  provider that is registered in the product but not part of the current production rollout (for example, `x` while
+  its app credentials and certification are unavailable). It defaults to empty, so omitting the variable does not hide
+  a missing provider configuration. Set it only on the api, worker-core and worker-ingest services, and remove the key
+  before enabling that channel; this does not certify or connect the provider.
 
 ## 2. Deploy
 

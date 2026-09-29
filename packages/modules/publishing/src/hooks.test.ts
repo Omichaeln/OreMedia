@@ -23,4 +23,11 @@ describe('channel capabilities (startup configuration report)', () => {
     expect(providerClientsFromEnv(env)(key)).toEqual({ clientId: 'id-value', clientSecret: 'secret-value' });
     expect(() => providerClientsFromEnv({ [names.clientId]: 'id-value' })(key)).toThrow(names.clientSecret);
   });
+
+  it('omits only explicitly disabled channels and keeps all others required', () => {
+    const configured = channelCapabilities({ OREMEDIA_DISABLED_CHANNELS: ' x, ' });
+    expect(configured.map((c) => c.capability)).not.toContain('channel:x');
+    expect(configured.map((c) => c.capability)).toContain('channel:facebook_page');
+    expect(channelCapabilities().map((c) => c.capability)).toContain('channel:x');
+  });
 });

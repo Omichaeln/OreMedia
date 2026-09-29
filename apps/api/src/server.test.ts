@@ -51,7 +51,7 @@ describe('/health and the startup configuration report', () => {
       PROVIDER_X_CLIENT_ID_REF: 'client-id-value',
       PROVIDER_X_SECRET_REF: 'client-secret-value',
     };
-    const report = evaluateConfiguration(apiCapabilities(), env);
+    const report = evaluateConfiguration(apiCapabilities(env), env);
     expect(report.degraded).toContain('uploads');
     expect(report.degraded).not.toContain('web_origin');
     expect(report.degraded).not.toContain('channel:x');
