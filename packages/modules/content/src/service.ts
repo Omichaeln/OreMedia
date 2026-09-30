@@ -501,16 +501,26 @@ async function toVariantDto(
 }
 export type ChannelVariantDto = Awaited<ReturnType<typeof toVariantDto>>;
 
-/** The capability findings for a variant as it is about to be written (generate and update store the result). */
+/**
+ * The capability findings for a variant as it is about to be written (generate and update store the result). A
+ * channel that no longer resolves (disconnected, removed) is a finding, not a failed write: the variant stays
+ * editable so its media can be moved, and dispatch holds it on channel_active anyway (spec 13.4).
+ */
 async function validationFor(
   v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes'>,
   contentPackageId: string,
   tx?: Tx,
 ): Promise<ValidationResult> {
-  return variantValidator(
-    { ...v, contentPackageId, exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx) },
-    tx,
-  );
+  try {
+    return await variantValidator(
+      { ...v, contentPackageId, exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx) },
+      tx,
+    );
+  } catch (err) {
+    if (err instanceof NotFoundError)
+      return { ok: false, issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }] };
+    throw err;
+  }
 }
 
 /** Inserts revision n and points the package at it; shared by create (n = 1) and revise (n = current + 1). */
@@ -888,7 +898,7 @@ export const contentService = {
     /**
      * The packages whose current revision pins any revision of the document, newest first (spec 8.3): what a
      * studio document can be sent for review through. Bounded like listReferencingCreativeDocument (the 200 most
-     * recent live revisions of the brand), so the page is the whole set and carries no cursor.
+     * recent live revisions of the brand), then the matching packages and their variants in one query each.
      */
     async listForDocument(
       actor: ResolvedActor,
@@ -906,21 +916,37 @@ export const contentService = {
         ['draft', 'changes_requested', 'in_review', 'approved'],
         tx,
       );
-      const items = [];
-      for (const r of live) {
+      const pinning = live.flatMap((r) => {
         const pinnedRevisionId = r.creativeRevisionIds.find((id) => revisionIds.has(id));
-        if (!pinnedRevisionId) continue;
-        const pkg = await packagesRepo.getById(r.packageId, tx);
-        if (pkg.currentRevisionId !== r.id) continue;
-        items.push({
-          package: toPackageDto(pkg),
-          revision: toRevisionSummary(r),
-          pinnedRevisionId,
-          stale: doc.currentRevisionId !== pinnedRevisionId,
-          variantCount: (await variantsRepo.listForRevision(brand.id, r.id, tx)).length,
-        });
-      }
-      return { items: items.slice(0, parsed.page.limit), nextCursor: null };
+        return pinnedRevisionId ? [{ revision: r, pinnedRevisionId }] : [];
+      });
+      const packages = new Map(
+        (
+          await packagesRepo.listByIds(brand.id, [...new Set(pinning.map((p) => p.revision.packageId))], tx)
+        ).map((p) => [p.id, p]),
+      );
+      const variantCounts = new Map<string, number>();
+      for (const v of await variantsRepo.listForRevisions(
+        brand.id,
+        pinning.map((p) => p.revision.id),
+        tx,
+      ))
+        variantCounts.set(v.contentRevisionId, (variantCounts.get(v.contentRevisionId) ?? 0) + 1);
+      return {
+        items: pinning.flatMap(({ revision, pinnedRevisionId }) => {
+          const pkg = packages.get(revision.packageId);
+          if (!pkg || pkg.currentRevisionId !== revision.id) return []; // only the current revision counts
+          return [
+            {
+              package: toPackageDto(pkg),
+              revision: toRevisionSummary(revision),
+              pinnedRevisionId,
+              stale: doc.currentRevisionId !== pinnedRevisionId,
+              variantCount: variantCounts.get(revision.id) ?? 0,
+            },
+          ];
+        }),
+      };
     },
 
     /** The package, its current revision with variants, and its revision history (newest first, without copy). */

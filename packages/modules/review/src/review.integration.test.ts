@@ -1177,6 +1177,19 @@ describe('review module (spec 13) against MySQL 8', () => {
           .update(renderedExports)
           .set({ contentHash: 'a'.repeat(64) })
           .where(eq(renderedExports.id, exportIds[0]!));
+        // A frozen export that no longer exists is one unverified item, not a NOT_FOUND for the whole manifest.
+        const [exportRow] = await tdb.db
+          .select()
+          .from(renderedExports)
+          .where(eq(renderedExports.id, exportIds[0]!));
+        await tdb.db.delete(renderedExports).where(eq(renderedExports.id, exportIds[0]!));
+        const gone = await runA(() =>
+          reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id }),
+        );
+        expect(gone.items).toEqual([
+          expect.objectContaining({ exportId: exportIds[0], verified: false, url: null, mime: null }),
+        ]);
+        await tdb.db.insert(renderedExports).values(exportRow!);
       } finally {
         resetReviewMediaSigner();
       }

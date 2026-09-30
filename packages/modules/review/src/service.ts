@@ -487,9 +487,10 @@ export const reviewService = {
             channelConnectionIds: [e.channelConnectionId],
           });
       }
+      // A frozen export that no longer exists is reported unverified, never a 404 for the whole manifest.
       const exports = new Map(
         (
-          await creativeService.renders.exportsByIds(
+          await creativeService.renders.findByIds(
             request.brandId,
             frozen.map((e) => e.exportId),
             tx,

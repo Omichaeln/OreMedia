@@ -697,6 +697,15 @@ export const assetService = {
     return { grantId: id };
   },
 
+  /**
+   * A 5-minute signed GET for a storage key another module has already authorised (the review module's frozen
+   * exports, spec 13.3); the caller, not this method, decides who may read it.
+   */
+  async signStorageKey(storageKey: string) {
+    const signed = await storage().signDownloadUrl(storageKey, { expiresInSec: SIGNED_URL_TTL_SEC });
+    return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
+  },
+
   /** Spec 9.3: the media endpoint re-checks authorisation and returns a 5-minute signed GET. */
   async signedUrl(actor: ResolvedActor, input: z.infer<typeof MediaSignedUrlRequest>, tx?: Tx) {
     const parsed = MediaSignedUrlRequest.parse(input);

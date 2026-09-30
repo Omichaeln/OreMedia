@@ -2723,21 +2723,9 @@
                 "properties": {
                   "documentId": {
                     "type": "string"
-                  },
-                  "page": {
-                    "type": "object",
-                    "properties": {
-                      "cursor": {
-                        "type": "string"
-                      },
-                      "limit": {
-                        "type": "number"
-                      }
-                    },
-                    "required": []
                   }
                 },
-                "required": ["documentId", "page"]
+                "required": ["documentId"]
               }
             }
           }
@@ -10598,21 +10586,9 @@
           "properties": {
             "documentId": {
               "type": "string"
-            },
-            "page": {
-              "type": "object",
-              "properties": {
-                "cursor": {
-                  "type": "string"
-                },
-                "limit": {
-                  "type": "number"
-                }
-              },
-              "required": []
             }
           },
-          "required": ["documentId", "page"]
+          "required": ["documentId"]
         }
       },
       "content.packages.revise": {

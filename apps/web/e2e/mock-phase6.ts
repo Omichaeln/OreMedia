@@ -1516,7 +1516,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
             variantCount: [...p5.variants.values()].filter((v) => v.contentRevisionId === revision.id).length,
           });
         }
-        return { items: items.slice(0, input.page.limit), nextCursor: null };
+        return { items };
       }),
       get: query.input(ContentPackageGet).query(({ input }) => {
         const pkg = b.pkg(input.contentPackageId);

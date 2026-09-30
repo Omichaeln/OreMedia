@@ -403,7 +403,7 @@ export function PackageDetail({
                     variant={v}
                     channel={channels.get(v.channelConnectionId)}
                     documents={p.creativeDocuments}
-                    editable={p.revision.state === 'draft'}
+                    editable={p.revision.state === 'draft' || p.revision.state === 'changes_requested'}
                     schedulable={p.revision.state === 'approved'}
                   />
                 ))}

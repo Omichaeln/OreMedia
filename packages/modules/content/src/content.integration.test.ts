@@ -648,6 +648,28 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ),
       );
       expect(shortened.validation).toEqual({ ok: true, issues: [] });
+      // A channel the validator cannot resolve is a finding on the variant, not a refused edit.
+      registerVariantValidator(async () => {
+        throw new NotFoundError('ChannelConnection', channelA);
+      });
+      const unresolved = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 3,
+            text: 'Twenty percent off',
+            altTexts: ['Offer'],
+            settings: {},
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(unresolved.validation).toEqual({
+        ok: false,
+        issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }],
+      });
       resetVariantValidator();
       await expect(
         run(tenantA, (tx) =>
@@ -665,7 +687,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           ),
         ),
       ).rejects.toBeInstanceOf(ConflictError);
-      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(3);
+      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(4);
     });
 
     it('moves the revision only through the machine and guards variant edits by revision state (spec 5.5 step 5)', async () => {
@@ -858,10 +880,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
 
     it('lists the live packages whose current revision pins a document, with the pin and variant count; a foreign document is NOT_FOUND', async () => {
       const pkg = await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId }));
-      const res = await run(tenantA, () =>
-        contentService.packages.listForDocument(A, { documentId: docId, page: { limit: 50 } }),
-      );
-      expect(res.nextCursor).toBeNull();
+      const res = await run(tenantA, () => contentService.packages.listForDocument(A, { documentId: docId }));
       const mine = res.items.find((i) => i.package.id === packageId);
       expect(mine).toMatchObject({
         revision: { id: pkg.revision.id, state: pkg.revision.state },
@@ -872,9 +891,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       // Only the current revision counts: the superseded revisions that also pinned the document are not listed.
       expect(res.items.filter((i) => i.package.id === packageId)).toHaveLength(1);
       await expect(
-        run(tenantB, () =>
-          contentService.packages.listForDocument(B, { documentId: docId, page: { limit: 50 } }),
-        ),
+        run(tenantB, () => contentService.packages.listForDocument(B, { documentId: docId })),
       ).rejects.toBeInstanceOf(NotFoundError);
     });
 

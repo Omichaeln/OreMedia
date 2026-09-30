@@ -13,8 +13,7 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
-import { SIGNED_URL_TTL_SEC } from '@oremedia/contracts/assets';
-import { assetService, storage, uploadsCapability } from '@oremedia/module-assets';
+import { assetService, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
@@ -172,10 +171,7 @@ export function composeModules(): void {
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   // Spec 13.3: the review inbox and portal show the frozen files; the assets module's storage signs the GETs.
-  registerReviewMediaSigner(async (storageKey) => {
-    const signed = await storage().signDownloadUrl(storageKey, { expiresInSec: SIGNED_URL_TTL_SEC });
-    return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
-  });
+  registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).

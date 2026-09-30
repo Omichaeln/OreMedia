@@ -83,5 +83,5 @@ export type PackageForDocumentDto = inferOutput<
 /** The live packages whose current revision pins a studio document (UX-01); the server bounds the set, no cursor. */
 export function usePackagesForDocument(documentId: string) {
   const trpc = useTRPC();
-  return useQuery(trpc.content.packages.listForDocument.queryOptions({ documentId, page: { limit: 50 } }));
+  return useQuery(trpc.content.packages.listForDocument.queryOptions({ documentId }));
 }

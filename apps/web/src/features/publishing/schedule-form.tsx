@@ -59,6 +59,7 @@ export function ScheduleForm({
   const [at, setAt] = useState(() =>
     isoToZonedInput(new Date(Date.now() + 60 * 60_000).toISOString(), timeZone),
   );
+  const [atTouched, setAtTouched] = useState(false);
   const [authority, setAuthority] = useState<PublicationAuthorityT>('approval');
   const [authorityId, setAuthorityId] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -104,9 +105,9 @@ export function ScheduleForm({
   const options = authority === 'approval' ? approvalOptions : mandateOptions;
   const chooseAuthority = (id: string) => {
     setAuthorityId(id);
-    // The approval froze the timing the release policy will hold against; start from it.
+    // The approval froze the timing the release policy will hold against; start from it unless a time was typed.
     const approval = approvals.data?.items.find((a) => a.id === id);
-    if (approval) setAt(isoToZonedInput(timingStart(approval.binding.timing), timeZone));
+    if (approval && !atTouched) setAt(isoToZonedInput(timingStart(approval.binding.timing), timeZone));
   };
 
   const submit = (e: FormEvent) => {
@@ -256,7 +257,10 @@ export function ScheduleForm({
                   id="schedule-at"
                   type="datetime-local"
                   value={at}
-                  onChange={(e) => setAt(e.target.value)}
+                  onChange={(e) => {
+                    setAt(e.target.value);
+                    setAtTouched(true);
+                  }}
                   required
                 />
               </Field>

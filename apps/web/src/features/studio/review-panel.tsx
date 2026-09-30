@@ -140,7 +140,9 @@ export function ReviewPanel({
           <ul className="flex flex-col gap-3" aria-label="Packages publishing this document">
             {packages.data.items.map((item) => {
               const chip = revisionChip(item.revision.state);
-              const staleHead = item.pinnedRevisionId !== headRevisionId;
+              // The server's staleness is against the document's saved head; the local head can be newer for a
+              // moment after a save, until the list refetches, so either signal blocks the request.
+              const staleHead = item.stale || item.pinnedRevisionId !== headRevisionId;
               return (
                 <li
                   key={item.package.id}

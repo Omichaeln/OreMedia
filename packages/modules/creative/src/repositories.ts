@@ -164,7 +164,7 @@ export class RenderedExportRepository extends BrandScopedRepository<typeof rende
       .from(renderedExports)
       .where(this.brandScope(brandId, inArray(renderedExports.revisionId, revisionIds.slice(0, ID_LIST_MAX))))
       .orderBy(asc(renderedExports.id))
-      .limit(ID_LIST_MAX);
+      .limit(ID_LIST_MAX * Math.min(revisionIds.length, ID_LIST_MAX));
   }
 }
 

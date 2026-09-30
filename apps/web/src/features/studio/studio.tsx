@@ -184,6 +184,8 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
         </div>
       </header>
 
+      {/* Above the canvas rather than a right-sidebar tab: it holds a form and a package list that need the width,
+          and it is a hand-off out of the studio, not a view of the document like the sidebar tabs. */}
       {reviewOpen && (
         <div id="studio-review" className="px-3 pt-2">
           <ReviewPanel

@@ -56,6 +56,7 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
   const options = documents.flatMap((d) => d.exports.map((e) => ({ document: d, export: e })));
   const toggle = (id: string) =>
     setExportIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  const parsedSettings = parseSettings(settings);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const parsed = parsedSettings;
@@ -77,7 +78,6 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
     });
   };
   const ui = update.isError ? toUiError(update.error) : null;
-  const parsedSettings = parseSettings(settings);
   const unchanged =
     text === variant.text &&
     altTexts === variant.altTexts.join('\n') &&
