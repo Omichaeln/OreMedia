@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "pnpm build:renderer",
     "build:renderer": "tsup --config tsup.renderer.config.ts"
   },
   "dependencies": {
