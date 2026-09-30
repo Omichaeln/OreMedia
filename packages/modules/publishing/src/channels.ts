@@ -11,6 +11,7 @@ import {
   ChannelDisconnect,
   ChannelList,
   type ChannelConnectChoice,
+  type ChannelVariantForPublishing,
 } from '@oremedia/contracts/publishing';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
@@ -589,11 +590,18 @@ export const channelService = {
     override: { text?: string } = {},
   ): Promise<ValidationResult> {
     const variant = await variants.get(variantId, tx);
+    return channelService.validateVariantDraft({ ...variant, text: override.text ?? variant.text }, tx);
+  },
+  /**
+   * The same check on a variant that is not (yet) stored: the content module registers this as its variant
+   * validator, so a generated or edited variant carries the capability findings it will be released against.
+   */
+  async validateVariantDraft(variant: ChannelVariantForPublishing, tx?: Tx): Promise<ValidationResult> {
     const connection = await connectionsRepo.getById(variant.channelConnectionId, tx);
     const adapter = adapterFor(connection.providerKey);
     const media = await publishMedia.describeForVariant(variant, tx); // dimensions only: nothing is minted
     const input: ChannelVariantInput = {
-      text: override.text ?? variant.text,
+      text: variant.text,
       altTexts: variant.altTexts,
       media: media.map((m) => ({ mime: m.mime, width: m.width, height: m.height, bytes: m.bytes })),
       settings: variant.settings,

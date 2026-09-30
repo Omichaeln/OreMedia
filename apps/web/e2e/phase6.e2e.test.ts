@@ -444,6 +444,31 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     );
   }, 45_000);
 
+  it('editing a variant re-runs the capability check and stores the media selection (spec 14.1)', async () => {
+    const detail = page.getByTestId('package-detail');
+    await expect.poll(() => text('revision-state'), { timeout: 15_000 }).toContain('Draft');
+    await detail.getByLabel(/Acme X \(x\)/).check();
+    await detail.getByRole('button', { name: 'Generate variants' }).click();
+    await expect.poll(() => detail.getByTestId('variant').count(), { timeout: 15_000 }).toBe(1);
+    const variant = detail.getByTestId('variant');
+    expect(await variant.getAttribute('data-variant-valid')).toBe('false'); // 50 characters over X's 30
+    await variant.getByRole('button', { name: /^Edit Acme X/ }).click();
+    const editor = detail.getByTestId('variant-editor');
+    await expect.poll(() => editor.count(), { timeout: 15_000 }).toBe(1);
+    await editor.getByLabel('Caption').fill('Workshop dates for October.');
+    await editor.getByLabel(/Launch poster · square_1080/).check();
+    await editor.getByLabel('Alt texts').fill('Launch poster');
+    await editor.getByRole('button', { name: 'Save variant' }).click();
+    await expect.poll(() => requestsTo('content.variants.update').length, { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(() => detail.locator('[data-testid="variant"][data-variant-valid="true"]').count(), {
+        timeout: 15_000,
+      })
+      .toBe(1);
+    expect(await variant.textContent()).toContain('1 media item · 1 alt text');
+    expect(await count('variant-editor')).toBe(0);
+  }, 45_000);
+
   // ---- brand settings: channels (spec 14.7) ----
 
   it('channels show their status as text, with reconnect for an expired token', async () => {

@@ -8,6 +8,7 @@ import {
   CampaignGet,
   CampaignList,
   ChannelVariantGenerate,
+  ChannelVariantUpdate,
   ContentPackageCreate,
   ContentPackageGet,
   ContentPackageList,
@@ -443,6 +444,24 @@ export class Phase6Backend {
 
   /** The studio document a package may pin (mock-api's store); null when the id is not a document. */
   documentOf: (documentId: string) => { title: string; currentRevisionId: string } | null = () => null;
+  /** The ready exports of a pinned creative revision (mock-api's render store); one square export by default. */
+  exportsOf: (revisionId: string) => Array<{
+    exportId: string;
+    pageId: string;
+    formatKey: string;
+    mime: string;
+    width: number;
+    height: number;
+  }> = (revisionId) => [
+    {
+      exportId: `exp_${revisionId}`,
+      pageId: 'page_1',
+      formatKey: 'square_1080',
+      mime: 'image/png',
+      width: 1080,
+      height: 1080,
+    },
+  ];
   /** Creative revision id → the document it belongs to, for the revisions packages pinned here. */
   readonly creativeRevisionDocs = new Map<string, string>();
 
@@ -469,6 +488,7 @@ export class Phase6Backend {
         pinnedRevisionId,
         currentRevisionId,
         stale: currentRevisionId !== pinnedRevisionId,
+        exports: this.exportsOf(pinnedRevisionId),
       });
     }
     return out;
@@ -1645,6 +1665,47 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         out.push(variant);
       }
       return { contentRevisionId: revision.id, created, variants: out };
+    }),
+    /** Caption, alt texts, settings and media, re-checked against the channel's limit; only pinned exports are allowed. */
+    update: mutation.input(ChannelVariantUpdate).mutation(({ input }) => {
+      const variant = p5.variants.get(input.channelVariantId);
+      if (!variant) throw new NotFoundError('ChannelVariant', input.channelVariantId);
+      if (variant.version !== input.expectedVersion)
+        throw new ConflictError('ChannelVariant', variant.id, input.expectedVersion);
+      const revision = p5.revisions.get(variant.contentRevisionId);
+      if (!revision) throw new NotFoundError('ContentRevision', variant.contentRevisionId);
+      if (revision.state !== 'draft')
+        throw new ValidationFailedError([{ path: 'channelVariantId', issue: 'revision_not_editable' }]);
+      const allowed = new Set(
+        b.creativeDocumentsOf(revision.creativeRevisionIds).flatMap((d) => d.exports.map((e) => e.exportId)),
+      );
+      const details = input.exportIds.flatMap((id, i) =>
+        allowed.has(id) ? [] : [{ path: `exportIds.${i}`, issue: 'export_not_in_revision' }],
+      );
+      if (details.length) throw new ValidationFailedError(details);
+      const limit = P6.captionLimits[variant.channelConnectionId];
+      const tooLong = limit !== undefined && input.text.length > limit;
+      Object.assign(variant, {
+        text: input.text,
+        altTexts: input.altTexts,
+        settings: input.settings,
+        exportIds: [...new Set(input.exportIds)],
+        exportHashes: [...new Set(input.exportIds)].map((id) => hash(id)),
+        validation: tooLong
+          ? {
+              ok: false,
+              issues: [
+                {
+                  path: 'text',
+                  issue: `caption is ${input.text.length} characters; the channel allows ${limit}`,
+                },
+              ],
+            }
+          : { ok: true, issues: [] },
+        updatedAt: now(),
+        version: variant.version + 1,
+      });
+      return variant;
     }),
   } satisfies Phase5Extensions['variants'];
 

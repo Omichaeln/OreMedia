@@ -11,6 +11,7 @@ import { CHANNEL_CHIP, isoToLocalInput, localInputToIso } from '../publishing/pu
 import type { ChannelDto } from '../publishing/use-publishing';
 import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
 import { DocumentPicker } from './document-picker';
+import { VariantEditor } from './variant-editor';
 import { usePackage, type PackageDocumentDto, type PackageDto, type PackageVariantDto } from './use-content';
 
 export interface PackageDetailProps {
@@ -61,9 +62,22 @@ function PackageDocuments({
   );
 }
 
-function VariantRow({ variant, channel }: { variant: PackageVariantDto; channel: ChannelDto | undefined }) {
+function VariantRow({
+  variant,
+  channel,
+  documents,
+  editable,
+}: {
+  variant: PackageVariantDto;
+  channel: ChannelDto | undefined;
+  documents: readonly PackageDocumentDto[];
+  /** Only a draft revision's variants are edited (spec 5.5 step 5); the server guards the same. */
+  editable: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
   const findings = variantFindings(variant.validation);
   const status = channel ? CHANNEL_CHIP[channel.status] : null;
+  const label = channel ? `${channel.displayName} (${channel.providerKey})` : variant.channelConnectionId;
   return (
     <li
       className="flex flex-col gap-1 py-2"
@@ -71,14 +85,32 @@ function VariantRow({ variant, channel }: { variant: PackageVariantDto; channel:
       data-variant-valid={findings.ok ? 'true' : 'false'}
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-medium">
-          {channel ? `${channel.displayName} (${channel.providerKey})` : variant.channelConnectionId}
-        </span>
+        <span className="font-medium">{label}</span>
         {status && status.needsAction && <Badge tone={status.tone}>{status.label}</Badge>}
         <Badge tone={findings.ok ? 'good' : 'critical'}>{findings.ok ? 'Valid' : 'Invalid'}</Badge>
         <code className="text-xs text-muted-foreground">{variant.id}</code>
+        {editable && !editing && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(true)}>
+            Edit {label}
+          </Button>
+        )}
       </div>
-      <p className="whitespace-pre-wrap break-words text-sm">{variant.text}</p>
+      {editing ? (
+        <VariantEditor
+          key={variant.version}
+          variant={variant}
+          documents={documents}
+          onDone={() => setEditing(false)}
+        />
+      ) : (
+        <>
+          <p className="whitespace-pre-wrap break-words text-sm">{variant.text}</p>
+          <p className="text-xs text-muted-foreground">
+            {variant.exportIds.length} media item{variant.exportIds.length === 1 ? '' : 's'} ·{' '}
+            {variant.altTexts.length} alt text{variant.altTexts.length === 1 ? '' : 's'}
+          </p>
+        </>
+      )}
       {!findings.ok && (
         <ul
           className="list-disc pl-5 text-xs"
@@ -436,7 +468,13 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
             ) : (
               <ul className="divide-y divide-border" aria-label="Channel variants">
                 {p.variants.map((v) => (
-                  <VariantRow key={v.id} variant={v} channel={channels.get(v.channelConnectionId)} />
+                  <VariantRow
+                    key={v.id}
+                    variant={v}
+                    channel={channels.get(v.channelConnectionId)}
+                    documents={p.creativeDocuments}
+                    editable={p.revision.state === 'draft'}
+                  />
                 ))}
               </ul>
             )}

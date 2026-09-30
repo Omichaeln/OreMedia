@@ -32,6 +32,7 @@ import {
   registerChannelResolver,
   registerLinkTracker,
   registerRevisionChangeListener,
+  registerVariantValidator,
   contentService,
   contentToolSource,
 } from '@oremedia/module-content';
@@ -167,6 +168,7 @@ export function composeModules(): void {
       ),
   });
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
+  registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).

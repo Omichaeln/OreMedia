@@ -22,6 +22,7 @@ import {
 } from '@oremedia/contracts/content';
 import { NotFoundError, ValidationFailedError, type ErrorDetail } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
+import type { ValidationResult } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
@@ -88,6 +89,21 @@ export const registerChannelResolver = (fn: ChannelResolver): void => {
 /** Test seam: back to the loud default. */
 export const resetChannelResolver = (): void => {
   channelResolver = unregisteredChannelResolver;
+};
+
+/**
+ * Spec 13.4: a variant's `validation` is the channel capability check on what it will publish (text, alt texts,
+ * media dimensions, settings). The publishing module registers the check; until it does, nothing is flagged.
+ */
+export type VariantValidator = (variant: ChannelVariantForPublishing, tx?: Tx) => Promise<ValidationResult>;
+const unregisteredVariantValidator: VariantValidator = async () => ({ ok: true, issues: [] });
+let variantValidator: VariantValidator = unregisteredVariantValidator;
+export const registerVariantValidator = (fn: VariantValidator): void => {
+  variantValidator = fn;
+};
+/** Test seam: back to the default that flags nothing. */
+export const resetVariantValidator = (): void => {
+  variantValidator = unregisteredVariantValidator;
 };
 
 /** calendar.range reads publications through the publishing module; until it registers, the calendar shows packages only. */
@@ -296,8 +312,17 @@ async function pinCreativeRevisions(
  * revisions, never documents): the client never has to remember which studio document a package came from. `stale`
  * means the document has moved on since the pin, so a revise re-pins its current revision.
  */
+interface ExportSummary {
+  exportId: string;
+  pageId: string;
+  formatKey: string;
+  mime: string;
+  width: number;
+  height: number;
+}
+
 /**
- * The documents behind a revision's creative pins, in pin order (spec 8.3): two queries rather than one per pin.
+ * The documents behind a revision's creative pins, in pin order (spec 8.3): three queries rather than one per pin.
  * A pin whose revision or document is no longer visible is skipped rather than failing the read.
  */
 async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
@@ -309,6 +334,20 @@ async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
     tx,
   );
   const byDocument = new Map(docs.map((d) => [d.id, d]));
+  // The pinned revisions' ready exports: what a channel variant may select (variants.update checks the same set).
+  const exportsByRevision = new Map<string, ExportSummary[]>();
+  for (const e of await exportsRepo.listForRevisions(revision.brandId, revision.creativeRevisionIds, tx)) {
+    const list = exportsByRevision.get(e.revisionId) ?? [];
+    list.push({
+      exportId: e.id,
+      pageId: e.pageId,
+      formatKey: e.formatKey,
+      mime: e.mime,
+      width: e.width,
+      height: e.height,
+    });
+    exportsByRevision.set(e.revisionId, list);
+  }
   return revision.creativeRevisionIds.flatMap((pinnedRevisionId) => {
     const doc = byDocument.get(byRevision.get(pinnedRevisionId)?.documentId ?? '');
     if (!doc) return [];
@@ -319,6 +358,7 @@ async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
         pinnedRevisionId,
         currentRevisionId: doc.currentRevisionId,
         stale: doc.currentRevisionId !== pinnedRevisionId,
+        exports: exportsByRevision.get(pinnedRevisionId) ?? [],
       },
     ];
   });
@@ -459,6 +499,18 @@ async function toVariantDto(
   };
 }
 export type ChannelVariantDto = Awaited<ReturnType<typeof toVariantDto>>;
+
+/** The capability findings for a variant as it is about to be written (generate and update store the result). */
+async function validationFor(
+  v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes'>,
+  contentPackageId: string,
+  tx?: Tx,
+): Promise<ValidationResult> {
+  return variantValidator(
+    { ...v, contentPackageId, exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx) },
+    tx,
+  );
+}
 
 /** Inserts revision n and points the package at it; shared by create (n = 1) and revise (n = current + 1). */
 async function insertRevision(
@@ -975,27 +1027,34 @@ export const contentService = {
         if (!channel || channel.brandId !== revision.brandId)
           throw new NotFoundError('ChannelConnection', channelConnectionId); // never reveal another brand's channel
         const id = newId('channelVariant');
+        const values = {
+          id,
+          brandId: revision.brandId,
+          contentRevisionId: revision.id,
+          channelConnectionId,
+          text: await linkTracker(
+            {
+              brandId: revision.brandId,
+              contentRevisionId: revision.id,
+              channelVariantId: id,
+              channelConnectionId,
+              text: copy.master.text,
+            },
+            tx,
+          ),
+          altTexts,
+          settings: {},
+          exportIds,
+          capabilityVersion: channel.capabilityVersion,
+        };
         await variantsRepo.create(
           {
-            id,
-            brandId: revision.brandId,
-            contentRevisionId: revision.id,
-            channelConnectionId,
-            text: await linkTracker(
-              {
-                brandId: revision.brandId,
-                contentRevisionId: revision.id,
-                channelVariantId: id,
-                channelConnectionId,
-                text: copy.master.text,
-              },
+            ...values,
+            validation: await validationFor(
+              { ...values, tenantId: revision.tenantId, version: 0 },
+              revision.packageId,
               tx,
             ),
-            altTexts,
-            settings: {},
-            exportIds,
-            capabilityVersion: channel.capabilityVersion,
-            validation: { ok: true, issues: [] },
           },
           tx,
         );
@@ -1050,10 +1109,11 @@ export const contentService = {
           details.push({ path: `exportIds.${i}`, issue: 'export_not_in_revision' });
       });
       if (details.length) throw new ValidationFailedError(details);
+      const edited = { text: parsed.text, altTexts: parsed.altTexts, settings: parsed.settings, exportIds };
       await variantsRepo.update(
         variant.id,
         parsed.expectedVersion,
-        { text: parsed.text, altTexts: parsed.altTexts, settings: parsed.settings, exportIds },
+        { ...edited, validation: await validationFor({ ...variant, ...edited }, revision.packageId, tx) },
         tx,
       );
       await notifyRevisionChange(
