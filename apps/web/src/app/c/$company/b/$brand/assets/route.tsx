@@ -7,7 +7,17 @@ import { Drawer, DrawerContent, DrawerTrigger } from '../../../../../../componen
 import { Select } from '../../../../../../components/select';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { AssetThumb } from '../../../../../../features/assets/asset-thumb';
-import { useAsset, useAssetSearch, type AssetDto } from '../../../../../../features/assets/use-assets';
+import { AssetActions } from '../../../../../../features/assets/asset-actions';
+import { RIGHTS_ATTENTION_DAYS } from '@oremedia/contracts/assets';
+import {
+  ASSET_ISSUE_TEXT,
+  useAsset,
+  useAssetList,
+  useAssetSearch,
+  type AssetDto,
+  type AssetIssueDto,
+  type AssetListFilter,
+} from '../../../../../../features/assets/use-assets';
 import { useAssetUpload } from '../../../../../../features/assets/use-upload';
 import { toUiError } from '../../../../../../lib/errors';
 
@@ -18,20 +28,30 @@ const PURPOSE_LABEL: Record<AssetPurposeT, string> = {
   reference: 'Reference',
 };
 
+/** The librarian's filters over every asset (spec 21.2): what needs a person, what is waiting, what is gone. */
+const LIST_FILTERS: Array<{ key: string; label: string; filter: AssetListFilter }> = [
+  { key: 'all', label: 'All', filter: {} },
+  { key: 'attention', label: 'Needs attention', filter: { needsAttention: true } },
+  { key: 'pending', label: 'Pending review', filter: { state: 'pending_review' } },
+  { key: 'retired', label: 'Retired', filter: { state: 'retired' } },
+];
+
 /**
  * Spec 21.2 asset library states (processing; restricted; expired rights; missing rights; duplicate; retired) in
  * the prototype's layout: search and upload in the header, one chip per eligibility purpose, the eligible assets as
- * a grid, and an asset's state, rights and versions in a side sheet. Search returns eligible assets only, so assets
- * that are not eligible are opened by id, with the reason.
+ * a grid, and an asset's state, rights and versions in a side sheet. Search returns eligible assets only; "All
+ * assets" is the librarian's view (assets.list) where every asset appears with the issues that keep it out, so
+ * nothing needs a pasted id (UX-05).
  */
 export function AssetLibraryRoute() {
-  const { brandId } = useBrandContext();
+  const { brandId, brand } = useBrandContext();
+  const [view, setView] = useState<'eligible' | 'all'>('eligible');
   const [purpose, setPurpose] = useState<AssetPurposeT>('creative');
+  const [listFilter, setListFilter] = useState('all');
   const [text, setText] = useState('');
   const [inspectId, setInspectId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [openId, setOpenId] = useState('');
-  const search = useAssetSearch(brandId, purpose, text);
+  const timeZone = brand.timezone || 'UTC';
 
   return (
     <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-8">
@@ -60,30 +80,113 @@ export function AssetLibraryRoute() {
               side="right"
               className="w-[min(92vw,26rem)] overflow-y-auto p-5"
             >
-              <Upload />
+              <Upload
+                onAccepted={(assetId) => {
+                  setUploading(false);
+                  setInspectId(assetId);
+                }}
+              />
             </DrawerContent>
           </Drawer>
         </div>
       </header>
-      <div role="group" aria-label="Eligible for" className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-xs text-muted-foreground">Eligible for</span>
-        {AssetPurpose.options.map((p) => (
+      <div role="group" aria-label="View" className="flex flex-wrap items-center gap-1.5">
+        {(
+          [
+            ['eligible', 'Eligible assets'],
+            ['all', 'All assets'],
+          ] as const
+        ).map(([v, label]) => (
           <button
-            key={p}
+            key={v}
             type="button"
-            aria-pressed={purpose === p}
-            onClick={() => setPurpose(p)}
+            aria-pressed={view === v}
+            onClick={() => setView(v)}
             className={cn(
               'rounded-full border px-3 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              purpose === p
+              view === v
                 ? 'border-foreground bg-secondary font-medium'
                 : 'border-border text-muted-foreground hover:text-foreground',
             )}
           >
-            {PURPOSE_LABEL[p]}
+            {label}
           </button>
         ))}
       </div>
+      {view === 'eligible' ? (
+        <EligibleGrid
+          brandId={brandId}
+          purpose={purpose}
+          onPurpose={setPurpose}
+          text={text}
+          onInspect={setInspectId}
+        />
+      ) : (
+        <AllAssets
+          brandId={brandId}
+          filterKey={listFilter}
+          onFilter={setListFilter}
+          text={text}
+          onInspect={setInspectId}
+        />
+      )}
+      <Drawer open={inspectId !== null} onOpenChange={(open) => !open && setInspectId(null)}>
+        <DrawerContent title="Asset" side="right" className="w-[min(92vw,28rem)] overflow-y-auto p-5">
+          {inspectId && <Inspect assetId={inspectId} timeZone={timeZone} />}
+        </DrawerContent>
+      </Drawer>
+    </main>
+  );
+}
+
+function PurposeChips({
+  purpose,
+  onPurpose,
+}: {
+  purpose: AssetPurposeT;
+  onPurpose: (p: AssetPurposeT) => void;
+}) {
+  return (
+    <div role="group" aria-label="Eligible for" className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-xs text-muted-foreground">Eligible for</span>
+      {AssetPurpose.options.map((p) => (
+        <button
+          key={p}
+          type="button"
+          aria-pressed={purpose === p}
+          onClick={() => onPurpose(p)}
+          className={cn(
+            'rounded-full border px-3 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            purpose === p
+              ? 'border-foreground bg-secondary font-medium'
+              : 'border-border text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {PURPOSE_LABEL[p]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Spec 9.2: the eligibility search per purpose; ineligible assets never appear here. */
+function EligibleGrid({
+  brandId,
+  purpose,
+  onPurpose,
+  text,
+  onInspect,
+}: {
+  brandId: string;
+  purpose: AssetPurposeT;
+  onPurpose: (p: AssetPurposeT) => void;
+  text: string;
+  onInspect: (assetId: string) => void;
+}) {
+  const search = useAssetSearch(brandId, purpose, text);
+  return (
+    <>
+      <PurposeChips purpose={purpose} onPurpose={onPurpose} />
       {search.isPending && <Skeleton label="Loading assets" lines={3} />}
       {search.isError && (
         <RequestError error={search.error} onRetry={() => void search.refetch()} title="Restricted access" />
@@ -91,7 +194,7 @@ export function AssetLibraryRoute() {
       {search.isSuccess && search.items.length === 0 && (
         <EmptyState
           title="No eligible assets"
-          description={`Nothing approved with rights permitting ${purpose} use. Upload assets or record their usage rights.`}
+          description={`Nothing approved with rights permitting ${purpose} use. Upload assets or record their usage rights; "All assets" shows what is waiting.`}
         />
       )}
       {search.isSuccess && search.items.length > 0 && (
@@ -104,7 +207,7 @@ export function AssetLibraryRoute() {
               <button
                 type="button"
                 className="flex w-full flex-col gap-1.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => setInspectId(a.assetId)}
+                onClick={() => onInspect(a.assetId)}
                 aria-label={`Inspect ${a.altText ?? a.kind} ${a.assetId}`}
               >
                 <AssetThumb
@@ -132,36 +235,120 @@ export function AssetLibraryRoute() {
           className="px-0"
         />
       )}
-      <form
-        className="flex flex-wrap items-end gap-2 border-t border-border pt-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (openId.trim()) setInspectId(openId.trim());
-        }}
-      >
-        <Field
-          label="Asset id"
-          htmlFor="asset-id"
-          className="w-64"
-          hint="Not in the grid? Assets that are not eligible open by id, with the reason."
-        >
-          <Input
-            id="asset-id"
-            value={openId}
-            onChange={(e) => setOpenId(e.target.value)}
-            placeholder="ast_…"
-          />
-        </Field>
-        <Button type="submit" disabled={!openId.trim()}>
-          Inspect
-        </Button>
-      </form>
-      <Drawer open={inspectId !== null} onOpenChange={(open) => !open && setInspectId(null)}>
-        <DrawerContent title="Asset" side="right" className="w-[min(92vw,28rem)] overflow-y-auto p-5">
-          {inspectId && <Inspect assetId={inspectId} />}
-        </DrawerContent>
-      </Drawer>
-    </main>
+    </>
+  );
+}
+
+/** Spec 21.2: every asset with its issues named, so what is waiting or expiring is found here, not by id (UX-05). */
+function AllAssets({
+  brandId,
+  filterKey,
+  onFilter,
+  text,
+  onInspect,
+}: {
+  brandId: string;
+  filterKey: string;
+  onFilter: (key: string) => void;
+  text: string;
+  onInspect: (assetId: string) => void;
+}) {
+  const filter = LIST_FILTERS.find((f) => f.key === filterKey) ?? { key: 'all', label: 'All', filter: {} };
+  const list = useAssetList(brandId, { ...filter.filter, ...(text ? { query: text } : {}) });
+  return (
+    <>
+      <div role="group" aria-label="Show" className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-xs text-muted-foreground">Show</span>
+        {LIST_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            aria-pressed={filterKey === f.key}
+            onClick={() => onFilter(f.key)}
+            className={cn(
+              'rounded-full border px-3 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              filterKey === f.key
+                ? 'border-foreground bg-secondary font-medium'
+                : 'border-border text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+      {list.isPending && <Skeleton label="Loading assets" lines={3} />}
+      {list.isError && (
+        <RequestError error={list.error} onRetry={() => void list.refetch()} title="Restricted access" />
+      )}
+      {list.isSuccess && list.items.length === 0 && (
+        <EmptyState
+          title={filter.key === 'all' ? 'No assets yet' : `Nothing under ${filter.label.toLowerCase()}`}
+          description={
+            filter.key === 'all' ? 'Upload the first asset for this brand.' : 'Nothing needs you here.'
+          }
+        />
+      )}
+      {list.isSuccess && list.items.length > 0 && (
+        <ul className="divide-y divide-border" aria-label="All assets" data-testid="asset-list">
+          {list.items.map((a) => (
+            <li key={a.id} className="py-2" data-testid={`asset-${a.id}`}>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => onInspect(a.id)}
+                aria-label={`Inspect ${a.name}`}
+              >
+                {a.currentVersion ? (
+                  <AssetThumb
+                    assetVersionId={a.currentVersion.id}
+                    alt={a.currentVersion.altText ?? a.name}
+                    className="h-12 w-12 shrink-0 rounded-md border border-border bg-muted object-cover"
+                  />
+                ) : (
+                  <span
+                    className="h-12 w-12 shrink-0 rounded-md border border-dashed border-border"
+                    aria-hidden
+                  />
+                )}
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="truncate text-sm font-medium">{a.name}</span>
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-xs text-muted-foreground">{a.kind}</span>
+                    {a.issues.length === 0 && <Badge tone="good">Usable</Badge>}
+                    {a.issues.map((issue) => (
+                      <Badge
+                        key={issue}
+                        tone={
+                          issue === 'rights_expired' || issue === 'rejected'
+                            ? 'critical'
+                            : issue === 'retired'
+                              ? 'neutral'
+                              : issue === 'pending_review'
+                                ? 'info'
+                                : 'warning'
+                        }
+                      >
+                        {ASSET_ISSUE_TEXT[issue].label}
+                      </Badge>
+                    ))}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {list.isSuccess && (
+        <LoadMore
+          shown={list.items.length}
+          hasNextPage={list.hasNextPage}
+          isFetchingNextPage={list.isFetchingNextPage}
+          onLoadMore={() => void list.fetchNextPage()}
+          noun={list.items.length === 1 ? 'asset' : 'assets'}
+          className="px-0"
+        />
+      )}
+    </>
   );
 }
 
@@ -171,46 +358,43 @@ interface AssetStatus {
   detail: string;
 }
 
-/** Every non-eligible condition named explicitly, with the reason; colour is never the only carrier. */
+const ISSUE_TONE: Record<AssetIssueDto, Tone> = {
+  pending_review: 'info',
+  rejected: 'critical',
+  retired: 'neutral',
+  rights_unknown: 'warning',
+  rights_expired: 'critical',
+  rights_expiring: 'warning',
+  no_version: 'warning',
+};
+
+/**
+ * The issues the server derives for the list (assetIssues), re-derived for the inspector from the asset DTO with the
+ * same words (ASSET_ISSUE_TEXT), so a row flagged "Rights expiring" opens to the same chip; colour is never the only
+ * carrier.
+ */
 export function assetStatuses(a: AssetDto, now = Date.now()): AssetStatus[] {
-  const out: AssetStatus[] = [];
-  if (a.state === 'pending_review')
-    out.push({ tone: 'info', label: 'Processing', detail: 'Ingested and awaiting review; not usable yet.' });
-  if (a.state === 'rejected')
-    out.push({ tone: 'critical', label: 'Rejected', detail: 'Rejected at review.' });
-  if (a.state === 'retired')
-    out.push({
-      tone: 'neutral',
-      label: 'Retired',
-      detail: 'No longer usable in new work; existing usages are recorded.',
-    });
-  if (a.state === 'approved') out.push({ tone: 'good', label: 'Approved', detail: 'Reviewed and approved.' });
-  if (a.rightsState === 'unknown' || !a.rights)
-    out.push({
-      tone: 'warning',
-      label: 'Missing rights',
-      detail: 'No usage rights recorded; ineligible for creative and logo use until they are.',
-    });
-  else if (a.rights.expiresAt && new Date(a.rights.expiresAt).getTime() < now)
-    out.push({
-      tone: 'critical',
-      label: 'Expired rights',
-      detail: `Rights expired on ${new Date(a.rights.expiresAt).toLocaleDateString()}.`,
-    });
-  else
+  const issues: AssetIssueDto[] = [];
+  if (a.state === 'pending_review' || a.state === 'rejected' || a.state === 'retired') issues.push(a.state);
+  const expiresAt = a.rights?.expiresAt ? new Date(a.rights.expiresAt).getTime() : null;
+  if (a.rightsState === 'unknown' || !a.rights) issues.push('rights_unknown');
+  else if (expiresAt !== null && expiresAt < now) issues.push('rights_expired');
+  else if (expiresAt !== null && expiresAt < now + RIGHTS_ATTENTION_DAYS * 86_400_000)
+    issues.push('rights_expiring');
+  if (!a.currentVersion) issues.push('no_version');
+  const out: AssetStatus[] = issues.map((i) => ({ tone: ISSUE_TONE[i], ...ASSET_ISSUE_TEXT[i] }));
+  if (a.state === 'approved')
+    out.unshift({ tone: 'good', label: 'Approved', detail: 'Reviewed and approved.' });
+  if (a.rights && !issues.includes('rights_expired') && !issues.includes('rights_expiring'))
     out.push({
       tone: 'good',
       label: 'Rights recorded',
-      detail: a.rights.expiresAt
-        ? `Valid until ${new Date(a.rights.expiresAt).toLocaleDateString()}.`
-        : 'No expiry.',
+      detail: expiresAt !== null ? `Valid until ${new Date(expiresAt).toLocaleDateString()}.` : 'No expiry.',
     });
-  if (!a.currentVersion)
-    out.push({ tone: 'warning', label: 'No version', detail: 'The file has not been ingested.' });
   return out;
 }
 
-function Inspect({ assetId }: { assetId: string }) {
+function Inspect({ assetId, timeZone }: { assetId: string; timeZone: string }) {
   const asset = useAsset(assetId);
   return (
     <section aria-label="Asset detail" className="flex flex-col gap-3">
@@ -264,6 +448,7 @@ function Inspect({ assetId }: { assetId: string }) {
               <dd>{asset.data.currentVersion.provenance.kind}</dd>
             </dl>
           )}
+          <AssetActions key={asset.data.id} asset={asset.data} timeZone={timeZone} />
         </div>
       )}
     </section>
@@ -271,7 +456,7 @@ function Inspect({ assetId }: { assetId: string }) {
 }
 
 /** Spec 9.1 upload; the ingest workflow does the rest (see useAssetUpload). */
-function Upload() {
+function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
   const { brandId } = useBrandContext();
   const [kind, setKind] = useState<string>('photo');
   const { step, pending, upload } = useAssetUpload(brandId);
@@ -305,8 +490,39 @@ function Upload() {
         {step.kind === 'queued' && (
           <StatusBanner
             tone="info"
+            busy
             title="Processing"
-            description={`Upload accepted (intent ${step.intentId}). Scanning, sanitising, hashing and derivatives run in the ingest workflow; a duplicate of an existing asset is rejected with the existing asset id.`}
+            description={`Upload accepted (intent ${step.intentId}). Scanning, sanitising, hashing and derivatives run in the ingest workflow; this updates when it settles.`}
+            data-testid="upload-queued"
+          />
+        )}
+        {step.kind === 'accepted' && (
+          <StatusBanner
+            tone="good"
+            title="Ready"
+            description={`Ingested as asset ${step.assetId}. It is listed under All assets (approved, or pending review for someone without asset.approve).`}
+            actions={
+              <Button size="sm" onClick={() => onAccepted(step.assetId)}>
+                Inspect
+              </Button>
+            }
+            data-testid="upload-accepted"
+          />
+        )}
+        {step.kind === 'unsettled' && (
+          <StatusBanner
+            tone="warning"
+            title="Outcome not known yet"
+            description={`${step.message} (intent ${step.intentId})`}
+            data-testid="upload-unsettled"
+          />
+        )}
+        {step.kind === 'rejected' && (
+          <StatusBanner
+            tone="critical"
+            title="Rejected at ingest"
+            description={`The file was not catalogued: ${step.reason}. A duplicate of an existing asset names that asset; an unsafe or unrecognised file names the check that failed.`}
+            data-testid="upload-rejected"
           />
         )}
         {step.kind === 'failed' && (

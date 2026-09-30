@@ -25,6 +25,7 @@ export const ASSETS_INPUTS: Record<string, CrossTenantFixture> = {
   'assets.search': {
     buildInput: (f) => ({ query: { brandId: f['brandId'], purpose: 'creative' }, page: { limit: 50 } }),
   },
+  'assets.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'assets.get': { buildInput: (f) => ({ assetId: f['assetId'] }) },
   'assets.versions.list': { buildInput: (f) => ({ assetId: f['assetId'], page: { limit: 50 } }) },
   'assets.rights.set': {

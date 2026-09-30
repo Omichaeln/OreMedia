@@ -153,6 +153,46 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('assets: All assets names every state with its issues; a pending asset is approved and rights recorded from the inspector; an upload settles (UX-05, R1-B)', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/assets')}`);
+    await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'All assets' }).click();
+    const list = page.getByTestId('asset-list');
+    await expect.poll(() => list.getByRole('listitem').count(), { timeout: 15_000 }).toBe(4);
+    expect(await page.getByTestId('asset-ast_pending').textContent()).toContain('Pending review');
+    expect(await page.getByTestId('asset-ast_logo').textContent()).toContain('Missing rights');
+    expect(await page.getByTestId('asset-ast_retired').textContent()).toContain('Retired');
+    expect(await page.getByTestId('asset-ast_e2e').textContent()).toContain('Usable');
+    // Needs attention keeps the three with an issue.
+    await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Needs attention' }).click();
+    await expect.poll(() => list.getByRole('listitem').count(), { timeout: 15_000 }).toBe(3);
+    // Approve the pending one from the inspector: it leaves the attention list.
+    await page.getByTestId('asset-ast_pending').getByRole('button').click();
+    const sheet = page.getByRole('dialog', { name: 'Asset' });
+    await sheet.getByRole('button', { name: 'Approve' }).click();
+    await expect.poll(() => sheet.textContent(), { timeout: 15_000 }).toContain('Approved');
+    // Record rights on it (the form is open because none are recorded): it saves and the badge changes.
+    await sheet.getByLabel('Rights owner').fill('Studio');
+    await sheet.getByRole('button', { name: 'Save rights' }).click();
+    await expect.poll(() => sheet.textContent(), { timeout: 15_000 }).toContain('Rights recorded');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => list.getByRole('listitem').count(), { timeout: 15_000 }).toBe(2);
+    // Upload a photo: the sheet polls the intent until it settles and offers the new asset.
+    await page.getByRole('button', { name: 'Upload' }).click();
+    const upload = page.getByRole('dialog', { name: 'Upload an asset' });
+    await upload.getByLabel('File').setInputFiles({
+      name: 'new-hero.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from('89504e470d0a1a0a', 'hex'),
+    });
+    await expect.poll(() => upload.getByTestId('upload-accepted').count(), { timeout: 15_000 }).toBe(1);
+    await upload.getByRole('button', { name: 'Inspect' }).click();
+    await expect
+      .poll(() => page.getByRole('dialog', { name: 'Asset' }).textContent(), { timeout: 15_000 })
+      .toContain('new-hero.png');
+    await page.close();
+  }, 60_000);
+
   it('performance: totals stay within a kind, missing numbers are named, period and channel filter the posts', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/performance')}`);

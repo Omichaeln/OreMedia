@@ -6,7 +6,9 @@ import {
   AssetApprove,
   AssetGet,
   AssetGrantCreate,
+  AssetList,
   AssetRetire,
+  type AssetIssue,
   AssetSearch,
   AssetUsagesList,
   AssetVersionsList,
@@ -18,6 +20,7 @@ import {
   KIND_MIME_GROUPS,
   KINDS_NOT_PROCESSABLE,
   MediaSignedUrlRequest,
+  RIGHTS_ATTENTION_DAYS,
   SIGNED_URL_TTL_SEC,
   UPLOAD_CAPS_BYTES,
   UPLOAD_INTENT_TTL_SEC,
@@ -65,6 +68,7 @@ import {
   type AssetRow,
   type AssetVersionRow,
   type UploadIntentRow,
+  type UsageRightsRow,
 } from './repositories';
 import { storage, storageKeys } from './storage';
 
@@ -86,6 +90,23 @@ const brandResource = (brandId: string) => ({
   brandId,
   id: brandId,
 });
+
+/** The issues the library names on an asset (spec 21.2), derived from the same rows the eligibility rule reads. */
+function assetIssues(
+  a: AssetRow,
+  v: AssetVersionRow | null,
+  r: UsageRightsRow | null,
+  now: Date,
+  attentionBefore: Date,
+): AssetIssue[] {
+  const out: AssetIssue[] = [];
+  if (a.state === 'pending_review' || a.state === 'rejected' || a.state === 'retired') out.push(a.state);
+  if (a.rightsState !== 'recorded' || !r) out.push('rights_unknown');
+  else if (r.expiresAt && r.expiresAt.getTime() < now.getTime()) out.push('rights_expired');
+  else if (r.expiresAt && r.expiresAt.getTime() < attentionBefore.getTime()) out.push('rights_expiring');
+  if (!v) out.push('no_version');
+  return out;
+}
 
 const assetResource = (a: AssetRow) => ({
   type: 'asset',
@@ -436,6 +457,64 @@ export const assetService = {
     await policy.assert(actor, 'asset.read', assetResource(a), {}, tx);
     const p = await versionsRepo.listForAsset(a.id, parsed.page, tx);
     return { items: p.items.map(versionView), nextCursor: p.nextCursor };
+  },
+
+  /**
+   * The librarian's list (spec 21.2 asset states): every asset of the brand, newest first, each with the issues
+   * that keep it out of the eligibility search (or will within the attention window). Read as `search` is.
+   */
+  async list(actor: ResolvedActor, input: z.infer<typeof AssetList>, tx?: Tx, now: Date = new Date()) {
+    const parsed = AssetList.parse(input);
+    await brandService.assertExist([parsed.brandId], tx);
+    assetsRepo.assertBrandVisible(parsed.brandId);
+    await policy.assert(actor, 'asset.read', brandResource(parsed.brandId), {}, tx);
+    const attentionBefore = new Date(now.getTime() + RIGHTS_ATTENTION_DAYS * 86_400_000);
+    const p = await assetsRepo.list(
+      parsed.brandId,
+      {
+        state: parsed.state,
+        kinds: parsed.kinds,
+        text: parsed.query,
+        needsAttentionBefore: parsed.needsAttention ? attentionBefore : undefined,
+      },
+      parsed.page,
+      tx,
+    );
+    return {
+      items: p.items.map(({ asset: a, version: v, rights: r }) => ({
+        id: a.id,
+        brandId: a.brandId,
+        kind: a.kind,
+        name: a.name,
+        semanticRole: a.semanticRole,
+        state: a.state,
+        rightsState: a.rightsState,
+        version: a.version,
+        createdAt: a.createdAt.toISOString(),
+        updatedAt: a.updatedAt.toISOString(),
+        currentVersion: v
+          ? {
+              id: v.id,
+              number: v.number,
+              mime: v.mime,
+              width: v.width,
+              height: v.height,
+              altText: v.altText,
+              contentHash: v.contentHash,
+            }
+          : null,
+        rights: r
+          ? {
+              owner: r.owner,
+              permittedChannels: r.permittedChannels,
+              territories: r.territories,
+              expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
+            }
+          : null,
+        issues: assetIssues(a, v, r, now, attentionBefore),
+      })),
+      nextCursor: p.nextCursor,
+    };
   },
 
   /** Spec 7.5 `search`: the eligibility filter (9.2) runs before anything else; ineligible assets never appear. */

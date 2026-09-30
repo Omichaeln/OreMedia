@@ -246,6 +246,37 @@ export const AssetVersionsList = z.object({ assetId: z.string(), page: PageReque
 
 export const AssetSearch = z.object({ query: EligibilityQuery, page: PageRequest });
 
+/**
+ * Why an asset is not (or will soon not be) usable, as the library shows it (spec 21.2 asset states): the state
+ * machine's non-approved states, rights missing or expired, rights expiring within the attention window, no
+ * ingested version.
+ */
+export const AssetIssue = z.enum([
+  'pending_review',
+  'rejected',
+  'retired',
+  'rights_unknown',
+  'rights_expired',
+  'rights_expiring',
+  'no_version',
+]);
+export type AssetIssue = z.infer<typeof AssetIssue>;
+/** Rights expiring inside this window count as needing attention. */
+export const RIGHTS_ATTENTION_DAYS = 30;
+
+/**
+ * The brand's assets in every state, newest first (spec 9.2 search returns eligible assets only; this is the
+ * librarian's view). `needsAttention` keeps the rows with at least one issue; `state` and `kinds` narrow further.
+ */
+export const AssetList = z.object({
+  brandId: z.string(),
+  state: AssetState.optional(),
+  kinds: z.array(AssetKind).max(20).optional(),
+  query: z.string().max(200).optional(),
+  needsAttention: z.boolean().optional(),
+  page: PageRequest,
+});
+
 export const AssetApprove = z.object({
   assetId: z.string(),
   expectedVersion: z.number().int().nonnegative(),

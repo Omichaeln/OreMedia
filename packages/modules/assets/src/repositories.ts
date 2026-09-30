@@ -1,5 +1,5 @@
-import { and, desc, eq, gt, inArray, isNotNull, isNull, like, lte, or, type SQL } from 'drizzle-orm';
-import type { AssetKind, AssetPurpose } from '@oremedia/contracts/assets';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, like, lte, lt, ne, or, type SQL } from 'drizzle-orm';
+import type { AssetKind, AssetPurpose, AssetState } from '@oremedia/contracts/assets';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import { ID_LIST_MAX } from '@oremedia/contracts/pagination';
 import { BrandScopedRepository, requireTenant, type Tx } from '@oremedia/db';
@@ -36,6 +36,14 @@ export interface EligibleCandidateRow {
   version: AssetVersionRow | null;
   rights: UsageRightsRow | null;
   grantId: string | null;
+}
+
+export interface AssetListFilter {
+  state?: AssetState;
+  kinds?: readonly AssetKind[];
+  text?: string;
+  /** Keep rows that are not approved, have no recorded rights, have no version, or whose rights expire before this. */
+  needsAttentionBefore?: Date;
 }
 
 export interface EligibilityFilter {
@@ -127,6 +135,54 @@ export class AssetRepository extends BrandScopedRepository<typeof assets> {
         ),
       )
       .where(this.scope(and(...clauses) as SQL))
+      .orderBy(desc(assets.id))
+      .limit(req.limit + 1);
+    const items = rows.slice(0, req.limit);
+    const next = rows.length > req.limit ? rows[req.limit] : undefined;
+    return { items, nextCursor: next ? encodeCursor({ id: next.asset.id }) : null };
+  }
+  /**
+   * The librarian's list (every state, spec 21.2): the brand's own assets with their current version and rights,
+   * newest first, cursor-paged. The attention filter is the SQL-expressible part of the issues the service derives;
+   * channels and territories stay in JSON and are never filtered here (spec 6.1).
+   */
+  async list(
+    brandId: string,
+    f: AssetListFilter,
+    req: PageRequest,
+    tx?: Tx,
+  ): Promise<Page<Omit<EligibleCandidateRow, 'grantId'>>> {
+    const clauses: SQL[] = [];
+    if (f.state) clauses.push(eq(assets.state, f.state));
+    if (f.kinds) {
+      if (f.kinds.length === 0) return { items: [], nextCursor: null };
+      clauses.push(inArray(assets.kind, [...f.kinds]));
+    }
+    if (f.text) clauses.push(like(assets.name, `%${escapeLike(f.text)}%`));
+    if (f.needsAttentionBefore)
+      clauses.push(
+        or(
+          ne(assets.state, 'approved'),
+          ne(assets.rightsState, 'recorded'),
+          isNull(usageRights.id),
+          isNull(assets.currentVersionId),
+          lt(usageRights.expiresAt, f.needsAttentionBefore),
+        ) as SQL,
+      );
+    const cursor = req.cursor ? decodeCursor(req.cursor) : null;
+    if (cursor) clauses.push(lte(assets.id, cursor.id));
+    const rows = await this.conn(tx)
+      .select({ asset: assets, version: assetVersions, rights: usageRights })
+      .from(assets)
+      .leftJoin(
+        assetVersions,
+        and(eq(assetVersions.tenantId, assets.tenantId), eq(assetVersions.id, assets.currentVersionId)),
+      )
+      .leftJoin(
+        usageRights,
+        and(eq(usageRights.tenantId, assets.tenantId), eq(usageRights.assetId, assets.id)),
+      )
+      .where(this.brandScope(brandId, clauses.length ? (and(...clauses) as SQL) : undefined))
       .orderBy(desc(assets.id))
       .limit(req.limit + 1);
     const items = rows.slice(0, req.limit);
