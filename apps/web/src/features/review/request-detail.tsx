@@ -20,6 +20,7 @@ import {
 } from './review-attention';
 import {
   isMemberView,
+  useManifestMedia,
   useReviewRequest,
   type ExternalLinkCreatedDto,
   type MemberReviewRequestDto,
@@ -32,15 +33,89 @@ export const portalBase = (): string =>
   (import.meta.env['VITE_REVIEW_PORTAL_URL'] as string | undefined) ??
   `${window.location.origin}/review-portal`;
 
+/**
+ * The rendered files the manifest froze, as the reviewer sees them (spec 13.3): each file is delivered only when its
+ * stored bytes still carry the frozen hash; one that does not is shown as unverifiable, never as approved media.
+ */
+function ManifestMedia({
+  reviewRequestId,
+  manifest,
+  name,
+}: {
+  reviewRequestId: string;
+  manifest: FrozenManifestV1;
+  name: (channelConnectionId: string) => string;
+}) {
+  const media = useManifestMedia(reviewRequestId);
+  if (manifest.exports.length === 0) return null;
+  // Alt texts are frozen per channel in media order (spec 14.1): the n-th export of a channel takes its n-th alt text.
+  const altFor = (channelConnectionId: string, exportId: string) => {
+    const caption = manifest.captions.find((c) => c.channelConnectionId === channelConnectionId);
+    const index = manifest.exports
+      .filter((e) => e.channelConnectionId === channelConnectionId)
+      .findIndex((e) => e.exportId === exportId);
+    return caption?.altTexts[index] ?? '';
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-semibold">Rendered files</p>
+      {media.isPending && <Skeleton label="Loading rendered files" />}
+      {media.isError && <RequestError error={media.error} title="The rendered files could not be loaded" />}
+      {media.data && (
+        <ul
+          className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+          aria-label="Rendered files"
+          data-testid="manifest-media"
+        >
+          {media.data.items.map((item) => (
+            <li
+              key={item.exportId}
+              className="flex flex-col gap-1 rounded-md border border-border p-2 text-xs"
+              data-testid="manifest-media-item"
+              data-verified={item.verified ? 'true' : 'false'}
+            >
+              {item.verified && item.url && item.mime?.startsWith('image/') ? (
+                <img
+                  src={item.url}
+                  alt={altFor(item.channelConnectionIds[0] ?? '', item.exportId)}
+                  width={item.width ?? undefined}
+                  height={item.height ?? undefined}
+                  className="h-auto w-full rounded-sm bg-muted object-contain"
+                />
+              ) : item.verified && item.url ? (
+                <a href={item.url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                  Open file ({item.mime ?? 'unknown type'})
+                </a>
+              ) : (
+                <Badge tone="critical" data-testid="media-unverified">
+                  Could not verify this file against the manifest
+                </Badge>
+              )}
+              <span className="text-muted-foreground">
+                {item.channelConnectionIds.map(name).join(', ')}
+                {item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · hash{' '}
+                <code>{shortHash(item.contentHash)}</code>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Spec 13.3: exactly what the reviewer sees. Shared by the inbox detail and the external portal. */
 export function ManifestSummary({
   manifest,
   manifestHash,
   channels,
+  reviewRequestId,
 }: {
   manifest: FrozenManifestV1;
   manifestHash: string;
   channels?: ReadonlyMap<string, ChannelDto>;
+  /** When given, the frozen files are loaded and shown (spec 13.3); the summary alone lists their counts. */
+  reviewRequestId?: string;
 }) {
   const name = (id: string) => {
     const c = channels?.get(id);
@@ -93,6 +168,7 @@ export function ManifestSummary({
           <li className="text-xs text-muted-foreground">No channel variants were frozen.</li>
         )}
       </ul>
+      {reviewRequestId && <ManifestMedia reviewRequestId={reviewRequestId} manifest={manifest} name={name} />}
     </div>
   );
 }
@@ -214,7 +290,12 @@ function MemberDetail({
         >
           Frozen manifest
         </h3>
-        <ManifestSummary manifest={r.frozenManifest} manifestHash={r.manifestHash} channels={channels} />
+        <ManifestSummary
+          manifest={r.frozenManifest}
+          manifestHash={r.manifestHash}
+          channels={channels}
+          reviewRequestId={r.id}
+        />
       </section>
 
       <section aria-labelledby={`decisions-${r.id}`}>

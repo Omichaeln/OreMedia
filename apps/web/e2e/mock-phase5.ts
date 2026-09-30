@@ -27,6 +27,7 @@ import {
   ReviewInboxList,
   ReviewRequestCreate,
   ReviewRequestGet,
+  ReviewRequestMedia,
   MandateList,
   MandatePause,
   MandateRevoke,
@@ -951,6 +952,10 @@ const linksFor = (b: Phase5Backend, requestId: string) =>
     }));
 
 /** Spec 5.5 for an external reviewer: revoked, expired, wrong request, then the resource state (open only). */
+/** A 2×2 PNG: what the portal shows as a rendered file without a storage service behind it. */
+const PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC';
+
 function assertReviewer(link: ReviewerLink, request: Request, deciding: boolean) {
   if (link.revokedAt) throw new PolicyDeniedError('reviewer_link_revoked');
   if (new Date(link.expiresAt).getTime() < Date.now()) throw new PolicyDeniedError('reviewer_link_expired');
@@ -1267,6 +1272,41 @@ export function phase5Routers(
           state: 'open' as const,
           version: 0,
         };
+      }),
+      /** Spec 13.3: the frozen files as signed URLs, request-bound for a reviewer; every export verifies here. */
+      media: query.input(ReviewRequestMedia).query(({ ctx, input }) => {
+        const r = b.request(input.reviewRequestId);
+        if (ctx.reviewer) assertReviewer(ctx.reviewer, r, false);
+        const items: Array<{
+          exportId: string;
+          channelConnectionIds: string[];
+          contentHash: string;
+          mime: string;
+          width: number;
+          height: number;
+          verified: true;
+          url: string;
+          expiresAt: string;
+        }> = [];
+        for (const e of r.frozenManifest.exports) {
+          const seen = items.find((i) => i.exportId === e.exportId);
+          if (seen) {
+            seen.channelConnectionIds.push(e.channelConnectionId);
+            continue;
+          }
+          items.push({
+            exportId: e.exportId,
+            channelConnectionIds: [e.channelConnectionId],
+            contentHash: e.contentHash,
+            mime: 'image/png',
+            width: 1080,
+            height: 1080,
+            verified: true as const,
+            url: PNG_DATA_URL,
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          });
+        }
+        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items };
       }),
       get: query.input(ReviewRequestGet).query(({ ctx, input }) => {
         const r = b.request(input.reviewRequestId);

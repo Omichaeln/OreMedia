@@ -1,6 +1,6 @@
 import { ApprovalBindingV1 } from '@oremedia/contracts/approval';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import {
   defaultPolicyDocument,
   emptyBrandSystemDocument,
@@ -28,6 +28,7 @@ import { entitlements } from '@oremedia/db/schema/billing';
 import { brands } from '@oremedia/db/schema/brand';
 import { channelVariants, contentRevisions } from '@oremedia/db/schema/content';
 import { auditEvents, featureFlags, outboxEvents } from '@oremedia/db/schema/operations';
+import { renderedExports } from '@oremedia/db/schema/creative';
 import { releaseApprovals, reviewDecisions, reviewRequests } from '@oremedia/db/schema/review';
 import { bindingHash } from '@oremedia/domain/approval-binding';
 import { hashCanonical } from '@oremedia/domain/hash';
@@ -54,7 +55,7 @@ import {
   resetReleaseCheckers,
   type ReleaseCheckers,
 } from './evaluate-release';
-import { reviewService } from './service';
+import { registerReviewMediaSigner, resetReviewMediaSigner, reviewService } from './service';
 import { reviewToolSource } from './tools';
 
 const brandDocument = (): BrandSystemDocumentV1 => ({
@@ -1084,6 +1085,67 @@ describe('review module (spec 13) against MySQL 8', () => {
           reviewService.inbox.list(external, { brandId: brandA, page: { limit: 10 } }),
         ),
       ).rejects.toBeInstanceOf(PolicyDeniedError);
+    });
+
+    it('media signs the frozen files for the reviewer and the team, only while the stored export carries the frozen hash', async () => {
+      // This reviewer's request froze no files (the revision pins no creative): nothing to sign, nothing refused.
+      const none = await asExternal(external, () =>
+        reviewService.requests.media(external, { reviewRequestId: requestId }),
+      );
+      expect(none).toEqual({ reviewRequestId: requestId, manifestHash, items: [] });
+      // The earlier request in this brand froze the ready export at hash 'a…' (spec 13.3 manifest).
+      const withFiles = (
+        await tdb.db
+          .select({ id: reviewRequests.id, manifestHash: reviewRequests.manifestHash })
+          .from(reviewRequests)
+          .where(and(eq(reviewRequests.tenantId, tenantA), ne(reviewRequests.id, requestId)))
+          .orderBy(reviewRequests.id)
+      )[0]!;
+      // A reviewer link is bound to its request: another request's files in the same brand are out of scope.
+      await expect(
+        asExternal(external, () => reviewService.requests.media(external, { reviewRequestId: withFiles.id })),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        runA(() => reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id })),
+      ).rejects.toThrow(/review media signer not registered/);
+      registerReviewMediaSigner(async (storageKey) => ({
+        url: `https://signed.test/${storageKey}`,
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      }));
+      try {
+        const forTeam = await runA(() =>
+          reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id }),
+        );
+        expect(forTeam.manifestHash).toBe(withFiles.manifestHash);
+        expect(forTeam.items).toEqual([
+          {
+            exportId: exportIds[0],
+            channelConnectionIds: [channelA],
+            contentHash: 'a'.repeat(64),
+            mime: 'image/png',
+            width: 1080,
+            height: 1080,
+            verified: true,
+            url: `https://signed.test/renders/${tenantA}/a.png`,
+            expiresAt: '2030-01-01T00:00:00.000Z',
+          },
+        ]);
+        // Spec 3.g4: a stored export whose hash no longer matches the manifest is never delivered as approved media.
+        await tdb.db
+          .update(renderedExports)
+          .set({ contentHash: 'f'.repeat(64) })
+          .where(eq(renderedExports.id, exportIds[0]!));
+        const tampered = await runA(() =>
+          reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id }),
+        );
+        expect(tampered.items[0]).toMatchObject({ verified: false, url: null, expiresAt: null });
+        await tdb.db
+          .update(renderedExports)
+          .set({ contentHash: 'a'.repeat(64) })
+          .where(eq(renderedExports.id, exportIds[0]!));
+      } finally {
+        resetReviewMediaSigner();
+      }
     });
 
     it('records the verified email on the decision, grants the approval to the link, and the link is single-use', async () => {

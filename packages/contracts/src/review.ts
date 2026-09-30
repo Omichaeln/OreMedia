@@ -71,6 +71,8 @@ import type { ApprovalBindingV1 } from './approval';
 import { MandateState } from './publishing';
 
 export const ReviewRequestGet = z.object({ reviewRequestId: z.string() });
+/** The manifest's rendered files as short-lived signed URLs (spec 13.3: a reviewer sees exactly what was frozen). */
+export const ReviewRequestMedia = z.object({ reviewRequestId: z.string() });
 export const ReviewInboxList = z.object({ brandId: z.string().optional(), page: PageRequest });
 export const ApprovalGet = z.object({ approvalId: z.string() });
 

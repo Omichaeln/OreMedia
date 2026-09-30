@@ -10,6 +10,7 @@ import {
   ReviewInboxList,
   ReviewRequestCreate,
   ReviewRequestGet,
+  ReviewRequestMedia,
 } from '@oremedia/contracts/review';
 import { idempotent } from '@oremedia/module-operations';
 import { reviewService } from '@oremedia/module-review';
@@ -31,6 +32,9 @@ export const reviewRouter = router({
     get: tenantQuery
       .input(ReviewRequestGet)
       .query(({ ctx, input }) => reviewService.requests.get(ctx.tenant.actor, input)),
+    media: tenantQuery
+      .input(ReviewRequestMedia)
+      .query(({ ctx, input }) => reviewService.requests.media(ctx.tenant.actor, input)),
   }),
 
   decisions: router({

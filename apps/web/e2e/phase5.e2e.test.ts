@@ -232,6 +232,15 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   it('creates an external reviewer link whose token is shown once and never again', async () => {
     await page.getByTestId(`inbox-${P5.requests.open}`).click();
     await expect.poll(() => page.getByTestId('manifest-hash').count(), { timeout: 15_000 }).toBe(1);
+    // Spec 13.3: the frozen files themselves, one per manifest export, from review.requests.media.
+    // One file frozen for several channels is shown once (the item names every channel it serves).
+    const frozenFiles = new Set(p5.request(P5.requests.open).frozenManifest.exports.map((e) => e.exportId))
+      .size;
+    expect(frozenFiles).toBeGreaterThan(0);
+    await expect
+      .poll(() => page.getByTestId('manifest-media-item').count(), { timeout: 15_000 })
+      .toBe(frozenFiles);
+    expect(await page.getByTestId('manifest-media').getByRole('img').count()).toBe(frozenFiles);
     await page.getByLabel('Reviewer email').fill('client@example.com');
     await page.getByRole('button', { name: 'Create link' }).click();
     await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);
@@ -261,6 +270,12 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       p5.request(P5.requests.open).manifestHash,
     );
     expect(await page.locator('body').textContent()).toContain('Autumn offer');
+    // The reviewer sees the rendered files too, fetched with the rl_ bearer and bound to this request.
+    await expect
+      .poll(() => page.getByTestId('manifest-media-item').count(), { timeout: 15_000 })
+      .toBe(new Set(p5.request(P5.requests.open).frozenManifest.exports.map((e) => e.exportId)).size);
+    const mediaCall = backend.requests.filter((r) => r.path === 'review.requests.media').at(-1);
+    expect(String(mediaCall?.headers['authorization'])).toMatch(/^Bearer rl_/);
     // The header carries the link's expiry; the page says the reviewer sees only this request.
     expect(await page.getByRole('banner').textContent()).toContain('Link expires');
     expect(await page.locator('main').textContent()).toContain('You can only see this request.');

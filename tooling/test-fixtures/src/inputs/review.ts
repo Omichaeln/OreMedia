@@ -9,6 +9,7 @@ export const REVIEW_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'review.requests.get': { buildInput: (f) => ({ reviewRequestId: f['reviewRequestId'] }) },
+  'review.requests.media': { buildInput: (f) => ({ reviewRequestId: f['reviewRequestId'] }) },
   'review.decisions.submit': {
     buildInput: (f) => ({
       reviewRequestId: f['reviewRequestId'],

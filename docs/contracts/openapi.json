@@ -6356,6 +6356,27 @@
         }
       }
     },
+    "/trpc/review.requests.media": {
+      "get": {
+        "operationId": "review.requests.media",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reviewRequestId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["reviewRequestId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/skills.bindings.set": {
       "post": {
         "operationId": "skills.bindings.set",
@@ -13357,6 +13378,18 @@
         }
       },
       "review.requests.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "reviewRequestId": {
+              "type": "string"
+            }
+          },
+          "required": ["reviewRequestId"]
+        }
+      },
+      "review.requests.media": {
         "type": "query",
         "input": {
           "type": "object",
