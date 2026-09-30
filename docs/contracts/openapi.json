@@ -903,6 +903,66 @@
         }
       }
     },
+    "/trpc/assets.list": {
+      "get": {
+        "operationId": "assets.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": ["pending_review", "approved", "rejected", "retired"]
+                  },
+                  "kinds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "logo",
+                        "photo",
+                        "icon",
+                        "illustration",
+                        "font",
+                        "video",
+                        "audio",
+                        "template",
+                        "reference"
+                      ]
+                    }
+                  },
+                  "query": {
+                    "type": "string"
+                  },
+                  "needsAttention": {
+                    "type": "boolean"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/assets.media.signedUrl": {
       "get": {
         "operationId": "assets.media.signedUrl",
@@ -9167,6 +9227,57 @@
             }
           },
           "required": ["assetId", "granteeBrandId", "purpose"]
+        }
+      },
+      "assets.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": ["pending_review", "approved", "rejected", "retired"]
+            },
+            "kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "logo",
+                  "photo",
+                  "icon",
+                  "illustration",
+                  "font",
+                  "video",
+                  "audio",
+                  "template",
+                  "reference"
+                ]
+              }
+            },
+            "query": {
+              "type": "string"
+            },
+            "needsAttention": {
+              "type": "boolean"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
         }
       },
       "assets.media.signedUrl": {

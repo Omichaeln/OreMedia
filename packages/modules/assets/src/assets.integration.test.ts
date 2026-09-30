@@ -791,6 +791,46 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         expiredGrant.id,
       );
     });
+    it('list names every asset of the brand with its issues; needsAttention keeps the ones with any; foreign brands are NOT_FOUND', async () => {
+      const listIds = (input: Record<string, unknown>) =>
+        runInTenant(
+          ctxFor(ownerA),
+          async () =>
+            (await assetService.list(ownerA, { brandId: brandE, page: { limit: 50 }, ...input })).items,
+        );
+      const all = await listIds({});
+      const byId = new Map(all.map((i) => [i.id, i]));
+      expect(byId.get(eligible.id)?.issues).toEqual([]);
+      expect(byId.get(pending.id)?.issues).toEqual(['pending_review']);
+      expect(byId.get(expired.id)?.issues).toEqual(['rights_expiring']); // expires in 1 h: inside the window
+      expect(byId.get(unknownRights.id)?.issues).toEqual(['rights_unknown']);
+      expect(byId.get(expiringLater.id)?.issues).toEqual(['rights_expiring']);
+      expect(byId.has(otherBrand.id)).toBe(false); // another brand's asset, grant or not
+      expect(byId.get(eligible.id)?.currentVersion?.id).toBe(eligible.versionId);
+      const attention = await listIds({ needsAttention: true });
+      expect(attention.map((i) => i.id).sort()).toEqual(
+        [pending.id, expired.id, unknownRights.id, expiringLater.id].sort(),
+      );
+      expect((await listIds({ state: 'pending_review' })).map((i) => i.id)).toEqual([pending.id]);
+      expect((await listIds({ kinds: ['font'] })).map((i) => i.id)).toEqual([font.id]);
+      expect((await listIds({ query: 'eligible' })).map((i) => i.id)).toEqual([eligible.id]);
+      // Paging: newest first, the cursor continues without repeating.
+      const first = await runInTenant(ctxFor(ownerA), () =>
+        assetService.list(ownerA, { brandId: brandE, page: { limit: 2 } }),
+      );
+      expect(first.items).toHaveLength(2);
+      expect(first.nextCursor).not.toBeNull();
+      const second = await runInTenant(ctxFor(ownerA), () =>
+        assetService.list(ownerA, { brandId: brandE, page: { limit: 2, cursor: first.nextCursor! } }),
+      );
+      expect(second.items.map((i) => i.id)).not.toContain(first.items[0]?.id);
+      await expect(
+        runInTenant(ctxFor(ownerB), () =>
+          assetService.list(ownerB, { brandId: brandE, page: { limit: 50 } }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
     it('brand visibility and tenancy: a restricted creator and a foreign tenant get NOT_FOUND', async () => {
       await expect(searchIds(creatorA1, { brandId: brandE, purpose: 'creative' })).rejects.toBeInstanceOf(
         NotFoundError,

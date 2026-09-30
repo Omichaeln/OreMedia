@@ -564,6 +564,24 @@ function UploadStatus({ step }: { step: UploadStep }) {
         description="Scanning and preparing the file. It appears below within a minute; use Refresh if it has not."
       />
     );
+  if (step.kind === 'accepted')
+    return (
+      <StatusBanner
+        tone="good"
+        title="Ready"
+        description={`Ingested as asset ${step.assetId}; it is listed below.`}
+        data-testid="upload-accepted"
+      />
+    );
+  if (step.kind === 'rejected')
+    return (
+      <StatusBanner
+        tone="critical"
+        title="Rejected at ingest"
+        description={`The file was not catalogued: ${step.reason}.`}
+        data-testid="upload-rejected"
+      />
+    );
   if (step.kind === 'failed')
     return (
       <StatusBanner

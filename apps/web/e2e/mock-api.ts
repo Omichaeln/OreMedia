@@ -31,9 +31,14 @@ import {
   type ModelRoutingPolicy,
 } from '@oremedia/contracts/agents';
 import {
+  AssetApprove,
   AssetGet,
+  AssetList,
+  AssetRetire,
   AssetSearch,
   BrandFontsList,
+  UploadIntentGet,
+  UsageRightsInput,
   GOOGLE_FONTS_LICENCE_NOTE,
   GoogleFontImport,
   MediaSignedUrlRequest,
@@ -266,6 +271,55 @@ const fontFace = (
   })),
 });
 
+interface MockAsset {
+  id: string;
+  kind: 'photo' | 'logo' | 'illustration' | 'font';
+  name: string;
+  state: 'pending_review' | 'approved' | 'rejected' | 'retired';
+  rights: { owner: string; licenceRef: string | null; expiresAt: string | null } | null;
+  version: number;
+  createdAt: string;
+}
+const mockAsset = (
+  id: string,
+  kind: MockAsset['kind'],
+  name: string,
+  state: MockAsset['state'],
+  rights: { owner: string; expiresAt: string | null } | null,
+): MockAsset => ({
+  id,
+  kind,
+  name,
+  state,
+  rights: rights ? { licenceRef: null, ...rights } : null,
+  version: 1,
+  createdAt: now(),
+});
+/** Mirrors packages/modules/assets assetIssues. */
+const assetIssues = (a: MockAsset): string[] => {
+  const out: string[] = [];
+  if (a.state !== 'approved') out.push(a.state);
+  if (!a.rights) out.push('rights_unknown');
+  else if (a.rights.expiresAt && new Date(a.rights.expiresAt).getTime() < Date.now())
+    out.push('rights_expired');
+  else if (a.rights.expiresAt && new Date(a.rights.expiresAt).getTime() < Date.now() + 30 * 86_400_000)
+    out.push('rights_expiring');
+  return out;
+};
+const assetVersionOf = (a: MockAsset) => ({
+  id: 'av_photo',
+  assetId: a.id,
+  number: 1,
+  mime: 'image/png',
+  bytes: 68,
+  width: 2,
+  height: 2,
+  altText: a.kind === 'photo' ? 'Sample photo' : null,
+  contentHash: hash(a.id),
+  provenance: { kind: 'upload' as const },
+  createdAt: now(),
+});
+
 export class MockBackend {
   /**
    * The brand's font faces (assets.fonts.list): the fixture brand's type roles name `ast_font`. Uploads and Google
@@ -278,8 +332,29 @@ export class MockBackend {
    * font-src) and the store's CORS.
    */
   objectStoreOrigin = '';
-  /** Upload intents issued through assets.uploads.createIntent, by id. */
-  readonly fontIntents = new Map<string, { originalFilename: string; declaredMime: string }>();
+  /** Upload intents issued through assets.uploads.createIntent, by id, with how often their status was read. */
+  readonly fontIntents = new Map<
+    string,
+    { originalFilename: string; declaredMime: string; kind: string; polls: number; assetId: string | null }
+  >();
+  /**
+   * The brand's assets as assets.list and assets.get report them (spec 21.2 states): the sample photo (usable), the
+   * fixture logo (no rights yet), one pending review and one retired. Approve, retire and rights.set change them.
+   */
+  readonly assets: MockAsset[] = [
+    mockAsset('ast_e2e', 'photo', 'Sample photo', 'approved', { owner: 'Studio', expiresAt: null }),
+    mockAsset('ast_logo', 'logo', 'E2E wordmark.svg', 'approved', null),
+    mockAsset('ast_pending', 'photo', 'Autumn hero.png', 'pending_review', null),
+    mockAsset('ast_retired', 'illustration', 'Old campaign art.png', 'retired', {
+      owner: 'Studio',
+      expiresAt: null,
+    }),
+  ];
+  asset(id: string): MockAsset {
+    const a = this.assets.find((x) => x.id === id);
+    if (!a) throw new NotFoundError('Asset', id);
+    return a;
+  }
   /** Google Fonts imports received (tests read what the editor asked for). */
   readonly googleImports: unknown[] = [];
   /** The last brand draft document saved through brand.versions.update (tests read what the editor sent). */
@@ -1186,41 +1261,103 @@ export function createMockRouter(backend: MockBackend) {
         ],
         nextCursor: null,
       })),
-      /** The fixture brand's logo (ast_logo, no rights yet) and the sample photo, as the brand kit editor reads them. */
+      /** Every asset of the brand with its issues (spec 21.2), filtered as assets.list is. */
+      list: query.input(AssetList).query(({ input }) => {
+        const items = backend.assets
+          .filter((a) => !input.state || a.state === input.state)
+          .filter((a) => !input.kinds || input.kinds.includes(a.kind))
+          .filter((a) => !input.query || a.name.toLowerCase().includes(input.query.toLowerCase()))
+          .filter((a) => !input.needsAttention || assetIssues(a).length > 0)
+          .map((a) => ({
+            id: a.id,
+            brandId: backend.brandId,
+            kind: a.kind,
+            name: a.name,
+            semanticRole: null,
+            state: a.state,
+            rightsState: a.rights ? ('recorded' as const) : ('unknown' as const),
+            version: a.version,
+            createdAt: a.createdAt,
+            updatedAt: a.createdAt,
+            currentVersion: { ...assetVersionOf(a), provenance: undefined, bytes: undefined },
+            rights: a.rights
+              ? {
+                  owner: a.rights.owner,
+                  permittedChannels: 'all' as const,
+                  territories: 'all' as const,
+                  expiresAt: a.rights.expiresAt,
+                }
+              : null,
+            issues: assetIssues(a),
+          }));
+        return paged(items, input.page);
+      }),
+      /** The asset as the inspector and the brand kit editor read it. */
       get: query.input(AssetGet).query(({ input }) => {
-        if (input.assetId !== 'ast_logo' && input.assetId !== 'ast_e2e')
-          throw new NotFoundError('Asset', input.assetId);
-        const logo = input.assetId === 'ast_logo';
+        const a = backend.asset(input.assetId);
         return {
-          id: input.assetId,
+          id: a.id,
           brandId: backend.brandId,
-          kind: logo ? ('logo' as const) : ('photo' as const),
-          name: logo ? 'E2E wordmark.svg' : 'Sample photo',
-          state: 'approved' as const,
-          rightsState: logo ? ('unknown' as const) : ('recorded' as const),
-          currentVersion: {
-            id: 'av_photo',
-            assetId: input.assetId,
-            number: 1,
-            mime: 'image/png',
-            bytes: 68,
-            width: 2,
-            height: 2,
-            altText: logo ? null : 'Sample photo',
-            contentHash: hash(input.assetId),
-            provenance: { kind: 'upload' as const },
-            createdAt: now(),
-          },
-          rights: logo ? null : { expiresAt: null },
-          version: 1,
+          kind: a.kind,
+          name: a.name,
+          semanticRole: null,
+          state: a.state,
+          rightsState: a.rights ? ('recorded' as const) : ('unknown' as const),
+          currentVersion: assetVersionOf(a),
+          derivatives: [],
+          rights: a.rights
+            ? {
+                id: `ur_${a.id}`,
+                owner: a.rights.owner,
+                licenceRef: a.rights.licenceRef,
+                permittedChannels: 'all' as const,
+                territories: 'all' as const,
+                expiresAt: a.rights.expiresAt ? new Date(a.rights.expiresAt) : null,
+                releases: [],
+                restrictions: [],
+                version: 1,
+              }
+            : null,
+          version: a.version,
         };
+      }),
+      approve: mutation.input(AssetApprove).mutation(({ ctx, input }) => {
+        if (ctx.member?.role === 'creator') throw new PolicyDeniedError('role');
+        const a = backend.asset(input.assetId);
+        if (a.version !== input.expectedVersion)
+          throw new ConflictError('Asset', a.id, input.expectedVersion);
+        if (a.state !== 'pending_review')
+          throw new ValidationFailedError([{ path: 'assetId', issue: `asset_${a.state}` }]);
+        a.state = 'approved';
+        a.version += 1;
+        return { assetId: a.id, state: a.state, version: a.version };
+      }),
+      retire: mutation.input(AssetRetire).mutation(({ ctx, input }) => {
+        if (ctx.member?.role === 'creator') throw new PolicyDeniedError('role');
+        const a = backend.asset(input.assetId);
+        if (a.version !== input.expectedVersion)
+          throw new ConflictError('Asset', a.id, input.expectedVersion);
+        if (a.state !== 'approved')
+          throw new ValidationFailedError([{ path: 'assetId', issue: `asset_${a.state}` }]);
+        a.state = 'retired';
+        a.version += 1;
+        return { assetId: a.id, state: a.state, version: a.version };
+      }),
+      rights: t.router({
+        set: mutation.input(UsageRightsInput).mutation(({ input }) => {
+          const a = backend.asset(input.assetId);
+          a.rights = {
+            owner: input.owner,
+            licenceRef: input.licenceRef ?? null,
+            expiresAt: input.expiresAt ?? null,
+          };
+          return { usageRightsId: `ur_${a.id}` };
+        }),
       }),
       uploads: t.router({
         createIntent: mutation.input(UploadIntentCreate).mutation(({ input }) => {
-          if (input.kind !== 'font')
-            throw new ValidationFailedError([{ path: 'kind', issue: 'mock_fonts_only' }]);
           const intentId = rid('upi');
-          backend.fontIntents.set(intentId, input);
+          backend.fontIntents.set(intentId, { ...input, polls: 0, assetId: null });
           return {
             intentId,
             uploadUrl: `${backend.objectStoreOrigin}/e2e-upload/${intentId}`,
@@ -1231,9 +1368,36 @@ export function createMockRouter(backend: MockBackend) {
         complete: mutation.input(UploadIntentComplete).mutation(({ input }) => {
           const intent = backend.fontIntents.get(input.intentId);
           if (!intent) throw new NotFoundError('UploadIntent', input.intentId);
-          const family = intent.originalFilename.replace(/\.[a-z0-9]+$/i, '');
-          backend.fonts.push(fontFace(rid('ast'), family, 400, 'upload'));
+          if (intent.kind === 'font') {
+            const family = intent.originalFilename.replace(/\.[a-z0-9]+$/i, '');
+            backend.fonts.push(fontFace(rid('ast'), family, 400, 'upload'));
+          }
           return { intentId: input.intentId, state: 'uploaded' as const };
+        }),
+        /** The ingest workflow's side: the second read settles the intent (accepted, catalogued pending review). */
+        get: query.input(UploadIntentGet).query(({ input }) => {
+          const intent = backend.fontIntents.get(input.intentId);
+          if (!intent) throw new NotFoundError('UploadIntent', input.intentId);
+          intent.polls += 1;
+          if (intent.polls >= 2 && !intent.assetId) {
+            intent.assetId = rid('ast');
+            if (intent.kind !== 'font')
+              backend.assets.unshift(
+                mockAsset(
+                  intent.assetId,
+                  intent.kind === 'logo' || intent.kind === 'illustration' ? intent.kind : 'photo',
+                  intent.originalFilename,
+                  'pending_review',
+                  null,
+                ),
+              );
+          }
+          return {
+            intentId: input.intentId,
+            state: intent.assetId ? ('accepted' as const) : ('uploaded' as const),
+            assetId: intent.assetId,
+            rejectionReason: null,
+          };
         }),
       }),
       fonts: t.router({

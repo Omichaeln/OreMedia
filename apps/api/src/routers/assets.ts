@@ -2,6 +2,7 @@ import {
   AssetApprove,
   AssetGet,
   AssetGrantCreate,
+  AssetList,
   AssetRetire,
   AssetSearch,
   AssetUsagesList,
@@ -43,6 +44,7 @@ export const assetsRouter = router({
   search: tenantQuery
     .input(AssetSearch)
     .query(({ ctx, input }) => assetService.search(ctx.tenant.actor, input)),
+  list: tenantQuery.input(AssetList).query(({ ctx, input }) => assetService.list(ctx.tenant.actor, input)),
   get: tenantQuery.input(AssetGet).query(({ ctx, input }) => assetService.get(ctx.tenant.actor, input)),
   versions: router({
     list: tenantQuery

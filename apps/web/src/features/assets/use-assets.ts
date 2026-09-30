@@ -5,10 +5,51 @@ import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
 export type AssetDto = inferOutput<Trpc['assets']['get']>;
+export type AssetListItemDto = inferOutput<Trpc['assets']['list']>['items'][number];
+export type AssetIssueDto = AssetListItemDto['issues'][number];
 export type AssetRefDto = inferOutput<Trpc['assets']['search']>['items'][number];
 export type BrandFontFaceDto = inferOutput<Trpc['assets']['fonts']['list']>['items'][number];
 
 const SEARCH_PAGE = 50;
+
+export interface AssetListFilter {
+  state?: AssetListItemDto['state'];
+  needsAttention?: boolean;
+  query?: string;
+}
+
+/**
+ * Spec 21.2 asset states: every asset of the brand with the issues that keep it out of the eligibility search
+ * (processing, missing or expired rights, retired…), page by page. The librarian's view beside `useAssetSearch`.
+ */
+export function useAssetList(brandId: string, filter: AssetListFilter) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  const input = {
+    brandId,
+    ...(filter.state ? { state: filter.state } : {}),
+    ...(filter.needsAttention ? { needsAttention: true } : {}),
+    ...(filter.query ? { query: filter.query } : {}),
+  };
+  return useCursorPages({
+    queryKey: trpc.assets.list.queryKey({ ...input, page: { limit: SEARCH_PAGE } }),
+    fetchPage: (cursor) => client.assets.list.query({ ...input, page: { limit: SEARCH_PAGE, cursor } }),
+  });
+}
+
+/** The words the library uses for each issue (colour is never the only carrier). */
+export const ASSET_ISSUE_TEXT: Record<AssetIssueDto, { label: string; detail: string }> = {
+  pending_review: { label: 'Pending review', detail: 'Ingested and awaiting approval; not usable yet.' },
+  rejected: { label: 'Rejected', detail: 'Rejected at review.' },
+  retired: { label: 'Retired', detail: 'No longer usable in new work; existing usages are recorded.' },
+  rights_unknown: {
+    label: 'Missing rights',
+    detail: 'No usage rights recorded; ineligible for creative and logo use until they are.',
+  },
+  rights_expired: { label: 'Expired rights', detail: 'The recorded rights have expired.' },
+  rights_expiring: { label: 'Rights expiring', detail: 'The recorded rights expire within 30 days.' },
+  no_version: { label: 'No version', detail: 'The file has not been ingested.' },
+};
 
 /** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. Page by page (spec 7.4). */
 export function useAssetSearch(brandId: string, purpose: AssetPurpose, query?: string) {
