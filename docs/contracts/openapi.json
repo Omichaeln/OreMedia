@@ -563,6 +563,55 @@
         }
       }
     },
+    "/trpc/agents.budgets.read": {
+      "get": {
+        "operationId": "agents.budgets.read",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/agents.budgets.setLimit": {
+      "post": {
+        "operationId": "agents.budgets.setLimit",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "period": {
+                    "type": "string",
+                    "enum": ["day", "month"]
+                  },
+                  "limitMicros": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "period", "limitMicros"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/agents.routingPolicy.get": {
       "get": {
         "operationId": "agents.routingPolicy.get",
@@ -9042,6 +9091,37 @@
             }
           },
           "required": ["tenantId"]
+        }
+      },
+      "agents.budgets.read": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "agents.budgets.setLimit": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "period": {
+              "type": "string",
+              "enum": ["day", "month"]
+            },
+            "limitMicros": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "period", "limitMicros"]
         }
       },
       "agents.routingPolicy.get": {

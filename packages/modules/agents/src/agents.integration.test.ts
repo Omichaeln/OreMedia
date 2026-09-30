@@ -1084,6 +1084,34 @@ describe('agents module (spec 12) against MySQL 8', () => {
   });
 
   describe('budgets (spec 12.6, Phase 4 gate: parallel runs cannot overspend)', () => {
+    it('budgets.read shows the effective limits, what is committed and the ledger by kind; setLimit changes the day limit (UX-16)', async () => {
+      const owner: ResolvedActorUser = { ...manager(tenantA), role: 'owner' };
+      await run(tenantA, (tx) =>
+        agentsService.budgets.setLimit(owner, { brandId: brandA, period: 'day', limitMicros: 9_000_000 }, tx),
+      );
+      const before = await runInTenant(ctx(tenantA), () =>
+        agentsService.budgets.read(owner, { brandId: brandA }),
+      );
+      expect(before.day).toMatchObject({ limitMicros: 9_000_000, storedLimitMicros: 9_000_000 });
+      expect(before.month.limitMicros).toBe(
+        Math.min(before.month.entitlementMicros, before.month.storedLimitMicros ?? Infinity),
+      );
+      expect(before.month.remainingMicros).toBe(
+        Math.max(0, before.month.limitMicros - before.month.committedMicros),
+      );
+      expect(Array.isArray(before.ledger)).toBe(true);
+      // A person without billing.manage is refused; a foreign brand is NOT_FOUND.
+      await expect(
+        runInTenant(
+          ctx(tenantA),
+          () => agentsService.budgets.read(A, { brandId: brandA }) /* brand manager */,
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        runInTenant(ctx(tenantA), () => agentsService.budgets.read(owner, { brandId: brandB })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
     it('N concurrent reservations against one brand-day limit: exactly the affordable number succeed', async () => {
       await runInTenant(ctx(tenantA), () => budgets.setLimit(brandA, 'day', 7_000_000));
       const { runtime } = runtimeWith([{ kind: 'done', text: '{}' }]);

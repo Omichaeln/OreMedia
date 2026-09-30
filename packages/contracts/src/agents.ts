@@ -63,6 +63,15 @@ export type ToolResult =
 
 export const AgentStepKind = z.enum(['plan', 'model_call', 'tool_call', 'validation']);
 
+/** UX-16: the brand's spend position this month and today, with the ledger by kind (billing.manage). */
+export const BudgetRead = z.object({ brandId: z.string() });
+/** UX-16: a spend limit for the brand's day or the company's month, in USD micros (billing.manage). */
+export const BudgetSetLimit = z.object({
+  brandId: z.string(),
+  period: z.enum(['day', 'month']),
+  limitMicros: z.number().int().min(0),
+});
+
 export const RunStart = z.object({
   brandId: z.string(),
   servicePrincipalId: z.string(),

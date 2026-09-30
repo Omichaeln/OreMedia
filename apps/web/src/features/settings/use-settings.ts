@@ -3,6 +3,20 @@ import type { inferOutput } from '@trpc/tanstack-react-query';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 
 export type SkillDto = inferOutput<Trpc['skills']['list']>['items'][number];
+export type SkillDetailDto = inferOutput<Trpc['skills']['get']>;
+export type BudgetsDto = inferOutput<Trpc['agents']['budgets']['read']>;
+
+/** UX-17: one skill with its versions, evaluations and bindings (skill.read). */
+export function useSkill(skillId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.skills.get.queryOptions({ skillId: skillId ?? '' }), enabled: skillId !== null });
+}
+
+/** UX-16, spec 12.6: the brand's spend position and limits. Owners and admins only (billing.manage). */
+export function useBudgets(brandId: string, enabled: boolean) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.agents.budgets.read.queryOptions({ brandId }), enabled, retry: false });
+}
 
 /** Spec 9: the skills the company can see (built in, company-wide and brand-scoped). One hook per query. */
 export function useSkills() {

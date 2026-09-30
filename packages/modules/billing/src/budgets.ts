@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { BudgetExhaustedError, NotFoundError } from '@oremedia/contracts/errors';
 import { TenantScopedRepository, requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { budgetReservations, spendLimits, usageLedger } from '@oremedia/db/schema/billing';
@@ -34,6 +34,13 @@ class SpendLimitRepository extends TenantScopedRepository<typeof spendLimits> {
     const row = rows[0];
     if (!row) throw new Error(`spend limit row missing for ${brandId}/${period}`);
     return { id: row.id, limitMicros: row.limitMicros };
+  }
+  async find(brandId: string, period: 'day' | 'month', tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(spendLimits)
+      .where(this.scope(and(eq(spendLimits.brandId, brandId), eq(spendLimits.period, period))));
+    return rows[0] ?? null;
   }
   async set(brandId: string, period: 'day' | 'month', limitMicros: number, tx?: Tx) {
     const rows = await this.conn(tx)
@@ -82,6 +89,17 @@ class ReservationRepository extends TenantScopedRepository<typeof budgetReservat
     if (!row) throw new NotFoundError('BudgetReservation', id);
     return row;
   }
+  /** The brand's reservations in a month period, newest first, bounded (the Budgets screen's recent runs). */
+  async listForBrandPeriod(brandId: string, periodKey: string, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(budgetReservations)
+      .where(
+        this.scope(and(eq(budgetReservations.brandId, brandId), eq(budgetReservations.periodKey, periodKey))),
+      )
+      .orderBy(desc(budgetReservations.id))
+      .limit(limit);
+  }
   async byRun(runId: string, tx?: Tx) {
     const rows = await this.conn(tx)
       .select()
@@ -106,6 +124,20 @@ class ReservationRepository extends TenantScopedRepository<typeof budgetReservat
 class LedgerRepository extends TenantScopedRepository<typeof usageLedger> {
   constructor() {
     super(usageLedger);
+  }
+  /** The brand's charges in a month period, summed by kind (the Budgets screen's breakdown). */
+  async sumByKind(brandId: string, periodKey: string, tx?: Tx) {
+    return this.conn(tx)
+      .select({
+        kind: usageLedger.kind,
+        unit: usageLedger.unit,
+        quantity: sql<number>`coalesce(sum(${usageLedger.quantity}), 0)`,
+        costMicros: sql<number>`coalesce(sum(${usageLedger.costMicros}), 0)`,
+        entries: sql<number>`count(*)`,
+      })
+      .from(usageLedger)
+      .where(this.scope(and(eq(usageLedger.brandId, brandId), eq(usageLedger.periodKey, periodKey))))
+      .groupBy(usageLedger.kind, usageLedger.unit);
   }
   async append(values: Omit<typeof usageLedger.$inferInsert, 'tenantId'>, tx?: Tx) {
     await this.insertScoped(values, tx);
@@ -240,4 +272,64 @@ export const budgets = {
 
   setLimit: (brandId: string | null, period: 'day' | 'month', limitMicros: number, tx?: Tx) =>
     limitsRepo.set(brandId ?? '', period, limitMicros, tx),
+
+  /**
+   * UX-16: the numbers reserveSpend reasons with, for a person to read: the company's month (stored row, the
+   * plan's entitlement, the effective minimum, what is committed and what remains) and the brand's day, plus the
+   * brand's ledger this month by kind and its recent reservations. The caller asserts billing.manage; this reads.
+   */
+  async summary(brandId: string, tx?: Tx) {
+    const { tenantId } = requireTenant();
+    const ent = await entitlements.resolve(tenantId, tx);
+    const entitlementMicros = ent.limits.generation_budget_micros_month ?? 0;
+    const month = monthKey();
+    const day = dayKey();
+    const [monthRow, dayRow] = await Promise.all([
+      limitsRepo.find('', 'month', tx),
+      limitsRepo.find(brandId, 'day', tx),
+    ]);
+    const monthLimit = monthRow ? Math.min(monthRow.limitMicros, entitlementMicros) : entitlementMicros;
+    const dayLimit = dayRow ? dayRow.limitMicros : DEFAULT_BRAND_DAY_MICROS;
+    const [monthCommitted, dayCommitted, ledgerRows, recent] = await withTransaction(tx, (t) =>
+      Promise.all([
+        reservations.committedMicros({ periodKey: month }, t),
+        reservations.committedMicros({ brandId, dayKey: day }, t),
+        ledger.sumByKind(brandId, month, t),
+        reservations.listForBrandPeriod(brandId, month, 50, t),
+      ]),
+    );
+    return {
+      month: {
+        periodKey: month,
+        storedLimitMicros: monthRow?.limitMicros ?? null,
+        entitlementMicros,
+        limitMicros: monthLimit,
+        committedMicros: monthCommitted,
+        remainingMicros: Math.max(0, monthLimit - monthCommitted),
+      },
+      day: {
+        dayKey: day,
+        limitMicros: dayLimit,
+        storedLimitMicros: dayRow?.limitMicros ?? null,
+        committedMicros: dayCommitted,
+        remainingMicros: Math.max(0, dayLimit - dayCommitted),
+      },
+      ledger: ledgerRows.map((r) => ({
+        kind: r.kind,
+        unit: r.unit,
+        quantity: Number(r.quantity),
+        costMicros: Number(r.costMicros),
+        entries: Number(r.entries),
+      })),
+      reservations: recent.map((r) => ({
+        id: r.id,
+        runId: r.runId,
+        reservedMicros: r.reservedMicros,
+        consumedMicros: r.consumedMicros,
+        state: r.state,
+        dayKey: r.dayKey,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  },
 };
