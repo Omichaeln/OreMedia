@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent } from 'react';
 import { AssetKind, AssetPurpose, type AssetPurpose as AssetPurposeT } from '@oremedia/contracts/assets';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, cn, type Tone } from '@oremedia/ui';
+import { LoadMore } from '../../../../../../components/load-more';
 import { RequestError } from '../../../../../../components/request-state';
 import { Drawer, DrawerContent, DrawerTrigger } from '../../../../../../components/drawer';
 import { Select } from '../../../../../../components/select';
@@ -87,18 +88,18 @@ export function AssetLibraryRoute() {
       {search.isError && (
         <RequestError error={search.error} onRetry={() => void search.refetch()} title="Restricted access" />
       )}
-      {search.isSuccess && search.data.items.length === 0 && (
+      {search.isSuccess && search.items.length === 0 && (
         <EmptyState
           title="No eligible assets"
           description={`Nothing approved with rights permitting ${purpose} use. Upload assets or record their usage rights.`}
         />
       )}
-      {search.isSuccess && search.data.items.length > 0 && (
+      {search.isSuccess && search.items.length > 0 && (
         <ul
           className="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6"
           aria-label="Eligible assets"
         >
-          {search.data.items.map((a) => (
+          {search.items.map((a) => (
             <li key={a.assetVersionId}>
               <button
                 type="button"
@@ -120,6 +121,16 @@ export function AssetLibraryRoute() {
             </li>
           ))}
         </ul>
+      )}
+      {search.isSuccess && (
+        <LoadMore
+          shown={search.items.length}
+          hasNextPage={search.hasNextPage}
+          isFetchingNextPage={search.isFetchingNextPage}
+          onLoadMore={() => void search.fetchNextPage()}
+          noun={search.items.length === 1 ? 'asset' : 'assets'}
+          className="px-0"
+        />
       )}
       <form
         className="flex flex-wrap items-end gap-2 border-t border-border pt-4"

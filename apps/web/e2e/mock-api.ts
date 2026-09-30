@@ -11,6 +11,7 @@ import {
   CommentResolve,
   DocumentCreate,
   DocumentGet,
+  DocumentList,
   OperationsApply,
   OperationsPropose,
   RenderGet,
@@ -22,7 +23,13 @@ import {
   type Operation,
   type OperationBatch,
 } from '@oremedia/contracts/creative';
-import { RoutingPolicySet, RunGet, RunSteps, type ModelRoutingPolicy } from '@oremedia/contracts/agents';
+import {
+  RoutingPolicySet,
+  RunGet,
+  RunList,
+  RunSteps,
+  type ModelRoutingPolicy,
+} from '@oremedia/contracts/agents';
 import {
   AssetGet,
   AssetSearch,
@@ -220,6 +227,12 @@ interface RenderJob {
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
+/** Spec 7.4 cursor paging over an in-memory list: the cursor is the offset of the next row. */
+const paged = <T>(rows: T[], page: { cursor?: string | undefined; limit: number }) => {
+  const from = page.cursor ? Number(page.cursor) : 0;
+  const items = rows.slice(from, from + page.limit);
+  return { items, nextCursor: from + page.limit < rows.length ? String(from + page.limit) : null };
+};
 
 const fontFace = (
   assetId: string,
@@ -291,7 +304,7 @@ export class MockBackend {
   readonly community: CommunityBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
-  /** Agent runs of this company (agents.runs.*, listed through operations.audit.query). */
+  /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
   readonly runs = new Map<string, AgentRunRow>();
   /** Skills visible to the company (skills.list): built in, company-wide and this brand's own. */
   readonly skills = [
@@ -375,6 +388,10 @@ export class MockBackend {
     this.brandName = company.brandName;
     this.phase5 = new Phase5Backend(company.tenantId, company.brandId, seed);
     this.phase6 = new Phase6Backend(this.phase5, seed);
+    this.phase6.documentOf = (documentId) => {
+      const doc = this.docs.get(documentId);
+      return doc ? { title: doc.title, currentRevisionId: doc.currentRevisionId } : null;
+    };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
@@ -957,6 +974,15 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       runs: t.router({
+        list: query.input(RunList).query(({ input }) =>
+          paged(
+            [...backend.runs.values()]
+              .filter((r) => r.brandId === input.brandId)
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+              .map(({ steps: _s, ...dto }) => dto),
+            input.page,
+          ),
+        ),
         get: query.input(RunGet).query(({ input }) => {
           const run = backend.runs.get(input.runId);
           if (!run) throw new NotFoundError('AgentRun', input.runId);
@@ -1282,6 +1308,19 @@ export function createMockRouter(backend: MockBackend) {
           const { revisions: _r, ...doc } = backend.doc(input.documentId);
           return { ...doc, revision: backend.head(input.documentId) };
         }),
+        list: query.input(DocumentList).query(({ input }) =>
+          paged(
+            [...backend.docs.values()]
+              .filter(
+                (d) =>
+                  d.brandId === input.brandId &&
+                  (input.contentPackageId === undefined || d.contentPackageId === input.contentPackageId),
+              )
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+              .map(({ revisions: _r, ...doc }) => doc),
+            input.page,
+          ),
+        ),
       }),
       revisions: t.router({
         list: query.input(RevisionList).query(({ input }) => ({

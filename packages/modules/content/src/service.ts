@@ -291,6 +291,39 @@ async function pinCreativeRevisions(
   return pinned;
 }
 
+/**
+ * The creative documents a revision publishes with, derived from its pinned creative revisions (spec 6.3 pins
+ * revisions, never documents): the client never has to remember which studio document a package came from. `stale`
+ * means the document has moved on since the pin, so a revise re-pins its current revision.
+ */
+/**
+ * The documents behind a revision's creative pins, in pin order (spec 8.3): two queries rather than one per pin.
+ * A pin whose revision or document is no longer visible is skipped rather than failing the read.
+ */
+async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
+  const pinned = await creativeRevisionsRepo.listByIds(revision.brandId, revision.creativeRevisionIds, tx);
+  const byRevision = new Map(pinned.map((r) => [r.id, r]));
+  const docs = await creativeDocumentsRepo.listByIds(
+    revision.brandId,
+    [...new Set(pinned.map((r) => r.documentId))],
+    tx,
+  );
+  const byDocument = new Map(docs.map((d) => [d.id, d]));
+  return revision.creativeRevisionIds.flatMap((pinnedRevisionId) => {
+    const doc = byDocument.get(byRevision.get(pinnedRevisionId)?.documentId ?? '');
+    if (!doc) return [];
+    return [
+      {
+        documentId: doc.id,
+        title: doc.title,
+        pinnedRevisionId,
+        currentRevisionId: doc.currentRevisionId,
+        stale: doc.currentRevisionId !== pinnedRevisionId,
+      },
+    ];
+  });
+}
+
 const revisionContentHash = (input: {
   copy: CopyDocumentV1;
   creativeRevisionIds: string[];
@@ -737,12 +770,10 @@ export const contentService = {
       const current = await loadCurrentRevision(pkg, tx);
       const snapshot = await resolveSnapshot(actor, pkg.brandId, tx);
       assertFactsEffective(parsed.copy, snapshot);
-      const creativeRevisionIds = await pinCreativeRevisions(
-        actor,
-        pkg.brandId,
-        parsed.creativeDocumentIds,
-        tx,
-      );
+      // Omitted: keep the documents the current revision publishes with (contract ContentPackageRevise).
+      const documentIds =
+        parsed.creativeDocumentIds ?? (await creativeDocumentsOf(current, tx)).map((d) => d.documentId);
+      const creativeRevisionIds = await pinCreativeRevisions(actor, pkg.brandId, documentIds, tx);
       const superseded = transition(contentRevisionMachine, current.state, 'supersede', 'contentPackageId');
       const number = await revisionsRepo.nextNumber(pkg.brandId, pkg.id, tx);
       await revisionsRepo.setState(current.id, current.version, superseded, tx);
@@ -814,6 +845,7 @@ export const contentService = {
       return {
         ...toPackageDto(pkg),
         revision: toRevisionDto(current),
+        creativeDocuments: await creativeDocumentsOf(current, tx),
         variants: variantDtos,
         revisions: history.map(toRevisionSummary),
       };

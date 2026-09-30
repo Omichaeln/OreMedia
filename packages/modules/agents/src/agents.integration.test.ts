@@ -1028,6 +1028,26 @@ describe('agents module (spec 12) against MySQL 8', () => {
           agentsService.runs.steps(manager(tenantB), { runId: runId!, page: { limit: 50 } }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
+      // list: the brand's runs newest first, cursor-paged; a foreign brand is NOT_FOUND.
+      const listed = await runInTenant(ctx(tenantA), () =>
+        agentsService.runs.list(A, { brandId: got.brandId, page: { limit: 1 } }),
+      );
+      expect(listed.items).toHaveLength(1);
+      expect(listed.items[0]?.brandId).toBe(got.brandId);
+      const rest = await runInTenant(ctx(tenantA), () =>
+        agentsService.runs.list(A, {
+          brandId: got.brandId,
+          page: { limit: 200, cursor: listed.nextCursor ?? undefined },
+        }),
+      );
+      const everyId = [...listed.items, ...rest.items].map((r) => r.id);
+      expect(everyId).toContain(runId);
+      expect(everyId).toEqual([...everyId].sort().reverse());
+      await expect(
+        runInTenant(ctx(tenantB), () =>
+          agentsService.runs.list(manager(tenantB), { brandId: got.brandId, page: { limit: 10 } }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
   });
 

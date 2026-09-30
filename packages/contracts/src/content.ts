@@ -97,12 +97,17 @@ export const ContentPackageCreate = z.object({
   copy: CopyDocumentV1,
   creativeDocumentIds: z.array(z.string()).max(20).default([]),
 });
-/** A revision is never edited: revising creates content revision n+1 and supersedes the current one (spec 13.1). */
+/**
+ * A revision is never edited: revising creates content revision n+1 and supersedes the current one (spec 13.1).
+ * `creativeDocumentIds` omitted keeps the documents the current revision publishes with (re-pinned at their current
+ * creative revisions, as re-submitting them would); `[]` removes every creative; a list replaces the selection. A
+ * client that only changes copy therefore never detaches the creative by accident.
+ */
 export const ContentPackageRevise = z.object({
   contentPackageId: z.string(),
   expectedVersion: z.number().int(),
   copy: CopyDocumentV1,
-  creativeDocumentIds: z.array(z.string()).max(20).default([]),
+  creativeDocumentIds: z.array(z.string()).max(20).optional(),
   summary: z.string().max(500).optional(),
 });
 export const ContentPackageGet = z.object({ contentPackageId: z.string() });

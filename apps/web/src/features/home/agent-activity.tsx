@@ -1,20 +1,18 @@
 import { Link } from 'react-router';
-import { Badge, EmptyState } from '@oremedia/ui';
-import { brandPath, useBrandContext } from '../brand/brand-context';
-import { readRecentRuns, runStateChip } from '../agents/run-helpers';
-import { useAgentRuns } from '../agents/use-agent-runs';
+import { Badge, EmptyState, Skeleton } from '@oremedia/ui';
+import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
+import { brandPath, useBrandContext } from '../brand/brand-context';
+import { runStateChip } from '../agents/run-helpers';
+import { useAgentRunList } from '../agents/use-agent-runs';
 
 const RECENT = 5;
 
-/**
- * The agent runs started or opened on this device, newest first, with their state. The API has no run listing for
- * every member (the brand-wide history needs audit access, on the agents screen), so this says whose list it is.
- */
+/** The brand's most recent agent runs from the server, newest first, with their state; the agents screen has them all. */
 export function AgentActivity() {
   const { companyId, brandId } = useBrandContext();
-  const recent = readRecentRuns(companyId, brandId).slice(0, RECENT);
-  const runs = useAgentRuns(recent.map((r) => r.runId));
+  const runs = useAgentRunList(brandId, RECENT);
+  const recent = runs.items.slice(0, RECENT);
   const agentsHref = brandPath(companyId, brandId, 'agents');
   return (
     <Section
@@ -26,30 +24,38 @@ export function AgentActivity() {
         </Link>
       }
     >
-      {recent.length === 0 ? (
-        <EmptyState
-          title="No runs on this device"
-          description="Runs you start or open appear here; the agents screen lists the brand’s history."
+      {runs.isPending && <Skeleton label="Loading agent runs" lines={3} />}
+      {runs.isError && (
+        <RequestError
+          error={runs.error}
+          onRetry={() => void runs.refetch()}
+          title="Runs could not be loaded"
         />
-      ) : (
-        <ul className="flex flex-col divide-y divide-border">
-          {recent.map((r, i) => {
-            const run = runs[i]?.data;
-            const chip = run ? runStateChip(run.state) : null;
+      )}
+      {runs.isSuccess && recent.length === 0 && (
+        <EmptyState
+          title="No runs yet"
+          description="Nothing has run for this brand. Runs started from the agents screen appear here, newest first."
+        />
+      )}
+      {recent.length > 0 && (
+        <ul className="flex flex-col divide-y divide-border" aria-label="Recent agent runs">
+          {recent.map((run) => {
+            const chip = runStateChip(run.state);
             return (
-              <li key={r.runId} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+              <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
                 <div className="min-w-0">
                   <Link
-                    to={`${agentsHref}?run=${encodeURIComponent(r.runId)}`}
+                    to={`${agentsHref}?run=${encodeURIComponent(run.id)}`}
                     className="text-sm font-medium underline-offset-2 hover:underline"
                   >
-                    {run ? run.taskKind.replace(/_/g, ' ') : r.runId}
+                    {run.taskKind.replace(/_/g, ' ')}
                   </Link>
                   <p className="font-mono text-xs text-muted-foreground">
-                    {new Date(run?.createdAt ?? r.openedAt).toLocaleString()}
+                    {new Date(run.createdAt).toLocaleString()}
                   </p>
                 </div>
-                {chip && <Badge tone={chip.tone}>{chip.label}</Badge>}
+                <Badge tone={chip.tone}>{chip.label}</Badge>
               </li>
             );
           })}

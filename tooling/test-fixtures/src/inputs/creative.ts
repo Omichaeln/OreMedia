@@ -5,6 +5,7 @@ import { seedCreativeDocument } from './creative-seed';
 export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
   'creative.documents.create': { buildInput: (f) => ({ brandId: f['brandId'], title: 'Foreign document' }) },
   'creative.documents.get': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
+  'creative.documents.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'creative.revisions.list': {
     buildInput: (f) => ({ documentId: f['creativeDocumentId'], page: { limit: 50 } }),
   },

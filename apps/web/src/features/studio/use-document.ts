@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useTRPC } from '../../lib/trpc';
+import { useCursorPages } from '../../lib/cursor-pages';
+import { useTRPC, useTRPCClient } from '../../lib/trpc';
 
 /** One hook per query (spec 21.1). */
 export function useDocument(documentId: string) {
@@ -7,19 +8,51 @@ export function useDocument(documentId: string) {
   return useQuery(trpc.creative.documents.get.queryOptions({ documentId }));
 }
 
-/** The newest revisions the studio's history lists. */
-export const REVISIONS_SHOWN = 50;
+/** Documents a page at a time (spec 7.4); the home and the package forms show more on request. */
+const DOCUMENTS_PAGE = 50;
 
-export function useRevisions(documentId: string) {
+/** The brand's documents, newest first, page by page; optionally only those created for one content package. */
+export function useDocuments(brandId: string, opts: { contentPackageId?: string; enabled?: boolean } = {}) {
   const trpc = useTRPC();
-  return useQuery(
-    trpc.creative.revisions.list.queryOptions({ documentId, page: { limit: REVISIONS_SHOWN } }),
-  );
+  const client = useTRPCClient();
+  const input = { brandId, ...(opts.contentPackageId ? { contentPackageId: opts.contentPackageId } : {}) };
+  return useCursorPages({
+    queryKey: trpc.creative.documents.list.queryKey(input),
+    fetchPage: (cursor) =>
+      client.creative.documents.list.query({
+        ...input,
+        page: { limit: DOCUMENTS_PAGE, ...(cursor ? { cursor } : {}) },
+      }),
+    enabled: opts.enabled,
+  });
 }
 
-export function useComments(documentId: string) {
+const REVISIONS_PAGE = 50;
+
+/** The studio's history, newest first, page by page (spec 7.4). */
+export function useRevisions(documentId: string) {
   const trpc = useTRPC();
-  return useQuery(trpc.creative.comments.list.queryOptions({ documentId, page: { limit: 100 } }));
+  const client = useTRPCClient();
+  const input = { documentId, page: { limit: REVISIONS_PAGE } };
+  return useCursorPages({
+    queryKey: trpc.creative.revisions.list.queryKey(input),
+    fetchPage: (cursor) =>
+      client.creative.revisions.list.query({ documentId, page: { limit: REVISIONS_PAGE, cursor } }),
+  });
+}
+
+const COMMENTS_PAGE = 50;
+
+/** A document's comments page by page (spec 7.4); the studio header counts the open ones from the same query. */
+export function useCommentPages(documentId: string) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  const input = { documentId, page: { limit: COMMENTS_PAGE } };
+  return useCursorPages({
+    queryKey: trpc.creative.comments.list.queryKey(input),
+    fetchPage: (cursor) =>
+      client.creative.comments.list.query({ documentId, page: { limit: COMMENTS_PAGE, cursor } }),
+  });
 }
 
 export function useTemplates(brandId: string) {

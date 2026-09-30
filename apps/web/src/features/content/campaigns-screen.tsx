@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { AddToggle, ColumnHeader, listButton } from '../../components/column-header';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -11,16 +12,9 @@ import { useBrandContext } from '../brand/brand-context';
 import { localInputToIso } from '../publishing/publication-state';
 import { useChannels, type ChannelDto } from '../publishing/use-publishing';
 import { BriefDetail } from './brief-detail';
-import {
-  briefChip,
-  briefGaps,
-  campaignChip,
-  isSuggested,
-  missedDate,
-  packageWindow,
-} from './content-helpers';
+import { briefChip, briefGaps, campaignChip, isSuggested, missedDate } from './content-helpers';
 import { PackageDetail } from './package-detail';
-import { useBriefs, useCampaigns, useRecentPackages } from './use-content';
+import { useBriefs, useCampaigns, usePackages } from './use-content';
 
 function CreateCampaignForm({ brandId, onCreated }: { brandId: string; onCreated: (id: string) => void }) {
   const trpc = useTRPC();
@@ -221,10 +215,9 @@ export function CampaignsScreen() {
   const campaignId = params.get('campaign');
   const briefId = params.get('brief');
   const packageId = params.get('package');
-  const [pkgWindow] = useState(() => packageWindow());
   const campaigns = useCampaigns(brandId);
   const briefs = useBriefs(brandId, campaignId);
-  const packages = useRecentPackages(brandId, pkgWindow.from, pkgWindow.to);
+  const packages = usePackages(brandId);
   const channels = useChannels(brandId);
   const channelMap = useMemo(
     () => new Map<string, ChannelDto>((channels.data ?? []).map((c) => [c.id, c])),
@@ -238,7 +231,6 @@ export function CampaignsScreen() {
     }
     setParams(p, { replace: true });
   };
-  const windowText = `between ${new Date(pkgWindow.from).toLocaleDateString()} and ${new Date(pkgWindow.to).toLocaleDateString()}`;
   const forbidden = campaigns.isError && toUiError(campaigns.error).kind === 'forbidden';
   const [creating, setCreating] = useState<'campaign' | 'brief' | null>(null);
 
@@ -298,7 +290,7 @@ export function CampaignsScreen() {
                 <span className="font-medium">All briefs</span>
               </button>
             </li>
-            {campaigns.data.items.map((c) => {
+            {campaigns.items.map((c) => {
               const chip = campaignChip(c.state);
               return (
                 <li key={c.id}>
@@ -324,11 +316,18 @@ export function CampaignsScreen() {
             })}
           </ul>
         )}
-        {campaigns.isSuccess && campaigns.data.items.length === 0 && (
+        {campaigns.isSuccess && campaigns.items.length === 0 && (
           <p className="px-4 py-3 text-sm text-muted-foreground">
             No campaigns yet. Group briefs in one, or write a standalone brief.
           </p>
         )}
+        <LoadMore
+          shown={campaigns.items.length}
+          hasNextPage={campaigns.hasNextPage}
+          isFetchingNextPage={campaigns.isFetchingNextPage}
+          onLoadMore={() => void campaigns.fetchNextPage()}
+          noun="campaigns"
+        />
       </section>
       <section
         aria-labelledby="briefs-title"
@@ -379,14 +378,14 @@ export function CampaignsScreen() {
             <RequestError error={briefs.error} onRetry={() => void briefs.refetch()} />
           </div>
         )}
-        {briefs.isSuccess && briefs.data.items.length === 0 && (
+        {briefs.isSuccess && briefs.items.length === 0 && (
           <p className="px-4 py-3 text-sm text-muted-foreground">
             No briefs yet. Write one, or accept a recommendation that creates one.
           </p>
         )}
-        {briefs.isSuccess && briefs.data.items.length > 0 && (
+        {briefs.isSuccess && briefs.items.length > 0 && (
           <ul className="flex flex-col divide-y divide-border" aria-label="Briefs">
-            {briefs.data.items.map((b) => {
+            {briefs.items.map((b) => {
               const chip = briefChip(b.state);
               return (
                 <li key={b.id}>
@@ -413,6 +412,13 @@ export function CampaignsScreen() {
             })}
           </ul>
         )}
+        <LoadMore
+          shown={briefs.items.length}
+          hasNextPage={briefs.hasNextPage}
+          isFetchingNextPage={briefs.isFetchingNextPage}
+          onLoadMore={() => void briefs.fetchNextPage()}
+          noun="briefs"
+        />
       </section>
       <div className="flex min-w-0 flex-1 flex-col gap-6 border-t border-border px-4 py-6 sm:px-8 lg:border-t-0">
         {channels.isError && (
@@ -428,8 +434,7 @@ export function CampaignsScreen() {
             brandId={brandId}
             briefId={briefId}
             channels={channelMap}
-            packages={packages.data?.packages}
-            packagesWindow={windowText}
+            packages={packages}
             selectedPackageId={packageId}
             onSelectPackage={(id) => update({ package: id })}
           />

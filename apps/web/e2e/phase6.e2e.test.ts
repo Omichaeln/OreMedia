@@ -22,6 +22,8 @@ const launchOptions = chromiumPath
 describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transport, phone width)', () => {
   const backend = new MockBackend();
   const p6 = backend.phase6;
+  /** A studio document the revise form can pin (creative.documents.list serves it). */
+  const poster = backend.createDocument('Launch poster');
   let origin = '';
   let close: () => Promise<void> = async () => {};
   let browser: Browser;
@@ -421,14 +423,25 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     const detail = page.getByTestId('package-detail');
     await expect.poll(() => text('revision-state'), { timeout: 15_000 }).toContain('Changes requested');
     await detail.getByLabel('Master copy').fill('Workshop dates for October and November.');
-    await detail.getByLabel('Creative document ids').fill('doc_e2e_poster');
+    // The documents come from creative.documents.list, not typed ids; the seeded package pins nothing yet.
+    const picker = detail.getByTestId('document-picker');
+    await expect.poll(() => picker.getByLabel(/Launch poster/).count(), { timeout: 15_000 }).toBe(1);
+    await picker.getByLabel(/Launch poster/).check();
     await detail.getByRole('button', { name: 'Create next revision' }).click();
     await expect.poll(() => text('revision-state'), { timeout: 15_000 }).toContain('Draft');
     expect(await text('revision-history')).toContain('Superseded');
-    const link = page
-      .getByTestId('studio-links')
-      .getByRole('link', { name: 'Open doc_e2e_poster in the studio' });
-    expect(await link.getAttribute('href')).toBe(brandPath('studio/doc_e2e_poster'));
+    expect(requestsTo('content.packages.revise')).toHaveLength(1);
+    const link = page.getByTestId('studio-links').getByRole('link', { name: 'Launch poster' });
+    expect(await link.getAttribute('href')).toBe(brandPath(`studio/${poster.id}`));
+    expect(await count('document-stale')).toBe(0);
+    // A copy-only revision omits creativeDocumentIds: the server keeps the document (spec 6.3, no accidental detach).
+    await detail.getByLabel('Master copy').fill('Workshop dates for October, November and December.');
+    await detail.getByRole('button', { name: 'Create next revision' }).click();
+    await expect.poll(() => requestsTo('content.packages.revise').length, { timeout: 15_000 }).toBe(2);
+    await expect.poll(() => text('revision-history'), { timeout: 15_000 }).toContain('#3');
+    expect(await page.getByTestId('studio-links').getByRole('link', { name: 'Launch poster' }).count()).toBe(
+      1,
+    );
   }, 45_000);
 
   // ---- brand settings: channels (spec 14.7) ----

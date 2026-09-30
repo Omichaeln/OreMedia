@@ -1,21 +1,25 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import type { AssetKind, AssetPurpose } from '@oremedia/contracts/assets';
-import { useTRPC, type Trpc } from '../../lib/trpc';
+import { useCursorPages } from '../../lib/cursor-pages';
+import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
 export type AssetDto = inferOutput<Trpc['assets']['get']>;
 export type AssetRefDto = inferOutput<Trpc['assets']['search']>['items'][number];
 export type BrandFontFaceDto = inferOutput<Trpc['assets']['fonts']['list']>['items'][number];
 
-/** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. */
+const SEARCH_PAGE = 50;
+
+/** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. Page by page (spec 7.4). */
 export function useAssetSearch(brandId: string, purpose: AssetPurpose, query?: string) {
   const trpc = useTRPC();
-  return useQuery(
-    trpc.assets.search.queryOptions({
-      query: { brandId, purpose, channelConnectionIds: [], query: query || undefined },
-      page: { limit: 100 },
-    }),
-  );
+  const client = useTRPCClient();
+  const search = { brandId, purpose, channelConnectionIds: [], query: query || undefined };
+  return useCursorPages({
+    queryKey: trpc.assets.search.queryKey({ query: search, page: { limit: SEARCH_PAGE } }),
+    fetchPage: (cursor) =>
+      client.assets.search.query({ query: search, page: { limit: SEARCH_PAGE, cursor } }),
+  });
 }
 
 /**

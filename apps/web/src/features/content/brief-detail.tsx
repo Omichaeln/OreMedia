@@ -11,28 +11,22 @@ import {
   StatusBanner,
   Textarea,
 } from '@oremedia/ui';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import type { ChannelDto } from '../publishing/use-publishing';
-import {
-  briefChip,
-  briefGaps,
-  isSuggested,
-  packageChip,
-  parseIds,
-  rememberPackageDocuments,
-} from './content-helpers';
-import { useBrief, type PackageSummaryDto } from './use-content';
+import { briefChip, briefGaps, isSuggested, packageChip } from './content-helpers';
+import { DocumentPicker } from './document-picker';
+import { useBrief, type PackagesQuery } from './use-content';
 
 export interface BriefDetailProps {
   brandId: string;
   briefId: string;
   channels: ReadonlyMap<string, ChannelDto>;
-  /** The brand's recent packages (the calendar window); this brief's are the ones pointing at it. */
-  packages: readonly PackageSummaryDto[] | undefined;
-  packagesWindow: string;
+  /** The brand's packages, newest first and paged; this brief's are the ones pointing at it. */
+  packages: PackagesQuery;
   selectedPackageId: string | null;
   onSelectPackage: (contentPackageId: string) => void;
 }
@@ -51,21 +45,22 @@ function CreatePackageForm({
   const intent = useIntentKey();
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
-  const [docs, setDocs] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
   const create = useMutation(
     trpc.content.packages.create.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: (res, vars) => {
+      onSuccess: (res) => {
         intent.renew();
-        rememberPackageDocuments(res.contentPackageId, vars.creativeDocumentIds ?? []);
         setTitle('');
         setText('');
-        setDocs('');
+        setSelected([]);
         void queryClient.invalidateQueries(trpc.content.pathFilter());
         onCreated(res.contentPackageId);
       },
     }),
   );
+  const toggle = (id: string) =>
+    setSelected((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
@@ -74,7 +69,7 @@ function CreatePackageForm({
       briefId,
       title: title.trim(),
       copy: { schemaVersion: 1, master: { text, factRefs: [] } },
-      creativeDocumentIds: parseIds(docs),
+      creativeDocumentIds: selected,
     });
   };
   const ui = create.isError ? toUiError(create.error) : null;
@@ -92,13 +87,13 @@ function CreatePackageForm({
       <Field label="Master copy" htmlFor="pkg-copy">
         <Textarea id="pkg-copy" value={text} onChange={(e) => setText(e.target.value)} rows={3} />
       </Field>
-      <Field
-        label="Creative document ids"
-        htmlFor="pkg-docs"
-        hint="doc_…, comma separated. Revision 1 pins their current revisions."
-      >
-        <Input id="pkg-docs" value={docs} onChange={(e) => setDocs(e.target.value)} />
-      </Field>
+      <DocumentPicker
+        brandId={brandId}
+        pinned={[]}
+        selected={selected}
+        onToggle={toggle}
+        legend="Creative documents (revision 1 pins their current revisions)"
+      />
       {ui && ui.kind === 'forbidden' && (
         <StatusBanner
           tone="critical"
@@ -130,7 +125,6 @@ export function BriefDetail({
   briefId,
   channels,
   packages,
-  packagesWindow,
   selectedPackageId,
   onSelectPackage,
 }: BriefDetailProps) {
@@ -149,7 +143,7 @@ export function BriefDetail({
   );
   const b = brief.data;
   const acceptUi = accept.isError ? toUiError(accept.error) : null;
-  const mine = (packages ?? []).filter((p) => p.briefId === briefId);
+  const mine = packages.items.filter((p) => p.briefId === briefId);
   const chip = b ? briefChip(b.state) : null;
   const gaps = b ? briefGaps(b) : [];
 
@@ -245,8 +239,8 @@ export function BriefDetail({
             <h3 id="brief-packages" className="text-sm font-semibold">
               Content packages
             </h3>
-            <p className="text-xs text-muted-foreground">Packages touched {packagesWindow}.</p>
-            {mine.length === 0 ? (
+            {packages.isPending && <Skeleton label="Loading packages" lines={2} />}
+            {packages.isSuccess && mine.length === 0 ? (
               <EmptyState
                 title="No packages for this brief"
                 description={
@@ -277,6 +271,14 @@ export function BriefDetail({
                 })}
               </ul>
             )}
+            <LoadMore
+              shown={packages.items.length}
+              hasNextPage={packages.hasNextPage}
+              isFetchingNextPage={packages.isFetchingNextPage}
+              onLoadMore={() => void packages.fetchNextPage()}
+              noun="brand packages"
+              className="px-0"
+            />
             {b.state !== 'draft' && b.state !== 'cancelled' && (
               <CreatePackageForm brandId={brandId} briefId={b.id} onCreated={onSelectPackage} />
             )}

@@ -1456,4 +1456,53 @@ describe('creative module (spec 11) against MySQL 8', () => {
       expect(denied.length).toBeGreaterThan(0);
     });
   });
+  describe('documents.list', () => {
+    it("lists the brand's documents newest first with cursor paging, filters by package, and a foreign brand is NOT_FOUND", async () => {
+      registerAssetAuthoriser(async () => undefined);
+      const ids: string[] = [];
+      for (const title of ['one', 'two', 'three']) {
+        const res = await run(tenantA, (tx) =>
+          creativeService.documents.create(
+            A,
+            {
+              brandId: brandA,
+              title,
+              ...(title === 'two' ? { contentPackageId: 'pkg_list_test' } : {}),
+              document: studioDocument(brandVersionA, false),
+            },
+            tx,
+          ),
+        );
+        ids.push(res.documentId);
+      }
+      resetAssetAuthoriser();
+      const first = await run(tenantA, () =>
+        creativeService.documents.list(A, { brandId: brandA, page: { limit: 2 } }),
+      );
+      expect(first.items).toHaveLength(2);
+      expect(first.items.map((d) => d.id)).toEqual([...first.items.map((d) => d.id)].sort().reverse());
+      expect(first.nextCursor).not.toBeNull();
+      const second = await run(tenantA, () =>
+        creativeService.documents.list(A, {
+          brandId: brandA,
+          page: { limit: 200, cursor: first.nextCursor ?? undefined },
+        }),
+      );
+      expect(second.items.map((d) => d.id)).not.toContain(first.items[0]?.id);
+      const all = [...first.items, ...second.items].map((d) => d.id);
+      for (const id of ids) expect(all).toContain(id);
+      expect(all).not.toContain(docB);
+      const byPackage = await run(tenantA, () =>
+        creativeService.documents.list(A, {
+          brandId: brandA,
+          contentPackageId: 'pkg_list_test',
+          page: { limit: 50 },
+        }),
+      );
+      expect(byPackage.items.map((d) => d.title)).toEqual(['two']);
+      await expect(
+        run(tenantA, () => creativeService.documents.list(A, { brandId: brandB, page: { limit: 10 } })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
 });

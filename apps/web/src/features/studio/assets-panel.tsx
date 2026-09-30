@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CreativePage, Element } from '@oremedia/contracts/creative';
 import { findElement, type IntentBatch } from '@oremedia/editor';
 import { Badge, EmptyState, Input, Skeleton } from '@oremedia/ui';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useAssetSearch, type AssetRefDto } from '../assets/use-assets';
@@ -93,15 +94,15 @@ export function AssetsPanel({ brandId, page, selection, readOnly, onIntent }: As
       </p>
       {search.isPending && <Skeleton label="Loading assets" lines={2} />}
       {search.isError && <RequestError error={search.error} onRetry={() => void search.refetch()} />}
-      {search.isSuccess && search.data.items.length === 0 && (
+      {search.isSuccess && search.items.length === 0 && (
         <EmptyState
           title="No eligible assets"
           description="Approved assets with usage rights for creative use appear here."
         />
       )}
-      {search.isSuccess && search.data.items.length > 0 && (
+      {search.isSuccess && search.items.length > 0 && (
         <ul className="grid grid-cols-3 gap-1" aria-label="Eligible assets">
-          {search.data.items.map((a) => (
+          {search.items.map((a) => (
             <li key={a.assetVersionId}>
               <button
                 type="button"
@@ -122,6 +123,16 @@ export function AssetsPanel({ brandId, page, selection, readOnly, onIntent }: As
             </li>
           ))}
         </ul>
+      )}
+      {search.isSuccess && (
+        <LoadMore
+          shown={search.items.length}
+          hasNextPage={search.hasNextPage}
+          isFetchingNextPage={search.isFetchingNextPage}
+          onLoadMore={() => void search.fetchNextPage()}
+          noun={search.items.length === 1 ? 'asset' : 'assets'}
+          className="px-0"
+        />
       )}
     </div>
   );

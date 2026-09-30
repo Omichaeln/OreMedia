@@ -1,7 +1,7 @@
 import type { InboxAttention } from '@oremedia/contracts/review';
 import { useBrandVersions, useFacts, type BrandDto } from '../brand/use-brand';
 import { usePublicationsInState } from '../publishing/use-publishing';
-import { useReviewInbox } from '../review/use-review';
+import { useReviewInboxPages } from '../review/use-review';
 
 /** Review states that wait on a person: a decision, a new request, the author's changes, or a lost approval. */
 export const REVIEW_NEEDS_YOU: ReadonlySet<InboxAttention> = new Set([
@@ -18,13 +18,13 @@ export const REVIEW_NEEDS_YOU: ReadonlySet<InboxAttention> = new Set([
  * the navigation never shows a number it does not have.
  */
 export function useNavCounts(brand: BrandDto) {
-  const inbox = useReviewInbox(brand.id);
+  const inbox = useReviewInboxPages(brand.id);
   const failed = usePublicationsInState(brand.id, 'failed');
   const unknown = usePublicationsInState(brand.id, 'outcome_unknown');
   const held = usePublicationsInState(brand.id, 'held');
   const facts = useFacts(brand.id, 'proposed');
   const versions = useBrandVersions(brand.id);
-  const review = inbox.data?.items.filter((i) => i.attention.some((a) => REVIEW_NEEDS_YOU.has(a))).length;
+  const review = inbox.items.filter((i) => i.attention.some((a) => REVIEW_NEEDS_YOU.has(a))).length;
   const calendar =
     failed.data && unknown.data && held.data
       ? failed.data.items.length + unknown.data.items.length + held.data.items.length

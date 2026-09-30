@@ -46,7 +46,35 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   async create(values: Omit<typeof creativeDocuments.$inferInsert, 'tenantId'>, tx?: Tx) {
     await this.insertBrandScoped(values, tx);
   }
+  /** The brand's documents newest first (id-desc cursor, as revisions); optionally those of one content package. */
+  async list(
+    brandId: string,
+    filter: { contentPackageId?: string },
+    page: PageRequest,
+    tx?: Tx,
+  ): Promise<Page<typeof creativeDocuments.$inferSelect>> {
+    const clauses: SQL[] = [];
+    if (filter.contentPackageId)
+      clauses.push(eq(creativeDocuments.contentPackageId, filter.contentPackageId));
+    const cursor = page.cursor ? decodeCursor(page.cursor) : null;
+    if (cursor) clauses.push(lte(creativeDocuments.id, cursor.id));
+    const rows = await this.conn(tx)
+      .select()
+      .from(creativeDocuments)
+      .where(this.brandScope(brandId, clauses.length ? (and(...clauses) as SQL) : undefined))
+      .orderBy(desc(creativeDocuments.id))
+      .limit(page.limit + 1);
+    return pageOf(rows, page);
+  }
   /** Spec 11.4 documents.setCurrentRevision(doc.id, doc.version, revision.id): optimistic version → CONFLICT on mismatch. */
+  /** Documents by id (content revision pins), bounded by the id-list maximum (spec 7.4); unseen ids are dropped. */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(creativeDocuments)
+      .where(this.brandScope(brandId, inArray(creativeDocuments.id, ids.slice(0, ID_LIST_MAX))));
+  }
   async setCurrentRevision(id: string, expectedVersion: number, revisionId: string, tx: Tx) {
     await this.updateScoped(id, expectedVersion, { currentRevisionId: revisionId }, tx);
   }
@@ -76,6 +104,14 @@ export class CreativeRevisionRepository extends BrandScopedRepository<typeof cre
       .orderBy(desc(creativeRevisions.id))
       .limit(page.limit + 1);
     return pageOf(rows, page);
+  }
+  /** Revisions by id (content revision pins), bounded by the id-list maximum (spec 7.4); unseen ids are dropped. */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(creativeRevisions)
+      .where(this.brandScope(brandId, inArray(creativeRevisions.id, ids.slice(0, ID_LIST_MAX))));
   }
 }
 

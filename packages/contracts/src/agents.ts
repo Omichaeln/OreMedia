@@ -240,6 +240,8 @@ export type AgentRunSignalV1 = z.infer<typeof AgentRunSignalV1>;
 
 // ---- router DTOs (spec 7.5 agents router) ----
 export const RunGet = z.object({ runId: z.string() });
+/** The brand's runs, newest first (brand.read). */
+export const RunList = z.object({ brandId: z.string(), page: PageRequest });
 export const RunCancel = z.object({ runId: z.string(), reason: z.string().max(500).optional() });
 export const RunSteps = z.object({ runId: z.string(), page: PageRequest });
 export const RunApproveProposal = z.object({

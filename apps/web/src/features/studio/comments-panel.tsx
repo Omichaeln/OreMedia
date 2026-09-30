@@ -2,11 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
 import { Badge, Button, EmptyState, Field, Skeleton, Textarea, type Tone } from '@oremedia/ui';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
-import { useComments } from './use-document';
+import { useCommentPages } from './use-document';
 import { elementName } from './document-helpers';
 import type { CommentDto } from './types';
 
@@ -33,7 +34,7 @@ export function CommentsPanel({
 }: CommentsPanelProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const comments = useComments(documentId);
+  const comments = useCommentPages(documentId);
   const [body, setBody] = useState('');
   const selected = selection[0] ?? null;
   const addIntent = useIntentKey();
@@ -67,12 +68,12 @@ export function CommentsPanel({
     <div className="flex flex-col gap-3" data-testid="comments">
       {comments.isPending && <Skeleton label="Loading comments" lines={2} />}
       {comments.isError && <RequestError error={comments.error} onRetry={() => void comments.refetch()} />}
-      {comments.isSuccess && comments.data.items.length === 0 && (
+      {comments.isSuccess && comments.items.length === 0 && (
         <EmptyState title="No comments" description="Select an element and leave a note for reviewers." />
       )}
-      {comments.isSuccess && comments.data.items.length > 0 && (
+      {comments.isSuccess && comments.items.length > 0 && (
         <ul className="flex flex-col divide-y divide-border text-sm">
-          {comments.data.items.map((c) => (
+          {comments.items.map((c) => (
             <li key={c.id} className="flex flex-col gap-1 py-2">
               <div className="flex flex-wrap items-center gap-1">
                 <button
@@ -107,6 +108,16 @@ export function CommentsPanel({
             </li>
           ))}
         </ul>
+      )}
+      {comments.isSuccess && (
+        <LoadMore
+          shown={comments.items.length}
+          hasNextPage={comments.hasNextPage}
+          isFetchingNextPage={comments.isFetchingNextPage}
+          onLoadMore={() => void comments.fetchNextPage()}
+          noun={comments.items.length === 1 ? 'comment' : 'comments'}
+          className="px-0"
+        />
       )}
       {resolve.isError && <RequestError error={resolve.error} />}
       <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>

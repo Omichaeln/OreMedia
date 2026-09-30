@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { useMutation } from '@tanstack/react-query';
-import { Button, Field, Input, StatusBanner } from '@oremedia/ui';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
+import { LoadMore } from '../../../../../../components/load-more';
+import { RequestError } from '../../../../../../components/request-state';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
 import { useBrandVersions } from '../../../../../../features/brand/use-brand';
 import { AgentActivity } from '../../../../../../features/home/agent-activity';
@@ -9,8 +11,8 @@ import { NeedsYou } from '../../../../../../features/home/needs-you';
 import { Section } from '../../../../../../components/section';
 import { WeekStrip } from '../../../../../../features/home/week-strip';
 import { useSessionUser } from '../../../../../../features/session/use-session-user';
+import { useDocuments } from '../../../../../../features/studio/use-document';
 import { hasCredential } from '../../../../../../lib/session';
-import { readRecentDocuments, rememberDocument } from '../../../../../../lib/recent-documents';
 import { useTRPC } from '../../../../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../../../../lib/intent-key';
 import { toUiError } from '../../../../../../lib/errors';
@@ -20,7 +22,8 @@ const greetingFor = (hour: number) =>
 
 /**
  * Spec 21.2 brand home: the day in the brand's timezone, the standards banners, then one list of what needs a
- * person, the week at a glance, recent agent runs and documents. All from live data; nothing is estimated.
+ * person, the week at a glance, the brand's recent agent runs and its documents. All from live data; nothing is
+ * estimated.
  */
 export function BrandHomeRoute() {
   const { companyId, brandId, brand } = useBrandContext();
@@ -96,7 +99,7 @@ export function BrandHomeRoute() {
       <div className="grid gap-8 md:grid-cols-2">
         <AgentActivity />
         <Section id="documents" title="Documents">
-          <RecentDocuments />
+          <Documents />
           <NewDocument
             disabledReason={brand.publishedVersionId ? undefined : 'Publish brand standards first'}
           />
@@ -109,16 +112,16 @@ export function BrandHomeRoute() {
 function NewDocument({ disabledReason }: { disabledReason?: string }) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const intent = useIntentKey();
   const [title, setTitle] = useState('');
-  const [openId, setOpenId] = useState('');
   const create = useMutation(
     trpc.creative.documents.create.mutationOptions({
       ...mutationIntent(intent.key),
       onSuccess: (res) => {
         intent.renew();
-        rememberDocument({ companyId, brandId, documentId: res.documentId, title: title.trim() });
+        void queryClient.invalidateQueries(trpc.creative.documents.pathFilter());
         navigate(brandPath(companyId, brandId, `studio/${encodeURIComponent(res.documentId)}`));
       },
     }),
@@ -148,49 +151,55 @@ function NewDocument({ disabledReason }: { disabledReason?: string }) {
           </Button>
         </div>
       </form>
-      <form
-        className="mt-4 flex items-end gap-2 border-t border-border pt-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (openId.trim())
-            navigate(brandPath(companyId, brandId, `studio/${encodeURIComponent(openId.trim())}`));
-        }}
-      >
-        <Field label="Open a document by id" htmlFor="doc-id" className="flex-1" hint="doc_…">
-          <Input id="doc-id" value={openId} onChange={(e) => setOpenId(e.target.value)} />
-        </Field>
-        <Button type="submit" disabled={!openId.trim()}>
-          Open
-        </Button>
-      </form>
     </div>
   );
 }
 
-function RecentDocuments() {
+/** The brand's documents from the server, newest first, page by page; every title opens the studio. */
+function Documents() {
   const { companyId, brandId } = useBrandContext();
-  const recent = readRecentDocuments(companyId, brandId);
-  if (recent.length === 0)
+  const documents = useDocuments(brandId);
+  if (documents.isPending) return <Skeleton label="Loading documents" lines={3} />;
+  if (documents.isError)
     return (
-      <p className="text-sm text-muted-foreground">
-        No documents opened on this device yet. The list is per browser; campaigns hold every package.
-      </p>
+      <RequestError
+        error={documents.error}
+        onRetry={() => void documents.refetch()}
+        title="Documents could not be loaded"
+      />
+    );
+  if (documents.items.length === 0)
+    return (
+      <EmptyState
+        title="No documents yet"
+        description="Create the first one below; every document of the brand is listed here."
+      />
     );
   return (
-    <ul className="flex flex-col divide-y divide-border" aria-label="Recently opened on this device">
-      {recent.map((d) => (
-        <li key={d.documentId} className="flex items-center justify-between gap-2 py-2.5">
-          <Link
-            to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.documentId)}`)}
-            className="min-w-0 truncate text-sm font-medium underline-offset-2 hover:underline"
-          >
-            {d.title || d.documentId}
-          </Link>
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {new Date(d.openedAt).toLocaleDateString()}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex flex-col">
+      <ul className="flex flex-col divide-y divide-border" aria-label="Documents" data-testid="documents">
+        {documents.items.map((d) => (
+          <li key={d.id} className="flex items-center justify-between gap-2 py-2.5">
+            <Link
+              to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.id)}`)}
+              className="min-w-0 truncate text-sm font-medium underline-offset-2 hover:underline"
+            >
+              {d.title}
+            </Link>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {new Date(d.updatedAt).toLocaleDateString()}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <LoadMore
+        shown={documents.items.length}
+        hasNextPage={documents.hasNextPage}
+        isFetchingNextPage={documents.isFetchingNextPage}
+        onLoadMore={() => void documents.fetchNextPage()}
+        noun="documents"
+        className="px-0"
+      />
+    </div>
   );
 }

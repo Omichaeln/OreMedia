@@ -7,6 +7,7 @@ import {
   CreativeDocumentV1,
   DocumentCreate,
   DocumentGet,
+  DocumentList,
   OperationBatch,
   OperationsApply,
   OperationsPropose,
@@ -790,6 +791,20 @@ export const creativeService = {
       await policy.assert(actor, 'creative.read', documentResource(doc), {}, tx);
       const current = await loadCurrentRevision(doc, tx);
       return { ...toDocumentDto(doc), revision: toRevisionDto(current) };
+    },
+
+    /** The brand's documents, newest first, without their revisions (get returns the current one); creative.read. */
+    async list(actor: ResolvedActor, input: z.infer<typeof DocumentList>, tx?: Tx) {
+      const parsed = DocumentList.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
+      await policy.assert(actor, 'creative.read', brandResource(brand.id), {}, tx);
+      const page = await documentsRepo.list(
+        brand.id,
+        parsed.contentPackageId ? { contentPackageId: parsed.contentPackageId } : {},
+        parsed.page,
+        tx,
+      );
+      return { items: page.items.map(toDocumentDto), nextCursor: page.nextCursor };
     },
   },
 

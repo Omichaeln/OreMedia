@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Field, Skeleton, Textarea, cn } from '@oremedia/ui';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { useToast } from '../../components/toast';
 import { toUiError } from '../../lib/errors';
@@ -34,7 +35,7 @@ export function InboxScreen() {
     p.set('conversation', id);
     setParams(p, { replace: true });
   };
-  const items = conversations.data?.items ?? [];
+  const items = conversations.items;
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -104,6 +105,16 @@ export function InboxScreen() {
                 </li>
               ))}
             </ul>
+          )}
+          {conversations.isSuccess && (
+            <LoadMore
+              shown={items.length}
+              hasNextPage={conversations.hasNextPage}
+              isFetchingNextPage={conversations.isFetchingNextPage}
+              onLoadMore={() => void conversations.fetchNextPage()}
+              noun={items.length === 1 ? 'conversation' : 'conversations'}
+              className="border-t border-border px-4 py-2 sm:px-6"
+            />
           )}
         </div>
       </section>

@@ -5,6 +5,7 @@ import {
   RunApproveProposal,
   RunCancel,
   RunGet,
+  RunList,
   RunStart,
   RunSteps,
   type AgentRunState,
@@ -232,6 +233,15 @@ export const agentsService = {
       const run = await runsRepo.getById(parsed.runId, tx);
       await policy.assert(actor, 'brand.read', brandResource(run), {}, tx);
       return toRunDto(run);
+    },
+
+    /** The brand's runs newest first (brand.read on the brand, as get on each run); a foreign brand is NOT_FOUND. */
+    async list(actor: ResolvedActor, input: z.infer<typeof RunList>, tx?: Tx) {
+      const parsed = RunList.parse(input);
+      // brandService.get asserts brand.read; a foreign brand is NOT_FOUND.
+      const brand = await brandService.get(actor, parsed.brandId, tx);
+      const page = await runsRepo.listForBrand(brand.id, parsed.page, tx);
+      return { items: page.items.map(toRunDto), nextCursor: page.nextCursor };
     },
 
     /** Spec 13.5: cancel moves the row (machine), releases the reservation and signals the workflow via the outbox. */

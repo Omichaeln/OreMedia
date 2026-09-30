@@ -13,6 +13,7 @@ import {
   RunApproveProposal,
   RunCancel,
   RunGet,
+  RunList,
   RunStart,
   RunSteps,
 } from '@oremedia/contracts/agents';
@@ -399,6 +400,13 @@ function createRouter(backend: Backend) {
             version: 0,
           };
         }),
+        list: query.input(RunList).query(({ input }) => ({
+          items: [...backend.runs.values()]
+            .filter((r) => r.brandId === input.brandId)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+            .map(dto),
+          nextCursor: null,
+        })),
         get: query.input(RunGet).query(({ input }) => dto(backend.run(input.runId))),
         steps: query
           .input(RunSteps)
@@ -489,12 +497,11 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await close();
   });
 
-  it('lists every run of the brand from the audit log with a state chip, task kind, initiator, cost and times', async () => {
+  it('lists every run of the brand from the server with a state chip, task kind, initiator, cost and times', async () => {
     await signIn(E2E.ownerToken);
     await page.goto(`${origin}${agentsPath()}`);
     await expect.poll(() => page.getByRole('heading', { level: 1 }).textContent()).toBe('Agent runs');
     await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(6);
-    // Each row loads its run separately, so the state attribute arrives after the row: poll until all six are set.
     await expect
       .poll(
         async () =>
@@ -523,7 +530,8 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(0);
-    expect(backend.requests.some((r) => r.path.includes('operations.audit.query'))).toBe(true);
+    expect(backend.requests.some((r) => r.path.includes('agents.runs.list'))).toBe(true);
+    expect(backend.requests.some((r) => r.path.includes('operations.audit.query'))).toBe(false);
   }, 45_000);
 
   it('shows the step timeline with kinds, tokens, cost, duration and tool invocations with the redacted input', async () => {
@@ -653,7 +661,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(backend.runs.size).toBe(7);
   }, 45_000);
 
-  it('a creator without agent.start_run sees the empty device list and a Permission denied state on start', async () => {
+  it('a creator without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
     // At phone width Sign out is in the Menu drawer with the brand navigation.
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
@@ -661,15 +669,10 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     // Sign out navigates to /sign-in itself; a second navigation started before it lands is aborted (ERR_ABORTED).
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
     await signIn(E2E.creatorToken);
-    // The device list belongs to the previous sign-in on this browser; clear it to get the honest empty state.
-    await page.evaluate(() => localStorage.clear());
     await page.goto(`${origin}${agentsPath()}`);
-    await expect
-      .poll(() => page.getByRole('status').filter({ hasText: 'No runs yet' }).count(), { timeout: 15_000 })
-      .toBe(1);
-    await expect
-      .poll(() => page.getByTestId('runs').textContent(), { timeout: 15_000 })
-      .toContain('Brand-wide history needs audit access');
+    // The list comes from agents.runs.list (brand.read), not the audit log: no admin role is needed for history.
+    await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(7);
+    expect(await page.getByTestId('runs').textContent()).not.toContain('audit access');
     await page.getByRole('button', { name: 'New run' }).click();
     await page.getByLabel('Service principal').fill(E2E.principalId);
     await page.getByRole('button', { name: 'Start run' }).click();

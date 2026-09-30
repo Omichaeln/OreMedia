@@ -108,49 +108,9 @@ export function variantFindings(validation: unknown): ValidationFindings {
   return { ok: v.ok === true, issues };
 }
 
-/** The window the planner asks the calendar for packages in: 90 days back to 90 days ahead, at day precision. */
-export function packageWindow(now = new Date()): { from: string; to: string } {
-  const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return {
-    from: new Date(day - 90 * 86_400_000).toISOString(),
-    to: new Date(day + 91 * 86_400_000).toISOString(),
-  };
-}
-
-/** Comma, space or newline separated ids, trimmed and de-duplicated in order. */
-export const parseIds = (text: string): string[] => [
-  ...new Set(
-    text
-      .split(/[\s,]+/)
-      .map((s) => s.trim())
-      .filter(Boolean),
-  ),
-];
-
-/**
- * A content revision pins creative *revisions*, not documents (spec 6.3), so the API cannot say which studio
- * document a package came from. The planner remembers the documents chosen on THIS device per package, as the
- * brand home remembers recent documents; it is a convenience, never presented as the package's record.
- */
-const DOCS_KEY = 'oremedia.package_documents';
-
-export function readPackageDocuments(contentPackageId: string): string[] {
-  try {
-    const raw = localStorage.getItem(DOCS_KEY);
-    const all = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
-    return Array.isArray(all[contentPackageId]) ? all[contentPackageId] : [];
-  } catch {
-    return [];
-  }
-}
-
-export function rememberPackageDocuments(contentPackageId: string, documentIds: readonly string[]): void {
-  try {
-    const raw = localStorage.getItem(DOCS_KEY);
-    const all = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
-    all[contentPackageId] = [...documentIds];
-    localStorage.setItem(DOCS_KEY, JSON.stringify(all));
-  } catch {
-    // storage blocked: nothing to remember
-  }
-}
+/** Whether two id selections are the same set (order and repeats aside): an unchanged selection is not sent. */
+export const sameIdSet = (a: readonly string[], b: readonly string[]): boolean => {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  return setA.size === setB.size && [...setA].every((id) => setB.has(id));
+};

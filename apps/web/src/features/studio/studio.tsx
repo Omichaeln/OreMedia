@@ -6,7 +6,6 @@ import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { useBrandVersion } from '../brand/use-brand';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useAssetUrls } from '../assets/use-assets';
-import { rememberDocument } from '../../lib/recent-documents';
 import { useTheme } from '../../lib/theme';
 import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
@@ -22,7 +21,7 @@ import { RenderPanel } from './render-panel';
 import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
 import { hasLocalWork } from './studio-reducer';
 import { TemplatesPanel } from './templates-panel';
-import { useComments } from './use-document';
+import { useCommentPages } from './use-document';
 import { useDocumentFonts } from './use-document-fonts';
 import { useStudio } from './use-studio';
 import type { DocumentDto } from './types';
@@ -57,12 +56,8 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const [focusText, setFocusText] = useState(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [rightTab, setRightTab] = useState<RightTab>('agent');
-  const comments = useComments(documentId);
-  const openComments = (comments.data?.items ?? []).filter((c) => c.state !== 'resolved').length;
-
-  useEffect(() => {
-    rememberDocument({ companyId, brandId, documentId, title: initial.title });
-  }, [companyId, brandId, documentId, initial.title]);
+  const comments = useCommentPages(documentId);
+  const openComments = comments.items.filter((c) => c.state !== 'resolved').length;
 
   const brandVersion = useBrandVersion(brandId, state.committed.snapshot.brandVersionId);
   const colourTokens = useMemo(() => brandVersion.data?.document.tokens.colours ?? [], [brandVersion.data]);

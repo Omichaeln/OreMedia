@@ -114,19 +114,7 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                   ),
                 ),
             },
-            {
-              path: 'review',
-              Component: ReviewInboxRoute,
-              loader: (args) =>
-                prefetch(
-                  queryClient.ensureQueryData(
-                    trpcFor(param(args, 'company')).review.inbox.list.queryOptions(
-                      { brandId: param(args, 'brand'), page: { limit: 100 } },
-                      { trpc: { context: { tenantId: param(args, 'company') } } },
-                    ),
-                  ),
-                ),
-            },
+            { path: 'review', Component: ReviewInboxRoute },
             {
               path: 'performance',
               Component: PerformanceRoute,
@@ -140,19 +128,8 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                   ),
                 ),
             },
-            {
-              path: 'inbox',
-              Component: InboxRoute,
-              loader: (args) =>
-                prefetch(
-                  queryClient.ensureQueryData(
-                    trpcFor(param(args, 'company')).community.conversations.list.queryOptions(
-                      { brandId: param(args, 'brand'), page: { limit: 50 } },
-                      { trpc: { context: { tenantId: param(args, 'company') } } },
-                    ),
-                  ),
-                ),
-            },
+            // The review, inbox, experiments and campaigns lists page with useCursorPages (their own key), so nothing to prefetch.
+            { path: 'inbox', Component: InboxRoute },
             {
               path: 'intelligence',
               Component: IntelligenceRoute,
@@ -166,32 +143,8 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                   ),
                 ),
             },
-            {
-              path: 'experiments',
-              Component: ExperimentsRoute,
-              loader: (args) =>
-                prefetch(
-                  queryClient.ensureQueryData(
-                    trpcFor(param(args, 'company')).experiments.list.queryOptions(
-                      { brandId: param(args, 'brand'), page: { limit: 100 } },
-                      { trpc: { context: { tenantId: param(args, 'company') } } },
-                    ),
-                  ),
-                ),
-            },
-            {
-              path: 'campaigns',
-              Component: CampaignsRoute,
-              loader: (args) =>
-                prefetch(
-                  queryClient.ensureQueryData(
-                    trpcFor(param(args, 'company')).content.campaigns.list.queryOptions(
-                      { brandId: param(args, 'brand'), page: { limit: 100 } },
-                      { trpc: { context: { tenantId: param(args, 'company') } } },
-                    ),
-                  ),
-                ),
-            },
+            { path: 'experiments', Component: ExperimentsRoute },
+            { path: 'campaigns', Component: CampaignsRoute },
             {
               path: 'settings',
               Component: SettingsRoute,
