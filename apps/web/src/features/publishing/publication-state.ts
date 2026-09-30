@@ -387,6 +387,43 @@ export function localInputToIso(value: string): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/** The wall clock of an instant in a zone, read as if it were UTC (minutes precision). */
+function wallClockAsUtc(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(instant);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? '0');
+  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
+}
+
+/**
+ * `datetime-local` value read as a wall clock in the brand's time zone → ISO instant (UX-06): the review manifest,
+ * the release policy and the calendar all reason in the brand zone, so a form must not use the viewer's. The offset
+ * is taken at the guessed instant and corrected once more, which settles the instant across a DST change.
+ */
+export function zonedInputToIso(value: string, timeZone: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return null;
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  if (Number.isNaN(wall)) return null;
+  let instant = wall - (wallClockAsUtc(new Date(wall), timeZone) - wall);
+  instant = wall - (wallClockAsUtc(new Date(instant), timeZone) - instant);
+  return new Date(instant).toISOString();
+}
+
+/** ISO instant → `datetime-local` value as the brand's wall clock (minutes precision). */
+export function isoToZonedInput(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Date(wallClockAsUtc(d, timeZone)).toISOString().slice(0, 16);
+}
+
 /** ISO instant → `datetime-local` value in the viewer's zone (minutes precision). */
 export function isoToLocalInput(iso: string): string {
   const d = new Date(iso);

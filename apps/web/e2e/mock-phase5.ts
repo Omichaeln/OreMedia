@@ -23,6 +23,7 @@ import {
 } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
+  ApprovalList,
   ReviewDecisionSubmit,
   ReviewInboxList,
   ReviewRequestCreate,
@@ -712,7 +713,7 @@ export class Phase5Backend {
       approverKind: 'user',
       approverId: 'usr_reviewer',
       bindingHash: hash(r.manifestHash),
-      binding: { v: 1 },
+      binding: { v: 1, timing: r.frozenManifest.timing },
       validUntil: null,
       state,
       invalidatedReason,
@@ -912,6 +913,22 @@ export class Phase5Backend {
     this.link('rl_id_expired', P5.requests.revoked, P5.links.expired, 'late@client.example', daysFromNow(-2));
     this.requestRow(P5.requests.approved, P5.revisions.three, 'decided');
     this.approval(P5.requests.approved, 'valid');
+    // The seeded valid approval of revision one (what the schedulable variant cv_ok is on): the picker offers it.
+    this.approvals.push({
+      id: P5.approvalId,
+      brandId: this.brandId,
+      contentRevisionId: P5.revisions.one,
+      reviewRequestId: P5.requests.approved,
+      approverKind: 'user',
+      approverId: 'usr_reviewer',
+      bindingHash: hash(P5.approvalId),
+      binding: { v: 1, timing: { kind: 'exact', at: daysFromNow(1) } },
+      validUntil: null,
+      state: 'valid',
+      invalidatedReason: null,
+      createdAt: now(),
+      version: 1,
+    });
   }
 
   /** Mirrors packages/modules/review attentionFor. */
@@ -1373,7 +1390,7 @@ export function phase5Routers(
             approverKind: ctx.reviewer ? 'external_reviewer' : 'user',
             approverId: ctx.reviewer ? ctx.reviewer.id : (ctx.member?.userId ?? 'usr_e2e'),
             bindingHash: hash(r.manifestHash),
-            binding: { v: 1 },
+            binding: { v: 1, timing: r.frozenManifest.timing },
             validUntil: i.validUntil ?? null,
             state: 'valid',
             invalidatedReason: null,
@@ -1453,6 +1470,18 @@ export function phase5Routers(
         const a = b.approvals.find((x) => x.id === input.approvalId);
         if (!a) throw new NotFoundError('ReleaseApproval', input.approvalId);
         return a;
+      }),
+      /** Newest first, by revision and state (the schedule form's picker). */
+      list: query.input(ApprovalList).query(({ input }) => {
+        brandOf(input.brandId);
+        const items = [...b.approvals]
+          .reverse()
+          .filter(
+            (a) =>
+              (!input.contentRevisionId || a.contentRevisionId === input.contentRevisionId) &&
+              (!input.state || a.state === input.state),
+          );
+        return { items: items.slice(0, input.page.limit), nextCursor: null };
       }),
     }),
   });

@@ -22,8 +22,8 @@ import {
   actionsFor,
   channelOutcomeSummary,
   holdReasonText,
-  isoToLocalInput,
-  localInputToIso,
+  isoToZonedInput,
+  zonedInputToIso,
   outcomeUnknownReasonText,
   plainLength,
   publicationChip,
@@ -44,6 +44,8 @@ export interface PublicationDetailProps {
   brandId: string;
   publicationId: string | null;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** The brand's time zone: reschedule times are entered as the brand's wall clock (UX-06). */
+  timeZone: string;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -57,7 +59,7 @@ const channelName = (channels: ReadonlyMap<string, ChannelDto>, id: string) => {
  * its revision (spec 14.4) and the actions the state allows (spec 13.1, 13.5). Every action has a keyboard path
  * and every result is written out as text.
  */
-export function PublicationDetail({ brandId, publicationId, channels }: PublicationDetailProps) {
+export function PublicationDetail({ brandId, publicationId, channels, timeZone }: PublicationDetailProps) {
   const publication = usePublication(publicationId);
   return (
     <Panel title="Publication" data-testid="publication-detail">
@@ -72,7 +74,7 @@ export function PublicationDetail({ brandId, publicationId, channels }: Publicat
         <RequestError error={publication.error} onRetry={() => void publication.refetch()} />
       )}
       {publication.isSuccess && (
-        <Loaded brandId={brandId} publication={publication.data} channels={channels} />
+        <Loaded brandId={brandId} publication={publication.data} channels={channels} timeZone={timeZone} />
       )}
     </Panel>
   );
@@ -82,10 +84,12 @@ function Loaded({
   brandId,
   publication: p,
   channels,
+  timeZone,
 }: {
   brandId: string;
   publication: PublicationDto;
   channels: ReadonlyMap<string, ChannelDto>;
+  timeZone: string;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -304,6 +308,7 @@ function Loaded({
           <RescheduleAction
             publication={p}
             release={actions.release}
+            timeZone={timeZone}
             onDone={refresh}
             onError={fail('Reschedule failed')}
           />
@@ -479,11 +484,13 @@ function CancelAction({
 function RescheduleAction({
   publication: p,
   release,
+  timeZone,
   onDone,
   onError,
 }: {
   publication: PublicationDto;
   release: boolean;
+  timeZone: string;
   onDone: () => void;
   onError: (err: unknown) => void;
 }) {
@@ -491,7 +498,7 @@ function RescheduleAction({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(() =>
-    isoToLocalInput(release ? new Date(Date.now() + 5 * 60_000).toISOString() : p.scheduledFor),
+    isoToZonedInput(release ? new Date(Date.now() + 5 * 60_000).toISOString() : p.scheduledFor, timeZone),
   );
   const [error, setError] = useState<string | null>(null);
   const intent = useIntentKey();
@@ -516,7 +523,7 @@ function RescheduleAction({
   );
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const iso = localInputToIso(value);
+    const iso = zonedInputToIso(value, timeZone);
     if (!iso) {
       setError('Enter a date and time.');
       return;
@@ -539,7 +546,7 @@ function RescheduleAction({
         }
       >
         <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
-          <Field label="Publish at" htmlFor={`reschedule-${p.id}`} error={error ?? undefined}>
+          <Field label={`Publish at (${timeZone})`} htmlFor={`reschedule-${p.id}`} error={error ?? undefined}>
             <Input
               id={`reschedule-${p.id}`}
               type="datetime-local"

@@ -76,17 +76,17 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
   };
   const publicationState = () =>
     page.getByTestId('publication-detail').getByTestId('publication-state').textContent();
-  /** Loads the variant (waiting for ITS channel in the preview, not a previous one), then schedules it. */
+  /** Opens the calendar on the variant (as the package's Schedule link does), picks the approval, schedules. */
   const schedule = async (variantId: string, channelName: string, at: string) => {
+    await open(pathA(`calendar?schedule=${encodeURIComponent(variantId)}`));
     // Earlier confirmations sit over the bottom of a phone screen; dismiss them as a person would.
     for (const dismiss of await page.getByRole('button', { name: /^Dismiss: / }).all()) await dismiss.click();
-    await page.getByLabel('Channel variant id').fill(variantId);
-    await page.getByRole('button', { name: 'Load variant' }).click();
     await expect
       .poll(() => page.getByTestId('variant-preview').textContent(), { timeout: 15_000 })
       .toContain(channelName);
+    await page.locator('#schedule-authority-id').click();
+    await page.getByRole('option', { name: new RegExp(journey.approvalId) }).click();
     await page.locator('#schedule-at').fill(at);
-    await page.locator('#schedule-authority-id').fill(journey.approvalId);
     const before = new URL(page.url()).searchParams.get('publication');
     await page.getByRole('button', { name: 'Schedule', exact: true }).click();
     await expect
@@ -229,7 +229,8 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await signOut();
     await signIn(TOKENS.agency);
     await open(pathA(`calendar?day=${dayKey(0)}`));
-    await expect.poll(() => page.getByLabel('Channel variant id').count(), { timeout: 15_000 }).toBe(1);
+    // Without a variant chosen on its package the form says so (UX-06); the package's Schedule link supplies it.
+    await expect.poll(() => page.getByTestId('schedule-empty').count(), { timeout: 15_000 }).toBe(1);
     journey.publications.linkedin = await schedule(
       journey.variants.linkedin,
       'Acme LinkedIn',
@@ -330,7 +331,7 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     // In flight at the restore point: a post waiting for the day after tomorrow, one the workflow had sent and the
     // channel was still processing (live there), and the seeded one the workflow had claimed (dispatching).
     await open(pathA(`calendar?day=${dayKey(2)}`));
-    await expect.poll(() => page.getByLabel('Channel variant id').count(), { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => page.getByTestId('schedule-empty').count(), { timeout: 15_000 }).toBe(1);
     journey.publications.restoredWaiting = await schedule(journey.variants.x, 'Acme X', localInput(2, 9));
     journey.publications.restoredSent = await schedule(
       journey.variants.linkedin,

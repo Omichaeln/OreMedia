@@ -7,6 +7,7 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { MandateCreate } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
+  ApprovalList,
   FrozenManifestV1,
   MandateGet,
   MandateList,
@@ -741,6 +742,19 @@ export const reviewService = {
       const apr = await approvalsRepo.getById(parsed.approvalId, tx);
       await policy.assert(actor, 'brand.read', brandResource(apr.brandId), {}, tx);
       return toApprovalDto(apr);
+    },
+
+    /** The brand's approvals newest first (brand.read via brandService.get; a foreign brand is NOT_FOUND). */
+    async list(actor: ResolvedActor, input: z.infer<typeof ApprovalList>, tx?: Tx) {
+      const parsed = ApprovalList.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx);
+      const page = await approvalsRepo.list(
+        brand.id,
+        { contentRevisionId: parsed.contentRevisionId, state: parsed.state },
+        parsed.page,
+        tx,
+      );
+      return { items: page.items.map(toApprovalDto), nextCursor: page.nextCursor };
     },
 
     /** Spec 13.4 approvals.getById: the scoped row (NOT_FOUND for a foreign id). */

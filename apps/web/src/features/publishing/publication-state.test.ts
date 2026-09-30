@@ -2,25 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { PublicationState } from '@oremedia/contracts/publishing';
 import { RELEASE_CHECK_KEYS } from '@oremedia/contracts/review';
 import {
+  HOLD_REASON_TEXT,
+  PUBLICATION_CHIP,
   actionsFor,
   channelOutcomeSummary,
-  plainLength,
-  remoteChangeStatus,
-  wasReleased,
-  type RemoteChangeLike,
   dayKey,
   groupByDay,
   holdReasonText,
+  isoToZonedInput,
   localMidnight,
   monthGrid,
   outcomeUnknownReasonText,
+  plainLength,
   publicationChip,
   rangeFor,
-  trailingRange,
+  remoteChangeStatus,
   shiftAnchor,
+  trailingRange,
+  type RemoteChangeLike,
+  wasReleased,
   weekDays,
-  PUBLICATION_CHIP,
-  HOLD_REASON_TEXT,
+  zonedInputToIso,
 } from './publication-state';
 
 describe('publicationChip', () => {
@@ -82,6 +84,29 @@ describe('actionsFor', () => {
     expect(actionsFor('removed')).toMatchObject({ cancel: false, deleteRemote: false, editRemote: false });
     expect(actionsFor('failed')).toMatchObject({ cancel: false, reschedule: false, release: false });
     expect(actionsFor('cancelled')).toMatchObject({ cancel: false, reschedule: false });
+  });
+});
+
+describe('brand-zone form values (UX-06)', () => {
+  it('reads a datetime-local value as the brand zone, not the viewer zone', () => {
+    expect(zonedInputToIso('2026-07-01T09:00', 'Europe/London')).toBe('2026-07-01T08:00:00.000Z'); // BST
+    expect(zonedInputToIso('2026-01-15T09:00', 'Europe/London')).toBe('2026-01-15T09:00:00.000Z'); // GMT
+    expect(zonedInputToIso('2026-07-01T09:00', 'Asia/Kolkata')).toBe('2026-07-01T03:30:00.000Z');
+    expect(zonedInputToIso('2026-07-01T09:00', 'UTC')).toBe('2026-07-01T09:00:00.000Z');
+  });
+  it('settles across a DST change and round-trips with the formatter', () => {
+    // 29 March 2026 01:30 Europe/London does not exist (clocks go forward at 01:00); the instant lands after it.
+    expect(zonedInputToIso('2026-03-29T01:30', 'Europe/London')).toBe('2026-03-29T01:30:00.000Z');
+    for (const [iso, zone] of [
+      ['2026-07-01T08:00:00.000Z', 'Europe/London'],
+      ['2026-11-05T23:30:00.000Z', 'America/Los_Angeles'],
+      ['2026-02-01T12:00:00.000Z', 'Australia/Sydney'],
+    ] as const) {
+      expect(zonedInputToIso(isoToZonedInput(iso, zone), zone)).toBe(iso);
+    }
+    expect(isoToZonedInput('2026-07-01T08:00:00.000Z', 'Europe/London')).toBe('2026-07-01T09:00');
+    expect(zonedInputToIso('', 'UTC')).toBeNull();
+    expect(zonedInputToIso('not a date', 'UTC')).toBeNull();
   });
 });
 

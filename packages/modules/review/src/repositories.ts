@@ -161,6 +161,27 @@ export class ReleaseApprovalRepository extends BrandScopedRepository<typeof rele
       )
       .orderBy(desc(releaseApprovals.id));
   }
+  /** Spec 7.4 cursor page, newest first; optional revision and state filters. */
+  async list(
+    brandId: string,
+    filter: { contentRevisionId?: string; state?: ApprovalState },
+    page: PageRequest,
+    tx?: Tx,
+  ): Promise<Page<typeof releaseApprovals.$inferSelect>> {
+    const clauses: SQL[] = [];
+    if (filter.contentRevisionId)
+      clauses.push(eq(releaseApprovals.contentRevisionId, filter.contentRevisionId));
+    if (filter.state) clauses.push(eq(releaseApprovals.state, filter.state));
+    const cursor = page.cursor ? decodeCursor(page.cursor) : null;
+    if (cursor) clauses.push(lte(releaseApprovals.id, cursor.id));
+    const rows = await this.conn(tx)
+      .select()
+      .from(releaseApprovals)
+      .where(this.brandScope(brandId, clauses.length ? (and(...clauses) as SQL) : undefined))
+      .orderBy(desc(releaseApprovals.id))
+      .limit(page.limit + 1);
+    return pageOf(rows, page);
+  }
   async listValidForBrand(brandId: string, tx?: Tx) {
     return this.conn(tx)
       .select()

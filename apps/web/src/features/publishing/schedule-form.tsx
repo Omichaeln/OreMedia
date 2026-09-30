@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   PublicationAuthority,
@@ -11,32 +12,59 @@ import { useToast } from '../../components/toast';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
-import { CHANNEL_CHIP, dayKey, isoToLocalInput, localInputToIso } from './publication-state';
+import { brandPath } from '../brand/brand-context';
+import { useApprovals, type ApprovalDto } from '../review/use-review';
+import { useMandates } from '../settings/use-settings';
+import { CHANNEL_CHIP, dayKey, isoToZonedInput, zonedInputToIso } from './publication-state';
 import { useChannelVariant, type ChannelDto } from './use-publishing';
 
 export interface ScheduleFormProps {
+  companyId: string;
+  brandId: string;
   timeZone: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** The variant to schedule, chosen on its content package (the calendar's `schedule` search param). */
+  variantId: string | null;
   /** Called with the scheduled instant's day key so the calendar shows it. */
   onScheduled: (publicationId: string, dayKey: string) => void;
 }
 
+/** Where an approval's frozen timing starts: the exact instant, or the first instant of the window. */
+const timingStart = (timing: ApprovalDto['binding']['timing']): string =>
+  timing.kind === 'exact' ? timing.at : timing.from;
+const timingText = (timing: ApprovalDto['binding']['timing'], timeZone: string): string =>
+  timing.kind === 'exact'
+    ? `at ${new Date(timing.at).toLocaleString(undefined, { timeZone })}`
+    : `${new Date(timing.from).toLocaleString(undefined, { timeZone })} – ${new Date(timing.to).toLocaleString(undefined, { timeZone })}`;
+
 /**
- * Spec 14.1: schedule a channel variant with an authority. The variant is loaded first so the person sees the
- * channel it targets, that channel's connection state (token expiry, spec 21.2) and the variant's validation
- * findings (invalid media) before anything is scheduled; the API re-checks all of it (fail-fast pre-check).
+ * Spec 14.1: schedule a channel variant with an authority. The variant comes from its content package (never a
+ * typed id), the authority is picked from the revision's valid approvals or the brand's active mandates, and the
+ * time is entered as the brand's wall clock (UX-06): the release policy holds a publication scheduled outside the
+ * approval's frozen timing, so the form prefills that timing and reads the input in the same zone. The person sees
+ * the channel's connection state and the variant's validation findings before anything is scheduled; the API
+ * re-checks all of it (fail-fast pre-check).
  */
-export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormProps) {
+export function ScheduleForm({
+  companyId,
+  brandId,
+  timeZone,
+  channels,
+  variantId,
+  onScheduled,
+}: ScheduleFormProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [variantDraft, setVariantDraft] = useState('');
-  const [variantId, setVariantId] = useState<string | null>(null);
-  const [at, setAt] = useState(() => isoToLocalInput(new Date(Date.now() + 60 * 60_000).toISOString()));
+  const [at, setAt] = useState(() =>
+    isoToZonedInput(new Date(Date.now() + 60 * 60_000).toISOString(), timeZone),
+  );
   const [authority, setAuthority] = useState<PublicationAuthorityT>('approval');
   const [authorityId, setAuthorityId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const variant = useChannelVariant(variantId);
+  const approvals = useApprovals(brandId, variant.data?.contentRevisionId ?? null);
+  const mandates = useMandates(brandId);
   const channel = variant.data ? channels.get(variant.data.channelConnectionId) : undefined;
   const findings = variant.data?.validation as
     { ok: boolean; issues: Array<{ path?: string; issue: string }> } | undefined;
@@ -52,7 +80,7 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
         toast({
           tone: 'good',
           title: 'Scheduled',
-          description: `Publication ${res.id} for ${new Date(vars.scheduledFor).toLocaleString()}.`,
+          description: `Publication ${res.id} for ${new Date(vars.scheduledFor).toLocaleString(undefined, { timeZone })} (${timeZone}).`,
         });
         onScheduled(res.id, dayKey(vars.scheduledFor, timeZone));
       },
@@ -60,19 +88,37 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
     }),
   );
 
+  // Valid approvals first; a spent or invalidated one is offered with its state, because the release policy (not
+  // this form) decides what it still releases, and a person may schedule knowingly under it.
+  const approvalItems = [...(approvals.data?.items ?? [])].sort(
+    (a, b) => Number(b.state === 'valid') - Number(a.state === 'valid'),
+  );
+  const approvalOptions = approvalItems.map((a) => ({
+    value: a.id,
+    label: `${a.id} · ${a.approverKind === 'external_reviewer' ? 'external reviewer' : 'team'} · ${timingText(a.binding.timing, timeZone)}${a.state === 'valid' ? '' : ` · ${a.state}${a.invalidatedReason ? ` (${a.invalidatedReason})` : ''}`}`,
+  }));
+  const noValidApproval = approvals.isSuccess && !approvalItems.some((a) => a.state === 'valid');
+  const mandateOptions = (mandates.data?.items ?? [])
+    .filter((m) => m.state === 'active')
+    .map((m) => ({ value: m.id, label: `${m.id} · ${m.channelConnectionIds.length} channel(s)` }));
+  const options = authority === 'approval' ? approvalOptions : mandateOptions;
+  const chooseAuthority = (id: string) => {
+    setAuthorityId(id);
+    // The approval froze the timing the release policy will hold against; start from it.
+    const approval = approvals.data?.items.find((a) => a.id === id);
+    if (approval) setAt(isoToZonedInput(timingStart(approval.binding.timing), timeZone));
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!variantId) {
-      setError('Load a channel variant first.');
-      return;
-    }
-    const iso = localInputToIso(at);
+    if (!variantId) return;
+    const iso = zonedInputToIso(at, timeZone);
     if (!iso) {
       setError('Enter a date and time.');
       return;
     }
-    if (!authorityId.trim()) {
-      setError(authority === 'approval' ? 'An approval id is required.' : 'A mandate id is required.');
+    if (!authorityId) {
+      setError(authority === 'approval' ? 'Choose an approval.' : 'Choose a mandate.');
       return;
     }
     setError(null);
@@ -80,36 +126,26 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
       channelVariantId: variantId,
       scheduledFor: iso,
       authority,
-      ...(authority === 'approval' ? { approvalId: authorityId.trim() } : { mandateId: authorityId.trim() }),
+      ...(authority === 'approval' ? { approvalId: authorityId } : { mandateId: authorityId }),
     });
   };
 
   const blocked = findings ? !findings.ok : false;
   const channelBlocked = channel ? !channel.usable : false;
+  const noAuthority =
+    options.length === 0 && (authority === 'approval' ? approvals.isSuccess : mandates.isSuccess);
 
   return (
     <Panel title="Schedule a publication">
-      <form
-        className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setVariantId(variantDraft.trim() || null);
-        }}
-      >
-        <Field
-          label="Channel variant id"
-          htmlFor="schedule-variant"
-          className="flex-1"
-          hint="cv_… (from the content package)"
-        >
-          <Input
-            id="schedule-variant"
-            value={variantDraft}
-            onChange={(e) => setVariantDraft(e.target.value)}
-          />
-        </Field>
-        <Button type="submit">Load variant</Button>
-      </form>
+      {variantId === null && (
+        <p className="text-sm text-muted-foreground" data-testid="schedule-empty">
+          Choose a channel variant on its content package (Campaigns → package → Schedule) to schedule it
+          here.{' '}
+          <Link to={brandPath(companyId, brandId, 'campaigns')} className="underline underline-offset-2">
+            Open campaigns
+          </Link>
+        </p>
+      )}
       {variantId !== null && variant.isPending && <Skeleton label="Loading variant" lines={2} />}
       {variantId !== null && variant.isError && (
         <RequestError error={variant.error} onRetry={() => void variant.refetch()} />
@@ -128,6 +164,16 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
             ) : (
               <code>{variant.data.channelConnectionId}</code>
             )}
+            <Link
+              to={brandPath(
+                companyId,
+                brandId,
+                `campaigns?package=${encodeURIComponent(variant.data.contentPackageId)}`,
+              )}
+              className="text-xs underline underline-offset-2"
+            >
+              Open the package
+            </Link>
           </div>
           <p className="line-clamp-3 rounded-md border border-border bg-muted p-2 text-sm">
             {variant.data.text}
@@ -169,7 +215,43 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
           )}
           <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Publish at" htmlFor="schedule-at">
+              <Field label="Authority" htmlFor="schedule-authority">
+                <Select
+                  id="schedule-authority"
+                  value={authority}
+                  onValueChange={(v) => {
+                    setAuthority(PublicationAuthority.parse(v));
+                    setAuthorityId('');
+                  }}
+                  options={[
+                    { value: 'approval', label: 'Approval' },
+                    { value: 'mandate', label: 'Mandate' },
+                  ]}
+                />
+              </Field>
+              <Field
+                label={authority === 'approval' ? 'Approval' : 'Mandate'}
+                htmlFor="schedule-authority-id"
+                hint={
+                  authority === 'approval'
+                    ? 'Valid approvals of this revision (spec 13.2).'
+                    : 'Active mandates of this brand (spec 13.4).'
+                }
+              >
+                <Select
+                  id="schedule-authority-id"
+                  value={authorityId}
+                  onValueChange={chooseAuthority}
+                  options={options}
+                  placeholder={authority === 'approval' ? 'Choose an approval' : 'Choose a mandate'}
+                  disabled={options.length === 0}
+                />
+              </Field>
+              <Field
+                label={`Publish at (${timeZone})`}
+                htmlFor="schedule-at"
+                hint="Brand time. An approval's frozen timing is prefilled; publishing outside it is held."
+              >
                 <Input
                   id="schedule-at"
                   type="datetime-local"
@@ -178,29 +260,26 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
                   required
                 />
               </Field>
-              <Field label="Authority" htmlFor="schedule-authority">
-                <Select
-                  id="schedule-authority"
-                  value={authority}
-                  onValueChange={(v) => setAuthority(PublicationAuthority.parse(v))}
-                  options={[
-                    { value: 'approval', label: 'Approval' },
-                    { value: 'mandate', label: 'Mandate' },
-                  ]}
-                />
-              </Field>
-              <Field
-                label={authority === 'approval' ? 'Approval id' : 'Mandate id'}
-                htmlFor="schedule-authority-id"
-              >
-                <Input
-                  id="schedule-authority-id"
-                  value={authorityId}
-                  onChange={(e) => setAuthorityId(e.target.value)}
-                  required
-                />
-              </Field>
             </div>
+            {authority === 'approval' && noValidApproval && (
+              <StatusBanner
+                tone="warning"
+                title="No valid approval for this revision"
+                description={
+                  noAuthority
+                    ? 'Request a review on the package and schedule once it is approved, or switch the authority to a mandate.'
+                    : 'Every approval of this revision is spent, expired or invalidated; a publication scheduled under one is held at dispatch until the package is approved again.'
+                }
+                data-testid="no-approval"
+              />
+            )}
+            {noAuthority && authority === 'mandate' && (
+              <StatusBanner
+                tone="warning"
+                title="No active mandate"
+                description="Mandates are created under Settings → Members and mandates when the feature is enabled."
+              />
+            )}
             {error && <StatusBanner tone="critical" title="Not scheduled" description={error} />}
             <div>
               <Button
@@ -212,7 +291,9 @@ export function ScheduleForm({ timeZone, channels, onScheduled }: ScheduleFormPr
                     ? 'Fix the validation findings first'
                     : channelBlocked
                       ? 'Reconnect the channel first'
-                      : undefined
+                      : noAuthority
+                        ? 'No authority to publish under'
+                        : undefined
                 }
               >
                 {schedule.isPending ? 'Scheduling…' : 'Schedule'}

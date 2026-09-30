@@ -945,6 +945,40 @@ describe('review module (spec 13) against MySQL 8', () => {
       );
     });
 
+    it('lists a brand’s approvals newest first, by revision and state, with cursor paging; a foreign brand is NOT_FOUND', async () => {
+      const all = await runA(() =>
+        reviewService.approvals.list(manager.actor, { brandId: brandA, page: { limit: 50 } }),
+      );
+      expect(all.items.map((a) => a.id)).toContain(approvalId);
+      expect(all.nextCursor).toBeNull();
+      const mine = await runA(() =>
+        reviewService.approvals.list(manager.actor, {
+          brandId: brandA,
+          contentRevisionId: revisionId,
+          state: 'valid',
+          page: { limit: 50 },
+        }),
+      );
+      expect(mine.items.every((a) => a.contentRevisionId === revisionId && a.state === 'valid')).toBe(true);
+      const first = await runA(() =>
+        reviewService.approvals.list(manager.actor, { brandId: brandA, page: { limit: 1 } }),
+      );
+      expect(first.items).toHaveLength(1);
+      if (all.items.length > 1) {
+        expect(first.nextCursor).not.toBeNull();
+        const second = await runA(() =>
+          reviewService.approvals.list(manager.actor, {
+            brandId: brandA,
+            page: { limit: 1, cursor: first.nextCursor! },
+          }),
+        );
+        expect(second.items[0]?.id).toBe(all.items[1]?.id);
+      }
+      await expect(
+        runA(() => reviewService.approvals.list(manager.actor, { brandId: brandB, page: { limit: 50 } })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
     it('a creative edit after approval invalidates the approval eagerly (spec 11.4 hook); the request is already decided', async () => {
       const before = await approvalRow(approvalId);
       expect(before.state).toBe('valid');

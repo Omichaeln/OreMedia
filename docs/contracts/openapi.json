@@ -5982,6 +5982,46 @@
         }
       }
     },
+    "/trpc/review.approvals.list": {
+      "get": {
+        "operationId": "review.approvals.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "contentRevisionId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": ["valid", "invalidated", "consumed", "expired"]
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/review.decisions.submit": {
       "post": {
         "operationId": "review.decisions.submit",
@@ -13112,6 +13152,37 @@
             }
           },
           "required": ["approvalId"]
+        }
+      },
+      "review.approvals.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "contentRevisionId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": ["valid", "invalidated", "consumed", "expired"]
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
         }
       },
       "review.decisions.submit": {

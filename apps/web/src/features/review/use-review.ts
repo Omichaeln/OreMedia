@@ -33,6 +33,21 @@ export function useReviewRequest(reviewRequestId: string | null) {
   });
 }
 
+export type ApprovalDto = inferOutput<Trpc['review']['approvals']['list']>['items'][number];
+
+/** A revision's approvals, every state (the schedule form's authority picker); one page is the whole set in practice. */
+export function useApprovals(brandId: string, contentRevisionId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.review.approvals.list.queryOptions({
+      brandId,
+      contentRevisionId: contentRevisionId ?? '',
+      page: { limit: 100 },
+    }),
+    enabled: contentRevisionId !== null,
+  });
+}
+
 export type ManifestMediaItemDto = inferOutput<Trpc['review']['requests']['media']>['items'][number];
 
 /**

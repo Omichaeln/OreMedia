@@ -90,8 +90,8 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('refuses to schedule a variant with invalid media and names the findings', async () => {
-    await page.getByLabel('Channel variant id').fill(P5.variants.invalid);
-    await page.getByRole('button', { name: 'Load variant' }).click();
+    // The variant comes from its package (the calendar's `schedule` param), never a typed id (UX-06).
+    await page.goto(`${origin}${calendarPath()}&schedule=${P5.variants.invalid}`);
     await expect.poll(() => page.getByTestId('variant-findings').count(), { timeout: 15_000 }).toBe(1);
     const findings = await page.getByTestId('variant-findings').textContent();
     expect(findings).toContain('12.4 MB');
@@ -102,13 +102,16 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('schedule → the publication appears as Scheduled, and shows Published once the workflow reports it', async () => {
-    await page.getByLabel('Channel variant id').fill(P5.variants.ok);
-    await page.getByRole('button', { name: 'Load variant' }).click();
+    await page.goto(`${origin}${calendarPath()}&schedule=${P5.variants.ok}`);
     await expect
       .poll(() => page.getByTestId('variant-preview').textContent(), { timeout: 15_000 })
       .toContain('Acme LinkedIn');
+    // The authority is picked from the revision's valid approvals; choosing one prefills its frozen timing.
+    await page.locator('#schedule-authority-id').click();
+    await page.getByRole('option', { name: new RegExp(P5.approvalId) }).click();
+    await expect.poll(() => page.locator('#schedule-at').inputValue()).not.toBe('');
+    // The time is the brand's wall clock (UTC for this brand), so 16:00 today lands on today's day key.
     await page.locator('#schedule-at').fill(todayLocalInput(16));
-    await page.locator('#schedule-authority-id').fill(P5.approvalId);
     // The first attempt fails server-side; the retry is the same intent and must carry the same key (spec 7.3).
     p5.failNextSchedule = true;
     const schedules = () => backend.requests.filter((r) => r.path === 'publishing.publications.schedule');

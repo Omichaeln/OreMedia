@@ -7,7 +7,7 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { brandPath } from '../brand/brand-context';
-import { CHANNEL_CHIP, isoToLocalInput, localInputToIso } from '../publishing/publication-state';
+import { CHANNEL_CHIP, isoToZonedInput, zonedInputToIso } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
 import { DocumentPicker } from './document-picker';
@@ -19,6 +19,8 @@ export interface PackageDetailProps {
   brandId: string;
   contentPackageId: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** The brand's time zone: the planned publish time is entered as the brand's wall clock (UX-06). */
+  timeZone: string;
 }
 
 /**
@@ -63,16 +65,23 @@ function PackageDocuments({
 }
 
 function VariantRow({
+  companyId,
+  brandId,
   variant,
   channel,
   documents,
   editable,
+  schedulable,
 }: {
+  companyId: string;
+  brandId: string;
   variant: PackageVariantDto;
   channel: ChannelDto | undefined;
   documents: readonly PackageDocumentDto[];
   /** Only a draft revision's variants are edited (spec 5.5 step 5); the server guards the same. */
   editable: boolean;
+  /** An approved revision's variants are scheduled from here (UX-06): the calendar form opens on this variant. */
+  schedulable: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const findings = variantFindings(variant.validation);
@@ -92,6 +101,16 @@ function VariantRow({
         {editable && !editing && (
           <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(true)}>
             Edit {label}
+          </Button>
+        )}
+        {schedulable && (
+          <Button asChild size="sm" variant="secondary">
+            <Link
+              to={brandPath(companyId, brandId, `calendar?schedule=${encodeURIComponent(variant.id)}`)}
+              data-testid="schedule-variant"
+            >
+              Schedule {label}
+            </Link>
           </Button>
         )}
       </div>
@@ -220,11 +239,23 @@ function GenerateVariantsForm({
  * Spec 13.3: sends the current draft revision for review. The request freezes the revision, its channel variants and
  * the planned timing into a manifest; the revision moves to in review and the request opens in the review inbox.
  */
-function RequestReview({ companyId, brandId, pkg }: { companyId: string; brandId: string; pkg: PackageDto }) {
+function RequestReview({
+  companyId,
+  brandId,
+  pkg,
+  timeZone,
+}: {
+  companyId: string;
+  brandId: string;
+  pkg: PackageDto;
+  timeZone: string;
+}) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
-  const [at, setAt] = useState(() => isoToLocalInput(new Date(Date.now() + 24 * 3_600_000).toISOString()));
+  const [at, setAt] = useState(() =>
+    isoToZonedInput(new Date(Date.now() + 24 * 3_600_000).toISOString(), timeZone),
+  );
   const [error, setError] = useState<string | null>(null);
   const request = useMutation(
     trpc.review.requests.create.mutationOptions({
@@ -262,7 +293,7 @@ function RequestReview({ companyId, brandId, pkg }: { companyId: string; brandId
   if (pkg.revision.state !== 'draft') return null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const iso = localInputToIso(at);
+    const iso = zonedInputToIso(at, timeZone);
     if (!iso) {
       setError('Enter the planned publish time.');
       return;
@@ -274,9 +305,9 @@ function RequestReview({ companyId, brandId, pkg }: { companyId: string; brandId
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
       <Field
-        label="Planned publish time"
+        label={`Planned publish time (${timeZone})`}
         htmlFor={`review-at-${pkg.id}`}
-        hint="Frozen into the review manifest; publishing outside it is held."
+        hint="Brand time, frozen into the review manifest; publishing outside it is held."
         error={error ?? undefined}
       >
         <Input
@@ -391,7 +422,13 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
  * history (superseded revisions are kept, never edited), channel variants with their capability findings, and the
  * creative documents the revision publishes with.
  */
-export function PackageDetail({ companyId, brandId, contentPackageId, channels }: PackageDetailProps) {
+export function PackageDetail({
+  companyId,
+  brandId,
+  contentPackageId,
+  channels,
+  timeZone,
+}: PackageDetailProps) {
   const pkg = usePackage(contentPackageId);
   const p = pkg.data;
   const current = p ? revisionChip(p.revision.state) : null;
@@ -470,10 +507,13 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
                 {p.variants.map((v) => (
                   <VariantRow
                     key={v.id}
+                    companyId={companyId}
+                    brandId={brandId}
                     variant={v}
                     channel={channels.get(v.channelConnectionId)}
                     documents={p.creativeDocuments}
                     editable={p.revision.state === 'draft'}
+                    schedulable={p.revision.state === 'approved'}
                   />
                 ))}
               </ul>
@@ -490,7 +530,13 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
                 sent for review.
               </p>
             )}
-            <RequestReview key={p.revision.id} companyId={companyId} brandId={brandId} pkg={p} />
+            <RequestReview
+              key={p.revision.id}
+              companyId={companyId}
+              brandId={brandId}
+              pkg={p}
+              timeZone={timeZone}
+            />
           </section>
           <ReviseForm key={p.version} pkg={p} />
         </div>

@@ -2,6 +2,7 @@ import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/acce
 import { MandateCreate } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
+  ApprovalList,
   MandateGet,
   MandateList,
   MandatePause,
@@ -72,6 +73,9 @@ export const reviewRouter = router({
     get: tenantQuery
       .input(ApprovalGet)
       .query(({ ctx, input }) => reviewService.approvals.get(ctx.tenant.actor, input)),
+    list: tenantQuery
+      .input(ApprovalList)
+      .query(({ ctx, input }) => reviewService.approvals.list(ctx.tenant.actor, input)),
   }),
 
   /** Spec 7.5 lists mandates under publishing; they live here with the release policy that evaluates them. */
