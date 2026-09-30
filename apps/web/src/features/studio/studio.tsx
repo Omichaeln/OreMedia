@@ -24,6 +24,7 @@ import { hasLocalWork } from './studio-reducer';
 import { TemplatesPanel } from './templates-panel';
 import { useCommentPages } from './use-document';
 import { useDocumentFonts } from './use-document-fonts';
+import { useStudioPanels } from './use-panels';
 import { useStudio } from './use-studio';
 import type { DocumentDto } from './types';
 
@@ -48,6 +49,21 @@ function TabCount({ n, label }: { n: number; label: string }) {
  * Spec 11.1 layout: header with company + brand; assets/templates/layers left; canvas centre; properties right with
  * the agent, comments, checks and history as tabs under them (the v3 prototype's arrangement); page strip bottom.
  */
+/**
+ * UX-18: the three columns by breakpoint. The canvas column keeps a minimum (20rem, 24rem from xl) whichever side
+ * panels are shown, so panels give way, never the canvas; below md everything stacks. Full class strings so
+ * Tailwind sees them.
+ */
+const GRID = {
+  both: 'md:grid-cols-[13rem_minmax(20rem,1fr)_18rem] lg:grid-cols-[16rem_minmax(20rem,1fr)_22rem] xl:grid-cols-[18rem_minmax(24rem,1fr)_24rem]',
+  left: 'md:grid-cols-[13rem_minmax(20rem,1fr)] lg:grid-cols-[16rem_minmax(20rem,1fr)] xl:grid-cols-[18rem_minmax(24rem,1fr)]',
+  right:
+    'md:grid-cols-[minmax(20rem,1fr)_18rem] lg:grid-cols-[minmax(20rem,1fr)_22rem] xl:grid-cols-[minmax(24rem,1fr)_24rem]',
+  none: 'md:grid-cols-[minmax(20rem,1fr)]',
+} as const;
+const gridKey = (p: { left: boolean; right: boolean }): keyof typeof GRID =>
+  p.left && p.right ? 'both' : p.left ? 'left' : p.right ? 'right' : 'none';
+
 export function Studio({ documentId, initial }: { documentId: string; initial: DocumentDto }) {
   const { companyId, companyName, brandId, brand } = useBrandContext();
   const studio = useStudio(documentId, initial);
@@ -58,6 +74,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const canvasRef = useRef<HTMLDivElement>(null);
   const [rightTab, setRightTab] = useState<RightTab>('agent');
   const [reviewOpen, setReviewOpen] = useState(false);
+  const { panels, toggle: togglePanel } = useStudioPanels();
   const comments = useCommentPages(documentId);
   const openComments = comments.items.filter((c) => c.state !== 'resolved').length;
 
@@ -178,6 +195,24 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           >
             Send for review
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => togglePanel('left')}
+            aria-pressed={panels.left}
+            data-testid="toggle-left-panels"
+          >
+            {panels.left ? 'Hide layers' : 'Show layers'}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => togglePanel('right')}
+            aria-pressed={panels.right}
+            data-testid="toggle-right-panels"
+          >
+            {panels.right ? 'Hide properties' : 'Show properties'}
+          </Button>
           <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
             {theme === 'dark' ? 'Light theme' : 'Dark theme'}
           </Button>
@@ -242,55 +277,56 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
         </div>
       )}
 
-      <main
-        id="main"
-        className="grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 md:grid-cols-[16rem_minmax(0,1fr)_22rem]"
-      >
-        <Panel
-          title="Left panels"
-          hideTitle
-          className="min-h-48 md:min-h-0"
-          bodyClassName="flex flex-col p-0"
-        >
-          <Tabs defaultValue="layers" className="flex min-h-0 flex-1 flex-col">
-            <TabList label="Studio panels">
-              <Tab value="layers">Layers</Tab>
-              <Tab value="assets">Assets</Tab>
-              <Tab value="templates">Templates</Tab>
-            </TabList>
-            <TabPanel value="layers">
-              <LayersPanel
-                page={page}
-                selection={state.selection}
-                onSelect={studio.select}
-                onActivate={() => setFocusText((n) => n + 1)}
-              />
-            </TabPanel>
-            <TabPanel value="assets">
-              <AssetsPanel
-                brandId={brandId}
-                page={page}
-                selection={state.selection}
-                readOnly={readOnly}
-                onIntent={studio.applyIntent}
-              />
-            </TabPanel>
-            <TabPanel value="templates">
-              <TemplatesPanel
-                brandId={brandId}
-                page={page}
-                readOnly={readOnly}
-                resolveTemplate={studio.resolveTemplate}
-                onIntent={studio.applyIntent}
-                templates={state.templates}
-              />
-            </TabPanel>
-          </Tabs>
-        </Panel>
+      <main id="main" className={`grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 ${GRID[gridKey(panels)]}`}>
+        {panels.left && (
+          <Panel
+            title="Left panels"
+            hideTitle
+            className="min-h-48 md:min-h-0"
+            bodyClassName="flex flex-col p-0"
+            data-testid="left-panels"
+          >
+            <Tabs defaultValue="layers" className="flex min-h-0 flex-1 flex-col">
+              <TabList label="Studio panels">
+                <Tab value="layers">Layers</Tab>
+                <Tab value="assets">Assets</Tab>
+                <Tab value="templates">Templates</Tab>
+              </TabList>
+              <TabPanel value="layers">
+                <LayersPanel
+                  page={page}
+                  selection={state.selection}
+                  onSelect={studio.select}
+                  onActivate={() => setFocusText((n) => n + 1)}
+                />
+              </TabPanel>
+              <TabPanel value="assets">
+                <AssetsPanel
+                  brandId={brandId}
+                  page={page}
+                  selection={state.selection}
+                  readOnly={readOnly}
+                  onIntent={studio.applyIntent}
+                />
+              </TabPanel>
+              <TabPanel value="templates">
+                <TemplatesPanel
+                  brandId={brandId}
+                  page={page}
+                  readOnly={readOnly}
+                  resolveTemplate={studio.resolveTemplate}
+                  onIntent={studio.applyIntent}
+                  templates={state.templates}
+                />
+              </TabPanel>
+            </Tabs>
+          </Panel>
+        )}
 
         <div
           ref={canvasRef}
           className="flex min-h-72 min-w-0 flex-col rounded-md border border-border md:min-h-0"
+          data-testid="canvas-column"
         >
           <Canvas
             doc={doc}
@@ -322,140 +358,144 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           />
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2">
-          <Panel title="Properties" level={2} className="shrink-0 md:max-h-[45%] md:overflow-auto">
-            <PropertiesPanel
-              page={page}
-              elementId={state.selection[0] ?? null}
-              readOnly={readOnly}
-              colourTokens={colourTokens}
-              onIntent={studio.applyIntent}
-              focusTextRequest={focusText}
-            />
-          </Panel>
-          <Panel
-            title="Document panels"
-            hideTitle
-            className="min-h-72 flex-1 md:min-h-0"
-            bodyClassName="flex flex-col p-0"
-          >
-            <Tabs
-              value={rightTab}
-              onValueChange={(v) => setRightTab(v as RightTab)}
-              className="flex min-h-0 flex-1 flex-col"
+        {panels.right && (
+          <div className="flex min-h-0 flex-col gap-2" data-testid="right-panels">
+            <Panel title="Properties" level={2} className="shrink-0 md:max-h-[45%] md:overflow-auto">
+              <PropertiesPanel
+                page={page}
+                elementId={state.selection[0] ?? null}
+                readOnly={readOnly}
+                colourTokens={colourTokens}
+                onIntent={studio.applyIntent}
+                focusTextRequest={focusText}
+              />
+            </Panel>
+            <Panel
+              title="Document panels"
+              hideTitle
+              className="min-h-72 flex-1 md:min-h-0"
+              bodyClassName="flex flex-col p-0"
             >
-              <TabList label="Document panels" className="flex-wrap">
-                <Tab value="agent">
-                  Agent
-                  {state.proposal && <TabCount n={1} label="proposal waiting" />}
-                </Tab>
-                <Tab value="comments">
-                  Comments
-                  <TabCount n={openComments} label="open" />
-                </Tab>
-                <Tab value="checks">
-                  Checks
-                  <TabCount n={state.findings.length} label="on the last save" />
-                </Tab>
-                <Tab value="history">History</Tab>
-              </TabList>
-              <TabPanel value="agent" className="flex flex-col gap-3 p-3">
-                {state.proposal && proposalDiff ? (
-                  <section aria-labelledby="proposal-heading" className="flex flex-col gap-2">
-                    <h2 id="proposal-heading" className="text-sm font-semibold">
-                      Agent proposal
-                    </h2>
-                    <ProposalPanel
-                      proposal={state.proposal}
-                      diff={proposalDiff}
-                      headRevisionId={state.committed.revisionId}
-                      hasLocalWork={dirty}
-                      onAccept={studio.acceptProposal}
-                      onModify={studio.modifyProposal}
-                      onReject={studio.rejectProposal}
+              <Tabs
+                value={rightTab}
+                onValueChange={(v) => setRightTab(v as RightTab)}
+                className="flex min-h-0 flex-1 flex-col"
+              >
+                <TabList label="Document panels" className="flex-wrap">
+                  <Tab value="agent">
+                    Agent
+                    {state.proposal && <TabCount n={1} label="proposal waiting" />}
+                  </Tab>
+                  <Tab value="comments">
+                    Comments
+                    <TabCount n={openComments} label="open" />
+                  </Tab>
+                  <Tab value="checks">
+                    Checks
+                    <TabCount n={state.findings.length} label="on the last save" />
+                  </Tab>
+                  <Tab value="history">History</Tab>
+                </TabList>
+                <TabPanel value="agent" className="flex flex-col gap-3 p-3">
+                  {state.proposal && proposalDiff ? (
+                    <section aria-labelledby="proposal-heading" className="flex flex-col gap-2">
+                      <h2 id="proposal-heading" className="text-sm font-semibold">
+                        Agent proposal
+                      </h2>
+                      <ProposalPanel
+                        proposal={state.proposal}
+                        diff={proposalDiff}
+                        headRevisionId={state.committed.revisionId}
+                        hasLocalWork={dirty}
+                        onAccept={studio.acceptProposal}
+                        onModify={studio.modifyProposal}
+                        onReject={studio.rejectProposal}
+                      />
+                    </section>
+                  ) : (
+                    <EmptyState
+                      title="No agent proposal"
+                      description="Targeted change requests go through the same operation contract as your edits. An agent's change arrives here as a proposal you accept, modify or reject."
+                      className="py-4"
+                      action={
+                        devTools() ? (
+                          <Button
+                            size="sm"
+                            onClick={() => void studio.simulateProposal()}
+                            data-testid="simulate-proposal"
+                          >
+                            Development only: simulate an agent proposal
+                          </Button>
+                        ) : undefined
+                      }
                     />
-                  </section>
-                ) : (
-                  <EmptyState
-                    title="No agent proposal"
-                    description="Targeted change requests go through the same operation contract as your edits. An agent's change arrives here as a proposal you accept, modify or reject."
-                    className="py-4"
-                    action={
-                      devTools() ? (
-                        <Button
-                          size="sm"
-                          onClick={() => void studio.simulateProposal()}
-                          data-testid="simulate-proposal"
-                        >
-                          Development only: simulate an agent proposal
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                )}
-              </TabPanel>
-              <TabPanel value="comments" className="p-3" keepMounted>
-                <CommentsPanel
-                  documentId={documentId}
-                  revisionId={state.committed.revisionId}
-                  doc={doc}
-                  selection={state.selection}
-                  pendingElementIds={pendingElementIds}
-                  onSelect={studio.select}
-                />
-              </TabPanel>
-              <TabPanel value="checks" className="p-3">
-                {state.findings.length === 0 ? (
-                  <EmptyState
-                    title="No findings on the last save"
-                    description="Brand checks run on every save; blocking findings and warnings appear here."
-                    className="py-4"
-                  />
-                ) : (
-                  <ul className="flex flex-col gap-2 text-sm" data-testid="findings">
-                    {state.findings.map((f, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <Badge
-                          tone={
-                            f.severity === 'blocking'
-                              ? 'critical'
-                              : f.severity === 'warning'
-                                ? 'warning'
-                                : 'info'
-                          }
-                        >
-                          {f.severity}
-                        </Badge>
-                        <span>{f.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </TabPanel>
-              <TabPanel value="history" className="flex flex-col gap-4 p-3">
-                <HistoryPanel documentId={documentId} headRevisionId={state.committed.revisionId} />
-                <section aria-labelledby="exports-heading" className="flex flex-col gap-2">
-                  <h2 id="exports-heading" className="text-sm font-semibold">
-                    Exports
-                  </h2>
-                  <RenderPanel
+                  )}
+                </TabPanel>
+                <TabPanel value="comments" className="p-3" keepMounted>
+                  <CommentsPanel
                     documentId={documentId}
                     revisionId={state.committed.revisionId}
-                    formatKey={page.formatKey}
-                    hasLocalWork={dirty}
+                    doc={doc}
+                    selection={state.selection}
+                    pendingElementIds={pendingElementIds}
+                    onSelect={studio.select}
                   />
-                </section>
-              </TabPanel>
-            </Tabs>
-          </Panel>
-        </div>
+                </TabPanel>
+                <TabPanel value="checks" className="p-3">
+                  {state.findings.length === 0 ? (
+                    <EmptyState
+                      title="No findings on the last save"
+                      description="Brand checks run on every save; blocking findings and warnings appear here."
+                      className="py-4"
+                    />
+                  ) : (
+                    <ul className="flex flex-col gap-2 text-sm" data-testid="findings">
+                      {state.findings.map((f, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <Badge
+                            tone={
+                              f.severity === 'blocking'
+                                ? 'critical'
+                                : f.severity === 'warning'
+                                  ? 'warning'
+                                  : 'info'
+                            }
+                          >
+                            {f.severity}
+                          </Badge>
+                          <span>{f.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </TabPanel>
+                <TabPanel value="history" className="flex flex-col gap-4 p-3">
+                  <HistoryPanel documentId={documentId} headRevisionId={state.committed.revisionId} />
+                  <section aria-labelledby="exports-heading" className="flex flex-col gap-2">
+                    <h2 id="exports-heading" className="text-sm font-semibold">
+                      Exports
+                    </h2>
+                    <RenderPanel
+                      documentId={documentId}
+                      revisionId={state.committed.revisionId}
+                      formatKey={page.formatKey}
+                      hasLocalWork={dirty}
+                    />
+                  </section>
+                </TabPanel>
+              </Tabs>
+            </Panel>
+          </div>
+        )}
       </main>
 
       {state.conflict && (
         <ConflictDialog
           conflict={state.conflict}
           doc={doc}
+          templates={state.templates}
           onKeepServer={studio.keepServer}
+          onKeepMine={studio.keepMine}
           onDiscardAll={studio.discardAll}
         />
       )}

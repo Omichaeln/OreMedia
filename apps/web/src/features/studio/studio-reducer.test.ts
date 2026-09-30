@@ -5,6 +5,7 @@ import { fixtureDocument, ids } from '@oremedia/editor/fixtures';
 import {
   dropConflicting,
   hasLocalWork,
+  keepMineOps,
   initialStudioState,
   localDocument,
   studioReducer,
@@ -131,6 +132,48 @@ describe('studio state machine (spec 21.4)', () => {
     const discarded = studioReducer(s, { type: 'conflict:discard-all' });
     expect(discarded.pending).toBeNull();
     expect(discarded.committed.revisionId).toBe('rev_2');
+  });
+
+  it('STALE_REVISION with a conflict: keep-mine re-applies every local op on the head and drops those that no longer apply (UX-15)', () => {
+    let s = initialStudioState(committed());
+    const local = [setText('Local'), move];
+    s = studioReducer(s, {
+      type: 'intent',
+      batch: { operations: local, summary: 'Edit', origin: 'user' },
+      key: 'k1',
+    });
+    s = studioReducer(s, { type: 'commit:start', mode: 'autosave' });
+    const remote = [setText('Remote')];
+    const head = { ...committed(2), snapshot: applyBatch(fixtureDocument(), { operations: remote }) };
+    const rebased = rebaseBatch(local, [remote]);
+    if (rebased.ok) throw new Error('expected a conflict');
+    s = studioReducer(s, { type: 'rebase:conflict', head, localOps: local, conflicts: rebased.conflicts });
+    expect(keepMineOps(head, local, {})).toEqual({ kept: local, dropped: [] });
+    const mine = studioReducer(s, { type: 'conflict:keep-mine', key: 'k2' });
+    expect(mine.conflict).toBeNull();
+    expect(mine.committed.revisionId).toBe('rev_2'); // theirs stays in the history; ours goes on top
+    expect(mine.pending?.operations).toEqual(local);
+    expect(mine.pending?.key).toBe('k2');
+    expect(findElement(localDocument(mine).doc.pages[0]!, ids.headline)).toMatchObject({ text: 'Local' });
+    expect(mine.notice?.text).toContain('Kept your version for 1 element on revision 2');
+    // Their side removed the element: the text edit no longer applies and is named; the move survives.
+    const removed = [{ op: 'removeElement', pageId: P, elementId: ids.headline } as Operation];
+    const headRemoved = { ...committed(3), snapshot: applyBatch(fixtureDocument(), { operations: removed }) };
+    const result = keepMineOps(headRemoved, local, {});
+    expect(result.kept).toEqual([move]);
+    expect(result.dropped.map((d) => d.op.op)).toEqual(['setText']);
+    const rebasedRemoved = rebaseBatch(local, [removed]);
+    if (rebasedRemoved.ok) throw new Error('expected a conflict');
+    const s3 = studioReducer(s, {
+      type: 'rebase:conflict',
+      head: headRemoved,
+      localOps: local,
+      conflicts: rebasedRemoved.conflicts,
+    });
+    const partial = studioReducer(s3, { type: 'conflict:keep-mine', key: 'k3' });
+    expect(partial.pending?.operations).toEqual([move]);
+    expect(partial.notice?.tone).toBe('warning');
+    expect(partial.notice?.text).toContain('1 of your changes no longer apply (setText)');
   });
 
   it('undo and redo move history entries and never rewrite it', () => {

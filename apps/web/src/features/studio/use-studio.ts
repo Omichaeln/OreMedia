@@ -56,6 +56,7 @@ export interface StudioApi {
   undoBlocked: string | null;
   redoBlocked: string | null;
   keepServer: () => void;
+  keepMine: () => void;
   discardAll: () => void;
   select: (ids: string[]) => void;
   setPage: (id: string) => void;
@@ -379,6 +380,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     undoBlocked: blockedReason(state.undo, 'undo'),
     redoBlocked: blockedReason(state.redo, 'redo'),
     keepServer: () => dispatch({ type: 'conflict:keep-server', key: newIntentKey() }),
+    keepMine: () => dispatch({ type: 'conflict:keep-mine', key: newIntentKey() }),
     discardAll: () => dispatch({ type: 'conflict:discard-all' }),
     select: (ids) =>
       dispatch({
