@@ -152,6 +152,26 @@ interface Attempt {
   remoteJobId: string | null;
   remotePostId: string | null;
 }
+/** One remote_evidence row (spec 14.4), as publications.evidence returns it. */
+interface Evidence {
+  id: string;
+  publicationId: string;
+  attemptId: string | null;
+  kind:
+    | 'accepted_response'
+    | 'status_poll'
+    | 'reconciliation'
+    | 'human_confirmation'
+    | 'metrics_readback'
+    | 'remote_edit'
+    | 'remote_deletion';
+  remotePostId: string | null;
+  remoteUrl: string | null;
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  capturedAt: string;
+}
+
 export interface Publication {
   id: string;
   brandId: string;
@@ -291,6 +311,7 @@ export class Phase5Backend {
   readonly revisions = new Map<string, Revision>();
   readonly variants = new Map<string, Variant>();
   readonly publications = new Map<string, Publication>();
+  readonly evidence: Evidence[] = [];
   /** Spec 13.4 mandates of the brand: one active, one revoked (review.mandates.list / pause / revoke). */
   readonly mandates = new Map(
     (
@@ -834,6 +855,18 @@ export class Phase5Backend {
         ],
       },
     );
+    // The ledger behind the published row: what X answered when the post was accepted (spec 14.4).
+    this.evidence.push({
+      id: 'ev_pub_1',
+      publicationId: P5.publications.published,
+      attemptId: 'att_pub_1',
+      kind: 'accepted_response',
+      remotePostId: 'x_123',
+      remoteUrl: 'https://x.example/status/123',
+      payload: { id: 'x_123' },
+      payloadHash: hash({ id: 'x_123' }),
+      capturedAt: todayAt(11),
+    });
     this.publicationRow(
       P5.publications.publishedEarlier,
       P5.revisions.measured,
@@ -1155,7 +1188,10 @@ export function phase5Routers(
           nextCursor: null,
         };
       }),
-      evidence: query.input(PublicationEvidence).query(() => []),
+      evidence: query.input(PublicationEvidence).query(({ input }) => {
+        b.publication(input.publicationId);
+        return b.evidence.filter((e) => e.publicationId === input.publicationId);
+      }),
       reconcile: mutation.input(ReconcileCommand).mutation(({ input }) => {
         const cmd = input;
         const p = b.publication(cmd.publicationId);

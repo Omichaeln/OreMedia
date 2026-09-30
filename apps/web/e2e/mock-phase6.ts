@@ -12,6 +12,7 @@ import {
   ContentPackageCreate,
   ContentPackageGet,
   ContentPackageList,
+  ContentPackageListForDocument,
   ContentPackageRevise,
 } from '@oremedia/contracts/content';
 import {
@@ -1493,6 +1494,30 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           input.page,
         ),
       ),
+      /** The live packages whose current revision pins the document (UX-01); the set is small, no cursor. */
+      listForDocument: query.input(ContentPackageListForDocument).query(({ input }) => {
+        const doc = b.documentOf(input.documentId);
+        if (!doc) throw new NotFoundError('CreativeDocument', input.documentId);
+        const items = [];
+        for (const pkg of [...b.packages.values()].sort((x, y) => y.id.localeCompare(x.id))) {
+          const revision = p5.revisions.get(pkg.currentRevisionId);
+          if (!revision || revision.state === 'superseded') continue;
+          const pinnedRevisionId = b
+            .creativeDocumentsOf(revision.creativeRevisionIds)
+            .find((d) => d.documentId === input.documentId)?.pinnedRevisionId;
+          if (!pinnedRevisionId) continue;
+          const { revisionIds: _r, ...dto } = pkg;
+          const { copy: _c, ...summary } = revision;
+          items.push({
+            package: dto,
+            revision: summary,
+            pinnedRevisionId,
+            stale: doc.currentRevisionId !== pinnedRevisionId,
+            variantCount: [...p5.variants.values()].filter((v) => v.contentRevisionId === revision.id).length,
+          });
+        }
+        return { items: items.slice(0, input.page.limit), nextCursor: null };
+      }),
       get: query.input(ContentPackageGet).query(({ input }) => {
         const pkg = b.pkg(input.contentPackageId);
         const revision = p5.revisions.get(pkg.currentRevisionId);

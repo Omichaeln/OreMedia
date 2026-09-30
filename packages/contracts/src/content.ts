@@ -112,6 +112,8 @@ export const ContentPackageRevise = z.object({
 });
 export const ContentPackageGet = z.object({ contentPackageId: z.string() });
 export const ContentPackageList = z.object({ brandId: z.string(), page: PageRequest });
+/** The live packages whose current revision pins a creative document (the studio's way into review, UX-01). */
+export const ContentPackageListForDocument = z.object({ documentId: z.string(), page: PageRequest });
 export const ContentRevisionGet = z.object({ revisionId: z.string() });
 
 /** One variant per (content revision, channel connection); existing targets are returned, never duplicated. */

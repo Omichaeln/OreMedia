@@ -34,6 +34,7 @@ import {
 import {
   useChannelVariant,
   usePublication,
+  usePublicationEvidence,
   useRevisionPublications,
   type CancelResultDto,
   type ChannelDto,
@@ -387,6 +388,8 @@ function Loaded({
         )}
       </section>
 
+      <EvidenceLedger publicationId={p.id} />
+
       <section aria-labelledby={`channels-${p.id}`} data-testid="channel-outcomes">
         <h3 id={`channels-${p.id}`} className="mb-1 text-xs font-semibold">
           Channels for this revision
@@ -435,6 +438,71 @@ function Loaded({
         )}
       </section>
     </div>
+  );
+}
+
+const EVIDENCE_KIND_TEXT: Record<string, string> = {
+  accepted_response: 'Accepted response',
+  status_poll: 'Status poll',
+  reconciliation: 'Reconciliation',
+  human_confirmation: 'Human confirmation',
+  metrics_readback: 'Metrics read-back',
+  remote_edit: 'Remote edit',
+  remote_deletion: 'Remote deletion',
+};
+
+/**
+ * R1-C attempt ledger: the evidence rows behind the attempts (spec 14.4), newest last, as the record of what the
+ * channel said and what a person confirmed. Redacted payloads are summarised by their hash; the raw row is the API's.
+ */
+function EvidenceLedger({ publicationId }: { publicationId: string }) {
+  const evidence = usePublicationEvidence(publicationId);
+  return (
+    <section aria-labelledby={`evidence-${publicationId}`} data-testid="evidence-ledger">
+      <h3 id={`evidence-${publicationId}`} className="mb-1 text-xs font-semibold">
+        Attempt ledger
+      </h3>
+      {evidence.isPending && <Skeleton label="Loading evidence" lines={2} />}
+      {evidence.isError && <RequestError error={evidence.error} onRetry={() => void evidence.refetch()} />}
+      {evidence.data && evidence.data.length === 0 && (
+        <p className="text-xs text-muted-foreground">No evidence recorded yet.</p>
+      )}
+      {evidence.data && evidence.data.length > 0 && (
+        <ol className="flex flex-col gap-1 text-xs" aria-label="Evidence">
+          {evidence.data.map((e) => (
+            <li key={e.id} className="rounded-md border border-border p-2">
+              <span className="font-medium">{EVIDENCE_KIND_TEXT[e.kind] ?? e.kind}</span> at{' '}
+              {when(e.capturedAt)}
+              {e.attemptId && (
+                <>
+                  {' '}
+                  · attempt <code>{e.attemptId}</code>
+                </>
+              )}
+              {e.remotePostId && (
+                <>
+                  {' '}
+                  · post{' '}
+                  {e.remoteUrl ? (
+                    <a
+                      href={e.remoteUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2"
+                    >
+                      {e.remotePostId}
+                    </a>
+                  ) : (
+                    <code>{e.remotePostId}</code>
+                  )}
+                </>
+              )}{' '}
+              · payload <code>{e.payloadHash.slice(0, 12)}…</code>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 

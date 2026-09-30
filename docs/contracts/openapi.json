@@ -2711,6 +2711,39 @@
         }
       }
     },
+    "/trpc/content.packages.listForDocument": {
+      "get": {
+        "operationId": "content.packages.listForDocument",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["documentId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/content.packages.revise": {
       "post": {
         "operationId": "content.packages.revise",
@@ -10556,6 +10589,30 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "content.packages.listForDocument": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["documentId", "page"]
         }
       },
       "content.packages.revise": {

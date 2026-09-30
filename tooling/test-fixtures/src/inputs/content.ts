@@ -35,6 +35,9 @@ export const CONTENT_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'content.packages.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'content.packages.listForDocument': {
+    buildInput: (f) => ({ documentId: f['creativeDocumentId'], page: { limit: 50 } }),
+  },
   'content.packages.get': { buildInput: (f) => ({ contentPackageId: f['contentPackageId'] }) },
   'content.revisions.get': { buildInput: (f) => ({ revisionId: f['contentRevisionId'] }) },
   'content.variants.generate': {

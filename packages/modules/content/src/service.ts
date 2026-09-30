@@ -14,6 +14,7 @@ import {
   ContentPackageCreate,
   ContentPackageGet,
   ContentPackageList,
+  ContentPackageListForDocument,
   ContentPackageRevise,
   ContentRevisionGet,
   CopyDocumentV1,
@@ -882,6 +883,44 @@ export const contentService = {
       const brand = await brandService.get(actor, parsed.brandId, tx);
       const page = await packagesRepo.list(brand.id, parsed.page, tx);
       return { items: page.items.map(toPackageDto), nextCursor: page.nextCursor };
+    },
+
+    /**
+     * The packages whose current revision pins any revision of the document, newest first (spec 8.3): what a
+     * studio document can be sent for review through. Bounded like listReferencingCreativeDocument (the 200 most
+     * recent live revisions of the brand), so the page is the whole set and carries no cursor.
+     */
+    async listForDocument(
+      actor: ResolvedActor,
+      input: z.infer<typeof ContentPackageListForDocument>,
+      tx?: Tx,
+    ) {
+      const parsed = ContentPackageListForDocument.parse(input);
+      const doc = await creativeDocumentsRepo.getById(parsed.documentId, tx); // foreign → NOT_FOUND
+      const brand = await brandService.get(actor, doc.brandId, tx);
+      const revisionIds = new Set(
+        (await creativeRevisionsRepo.list(brand.id, doc.id, { limit: 200 }, tx)).items.map((r) => r.id),
+      );
+      const live = await revisionsRepo.listInStates(
+        brand.id,
+        ['draft', 'changes_requested', 'in_review', 'approved'],
+        tx,
+      );
+      const items = [];
+      for (const r of live) {
+        const pinnedRevisionId = r.creativeRevisionIds.find((id) => revisionIds.has(id));
+        if (!pinnedRevisionId) continue;
+        const pkg = await packagesRepo.getById(r.packageId, tx);
+        if (pkg.currentRevisionId !== r.id) continue;
+        items.push({
+          package: toPackageDto(pkg),
+          revision: toRevisionSummary(r),
+          pinnedRevisionId,
+          stale: doc.currentRevisionId !== pinnedRevisionId,
+          variantCount: (await variantsRepo.listForRevision(brand.id, r.id, tx)).length,
+        });
+      }
+      return { items: items.slice(0, parsed.page.limit), nextCursor: null };
     },
 
     /** The package, its current revision with variants, and its revision history (newest first, without copy). */

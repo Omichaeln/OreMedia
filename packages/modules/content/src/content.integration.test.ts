@@ -856,6 +856,28 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       expect(refs.map((r) => r.id)).toEqual([pkg.revision.id]);
     });
 
+    it('lists the live packages whose current revision pins a document, with the pin and variant count; a foreign document is NOT_FOUND', async () => {
+      const pkg = await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId }));
+      const res = await run(tenantA, () =>
+        contentService.packages.listForDocument(A, { documentId: docId, page: { limit: 50 } }),
+      );
+      expect(res.nextCursor).toBeNull();
+      const mine = res.items.find((i) => i.package.id === packageId);
+      expect(mine).toMatchObject({
+        revision: { id: pkg.revision.id, state: pkg.revision.state },
+        pinnedRevisionId: docRevision,
+        stale: false,
+        variantCount: pkg.variants.length,
+      });
+      // Only the current revision counts: the superseded revisions that also pinned the document are not listed.
+      expect(res.items.filter((i) => i.package.id === packageId)).toHaveLength(1);
+      await expect(
+        run(tenantB, () =>
+          contentService.packages.listForDocument(B, { documentId: docId, page: { limit: 50 } }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
     it('lists the packages of a brand newest first with cursor paging; a foreign brand is NOT_FOUND', async () => {
       const first = await run(tenantA, () =>
         contentService.packages.list(A, { brandId: brandA, page: { limit: 1 } }),

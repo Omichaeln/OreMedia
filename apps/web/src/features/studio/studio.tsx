@@ -18,6 +18,7 @@ import { LayersPanel } from './layers-panel';
 import { PropertiesPanel } from './properties-panel';
 import { ProposalPanel } from './proposal-panel';
 import { RenderPanel } from './render-panel';
+import { ReviewPanel } from './review-panel';
 import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
 import { hasLocalWork } from './studio-reducer';
 import { TemplatesPanel } from './templates-panel';
@@ -56,6 +57,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const [focusText, setFocusText] = useState(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [rightTab, setRightTab] = useState<RightTab>('agent');
+  const [reviewOpen, setReviewOpen] = useState(false);
   const comments = useCommentPages(documentId);
   const openComments = comments.items.filter((c) => c.state !== 'resolved').length;
 
@@ -170,7 +172,9 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           <Button
             size="sm"
             variant="primary"
-            disabledReason="Review requests arrive in Phase 5 (review and publication)"
+            onClick={() => setReviewOpen((open) => !open)}
+            aria-expanded={reviewOpen}
+            aria-controls="studio-review"
           >
             Send for review
           </Button>
@@ -179,6 +183,21 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           </Button>
         </div>
       </header>
+
+      {reviewOpen && (
+        <div id="studio-review" className="px-3 pt-2">
+          <ReviewPanel
+            companyId={companyId}
+            brandId={brandId}
+            timeZone={brand.timezone || 'UTC'}
+            documentId={documentId}
+            documentTitle={initial.title}
+            headRevisionId={state.committed.revisionId}
+            hasLocalWork={dirty}
+            onClose={() => setReviewOpen(false)}
+          />
+        </div>
+      )}
 
       {state.notice && (
         <div className="px-3 pt-2">

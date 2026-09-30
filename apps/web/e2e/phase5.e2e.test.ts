@@ -194,6 +194,14 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       .toContain('Partial success');
     const text = await page.getByTestId('channel-outcomes').textContent();
     expect(text).toContain('1 published, 1 failed, 1 pending of 3 channels.');
+    // R1-C: the attempt ledger lists the evidence rows behind the attempts, from publications.evidence.
+    await expect
+      .poll(() => page.getByTestId('evidence-ledger').getByRole('listitem').count(), { timeout: 15_000 })
+      .toBe(1);
+    const ledger = await page.getByTestId('evidence-ledger').textContent();
+    expect(ledger).toContain('Accepted response');
+    expect(ledger).toContain('att_pub_1');
+    expect(ledger).toContain('x_123');
     const outcomes = page.getByRole('list', { name: 'Per-channel outcomes' });
     expect(await outcomes.textContent()).toContain('Acme X (x)');
     expect(await outcomes.textContent()).toContain('Acme Instagram (instagram)');
