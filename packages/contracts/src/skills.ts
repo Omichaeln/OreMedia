@@ -169,6 +169,8 @@ export const SkillList = z.object({
   page: PageRequest,
 });
 export const SkillGet = z.object({ skillId: z.string() });
+/** Spec 12.3 per task kind: the skill versions a run on the brand would use, with their input schemas (UX-08). */
+export const SkillTaskKinds = z.object({ brandId: z.string() });
 export const SkillVersionCreate = z.object({
   /** Append to an existing skill; otherwise the skill is found or created by manifest.key in `scope`. */
   skillId: z.string().optional(),

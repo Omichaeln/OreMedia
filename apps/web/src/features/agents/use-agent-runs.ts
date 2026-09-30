@@ -43,3 +43,27 @@ export function useAgentRunList(brandId: string, limit: number = RUNS_PAGE) {
     refetchInterval: (items) => (items.some((r) => LIVE.has(r.state)) ? POLL_MS : false),
   });
 }
+
+export type AgentPrincipalDto = inferOutput<Trpc['access']['servicePrincipals']['list']>['items'][number];
+export type TaskKindsDto = inferOutput<Trpc['skills']['taskKinds']>;
+
+/** UX-08: the agent principals a run on the brand can start under (gated on agent.start_run), page by page. */
+export function useAgentPrincipals(brandId: string) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  const input = { brandId, page: { limit: RUNS_PAGE } };
+  return useCursorPages({
+    queryKey: trpc.access.servicePrincipals.list.queryKey(input),
+    fetchPage: (cursor) =>
+      client.access.servicePrincipals.list.query({
+        brandId,
+        page: { limit: RUNS_PAGE, ...(cursor ? { cursor } : {}) },
+      }),
+  });
+}
+
+/** UX-08: per task kind, the skills a run on the brand would use and their input schemas. */
+export function useTaskKinds(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.skills.taskKinds.queryOptions({ brandId }));
+}

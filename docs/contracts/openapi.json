@@ -452,6 +452,39 @@
         }
       }
     },
+    "/trpc/access.servicePrincipals.list": {
+      "get": {
+        "operationId": "access.servicePrincipals.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/access.servicePrincipals.revoke": {
       "post": {
         "operationId": "access.servicePrincipals.revoke",
@@ -6708,6 +6741,27 @@
         }
       }
     },
+    "/trpc/skills.taskKinds": {
+      "get": {
+        "operationId": "skills.taskKinds",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/skills.versions.create": {
       "post": {
         "operationId": "skills.versions.create",
@@ -8915,6 +8969,30 @@
             }
           },
           "required": ["kind", "name", "grants"]
+        }
+      },
+      "access.servicePrincipals.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
         }
       },
       "access.servicePrincipals.revoke": {
@@ -13779,6 +13857,18 @@
             }
           },
           "required": ["page"]
+        }
+      },
+      "skills.taskKinds": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
         }
       },
       "skills.versions.create": {

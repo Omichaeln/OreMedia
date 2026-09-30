@@ -5,6 +5,7 @@ import { seedSkillManifest } from './skills-seed';
 export const SKILLS_INPUTS: Record<string, CrossTenantFixture> = {
   'skills.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'skills.get': { buildInput: (f) => ({ skillId: f['skillId'] }) },
+  'skills.taskKinds': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'skills.versions.create': {
     buildInput: (f) => ({
       skillId: f['skillId'],

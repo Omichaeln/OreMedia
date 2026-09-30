@@ -69,12 +69,13 @@ import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } f
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
 import { PageRequest } from '@oremedia/contracts/pagination';
-import { SkillList } from '@oremedia/contracts/skills';
+import { SkillList, SkillTaskKinds, TaskKind } from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import {
+  passwordPolicyIssue,
   PasswordSetup,
   PasswordSignIn,
-  passwordPolicyIssue,
+  ServicePrincipalList,
   type PasswordAuthResponse,
 } from '@oremedia/contracts/access';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
@@ -884,6 +885,30 @@ export function createMockRouter(backend: MockBackend) {
     measurement: p6.measurement,
     community: communityRouters(backend.community, { router: t.router, query, mutation }),
     access: t.router({
+      /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
+      servicePrincipals: t.router({
+        list: query.input(ServicePrincipalList).query(({ ctx, input }) => {
+          if (ctx.member?.role === 'creator' || ctx.member?.role === 'reviewer')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          return {
+            items: [
+              {
+                id: 'sp_e2e_agent',
+                name: 'E2E agent',
+                kind: 'agent' as const,
+                maxAutonomy: 'prepare_release' as const,
+                actions: ['brand.read', 'content.plan', 'creative.edit'],
+                createdAt: '2026-09-01T09:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          };
+        }),
+      }),
       members: t.router({
         list: query.query(({ ctx }) => {
           if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
@@ -1016,6 +1041,42 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     skills: t.router({
+      /** UX-08: copywriting is served by the brand copywriting skill; the other kinds have no published skill here. */
+      taskKinds: query.input(SkillTaskKinds).query(({ input }) => {
+        if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+        return {
+          items: TaskKind.options.map((taskKind) => ({
+            taskKind,
+            skills:
+              taskKind === 'copywriting'
+                ? [
+                    {
+                      skillVersionId: 'skv_copy_3',
+                      skillId: 'sk_copy',
+                      key: 'brand-copywriting',
+                      title: 'Brand copywriting',
+                      description: 'Drafts on-brand copy for the brief.',
+                      versionNumber: 3,
+                      inputSchema: {
+                        type: 'object',
+                        properties: {
+                          goal: {
+                            type: 'string',
+                            maxLength: 1000,
+                            description: 'What the copy must achieve.',
+                          },
+                          channels: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+                          tone: { type: 'string', enum: ['warm', 'direct'] },
+                        },
+                        required: ['goal'],
+                        additionalProperties: false,
+                      },
+                    },
+                  ]
+                : [],
+          })),
+        };
+      }),
       list: query.input(SkillList).query(({ input }) => ({
         items: backend.skills.filter(
           (k) => (!input.scope || k.scope === input.scope) && (!input.brandId || k.brandId === input.brandId),

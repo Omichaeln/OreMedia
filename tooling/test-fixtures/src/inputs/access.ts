@@ -33,6 +33,7 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
   'access.brandGrants.set': {
     buildInput: (f) => ({ membershipId: f['membershipId'], brandId: f['brandId'], roles: [] }),
   },
+  'access.servicePrincipals.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'access.servicePrincipals.create': {
     buildInput: (f) => ({
       kind: 'agent',

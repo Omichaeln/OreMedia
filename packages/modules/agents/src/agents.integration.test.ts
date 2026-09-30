@@ -10,6 +10,7 @@ import type { AgentRunWorkflowInputV1 } from '@oremedia/contracts/agents';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { servicePrincipals, tenants } from '@oremedia/db/schema/access';
+import { accessService, registerBrandChecker } from '@oremedia/module-access';
 import { agentRuns, agentSteps, toolInvocations } from '@oremedia/db/schema/agents';
 import { budgetReservations, usageLedger } from '@oremedia/db/schema/billing';
 import { brands } from '@oremedia/db/schema/brand';
@@ -244,6 +245,11 @@ describe('agents module (spec 12) against MySQL 8', () => {
     (await tdb.db.select().from(agentRuns).where(eq(agentRuns.id, runId)))[0]!;
 
   beforeAll(async () => {
+    // As the composition root: the access module validates brand ids through the brand module (spec 4.2).
+    registerBrandChecker({
+      assertExist: (ids, tx) => brandService.assertExist(ids, tx),
+      assertValidGrantBrands: (ids, tx) => brandService.assertValidGrantBrands(ids, tx),
+    });
     // The brand documents here name the placeholder font ast_font; a draft's type roles must name fonts of the
     // brand, so the brand module is told it is one (no asset rows are seeded in this suite).
     registerBrandAssetKindSource(
@@ -354,6 +360,32 @@ describe('agents module (spec 12) against MySQL 8', () => {
     configureAgentModel(null);
     clearOutboxRoutes();
     await tdb?.drop();
+  });
+
+  describe('access.servicePrincipals.list (UX-08)', () => {
+    it('names the active agent principals granted the brand with their actions there; gated on agent.start_run', async () => {
+      const listed = await run(tenantA, () =>
+        accessService.listServicePrincipals(A, { brandId: brandA, page: { limit: 50 } }),
+      );
+      expect(listed.items.map((p) => p.id)).toEqual([spA]);
+      expect(listed.items[0]).toMatchObject({
+        name: 'agent A',
+        kind: 'agent',
+        maxAutonomy: 'managed_autopublish',
+        actions: ['asset.read', 'brand.read', 'creative.edit', 'creative.read'],
+      });
+      // Another tenant's brand is NOT_FOUND; a foreign principal never appears in this tenant's list.
+      await expect(
+        run(tenantA, () => accessService.listServicePrincipals(A, { brandId: brandB, page: { limit: 50 } })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(
+        (
+          await run(tenantB, () =>
+            accessService.listServicePrincipals(manager(tenantB), { brandId: brandB, page: { limit: 50 } }),
+          )
+        ).items.map((p) => p.id),
+      ).toEqual([spB]);
+    });
   });
 
   describe('runs.start', () => {
