@@ -21,7 +21,12 @@ import {
   type CalendarPublication,
   type ContentClass,
 } from '@oremedia/contracts/content';
-import { NotFoundError, ValidationFailedError, type ErrorDetail } from '@oremedia/contracts/errors';
+import {
+  CapabilityUnsupportedError,
+  NotFoundError,
+  ValidationFailedError,
+  type ErrorDetail,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { ValidationResult } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
@@ -503,8 +508,9 @@ export type ChannelVariantDto = Awaited<ReturnType<typeof toVariantDto>>;
 
 /**
  * The capability findings for a variant as it is about to be written (generate and update store the result). A
- * channel that no longer resolves (disconnected, removed) is a finding, not a failed write: the variant stays
- * editable so its media can be moved, and dispatch holds it on channel_active anyway (spec 13.4).
+ * channel that no longer resolves (disconnected, removed) or a provider that cannot be used (unknown, not
+ * certified) is a finding, not a failed write: the variant stays editable so its media can be moved, and dispatch
+ * holds it on channel_active / the capability check anyway (spec 13.4).
  */
 async function validationFor(
   v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes'>,
@@ -519,6 +525,7 @@ async function validationFor(
   } catch (err) {
     if (err instanceof NotFoundError)
       return { ok: false, issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }] };
+    if (err instanceof CapabilityUnsupportedError) return { ok: false, issues: err.details ?? [] };
     throw err;
   }
 }

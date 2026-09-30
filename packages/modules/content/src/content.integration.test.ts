@@ -7,6 +7,7 @@ import {
 } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
 import {
+  CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
@@ -670,6 +671,28 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ok: false,
         issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }],
       });
+      // So is a provider the registry refuses (unknown or not certified): its details are the findings.
+      registerVariantValidator(async () => {
+        throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: 'provider_not_certified:x' }]);
+      });
+      const uncertified = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 4,
+            text: 'Twenty percent off',
+            altTexts: ['Offer'],
+            settings: {},
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(uncertified.validation).toEqual({
+        ok: false,
+        issues: [{ path: 'providerKey', issue: 'provider_not_certified:x' }],
+      });
       resetVariantValidator();
       await expect(
         run(tenantA, (tx) =>
@@ -687,7 +710,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           ),
         ),
       ).rejects.toBeInstanceOf(ConflictError);
-      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(4);
+      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(5);
     });
 
     it('moves the revision only through the machine and guards variant edits by revision state (spec 5.5 step 5)', async () => {
