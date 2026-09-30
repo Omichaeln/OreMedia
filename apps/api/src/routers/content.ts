@@ -13,6 +13,7 @@ import {
   ContentPackageCreate,
   ContentPackageGet,
   ContentPackageList,
+  ContentPackageListForDocument,
   ContentPackageRevise,
   ContentRevisionGet,
 } from '@oremedia/contracts/content';
@@ -74,6 +75,9 @@ export const contentRouter = router({
     list: tenantQuery
       .input(ContentPackageList)
       .query(({ ctx, input }) => contentService.packages.list(ctx.tenant.actor, input)),
+    listForDocument: tenantQuery
+      .input(ContentPackageListForDocument)
+      .query(({ ctx, input }) => contentService.packages.listForDocument(ctx.tenant.actor, input)),
     get: tenantQuery
       .input(ContentPackageGet)
       .query(({ ctx, input }) => contentService.packages.get(ctx.tenant.actor, input)),

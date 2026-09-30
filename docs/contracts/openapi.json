@@ -2711,6 +2711,27 @@
         }
       }
     },
+    "/trpc/content.packages.listForDocument": {
+      "get": {
+        "operationId": "content.packages.listForDocument",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/content.packages.revise": {
       "post": {
         "operationId": "content.packages.revise",
@@ -5982,6 +6003,46 @@
         }
       }
     },
+    "/trpc/review.approvals.list": {
+      "get": {
+        "operationId": "review.approvals.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "contentRevisionId": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": ["valid", "invalidated", "consumed", "expired"]
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/review.decisions.submit": {
       "post": {
         "operationId": "review.decisions.submit",
@@ -6338,6 +6399,27 @@
     "/trpc/review.requests.get": {
       "get": {
         "operationId": "review.requests.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reviewRequestId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["reviewRequestId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/review.requests.media": {
+      "get": {
+        "operationId": "review.requests.media",
         "x-trpc-type": "query",
         "requestBody": {
           "content": {
@@ -10497,6 +10579,18 @@
           "required": ["brandId", "page"]
         }
       },
+      "content.packages.listForDocument": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            }
+          },
+          "required": ["documentId"]
+        }
+      },
       "content.packages.revise": {
         "type": "mutation",
         "input": {
@@ -13093,6 +13187,37 @@
           "required": ["approvalId"]
         }
       },
+      "review.approvals.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "contentRevisionId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": ["valid", "invalidated", "consumed", "expired"]
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
       "review.decisions.submit": {
         "type": "mutation",
         "input": {
@@ -13357,6 +13482,18 @@
         }
       },
       "review.requests.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "reviewRequestId": {
+              "type": "string"
+            }
+          },
+          "required": ["reviewRequestId"]
+        }
+      },
+      "review.requests.media": {
         "type": "query",
         "input": {
           "type": "object",

@@ -378,6 +378,28 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
       .toContain('Outdated');
   }, 30_000);
 
+  it('sends a document for review through a package: the studio creates the first package pinning the saved head (UX-01)', async () => {
+    await waitSaved();
+    await page.getByRole('button', { name: 'Send for review' }).click();
+    const panel = page.getByTestId('studio-review');
+    await expect.poll(() => panel.getByTestId('studio-create-package').count(), { timeout: 15_000 }).toBe(1);
+    expect(await panel.getByLabel('Package title').inputValue()).not.toBe('');
+    await panel.getByLabel('Master copy').fill('Copy that goes with this creative.');
+    await panel.getByRole('button', { name: 'Create package' }).click();
+    await expect.poll(() => panel.getByTestId('studio-review-package').count(), { timeout: 15_000 }).toBe(1);
+    const item = panel.getByTestId('studio-review-package');
+    expect(await item.textContent()).toContain('Draft');
+    expect(await item.textContent()).toContain('0 variants');
+    expect(await item.getByRole('link', { name: 'Open package' }).getAttribute('href')).toContain(
+      'campaigns?package=pkg_',
+    );
+    // A review needs channel variants (spec 13.3 no_channel_variants); the button says what to do first.
+    const request = item.getByRole('button', { name: 'Request review' });
+    expect(await request.getAttribute('aria-disabled')).toBe('true');
+    expect(await request.getAttribute('title')).toBe('Generate at least one channel variant first');
+    expect(await panel.getByTestId('studio-review-stale').count()).toBe(0);
+  }, 45_000);
+
   it('creates a format variant from the strip and switches pages', async () => {
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     await expect.poll(() => page.getByTestId('format-strip').getByRole('tab').count()).toBe(2);

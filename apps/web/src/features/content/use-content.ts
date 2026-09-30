@@ -75,3 +75,13 @@ export function usePackages(brandId: string) {
 }
 
 export type PackagesQuery = ReturnType<typeof usePackages>;
+
+export type PackageForDocumentDto = inferOutput<
+  Trpc['content']['packages']['listForDocument']
+>['items'][number];
+
+/** The live packages whose current revision pins a studio document (UX-01); the server bounds the set, no cursor. */
+export function usePackagesForDocument(documentId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.content.packages.listForDocument.queryOptions({ documentId }));
+}

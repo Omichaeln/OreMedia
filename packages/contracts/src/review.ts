@@ -67,12 +67,21 @@ export type ReleaseDecision = { allow: true } | { allow: false; hold: true; reas
 // Phase 5 review module (spec 7.5 `review` router, 13.2–13.4). Appended only; nothing above changes.
 // ---------------------------------------------------------------------------------------------------------------
 import { PageRequest } from './pagination';
-import type { ApprovalBindingV1 } from './approval';
+import { ApprovalState, type ApprovalBindingV1 } from './approval';
 import { MandateState } from './publishing';
 
 export const ReviewRequestGet = z.object({ reviewRequestId: z.string() });
+/** The manifest's rendered files as short-lived signed URLs (spec 13.3: a reviewer sees exactly what was frozen). */
+export const ReviewRequestMedia = z.object({ reviewRequestId: z.string() });
 export const ReviewInboxList = z.object({ brandId: z.string().optional(), page: PageRequest });
 export const ApprovalGet = z.object({ approvalId: z.string() });
+/** A brand's release approvals newest first, optionally one revision's or one state's (the schedule form's picker). */
+export const ApprovalList = z.object({
+  brandId: z.string(),
+  contentRevisionId: z.string().optional(),
+  state: ApprovalState.optional(),
+  page: PageRequest,
+});
 
 export const MandateGet = z.object({ mandateId: z.string() });
 /** A brand's mandates, newest first (spec 13.4); every state, so paused and revoked ones stay visible. */

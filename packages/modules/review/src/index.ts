@@ -1,6 +1,13 @@
 // Review, approval and release policy (spec 13): requests with frozen manifests, decisions, bound approvals,
 // mandates (flagged) and the release evaluator the publishing workflow calls at dispatch.
-export { reviewService, type ActorOptions, type DecisionMeta } from './service';
+export {
+  reviewService,
+  registerReviewMediaSigner,
+  resetReviewMediaSigner,
+  type ActorOptions,
+  type DecisionMeta,
+  type ReviewMediaSigner,
+} from './service';
 export { reviewToolSource } from './tools';
 export {
   evaluateRelease,

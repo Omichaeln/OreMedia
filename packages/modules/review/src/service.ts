@@ -7,6 +7,7 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { MandateCreate } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
+  ApprovalList,
   FrozenManifestV1,
   MandateGet,
   MandateList,
@@ -16,6 +17,7 @@ import {
   ReviewInboxList,
   ReviewRequestCreate,
   ReviewRequestGet,
+  ReviewRequestMedia,
   type ApprovalInvalidatedReason,
   type InboxAttention,
   type StaleReason,
@@ -36,6 +38,7 @@ import {
 } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { contentService, hashesForVariant, type RevisionChange } from '@oremedia/module-content';
+import { creativeService } from '@oremedia/module-creative';
 import { audit, featureFlag, outbox } from '@oremedia/module-operations';
 import {
   bindingForRevision,
@@ -87,6 +90,25 @@ const brandResource = (brandId: string) => {
   const { tenantId } = requireTenant();
   return { type: 'brand', tenantId, brandId, id: brandId };
 };
+/**
+ * Spec 13.3 / 9.3: the manifest's files are delivered as short-lived signed GETs. The assets module owns storage,
+ * so the composition root registers the signer (as the release asset authoriser); until it does, media is refused.
+ */
+export type ReviewMediaSigner = (storageKey: string) => Promise<{ url: string; expiresAt: string }>;
+const unregisteredSigner: ReviewMediaSigner = async () => {
+  throw new Error(
+    'review media signer not registered (composition root must call registerReviewMediaSigner)',
+  );
+};
+let mediaSigner: ReviewMediaSigner = unregisteredSigner;
+export const registerReviewMediaSigner = (fn: ReviewMediaSigner): void => {
+  mediaSigner = fn;
+};
+/** Test seam: back to the loud default. */
+export const resetReviewMediaSigner = (): void => {
+  mediaSigner = unregisteredSigner;
+};
+
 const requestResource = (r: RequestRow, extra: { state?: string; authorPrincipalId?: string } = {}) => ({
   type: 'review_request',
   tenantId: r.tenantId,
@@ -440,6 +462,61 @@ export const reviewService = {
         })),
       };
     },
+
+    /**
+     * The rendered files the manifest froze, as signed URLs: authorised exactly as get (an external reviewer only
+     * for their own request), and each file is signed only when the stored export still carries the frozen hash;
+     * one that does not is reported unverified and never delivered as if it were what the reviewer approved.
+     */
+    async media(actor: ResolvedActor, input: z.infer<typeof ReviewRequestMedia>, tx?: Tx) {
+      const parsed = ReviewRequestMedia.parse(input);
+      const request = await requestsRepo.getById(parsed.reviewRequestId, tx);
+      if (actor.kind === 'external_reviewer')
+        await policy.assert(actor, 'review.decide', requestResource(request), {}, tx);
+      else await policy.assert(actor, 'brand.read', brandResource(request.brandId), {}, tx);
+      const manifest = FrozenManifestV1.parse(request.frozenManifest);
+      // One file frozen for several channels is one file, delivered once, naming the channels it serves.
+      const frozen: Array<{ exportId: string; contentHash: string; channelConnectionIds: string[] }> = [];
+      for (const e of manifest.exports) {
+        const seen = frozen.find((f) => f.exportId === e.exportId);
+        if (seen) seen.channelConnectionIds.push(e.channelConnectionId);
+        else
+          frozen.push({
+            exportId: e.exportId,
+            contentHash: e.contentHash,
+            channelConnectionIds: [e.channelConnectionId],
+          });
+      }
+      // A frozen export that no longer exists is reported unverified, never a 404 for the whole manifest.
+      const exports = new Map(
+        (
+          await creativeService.renders.findByIds(
+            request.brandId,
+            frozen.map((e) => e.exportId),
+            tx,
+          )
+        ).map((e) => [e.id, e]),
+      );
+      const items = [];
+      for (const f of frozen) {
+        const e = exports.get(f.exportId);
+        const base = {
+          exportId: f.exportId,
+          channelConnectionIds: f.channelConnectionIds,
+          contentHash: f.contentHash,
+          mime: e?.mime ?? null,
+          width: e?.width ?? null,
+          height: e?.height ?? null,
+        };
+        if (!e || e.contentHash !== f.contentHash) {
+          items.push({ ...base, verified: false as const, url: null, expiresAt: null });
+          continue;
+        }
+        const signed = await mediaSigner(e.storageKey);
+        items.push({ ...base, verified: true as const, url: signed.url, expiresAt: signed.expiresAt });
+      }
+      return { reviewRequestId: request.id, manifestHash: request.manifestHash, items };
+    },
   },
 
   decisions: {
@@ -666,6 +743,19 @@ export const reviewService = {
       const apr = await approvalsRepo.getById(parsed.approvalId, tx);
       await policy.assert(actor, 'brand.read', brandResource(apr.brandId), {}, tx);
       return toApprovalDto(apr);
+    },
+
+    /** The brand's approvals newest first (brand.read via brandService.get; a foreign brand is NOT_FOUND). */
+    async list(actor: ResolvedActor, input: z.infer<typeof ApprovalList>, tx?: Tx) {
+      const parsed = ApprovalList.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx);
+      const page = await approvalsRepo.list(
+        brand.id,
+        { contentRevisionId: parsed.contentRevisionId, state: parsed.state },
+        parsed.page,
+        tx,
+      );
+      return { items: page.items.map(toApprovalDto), nextCursor: page.nextCursor };
     },
 
     /** Spec 13.4 approvals.getById: the scoped row (NOT_FOUND for a foreign id). */

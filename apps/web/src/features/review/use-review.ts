@@ -33,4 +33,36 @@ export function useReviewRequest(reviewRequestId: string | null) {
   });
 }
 
+export type ApprovalDto = inferOutput<Trpc['review']['approvals']['list']>['items'][number];
+
+/** A revision's approvals, every state (the schedule form's authority picker); one page is the whole set in practice. */
+export function useApprovals(brandId: string, contentRevisionId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.review.approvals.list.queryOptions({
+      brandId,
+      contentRevisionId: contentRevisionId ?? '',
+      page: { limit: 100 },
+    }),
+    enabled: contentRevisionId !== null,
+  });
+}
+
+export type ManifestMediaItemDto = inferOutput<Trpc['review']['requests']['media']>['items'][number];
+
+/**
+ * The manifest's rendered files as signed URLs (spec 13.3), re-signed before the 5-minute URLs lapse so an open
+ * review never shows a broken image. Read by the inbox detail and the external portal alike (request-bound there).
+ */
+export function useManifestMedia(reviewRequestId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.review.requests.media.queryOptions({ reviewRequestId: reviewRequestId ?? '' }),
+    enabled: reviewRequestId !== null,
+    staleTime: 4 * 60_000,
+    refetchInterval: 4 * 60_000,
+    retry: false,
+  });
+}
+
 export const isMemberView = (r: ReviewRequestDto): r is MemberReviewRequestDto => 'decisions' in r;

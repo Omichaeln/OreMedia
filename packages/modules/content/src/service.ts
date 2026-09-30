@@ -14,14 +14,21 @@ import {
   ContentPackageCreate,
   ContentPackageGet,
   ContentPackageList,
+  ContentPackageListForDocument,
   ContentPackageRevise,
   ContentRevisionGet,
   CopyDocumentV1,
   type CalendarPublication,
   type ContentClass,
 } from '@oremedia/contracts/content';
-import { NotFoundError, ValidationFailedError, type ErrorDetail } from '@oremedia/contracts/errors';
+import {
+  CapabilityUnsupportedError,
+  NotFoundError,
+  ValidationFailedError,
+  type ErrorDetail,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
+import type { ValidationResult } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
@@ -88,6 +95,21 @@ export const registerChannelResolver = (fn: ChannelResolver): void => {
 /** Test seam: back to the loud default. */
 export const resetChannelResolver = (): void => {
   channelResolver = unregisteredChannelResolver;
+};
+
+/**
+ * Spec 13.4: a variant's `validation` is the channel capability check on what it will publish (text, alt texts,
+ * media dimensions, settings). The publishing module registers the check; until it does, nothing is flagged.
+ */
+export type VariantValidator = (variant: ChannelVariantForPublishing, tx?: Tx) => Promise<ValidationResult>;
+const unregisteredVariantValidator: VariantValidator = async () => ({ ok: true, issues: [] });
+let variantValidator: VariantValidator = unregisteredVariantValidator;
+export const registerVariantValidator = (fn: VariantValidator): void => {
+  variantValidator = fn;
+};
+/** Test seam: back to the default that flags nothing. */
+export const resetVariantValidator = (): void => {
+  variantValidator = unregisteredVariantValidator;
 };
 
 /** calendar.range reads publications through the publishing module; until it registers, the calendar shows packages only. */
@@ -296,8 +318,17 @@ async function pinCreativeRevisions(
  * revisions, never documents): the client never has to remember which studio document a package came from. `stale`
  * means the document has moved on since the pin, so a revise re-pins its current revision.
  */
+interface ExportSummary {
+  exportId: string;
+  pageId: string;
+  formatKey: string;
+  mime: string;
+  width: number;
+  height: number;
+}
+
 /**
- * The documents behind a revision's creative pins, in pin order (spec 8.3): two queries rather than one per pin.
+ * The documents behind a revision's creative pins, in pin order (spec 8.3): three queries rather than one per pin.
  * A pin whose revision or document is no longer visible is skipped rather than failing the read.
  */
 async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
@@ -309,6 +340,20 @@ async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
     tx,
   );
   const byDocument = new Map(docs.map((d) => [d.id, d]));
+  // The pinned revisions' ready exports: what a channel variant may select (variants.update checks the same set).
+  const exportsByRevision = new Map<string, ExportSummary[]>();
+  for (const e of await exportsRepo.listForRevisions(revision.brandId, revision.creativeRevisionIds, tx)) {
+    const list = exportsByRevision.get(e.revisionId) ?? [];
+    list.push({
+      exportId: e.id,
+      pageId: e.pageId,
+      formatKey: e.formatKey,
+      mime: e.mime,
+      width: e.width,
+      height: e.height,
+    });
+    exportsByRevision.set(e.revisionId, list);
+  }
   return revision.creativeRevisionIds.flatMap((pinnedRevisionId) => {
     const doc = byDocument.get(byRevision.get(pinnedRevisionId)?.documentId ?? '');
     if (!doc) return [];
@@ -319,6 +364,7 @@ async function creativeDocumentsOf(revision: RevisionRow, tx?: Tx) {
         pinnedRevisionId,
         currentRevisionId: doc.currentRevisionId,
         stale: doc.currentRevisionId !== pinnedRevisionId,
+        exports: exportsByRevision.get(pinnedRevisionId) ?? [],
       },
     ];
   });
@@ -459,6 +505,30 @@ async function toVariantDto(
   };
 }
 export type ChannelVariantDto = Awaited<ReturnType<typeof toVariantDto>>;
+
+/**
+ * The capability findings for a variant as it is about to be written (generate and update store the result). A
+ * channel that no longer resolves (disconnected, removed) or a provider that cannot be used (unknown, not
+ * certified) is a finding, not a failed write: the variant stays editable so its media can be moved, and dispatch
+ * holds it on channel_active / the capability check anyway (spec 13.4).
+ */
+async function validationFor(
+  v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes'>,
+  contentPackageId: string,
+  tx?: Tx,
+): Promise<ValidationResult> {
+  try {
+    return await variantValidator(
+      { ...v, contentPackageId, exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx) },
+      tx,
+    );
+  } catch (err) {
+    if (err instanceof NotFoundError)
+      return { ok: false, issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }] };
+    if (err instanceof CapabilityUnsupportedError) return { ok: false, issues: err.details ?? [] };
+    throw err;
+  }
+}
 
 /** Inserts revision n and points the package at it; shared by create (n = 1) and revise (n = current + 1). */
 async function insertRevision(
@@ -832,6 +902,60 @@ export const contentService = {
       return { items: page.items.map(toPackageDto), nextCursor: page.nextCursor };
     },
 
+    /**
+     * The packages whose current revision pins any revision of the document, newest first (spec 8.3): what a
+     * studio document can be sent for review through. Bounded like listReferencingCreativeDocument (the 200 most
+     * recent live revisions of the brand), then the matching packages and their variants in one query each.
+     */
+    async listForDocument(
+      actor: ResolvedActor,
+      input: z.infer<typeof ContentPackageListForDocument>,
+      tx?: Tx,
+    ) {
+      const parsed = ContentPackageListForDocument.parse(input);
+      const doc = await creativeDocumentsRepo.getById(parsed.documentId, tx); // foreign → NOT_FOUND
+      const brand = await brandService.get(actor, doc.brandId, tx);
+      const revisionIds = new Set(
+        (await creativeRevisionsRepo.list(brand.id, doc.id, { limit: 200 }, tx)).items.map((r) => r.id),
+      );
+      const live = await revisionsRepo.listInStates(
+        brand.id,
+        ['draft', 'changes_requested', 'in_review', 'approved'],
+        tx,
+      );
+      const pinning = live.flatMap((r) => {
+        const pinnedRevisionId = r.creativeRevisionIds.find((id) => revisionIds.has(id));
+        return pinnedRevisionId ? [{ revision: r, pinnedRevisionId }] : [];
+      });
+      const packages = new Map(
+        (
+          await packagesRepo.listByIds(brand.id, [...new Set(pinning.map((p) => p.revision.packageId))], tx)
+        ).map((p) => [p.id, p]),
+      );
+      const variantCounts = new Map<string, number>();
+      for (const v of await variantsRepo.listForRevisions(
+        brand.id,
+        pinning.map((p) => p.revision.id),
+        tx,
+      ))
+        variantCounts.set(v.contentRevisionId, (variantCounts.get(v.contentRevisionId) ?? 0) + 1);
+      return {
+        items: pinning.flatMap(({ revision, pinnedRevisionId }) => {
+          const pkg = packages.get(revision.packageId);
+          if (!pkg || pkg.currentRevisionId !== revision.id) return []; // only the current revision counts
+          return [
+            {
+              package: toPackageDto(pkg),
+              revision: toRevisionSummary(revision),
+              pinnedRevisionId,
+              stale: doc.currentRevisionId !== pinnedRevisionId,
+              variantCount: variantCounts.get(revision.id) ?? 0,
+            },
+          ];
+        }),
+      };
+    },
+
     /** The package, its current revision with variants, and its revision history (newest first, without copy). */
     async get(actor: ResolvedActor, input: z.infer<typeof ContentPackageGet>, tx?: Tx) {
       const parsed = ContentPackageGet.parse(input);
@@ -975,27 +1099,34 @@ export const contentService = {
         if (!channel || channel.brandId !== revision.brandId)
           throw new NotFoundError('ChannelConnection', channelConnectionId); // never reveal another brand's channel
         const id = newId('channelVariant');
+        const values = {
+          id,
+          brandId: revision.brandId,
+          contentRevisionId: revision.id,
+          channelConnectionId,
+          text: await linkTracker(
+            {
+              brandId: revision.brandId,
+              contentRevisionId: revision.id,
+              channelVariantId: id,
+              channelConnectionId,
+              text: copy.master.text,
+            },
+            tx,
+          ),
+          altTexts,
+          settings: {},
+          exportIds,
+          capabilityVersion: channel.capabilityVersion,
+        };
         await variantsRepo.create(
           {
-            id,
-            brandId: revision.brandId,
-            contentRevisionId: revision.id,
-            channelConnectionId,
-            text: await linkTracker(
-              {
-                brandId: revision.brandId,
-                contentRevisionId: revision.id,
-                channelVariantId: id,
-                channelConnectionId,
-                text: copy.master.text,
-              },
+            ...values,
+            validation: await validationFor(
+              { ...values, tenantId: revision.tenantId, version: 0 },
+              revision.packageId,
               tx,
             ),
-            altTexts,
-            settings: {},
-            exportIds,
-            capabilityVersion: channel.capabilityVersion,
-            validation: { ok: true, issues: [] },
           },
           tx,
         );
@@ -1050,10 +1181,11 @@ export const contentService = {
           details.push({ path: `exportIds.${i}`, issue: 'export_not_in_revision' });
       });
       if (details.length) throw new ValidationFailedError(details);
+      const edited = { text: parsed.text, altTexts: parsed.altTexts, settings: parsed.settings, exportIds };
       await variantsRepo.update(
         variant.id,
         parsed.expectedVersion,
-        { text: parsed.text, altTexts: parsed.altTexts, settings: parsed.settings, exportIds },
+        { ...edited, validation: await validationFor({ ...variant, ...edited }, revision.packageId, tx) },
         tx,
       );
       await notifyRevisionChange(

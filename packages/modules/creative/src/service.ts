@@ -986,6 +986,11 @@ export const creativeService = {
       });
     },
 
+    /** The exports that still exist among the ids, in id order (a review manifest may name a deleted one). */
+    async findByIds(brandId: string, exportIds: readonly string[], tx?: Tx) {
+      return (await exportsRepo.listByIds(brandId, exportIds, tx)).map(toExportDto);
+    },
+
     /** The job with its exports: storage keys and hashes only (delivery is the assets media endpoint). */
     async get(actor: ResolvedActor, input: z.infer<typeof RenderGet>, tx?: Tx) {
       const parsed = RenderGet.parse(input);

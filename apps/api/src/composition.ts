@@ -32,6 +32,7 @@ import {
   registerChannelResolver,
   registerLinkTracker,
   registerRevisionChangeListener,
+  registerVariantValidator,
   contentService,
   contentToolSource,
 } from '@oremedia/module-content';
@@ -63,6 +64,7 @@ import {
 import {
   registerAssetAuthoriser as registerReleaseAssetAuthoriser,
   registerReleaseCheckers,
+  registerReviewMediaSigner,
   reviewService,
   reviewToolSource,
 } from '@oremedia/module-review';
@@ -167,6 +169,9 @@ export function composeModules(): void {
       ),
   });
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
+  registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
+  // Spec 13.3: the review inbox and portal show the frozen files; the assets module's storage signs the GETs.
+  registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).

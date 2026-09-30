@@ -156,6 +156,16 @@ export class RenderedExportRepository extends BrandScopedRepository<typeof rende
       .where(this.brandScope(brandId, inArray(renderedExports.id, ids.slice(0, ID_LIST_MAX))))
       .orderBy(asc(renderedExports.id));
   }
+  /** The ready exports of several revisions (a content revision's pins) in id order; bounded as listForRevision. */
+  async listForRevisions(brandId: string, revisionIds: readonly string[], tx?: Tx) {
+    if (revisionIds.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(renderedExports)
+      .where(this.brandScope(brandId, inArray(renderedExports.revisionId, revisionIds.slice(0, ID_LIST_MAX))))
+      .orderBy(asc(renderedExports.id))
+      .limit(ID_LIST_MAX * Math.min(revisionIds.length, ID_LIST_MAX));
+  }
 }
 
 /**

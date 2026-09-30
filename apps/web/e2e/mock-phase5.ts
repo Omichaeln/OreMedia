@@ -23,10 +23,12 @@ import {
 } from '@oremedia/contracts/publishing';
 import {
   ApprovalGet,
+  ApprovalList,
   ReviewDecisionSubmit,
   ReviewInboxList,
   ReviewRequestCreate,
   ReviewRequestGet,
+  ReviewRequestMedia,
   MandateList,
   MandatePause,
   MandateRevoke,
@@ -150,6 +152,26 @@ interface Attempt {
   remoteJobId: string | null;
   remotePostId: string | null;
 }
+/** One remote_evidence row (spec 14.4), as publications.evidence returns it. */
+interface Evidence {
+  id: string;
+  publicationId: string;
+  attemptId: string | null;
+  kind:
+    | 'accepted_response'
+    | 'status_poll'
+    | 'reconciliation'
+    | 'human_confirmation'
+    | 'metrics_readback'
+    | 'remote_edit'
+    | 'remote_deletion';
+  remotePostId: string | null;
+  remoteUrl: string | null;
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  capturedAt: string;
+}
+
 export interface Publication {
   id: string;
   brandId: string;
@@ -289,6 +311,7 @@ export class Phase5Backend {
   readonly revisions = new Map<string, Revision>();
   readonly variants = new Map<string, Variant>();
   readonly publications = new Map<string, Publication>();
+  readonly evidence: Evidence[] = [];
   /** Spec 13.4 mandates of the brand: one active, one revoked (review.mandates.list / pause / revoke). */
   readonly mandates = new Map(
     (
@@ -711,7 +734,7 @@ export class Phase5Backend {
       approverKind: 'user',
       approverId: 'usr_reviewer',
       bindingHash: hash(r.manifestHash),
-      binding: { v: 1 },
+      binding: { v: 1, timing: r.frozenManifest.timing },
       validUntil: null,
       state,
       invalidatedReason,
@@ -832,6 +855,18 @@ export class Phase5Backend {
         ],
       },
     );
+    // The ledger behind the published row: what X answered when the post was accepted (spec 14.4).
+    this.evidence.push({
+      id: 'ev_pub_1',
+      publicationId: P5.publications.published,
+      attemptId: 'att_pub_1',
+      kind: 'accepted_response',
+      remotePostId: 'x_123',
+      remoteUrl: 'https://x.example/status/123',
+      payload: { id: 'x_123' },
+      payloadHash: hash({ id: 'x_123' }),
+      capturedAt: todayAt(11),
+    });
     this.publicationRow(
       P5.publications.publishedEarlier,
       P5.revisions.measured,
@@ -911,6 +946,22 @@ export class Phase5Backend {
     this.link('rl_id_expired', P5.requests.revoked, P5.links.expired, 'late@client.example', daysFromNow(-2));
     this.requestRow(P5.requests.approved, P5.revisions.three, 'decided');
     this.approval(P5.requests.approved, 'valid');
+    // The seeded valid approval of revision one (what the schedulable variant cv_ok is on): the picker offers it.
+    this.approvals.push({
+      id: P5.approvalId,
+      brandId: this.brandId,
+      contentRevisionId: P5.revisions.one,
+      reviewRequestId: P5.requests.approved,
+      approverKind: 'user',
+      approverId: 'usr_reviewer',
+      bindingHash: hash(P5.approvalId),
+      binding: { v: 1, timing: { kind: 'exact', at: daysFromNow(1) } },
+      validUntil: null,
+      state: 'valid',
+      invalidatedReason: null,
+      createdAt: now(),
+      version: 1,
+    });
   }
 
   /** Mirrors packages/modules/review attentionFor. */
@@ -951,6 +1002,10 @@ const linksFor = (b: Phase5Backend, requestId: string) =>
     }));
 
 /** Spec 5.5 for an external reviewer: revoked, expired, wrong request, then the resource state (open only). */
+/** A 2×2 PNG: what the portal shows as a rendered file without a storage service behind it. */
+const PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC';
+
 function assertReviewer(link: ReviewerLink, request: Request, deciding: boolean) {
   if (link.revokedAt) throw new PolicyDeniedError('reviewer_link_revoked');
   if (new Date(link.expiresAt).getTime() < Date.now()) throw new PolicyDeniedError('reviewer_link_expired');
@@ -1133,7 +1188,10 @@ export function phase5Routers(
           nextCursor: null,
         };
       }),
-      evidence: query.input(PublicationEvidence).query(() => []),
+      evidence: query.input(PublicationEvidence).query(({ input }) => {
+        b.publication(input.publicationId);
+        return b.evidence.filter((e) => e.publicationId === input.publicationId);
+      }),
       reconcile: mutation.input(ReconcileCommand).mutation(({ input }) => {
         const cmd = input;
         const p = b.publication(cmd.publicationId);
@@ -1268,6 +1326,41 @@ export function phase5Routers(
           version: 0,
         };
       }),
+      /** Spec 13.3: the frozen files as signed URLs, request-bound for a reviewer; every export verifies here. */
+      media: query.input(ReviewRequestMedia).query(({ ctx, input }) => {
+        const r = b.request(input.reviewRequestId);
+        if (ctx.reviewer) assertReviewer(ctx.reviewer, r, false);
+        const items: Array<{
+          exportId: string;
+          channelConnectionIds: string[];
+          contentHash: string;
+          mime: string;
+          width: number;
+          height: number;
+          verified: true;
+          url: string;
+          expiresAt: string;
+        }> = [];
+        for (const e of r.frozenManifest.exports) {
+          const seen = items.find((i) => i.exportId === e.exportId);
+          if (seen) {
+            seen.channelConnectionIds.push(e.channelConnectionId);
+            continue;
+          }
+          items.push({
+            exportId: e.exportId,
+            channelConnectionIds: [e.channelConnectionId],
+            contentHash: e.contentHash,
+            mime: 'image/png',
+            width: 1080,
+            height: 1080,
+            verified: true as const,
+            url: PNG_DATA_URL,
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          });
+        }
+        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items };
+      }),
       get: query.input(ReviewRequestGet).query(({ ctx, input }) => {
         const r = b.request(input.reviewRequestId);
         if (ctx.reviewer) {
@@ -1333,7 +1426,7 @@ export function phase5Routers(
             approverKind: ctx.reviewer ? 'external_reviewer' : 'user',
             approverId: ctx.reviewer ? ctx.reviewer.id : (ctx.member?.userId ?? 'usr_e2e'),
             bindingHash: hash(r.manifestHash),
-            binding: { v: 1 },
+            binding: { v: 1, timing: r.frozenManifest.timing },
             validUntil: i.validUntil ?? null,
             state: 'valid',
             invalidatedReason: null,
@@ -1413,6 +1506,18 @@ export function phase5Routers(
         const a = b.approvals.find((x) => x.id === input.approvalId);
         if (!a) throw new NotFoundError('ReleaseApproval', input.approvalId);
         return a;
+      }),
+      /** Newest first, by revision and state (the schedule form's picker). */
+      list: query.input(ApprovalList).query(({ input }) => {
+        brandOf(input.brandId);
+        const items = [...b.approvals]
+          .reverse()
+          .filter(
+            (a) =>
+              (!input.contentRevisionId || a.contentRevisionId === input.contentRevisionId) &&
+              (!input.state || a.state === input.state),
+          );
+        return { items: items.slice(0, input.page.limit), nextCursor: null };
       }),
     }),
   });

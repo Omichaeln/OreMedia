@@ -90,8 +90,8 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('refuses to schedule a variant with invalid media and names the findings', async () => {
-    await page.getByLabel('Channel variant id').fill(P5.variants.invalid);
-    await page.getByRole('button', { name: 'Load variant' }).click();
+    // The variant comes from its package (the calendar's `schedule` param), never a typed id (UX-06).
+    await page.goto(`${origin}${calendarPath()}&schedule=${P5.variants.invalid}`);
     await expect.poll(() => page.getByTestId('variant-findings').count(), { timeout: 15_000 }).toBe(1);
     const findings = await page.getByTestId('variant-findings').textContent();
     expect(findings).toContain('12.4 MB');
@@ -102,13 +102,16 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('schedule → the publication appears as Scheduled, and shows Published once the workflow reports it', async () => {
-    await page.getByLabel('Channel variant id').fill(P5.variants.ok);
-    await page.getByRole('button', { name: 'Load variant' }).click();
+    await page.goto(`${origin}${calendarPath()}&schedule=${P5.variants.ok}`);
     await expect
       .poll(() => page.getByTestId('variant-preview').textContent(), { timeout: 15_000 })
       .toContain('Acme LinkedIn');
+    // The authority is picked from the revision's valid approvals; choosing one prefills its frozen timing.
+    await page.locator('#schedule-authority-id').click();
+    await page.getByRole('option', { name: new RegExp(P5.approvalId) }).click();
+    await expect.poll(() => page.locator('#schedule-at').inputValue()).not.toBe('');
+    // The time is the brand's wall clock (UTC for this brand), so 16:00 today lands on today's day key.
     await page.locator('#schedule-at').fill(todayLocalInput(16));
-    await page.locator('#schedule-authority-id').fill(P5.approvalId);
     // The first attempt fails server-side; the retry is the same intent and must carry the same key (spec 7.3).
     p5.failNextSchedule = true;
     const schedules = () => backend.requests.filter((r) => r.path === 'publishing.publications.schedule');
@@ -191,6 +194,14 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       .toContain('Partial success');
     const text = await page.getByTestId('channel-outcomes').textContent();
     expect(text).toContain('1 published, 1 failed, 1 pending of 3 channels.');
+    // R1-C: the attempt ledger lists the evidence rows behind the attempts, from publications.evidence.
+    await expect
+      .poll(() => page.getByTestId('evidence-ledger').getByRole('listitem').count(), { timeout: 15_000 })
+      .toBe(1);
+    const ledger = await page.getByTestId('evidence-ledger').textContent();
+    expect(ledger).toContain('Accepted response');
+    expect(ledger).toContain('att_pub_1');
+    expect(ledger).toContain('x_123');
     const outcomes = page.getByRole('list', { name: 'Per-channel outcomes' });
     expect(await outcomes.textContent()).toContain('Acme X (x)');
     expect(await outcomes.textContent()).toContain('Acme Instagram (instagram)');
@@ -232,6 +243,15 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   it('creates an external reviewer link whose token is shown once and never again', async () => {
     await page.getByTestId(`inbox-${P5.requests.open}`).click();
     await expect.poll(() => page.getByTestId('manifest-hash').count(), { timeout: 15_000 }).toBe(1);
+    // Spec 13.3: the frozen files themselves, one per manifest export, from review.requests.media.
+    // One file frozen for several channels is shown once (the item names every channel it serves).
+    const frozenFiles = new Set(p5.request(P5.requests.open).frozenManifest.exports.map((e) => e.exportId))
+      .size;
+    expect(frozenFiles).toBeGreaterThan(0);
+    await expect
+      .poll(() => page.getByTestId('manifest-media-item').count(), { timeout: 15_000 })
+      .toBe(frozenFiles);
+    expect(await page.getByTestId('manifest-media').getByRole('img').count()).toBe(frozenFiles);
     await page.getByLabel('Reviewer email').fill('client@example.com');
     await page.getByRole('button', { name: 'Create link' }).click();
     await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);
@@ -261,6 +281,12 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       p5.request(P5.requests.open).manifestHash,
     );
     expect(await page.locator('body').textContent()).toContain('Autumn offer');
+    // The reviewer sees the rendered files too, fetched with the rl_ bearer and bound to this request.
+    await expect
+      .poll(() => page.getByTestId('manifest-media-item').count(), { timeout: 15_000 })
+      .toBe(new Set(p5.request(P5.requests.open).frozenManifest.exports.map((e) => e.exportId)).size);
+    const mediaCall = backend.requests.filter((r) => r.path === 'review.requests.media').at(-1);
+    expect(String(mediaCall?.headers['authorization'])).toMatch(/^Bearer rl_/);
     // The header carries the link's expiry; the page says the reviewer sees only this request.
     expect(await page.getByRole('banner').textContent()).toContain('Link expires');
     expect(await page.locator('main').textContent()).toContain('You can only see this request.');

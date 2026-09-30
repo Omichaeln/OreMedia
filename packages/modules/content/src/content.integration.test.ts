@@ -7,6 +7,7 @@ import {
 } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
 import {
+  CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
@@ -29,6 +30,8 @@ import {
   registerCalendarSource,
   registerChannelResolver,
   registerRevisionChangeListener,
+  registerVariantValidator,
+  resetVariantValidator,
   resetChannelResolver,
   type RevisionChange,
 } from './service';
@@ -605,8 +608,92 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         text: 'Twenty percent off in June ✨',
         altTexts: ['Offer'],
         settings: { firstComment: 'Shop now' },
+        validation: { ok: true, issues: [] }, // no validator registered: nothing is flagged
         version: 1,
       });
+      // Spec 13.4: the registered capability check runs on the edited variant and its findings are stored with it.
+      registerVariantValidator(async (v) => ({
+        ok: v.text.length <= 20,
+        issues: v.text.length <= 20 ? [] : [{ path: 'text', issue: 'text_too_long' }],
+      }));
+      const flagged = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 1,
+            text: 'Twenty percent off in June, this week only',
+            altTexts: ['Offer'],
+            settings: {},
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(flagged.validation).toEqual({ ok: false, issues: [{ path: 'text', issue: 'text_too_long' }] });
+      expect((await run(tenantA, () => contentService.variants.get(A, { variantId }))).validation).toEqual(
+        flagged.validation,
+      );
+      const shortened = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 2,
+            text: 'Twenty percent off',
+            altTexts: ['Offer'],
+            settings: { firstComment: 'Shop now' },
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(shortened.validation).toEqual({ ok: true, issues: [] });
+      // A channel the validator cannot resolve is a finding on the variant, not a refused edit.
+      registerVariantValidator(async () => {
+        throw new NotFoundError('ChannelConnection', channelA);
+      });
+      const unresolved = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 3,
+            text: 'Twenty percent off',
+            altTexts: ['Offer'],
+            settings: {},
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(unresolved.validation).toEqual({
+        ok: false,
+        issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }],
+      });
+      // So is a provider the registry refuses (unknown or not certified): its details are the findings.
+      registerVariantValidator(async () => {
+        throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: 'provider_not_certified:x' }]);
+      });
+      const uncertified = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: variantId,
+            expectedVersion: 4,
+            text: 'Twenty percent off',
+            altTexts: ['Offer'],
+            settings: {},
+            exportIds: [readyExportId],
+          },
+          tx,
+        ),
+      );
+      expect(uncertified.validation).toEqual({
+        ok: false,
+        issues: [{ path: 'providerKey', issue: 'provider_not_certified:x' }],
+      });
+      resetVariantValidator();
       await expect(
         run(tenantA, (tx) =>
           contentService.variants.update(
@@ -623,7 +710,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           ),
         ),
       ).rejects.toBeInstanceOf(ConflictError);
-      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(1);
+      expect((await auditOf(tenantA, 'content.variant.update')).length).toBe(5);
     });
 
     it('moves the revision only through the machine and guards variant edits by revision state (spec 5.5 step 5)', async () => {
@@ -750,6 +837,17 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           pinnedRevisionId: docRevision,
           currentRevisionId: docRevision,
           stale: false,
+          // The pinned revision's ready exports, what a variant may select (the pending job contributes none).
+          exports: [
+            {
+              exportId: readyExportId,
+              pageId: 'page_1',
+              formatKey: 'square_1080',
+              mime: 'image/png',
+              width: 1080,
+              height: 1080,
+            },
+          ],
         }),
       ]);
       expect(pkg.creativeDocuments[0]?.title).toEqual(expect.any(String));
@@ -801,6 +899,23 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       await run(tenantA, (tx) => contentService.revisions.transition(pkg.revision.id, 'request_review', tx));
       const refs = await run(tenantA, () => contentService.revisions.listReferencingCreativeDocument(docId));
       expect(refs.map((r) => r.id)).toEqual([pkg.revision.id]);
+    });
+
+    it('lists the live packages whose current revision pins a document, with the pin and variant count; a foreign document is NOT_FOUND', async () => {
+      const pkg = await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId }));
+      const res = await run(tenantA, () => contentService.packages.listForDocument(A, { documentId: docId }));
+      const mine = res.items.find((i) => i.package.id === packageId);
+      expect(mine).toMatchObject({
+        revision: { id: pkg.revision.id, state: pkg.revision.state },
+        pinnedRevisionId: docRevision,
+        stale: false,
+        variantCount: pkg.variants.length,
+      });
+      // Only the current revision counts: the superseded revisions that also pinned the document are not listed.
+      expect(res.items.filter((i) => i.package.id === packageId)).toHaveLength(1);
+      await expect(
+        run(tenantB, () => contentService.packages.listForDocument(B, { documentId: docId })),
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
 
     it('lists the packages of a brand newest first with cursor paging; a foreign brand is NOT_FOUND', async () => {

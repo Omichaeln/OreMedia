@@ -190,7 +190,7 @@ function Portal({ link }: { link: PortalLink }) {
           </Badge>
           {r.dueAt && <span className="text-muted-foreground">Due {new Date(r.dueAt).toLocaleString()}</span>}
         </div>
-        <ManifestSummary manifest={r.frozenManifest} manifestHash={r.manifestHash} />
+        <ManifestSummary manifest={r.frozenManifest} manifestHash={r.manifestHash} reviewRequestId={r.id} />
       </Section>
       {!outcome && r.state === 'open' && (
         <Section id="decision-heading" title="Your decision">

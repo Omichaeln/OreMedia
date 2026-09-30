@@ -9,6 +9,7 @@ export const REVIEW_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'review.requests.get': { buildInput: (f) => ({ reviewRequestId: f['reviewRequestId'] }) },
+  'review.requests.media': { buildInput: (f) => ({ reviewRequestId: f['reviewRequestId'] }) },
   'review.decisions.submit': {
     buildInput: (f) => ({
       reviewRequestId: f['reviewRequestId'],
@@ -26,6 +27,7 @@ export const REVIEW_INPUTS: Record<string, CrossTenantFixture> = {
   },
   'review.externalLinks.revoke': { buildInput: (f) => ({ linkId: f['externalLinkId'] }) },
   'review.approvals.get': { buildInput: (f) => ({ approvalId: f['approvalId'] }) },
+  'review.approvals.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'review.mandates.create': {
     buildInput: (f) => ({
       brandId: f['brandId'],

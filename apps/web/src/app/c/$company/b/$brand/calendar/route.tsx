@@ -248,16 +248,24 @@ export function CalendarRoute() {
             </ul>
           )}
         </section>
-        <PublicationDetail brandId={brandId} publicationId={selectedId} channels={channelMap} />
+        <PublicationDetail
+          brandId={brandId}
+          publicationId={selectedId}
+          channels={channelMap}
+          timeZone={timeZone}
+        />
       </div>
 
       <div id="schedule" className="scroll-mt-4">
         <ScheduleForm
+          companyId={companyId}
+          brandId={brandId}
           timeZone={timeZone}
           channels={channelMap}
+          variantId={params.get('schedule')}
           onScheduled={(publicationId, key) => {
             setAnchorKey(key);
-            update({ day: key, publication: publicationId });
+            update({ day: key, publication: publicationId, schedule: null });
           }}
         />
       </div>

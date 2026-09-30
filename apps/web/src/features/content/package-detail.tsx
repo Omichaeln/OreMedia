@@ -7,10 +7,12 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { brandPath } from '../brand/brand-context';
-import { CHANNEL_CHIP, isoToLocalInput, localInputToIso } from '../publishing/publication-state';
+import { CHANNEL_CHIP } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
 import { DocumentPicker } from './document-picker';
+import { RequestReview } from './request-review';
+import { VariantEditor } from './variant-editor';
 import { usePackage, type PackageDocumentDto, type PackageDto, type PackageVariantDto } from './use-content';
 
 export interface PackageDetailProps {
@@ -18,6 +20,8 @@ export interface PackageDetailProps {
   brandId: string;
   contentPackageId: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** The brand's time zone: the planned publish time is entered as the brand's wall clock (UX-06). */
+  timeZone: string;
 }
 
 /**
@@ -61,9 +65,29 @@ function PackageDocuments({
   );
 }
 
-function VariantRow({ variant, channel }: { variant: PackageVariantDto; channel: ChannelDto | undefined }) {
+function VariantRow({
+  companyId,
+  brandId,
+  variant,
+  channel,
+  documents,
+  editable,
+  schedulable,
+}: {
+  companyId: string;
+  brandId: string;
+  variant: PackageVariantDto;
+  channel: ChannelDto | undefined;
+  documents: readonly PackageDocumentDto[];
+  /** Only a draft revision's variants are edited (spec 5.5 step 5); the server guards the same. */
+  editable: boolean;
+  /** An approved revision's variants are scheduled from here (UX-06): the calendar form opens on this variant. */
+  schedulable: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
   const findings = variantFindings(variant.validation);
   const status = channel ? CHANNEL_CHIP[channel.status] : null;
+  const label = channel ? `${channel.displayName} (${channel.providerKey})` : variant.channelConnectionId;
   return (
     <li
       className="flex flex-col gap-1 py-2"
@@ -71,14 +95,42 @@ function VariantRow({ variant, channel }: { variant: PackageVariantDto; channel:
       data-variant-valid={findings.ok ? 'true' : 'false'}
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-medium">
-          {channel ? `${channel.displayName} (${channel.providerKey})` : variant.channelConnectionId}
-        </span>
+        <span className="font-medium">{label}</span>
         {status && status.needsAction && <Badge tone={status.tone}>{status.label}</Badge>}
         <Badge tone={findings.ok ? 'good' : 'critical'}>{findings.ok ? 'Valid' : 'Invalid'}</Badge>
         <code className="text-xs text-muted-foreground">{variant.id}</code>
+        {editable && !editing && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(true)}>
+            Edit {label}
+          </Button>
+        )}
+        {schedulable && (
+          <Button asChild size="sm" variant="secondary">
+            <Link
+              to={brandPath(companyId, brandId, `calendar?schedule=${encodeURIComponent(variant.id)}`)}
+              data-testid="schedule-variant"
+            >
+              Schedule {label}
+            </Link>
+          </Button>
+        )}
       </div>
-      <p className="whitespace-pre-wrap break-words text-sm">{variant.text}</p>
+      {editing ? (
+        <VariantEditor
+          key={variant.version}
+          variant={variant}
+          documents={documents}
+          onDone={() => setEditing(false)}
+        />
+      ) : (
+        <>
+          <p className="whitespace-pre-wrap break-words text-sm">{variant.text}</p>
+          <p className="text-xs text-muted-foreground">
+            {variant.exportIds.length} media item{variant.exportIds.length === 1 ? '' : 's'} ·{' '}
+            {variant.altTexts.length} alt text{variant.altTexts.length === 1 ? '' : 's'}
+          </p>
+        </>
+      )}
       {!findings.ok && (
         <ul
           className="list-disc pl-5 text-xs"
@@ -184,104 +236,6 @@ function GenerateVariantsForm({
   );
 }
 
-/**
- * Spec 13.3: sends the current draft revision for review. The request freezes the revision, its channel variants and
- * the planned timing into a manifest; the revision moves to in review and the request opens in the review inbox.
- */
-function RequestReview({ companyId, brandId, pkg }: { companyId: string; brandId: string; pkg: PackageDto }) {
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const intent = useIntentKey();
-  const [at, setAt] = useState(() => isoToLocalInput(new Date(Date.now() + 24 * 3_600_000).toISOString()));
-  const [error, setError] = useState<string | null>(null);
-  const request = useMutation(
-    trpc.review.requests.create.mutationOptions({
-      ...mutationIntent(intent.key),
-      onSuccess: () => {
-        intent.renew();
-        setError(null);
-        void queryClient.invalidateQueries(trpc.content.pathFilter());
-        void queryClient.invalidateQueries(trpc.review.pathFilter());
-      },
-    }),
-  );
-  if (request.data)
-    return (
-      <StatusBanner
-        tone="good"
-        title="Review requested"
-        description={`Revision ${pkg.revision.number} and its channel variants are frozen for review (manifest ${request.data.manifestHash.slice(0, 12)}…).`}
-        actions={
-          <Button asChild size="sm">
-            <Link
-              to={brandPath(
-                companyId,
-                brandId,
-                `review?request=${encodeURIComponent(request.data.reviewRequestId)}`,
-              )}
-            >
-              Open in the review inbox
-            </Link>
-          </Button>
-        }
-        data-testid="review-requested"
-      />
-    );
-  if (pkg.revision.state !== 'draft') return null;
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const iso = localInputToIso(at);
-    if (!iso) {
-      setError('Enter the planned publish time.');
-      return;
-    }
-    setError(null);
-    request.mutate({ contentRevisionId: pkg.revision.id, timing: { kind: 'exact', at: iso } });
-  };
-  const ui = request.isError ? toUiError(request.error) : null;
-  return (
-    <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
-      <Field
-        label="Planned publish time"
-        htmlFor={`review-at-${pkg.id}`}
-        hint="Frozen into the review manifest; publishing outside it is held."
-        error={error ?? undefined}
-      >
-        <Input
-          id={`review-at-${pkg.id}`}
-          type="datetime-local"
-          value={at}
-          onChange={(e) => setAt(e.target.value)}
-          required
-        />
-      </Field>
-      {ui && ui.kind === 'forbidden' && (
-        <StatusBanner
-          tone="critical"
-          title="Permission denied"
-          description={`${ui.message} Requesting a review needs review.request.`}
-        />
-      )}
-      {ui && ui.kind !== 'forbidden' && (
-        <RequestError error={request.error} title="The review was not requested" />
-      )}
-      <div>
-        <Button
-          type="submit"
-          size="sm"
-          variant="primary"
-          disabled={request.isPending}
-          disabledReason={
-            pkg.variants.length === 0 ? 'Generate at least one channel variant first' : undefined
-          }
-        >
-          {request.isPending ? 'Requesting…' : 'Request review'}
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 function ReviseForm({ pkg }: { pkg: PackageDto }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -359,7 +313,13 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
  * history (superseded revisions are kept, never edited), channel variants with their capability findings, and the
  * creative documents the revision publishes with.
  */
-export function PackageDetail({ companyId, brandId, contentPackageId, channels }: PackageDetailProps) {
+export function PackageDetail({
+  companyId,
+  brandId,
+  contentPackageId,
+  channels,
+  timeZone,
+}: PackageDetailProps) {
   const pkg = usePackage(contentPackageId);
   const p = pkg.data;
   const current = p ? revisionChip(p.revision.state) : null;
@@ -436,7 +396,16 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
             ) : (
               <ul className="divide-y divide-border" aria-label="Channel variants">
                 {p.variants.map((v) => (
-                  <VariantRow key={v.id} variant={v} channel={channels.get(v.channelConnectionId)} />
+                  <VariantRow
+                    key={v.id}
+                    companyId={companyId}
+                    brandId={brandId}
+                    variant={v}
+                    channel={channels.get(v.channelConnectionId)}
+                    documents={p.creativeDocuments}
+                    editable={p.revision.state === 'draft' || p.revision.state === 'changes_requested'}
+                    schedulable={p.revision.state === 'approved'}
+                  />
                 ))}
               </ul>
             )}
@@ -446,13 +415,21 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
             <h3 id={`review-${p.id}`} className="text-sm font-semibold">
               Review
             </h3>
-            {p.revision.state !== 'draft' && (
+            {p.revision.state !== 'draft' && p.revision.state !== 'changes_requested' && (
               <p className="text-xs text-muted-foreground">
                 Revision {p.revision.number} is {current.label.toLowerCase()}; only a draft revision can be
                 sent for review.
               </p>
             )}
-            <RequestReview key={p.revision.id} companyId={companyId} brandId={brandId} pkg={p} />
+            <RequestReview
+              key={p.revision.id}
+              companyId={companyId}
+              brandId={brandId}
+              timeZone={timeZone}
+              contentPackageId={p.id}
+              revision={p.revision}
+              variantCount={p.variants.length}
+            />
           </section>
           <ReviseForm key={p.version} pkg={p} />
         </div>

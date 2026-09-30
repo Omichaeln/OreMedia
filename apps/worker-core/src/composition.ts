@@ -71,6 +71,7 @@ import {
   registerCalendarSource,
   registerChannelResolver,
   registerLinkTracker,
+  registerVariantValidator,
 } from '@oremedia/module-content';
 import {
   attributeService,
@@ -187,6 +188,7 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
       ),
   });
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
+  registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   registerWorkflowProbe(opts.workflowProbe ?? null);

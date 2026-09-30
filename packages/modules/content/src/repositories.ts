@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import type { ContentRevisionState } from '@oremedia/contracts/review';
 import { NotFoundError } from '@oremedia/contracts/errors';
-import type { Page, PageRequest } from '@oremedia/contracts/pagination';
+import { ID_LIST_MAX, type Page, type PageRequest } from '@oremedia/contracts/pagination';
 import { BrandScopedRepository, requireTenant, type Tx } from '@oremedia/db';
 import {
   briefs,
@@ -109,6 +109,14 @@ export class ContentPackageRepository extends BrandScopedRepository<typeof conte
   ) {
     await this.updateScoped(id, expectedVersion, values, tx);
   }
+  /** Packages by id (a set of live revisions' packages), bounded by the id-list maximum (spec 7.4). */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(contentPackages)
+      .where(this.brandScope(brandId, inArray(contentPackages.id, ids.slice(0, ID_LIST_MAX))));
+  }
   /** Newest first on the (tenant_id, brand_id, id) unique index (spec 7.4). */
   async list(
     brandId: string,
@@ -196,6 +204,20 @@ export class ChannelVariantRepository extends BrandScopedRepository<typeof chann
     tx: Tx,
   ) {
     await this.updateScoped(id, expectedVersion, values, tx);
+  }
+  /** The variants of several revisions (a document's live packages), bounded by the id-list maximum (spec 7.4). */
+  async listForRevisions(brandId: string, contentRevisionIds: readonly string[], tx?: Tx) {
+    if (contentRevisionIds.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(channelVariants)
+      .where(
+        this.brandScope(
+          brandId,
+          inArray(channelVariants.contentRevisionId, contentRevisionIds.slice(0, ID_LIST_MAX)),
+        ),
+      )
+      .limit(ID_LIST_MAX * 20);
   }
   /** Every variant of a revision, in a stable order (channel connection id) so bindings hash deterministically. */
   async listForRevision(brandId: string, contentRevisionId: string, tx?: Tx) {

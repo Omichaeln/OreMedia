@@ -460,6 +460,7 @@ export function CampaignsScreen() {
             brandId={brandId}
             contentPackageId={packageId}
             channels={channelMap}
+            timeZone={brand.timezone || 'UTC'}
           />
         )}
       </div>
