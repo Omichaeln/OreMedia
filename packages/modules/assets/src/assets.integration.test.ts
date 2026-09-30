@@ -805,11 +805,13 @@ describe('assets module against MySQL 8 (spec 9)', () => {
       expect(byId.get(expired.id)?.issues).toEqual(['rights_expiring']); // expires in 1 h: inside the window
       expect(byId.get(unknownRights.id)?.issues).toEqual(['rights_unknown']);
       expect(byId.get(expiringLater.id)?.issues).toEqual(['rights_expiring']);
+      const lapsed = await seedAsset({ brandId: brandE, rights: { expiresAt: hours(-1) } });
+      expect((await listIds({})).find((i) => i.id === lapsed.id)?.issues).toEqual(['rights_expired']);
       expect(byId.has(otherBrand.id)).toBe(false); // another brand's asset, grant or not
       expect(byId.get(eligible.id)?.currentVersion?.id).toBe(eligible.versionId);
       const attention = await listIds({ needsAttention: true });
       expect(attention.map((i) => i.id).sort()).toEqual(
-        [pending.id, expired.id, unknownRights.id, expiringLater.id].sort(),
+        [pending.id, expired.id, unknownRights.id, expiringLater.id, lapsed.id].sort(),
       );
       expect((await listIds({ state: 'pending_review' })).map((i) => i.id)).toEqual([pending.id]);
       expect((await listIds({ kinds: ['font'] })).map((i) => i.id)).toEqual([font.id]);
@@ -827,6 +829,12 @@ describe('assets module against MySQL 8 (spec 9)', () => {
       await expect(
         runInTenant(ctxFor(ownerB), () =>
           assetService.list(ownerB, { brandId: brandE, page: { limit: 50 } }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      // A creator restricted to other brands cannot list this one either (brand visibility, spec 5.3).
+      await expect(
+        runInTenant(ctxFor(creatorA1), () =>
+          assetService.list(creatorA1, { brandId: brandE, page: { limit: 50 } }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
     });

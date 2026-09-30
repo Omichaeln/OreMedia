@@ -10,7 +10,8 @@ import { isoToZonedInput, zonedInputToIso } from '../publishing/publication-stat
 import type { AssetDto } from './use-assets';
 
 /**
- * Spec 9 asset lifecycle from the inspector (UX-05): approve a pending asset, retire an approved one with a reason,
+ * Spec 9 asset lifecycle from the inspector (UX-05): approve a pending asset, retire a pending or approved one with a
+ * reason (the machine's retire edge; there is no reject command in the API, so an unwanted pending asset is retired),
  * and record or update its usage rights. Each is the API's own command; the policy decides who may (asset.approve,
  * asset.manage_rights) and a refusal is shown as such, never hidden.
  */
@@ -53,7 +54,7 @@ export function AssetActions({ asset, timeZone }: { asset: AssetDto; timeZone: s
             {approve.isPending ? 'Approving…' : 'Approve'}
           </Button>
         )}
-        {asset.state === 'approved' && !confirmRetire && (
+        {(asset.state === 'approved' || asset.state === 'pending_review') && !confirmRetire && (
           <Button type="button" size="sm" variant="danger" onClick={() => setConfirmRetire(true)}>
             Retire
           </Button>
@@ -154,6 +155,7 @@ function RightsForm({ asset, timeZone }: { asset: AssetDto; timeZone: string }) 
       permittedChannels: rights?.permittedChannels ?? 'all',
       territories: rights?.territories ?? 'all',
       ...(expiresAt ? { expiresAt } : {}),
+      // The DTO's JSON columns are loosely typed; the contract's own parser narrows them (they were written by it).
       releases: UsageRightsInput.shape.releases.parse(rights?.releases ?? []),
       restrictions: UsageRightsInput.shape.restrictions.parse(rights?.restrictions ?? []),
     });

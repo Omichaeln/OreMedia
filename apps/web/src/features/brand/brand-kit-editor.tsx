@@ -573,6 +573,8 @@ function UploadStatus({ step }: { step: UploadStep }) {
         data-testid="upload-accepted"
       />
     );
+  if (step.kind === 'unsettled')
+    return <StatusBanner tone="warning" title="Outcome not known yet" description={step.message} />;
   if (step.kind === 'rejected')
     return (
       <StatusBanner

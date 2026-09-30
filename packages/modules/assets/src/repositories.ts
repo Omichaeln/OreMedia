@@ -152,8 +152,7 @@ export class AssetRepository extends BrandScopedRepository<typeof assets> {
     req: PageRequest,
     tx?: Tx,
   ): Promise<Page<Omit<EligibleCandidateRow, 'grantId'>>> {
-    this.assertBrandAccess(brandId);
-    const clauses: SQL[] = [eq(assets.brandId, brandId)];
+    const clauses: SQL[] = [];
     if (f.state) clauses.push(eq(assets.state, f.state));
     if (f.kinds) {
       if (f.kinds.length === 0) return { items: [], nextCursor: null };
@@ -183,7 +182,7 @@ export class AssetRepository extends BrandScopedRepository<typeof assets> {
         usageRights,
         and(eq(usageRights.tenantId, assets.tenantId), eq(usageRights.assetId, assets.id)),
       )
-      .where(this.scope(and(...clauses) as SQL))
+      .where(this.brandScope(brandId, clauses.length ? (and(...clauses) as SQL) : undefined))
       .orderBy(desc(assets.id))
       .limit(req.limit + 1);
     const items = rows.slice(0, req.limit);

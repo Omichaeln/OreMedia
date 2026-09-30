@@ -8,12 +8,14 @@ import { Select } from '../../../../../../components/select';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { AssetThumb } from '../../../../../../features/assets/asset-thumb';
 import { AssetActions } from '../../../../../../features/assets/asset-actions';
+import { RIGHTS_ATTENTION_DAYS } from '@oremedia/contracts/assets';
 import {
   ASSET_ISSUE_TEXT,
   useAsset,
   useAssetList,
   useAssetSearch,
   type AssetDto,
+  type AssetIssueDto,
   type AssetListFilter,
 } from '../../../../../../features/assets/use-assets';
 import { useAssetUpload } from '../../../../../../features/assets/use-upload';
@@ -356,42 +358,39 @@ interface AssetStatus {
   detail: string;
 }
 
-/** Every non-eligible condition named explicitly, with the reason; colour is never the only carrier. */
+const ISSUE_TONE: Record<AssetIssueDto, Tone> = {
+  pending_review: 'info',
+  rejected: 'critical',
+  retired: 'neutral',
+  rights_unknown: 'warning',
+  rights_expired: 'critical',
+  rights_expiring: 'warning',
+  no_version: 'warning',
+};
+
+/**
+ * The issues the server derives for the list (assetIssues), re-derived for the inspector from the asset DTO with the
+ * same words (ASSET_ISSUE_TEXT), so a row flagged "Rights expiring" opens to the same chip; colour is never the only
+ * carrier.
+ */
 export function assetStatuses(a: AssetDto, now = Date.now()): AssetStatus[] {
-  const out: AssetStatus[] = [];
-  if (a.state === 'pending_review')
-    out.push({ tone: 'info', label: 'Processing', detail: 'Ingested and awaiting review; not usable yet.' });
-  if (a.state === 'rejected')
-    out.push({ tone: 'critical', label: 'Rejected', detail: 'Rejected at review.' });
-  if (a.state === 'retired')
-    out.push({
-      tone: 'neutral',
-      label: 'Retired',
-      detail: 'No longer usable in new work; existing usages are recorded.',
-    });
-  if (a.state === 'approved') out.push({ tone: 'good', label: 'Approved', detail: 'Reviewed and approved.' });
-  if (a.rightsState === 'unknown' || !a.rights)
-    out.push({
-      tone: 'warning',
-      label: 'Missing rights',
-      detail: 'No usage rights recorded; ineligible for creative and logo use until they are.',
-    });
-  else if (a.rights.expiresAt && new Date(a.rights.expiresAt).getTime() < now)
-    out.push({
-      tone: 'critical',
-      label: 'Expired rights',
-      detail: `Rights expired on ${new Date(a.rights.expiresAt).toLocaleDateString()}.`,
-    });
-  else
+  const issues: AssetIssueDto[] = [];
+  if (a.state === 'pending_review' || a.state === 'rejected' || a.state === 'retired') issues.push(a.state);
+  const expiresAt = a.rights?.expiresAt ? new Date(a.rights.expiresAt).getTime() : null;
+  if (a.rightsState === 'unknown' || !a.rights) issues.push('rights_unknown');
+  else if (expiresAt !== null && expiresAt < now) issues.push('rights_expired');
+  else if (expiresAt !== null && expiresAt < now + RIGHTS_ATTENTION_DAYS * 86_400_000)
+    issues.push('rights_expiring');
+  if (!a.currentVersion) issues.push('no_version');
+  const out: AssetStatus[] = issues.map((i) => ({ tone: ISSUE_TONE[i], ...ASSET_ISSUE_TEXT[i] }));
+  if (a.state === 'approved')
+    out.unshift({ tone: 'good', label: 'Approved', detail: 'Reviewed and approved.' });
+  if (a.rights && !issues.includes('rights_expired') && !issues.includes('rights_expiring'))
     out.push({
       tone: 'good',
       label: 'Rights recorded',
-      detail: a.rights.expiresAt
-        ? `Valid until ${new Date(a.rights.expiresAt).toLocaleDateString()}.`
-        : 'No expiry.',
+      detail: expiresAt !== null ? `Valid until ${new Date(expiresAt).toLocaleDateString()}.` : 'No expiry.',
     });
-  if (!a.currentVersion)
-    out.push({ tone: 'warning', label: 'No version', detail: 'The file has not been ingested.' });
   return out;
 }
 
@@ -449,7 +448,7 @@ function Inspect({ assetId, timeZone }: { assetId: string; timeZone: string }) {
               <dd>{asset.data.currentVersion.provenance.kind}</dd>
             </dl>
           )}
-          <AssetActions asset={asset.data} timeZone={timeZone} />
+          <AssetActions key={asset.data.id} asset={asset.data} timeZone={timeZone} />
         </div>
       )}
     </section>
@@ -508,6 +507,14 @@ function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
               </Button>
             }
             data-testid="upload-accepted"
+          />
+        )}
+        {step.kind === 'unsettled' && (
+          <StatusBanner
+            tone="warning"
+            title="Outcome not known yet"
+            description={`${step.message} (intent ${step.intentId})`}
+            data-testid="upload-unsettled"
           />
         )}
         {step.kind === 'rejected' && (

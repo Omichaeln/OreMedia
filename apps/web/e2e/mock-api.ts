@@ -1346,6 +1346,7 @@ export function createMockRouter(backend: MockBackend) {
       rights: t.router({
         set: mutation.input(UsageRightsInput).mutation(({ input }) => {
           const a = backend.asset(input.assetId);
+          if (!a.rights) a.version += 1; // the server bumps the asset when rightsState flips to recorded
           a.rights = {
             owner: input.owner,
             licenceRef: input.licenceRef ?? null,

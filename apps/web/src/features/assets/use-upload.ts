@@ -12,6 +12,8 @@ export type UploadStep =
   | { kind: 'queued'; intentId: string }
   | { kind: 'accepted'; intentId: string; assetId: string }
   | { kind: 'rejected'; intentId: string; reason: string }
+  /** Still processing after the wait, or the status could not be read: the outcome is not known here. */
+  | { kind: 'unsettled'; intentId: string; message: string }
   | { kind: 'failed'; message: string; details: string[] };
 
 /** Browsers often report no type for font files; the extension names it (ingest checks the content either way). */
@@ -26,6 +28,8 @@ const mimeFromName = (name: string): string =>
 
 /** How often the intent is read while the ingest workflow runs (it settles within seconds for an image). */
 const INGEST_POLL_MS = 2_000;
+/** After this long without an outcome the sheet stops polling and says so; the asset list still shows it when it lands. */
+const INGEST_WAIT_MS = 5 * 60_000;
 
 /**
  * Spec 9.1: intent → PUT to the signed URL → complete; processing continues in the ingest workflow, so the hook
@@ -38,24 +42,39 @@ export function useAssetUpload(brandId: string) {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<UploadStep>({ kind: 'idle' });
   const intentId = step.kind === 'queued' ? step.intentId : null;
+  const [queuedAt, setQueuedAt] = useState(0);
   const status = useQuery({
     ...trpc.assets.uploads.get.queryOptions({ intentId: intentId ?? '' }),
     enabled: intentId !== null,
     refetchInterval: (q) => {
+      if (q.state.status === 'error') return false;
       const state = q.state.data?.state;
-      return state === 'accepted' || state === 'rejected' ? false : INGEST_POLL_MS;
+      if (state === 'accepted' || state === 'rejected') return false;
+      return Date.now() - queuedAt > INGEST_WAIT_MS ? false : INGEST_POLL_MS;
     },
     retry: false,
   });
   useEffect(() => {
-    if (intentId === null || !status.data || status.data.intentId !== intentId) return;
+    if (intentId === null) return;
+    if (status.isError) {
+      setStep({ kind: 'unsettled', intentId, message: toUiError(status.error).message });
+      return;
+    }
+    if (!status.data || status.data.intentId !== intentId) return;
     if (status.data.state === 'accepted' && status.data.assetId) {
       setStep({ kind: 'accepted', intentId, assetId: status.data.assetId });
       void queryClient.invalidateQueries(trpc.assets.pathFilter());
     } else if (status.data.state === 'rejected') {
       setStep({ kind: 'rejected', intentId, reason: status.data.rejectionReason ?? 'rejected' });
+    } else if (Date.now() - queuedAt > INGEST_WAIT_MS) {
+      setStep({
+        kind: 'unsettled',
+        intentId,
+        message:
+          'Still processing after five minutes; it appears under All assets when the ingest workflow finishes.',
+      });
     }
-  }, [intentId, status.data, queryClient, trpc]);
+  }, [intentId, queuedAt, status.data, status.isError, status.error, queryClient, trpc]);
   const mutation = useMutation({
     mutationFn: async ({ file, kind }: { file: File; kind: AssetKind }) => {
       const mime = file.type || mimeFromName(file.name);
@@ -81,7 +100,10 @@ export function useAssetUpload(brandId: string) {
       );
     },
     onMutate: ({ file }) => setStep({ kind: 'uploading', name: file.name }),
-    onSuccess: (res) => setStep({ kind: 'queued', intentId: res.intentId }),
+    onSuccess: (res) => {
+      setQueuedAt(Date.now());
+      setStep({ kind: 'queued', intentId: res.intentId });
+    },
     onError: (err) => {
       const ui = toUiError(err);
       setStep({
