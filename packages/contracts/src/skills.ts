@@ -66,6 +66,7 @@ export const TOOL_NAMES_RELEASE_1 = [
   'voice.clusters',
   'content.createBrief',
   'content.draftCopy',
+  'content.proposePlan',
   'creative.proposeOperations',
   'creative.requestRender',
   'images.generate',

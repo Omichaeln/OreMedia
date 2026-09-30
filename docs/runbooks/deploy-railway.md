@@ -261,6 +261,13 @@ Rollout order for speech generation (migration 0008, flag `creative.audio_genera
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
 `worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
+Rollout order for plan items (migration 0014, UX-09): apply 0014 (`plan_items`, additive; the api pre-deploy
+command does it) and re-apply `app-role.sql` (the new table needs its grants); then deploy the api and workers in
+the usual order. The built-in `campaign-planning` skill gains `content.proposePlan` and an optional `briefId`
+input, so the seed registers a new draft version of it on deploy: a person evaluates and publishes that version
+(Settings → Skills) before planning runs record their calendar; until then runs use the published version, which
+returns the calendar as output only. Rolling the api back leaves the table in place, unused.
+
 Rollout order for Google sign-in (migration 0003, D-03):
 
 1. Apply migration 0003 (`external_identities`, `auth_events`; additive) with the api pre-deploy command and

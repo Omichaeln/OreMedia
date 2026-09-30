@@ -19,6 +19,18 @@ export const CONTENT_INPUTS: Record<string, CrossTenantFixture> = {
   'content.briefs.accept': { buildInput: (f) => ({ briefId: f['briefId'], expectedVersion: 0 }) },
   'content.briefs.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'content.briefs.get': { buildInput: (f) => ({ briefId: f['briefId'] }) },
+  'content.planItems.propose': {
+    buildInput: (f) => ({
+      briefId: f['briefId'],
+      items: [{ date: '2026-03-01', channelKey: 'fixture_provider', theme: 'x', formatKey: 'post' }],
+    }),
+  },
+  'content.planItems.list': { buildInput: (f) => ({ briefId: f['briefId'] }) },
+  'content.planItems.update': {
+    buildInput: (f) => ({ planItemId: f['planItemId'], expectedVersion: 0, theme: 'y' }),
+  },
+  'content.planItems.drop': { buildInput: (f) => ({ planItemId: f['planItemId'], expectedVersion: 0 }) },
+  'content.planItems.restore': { buildInput: (f) => ({ planItemId: f['planItemId'], expectedVersion: 0 }) },
   'content.packages.create': {
     buildInput: (f) => ({
       brandId: f['brandId'],

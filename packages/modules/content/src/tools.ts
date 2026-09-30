@@ -1,3 +1,4 @@
+import { NotFoundError } from '@oremedia/contracts/errors';
 import type { ResolvedActorServicePrincipal } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import type { Tx } from '@oremedia/db';
@@ -76,5 +77,20 @@ export const contentToolSource = {
       });
     }
     return { drafts };
+  },
+
+  /** UX-09: the run's calendar becomes plan items of its brief (bound to the brand), recorded against the run. */
+  async proposePlan(
+    actor: ResolvedActorServicePrincipal,
+    input: RunRef & {
+      briefId: string;
+      items: Array<{ date: string; channelKey: string; theme: string; formatKey: string; factIds: string[] }>;
+    },
+    tx: Tx,
+  ): Promise<{ briefId: string; planItemIds: string[] }> {
+    const { runId, autonomyMode, brandId, ...plan } = input;
+    const brief = await contentService.briefs.get(actor, { briefId: plan.briefId }, tx);
+    if (brief.brandId !== brandId) throw new NotFoundError('Brief', plan.briefId); // the run's brand binds
+    return contentService.planItems.propose(actor, plan, tx, { autonomyMode, agentRunId: runId });
   },
 };

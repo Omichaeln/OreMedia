@@ -437,6 +437,10 @@ export function CampaignsScreen() {
             packages={packages}
             selectedPackageId={packageId}
             onSelectPackage={(id) => update({ package: id })}
+            brandName={brand.name}
+            agentRunHref={(runId) =>
+              `/c/${encodeURIComponent(companyId)}/b/${encodeURIComponent(brandId)}/agents?run=${encodeURIComponent(runId)}`
+            }
           />
         ) : (
           <div data-testid="brief-detail">

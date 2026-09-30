@@ -18,7 +18,13 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { tenants } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
-import { briefs, channelVariants, contentPackages, contentRevisions } from '@oremedia/db/schema/content';
+import {
+  briefs,
+  channelVariants,
+  contentPackages,
+  contentRevisions,
+  planItems,
+} from '@oremedia/db/schema/content';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
@@ -980,6 +986,263 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       await expect(
         run(tenantA, () => contentService.calendar.range(A, { ...range, to: '2020-01-01T00:00:00.000Z' })),
       ).rejects.toBeInstanceOf(ValidationFailedError);
+    });
+  });
+
+  describe('plan items (UX-09): proposed by a run or a person, edited, dropped, materialised on acceptance', () => {
+    const planner = (tenantId: string): ResolvedActorServicePrincipal => ({
+      kind: 'service_principal',
+      id: 'sp_planner',
+      tenantId,
+      status: 'active',
+      maxAutonomy: 'create',
+      grants: [
+        { action: 'brand.read', brandIds: 'all' },
+        { action: 'content.plan', brandIds: 'all' },
+      ],
+    });
+    const runAsPlanner = <T>(fn: (tx: Tx) => Promise<T>) =>
+      runInTenant({ ...ctx(tenantA), actor: { kind: 'service_principal', id: 'sp_planner' } }, () =>
+        withTransaction(fn),
+      );
+    const item = (over: Record<string, unknown> = {}) => ({
+      date: '2026-11-02',
+      channelKey: 'fixture_provider',
+      theme: 'Launch week',
+      formatKey: 'post',
+      factIds: [],
+      ...over,
+    });
+    let planBriefId = '';
+    let ids: string[] = [];
+
+    it('a run proposes the calendar against its brief: channels resolve from the brief when unambiguous, another brand’s brief is NOT_FOUND', async () => {
+      const created = await run(tenantA, (tx) =>
+        contentService.briefs.create(
+          A,
+          {
+            brandId: brandA,
+            campaignId,
+            audience: 'Renovators',
+            message: 'Autumn lamps',
+            offerFactIds: [],
+            channelConnectionIds: [channelA],
+            constraints: [],
+          },
+          tx,
+        ),
+      );
+      planBriefId = created.briefId;
+      // A run for brand A cannot plan against brand A2's brief, whatever the principal's grants.
+      const otherBrief = await run(tenantA, (tx) =>
+        contentService.briefs.create(
+          A,
+          {
+            brandId: brandA2,
+            audience: 'x',
+            message: 'x',
+            offerFactIds: [],
+            channelConnectionIds: [],
+            constraints: [],
+          },
+          tx,
+        ),
+      );
+      await expect(
+        runAsPlanner((tx) =>
+          contentToolSource.proposePlan(
+            planner(tenantA),
+            {
+              brandId: brandA,
+              runId: 'run_plan',
+              autonomyMode: 'create',
+              briefId: otherBrief.briefId,
+              items: [item()],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        runAsPlanner((tx) =>
+          contentToolSource.proposePlan(
+            planner(tenantA),
+            {
+              brandId: brandA,
+              runId: 'run_plan',
+              autonomyMode: 'create',
+              briefId: planBriefId,
+              items: [item({ channelConnectionId: channelOfBrandA2 })],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      const proposed = await runAsPlanner((tx) =>
+        contentToolSource.proposePlan(
+          planner(tenantA),
+          {
+            brandId: brandA,
+            runId: 'run_plan',
+            autonomyMode: 'create',
+            briefId: planBriefId,
+            items: [
+              item(),
+              item({
+                date: '2026-11-04',
+                channelKey: 'unknown_provider',
+                theme: 'Follow-up',
+                formatKey: 'story',
+              }),
+              item({ date: '2026-11-06', channelKey: channelA, theme: 'Reminder' }),
+            ],
+          },
+          tx,
+        ),
+      );
+      ids = proposed.planItemIds;
+      expect(ids).toHaveLength(3);
+      const list = await run(tenantA, () => contentService.planItems.list(A, { briefId: planBriefId }));
+      expect(
+        list.items.map((i) => [i.date, i.channelConnectionId, i.state, i.createdByKind, i.agentRunId]),
+      ).toEqual([
+        ['2026-11-02', channelA, 'proposed', 'agent', 'run_plan'],
+        ['2026-11-04', null, 'proposed', 'agent', 'run_plan'],
+        ['2026-11-06', channelA, 'proposed', 'agent', 'run_plan'],
+      ]);
+      // Another tenant's manager cannot see the brief's plan.
+      await expect(
+        run(tenantB, () => contentService.planItems.list(B, { briefId: planBriefId })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('a person edits an item (the version guards it), assigns a channel of the brand only, drops and restores', async () => {
+      const [first, second] = ids as [string, string, string];
+      const edited = await run(tenantA, (tx) =>
+        contentService.planItems.update(
+          A,
+          {
+            planItemId: second,
+            expectedVersion: 0,
+            theme: 'Follow-up: the lamp range',
+            channelConnectionId: channelA2,
+          },
+          tx,
+        ),
+      );
+      expect(edited).toMatchObject({
+        theme: 'Follow-up: the lamp range',
+        channelConnectionId: channelA2,
+        version: 1,
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.update(A, { planItemId: second, expectedVersion: 0, theme: 'stale' }, tx),
+        ),
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.update(
+            A,
+            { planItemId: second, expectedVersion: 1, channelConnectionId: channelOfBrandA2 },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      const dropped = await run(tenantA, (tx) =>
+        contentService.planItems.drop(A, { planItemId: first, expectedVersion: 0 }, tx),
+      );
+      expect(dropped.state).toBe('dropped');
+      await expect(
+        run(tenantA, (tx) => contentService.planItems.drop(A, { planItemId: first, expectedVersion: 1 }, tx)),
+      ).rejects.toMatchObject({ details: [{ issue: 'plan_item_is_dropped' }] });
+      const restored = await run(tenantA, (tx) =>
+        contentService.planItems.restore(A, { planItemId: first, expectedVersion: 1 }, tx),
+      );
+      expect(restored.state).toBe('proposed');
+      await run(tenantA, (tx) =>
+        contentService.planItems.drop(A, { planItemId: first, expectedVersion: 2 }, tx),
+      );
+      // A foreign manager can move nothing.
+      await expect(
+        run(tenantB, (tx) =>
+          contentService.planItems.drop(B, { planItemId: second, expectedVersion: 1 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('accepting the brief materialises every proposed item as a draft package once; a retry creates no second package; an ineffective fact names its item', async () => {
+      const [, second, third] = ids as [string, string, string];
+      await run(tenantA, (tx) =>
+        contentService.planItems.update(
+          A,
+          { planItemId: third, expectedVersion: 0, factIds: ['fct_gone'] },
+          tx,
+        ),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: planBriefId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: [{ path: `planItems.${third}.copy.master.factRefs.0`, issue: 'fact_not_effective' }],
+      });
+      // The failed transaction left nothing behind: the brief is still a draft with no package.
+      const packagesBefore = await tdb.db
+        .select()
+        .from(contentPackages)
+        .where(and(eq(contentPackages.tenantId, tenantA), eq(contentPackages.briefId, planBriefId)));
+      expect(packagesBefore).toHaveLength(0);
+      await run(tenantA, (tx) =>
+        contentService.planItems.update(A, { planItemId: third, expectedVersion: 1, factIds: [] }, tx),
+      );
+      const accepted = await run(tenantA, (tx) =>
+        contentService.briefs.accept(A, { briefId: planBriefId, expectedVersion: 0 }, tx),
+      );
+      expect(accepted.materialised.map((m) => m.planItemId)).toEqual([second, third]);
+      expect(accepted.state).toBe('in_progress'); // the first package moved the accepted brief on
+      const rows = await tdb.db
+        .select()
+        .from(planItems)
+        .where(and(eq(planItems.tenantId, tenantA), eq(planItems.briefId, planBriefId)))
+        .orderBy(planItems.date);
+      expect(rows.map((r) => [r.state, r.contentPackageId !== null])).toEqual([
+        ['dropped', false],
+        ['materialised', true],
+        ['materialised', true],
+      ]);
+      const pkg = await packageRow(rows[1]!.contentPackageId!);
+      expect(pkg).toMatchObject({
+        briefId: planBriefId,
+        title: '2026-11-04 · Follow-up: the lamp range',
+        state: 'draft',
+      });
+      const rev = await revisionRow(pkg.currentRevisionId!);
+      expect(rev.copy.master.text).toBe('Follow-up: the lamp range');
+      // A retried acceptance (stale version, or the brief already moved) creates nothing more.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: planBriefId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+      const packagesAfter = await tdb.db
+        .select()
+        .from(contentPackages)
+        .where(and(eq(contentPackages.tenantId, tenantA), eq(contentPackages.briefId, planBriefId)));
+      expect(packagesAfter).toHaveLength(2);
+      // A materialised item is read-only; proposing against a brief that is no longer a draft is refused.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.update(A, { planItemId: second, expectedVersion: 2, theme: 'late' }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ issue: 'plan_item_materialised' }] });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.propose(A, { briefId: planBriefId, items: [item()] }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
+      expect((await auditOf(tenantA, 'content.plan_item.propose')).length).toBeGreaterThan(0);
     });
   });
 

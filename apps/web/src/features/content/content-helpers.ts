@@ -31,6 +31,14 @@ export const BRIEF_STATE_CHIP: Record<string, Chip> = {
 };
 export const briefChip = (state: string): Chip => chipOr(BRIEF_STATE_CHIP, state);
 
+/** UX-09 plan items: proposed until the brief is accepted, dropped by a person, or materialised as a package. */
+export const PLAN_ITEM_STATE_CHIP: Record<string, Chip> = {
+  proposed: { tone: 'warning', label: 'Proposed' },
+  dropped: { tone: 'neutral', label: 'Dropped' },
+  materialised: { tone: 'good', label: 'Package created' },
+};
+export const planItemChip = (state: string): Chip => chipOr(PLAN_ITEM_STATE_CHIP, state);
+
 export const PACKAGE_STATE_CHIP: Record<string, Chip> = {
   draft: { tone: 'neutral', label: 'Draft' },
   in_review: { tone: 'info', label: 'In review' },

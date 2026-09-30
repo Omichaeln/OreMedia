@@ -10,6 +10,7 @@ import {
   pendingChannelGrants,
   publicationRemoteChanges,
 } from '@oremedia/db/schema/publishing';
+import { planItems } from '@oremedia/db/schema/content';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   FIXTURE_PROVIDER_KEY,
@@ -33,7 +34,7 @@ import { composeModules } from './composition';
 const PREVIOUS_HEAD = '0009_brand_classification';
 const NEW_TABLES: MySqlTable[] = [pendingChannelGrants];
 /** Added by later migrations (0011 and 0013: their migration-*-roll-forward tests). */
-const LATER_TABLES: MySqlTable[] = [publicationRemoteChanges, passwordSetupTokens];
+const LATER_TABLES: MySqlTable[] = [publicationRemoteChanges, passwordSetupTokens, planItems];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

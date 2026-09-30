@@ -210,6 +210,15 @@ export interface ContentToolSource {
     },
     tx: Tx,
   ): Promise<{ drafts: Array<{ contentPackageId: string; contentRevisionId: string; contentHash: string }> }>;
+  /** UX-09: the calendar a planning run proposes for its brief; a person accepts the brief to materialise it. */
+  proposePlan(
+    actor: ResolvedActorServicePrincipal,
+    input: ToolRunRef & {
+      briefId: string;
+      items: Array<{ date: string; channelKey: string; theme: string; formatKey: string; factIds: string[] }>;
+    },
+    tx: Tx,
+  ): Promise<{ briefId: string; planItemIds: string[] }>;
 }
 
 /**

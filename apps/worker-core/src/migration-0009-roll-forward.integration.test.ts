@@ -8,6 +8,7 @@ import * as schema from '@oremedia/db/schema';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { brands, policyVersions } from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
+import { planItems } from '@oremedia/db/schema/content';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -20,7 +21,12 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0008_usage_audio_generation';
 /** Added by later migrations (0010 to 0013: their migration-*-roll-forward tests). */
-const LATER_TABLES: MySqlTable[] = [pendingChannelGrants, publicationRemoteChanges, passwordSetupTokens];
+const LATER_TABLES: MySqlTable[] = [
+  pendingChannelGrants,
+  publicationRemoteChanges,
+  passwordSetupTokens,
+  planItems,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));

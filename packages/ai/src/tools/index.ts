@@ -1,7 +1,7 @@
 import { ToolRegistry, type AnyToolDefinition } from '../tool-registry';
 import { assetsSearchEligible } from './assets';
 import { brandGetSnapshot, brandProposeVoice, factsList } from './brand';
-import { contentCreateBrief, contentDraftCopy } from './content';
+import { contentCreateBrief, contentDraftCopy, contentProposePlan } from './content';
 import { creativeProposeOperations, creativeRequestRender } from './creative';
 import { imagesGenerate } from './images';
 import { experimentsProposeDesign, metricsQuery, recommendationsCreate, voiceClusters } from './intelligence';
@@ -20,6 +20,7 @@ export const RELEASE_1_TOOLS: readonly AnyToolDefinition[] = [
   voiceClusters,
   contentCreateBrief,
   contentDraftCopy,
+  contentProposePlan,
   creativeProposeOperations,
   creativeRequestRender,
   imagesGenerate,
@@ -52,7 +53,7 @@ export { imagesGenerate, IMAGE_COST_MICROS } from './images';
 export { videosGenerate, videosStatus, VIDEO_COST_MICROS_PER_SECOND } from './videos';
 export { speechGenerate, SPEECH_COST_MICROS_PER_1K_CHARS } from './speech';
 export { reviewRunBrandReview, reviewRequest } from './review';
-export { contentCreateBrief, contentDraftCopy } from './content';
+export { contentCreateBrief, contentDraftCopy, contentProposePlan } from './content';
 export { publicationsProposeSchedule, ScheduleProposalPayload } from './publications';
 export { metricsQuery, voiceClusters, recommendationsCreate, experimentsProposeDesign } from './intelligence';
 export {

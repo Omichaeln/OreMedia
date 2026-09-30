@@ -85,6 +85,38 @@ export const BriefList = z.object({
 export const BriefGet = z.object({ briefId: z.string() });
 export const BriefAccept = z.object({ briefId: z.string(), expectedVersion: z.number().int() });
 
+// ---- plan items (UX-09): the calendar behind a brief, materialised as packages on acceptance ----
+
+export const PlanItemState = z.enum(['proposed', 'dropped', 'materialised']);
+export type PlanItemState = z.infer<typeof PlanItemState>;
+/** One planned post: a calendar date (brand zone), the channel key the planner named, a theme and a format. */
+export const PlanItemInput = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+  channelKey: z.string().min(1).max(60),
+  /** A connection of the brand; when omitted it is resolved from the brief's channels by provider key. */
+  channelConnectionId: z.string().optional(),
+  theme: z.string().min(1).max(300),
+  formatKey: z.string().min(1).max(60),
+  factIds: z.array(z.string()).max(20).default([]),
+});
+export const PlanItemsPropose = z.object({
+  briefId: z.string(),
+  items: z.array(PlanItemInput).min(1).max(100),
+});
+export const PlanItemList = z.object({ briefId: z.string() });
+export const PlanItemUpdate = z.object({
+  planItemId: z.string(),
+  expectedVersion: z.number().int(),
+  date: PlanItemInput.shape.date.optional(),
+  /** `null` leaves the item without a connection until a person assigns one. */
+  channelConnectionId: z.string().nullable().optional(),
+  theme: PlanItemInput.shape.theme.optional(),
+  formatKey: PlanItemInput.shape.formatKey.optional(),
+  factIds: z.array(z.string()).max(20).optional(),
+});
+export const PlanItemDrop = z.object({ planItemId: z.string(), expectedVersion: z.number().int() });
+export const PlanItemRestore = PlanItemDrop;
+
 /**
  * A package is born with content revision 1: the master copy (spec 6.3 content_revisions.copy) and the creative
  * documents it publishes with. The revision pins those documents' *current* creative revisions and the brand's

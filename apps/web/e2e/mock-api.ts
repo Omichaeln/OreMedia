@@ -1140,7 +1140,33 @@ export function createMockRouter(backend: MockBackend) {
                       },
                     },
                   ]
-                : [],
+                : taskKind === 'campaign_planning'
+                  ? [
+                      {
+                        skillVersionId: 'skv_plan_1',
+                        skillId: 'sk_plan',
+                        key: 'campaign-planning',
+                        title: 'Campaign planning',
+                        description: 'Produces a brief and a content calendar; a person accepts the plan.',
+                        versionNumber: 1,
+                        inputSchema: {
+                          type: 'object',
+                          properties: {
+                            objective: { type: 'string', maxLength: 1000 },
+                            audience: { type: 'string', maxLength: 1000 },
+                            offerFactIds: { type: 'array', items: { type: 'string' }, maxItems: 20 },
+                            startDate: { type: 'string', format: 'date' },
+                            endDate: { type: 'string', format: 'date' },
+                            channels: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+                            notes: { type: 'string', maxLength: 4000 },
+                            briefId: { type: 'string' },
+                          },
+                          required: ['objective', 'audience', 'startDate', 'endDate', 'channels'],
+                          additionalProperties: false,
+                        },
+                      },
+                    ]
+                  : [],
           })),
         };
       }),

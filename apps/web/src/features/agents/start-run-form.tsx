@@ -16,6 +16,8 @@ export interface StartRunFormProps {
   brandId: string;
   brandName: string;
   hrefFor: (runId: string) => string;
+  /** A task kind and brief values another screen prefilled (UX-09 "Plan with agent"); the person can still edit. */
+  initial?: { taskKind: string; values: BriefValues };
 }
 
 /** Runs that start from their own command, never from this form (agents.runs.start refuses them). */
@@ -28,7 +30,7 @@ const AUTONOMY_ORDER = AutonomyMode.options;
  * actually granted is min(requested, principal, tenant policy, entitlement); the server decides and the form only
  * requests, showing the principal's ceiling. One idempotency key per submission intent, renewed after success.
  */
-export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps) {
+export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunFormProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -36,9 +38,9 @@ export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps)
   const principals = useAgentPrincipals(brandId);
   const taskKinds = useTaskKinds(brandId);
   const [principalId, setPrincipalId] = useState('');
-  const [taskKind, setTaskKind] = useState<string>('copywriting');
+  const [taskKind, setTaskKind] = useState<string>(initial?.taskKind ?? 'copywriting');
   const [autonomy, setAutonomy] = useState<string>('create');
-  const [values, setValues] = useState<BriefValues>({});
+  const [values, setValues] = useState<BriefValues>(initial?.values ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const start = useMutation(
     trpc.agents.runs.start.mutationOptions({

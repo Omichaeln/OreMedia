@@ -14,6 +14,7 @@ import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
+import { planItems } from '@oremedia/db/schema/content';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
 import { creativeService } from '@oremedia/module-creative';
@@ -33,7 +34,7 @@ const NEW_TABLES = [providerJobs, modelRoutingPolicies, renderPreviews, previewE
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
-/** Added by later migrations (0003 to 0013). */
+/** Added by later migrations (0003 to 0014). */
 const LATER_TABLES: MySqlTable[] = [
   externalIdentities,
   authEvents,
@@ -43,6 +44,7 @@ const LATER_TABLES: MySqlTable[] = [
   pendingChannelGrants,
   publicationRemoteChanges,
   passwordSetupTokens,
+  planItems,
 ];
 
 const TABLES = (Object.values(schema) as unknown[])
