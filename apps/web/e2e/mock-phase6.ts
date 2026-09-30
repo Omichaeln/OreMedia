@@ -10,6 +10,7 @@ import {
   ChannelVariantGenerate,
   ContentPackageCreate,
   ContentPackageGet,
+  ContentPackageList,
   ContentPackageRevise,
 } from '@oremedia/contracts/content';
 import {
@@ -99,6 +100,12 @@ const now = () => iso(new Date());
 const hoursAgo = (h: number) => iso(new Date(Date.now() - h * 3_600_000));
 const daysFromNow = (n: number) => iso(new Date(Date.now() + n * 86_400_000));
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
+/** Spec 7.4 cursor paging over an in-memory list: the cursor is the offset of the next row. */
+const paged = <T>(rows: T[], page: { cursor?: string | undefined; limit: number }) => {
+  const from = page.cursor ? Number(page.cursor) : 0;
+  const items = rows.slice(from, from + page.limit);
+  return { items, nextCursor: from + page.limit < rows.length ? String(from + page.limit) : null };
+};
 /** Spec 15.2: stale is older than the expected latency × 2; the weekly analyst makes that a week plus a day. */
 const STALE_AFTER_HOURS = 24 * 8;
 
@@ -416,6 +423,7 @@ export class Phase6Backend {
     seed = true,
   ) {
     if (seed) this.seed();
+    // (documentOf is set by the owning MockBackend, whose studio store holds the documents.)
     p5.calendarPackages = (from, to) =>
       [...this.packages.values()]
         .filter((p) => {
@@ -431,6 +439,39 @@ export class Phase6Backend {
 
   get brandId(): string {
     return this.p5.brandId;
+  }
+
+  /** The studio document a package may pin (mock-api's store); null when the id is not a document. */
+  documentOf: (documentId: string) => { title: string; currentRevisionId: string } | null = () => null;
+  /** Creative revision id → the document it belongs to, for the revisions packages pinned here. */
+  readonly creativeRevisionDocs = new Map<string, string>();
+
+  /** Pins a document's current creative revision (a fixed `rev_of_` id when the document is not in the store). */
+  pinDocument(documentId: string): string {
+    const revisionId = this.documentOf(documentId)?.currentRevisionId ?? `rev_of_${documentId}`;
+    this.creativeRevisionDocs.set(revisionId, documentId);
+    return revisionId;
+  }
+
+  /** The documents a revision publishes with, as content.packages.get reports them (spec 6.3 pins revisions). */
+  creativeDocumentsOf(creativeRevisionIds: readonly string[]) {
+    const out = [];
+    for (const pinnedRevisionId of creativeRevisionIds) {
+      const documentId =
+        this.creativeRevisionDocs.get(pinnedRevisionId) ??
+        (pinnedRevisionId.startsWith('rev_of_') ? pinnedRevisionId.slice('rev_of_'.length) : null);
+      if (documentId === null) continue;
+      const doc = this.documentOf(documentId);
+      const currentRevisionId = doc?.currentRevisionId ?? null;
+      out.push({
+        documentId,
+        title: doc?.title ?? documentId,
+        pinnedRevisionId,
+        currentRevisionId,
+        stale: currentRevisionId !== pinnedRevisionId,
+      });
+    }
+    return out;
   }
 
   /** Seeds a campaign (a second company's own rows). */
@@ -1423,6 +1464,15 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       }),
     }),
     packages: router({
+      list: query.input(ContentPackageList).query(({ input }) =>
+        paged(
+          [...b.packages.values()]
+            .filter((p) => p.brandId === input.brandId)
+            .sort((x, y) => y.createdAt.localeCompare(x.createdAt) || y.id.localeCompare(x.id))
+            .map(({ revisionIds: _r, ...p }) => p),
+          input.page,
+        ),
+      ),
       get: query.input(ContentPackageGet).query(({ input }) => {
         const pkg = b.pkg(input.contentPackageId);
         const revision = p5.revisions.get(pkg.currentRevisionId);
@@ -1431,6 +1481,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         return {
           ...dto,
           revision,
+          creativeDocuments: b.creativeDocumentsOf(revision.creativeRevisionIds),
           variants: [...p5.variants.values()].filter((v) => v.contentRevisionId === revision.id),
           revisions: [...revisionIds]
             .reverse()
@@ -1453,7 +1504,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           brandVersionId: 'bv_e2e',
           policyVersionId: 'pv_e2e',
           copy: { schemaVersion: 1, master: { text: copy.master.text, factRefs: copy.master.factRefs } },
-          creativeRevisionIds: input.creativeDocumentIds.map((d) => `rev_of_${d}`),
+          creativeRevisionIds: input.creativeDocumentIds.map((d) => b.pinDocument(d)),
           factRefs: [],
           contentHash: hash(copy),
           state: 'draft',
@@ -1498,6 +1549,10 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           throw new ConflictError('ContentPackage', pkg.id, input.expectedVersion);
         const current = p5.revisions.get(pkg.currentRevisionId);
         if (!current) throw new NotFoundError('ContentRevision', pkg.currentRevisionId);
+        // As the server: omitted keeps the current documents (re-pinned at their current revisions), [] removes all.
+        const documentIds =
+          input.creativeDocumentIds ??
+          b.creativeDocumentsOf(current.creativeRevisionIds).map((d) => d.documentId);
         Object.assign(current, { state: 'superseded', updatedAt: now(), version: current.version + 1 });
         p5.revisionSuperseded(current.id);
         const revisionId = rid('cr');
@@ -1509,6 +1564,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
             schemaVersion: 1,
             master: { text: input.copy.master.text, factRefs: input.copy.master.factRefs },
           },
+          creativeRevisionIds: documentIds.map((d) => b.pinDocument(d)),
           contentHash: hash(input.copy),
           state: 'draft',
           createdAt: now(),

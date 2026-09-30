@@ -7,7 +7,7 @@ import { PackageTitle } from '../content/package-title';
 import { PUBLICATION_CHIP, holdReasonText, outcomeUnknownReasonText } from '../publishing/publication-state';
 import { usePublicationsInState, type PublicationSummaryDto } from '../publishing/use-publishing';
 import { ATTENTION_CHIP } from '../review/review-attention';
-import { useReviewInbox, type InboxItemDto } from '../review/use-review';
+import { useReviewInboxPages, type InboxItemDto } from '../review/use-review';
 import { REVIEW_NEEDS_YOU } from '../shell/use-nav-counts';
 import { Section } from '../../components/section';
 
@@ -92,7 +92,7 @@ const publicationRow = (p: PublicationSummaryDto, calendarHref: string): NeedsYo
 export function NeedsYou() {
   const { companyId, brandId, brand } = useBrandContext();
   const timeZone = brand.timezone || 'UTC';
-  const inbox = useReviewInbox(brandId);
+  const inbox = useReviewInboxPages(brandId);
   const failed = usePublicationsInState(brandId, 'failed');
   const unknown = usePublicationsInState(brandId, 'outcome_unknown');
   const held = usePublicationsInState(brandId, 'held');
@@ -105,7 +105,7 @@ export function NeedsYou() {
     ...(unknown.data?.items ?? []).map((p) => publicationRow(p, calendarHref)),
     ...(failed.data?.items ?? []).map((p) => publicationRow(p, calendarHref)),
     ...(held.data?.items ?? []).map((p) => publicationRow(p, calendarHref)),
-    ...(inbox.data?.items ?? []).flatMap((i) => reviewRow(i, reviewHref) ?? []),
+    ...inbox.items.flatMap((i) => reviewRow(i, reviewHref) ?? []),
     ...(factCount > 0
       ? [
           {

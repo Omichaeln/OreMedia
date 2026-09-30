@@ -295,6 +295,12 @@ export const DocumentCreate = z.object({
   document: CreativeDocumentV1.optional(),
 });
 export const DocumentGet = z.object({ documentId: z.string() });
+/** The brand's documents, newest first; optionally those created for one content package. */
+export const DocumentList = z.object({
+  brandId: z.string(),
+  contentPackageId: z.string().optional(),
+  page: PageRequest,
+});
 export const RevisionList = z.object({ documentId: z.string(), page: PageRequest });
 export const RevisionGet = z.object({ documentId: z.string(), revisionId: z.string() });
 /** Spec 11.4 applyOperations(docId, batch): the batch plus the document it targets. */

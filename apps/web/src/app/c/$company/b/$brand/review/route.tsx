@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
+import { LoadMore } from '../../../../../../components/load-more';
 import { RequestError } from '../../../../../../components/request-state';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { PackageTitle } from '../../../../../../features/content/package-title';
@@ -11,7 +12,7 @@ import {
   REQUEST_STATE_CHIP,
   orderAttention,
 } from '../../../../../../features/review/review-attention';
-import { useReviewInbox, type InboxItemDto } from '../../../../../../features/review/use-review';
+import { useReviewInboxPages, type InboxItemDto } from '../../../../../../features/review/use-review';
 import { REVIEW_NEEDS_YOU } from '../../../../../../features/shell/use-nav-counts';
 import { toUiError } from '../../../../../../lib/errors';
 
@@ -34,7 +35,7 @@ const FILTERS: Array<[Filter, string, (i: InboxItemDto) => boolean]> = [
  */
 export function ReviewInboxRoute() {
   const { brandId } = useBrandContext();
-  const inbox = useReviewInbox(brandId);
+  const inbox = useReviewInboxPages(brandId);
   const channels = useChannels(brandId);
   const channelMap = useMemo(
     () => new Map<string, ChannelDto>((channels.data ?? []).map((c) => [c.id, c])),
@@ -50,8 +51,9 @@ export function ReviewInboxRoute() {
     setParams(p, { replace: true });
   };
   const matches = FILTERS.find(([key]) => key === filter)?.[2] ?? (() => true);
-  const items = (inbox.data?.items ?? []).filter(matches);
-  const selected = inbox.data?.items.find((i) => i.id === selectedId) ?? null;
+  // Filters run over every page fetched so far; a request on a page not yet shown is reached with "Show more".
+  const items = inbox.items.filter(matches);
+  const selected = inbox.items.find((i) => i.id === selectedId) ?? null;
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -79,7 +81,7 @@ export function ReviewInboxRoute() {
           </p>
           <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
             {FILTERS.map(([key, label, test]) => {
-              const count = inbox.data?.items.filter(test).length;
+              const count = inbox.isSuccess ? inbox.items.filter(test).length : undefined;
               return (
                 <button
                   key={key}
@@ -122,9 +124,9 @@ export function ReviewInboxRoute() {
           {inbox.isSuccess && items.length === 0 && (
             <div className="p-4">
               <EmptyState
-                title={inbox.data.items.length === 0 ? 'No review requests' : 'Nothing in this view'}
+                title={inbox.items.length === 0 ? 'No review requests' : 'Nothing in this view'}
                 description={
-                  inbox.data.items.length === 0
+                  inbox.items.length === 0
                     ? 'Requests appear here when a content package is sent for review.'
                     : 'Choose another filter to see the other requests.'
                 }
@@ -193,6 +195,16 @@ export function ReviewInboxRoute() {
                 );
               })}
             </ul>
+          )}
+          {inbox.isSuccess && (
+            <LoadMore
+              shown={inbox.items.length}
+              hasNextPage={inbox.hasNextPage}
+              isFetchingNextPage={inbox.isFetchingNextPage}
+              onLoadMore={() => void inbox.fetchNextPage()}
+              noun={inbox.items.length === 1 ? 'request' : 'requests'}
+              className="border-t border-border px-4 py-2 sm:px-6"
+            />
           )}
         </div>
       </section>

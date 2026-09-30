@@ -9,15 +9,9 @@ import { useTRPC } from '../../lib/trpc';
 import { brandPath } from '../brand/brand-context';
 import { CHANNEL_CHIP, isoToLocalInput, localInputToIso } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
-import {
-  packageChip,
-  parseIds,
-  readPackageDocuments,
-  rememberPackageDocuments,
-  revisionChip,
-  variantFindings,
-} from './content-helpers';
-import { usePackage, type PackageDto, type PackageVariantDto } from './use-content';
+import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
+import { DocumentPicker } from './document-picker';
+import { usePackage, type PackageDocumentDto, type PackageDto, type PackageVariantDto } from './use-content';
 
 export interface PackageDetailProps {
   companyId: string;
@@ -26,32 +20,41 @@ export interface PackageDetailProps {
   channels: ReadonlyMap<string, ChannelDto>;
 }
 
-function StudioLinks({
+/**
+ * The creative documents the current revision publishes with, from the server (it resolves the pinned creative
+ * revisions to their documents); a document whose current revision moved past the pin is marked stale.
+ */
+function PackageDocuments({
   companyId,
   brandId,
-  documentIds,
+  documents,
 }: {
   companyId: string;
   brandId: string;
-  documentIds: string[];
+  documents: readonly PackageDocumentDto[];
 }) {
-  if (documentIds.length === 0)
+  if (documents.length === 0)
     return (
       <p className="text-xs text-muted-foreground">
-        No studio documents were chosen for this package on this device. The content revision pins creative
-        revisions, not documents; open a document from the brand home by its id.
+        No creative documents are pinned to this revision. Revise the package to choose some.
       </p>
     );
   return (
-    <ul className="flex flex-wrap gap-2" aria-label="Studio documents" data-testid="studio-links">
-      {documentIds.map((id) => (
-        <li key={id}>
+    <ul className="flex flex-col gap-1" aria-label="Creative documents" data-testid="studio-links">
+      {documents.map((d) => (
+        <li key={d.documentId} className="flex flex-wrap items-center gap-2 text-sm">
           <Link
-            to={brandPath(companyId, brandId, `studio/${encodeURIComponent(id)}`)}
-            className="text-sm underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.documentId)}`)}
+            className="underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            Open {id} in the studio
+            {d.title}
           </Link>
+          <code className="text-xs text-muted-foreground">{d.pinnedRevisionId}</code>
+          {d.stale && (
+            <Badge tone="warning" data-testid="document-stale">
+              Stale: newer revision exists
+            </Badge>
+          )}
         </li>
       ))}
     </ul>
@@ -279,31 +282,35 @@ function RequestReview({ companyId, brandId, pkg }: { companyId: string; brandId
   );
 }
 
-function ReviseForm({ pkg, onRevised }: { pkg: PackageDto; onRevised: (documentIds: string[]) => void }) {
+function ReviseForm({ pkg }: { pkg: PackageDto }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
+  const initialIds = pkg.creativeDocuments.map((d) => d.documentId);
   const [text, setText] = useState(pkg.revision.copy.master.text);
-  const [docs, setDocs] = useState(() => readPackageDocuments(pkg.id).join(', '));
+  const [selected, setSelected] = useState<string[]>(initialIds);
   const [summary, setSummary] = useState('');
   const revise = useMutation(
     trpc.content.packages.revise.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: (_res, vars) => {
+      onSuccess: () => {
         intent.renew();
         setSummary('');
-        onRevised(vars.creativeDocumentIds ?? []);
         void queryClient.invalidateQueries(trpc.content.pathFilter());
       },
     }),
   );
+  const toggle = (id: string) =>
+    setSelected((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const submit = (e: FormEvent) => {
     e.preventDefault();
     revise.mutate({
       contentPackageId: pkg.id,
       expectedVersion: pkg.version,
       copy: { schemaVersion: 1, master: { text, factRefs: pkg.revision.copy.master.factRefs } },
-      creativeDocumentIds: parseIds(docs),
+      // Omitted when unchanged: the server keeps the current documents, so a copy-only revision never detaches
+      // the creative. An empty list is a deliberate removal.
+      ...(sameIdSet(selected, initialIds) ? {} : { creativeDocumentIds: selected }),
       ...(summary.trim() ? { summary: summary.trim() } : {}),
     });
   };
@@ -318,13 +325,13 @@ function ReviseForm({ pkg, onRevised }: { pkg: PackageDto; onRevised: (documentI
           rows={3}
         />
       </Field>
-      <Field
-        label="Creative document ids"
-        htmlFor={`revise-${pkg.id}-docs`}
-        hint="doc_…, comma separated. Their current revisions are pinned."
-      >
-        <Input id={`revise-${pkg.id}-docs`} value={docs} onChange={(e) => setDocs(e.target.value)} />
-      </Field>
+      <DocumentPicker
+        brandId={pkg.brandId}
+        pinned={pkg.creativeDocuments}
+        selected={selected}
+        onToggle={toggle}
+        legend="Creative documents (their current revisions are pinned)"
+      />
       <Field label="Change summary (optional)" htmlFor={`revise-${pkg.id}-summary`}>
         <Input id={`revise-${pkg.id}-summary`} value={summary} onChange={(e) => setSummary(e.target.value)} />
       </Field>
@@ -350,11 +357,10 @@ function ReviseForm({ pkg, onRevised }: { pkg: PackageDto; onRevised: (documentI
 /**
  * Spec 13 content package: the current revision with its state (in review, changes requested, approved), the revision
  * history (superseded revisions are kept, never edited), channel variants with their capability findings, and the
- * studio documents chosen for it on this device.
+ * creative documents the revision publishes with.
  */
 export function PackageDetail({ companyId, brandId, contentPackageId, channels }: PackageDetailProps) {
   const pkg = usePackage(contentPackageId);
-  const [documentIds, setDocumentIds] = useState(() => readPackageDocuments(contentPackageId));
   const p = pkg.data;
   const current = p ? revisionChip(p.revision.state) : null;
   return (
@@ -399,7 +405,7 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
               {p.revision.creativeRevisionIds.length === 1 ? '' : 's'} pinned · hash{' '}
               <code>{p.revision.contentHash.slice(0, 12)}…</code>
             </p>
-            <StudioLinks companyId={companyId} brandId={brandId} documentIds={documentIds} />
+            <PackageDocuments companyId={companyId} brandId={brandId} documents={p.creativeDocuments} />
           </section>
           <section aria-labelledby={`history-${p.id}`} className="flex flex-col gap-1">
             <h3 id={`history-${p.id}`} className="text-sm font-semibold">
@@ -448,14 +454,7 @@ export function PackageDetail({ companyId, brandId, contentPackageId, channels }
             )}
             <RequestReview key={p.revision.id} companyId={companyId} brandId={brandId} pkg={p} />
           </section>
-          <ReviseForm
-            key={p.version}
-            pkg={p}
-            onRevised={(ids) => {
-              rememberPackageDocuments(p.id, ids);
-              setDocumentIds(ids);
-            }}
-          />
+          <ReviseForm key={p.version} pkg={p} />
         </div>
       )}
     </Panel>

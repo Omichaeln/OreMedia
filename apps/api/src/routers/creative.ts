@@ -4,6 +4,7 @@ import {
   CommentResolve,
   DocumentCreate,
   DocumentGet,
+  DocumentList,
   OperationsApply,
   OperationsPropose,
   RenderGet,
@@ -36,6 +37,9 @@ export const creativeRouter = router({
     get: tenantQuery
       .input(DocumentGet)
       .query(({ ctx, input }) => creativeService.documents.get(ctx.tenant.actor, input)),
+    list: tenantQuery
+      .input(DocumentList)
+      .query(({ ctx, input }) => creativeService.documents.list(ctx.tenant.actor, input)),
   }),
 
   revisions: router({

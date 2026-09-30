@@ -12,6 +12,7 @@ export const AGENTS_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'agents.runs.get': { buildInput: (f) => ({ runId: f['agentRunId'] }) },
+  'agents.runs.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'agents.runs.cancel': { buildInput: (f) => ({ runId: f['agentRunId'], reason: 'x' }) },
   'agents.runs.steps': { buildInput: (f) => ({ runId: f['agentRunId'], page: { limit: 50 } }) },
   'agents.runs.approveProposal': {

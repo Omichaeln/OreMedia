@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
 import { AddToggle, ColumnHeader, listButton } from '../../components/column-header';
+import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
@@ -61,14 +62,14 @@ export function ExperimentsScreen() {
             />
           </div>
         )}
-        {list.isSuccess && list.data.items.length === 0 && (
+        {list.isSuccess && list.items.length === 0 && (
           <p className="px-4 py-3 text-sm text-muted-foreground">
             No experiments yet. Design one with +, or accept a recommendation that prepares a test.
           </p>
         )}
-        {list.isSuccess && list.data.items.length > 0 && (
+        {list.isSuccess && list.items.length > 0 && (
           <ul className="flex flex-col divide-y divide-border" aria-label="Experiments">
-            {list.data.items.map((x) => {
+            {list.items.map((x) => {
               const chip = experimentStateChip(x.state);
               const selected = x.id === selectedId && !creating;
               return (
@@ -95,6 +96,16 @@ export function ExperimentsScreen() {
               );
             })}
           </ul>
+        )}
+        {list.isSuccess && (
+          <LoadMore
+            shown={list.items.length}
+            hasNextPage={list.hasNextPage}
+            isFetchingNextPage={list.isFetchingNextPage}
+            onLoadMore={() => void list.fetchNextPage()}
+            noun={list.items.length === 1 ? 'experiment' : 'experiments'}
+            className="border-t border-border px-4 py-2"
+          />
         )}
         <div className="mt-auto border-t border-border px-4 py-3">
           <Button size="sm" variant="ghost" onClick={() => void list.refetch()} disabled={list.isFetching}>

@@ -4,10 +4,8 @@ import {
   briefGaps,
   isSuggested,
   missedDate,
-  packageWindow,
-  parseIds,
-  readPackageDocuments,
   revisionChip,
+  sameIdSet,
   variantFindings,
 } from './content-helpers';
 
@@ -59,17 +57,12 @@ describe('variantFindings', () => {
   });
 });
 
-describe('packageWindow, parseIds and device documents', () => {
-  it('spans 90 days back to 91 days ahead from the UTC day', () => {
-    const w = packageWindow(new Date('2026-03-15T13:45:00.000Z'));
-    expect(w.from).toBe('2025-12-15T00:00:00.000Z');
-    expect(w.to).toBe('2026-06-14T00:00:00.000Z');
-  });
-  it('splits, trims and de-duplicates ids', () => {
-    expect(parseIds(' doc_a, doc_b\ndoc_a  doc_c ')).toEqual(['doc_a', 'doc_b', 'doc_c']);
-    expect(parseIds('')).toEqual([]);
-  });
-  it('returns nothing when storage is unavailable', () => {
-    expect(readPackageDocuments('pkg_1')).toEqual([]);
+describe('sameIdSet', () => {
+  it('compares selections as sets, so an unchanged selection is never sent as a change', () => {
+    expect(sameIdSet(['doc_a', 'doc_b'], ['doc_b', 'doc_a'])).toBe(true);
+    expect(sameIdSet(['doc_a', 'doc_a'], ['doc_a'])).toBe(true);
+    expect(sameIdSet(['doc_a'], ['doc_a', 'doc_b'])).toBe(false);
+    expect(sameIdSet([], ['doc_a'])).toBe(false);
+    expect(sameIdSet([], [])).toBe(true);
   });
 });

@@ -9,10 +9,8 @@ import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { intentContext, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
-import { rememberRun } from './run-helpers';
 
 export interface StartRunFormProps {
-  companyId: string;
   brandId: string;
   brandName: string;
   hrefFor: (runId: string) => string;
@@ -25,7 +23,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
  * Spec 12.5: the mode actually granted is min(requested, principal, tenant policy, entitlement); the server decides
  * and the form only requests. One idempotency key per submission intent, renewed after success.
  */
-export function StartRunForm({ companyId, brandId, brandName, hrefFor }: StartRunFormProps) {
+export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -40,8 +38,7 @@ export function StartRunForm({ companyId, brandId, brandName, hrefFor }: StartRu
       trpc: intentContext(intent.key),
       onSuccess: (res) => {
         intent.renew();
-        rememberRun({ companyId, brandId, runId: res.runId });
-        void queryClient.invalidateQueries(trpc.operations.audit.pathFilter());
+        void queryClient.invalidateQueries(trpc.agents.runs.pathFilter());
         navigate(hrefFor(res.runId));
       },
     }),

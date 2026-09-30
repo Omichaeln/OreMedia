@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Field, Input, StatusBanner } from '@oremedia/ui';
-import { rememberRun } from '../agents/run-helpers';
 import { brandPath, useBrandContext } from './brand-context';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -22,10 +21,9 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
   const start = useMutation(
     trpc.brand.onboarding.start.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: (res) => {
+      onSuccess: () => {
         intent.renew();
-        rememberRun({ companyId, brandId, runId: res.runId });
-        void queryClient.invalidateQueries(trpc.operations.audit.pathFilter());
+        void queryClient.invalidateQueries(trpc.agents.runs.pathFilter());
       },
     }),
   );

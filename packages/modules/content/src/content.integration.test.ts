@@ -742,6 +742,60 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       );
     });
 
+    it('get names the creative documents behind the pins; revising without creativeDocumentIds keeps them, [] removes them', async () => {
+      const pkg = await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId }));
+      expect(pkg.creativeDocuments).toEqual([
+        expect.objectContaining({
+          documentId: docId,
+          pinnedRevisionId: docRevision,
+          currentRevisionId: docRevision,
+          stale: false,
+        }),
+      ]);
+      expect(pkg.creativeDocuments[0]?.title).toEqual(expect.any(String));
+      // Copy-only revise from a client that knows nothing about documents: the creative stays pinned.
+      const kept = await run(tenantA, (tx) =>
+        contentService.packages.revise(
+          A,
+          { contentPackageId: packageId, expectedVersion: pkg.version, copy: copy('Kept creative') },
+          tx,
+        ),
+      );
+      expect((await revisionRow(kept.contentRevisionId)).creativeRevisionIds).toEqual([docRevision]);
+      // An explicit empty selection removes every creative.
+      const removed = await run(tenantA, (tx) =>
+        contentService.packages.revise(
+          A,
+          {
+            contentPackageId: packageId,
+            expectedVersion: kept.version,
+            copy: copy('No creative'),
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      expect((await revisionRow(removed.contentRevisionId)).creativeRevisionIds).toEqual([]);
+      expect(
+        (await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId })))
+          .creativeDocuments,
+      ).toEqual([]);
+      // Put the document back for the tests that follow.
+      const restored = await run(tenantA, (tx) =>
+        contentService.packages.revise(
+          A,
+          {
+            contentPackageId: packageId,
+            expectedVersion: removed.version,
+            copy: copy('Twenty-five percent off in June'),
+            creativeDocumentIds: [docId],
+          },
+          tx,
+        ),
+      );
+      expect((await revisionRow(restored.contentRevisionId)).creativeRevisionIds).toEqual([docRevision]);
+    });
+
     it('lists the revisions that pin a creative document (for the creative-change approval hook)', async () => {
       const pkg = await run(tenantA, () => contentService.packages.get(A, { contentPackageId: packageId }));
       await run(tenantA, (tx) => contentService.revisions.transition(pkg.revision.id, 'request_review', tx));

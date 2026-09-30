@@ -4,7 +4,6 @@ import {
   formatDuration,
   formatMicros,
   isTerminalState,
-  mergeRunIds,
   modifyBatchOf,
   needsAttention,
   pendingProposal,
@@ -12,7 +11,7 @@ import {
   recordedException,
   runStateChip,
 } from './run-helpers';
-import { auditRunIds, type AuditEventDto, type RunDto, type StepDto } from './use-agent-runs';
+import type { RunDto, StepDto } from './use-agent-runs';
 
 const run = (state: RunDto['state'], costMicros = 0): RunDto => ({
   id: 'run_1',
@@ -205,40 +204,5 @@ describe('proposals', () => {
     const batch = JSON.parse(modifyBatchOf(p!)) as Record<string, unknown>;
     expect(Object.keys(batch).sort()).toEqual(['baseRevisionId', 'documentId', 'operations', 'summary']);
     expect(batch['documentId']).toBe('doc_1');
-  });
-});
-
-describe('run discovery', () => {
-  const event = (resourceId: string, brandId: string | null, id: string): AuditEventDto => ({
-    id,
-    tenantId: 'ten_1',
-    actorKind: 'user',
-    actorId: 'usr_1',
-    supportSessionId: null,
-    action: 'agent.run.request',
-    resourceType: 'agent_run',
-    resourceId,
-    decision: 'allowed',
-    reason: null,
-    correlationId: 'c',
-    metadata: brandId ? { brandId, runId: resourceId } : null,
-    createdAt: new Date('2026-01-01T00:00:00.000Z'),
-  });
-  it('keeps the brand’s runs in audit order without duplicates', () => {
-    const ids = auditRunIds(
-      [
-        event('run_b', 'brd_1', '3'),
-        event('run_a', 'brd_1', '2'),
-        event('run_b', 'brd_1', '1'),
-        event('run_x', 'brd_2', '0'),
-        event('run_y', null, '-1'),
-      ],
-      'brd_1',
-    );
-    expect(ids).toEqual(['run_b', 'run_a']);
-  });
-  it('merges audit and device ids, audit first, without duplicates', () => {
-    expect(mergeRunIds(['run_b', 'run_a'], ['run_a', 'run_c'])).toEqual(['run_b', 'run_a', 'run_c']);
-    expect(mergeRunIds([], [])).toEqual([]);
   });
 });

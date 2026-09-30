@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Button, EmptyState, Field, Input } from '@oremedia/ui';
+import { EmptyState } from '@oremedia/ui';
 import { AddToggle, ColumnHeader } from '../../components/column-header';
-import { toUiError } from '../../lib/errors';
+import { LoadMore } from '../../components/load-more';
 import { useBrandContext } from '../brand/brand-context';
-import { mergeRunIds, readRecentRuns, rememberRun } from './run-helpers';
 import { RunDetail } from './run-detail';
 import { RunsList } from './runs-list';
 import { StartRunForm } from './start-run-form';
-import { useAgentRunAudit, useAgentRuns } from './use-agent-runs';
+import { useAgentRunList } from './use-agent-runs';
 
 const RUN_PARAM = 'run';
 
@@ -19,32 +18,14 @@ const RUN_PARAM = 'run';
  */
 export function AgentRunsScreen() {
   const { companyId, brandId, brand } = useBrandContext();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const selectedId = params.get(RUN_PARAM);
   const hrefFor = (runId: string) => `?${RUN_PARAM}=${encodeURIComponent(runId)}`;
-  const audit = useAgentRunAudit(brandId);
-  const [deviceIds, setDeviceIds] = useState(() => readRecentRuns(companyId, brandId).map((r) => r.runId));
+  const runs = useAgentRunList(brandId);
   const [starting, setStarting] = useState(false);
   useEffect(() => {
-    if (!selectedId) return;
-    setStarting(false); // a run the start form created replaces the form
-    rememberRun({ companyId, brandId, runId: selectedId });
-    setDeviceIds(readRecentRuns(companyId, brandId).map((r) => r.runId));
-  }, [companyId, brandId, selectedId]);
-  const runIds = useMemo(() => mergeRunIds(audit.data ?? [], deviceIds), [audit.data, deviceIds]);
-  const runs = useAgentRuns(runIds);
-  const auditUi = audit.isError ? toUiError(audit.error) : null;
-  const historyNotice =
-    auditUi?.kind === 'forbidden'
-      ? 'Brand-wide history needs audit access (owner or admin). Showing runs started or opened on this device.'
-      : null;
-  const [openId, setOpenId] = useState('');
-  const openById = (e: FormEvent) => {
-    e.preventDefault();
-    if (!openId.trim()) return;
-    setStarting(false);
-    setParams({ [RUN_PARAM]: openId.trim() });
-  };
+    if (selectedId) setStarting(false); // a run the start form created replaces the form
+  }, [selectedId]);
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -61,32 +42,25 @@ export function AgentRunsScreen() {
           action={<AddToggle open={starting} label="New run" onToggle={() => setStarting(!starting)} />}
         />
         <RunsList
-          runs={runIds.map((runId, i) => ({
-            runId,
-            run: runs[i]?.data,
-            error: runs[i]?.error ?? null,
-            isPending: runs[i]?.isPending ?? true,
-          }))}
+          runs={runs.items}
           selectedId={starting ? null : selectedId}
           hrefFor={hrefFor}
           onSelect={() => setStarting(false)}
-          historyNotice={historyNotice}
-          historyPending={audit.isPending}
-          historyError={audit.isError && !historyNotice ? audit.error : null}
-          onRetryHistory={() => void audit.refetch()}
+          isPending={runs.isPending}
+          error={runs.isError ? runs.error : null}
+          onRetry={() => void runs.refetch()}
         />
-        <form className="mt-auto flex items-end gap-2 border-t border-border px-4 py-3" onSubmit={openById}>
-          <Field label="Open a run by id" htmlFor="run-id" className="flex-1" hint="run_…">
-            <Input id="run-id" value={openId} onChange={(e) => setOpenId(e.target.value)} />
-          </Field>
-          <Button type="submit" disabled={!openId.trim()}>
-            Open
-          </Button>
-        </form>
+        <LoadMore
+          shown={runs.items.length}
+          hasNextPage={runs.hasNextPage}
+          isFetchingNextPage={runs.isFetchingNextPage}
+          onLoadMore={() => void runs.fetchNextPage()}
+          noun="runs"
+        />
       </section>
       <div className="min-w-0 flex-1 border-t border-border p-4 sm:p-6 lg:border-t-0">
         {starting ? (
-          <StartRunForm companyId={companyId} brandId={brandId} brandName={brand.name} hrefFor={hrefFor} />
+          <StartRunForm brandId={brandId} brandName={brand.name} hrefFor={hrefFor} />
         ) : selectedId ? (
           <RunDetail key={selectedId} companyId={companyId} brandId={brandId} runId={selectedId} />
         ) : (
