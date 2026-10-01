@@ -102,6 +102,27 @@ computed over the last 28 days: queries and pages with ≥ 100 impressions and a
 landing pages with ≥ 50 sessions and an engagement rate below half the property's pooled rate. AI search (D-19):
 no figure; the screen links to the vendor's console.
 
+## Local sources (R2-2: Business Profile performance)
+
+Same storage and read model as the web sources (`destination_report_rows`, `destinations.reports.*`), under the
+`gbp.reports` data type; the kind reads only (D-17), so the rows are the 7-day operational cache. The Performance
+API reports each metric per day and location; a day without a value is absent, never a zero.
+
+| Metric              | Source                     | Kind   | Aggregate across days and dimension values                                                                   |
+| ------------------- | -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `impressions`       | Business Profile (`gbp.*`) | `flow` | Summed; in `gbp.performance` the four surfaces (desktop/mobile × maps/search) are added by the adapter first |
+| `websiteClicks`     | Business Profile           | `flow` | Summed (`WEBSITE_CLICKS`)                                                                                    |
+| `callClicks`        | Business Profile           | `flow` | Summed (`CALL_CLICKS`)                                                                                       |
+| `directionRequests` | Business Profile           | `flow` | Summed (`BUSINESS_DIRECTION_REQUESTS`)                                                                       |
+| `conversations`     | Business Profile           | `flow` | Summed (`BUSINESS_CONVERSATIONS`)                                                                            |
+| `bookings`          | Business Profile           | `flow` | Summed (`BUSINESS_BOOKINGS`)                                                                                 |
+| `websiteClickRate`  | derived (Business Profile) | `rate` | Σ `websiteClicks` ÷ Σ `impressions`                                                                          |
+
+Reports: `gbp.performance` (no dimension: a destination is one location), `gbp.surfaces` (`surface`: Desktop Maps,
+Desktop Search, Mobile Maps, Mobile Search, impressions only). Freshness: stale when the latest day ended more than
+latency × 2 ago (120 h). No opportunity rule: the queue benchmarks a subject against the destination's own pooled
+rate, and a single location has nothing to be compared with. Reviews, posts and replies are not metrics here.
+
 ## Technical SEO audit (R2-4)
 
 The audit's checks, limits and findings are catalogued in [seo-audit.md](./seo-audit.md). They are lab data the
