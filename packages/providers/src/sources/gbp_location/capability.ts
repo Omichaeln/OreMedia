@@ -32,12 +32,15 @@ const WEBSITE_CLICK_RATE: SourceReportMetricV1 = {
 };
 const metrics = (...names: Array<keyof typeof METRIC>) => names.map((n) => METRIC[n] as SourceReportMetricV1);
 
-/** The API's daily metric names behind each row metric; the four impression surfaces add up to `impressions`. */
+/**
+ * The API's impression metric names and the stable `surface` value each becomes (the platform's own value, as the
+ * other kinds store their dimensions; the wording lives in the docs); the four add up to `impressions`.
+ */
 export const GBP_IMPRESSION_METRICS: Readonly<Record<string, string>> = {
-  BUSINESS_IMPRESSIONS_DESKTOP_MAPS: 'Desktop Maps',
-  BUSINESS_IMPRESSIONS_DESKTOP_SEARCH: 'Desktop Search',
-  BUSINESS_IMPRESSIONS_MOBILE_MAPS: 'Mobile Maps',
-  BUSINESS_IMPRESSIONS_MOBILE_SEARCH: 'Mobile Search',
+  BUSINESS_IMPRESSIONS_DESKTOP_MAPS: 'desktop_maps',
+  BUSINESS_IMPRESSIONS_DESKTOP_SEARCH: 'desktop_search',
+  BUSINESS_IMPRESSIONS_MOBILE_MAPS: 'mobile_maps',
+  BUSINESS_IMPRESSIONS_MOBILE_SEARCH: 'mobile_search',
 };
 export const GBP_ACTION_METRICS: Readonly<Record<string, string>> = {
   WEBSITE_CLICKS: 'websiteClicks',

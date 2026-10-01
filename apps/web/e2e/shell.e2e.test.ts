@@ -549,8 +549,8 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await gbp.getByRole('tab', { name: 'Impressions by surface' }).click();
     const drilldown = gbp.getByTestId('web-drilldown');
     await expect.poll(() => drilldown.locator('tbody tr').count(), { timeout: 15_000 }).toBe(4);
-    expect(await drilldown.locator('tbody tr').first().textContent()).toContain('Mobile Search');
-    expect(await drilldown.locator('tr[data-dimension="Desktop Maps"]').textContent()).toContain('60');
+    expect(await drilldown.locator('tbody tr').first().textContent()).toContain('mobile_search');
+    expect(await drilldown.locator('tr[data-dimension="desktop_maps"]').textContent()).toContain('60');
     const opportunities = gbp.getByTestId('web-opportunities');
     expect(await opportunities.count()).toBe(0);
     expect(await gbp.textContent()).toContain('Nothing below half');

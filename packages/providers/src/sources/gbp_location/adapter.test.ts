@@ -110,9 +110,27 @@ describe('Business Profile location source adapter (ledger R2-2, spec 14.5 / 14.
       adapter.classifyError({
         status: 403,
         phase: 'after_send',
-        body: '{"error":{"details":[{"reason":"SERVICE_DISABLED"}]}}',
+        body: '{"error":{"status":"PERMISSION_DENIED","details":[{"reason":"SERVICE_DISABLED"}]}}',
       }),
     ).toEqual({ kind: 'rejected', code: 'access_required' });
+    expect(
+      adapter.classifyError({
+        status: 403,
+        phase: 'after_send',
+        body: '{"error":{"status":"PERMISSION_DENIED","errors":[{"reason":"accessNotConfigured"}]}}',
+      }),
+    ).toEqual({ kind: 'rejected', code: 'access_required' });
+    // Prose in the message, a reason outside the set, or a non-JSON body: a reconnect, never access required.
+    expect(
+      adapter.classifyError({
+        status: 403,
+        phase: 'after_send',
+        body: '{"error":{"status":"PERMISSION_DENIED","message":"SERVICE_DISABLED: request access"}}',
+      }),
+    ).toEqual({ kind: 'reconnect_required' });
+    expect(adapter.classifyError({ status: 403, phase: 'after_send', body: 'SERVICE_DISABLED' })).toEqual({
+      kind: 'reconnect_required',
+    });
     expect(adapter.classifyError({ status: 429, phase: 'after_send' })).toEqual({
       kind: 'rate_limited',
       phase: 'before_send',

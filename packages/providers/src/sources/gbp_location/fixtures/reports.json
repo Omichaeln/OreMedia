@@ -227,6 +227,28 @@
         }
       ]
     },
+    "forbidden_prose": {
+      "description": "A permission refusal whose prose mentions requesting access but carries no structured reason: a reconnect, never access_required.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "error": {
+                "code": 403,
+                "message": "The caller does not have permission to read this location. Request access from the location's owner; the project has not been used in project settings.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          }
+        }
+      ]
+    },
     "forbidden": {
       "description": "The grant cannot read this location (removed from the account): a reconnect.",
       "exchanges": [

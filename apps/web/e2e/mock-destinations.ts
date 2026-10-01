@@ -421,10 +421,10 @@ function seededReportRows(ga4Id: string, gscId: string, gbpId: string): SeededRe
       metrics: { impressions: 150, websiteClicks: 6, callClicks: 3, directionRequests: 4 },
     });
     for (const [surface, impressions] of [
-      ['Mobile Search', 75],
-      ['Desktop Search', 40],
-      ['Mobile Maps', 25],
-      ['Desktop Maps', 10],
+      ['mobile_search', 75],
+      ['desktop_search', 40],
+      ['mobile_maps', 25],
+      ['desktop_maps', 10],
     ] as const)
       rows.push({
         destinationId: gbpId,

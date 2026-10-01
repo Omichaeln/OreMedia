@@ -41,16 +41,11 @@ const LOCATION_MAX_PAGES = 10;
 /** The location fields the listing asks for (the Business Information API refuses a request without a read mask). */
 const LOCATION_READ_MASK = 'name,title,storefrontAddress';
 /**
- * The 403 bodies that mean the API is not enabled or approved for the deployment's Cloud project rather than the
- * person's grant being refused: Google's `SERVICE_DISABLED` / `accessNotConfigured` error info, and the
- * Business Profile access programme's own refusal before the project is approved.
+ * The structured reasons of a 403 that mean the API is not enabled or approved for the deployment's Cloud project
+ * rather than the person's grant being refused (`error.details[].reason` as google.rpc.ErrorInfo carries it, or the
+ * legacy `error.errors[].reason`). Prose is never matched: a permission refusal stays a reconnect.
  */
-const ACCESS_REQUIRED_MARKERS = [
-  'SERVICE_DISABLED',
-  'accessNotConfigured',
-  'has not been used in project',
-  'request access',
-];
+const ACCESS_REQUIRED_REASONS = new Set(['SERVICE_DISABLED', 'accessNotConfigured']);
 
 /**
  * Google Business Profile location source adapter (ledger R2-2, read-only slice under D-17): Google OAuth with
@@ -165,6 +160,7 @@ export class GbpLocationAdapter implements SourceAdapter {
     const spec = this.capability.reports.find((r) => r.key === request.report);
     if (!spec)
       throw new CapabilityUnsupportedError([{ path: 'report', issue: `unknown_report:${request.report}` }]);
+    // request.pageToken is unused: the Performance API answers the whole range in one response and pages nothing.
     const bySurface = spec.dimensions.includes('surface');
     const dailyMetrics = bySurface
       ? Object.keys(GBP_IMPRESSION_METRICS)
@@ -241,8 +237,22 @@ export class GbpLocationAdapter implements SourceAdapter {
   }
 }
 
-const accessRequired = (body: string | undefined): boolean =>
-  body !== undefined && ACCESS_REQUIRED_MARKERS.some((marker) => body.includes(marker));
+/** A 403 whose JSON names one of the structured reasons under a PERMISSION_DENIED status; anything else is not. */
+const accessRequired = (body: string | undefined): boolean => {
+  if (!body) return false;
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  const error = get(json, 'error');
+  if (str(get(error, 'status')) !== 'PERMISSION_DENIED') return false;
+  const reasons = [...arr(get(error, 'details')), ...arr(get(error, 'errors'))].map((d) =>
+    str(get(d, 'reason')),
+  );
+  return reasons.some((reason) => reason !== undefined && ACCESS_REQUIRED_REASONS.has(reason));
+};
 
 /** The API's `google.type.Date` ({year, month, day}) as an ISO day; anything incomplete is not a day. */
 const gbpDate = (value: unknown): string | undefined => {

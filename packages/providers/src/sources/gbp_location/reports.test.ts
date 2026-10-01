@@ -76,9 +76,9 @@ describe('Business Profile performance reports (ledger R2-2, Performance API fet
       dateRange: range,
     });
     expect(page.rows).toEqual([
-      { date: '2026-09-27', dimensions: { surface: 'Desktop Maps' }, metrics: { impressions: 10 } },
-      { date: '2026-09-27', dimensions: { surface: 'Desktop Search' }, metrics: { impressions: 40 } },
-      { date: '2026-09-27', dimensions: { surface: 'Mobile Search' }, metrics: { impressions: 75 } },
+      { date: '2026-09-27', dimensions: { surface: 'desktop_maps' }, metrics: { impressions: 10 } },
+      { date: '2026-09-27', dimensions: { surface: 'desktop_search' }, metrics: { impressions: 40 } },
+      { date: '2026-09-27', dimensions: { surface: 'mobile_search' }, metrics: { impressions: 75 } },
     ]);
     const u = new URL(io.calls[0]!.url);
     expect(u.searchParams.getAll('dailyMetrics')).toHaveLength(4);
@@ -118,6 +118,8 @@ describe('Business Profile performance reports (ledger R2-2, Performance API fet
       classification: { kind: 'rejected', code: 'access_required' },
     });
     load('forbidden');
+    expect(((await read()) as SourceReadError).classification).toEqual({ kind: 'reconnect_required' });
+    load('forbidden_prose'); // prose alone never means access required
     expect(((await read()) as SourceReadError).classification).toEqual({ kind: 'reconnect_required' });
     load('unauthorised');
     expect(((await read()) as SourceReadError).classification).toEqual({ kind: 'refresh_token' });

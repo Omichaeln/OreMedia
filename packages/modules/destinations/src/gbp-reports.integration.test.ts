@@ -77,10 +77,10 @@ function surfaceRows(): SourceReportRow[] {
   const rows: SourceReportRow[] = [];
   for (let i = -39; i <= 0; i++)
     for (const [surface, impressions] of [
-      ['Desktop Search', 40],
-      ['Mobile Search', 75],
-      ['Mobile Maps', 25],
-      ['Desktop Maps', 10],
+      ['desktop_search', 40],
+      ['mobile_search', 75],
+      ['mobile_maps', 25],
+      ['desktop_maps', 10],
     ] as const)
       rows.push({ date: day(i), dimensions: { surface }, metrics: { impressions } });
   return rows;
@@ -348,10 +348,10 @@ describe('Business Profile location reports against MySQL 8 (R2-2 read-only slic
       }),
     );
     expect(surfaces.items.map((r) => [r.dimensions['surface'], r.metrics['impressions']])).toEqual([
-      ['Mobile Search', 525],
-      ['Desktop Search', 280],
-      ['Mobile Maps', 175],
-      ['Desktop Maps', 70],
+      ['mobile_search', 525],
+      ['desktop_search', 280],
+      ['mobile_maps', 175],
+      ['desktop_maps', 70],
     ]);
     const opportunities = await inTenant(tenantA, () =>
       reports.opportunities(owner(), { brandId: brandA, destinationId: locationId }),

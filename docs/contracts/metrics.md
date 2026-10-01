@@ -118,8 +118,8 @@ API reports each metric per day and location; a day without a value is absent, n
 | `bookings`          | Business Profile           | `flow` | Summed (`BUSINESS_BOOKINGS`)                                                                                 |
 | `websiteClickRate`  | derived (Business Profile) | `rate` | Σ `websiteClicks` ÷ Σ `impressions`                                                                          |
 
-Reports: `gbp.performance` (no dimension: a destination is one location), `gbp.surfaces` (`surface`: Desktop Maps,
-Desktop Search, Mobile Maps, Mobile Search, impressions only). Freshness: stale when the latest day ended more than
+Reports: `gbp.performance` (no dimension: a destination is one location), `gbp.surfaces` (`surface`, stored as
+the platform's value `desktop_maps`, `desktop_search`, `mobile_maps`, `mobile_search`: impressions only). Freshness: stale when the latest day ended more than
 latency × 2 ago (120 h). No opportunity rule: the queue benchmarks a subject against the destination's own pooled
 rate, and a single location has nothing to be compared with. Reviews, posts and replies are not metrics here.
 

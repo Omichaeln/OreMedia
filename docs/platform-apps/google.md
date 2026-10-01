@@ -123,7 +123,7 @@ operational cache applies (`REPORT_CACHE_DAYS`). Google makes a day's figures fi
 they need write access and the inbox design and stay blocked on D-17.
 
 While the access is pending, a connected location (a project that lists accounts but whose Performance API is not
-yet enabled) is not broken: the adapter classifies that 403 as `access_required`, the destination is `degraded`
+yet enabled) is not broken: the adapter classifies that 403 (a structured `SERVICE_DISABLED` / `accessNotConfigured` reason, never prose) as `access_required`, the destination is `degraded`
 with that reason in its `destination.report.fetched` audit and read again the next day; no reconnect is asked of
 the person, and no retry is attempted inside the day.
 
