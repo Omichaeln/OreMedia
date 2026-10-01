@@ -4866,6 +4866,99 @@
         }
       }
     },
+    "/trpc/destinations.reports.opportunities": {
+      "get": {
+        "operationId": "destinations.reports.opportunities",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.reports.rows": {
+      "get": {
+        "operationId": "destinations.reports.rows",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "reportKey": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "number"
+                  },
+                  "cursor": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId", "reportKey", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.reports.summary": {
+      "get": {
+        "operationId": "destinations.reports.summary",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/destinations.setHealth": {
       "post": {
         "operationId": "destinations.setHealth",
@@ -13180,6 +13273,72 @@
             }
           },
           "required": ["brandId", "kind", "externalId", "displayName"]
+        }
+      },
+      "destinations.reports.opportunities": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.reports.rows": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "reportKey": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "cursor": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId", "reportKey", "windowStart", "windowEnd"]
+        }
+      },
+      "destinations.reports.summary": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId", "windowStart", "windowEnd"]
         }
       },
       "destinations.setHealth": {

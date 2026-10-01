@@ -15,6 +15,12 @@ export {
   configureDestinationConnectStateStore,
 } from './service';
 export {
+  destinationReportService,
+  createDestinationReportService,
+  reportFreshness,
+  reportComparison,
+} from './reports';
+export {
   createDestinationReportRuntime,
   reportRange,
   type DestinationReportRuntimeOptions,
