@@ -1,0 +1,413 @@
+{
+  "provider": "cms_site",
+  "scenarios": {
+    "verify_ok": {
+      "description": "The application password authenticates an editor who can publish.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 7,
+              "name": "Ore Editor",
+              "slug": "ore-editor",
+              "capabilities": { "edit_posts": true, "publish_posts": true }
+            }
+          }
+        }
+      ]
+    },
+    "verify_unauthorised": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/wp-json/wp/v2/users/me" },
+          "response": {
+            "status": 401,
+            "json": {
+              "code": "rest_not_logged_in",
+              "message": "You are not currently logged in.",
+              "data": { "status": 401 }
+            }
+          }
+        }
+      ]
+    },
+    "verify_subscriber": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/wp-json/wp/v2/users/me" },
+          "response": {
+            "status": 200,
+            "json": { "id": 9, "name": "Reader", "capabilities": { "read": true } }
+          }
+        }
+      ]
+    },
+    "read_found": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "draft",
+              "modified_gmt": "2026-09-30T10:00:00",
+              "title": { "raw": "Why ore & tar", "rendered": "Why ore &amp; tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>", "rendered": "<p>Ore is heavy.</p>\n" }
+            }
+          }
+        }
+      ]
+    },
+    "read_absent": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/wp-json/wp/v2/posts/404" },
+          "response": {
+            "status": 404,
+            "json": {
+              "code": "rest_post_invalid_id",
+              "message": "Invalid post ID.",
+              "data": { "status": 404 }
+            }
+          }
+        }
+      ]
+    },
+    "read_forbidden": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/wp-json/wp/v2/posts/42" },
+          "response": {
+            "status": 403,
+            "json": {
+              "code": "rest_forbidden",
+              "message": "Sorry, you are not allowed to do that.",
+              "data": { "status": 403 }
+            }
+          }
+        }
+      ]
+    },
+    "create_draft": {
+      "description": "Terms resolved over two pages of the category listing (one created), then the draft post.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/categories",
+            "query": { "search": "Guides", "per_page": "100", "page": "1" }
+          },
+          "response": {
+            "status": 200,
+            "headers": { "x-wp-total": "101", "x-wp-totalpages": "2" },
+            "json": [{ "id": 3, "name": "Guides and more" }]
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/categories",
+            "query": { "search": "Guides", "per_page": "100", "page": "2" }
+          },
+          "response": {
+            "status": 200,
+            "headers": { "x-wp-total": "101", "x-wp-totalpages": "2" },
+            "json": [{ "id": 12, "name": "guides" }]
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/tags",
+            "query": { "search": "ore", "page": "1" }
+          },
+          "response": { "status": 200, "headers": { "x-wp-totalpages": "1" }, "json": [] }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/tags",
+            "bodyIncludes": ["\"name\":\"ore\""]
+          },
+          "response": { "status": 201, "json": { "id": 55, "name": "ore" } }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts",
+            "bodyIncludes": [
+              "\"status\":\"draft\"",
+              "\"slug\":\"why-ore-and-tar\"",
+              "\"categories\":[12]",
+              "\"tags\":[55]",
+              "<p>Ore is heavy.</p>"
+            ]
+          },
+          "response": {
+            "status": 201,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/?p=42",
+              "slug": "why-ore-and-tar",
+              "status": "draft",
+              "modified_gmt": "2026-09-30T10:00:00",
+              "title": { "raw": "Why ore & tar", "rendered": "Why ore &amp; tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>", "rendered": "<p>Ore is heavy.</p>\n" }
+            }
+          }
+        }
+      ]
+    },
+    "create_forbidden": {
+      "exchanges": [
+        {
+          "request": { "method": "POST", "host": "site.example", "path": "/wp-json/wp/v2/posts" },
+          "response": {
+            "status": 403,
+            "json": {
+              "code": "rest_cannot_create",
+              "message": "Sorry, you are not allowed to create posts as this user.",
+              "data": { "status": 403 }
+            }
+          }
+        }
+      ]
+    },
+    "create_outage_after_send": {
+      "exchanges": [
+        {
+          "request": { "method": "POST", "host": "site.example", "path": "/wp-json/wp/v2/posts" },
+          "response": { "status": 502, "body": "<html>Bad gateway</html>" }
+        }
+      ]
+    },
+    "update_conflict": {
+      "description": "The remote moved since the read-back: the update refuses before writing anything.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "publish",
+              "modified_gmt": "2026-09-30T12:30:00",
+              "title": { "raw": "Why ore & tar (edited on the site)" },
+              "content": { "raw": "<p>Someone changed this.</p>" }
+            }
+          }
+        }
+      ]
+    },
+    "update_ok": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "publish",
+              "modified_gmt": "2026-09-30T10:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>" }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "bodyIncludes": ["\"content\":\"<p>Ore is heavy and tar is sticky.</p>\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "publish",
+              "modified_gmt": "2026-09-30T13:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy and tar is sticky.</p>" }
+            }
+          }
+        }
+      ]
+    },
+    "unpublish": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "publish",
+              "modified_gmt": "2026-09-30T13:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>" }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "query": { "context": "edit" }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar",
+              "status": "publish",
+              "modified_gmt": "2026-09-30T13:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>" }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts/42",
+            "bodyIncludes": ["\"status\":\"draft\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/?p=42",
+              "slug": "why-ore-and-tar",
+              "status": "draft",
+              "modified_gmt": "2026-09-30T14:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>" }
+            }
+          }
+        }
+      ]
+    },
+    "delete_gone": {
+      "exchanges": [
+        {
+          "request": { "method": "DELETE", "host": "site.example", "path": "/wp-json/wp/v2/posts/42" },
+          "response": {
+            "status": 404,
+            "json": {
+              "code": "rest_post_invalid_id",
+              "message": "Invalid post ID.",
+              "data": { "status": 404 }
+            }
+          }
+        }
+      ]
+    },
+    "delete_ok": {
+      "exchanges": [
+        {
+          "request": { "method": "DELETE", "host": "site.example", "path": "/wp-json/wp/v2/posts/42" },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 42,
+              "link": "https://site.example/why-ore-and-tar/",
+              "slug": "why-ore-and-tar__trashed",
+              "status": "trash",
+              "modified_gmt": "2026-09-30T15:00:00",
+              "title": { "raw": "Why ore & tar" },
+              "content": { "raw": "<p>Ore is heavy.</p>" }
+            }
+          }
+        }
+      ]
+    },
+    "rendered_redirect": {
+      "description": "The pretty permalink redirects once on the same host; the final page is read.",
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/", "query": { "p": "42" } },
+          "response": {
+            "status": 301,
+            "headers": { "location": "https://site.example/why-ore-and-tar/" },
+            "body": ""
+          }
+        },
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/why-ore-and-tar/" },
+          "response": {
+            "status": 200,
+            "headers": { "content-type": "text/html" },
+            "body": "<html><head><title>Why ore &amp; tar – Site</title><link rel=\"canonical\" href=\"https://site.example/why-ore-and-tar/\"></head><body><h1>Why ore &amp; tar</h1><p>Ore is heavy.</p></body></html>"
+          }
+        }
+      ]
+    },
+    "rendered_other_host": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/why-ore-and-tar/" },
+          "response": { "status": 302, "headers": { "location": "https://evil.example/" }, "body": "" }
+        }
+      ]
+    },
+    "rendered_large": {
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "site.example", "path": "/big/" },
+          "response": {
+            "status": 200,
+            "headers": { "content-type": "text/html" },
+            "body": "0123456789012345678901234567890123456789"
+          }
+        }
+      ]
+    }
+  }
+}

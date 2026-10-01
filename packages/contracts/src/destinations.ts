@@ -524,3 +524,64 @@ export interface DestinationReportsRuntimeV1
     hooks?: ActivityHooks,
   ): Promise<DestinationReportFetchResultV1>;
 }
+
+// ---- website articles (ledger R2-3, D-16): a CMS connected with a sealed secret, verified by the worker ----
+
+/** The source-use data type every article write (publish, edit, revert) and read-back is checked against. */
+export const CMS_ARTICLES_DATA_TYPE = 'cms.articles';
+/**
+ * What a secret-based connect grants, recorded as the destination's scopes: writes land as drafts (D-16 preview
+ * by default); a live publish needs the `publish` scope the connecting person granted explicitly.
+ */
+export const CMS_SCOPE_WRITE = 'articles:write';
+export const CMS_SCOPE_PUBLISH = 'articles:publish';
+/** A destination variant's `settings.publishMode`: `draft` unless the person asks for `publish` and the grant allows it. */
+export const CmsPublishMode = z.enum(['draft', 'publish']);
+export type CmsPublishMode = z.infer<typeof CmsPublishMode>;
+
+/**
+ * `connect.withSecret`: a website connected with an integration identity and its secret (an application
+ * password). The secret is sealed by the broker in the API process and never returned, logged or decrypted
+ * there; the worker verifies it (destinationVerifyWorkflowV1) and sets the health.
+ */
+export const DestinationConnectWithSecret = z.object({
+  brandId: z.string(),
+  kind: z.literal('cms_site'),
+  siteUrl: z.string().url().max(200),
+  username: z.string().min(1).max(200),
+  secret: z.string().min(1).max(500),
+  displayName: z.string().min(1).max(200).optional(),
+  /** Lets a destination variant publish live (`settings.publishMode: 'publish'`); off, every write is a draft. */
+  allowPublish: z.boolean().default(false),
+});
+
+// ---- destinationVerifyWorkflowV1 (task queue `core`) ----
+
+export const DestinationVerifyInputV1 = TenantContextInput.extend({ destinationId: z.string() });
+export type DestinationVerifyInputV1 = z.infer<typeof DestinationVerifyInputV1>;
+export type DestinationVerifyResultV1 =
+  | { ok: true; health: DestinationHealth }
+  | { ok: false; reason: 'locked' | 'transient' | 'reconnect_required' | 'not_active' | 'no_credential' };
+export interface DestinationVerifyActivitiesV1 {
+  /** Opens the sealed secret in the worker, asks the adapter to verify it and records the health found. */
+  verifyDestinationCredential(input: DestinationVerifyInputV1): Promise<DestinationVerifyResultV1>;
+}
+/** The module-side implementation the activity wraps (tenant context is established by the activity host). */
+export type DestinationVerifyRuntimeV1 = DestinationVerifyActivitiesV1;
+
+// ---- article read-back (R2-3): the remote revision as evidence ----
+
+/** The remote article as read back after a write: identity, state, and the hash of its content (never the body). */
+export interface ArticleReadbackV1 {
+  remoteId: string;
+  remoteUrl: string;
+  title: string;
+  slug: string;
+  status: string;
+  modifiedAt: string | null;
+  /** The adapter's hash of the remote content; an edit refuses when the current remote hash differs. */
+  contentHash: string;
+}
+
+/** `destinations.articles.validate`: fetch the published page again and record what it shows. */
+export const DestinationArticleValidate = z.object({ publicationId: z.string() });

@@ -38,6 +38,23 @@ export type {
   SourceReportPage,
 } from './source-contract';
 export { SourceRegistry, sourceRegistry } from './source-registry';
+// Ledger R2-3: CMS write adapters behind `cms_site` destinations, with their own certification-gated registry.
+export type {
+  CmsAdapter,
+  CmsCapabilityV1,
+  CmsSite,
+  CmsArticleInput,
+  CmsRemoteArticle,
+  CmsVerifyResult,
+  CmsReadResult,
+  CmsWriteResult,
+  CmsRemoveResult,
+  CmsRenderedPage,
+  CmsUpdatePrecondition,
+} from './cms-contract';
+export { CmsRegistry, cmsRegistry } from './cms-registry';
+export { WordPressCmsAdapter, wordpressCmsAdapter, RenderedPageError } from './cms/wordpress/adapter';
+export { wordpressCmsCapability } from './cms/wordpress/capability';
 export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/adapter';
 export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';
 export { SearchConsoleSiteAdapter, searchConsoleSiteAdapter } from './sources/search_console_site/adapter';
