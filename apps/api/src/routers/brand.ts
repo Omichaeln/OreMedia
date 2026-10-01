@@ -6,6 +6,7 @@ import {
   BrandGuidelinesImport,
   BrandVersionCreateDraft,
   BrandVersionGet,
+  BrandVersionImpact,
   BrandVersionList,
   BrandVersionPublish,
   BrandVersionSubmit,
@@ -107,6 +108,9 @@ export const brandRouter = router({
     get: tenantQuery
       .input(BrandVersionGet)
       .query(({ ctx, input }) => brandService.versions.get(ctx.tenant.actor, input)),
+    impact: tenantQuery
+      .input(BrandVersionImpact)
+      .query(({ ctx, input }) => brandService.versions.impact(ctx.tenant.actor, input)),
   }),
 
   facts: router({

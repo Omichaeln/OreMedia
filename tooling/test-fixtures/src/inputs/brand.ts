@@ -31,6 +31,7 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
   },
   'brand.versions.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'brand.versions.get': { buildInput: (f) => ({ brandId: f['brandId'], versionId: f['brandVersionId'] }) },
+  'brand.versions.impact': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'brand.facts.propose': {
     buildInput: (f) => ({
       brandId: f['brandId'],

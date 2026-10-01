@@ -1964,6 +1964,10 @@
                           }
                         },
                         "required": []
+                      },
+                      "onBrandVersionPublished": {
+                        "type": "string",
+                        "enum": ["invalidate_and_hold", "flag"]
                       }
                     },
                     "required": ["schemaVersion", "reviewThresholds"]
@@ -2045,6 +2049,27 @@
                   }
                 },
                 "required": ["brandId", "versionId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.versions.impact": {
+      "get": {
+        "operationId": "brand.versions.impact",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
               }
             }
           }
@@ -10423,6 +10448,10 @@
                     }
                   },
                   "required": []
+                },
+                "onBrandVersionPublished": {
+                  "type": "string",
+                  "enum": ["invalidate_and_hold", "flag"]
                 }
               },
               "required": ["schemaVersion", "reviewThresholds"]
@@ -10475,6 +10504,18 @@
             }
           },
           "required": ["brandId", "versionId"]
+        }
+      },
+      "brand.versions.impact": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
         }
       },
       "brand.versions.list": {

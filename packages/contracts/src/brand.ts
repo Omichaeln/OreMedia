@@ -157,6 +157,14 @@ export const GenerationRestrictions = z.object({
 });
 export type GenerationRestrictions = z.infer<typeof GenerationRestrictions>;
 
+/**
+ * D-13 / UX-20: what publishing a brand version does to the brand's approved and scheduled work.
+ * `invalidate_and_hold` is today's behaviour (brandChangeImpactWorkflowV1); `flag` keeps approvals and marks the
+ * work for attention instead, which needs approval binding v2 and is designed but not enabled.
+ */
+export const OnBrandVersionPublished = z.enum(['invalidate_and_hold', 'flag']);
+export type OnBrandVersionPublished = z.infer<typeof OnBrandVersionPublished>;
+
 /** Spec 6.3 policy_versions. */
 export const PolicyDocumentV1 = z.object({
   schemaVersion: z.literal(1),
@@ -174,6 +182,11 @@ export const PolicyDocumentV1 = z.object({
    * in, so those documents (and the snapshot hashes recorded from them) are unchanged.
    */
   generation: GenerationRestrictions.optional(),
+  /**
+   * D-13: no default is filled in, so documents written before 1 October 2026 and the snapshot hashes recorded
+   * from them are unchanged; absent reads as `invalidate_and_hold`, today's behaviour.
+   */
+  onBrandVersionPublished: OnBrandVersionPublished.optional(),
 });
 export type PolicyDocumentV1 = z.infer<typeof PolicyDocumentV1>;
 
@@ -265,6 +278,8 @@ export const BrandVersionPublish = z.object({
   expectedVersion: z.number().int(),
 });
 export const BrandVersionGet = z.object({ brandId: z.string(), versionId: z.string() });
+/** UX-20: what publishing any version of the brand would reach now (open requests, valid approvals, scheduled posts). */
+export const BrandVersionImpact = z.object({ brandId: z.string() });
 export const BrandVersionList = z.object({ brandId: z.string(), page: PageRequest });
 export const FactPropose = z.object({
   brandId: z.string(),
