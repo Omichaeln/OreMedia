@@ -29,6 +29,7 @@ import { COMMUNITY_INPUTS } from './inputs/community';
 import { COMMUNITY_SEED } from './inputs/community-seed';
 import { DESTINATIONS_INPUTS } from './inputs/destinations';
 import { DESTINATIONS_SEED } from './inputs/destinations-seed';
+import { OVERVIEW_INPUTS } from './inputs/overview';
 export { MCP_CROSS_TENANT_INPUTS, type McpCrossTenantFixture } from './inputs/mcp';
 
 /**
@@ -66,6 +67,7 @@ export const CROSS_TENANT_INPUTS: Record<string, CrossTenantFixture> = {
   ...MEASUREMENT_INPUTS,
   ...COMMUNITY_INPUTS,
   ...DESTINATIONS_INPUTS,
+  ...OVERVIEW_INPUTS,
   ...INTELLIGENCE_INPUTS,
   ...EXPERIMENTS_INPUTS,
 };
