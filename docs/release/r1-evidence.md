@@ -18,18 +18,18 @@ database or workflow, SB staging browser, RP real provider, PO production observ
 
 From `docs/programme/production-ui/03-implementation-ledger.md`; the ledger is the source and this table its snapshot.
 
-| Work package | Rows                             | State                                                                                                                                             |
-| ------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WP-1         | UX-02, UX-13, UX-14, R1-A        | merged #3, deployed                                                                                                                               |
-| WP-2         | UX-04, UX-03, UX-06, UX-01, R1-C | merged #4, deployed                                                                                                                               |
-| WP-3         | UX-05, R1-B                      | merged #5, deployed                                                                                                                               |
-| WP-5         | UX-08, UX-09, UX-16, UX-17       | merged #6, deployed (migration 0014 `plan_items`; app-role grants re-application pending, R1-G)                                                   |
-| WP-4         | UX-15, UX-18, UX-07              | merged #7, deployed (smoke run 9)                                                                                                                 |
-| WP-6         | D-15, UX-11, UX-12               | merged #8, deployed (smoke run 10); dictionary awaits owner approval (X-5)                                                                        |
-| WP-7         | UX-20, D-13                      | merged #9, deployed (smoke run 11)                                                                                                                |
-| WP-8         | R1-D, R1-E, UX-19                | merged #10, deployed (2487550, all services SUCCESS 03:30 UTC; smoke run 12); SB pending                                                          |
-| WP-9         | UX-10                            | blocked: Meta Business Verification / App Review and LinkedIn Community Management API                                                            |
-| WP-10        | R1-F, R1-G, R1-H, R1-I           | merged #11, deployed (3363900, all services SUCCESS 03:56 UTC; smoke run 13); staging walk, role application and restore (R1-H) need the operator |
+| Work package | Rows                             | State                                                                                                                                                                                    |
+| ------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WP-1         | UX-02, UX-13, UX-14, R1-A        | merged #3, deployed                                                                                                                                                                      |
+| WP-2         | UX-04, UX-03, UX-06, UX-01, R1-C | merged #4, deployed                                                                                                                                                                      |
+| WP-3         | UX-05, R1-B                      | merged #5, deployed                                                                                                                                                                      |
+| WP-5         | UX-08, UX-09, UX-16, UX-17       | merged #6, deployed (migration 0014 `plan_items`; app-role grants re-application pending, R1-G)                                                                                          |
+| WP-4         | UX-15, UX-18, UX-07              | merged #7, deployed (smoke run 9)                                                                                                                                                        |
+| WP-6         | D-15, UX-11, UX-12               | merged #8, deployed (smoke run 10); dictionary awaits owner approval (X-5)                                                                                                               |
+| WP-7         | UX-20, D-13                      | merged #9, deployed (smoke run 11)                                                                                                                                                       |
+| WP-8         | R1-D, R1-E, UX-19                | merged #10, deployed (2487550, all services SUCCESS 03:30 UTC; smoke run 12); SB pending                                                                                                 |
+| WP-9         | UX-10                            | blocked: Meta Business Verification / App Review and LinkedIn Community Management API                                                                                                   |
+| WP-10        | R1-F, R1-G, R1-H, R1-I           | merged #11, deployed (3363900; smoke run 13); roles applied on staging and production (#13, #14, smoke run 14); database restore rehearsed on staging; staging walk waits on credentials |
 
 Every row's verification state (FU done; LW and SB pending per row) is in the ledger.
 
@@ -64,36 +64,48 @@ are ready to run once the apps are approved.
 
 ## 5. Railway inventory (production project `ae355f37-5289-4eee-a691-d12c18d83890`, environment `production`)
 
-| Service name           | Service id                             | Role                                         | Deployment on `3363900`           |
-| ---------------------- | -------------------------------------- | -------------------------------------------- | --------------------------------- |
-| successful-fulfillment | `8ffd0889-b494-45bf-8bac-4331d5b7fcce` | api                                          | SUCCESS 03:54 to 03:56 UTC        |
-| OreMedia               | `dcc31060-cbb1-4842-b987-88924850486b` | web                                          | SUCCESS 03:54 to 03:56 UTC        |
-| keen-charisma          | `74563d26-b342-4a7b-9c66-138c8569083b` | worker (role to confirm from its deploy log) | SUCCESS 03:54 to 03:56 UTC        |
-| worker-ingest          | `616d6e2e-96dd-4b57-9ae7-c85edb03059c` | worker-ingest                                | SUCCESS 03:54 to 03:56 UTC        |
-| sparkling-strength     | `4820740c-0eb4-4c41-bebb-286e2562b9d5` | worker (role to confirm from its deploy log) | SUCCESS 03:54 to 03:56 UTC        |
-| dynamic-intuition      | `a4cdc4b2-e44f-4754-9c82-6e8cf334d3f4` | worker (role to confirm from its deploy log) | SUCCESS 03:54 to 03:56 UTC        |
-| redirector             | `70250b7f-13ef-4b26-8354-7db8a4366f72` | redirector                                   | SUCCESS 03:54 to 03:56 UTC        |
-| temporal               | `0545f3fe-5f1b-4090-8ef8-e4aee7eb5259` | Temporal server                              | SUCCESS 03:54 to 03:56 UTC        |
-| temporal-db            | `9cf0cb48-8c4a-4b74-b51b-6c3e8103ff7c` | Temporal persistence                         | not rebuilt per commit            |
-| MySQL                  | `af87d8a4-cb50-4dc0-b317-9fe3ff0e5b82` | application database                         | not rebuilt per commit            |
-| Redis                  | `467fe6a5-cf24-4f4c-97f9-fe62a5722479` | rate limiter, caches                         | not rebuilt per commit            |
-| clamav                 | `1e885fbd-7fc1-4fb3-8c88-3ee5a5ffc152` | upload scanner                               | not rebuilt per commit            |
-| alluring-bravery       | `1acab570-175e-451b-9e15-1ba5e9644cab` | leftover hello-world                         | staged for deletion (owner's 2FA) |
-| function-bun           | `4c95b66e-c683-4443-8c62-a9bdd3d15d53` | leftover hello-world                         | staged for deletion (owner's 2FA) |
+| Service name           | Service id                             | Role                                                             | Deployment on `3363900`            |
+| ---------------------- | -------------------------------------- | ---------------------------------------------------------------- | ---------------------------------- |
+| successful-fulfillment | `8ffd0889-b494-45bf-8bac-4331d5b7fcce` | api                                                              | SUCCESS 03:54 to 03:56 UTC         |
+| OreMedia               | `dcc31060-cbb1-4842-b987-88924850486b` | web                                                              | SUCCESS 03:54 to 03:56 UTC         |
+| keen-charisma          | `74563d26-b342-4a7b-9c66-138c8569083b` | worker (role to confirm from its deploy log)                     | SUCCESS 03:54 to 03:56 UTC         |
+| worker-ingest          | `616d6e2e-96dd-4b57-9ae7-c85edb03059c` | worker-ingest                                                    | SUCCESS 03:54 to 03:56 UTC         |
+| sparkling-strength     | `4820740c-0eb4-4c41-bebb-286e2562b9d5` | worker (role to confirm from its deploy log)                     | SUCCESS 03:54 to 03:56 UTC         |
+| dynamic-intuition      | `a4cdc4b2-e44f-4754-9c82-6e8cf334d3f4` | worker (role to confirm from its deploy log)                     | SUCCESS 03:54 to 03:56 UTC         |
+| redirector             | `70250b7f-13ef-4b26-8354-7db8a4366f72` | redirector                                                       | SUCCESS 03:54 to 03:56 UTC         |
+| temporal               | `0545f3fe-5f1b-4090-8ef8-e4aee7eb5259` | Temporal server                                                  | SUCCESS 03:54 to 03:56 UTC         |
+| temporal-db            | `9cf0cb48-8c4a-4b74-b51b-6c3e8103ff7c` | Temporal persistence                                             | not rebuilt per commit             |
+| MySQL                  | `af87d8a4-cb50-4dc0-b317-9fe3ff0e5b82` | application database                                             | not rebuilt per commit             |
+| Redis                  | `467fe6a5-cf24-4f4c-97f9-fe62a5722479` | rate limiter, caches                                             | not rebuilt per commit             |
+| clamav                 | `1e885fbd-7fc1-4fb3-8c88-3ee5a5ffc152` | upload scanner                                                   | not rebuilt per commit             |
+| alluring-bravery       | `1acab570-175e-451b-9e15-1ba5e9644cab` | leftover hello-world                                             | staged for deletion (owner's 2FA)  |
+| function-bun           | `4c95b66e-c683-4443-8c62-a9bdd3d15d53` | leftover hello-world                                             | staged for deletion (owner's 2FA)  |
+| db-roles               | `c794e383-b7df-49a1-a39f-7bbd4ff22683` | applies the database roles (runbook §1 step 5)                   | SUCCESS 05:46 UTC, PASS both roles |
+| db-backup              | `113859cb-0686-4dab-b440-8d655f89b151` | nightly `mysqldump` to the `db-backups` volume, 14-day retention | first dump 05:44 UTC, 89,385 bytes |
 
-The role column is known for the api (the service the migration log names), the web, worker-ingest, the redirector,
-Temporal and ClamAV; the three generated-name workers run worker-core and worker-render between them and are to be
-confirmed from their deploy logs before release. Railway names may be changed by the operator without changing the ids. Staging project: "OreMedia
-Staging" (web `https://web-staging-6326.up.railway.app`), api deployed and stopped at the missing Google client;
-four services not yet connected (R.8).
+The three generated-name workers' roles are confirmed from their service configuration: `keen-charisma` builds
+`Dockerfile.render` (worker-render), `sparkling-strength` carries `OREMEDIA_APP`, the model and KMS settings
+(worker-core), `dynamic-intuition` runs on the five-minute cron with the Gmail settings (approval-monitor). worker-core had run without any provider credentials (`configuration incomplete`, every channel
+degraded) until 05:51 UTC on 1 October, when its `PROVIDER_*` settings were set as references to the api's; it now
+logs `configuration complete`. Renaming
+them is a dashboard action the operator may take without changing the ids. Every application service connects as
+`oremedia_app` (worker-core's retention sweep as `oremedia_retention`) since 05:49 UTC on 1 October; the api and the
+approval monitor hold `DATABASE_URL_MIGRATE` for the pre-deploy migration only.
+
+Staging project "OreMedia Staging" (`181fda48-853c-4597-ac4d-f260e55b0b13`, environment `staging`), web
+`https://web-staging-6326.up.railway.app`: api, web, worker-core, worker-ingest, worker-render, redirector,
+approval-monitor, db-roles, MySQL, a second MySQL for Temporal, Temporal, Redis, ClamAV, plus `mysql-restore` and
+`restore-rehearsal` (section 8). All deployed from `main` on the role users; internal secrets generated by Railway;
+every external credential is a `REPLACE_ME_*` sample until the operator sets the real values (Google OAuth is set).
 
 ## 6. Database roles (R1-G, D-25)
 
-Both environments connect as the MySQL root user today. `packages/db/roles/app-role.sql` and `retention-role.sql`
-are generated from the schema (`pnpm tsx tooling/scripts/generate-db-roles.ts`, regenerated with migration 0014).
-Applying them is the MySQL admin's step (deploy runbook §1 step 5); `pnpm db:roles:check` then proves the
-connection runs as the role with exactly the generated grants. Evidence to add: the check's output on staging, then
-production, with the date.
+Applied on 1 October 2026 by the `db-roles` service (runbook §1 step 5, PR #13 and #14): staging log 05:26 UTC and
+production log 05:46 UTC both read `PASS application: oremedia_app holds exactly the generated grants` and
+`PASS retention: oremedia_retention holds exactly the generated grants`. Every application service was then pointed
+at the role users (staging 05:30, production 05:49 UTC); the api's pre-deploy migration runs on `DATABASE_URL_MIGRATE`
+(the admin connection) because drizzle's migrator creates its own ledger table. `packages/db/roles/app-role.sql` and
+`retention-role.sql` stay generated from the schema and are re-applied by redeploying `db-roles` after a migration.
 
 ## 7. UAT (R1-F)
 
@@ -103,13 +115,16 @@ credentials pending). Record each walk here: date, account (never credentials), 
 ## 8. Restore rehearsal (R1-H)
 
 Local tenant-scoped export and import rehearsed (`runbooks.integration.test.ts` 7.11) with the restore hold
-command. On Railway: not yet (PITR into a separate instance, object retrieval, held-vs-reconciled behaviour, no
-duplicate publication). Depends on R1-G so the rehearsal runs on the application role.
+command. On Railway (staging, 1 October 2026 05:33 UTC): the `restore-rehearsal` job dumped the staging database
+(137,548 bytes) and loaded it into a separate `mysql-restore` instance; 103 of 103 tables and the 16-row migration
+ledger restored, `RESTORE_REHEARSAL_PASS`. Railway's MySQL offers no point-in-time recovery, so the recovery point is
+the nightly `db-backup` dump on production (03:00 UTC, 14-day retention; first dump 05:44 UTC, 89,385 bytes). Object
+retrieval and the held-vs-reconciled behaviour of an application restored on that dump wait on staging credentials.
 
 ## 9. Known limitations at this commit
 
 - No channel is certified (section 4): the product schedules, reviews and holds, but publishes nothing real.
-- Both environments run as MySQL root until R1-G is applied.
+- No point-in-time recovery: Railway's MySQL template has none, so recovery is to the latest nightly dump (section 8).
 - `flag` for a brand version publish is refused until approval binding v2 (D-13); `invalidate_and_hold` is the behaviour.
 - The metric dictionary (D-15) and the baseline rule (D-14) are applied as working defaults pending the owner's approval.
 - Residual risks R1 to R17 (`docs/operations/residual-risks.md`): R1 (multi-channel approval consumption), R16 (no on-call rota) and R17 (no real-brand UAT) are the ones a pilot cannot carry.
