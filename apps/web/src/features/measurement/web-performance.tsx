@@ -3,14 +3,20 @@ import { Link } from 'react-router';
 import { Badge, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import {
   DESTINATION_KIND_CAPABILITIES,
-  webMetricSpec,
+  webMetricByName,
   type DestinationKind,
   type DestinationReportOpportunityKind,
+  type SourceReportMetricV1,
+  type WebMetricKind,
 } from '@oremedia/contracts/destinations';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { brandPath } from '../brand/brand-context';
-import { useDestinations, type DestinationDto } from '../destinations/use-destinations';
+import {
+  useDestinationSources,
+  useDestinations,
+  type DestinationDto,
+} from '../destinations/use-destinations';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { formatNumber, percent } from './performance-helpers';
 import {
@@ -22,68 +28,27 @@ import {
 } from './use-web-performance';
 
 /**
- * The Performance screen's "Web" section (R2-1 part B): each connected GA4 property and Search Console site with
- * its coverage and freshness, summary tiles by the dictionary's kinds beside the previous period (D-14, D-15), a
- * tabbed drill-down over the stored reports and the computed opportunity queue. A destination whose source-use
- * policy does not allow reads says so and points at Settings → Destinations. AI search (D-19): no official API is
- * verified, so the row is a labelled link to the vendor's console, never a figure.
+ * The Performance screen's "Web" section (R2-1 part B): each connected destination whose kind has a source
+ * adapter, with its coverage and freshness, summary tiles by the dictionary's kinds beside the previous period
+ * (D-14, D-15), a tabbed drill-down over the stored reports and the computed opportunity queue. Everything the
+ * screen names (reports, metrics, dimensions, tiles, the vendor console) comes from the summary, which carries
+ * the source adapter's own descriptors: nothing here names a source. A destination whose source-use policy does
+ * not allow reads says so and points at Settings → Destinations. AI search (D-19): no official API is verified, so
+ * the row is a labelled link to the vendor's console, never a figure.
  */
-const WEB_KINDS: ReadonlySet<string> = new Set(['ga4_property', 'search_console_site']);
-
-/** Per kind: the report the tiles read, the tiles' metrics in order, and the drill-down tabs. */
-const SCREEN: Readonly<
-  Record<
-    'ga4_property' | 'search_console_site',
-    { tiles: { report: string; metrics: string[] }; tabs: ReadonlyArray<[reportKey: string, label: string]> }
-  >
-> = {
-  ga4_property: {
-    tiles: {
-      report: 'ga4.engagement',
-      metrics: ['sessions', 'engagedSessions', 'keyEvents', 'engagementRate'],
-    },
-    tabs: [
-      ['ga4.acquisition', 'Acquisition channels'],
-      ['ga4.landing_pages', 'Landing pages'],
-    ],
-  },
-  search_console_site: {
-    tiles: { report: 'gsc.countries_devices', metrics: ['clicks', 'impressions', 'ctr', 'position'] },
-    tabs: [
-      ['gsc.queries', 'Queries'],
-      ['gsc.pages', 'Pages'],
-      ['gsc.countries_devices', 'Countries and devices'],
-    ],
-  },
-};
-const DIMENSION_LABEL: Record<string, string> = {
-  sessionDefaultChannelGroup: 'Channel',
-  landingPage: 'Landing page',
-  query: 'Query',
-  page: 'Page',
-  country: 'Country',
-  device: 'Device',
-};
 const OPPORTUNITY_LABEL: Record<DestinationReportOpportunityKind, string> = {
   low_ctr_query: 'Low CTR query',
   low_ctr_page: 'Low CTR page',
   low_engagement_page: 'Low engagement page',
 };
-/** D-19: the vendor's own console, labelled as such; no AI-search figure is shown or computed here. */
-const VENDOR_CONSOLE: Record<'ga4_property' | 'search_console_site', { label: string; href: string }> = {
-  ga4_property: { label: 'Google Analytics', href: 'https://analytics.google.com/' },
-  search_console_site: { label: 'Search Console', href: 'https://search.google.com/search-console' },
-};
 
 /** A value in its metric's own unit (D-15): a rate as a percentage, a gauge to one decimal, a flow as a count. */
-export function formatWebValue(metric: string, value: number | null): string {
+export function formatWebValue(kind: WebMetricKind, value: number | null): string {
   if (value === null) return 'Unavailable';
-  const kind = webMetricSpec(metric)?.kind ?? 'flow';
   if (kind === 'rate') return percent(value);
   if (kind === 'gauge') return value.toFixed(1);
   return formatNumber(Math.round(value));
 }
-const metricLabel = (metric: string) => webMetricSpec(metric)?.label ?? metric;
 const settingsHref = (companyId: string, brandId: string) =>
   `${brandPath(companyId, brandId, 'settings')}?tab=destinations`;
 
@@ -102,20 +67,24 @@ export function WebPerformanceSection({
   days: number;
 }) {
   const destinations = useDestinations(brandId);
+  // The kinds with a registered source adapter (destinations.sources.list): the ones that can hold reports.
+  const sources = useDestinationSources();
+  const sourceKinds = new Set((sources.data?.items ?? []).map((s) => s.kind));
   const connected = (destinations.data?.items ?? []).filter(
-    (d) => d.status === 'active' && WEB_KINDS.has(d.kind),
+    (d) => d.status === 'active' && sourceKinds.has(d.kind),
   );
+  const failed = [destinations, sources].find((q) => q.isError);
   return (
     <Section id="web-heading" title="Web" testId="web-performance">
-      {destinations.isError && (
+      {failed && (
         <RequestError
-          error={destinations.error}
+          error={failed.error}
           title="Web sources could not load"
-          onRetry={() => void destinations.refetch()}
+          onRetry={() => [destinations, sources].forEach((q) => void q.refetch())}
         />
       )}
-      {destinations.isPending && <Skeleton label="Loading web sources" lines={2} />}
-      {destinations.isSuccess && connected.length === 0 && (
+      {(destinations.isPending || sources.isPending) && <Skeleton label="Loading web sources" lines={2} />}
+      {destinations.isSuccess && sources.isSuccess && connected.length === 0 && (
         <EmptyState
           title="No web source connected"
           description="Connect a Google Analytics 4 property or a Search Console site to see what the website did."
@@ -156,14 +125,15 @@ function WebDestinationCard({
   windowEnd: string;
   days: number;
 }) {
-  const kind = destination.kind as 'ga4_property' | 'search_console_site';
-  const screen = SCREEN[kind];
-  const [tab, setTab] = useState<string>(screen.tabs[0]?.[0] ?? '');
+  const [chosenTab, setTab] = useState<string | null>(null);
   const summary = useWebReportSummary(brandId, destination.id, windowStart, windowEnd);
   const allowed = summary.data?.policy.allowed === true;
+  const reports = summary.data?.reports ?? [];
+  const tab = chosenTab ?? reports[0]?.reportKey ?? '';
   const rows = useWebReportRows(brandId, destination.id, tab, windowStart, windowEnd, allowed && tab !== '');
   const opportunities = useWebOpportunities(brandId, destination.id, allowed);
-  const tiles = summary.data?.reports.find((r) => r.reportKey === screen.tiles.report) ?? null;
+  const presentation = summary.data?.presentation ?? null;
+  const tiles = reports.find((r) => r.reportKey === presentation?.tiles.reportKey) ?? null;
   const latest = (summary.data?.reports ?? [])
     .map((r) => r.freshness.latestDate)
     .filter((d): d is string => d !== null)
@@ -172,7 +142,7 @@ function WebDestinationCard({
   const stale = (summary.data?.reports ?? []).some(
     (r) => r.freshness.latestDate !== null && r.freshness.stale,
   );
-  const console = VENDOR_CONSOLE[kind];
+  const vendorConsole = presentation?.console ?? null;
 
   return (
     <article
@@ -223,9 +193,10 @@ function WebDestinationCard({
           aria-label={`${destination.displayName} totals`}
           className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3"
         >
-          {screen.tiles.metrics.map((metric) => (
-            <WebTile key={metric} metric={metric} entry={tiles} />
-          ))}
+          {(presentation?.tiles.metrics ?? []).flatMap((metric) => {
+            const descriptor = webMetricByName(tiles.metrics, tiles.derived, metric);
+            return descriptor ? [<WebTile key={metric} descriptor={descriptor} entry={tiles} />] : [];
+          })}
         </div>
       )}
 
@@ -236,7 +207,7 @@ function WebDestinationCard({
             aria-label={`${destination.displayName} reports`}
             className="flex flex-wrap gap-1"
           >
-            {screen.tabs.map(([reportKey, label]) => {
+            {reports.map(({ reportKey, label }) => {
               const active = reportKey === tab;
               return (
                 <button
@@ -268,10 +239,7 @@ function WebDestinationCard({
             )}
             {rows.isPending && rows.fetchStatus !== 'idle' && <Skeleton label="Loading rows" lines={3} />}
             {rows.data && (
-              <WebRows
-                entry={summary.data.reports.find((r) => r.reportKey === tab) ?? null}
-                rows={rows.data.items}
-              />
+              <WebRows entry={reports.find((r) => r.reportKey === tab) ?? null} rows={rows.data.items} />
             )}
           </div>
         </div>
@@ -291,8 +259,8 @@ function WebDestinationCard({
           )}
           {opportunities.data && opportunities.data.items.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              Nothing below half the {kind === 'ga4_property' ? "property's engagement rate" : "site's CTR"}{' '}
-              in the last 28 days with enough traffic to mean something.
+              Nothing below half the destination's own pooled rate in the last 28 days with enough traffic to
+              mean something.
             </p>
           )}
           {opportunities.data && opportunities.data.items.length > 0 && (
@@ -313,39 +281,42 @@ function WebDestinationCard({
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground" data-testid="web-ai-search">
-        AI search: no official API is verified for this report, so no figure is shown here (D-19).{' '}
-        <a
-          href={console.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2"
-        >
-          Open {console.label} (external)
-        </a>
-      </p>
+      {vendorConsole && (
+        <p className="text-xs text-muted-foreground" data-testid="web-ai-search">
+          AI search: no official API is verified for this report, so no figure is shown here (D-19).{' '}
+          <a
+            href={vendorConsole.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+          >
+            Open {vendorConsole.label} (external)
+          </a>
+        </p>
+      )}
     </article>
   );
 }
 
-function WebTile({ metric, entry }: { metric: string; entry: WebReportEntryDto }) {
+function WebTile({ descriptor, entry }: { descriptor: SourceReportMetricV1; entry: WebReportEntryDto }) {
+  const metric = descriptor.name;
   const value = entry.current.metrics[metric] ?? null;
   const comparison = entry.comparison.find((c) => c.metric === metric) ?? null;
-  const kind = webMetricSpec(metric)?.kind ?? 'flow';
+  const kind = descriptor.kind;
   return (
     <div
       className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-background p-4"
       data-testid={`web-tile-${metric}`}
     >
-      <span className="text-xs text-muted-foreground">{metricLabel(metric)}</span>
-      <span className="text-2xl font-semibold tabular-nums">{formatWebValue(metric, value)}</span>
+      <span className="text-xs text-muted-foreground">{descriptor.label}</span>
+      <span className="text-2xl font-semibold tabular-nums">{formatWebValue(kind, value)}</span>
       <span className="text-xs text-muted-foreground">
         {kind === 'gauge'
           ? 'weighted mean, not compared'
           : !entry.sample.sufficient
             ? `insufficient sample (${entry.sample.current} and ${entry.sample.previous} days of ${entry.sample.minimum})`
             : comparison && comparison.change !== null
-              ? `${comparison.change >= 0 ? '+' : ''}${(comparison.change * 100).toFixed(1)}% vs previous ${formatWebValue(metric, comparison.previous)}`
+              ? `${comparison.change >= 0 ? '+' : ''}${(comparison.change * 100).toFixed(1)}% vs previous ${formatWebValue(kind, comparison.previous)}`
               : 'no previous value'}
         {' · '}
         {entry.current.days} {entry.current.days === 1 ? 'day' : 'days'} with data
@@ -356,10 +327,9 @@ function WebTile({ metric, entry }: { metric: string; entry: WebReportEntryDto }
 }
 
 function WebRows({ entry, rows }: { entry: WebReportEntryDto | null; rows: WebReportRowDto[] }) {
-  const dimensions = entry?.dimensions ?? Object.keys(rows[0]?.dimensions ?? {});
-  const metrics = [...(entry?.metrics ?? Object.keys(rows[0]?.metrics ?? {}))];
-  if (entry?.metrics.includes('engagedSessions') && entry.metrics.includes('sessions'))
-    metrics.push('engagementRate');
+  const dimensions = entry?.dimensions ?? [];
+  // The fetched metrics and the rates the report derives from them, as the adapter describes them.
+  const metrics = [...(entry?.metrics ?? []), ...(entry?.derived ?? [])];
   if (rows.length === 0)
     return (
       <p className="text-sm text-muted-foreground">
@@ -372,13 +342,13 @@ function WebRows({ entry, rows }: { entry: WebReportEntryDto | null; rows: WebRe
         <thead>
           <tr className="text-left text-xs text-muted-foreground">
             {dimensions.map((d) => (
-              <th key={d} scope="col" className="py-1 pr-3 font-medium">
-                {DIMENSION_LABEL[d] ?? d}
+              <th key={d.name} scope="col" className="py-1 pr-3 font-medium">
+                {d.label}
               </th>
             ))}
             {metrics.map((m) => (
-              <th key={m} scope="col" className="py-1 pr-3 text-right font-medium">
-                {metricLabel(m)}
+              <th key={m.name} scope="col" className="py-1 pr-3 text-right font-medium">
+                {m.label}
               </th>
             ))}
             <th scope="col" className="py-1 text-right font-medium">
@@ -390,13 +360,13 @@ function WebRows({ entry, rows }: { entry: WebReportEntryDto | null; rows: WebRe
           {rows.map((r) => (
             <tr key={r.dimensionKey} data-dimension={Object.values(r.dimensions).join(' / ')}>
               {dimensions.map((d) => (
-                <td key={d} className="max-w-xs truncate py-1.5 pr-3" title={r.dimensions[d] ?? ''}>
-                  {r.dimensions[d] || '(not set)'}
+                <td key={d.name} className="max-w-xs truncate py-1.5 pr-3" title={r.dimensions[d.name] ?? ''}>
+                  {r.dimensions[d.name] || '(not set)'}
                 </td>
               ))}
               {metrics.map((m) => (
-                <td key={m} className="py-1.5 pr-3 text-right tabular-nums">
-                  {formatWebValue(m, r.metrics[m] ?? null)}
+                <td key={m.name} className="py-1.5 pr-3 text-right tabular-nums">
+                  {formatWebValue(m.kind, r.metrics[m.name] ?? null)}
                 </td>
               ))}
               <td className="py-1.5 text-right tabular-nums">{r.days}</td>

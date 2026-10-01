@@ -114,7 +114,7 @@ export class SearchConsoleSiteAdapter implements SourceAdapter {
         dimensions[name] = keys[i + 1] ?? '';
       });
       const metrics: Record<string, number> = {};
-      for (const name of spec.metrics) {
+      for (const { name } of spec.metrics) {
         const value = num(get(row, name));
         if (value !== undefined) metrics[name] = value; // a metric the API left out is absent, never zero
       }

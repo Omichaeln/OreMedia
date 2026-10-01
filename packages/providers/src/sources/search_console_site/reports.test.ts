@@ -61,7 +61,7 @@ describe('Search Console reports (ledger R2-1 part B, searchAnalytics/query)', (
       'gsc.countries_devices',
     ]);
     for (const r of adapter.capability.reports)
-      expect(r.metrics).toEqual(['clicks', 'impressions', 'ctr', 'position']);
+      expect(r.metrics.map((m) => m.name)).toEqual(['clicks', 'impressions', 'ctr', 'position']);
   });
 
   it('queries: one query with date first, final data, rowLimit 1000 from row 0; rows keyed by day and query', async () => {

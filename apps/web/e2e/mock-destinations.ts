@@ -12,8 +12,6 @@ import {
   DestinationReportRows,
   DestinationReportSummary,
   DestinationSetHealth,
-  OPPORTUNITY_MIN_IMPRESSIONS,
-  OPPORTUNITY_MIN_SESSIONS,
   OPPORTUNITY_RATE_FRACTION,
   OPPORTUNITY_WINDOW_DAYS,
   SourceUseCheck,
@@ -22,16 +20,18 @@ import {
   reportDataType,
   reportPrimaryMetric,
   sourceUseIssues,
-  webMetricSpec,
   webMetricSums,
   webMetricValues,
   type DestinationConnectTarget,
+  type DestinationReportOpportunityKind,
   type DestinationReportOpportunityV1,
+  type DestinationReportPresentationV1,
   type DestinationReportRowV1,
   type DestinationReportSummaryEntryV1,
   type DestinationReportSummaryV1,
   type DestinationSourceV1,
   type DestinationV1,
+  type SourceReportMetricV1,
   type SourceUseCheckResult,
   type SourceUsePolicyV1,
 } from '@oremedia/contracts/destinations';
@@ -93,50 +93,146 @@ const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (date: string, n: number) =>
   dayKey(new Date(Date.parse(`${date}T00:00:00.000Z`) + n * DAY_MS));
 
-/** The report specs the adapters declare (packages/providers/src/sources/<kind>/capability.ts), as the mock knows them. */
-const REPORTS: Readonly<
-  Record<string, Array<{ key: string; dimensions: string[]; metrics: string[]; latencyHours: number }>>
-> = {
+/**
+ * The report specs the adapters declare (packages/providers/src/sources/<kind>/capability.ts) in the descriptor
+ * shape the summary carries, as the mock knows them (apps/web may not import the providers package).
+ */
+interface MockReportSpec {
+  key: string;
+  label: string;
+  dimensions: string[];
+  dimensionLabels: Record<string, string>;
+  metrics: SourceReportMetricV1[];
+  derived: SourceReportMetricV1[];
+  latencyHours: number;
+  opportunity?: {
+    kind: DestinationReportOpportunityKind;
+    rateMetric: string;
+    volumeMetric: string;
+    minVolume: number;
+    task(input: { subject: string; volume: number; rate: number; benchmark: number }): string;
+  };
+}
+const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+const GA4_METRIC: Record<string, SourceReportMetricV1> = {
+  sessions: { name: 'sessions', label: 'Sessions', kind: 'flow' },
+  totalUsers: { name: 'totalUsers', label: 'Users (daily, summed)', kind: 'flow' },
+  engagedSessions: { name: 'engagedSessions', label: 'Engaged sessions', kind: 'flow' },
+  keyEvents: { name: 'keyEvents', label: 'Key events', kind: 'flow' },
+  averageSessionDuration: {
+    name: 'averageSessionDuration',
+    label: 'Avg. session duration (s)',
+    kind: 'gauge',
+    weight: 'sessions',
+  },
+};
+const ENGAGEMENT_RATE: SourceReportMetricV1 = {
+  name: 'engagementRate',
+  label: 'Engagement rate',
+  kind: 'rate',
+  numerator: 'engagedSessions',
+  denominator: 'sessions',
+};
+const ga4 = (...names: string[]) => names.map((n) => GA4_METRIC[n] as SourceReportMetricV1);
+const GSC_METRICS: SourceReportMetricV1[] = [
+  { name: 'clicks', label: 'Clicks', kind: 'flow' },
+  { name: 'impressions', label: 'Impressions', kind: 'flow' },
+  { name: 'ctr', label: 'CTR', kind: 'rate', numerator: 'clicks', denominator: 'impressions' },
+  { name: 'position', label: 'Position', kind: 'gauge', weight: 'impressions' },
+];
+const lowCtr = (
+  kind: DestinationReportOpportunityKind,
+  what: (subject: string) => string,
+): MockReportSpec['opportunity'] => ({
+  kind,
+  rateMetric: 'ctr',
+  volumeMetric: 'impressions',
+  minVolume: 100,
+  task: ({ subject, volume, rate, benchmark }) =>
+    `Rewrite the title and description of ${what(subject)} (${volume} impressions, CTR ${pct(rate)} against ${pct(benchmark)} for the site)`,
+});
+const REPORTS: Readonly<Record<string, MockReportSpec[]>> = {
   ga4_property: [
     {
       key: 'ga4.acquisition',
+      label: 'Acquisition channels',
       dimensions: ['sessionDefaultChannelGroup'],
-      metrics: ['sessions', 'totalUsers', 'engagedSessions', 'keyEvents'],
+      dimensionLabels: { sessionDefaultChannelGroup: 'Channel' },
+      metrics: ga4('sessions', 'totalUsers', 'engagedSessions', 'keyEvents'),
+      derived: [ENGAGEMENT_RATE],
       latencyHours: 48,
     },
     {
       key: 'ga4.landing_pages',
+      label: 'Landing pages',
       dimensions: ['landingPage'],
-      metrics: ['sessions', 'engagedSessions', 'keyEvents'],
+      dimensionLabels: { landingPage: 'Landing page' },
+      metrics: ga4('sessions', 'engagedSessions', 'keyEvents'),
+      derived: [ENGAGEMENT_RATE],
       latencyHours: 48,
+      opportunity: {
+        kind: 'low_engagement_page',
+        rateMetric: 'engagementRate',
+        volumeMetric: 'sessions',
+        minVolume: 50,
+        task: ({ subject, volume, rate, benchmark }) =>
+          `Review the content and next step on landing page ${subject} (${volume} sessions, engagement rate ${pct(rate)} against ${pct(benchmark)} for the property)`,
+      },
     },
     {
       key: 'ga4.engagement',
+      label: 'Engagement',
       dimensions: [],
-      metrics: ['sessions', 'engagedSessions', 'averageSessionDuration', 'keyEvents', 'totalUsers'],
+      dimensionLabels: {},
+      metrics: ga4('sessions', 'engagedSessions', 'averageSessionDuration', 'keyEvents', 'totalUsers'),
+      derived: [ENGAGEMENT_RATE],
       latencyHours: 48,
     },
   ],
   search_console_site: [
     {
       key: 'gsc.queries',
+      label: 'Queries',
       dimensions: ['query'],
-      metrics: ['clicks', 'impressions', 'ctr', 'position'],
+      dimensionLabels: { query: 'Query' },
+      metrics: GSC_METRICS,
+      derived: [],
       latencyHours: 72,
+      opportunity: lowCtr('low_ctr_query', (subject) => `the page ranking for "${subject}"`),
     },
     {
       key: 'gsc.pages',
+      label: 'Pages',
       dimensions: ['page'],
-      metrics: ['clicks', 'impressions', 'ctr', 'position'],
+      dimensionLabels: { page: 'Page' },
+      metrics: GSC_METRICS,
+      derived: [],
       latencyHours: 72,
+      opportunity: lowCtr('low_ctr_page', (subject) => subject),
     },
     {
       key: 'gsc.countries_devices',
+      label: 'Countries and devices',
       dimensions: ['country', 'device'],
-      metrics: ['clicks', 'impressions', 'ctr', 'position'],
+      dimensionLabels: { country: 'Country', device: 'Device' },
+      metrics: GSC_METRICS,
+      derived: [],
       latencyHours: 72,
     },
   ],
+};
+const PRESENTATION: Readonly<Record<string, DestinationReportPresentationV1>> = {
+  ga4_property: {
+    console: { label: 'Google Analytics', href: 'https://analytics.google.com/' },
+    tiles: {
+      reportKey: 'ga4.engagement',
+      metrics: ['sessions', 'engagedSessions', 'keyEvents', 'engagementRate'],
+    },
+  },
+  search_console_site: {
+    console: { label: 'Search Console', href: 'https://search.google.com/search-console' },
+    tiles: { reportKey: 'gsc.countries_devices', metrics: ['clicks', 'impressions', 'ctr', 'position'] },
+  },
 };
 
 export interface SeededReportRow {
@@ -365,12 +461,7 @@ export function destinationsRouters(
       (r) =>
         r.destinationId === destinationId && r.reportKey === reportKey && r.date >= start && r.date <= end,
     );
-  const windowOf = (
-    destinationId: string,
-    spec: { key: string; metrics: string[] },
-    start: string,
-    end: string,
-  ) => {
+  const windowOf = (destinationId: string, spec: MockReportSpec, start: string, end: string) => {
     const rows = rowsOf(destinationId, spec.key, start, end);
     return {
       windowStart: start,
@@ -379,6 +470,7 @@ export function destinationsRouters(
       rows: rows.length,
       metrics: webMetricValues(
         spec.metrics,
+        spec.derived,
         webMetricSums(
           spec.metrics,
           rows.map((r) => r.metrics),
@@ -388,7 +480,7 @@ export function destinationsRouters(
   };
   const byDimension = (
     destinationId: string,
-    spec: { key: string; metrics: string[] },
+    spec: MockReportSpec,
     start: string,
     end: string,
   ): DestinationReportRowV1[] => {
@@ -405,6 +497,7 @@ export function destinationsRouters(
         days: new Set(rows.map((r) => r.date)).size,
         metrics: webMetricValues(
           spec.metrics,
+          spec.derived,
           webMetricSums(
             spec.metrics,
             rows.map((r) => r.metrics),
@@ -592,8 +685,13 @@ export function destinationsRouters(
                 : null;
               return {
                 reportKey: spec.key,
-                dimensions: spec.dimensions,
+                label: spec.label,
+                dimensions: spec.dimensions.map((name) => ({
+                  name,
+                  label: spec.dimensionLabels[name] ?? name,
+                })),
                 metrics: spec.metrics,
+                derived: spec.derived,
                 freshness: {
                   latestDate: latest,
                   fetchedAt: latest ? now() : null,
@@ -603,15 +701,14 @@ export function destinationsRouters(
                 },
                 current,
                 previous,
-                comparison: Object.keys(current.metrics).flatMap((metric) => {
-                  const kind = webMetricSpec(metric)?.kind;
-                  if (!kind || kind === 'gauge') return [];
-                  const a = current.metrics[metric] ?? null;
-                  const b = previous.metrics[metric] ?? null;
+                comparison: [...spec.metrics, ...spec.derived].flatMap((m) => {
+                  if (m.kind === 'gauge') return [];
+                  const a = current.metrics[m.name] ?? null;
+                  const b = previous.metrics[m.name] ?? null;
                   return [
                     {
-                      metric,
-                      kind,
+                      metric: m.name,
+                      kind: m.kind,
                       current: a,
                       previous: b,
                       change: sufficient && a !== null && b !== null && b > 0 ? (a - b) / b : null,
@@ -631,6 +728,7 @@ export function destinationsRouters(
           brandId: d.brandId,
           destinationId: d.id,
           kind: d.kind,
+          presentation: PRESENTATION[d.kind] ?? null,
           policy: { allowed: decision.allowed, reason: decision.reason, dataType },
           windowStart: start,
           windowEnd: end,
@@ -657,57 +755,33 @@ export function destinationsRouters(
         const start = addDays(end, -(OPPORTUNITY_WINDOW_DAYS - 1));
         const items: DestinationReportOpportunityV1[] = [];
         for (const spec of specs) {
-          const pooled = webMetricValues(
-            spec.metrics,
-            webMetricSums(
-              spec.metrics,
-              rowsOf(d.id, spec.key, start, end).map((r) => r.metrics),
-            ),
-          );
+          const rule = spec.opportunity;
           const dimension = spec.dimensions[0];
-          if (!dimension) continue;
-          if (spec.key === 'gsc.queries' || spec.key === 'gsc.pages') {
-            const benchmark = pooled['ctr'] ?? null;
-            if (benchmark === null) continue;
-            for (const r of byDimension(d.id, spec, start, end)) {
-              const impressions = r.metrics['impressions'] ?? 0;
-              const ctr = r.metrics['ctr'] ?? null;
-              if (
-                ctr === null ||
-                impressions < OPPORTUNITY_MIN_IMPRESSIONS ||
-                ctr >= benchmark * OPPORTUNITY_RATE_FRACTION
-              )
-                continue;
-              items.push({
-                kind: spec.key === 'gsc.queries' ? 'low_ctr_query' : 'low_ctr_page',
-                reportKey: spec.key,
-                subject: r.dimensions[dimension] ?? '',
-                metrics: r.metrics,
-                benchmark: { metric: 'ctr', value: benchmark },
-                suggestedTask: `Rewrite the title and description for "${r.dimensions[dimension]}" (${impressions} impressions, CTR ${(ctr * 100).toFixed(1)}% against ${(benchmark * 100).toFixed(1)}% for the site)`,
-              });
-            }
-          } else if (spec.key === 'ga4.landing_pages') {
-            const benchmark = pooled['engagementRate'] ?? null;
-            if (benchmark === null) continue;
-            for (const r of byDimension(d.id, spec, start, end)) {
-              const sessions = r.metrics['sessions'] ?? 0;
-              const rate = r.metrics['engagementRate'] ?? null;
-              if (
-                rate === null ||
-                sessions < OPPORTUNITY_MIN_SESSIONS ||
-                rate >= benchmark * OPPORTUNITY_RATE_FRACTION
-              )
-                continue;
-              items.push({
-                kind: 'low_engagement_page',
-                reportKey: spec.key,
-                subject: r.dimensions[dimension] ?? '',
-                metrics: r.metrics,
-                benchmark: { metric: 'engagementRate', value: benchmark },
-                suggestedTask: `Review the content and next step on landing page ${r.dimensions[dimension]} (${sessions} sessions, engagement rate ${(rate * 100).toFixed(1)}% against ${(benchmark * 100).toFixed(1)}% for the property)`,
-              });
-            }
+          if (!rule || !dimension) continue;
+          const benchmark =
+            webMetricValues(
+              spec.metrics,
+              spec.derived,
+              webMetricSums(
+                spec.metrics,
+                rowsOf(d.id, spec.key, start, end).map((r) => r.metrics),
+              ),
+            )[rule.rateMetric] ?? null;
+          if (benchmark === null) continue;
+          for (const r of byDimension(d.id, spec, start, end)) {
+            const volume = r.metrics[rule.volumeMetric] ?? null;
+            const rate = r.metrics[rule.rateMetric] ?? null;
+            if (volume === null || rate === null || volume < rule.minVolume) continue;
+            if (rate >= benchmark * OPPORTUNITY_RATE_FRACTION) continue;
+            const subject = r.dimensions[dimension] ?? '';
+            items.push({
+              kind: rule.kind,
+              reportKey: spec.key,
+              subject,
+              metrics: r.metrics,
+              benchmark: { metric: rule.rateMetric, value: benchmark },
+              suggestedTask: rule.task({ subject, volume, rate, benchmark }),
+            });
           }
         }
         return { items, windowStart: start, windowEnd: end };

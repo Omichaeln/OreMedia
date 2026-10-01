@@ -39,9 +39,9 @@ export type {
 } from './source-contract';
 export { SourceRegistry, sourceRegistry } from './source-registry';
 export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/adapter';
-export { ga4PropertyCapability } from './sources/ga4_property/capability';
+export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';
 export { SearchConsoleSiteAdapter, searchConsoleSiteAdapter } from './sources/search_console_site/adapter';
-export { searchConsoleSiteCapability } from './sources/search_console_site/capability';
+export { searchConsoleSiteCapability, searchConsoleReports } from './sources/search_console_site/capability';
 export {
   ProviderAuthError,
   SourceReadError,

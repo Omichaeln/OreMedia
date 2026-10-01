@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { webMetricSums, webMetricValues } from '@oremedia/contracts/destinations';
+import { webMetricSums, webMetricValues, type SourceReportMetricV1 } from '@oremedia/contracts/destinations';
+import { ga4Reports, searchConsoleReports } from '@oremedia/providers';
 import { addDays, dateKey, reportRange } from './report-runtime';
 import { reportComparison, reportFreshness } from './reports';
 
@@ -60,34 +61,39 @@ describe('reportFreshness (stale beyond STALE_FACTOR × latency)', () => {
 });
 
 describe('web metric aggregates (D-15) and the comparison (D-14)', () => {
-  const metrics = ['clicks', 'impressions', 'ctr', 'position'];
+  const gsc = searchConsoleReports[0]!;
+  const metrics = gsc.metrics;
+  const none: SourceReportMetricV1[] = [];
   const rows = [
     { clicks: 10, impressions: 100, ctr: 0.1, position: 2 },
     { clicks: 30, impressions: 300, ctr: 0.1, position: 6 },
     { clicks: 5, impressions: 100, position: 10 }, // no ctr reported: the pooled rate still forms from the flows
   ];
   it('flows sum, a rate pools Σ numerator ÷ Σ denominator, a gauge is weighted by its weight', () => {
-    const values = webMetricValues(metrics, webMetricSums(metrics, rows));
+    const values = webMetricValues(metrics, none, webMetricSums(metrics, rows));
     expect(values).toEqual({ clicks: 45, impressions: 500, ctr: 0.09, position: (200 + 1800 + 1000) / 500 });
   });
   it('no rows is null everywhere, never zero; a zero denominator makes the rate null', () => {
-    expect(webMetricValues(metrics, webMetricSums(metrics, []))).toEqual({
+    expect(webMetricValues(metrics, none, webMetricSums(metrics, []))).toEqual({
       clicks: null,
       impressions: null,
       ctr: null,
       position: null,
     });
-    expect(webMetricValues(metrics, webMetricSums(metrics, [{ clicks: 0, impressions: 0 }]))).toMatchObject({
+    expect(
+      webMetricValues(metrics, none, webMetricSums(metrics, [{ clicks: 0, impressions: 0 }])),
+    ).toMatchObject({
       ctr: null,
       position: null,
     });
   });
   it('the GA4 engagement rate derives from engaged sessions over sessions when both are present', () => {
-    const ga = ['sessions', 'engagedSessions', 'keyEvents'];
+    const landing = ga4Reports.find((r) => r.key === 'ga4.landing_pages')!;
     expect(
       webMetricValues(
-        ga,
-        webMetricSums(ga, [
+        landing.metrics,
+        landing.derived,
+        webMetricSums(landing.metrics, [
           { sessions: 100, engagedSessions: 40, keyEvents: 1 },
           { sessions: 100, engagedSessions: 20 },
         ]),
@@ -97,12 +103,12 @@ describe('web metric aggregates (D-15) and the comparison (D-14)', () => {
   it('comparison: flows and rates only, a change only with a sufficient sample and a positive previous', () => {
     const current = { clicks: 60, impressions: 600, ctr: 0.1, position: 4 };
     const previous = { clicks: 50, impressions: 500, ctr: 0.1, position: 5 };
-    expect(reportComparison(current, previous, true)).toEqual([
+    expect(reportComparison(metrics, current, previous, true)).toEqual([
       { metric: 'clicks', kind: 'flow', current: 60, previous: 50, change: 0.2 },
       { metric: 'impressions', kind: 'flow', current: 600, previous: 500, change: 0.2 },
       { metric: 'ctr', kind: 'rate', current: 0.1, previous: 0.1, change: 0 },
     ]);
-    expect(reportComparison(current, previous, false).every((c) => c.change === null)).toBe(true);
-    expect(reportComparison(current, { ...previous, clicks: null }, true)[0]?.change).toBeNull();
+    expect(reportComparison(metrics, current, previous, false).every((c) => c.change === null)).toBe(true);
+    expect(reportComparison(metrics, current, { ...previous, clicks: null }, true)[0]?.change).toBeNull();
   });
 });

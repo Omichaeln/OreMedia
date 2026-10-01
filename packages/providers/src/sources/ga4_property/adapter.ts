@@ -117,7 +117,7 @@ export class Ga4PropertyAdapter implements SourceAdapter {
       {
         dateRanges: [{ startDate: request.dateRange.start, endDate: request.dateRange.end }],
         dimensions: ['date', ...spec.dimensions].map((name) => ({ name })),
-        metrics: spec.metrics.map((name) => ({ name })),
+        metrics: spec.metrics.map(({ name }) => ({ name })),
         limit: GA4_REPORT_PAGE_LIMIT,
         offset,
         keepEmptyRows: false,
@@ -136,7 +136,7 @@ export class Ga4PropertyAdapter implements SourceAdapter {
       for (const name of spec.dimensions)
         dimensions[name] = dimensionValues[dimensionNames.indexOf(name)] ?? '';
       const metrics: Record<string, number> = {};
-      for (const name of spec.metrics) {
+      for (const { name } of spec.metrics) {
         const value = metricValues[metricNames.indexOf(name)];
         if (value !== undefined) metrics[name] = value; // a metric the API left out is absent, never zero
       }

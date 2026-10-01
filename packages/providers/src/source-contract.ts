@@ -1,4 +1,9 @@
-import type { DestinationKind } from '@oremedia/contracts/destinations';
+import type {
+  DestinationKind,
+  DestinationReportOpportunityKind,
+  DestinationReportPresentationV1,
+  SourceReportMetricV1,
+} from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
   DecryptedCredentials,
@@ -27,7 +32,22 @@ export interface SourceCapabilityV1 {
   rateLimits: ProviderCapabilityV1['rateLimits'];
   /** The reports the source can read (part B); empty for a source that only authorises and lists targets. */
   reports: SourceReportSpec[];
+  /** The vendor console and the summary tiles the screen shows for this source (part B). */
+  presentation?: DestinationReportPresentationV1;
   certifiedAt: string | null;
+}
+
+/**
+ * An opportunity rule a report declares (part B): subjects (dimension values) with at least `minVolume` of the
+ * volume metric whose rate is below the fraction of the destination's pooled rate; `task` words the suggestion.
+ * The read model applies every rule generically.
+ */
+export interface SourceReportOpportunitySpec {
+  kind: DestinationReportOpportunityKind;
+  rateMetric: string;
+  volumeMetric: string;
+  minVolume: number;
+  task(input: { subject: string; volume: number; rate: number; benchmark: number }): string;
 }
 
 /**
@@ -39,10 +59,16 @@ export interface SourceCapabilityV1 {
  */
 export interface SourceReportSpec {
   key: string;
+  label: string;
   dimensions: string[];
-  metrics: string[];
+  dimensionLabels: Record<string, string>;
+  /** The metrics fetched, with their D-15 kind; the rows carry them by name. */
+  metrics: SourceReportMetricV1[];
+  /** Rates derived from two fetched flows (never fetched themselves). */
+  derived: SourceReportMetricV1[];
   latencyHours: number;
   maxRangeDays: number;
+  opportunity?: SourceReportOpportunitySpec;
 }
 
 /** One row of a report: the UTC day, the dimension values by name and the metric values by name. */

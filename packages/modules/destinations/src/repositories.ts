@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
-import { WEB_REPORT_METRICS, type WebMetricSums } from '@oremedia/contracts/destinations';
+import type { SourceReportMetricV1, WebMetricSums } from '@oremedia/contracts/destinations';
 import {
   BrandScopedRepository,
   PlatformRepository,
@@ -242,13 +242,12 @@ const weightSum = (name: string, weight: string | undefined): SQL<number | null>
     : sql<number | null>`count(json_extract(${destinationReportRows.metrics}, ${metricPath(name)}))`;
 
 /** The select list of one aggregate: `s_<metric>` sums (a gauge's weight sum) and `w_<metric>` weighted sums. */
-function sumColumns(metricNames: readonly string[]) {
+function sumColumns(metrics: readonly SourceReportMetricV1[]) {
   const columns: Record<string, SQL<number | null>> = {};
-  for (const name of metricNames) {
-    const spec = WEB_REPORT_METRICS[name];
-    if (spec?.kind === 'gauge') {
-      columns[`s_${name}`] = weightSum(name, spec.weight);
-      columns[`w_${name}`] = metricWeightedSum(name, spec.weight);
+  for (const { name, kind, weight } of metrics) {
+    if (kind === 'gauge') {
+      columns[`s_${name}`] = weightSum(name, weight);
+      columns[`w_${name}`] = metricWeightedSum(name, weight);
     } else columns[`s_${name}`] = metricSum(name);
   }
   return columns;
@@ -258,9 +257,13 @@ const num = (v: unknown): number | undefined => {
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
 };
-function toSums(metricNames: readonly string[], raw: Record<string, unknown>, rows: number): WebMetricSums {
+function toSums(
+  metrics: readonly SourceReportMetricV1[],
+  raw: Record<string, unknown>,
+  rows: number,
+): WebMetricSums {
   const out: WebMetricSums = { rows, sums: {}, weighted: {} };
-  for (const name of metricNames) {
+  for (const { name } of metrics) {
     const s = num(raw[`s_${name}`]);
     if (s !== undefined) out.sums[name] = s;
     const w = num(raw[`w_${name}`]);
@@ -334,11 +337,10 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     rows: ReportRowInsert[],
     tx: Tx,
   ): Promise<void> {
+    const { tenantId } = requireTenant();
     await tx
       .delete(destinationReportRows)
-      .where(this.windowScope(brandId, destinationId, reportKey, start, end));
-    const { tenantId } = requireTenant();
-    this.assertBrandAccess(brandId);
+      .where(this.windowScope(brandId, destinationId, reportKey, start, end)); // brand access asserted here
     for (let i = 0; i < rows.length; i += INSERT_CHUNK)
       await tx
         .insert(destinationReportRows)
@@ -394,17 +396,17 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     brandId: string,
     destinationId: string,
     reportKey: string,
-    metricNames: readonly string[],
+    metrics: readonly SourceReportMetricV1[],
     start: string,
     end: string,
     tx?: Tx,
   ): Promise<WebMetricSums> {
     const rows = await this.conn(tx)
-      .select({ rows: sql<number>`count(*)`, ...sumColumns(metricNames) })
+      .select({ rows: sql<number>`count(*)`, ...sumColumns(metrics) })
       .from(destinationReportRows)
       .where(this.windowScope(brandId, destinationId, reportKey, start, end));
     const r = (rows[0] ?? {}) as Record<string, unknown>;
-    return toSums(metricNames, r, Number(r['rows'] ?? 0));
+    return toSums(metrics, r, Number(r['rows'] ?? 0));
   }
 
   /**
@@ -415,7 +417,7 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     brandId: string,
     destinationId: string,
     reportKey: string,
-    metricNames: readonly string[],
+    metrics: readonly SourceReportMetricV1[],
     primary: string,
     start: string,
     end: string,
@@ -438,7 +440,7 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
         days: sql<number>`count(distinct ${destinationReportRows.date})`,
         rows: sql<number>`count(*)`,
         primary: primarySum,
-        ...sumColumns(metricNames),
+        ...sumColumns(metrics),
       })
       .from(destinationReportRows)
       .where(this.windowScope(brandId, destinationId, reportKey, start, end))
@@ -450,7 +452,7 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
       dimensionKey: String(r['dimensionKey']),
       dimensions: parseDimensions(r['dimensions']),
       days: Number(r['days'] ?? 0),
-      sums: toSums(metricNames, r, Number(r['rows'] ?? 0)),
+      sums: toSums(metrics, r, Number(r['rows'] ?? 0)),
     }));
     const next = rows.length > page.limit ? rows[page.limit - 1] : undefined;
     return {

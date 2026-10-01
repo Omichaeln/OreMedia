@@ -248,37 +248,28 @@ export const REPORT_CACHE_DAYS = 7;
 /** A first run reads this many days; later runs read from the last stored day minus the report's latency. */
 export const REPORT_FIRST_RUN_DAYS = 28;
 
-/** What each web metric is (D-15, docs/contracts/metrics.md "Web sources"): the kind decides the aggregate. */
+/**
+ * What a web metric is (D-15, docs/contracts/metrics.md "Web sources"): each source adapter describes the metrics
+ * of its reports with one of these, and the kind decides the aggregate. Generic code reads the descriptors; it
+ * never names a vendor's metric.
+ */
 export type WebMetricKind = 'flow' | 'rate' | 'gauge';
-export interface WebMetricSpec {
+export interface SourceReportMetricV1 {
+  /** The platform's metric name as the rows carry it (and, for a derived rate, the key it is reported under). */
+  name: string;
   label: string;
   kind: WebMetricKind;
-  /** A rate pools Σ numerator ÷ Σ denominator; a gauge is a mean weighted by `weight` (null: a plain mean). */
+  /** A rate pools Σ numerator ÷ Σ denominator; a gauge is a mean weighted by `weight` (absent: a plain mean). */
   numerator?: string;
   denominator?: string;
   weight?: string;
 }
-export const WEB_REPORT_METRICS: Readonly<Record<string, WebMetricSpec>> = {
-  sessions: { label: 'Sessions', kind: 'flow' },
-  // GA4 reports a day's total users per row; summed over days it is user-days, labelled so (never a reach).
-  totalUsers: { label: 'Users (daily, summed)', kind: 'flow' },
-  engagedSessions: { label: 'Engaged sessions', kind: 'flow' },
-  keyEvents: { label: 'Key events', kind: 'flow' },
-  averageSessionDuration: { label: 'Avg. session duration (s)', kind: 'gauge', weight: 'sessions' },
-  clicks: { label: 'Clicks', kind: 'flow' },
-  impressions: { label: 'Impressions', kind: 'flow' },
-  ctr: { label: 'CTR', kind: 'rate', numerator: 'clicks', denominator: 'impressions' },
-  position: { label: 'Position', kind: 'gauge', weight: 'impressions' },
-};
-/** Rates derived from two flows of the same report (as spec 15.2 derived rates). */
-export const WEB_DERIVED_RATES: ReadonlyArray<{ key: string; spec: WebMetricSpec }> = [
-  {
-    key: 'engagementRate',
-    spec: { label: 'Engagement rate', kind: 'rate', numerator: 'engagedSessions', denominator: 'sessions' },
-  },
-];
-export const webMetricSpec = (name: string): WebMetricSpec | undefined =>
-  WEB_REPORT_METRICS[name] ?? WEB_DERIVED_RATES.find((r) => r.key === name)?.spec;
+/** A report's descriptor by name, among its fetched metrics and the rates derived from them. */
+export const webMetricByName = (
+  metrics: readonly SourceReportMetricV1[],
+  derived: readonly SourceReportMetricV1[],
+  name: string,
+): SourceReportMetricV1 | undefined => [...metrics, ...derived].find((m) => m.name === name);
 
 /**
  * The sums one aggregate needs (the repository computes them in SQL, the UI mock in memory): Σ of every flow and
@@ -292,21 +283,20 @@ export interface WebMetricSums {
 
 /** Pure in-memory sums (the mock transport and tests); a metric a row does not carry adds nothing. */
 export function webMetricSums(
-  metricNames: readonly string[],
+  metrics: readonly SourceReportMetricV1[],
   rows: ReadonlyArray<Record<string, number | undefined>>,
 ): WebMetricSums {
   const out: WebMetricSums = { rows: rows.length, sums: {}, weighted: {} };
   for (const row of rows)
-    for (const name of metricNames) {
-      const value = row[name];
+    for (const spec of metrics) {
+      const value = row[spec.name];
       if (typeof value !== 'number') continue;
-      const spec = WEB_REPORT_METRICS[name];
-      if (spec?.kind === 'gauge') {
+      if (spec.kind === 'gauge') {
         const weight = spec.weight ? row[spec.weight] : 1;
         if (typeof weight !== 'number') continue;
-        out.weighted[name] = (out.weighted[name] ?? 0) + value * weight;
-        out.sums[name] = (out.sums[name] ?? 0) + weight;
-      } else out.sums[name] = (out.sums[name] ?? 0) + value;
+        out.weighted[spec.name] = (out.weighted[spec.name] ?? 0) + value * weight;
+        out.sums[spec.name] = (out.sums[spec.name] ?? 0) + weight;
+      } else out.sums[spec.name] = (out.sums[spec.name] ?? 0) + value;
     }
   return out;
 }
@@ -314,43 +304,41 @@ export function webMetricSums(
 /**
  * The D-15 aggregate of each metric from its sums: a flow is its sum, a rate Σ numerator ÷ Σ denominator (null on
  * a zero or missing denominator), a gauge Σ value × weight ÷ Σ weight. A metric without rows is null, never zero.
- * The derived rates are added when both operands are present.
+ * The report's derived rates are added when both operands are among its metrics.
  */
 export function webMetricValues(
-  metricNames: readonly string[],
+  metrics: readonly SourceReportMetricV1[],
+  derived: readonly SourceReportMetricV1[],
   sums: WebMetricSums,
 ): Record<string, number | null> {
   const out: Record<string, number | null> = {};
   const flow = (name: string): number | null => (name in sums.sums ? (sums.sums[name] as number) : null);
-  const rate = (spec: WebMetricSpec): number | null => {
+  const rate = (spec: SourceReportMetricV1): number | null => {
     const n = spec.numerator ? flow(spec.numerator) : null;
     const d = spec.denominator ? flow(spec.denominator) : null;
     return n !== null && d !== null && d > 0 ? n / d : null;
   };
-  for (const name of metricNames) {
-    const spec = WEB_REPORT_METRICS[name];
-    if (sums.rows === 0 || !spec) out[name] = null;
-    else if (spec.kind === 'flow') out[name] = flow(name);
-    else if (spec.kind === 'rate') out[name] = rate(spec);
+  for (const spec of metrics) {
+    if (sums.rows === 0) out[spec.name] = null;
+    else if (spec.kind === 'flow') out[spec.name] = flow(spec.name);
+    else if (spec.kind === 'rate') out[spec.name] = rate(spec);
     else {
-      const weight = sums.sums[name];
-      const weighted = sums.weighted[name];
-      out[name] = weight !== undefined && weighted !== undefined && weight > 0 ? weighted / weight : null;
+      const weight = sums.sums[spec.name];
+      const weighted = sums.weighted[spec.name];
+      out[spec.name] =
+        weight !== undefined && weighted !== undefined && weight > 0 ? weighted / weight : null;
     }
   }
-  for (const derived of WEB_DERIVED_RATES)
-    if (
-      derived.spec.numerator &&
-      derived.spec.denominator &&
-      metricNames.includes(derived.spec.numerator) &&
-      metricNames.includes(derived.spec.denominator)
-    )
-      out[derived.key] = sums.rows === 0 ? null : rate(derived.spec);
+  const names = new Set(metrics.map((m) => m.name));
+  for (const spec of derived)
+    if (spec.numerator && spec.denominator && names.has(spec.numerator) && names.has(spec.denominator))
+      out[spec.name] = sums.rows === 0 ? null : rate(spec);
   return out;
 }
 
 /** The sort key of a report's drill-down: its first metric (sessions, clicks). */
-export const reportPrimaryMetric = (metrics: readonly string[]): string => metrics[0] ?? '';
+export const reportPrimaryMetric = (metrics: readonly SourceReportMetricV1[]): string =>
+  metrics[0]?.name ?? '';
 
 // ---- router DTOs (destinations.reports.*) ----
 
@@ -372,10 +360,8 @@ export const DestinationReportRows = z.object({
 });
 export const DestinationReportOpportunities = z.object({ brandId: z.string(), destinationId: z.string() });
 
-/** Opportunity thresholds (R2-1): enough traffic to mean something, and a rate below half the destination's own. */
+/** Opportunity window and ratio (R2-1); each report's rule names its own volume metric and minimum. */
 export const OPPORTUNITY_WINDOW_DAYS = 28;
-export const OPPORTUNITY_MIN_IMPRESSIONS = 100;
-export const OPPORTUNITY_MIN_SESSIONS = 50;
 export const OPPORTUNITY_RATE_FRACTION = 0.5;
 export const OPPORTUNITIES_MAX = 20;
 
@@ -405,8 +391,11 @@ export interface DestinationReportComparisonV1 {
 }
 export interface DestinationReportSummaryEntryV1 {
   reportKey: string;
-  dimensions: string[];
-  metrics: string[];
+  label: string;
+  dimensions: Array<{ name: string; label: string }>;
+  metrics: SourceReportMetricV1[];
+  /** Rates derived from the report's flows (reported in `metrics` values under their own name). */
+  derived: SourceReportMetricV1[];
   freshness: DestinationReportFreshnessV1;
   current: DestinationReportWindowV1;
   previous: DestinationReportWindowV1;
@@ -414,10 +403,17 @@ export interface DestinationReportSummaryEntryV1 {
   /** D-14 with days as the unit: below the minimum on either side the comparison reads insufficient. */
   sample: { current: number; previous: number; minimum: number; sufficient: boolean };
 }
+/** How the kind's source presents itself: the vendor console the AI-search row links to (D-19) and the tiles. */
+export interface DestinationReportPresentationV1 {
+  console: { label: string; href: string };
+  tiles: { reportKey: string; metrics: string[] };
+}
 export interface DestinationReportSummaryV1 {
   brandId: string;
   destinationId: string;
   kind: DestinationKind;
+  /** From the source adapter's capability; null for a kind without a registered source. */
+  presentation: DestinationReportPresentationV1 | null;
   /** Whether the source-use policy allows `read` of the kind's reports; nothing is summarised when it does not. */
   policy: { allowed: boolean; reason: SourceUseCheckReason; dataType: string };
   windowStart: string;
