@@ -8,6 +8,7 @@ import type {
 import {
   ProviderAuthError,
   ProviderTransportError,
+  SOURCE_ACCESS_REQUIRED,
   SourceReadError,
   classifyByStatus,
   sourceRegistry,
@@ -36,8 +37,12 @@ export const fixtureSourceCapability = (
   requiredScopes: ['https://www.googleapis.com/auth/fixture.readonly'],
   latencyHours: 1,
   rateLimits: [],
-  // The real kind's reports (ga4.*, gsc.*), so the dictionary and the policy data types apply as in production.
+  // The real kind's reports (ga4.*, gsc.*, gbp.*) and presentation, so the dictionary, the policy data types and
+  // the read model's console and tiles apply as in production.
   reports: sourceRegistry.capability(kind)?.reports ?? [],
+  ...(sourceRegistry.capability(kind)?.presentation
+    ? { presentation: sourceRegistry.capability(kind)?.presentation }
+    : {}),
   certifiedAt: '2026-01-01T00:00:00.000Z',
   ...over,
 });
@@ -48,6 +53,8 @@ export type ReportBehaviour =
   | { kind: 'rows' }
   | { kind: 'unauthorised' }
   | { kind: 'forbidden' }
+  /** R2-2: the platform API is not enabled for the project (a 403 that is no reconnect). */
+  | { kind: 'access_required' }
   | { kind: 'rate_limited' }
   | { kind: 'transient' };
 
@@ -148,6 +155,13 @@ export class FixtureSourceAdapter implements SourceAdapter {
         throw fail(401);
       case 'forbidden':
         throw fail(403);
+      case 'access_required':
+        throw new SourceReadError(
+          this.key,
+          403,
+          { kind: 'rejected', code: SOURCE_ACCESS_REQUIRED },
+          'fixture 403 SERVICE_DISABLED',
+        );
       case 'rate_limited':
         throw fail(429);
       case 'transient':

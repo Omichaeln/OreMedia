@@ -22,10 +22,12 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      `PROVIDER_<KEY>_SECRET_REF` (sealed; the code exchange needs both, see `docs/platform-apps/`), and per source
      kind `PROVIDER_GA4_PROPERTY_CLIENT_ID_REF` / `PROVIDER_GA4_PROPERTY_SECRET_REF` and
      `PROVIDER_SEARCH_CONSOLE_SITE_CLIENT_ID_REF` / `PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF` (sealed; one Google
-     OAuth client serves both, `docs/platform-apps/google.md`), optional `OREMEDIA_DISABLED_SOURCES`;
+     OAuth client serves both, `docs/platform-apps/google.md`), optional `OREMEDIA_DISABLED_SOURCES`; the Business
+     Profile pair `PROVIDER_GBP_LOCATION_CLIENT_ID_REF` / `PROVIDER_GBP_LOCATION_SECRET_REF` with `OREMEDIA_ENABLE_GBP=1`
+     only once Google granted the project Business Profile API access (R2-2; off by default);
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
-     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`;
+     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`, and `PROVIDER_GBP_LOCATION_*` with `OREMEDIA_ENABLE_GBP=1` where the Business Profile kind is enabled (R2-2);
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OBJECT_STORE_PUBLIC_ORIGIN`
      (runtime: the object store origin allowed in `font-src` and `connect-src`, section 1b; uploads fail without it), `OREMEDIA_DEPLOYMENT_BRAND`
@@ -199,21 +201,21 @@ Every Node service checks, at start, the settings each of its **capabilities** n
 reads them uses (so the report and the code cannot disagree). A missing setting does **not** stop the service:
 production keeps running with that capability degraded, and the gap is reported.
 
-| Capability      | Settings it needs (names only)                                                                                                                                                                                                                                            | Checked on                      |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`                                                                                          | api, worker-core, worker-render |
-| `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`), unless the provider key is explicitly listed in comma-separated `OREMEDIA_DISABLED_CHANNELS` on that service | api, worker-core, worker-ingest |
-| `source:<kind>` | `PROVIDER_<KIND>_CLIENT_ID_REF` and `PROVIDER_<KIND>_SECRET_REF`, for every registered source adapter (`ga4_property`, `search_console_site`), unless the kind is explicitly listed in comma-separated `OREMEDIA_DISABLED_SOURCES` on that service                        | api, worker-core, worker-ingest |
-| `cms:<vendor>`  | Nothing: a website (`cms_site`, R2-3) is connected per brand with its own integration identity, sealed by the broker. The line reports the registered adapter (`cms:wordpress`) unless `cms_site` is listed in `OREMEDIA_DISABLED_SOURCES` on that service                | api, worker-core, worker-ingest |
-| `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                                                                                                             | worker-core, worker-ingest      |
-| `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                                                                                                              | api                             |
+| Capability      | Settings it needs (names only)                                                                                                                                                                                                                                                                              | Checked on                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`                                                                                                                            | api, worker-core, worker-render |
+| `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`), unless the provider key is explicitly listed in comma-separated `OREMEDIA_DISABLED_CHANNELS` on that service                                   | api, worker-core, worker-ingest |
+| `source:<kind>` | `PROVIDER_<KIND>_CLIENT_ID_REF` and `PROVIDER_<KIND>_SECRET_REF`, for every registered source adapter (`ga4_property`, `search_console_site`; `gbp_location` only where `OREMEDIA_ENABLE_GBP=1`, R2-2), unless the kind is explicitly listed in comma-separated `OREMEDIA_DISABLED_SOURCES` on that service | api, worker-core, worker-ingest |
+| `cms:<vendor>`  | Nothing: a website (`cms_site`, R2-3) is connected per brand with its own integration identity, sealed by the broker. The line reports the registered adapter (`cms:wordpress`) unless `cms_site` is listed in `OREMEDIA_DISABLED_SOURCES` on that service                                                  | api, worker-core, worker-ingest |
+| `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                                                                                                                                               | worker-core, worker-ingest      |
+| `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                                                                                                                                                | api                             |
 
 - `uploads` on the api signs upload and download URLs; on worker-core it copies media for publishing and deletes
   objects; on worker-render it ingests uploads and writes renders. `channel:<key>` on the api connects channels; on
   worker-core it publishes and refreshes tokens; on worker-ingest it refreshes tokens and pulls metrics and comments.
   `models` on worker-core runs agents and generators; on worker-ingest it classifies comments. `source:<kind>` on
   the api connects destinations (R2-1); on worker-core it refreshes their tokens daily; on worker-ingest it reads
-  their GA4 and Search Console reports daily (the `destination-report-sweep` schedule, 04:00 UTC, created by
+  their GA4, Search Console and (where enabled) Business Profile reports daily (the `destination-report-sweep` schedule, 04:00 UTC, created by
   worker-ingest at start on task queue `ingest-metrics`, overlap skipped; one child per destination per day, so a
   rerun of a day is refused by its workflow id, and a quota 429 leaves the destination `degraded` until the next
   day's run catches up from the last stored day). `cms:<vendor>` on the api connects websites (the secret is sealed
@@ -246,7 +248,10 @@ production keeps running with that capability degraded, and the gap is reported.
   its app credentials and certification are unavailable). It defaults to empty, so omitting the variable does not hide
   a missing provider configuration. Set it only on the api, worker-core and worker-ingest services, and remove the key
   before enabling that channel; this does not certify or connect the provider. `OREMEDIA_DISABLED_SOURCES` is the
-  same policy for a source kind (R2-1), set on the api and worker-core.
+  same policy for a source kind (R2-1), set on the api and worker-core. The Business Profile kind (`gbp_location`,
+  R2-2) is the other way round: off unless `OREMEDIA_ENABLE_GBP=1` is set beside its pair on the api, worker-core and
+  worker-ingest, because Google grants its API access per project after an application
+  (`docs/platform-apps/google.md`); omitting the flag never reads as a missing configuration.
 
 ## 2. Deploy
 

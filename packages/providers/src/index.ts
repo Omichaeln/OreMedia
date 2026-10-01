@@ -45,6 +45,7 @@ export type {
   SourceReportPage,
 } from './source-contract';
 export { SourceRegistry, sourceRegistry } from './source-registry';
+export { SOURCE_ACCESS_REQUIRED } from './source-contract';
 // Ledger R2-3: CMS write adapters behind `cms_site` destinations, with their own certification-gated registry.
 export type {
   CmsAdapter,
@@ -68,6 +69,9 @@ export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/a
 export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';
 export { SearchConsoleSiteAdapter, searchConsoleSiteAdapter } from './sources/search_console_site/adapter';
 export { searchConsoleSiteCapability, searchConsoleReports } from './sources/search_console_site/capability';
+// Ledger R2-2: the Business Profile location, read-only, behind OREMEDIA_ENABLE_GBP.
+export { GbpLocationAdapter, gbpLocationAdapter } from './sources/gbp_location/adapter';
+export { gbpLocationCapability, gbpReports, GBP_ENABLE_SETTING } from './sources/gbp_location/capability';
 export {
   ProviderAuthError,
   SourceReadError,

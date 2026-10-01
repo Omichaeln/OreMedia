@@ -27,6 +27,7 @@ import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-pu
 import { logger } from '@oremedia/observability';
 import {
   ProviderTransportError,
+  SOURCE_ACCESS_REQUIRED,
   SourceReadError,
   type SourceReportRow,
   type SourceReportSpec,
@@ -169,7 +170,11 @@ export function createDestinationReportRuntime(
         case 'reconnect_required':
           return { outcome: 'unreachable', reason: 'reconnect_required' };
         case 'rejected':
-          return { outcome: 'unreachable', reason: 'rejected' };
+          // The platform API is not enabled for this deployment (R2-2): the grant is intact, so the destination is
+          // degraded with the reason and read again tomorrow, once the operator has the access.
+          return err.classification.code === SOURCE_ACCESS_REQUIRED
+            ? { outcome: 'transient', reason: SOURCE_ACCESS_REQUIRED }
+            : { outcome: 'unreachable', reason: 'rejected' };
         case 'refresh_token':
           return { outcome: 'transient', reason: 'refresh_token' };
         case 'unknown':
