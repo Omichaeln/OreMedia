@@ -996,7 +996,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await button.isDisabled()).toBe(false);
     await button.click();
     await expect.poll(() => button.textContent(), { timeout: 15_000 }).toBe('Audit running…');
-    expect(await button.isDisabled()).toBe(true);
+    // The label reads "running" while the mutation is pending and again once the summary refetched; between the
+    // two the button can re-enable for a frame, so the disabled state is polled rather than read once.
+    await expect.poll(() => button.isDisabled(), { timeout: 15_000 }).toBe(true);
     expect(backend.destinations.auditRuns.filter((r) => r.outcome === 'running')).toHaveLength(1);
     // The last finished run stays on screen while the new one runs; the summary says so.
     await expect
