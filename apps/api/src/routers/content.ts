@@ -16,6 +16,11 @@ import {
   ContentPackageListForDocument,
   ContentPackageRevise,
   ContentRevisionGet,
+  PlanItemDrop,
+  PlanItemList,
+  PlanItemRestore,
+  PlanItemUpdate,
+  PlanItemsPropose,
 } from '@oremedia/contracts/content';
 import { contentService } from '@oremedia/module-content';
 import { idempotent } from '@oremedia/module-operations';
@@ -59,6 +64,33 @@ export const contentRouter = router({
     get: tenantQuery
       .input(BriefGet)
       .query(({ ctx, input }) => contentService.briefs.get(ctx.tenant.actor, input)),
+  }),
+
+  /** UX-09 plan items: the calendar behind a brief; accepting the brief materialises them as packages. */
+  planItems: router({
+    propose: tenantMutation
+      .input(PlanItemsPropose)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.planItems.propose(ctx.tenant.actor, input, tx)),
+      ),
+    list: tenantQuery
+      .input(PlanItemList)
+      .query(({ ctx, input }) => contentService.planItems.list(ctx.tenant.actor, input)),
+    update: tenantMutation
+      .input(PlanItemUpdate)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.planItems.update(ctx.tenant.actor, input, tx)),
+      ),
+    drop: tenantMutation
+      .input(PlanItemDrop)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.planItems.drop(ctx.tenant.actor, input, tx)),
+      ),
+    restore: tenantMutation
+      .input(PlanItemRestore)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.planItems.restore(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   packages: router({

@@ -19,7 +19,8 @@ import {
   type ResolvedSkill,
   type SkillScope,
   type SkillVersionState,
-  type TaskKind,
+  SkillTaskKinds,
+  TaskKind,
 } from '@oremedia/contracts/skills';
 import { requireTenant, runAsPlatform, type Tx } from '@oremedia/db';
 import { hashCanonical } from '@oremedia/domain/hash';
@@ -944,6 +945,32 @@ export const skillsService = {
       packageHash: version.packageHash,
       files: toPackage(contentOf(version)),
     };
+  },
+
+  /**
+   * UX-08: for every task kind, the skill versions a run on the brand would use (resolveForRun) with their input
+   * schemas, so a start form is built from the skill rather than typed as JSON. A kind no skill serves is listed
+   * with no skills, and the form says so.
+   */
+  async taskKinds(actor: ResolvedActor, input: z.infer<typeof SkillTaskKinds>, tx?: Tx) {
+    const parsed = SkillTaskKinds.parse(input);
+    const items = [];
+    for (const taskKind of TaskKind.options) {
+      const resolved = await skillsService.resolveForRun(actor, { brandId: parsed.brandId, taskKind }, tx);
+      items.push({
+        taskKind,
+        skills: resolved.map((r) => ({
+          skillVersionId: r.skillVersionId,
+          skillId: r.skillId,
+          key: r.key,
+          title: r.manifest.title,
+          description: r.manifest.description,
+          versionNumber: r.versionNumber,
+          inputSchema: r.manifest.inputSchema,
+        })),
+      });
+    }
+    return { items };
   },
 
   /**

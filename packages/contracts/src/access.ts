@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MembershipRole } from './tenancy';
+import { PageRequest } from './pagination';
 import { ServicePrincipalGrant } from './policy';
 import { AutonomyMode } from './tenancy';
 
@@ -35,6 +36,11 @@ export const ServicePrincipalCreate = z.object({
   grants: z.array(ServicePrincipalGrant).max(100),
   maxAutonomy: AutonomyMode.default('create'),
 });
+/**
+ * The active agent principals a run on the brand can be started under (UX-08): gated on agent.start_run for that
+ * brand, and each principal is reported with the actions its grants cover there, never its whole grant table.
+ */
+export const ServicePrincipalList = z.object({ brandId: z.string(), page: PageRequest });
 export const ServicePrincipalRevoke = z.object({
   servicePrincipalId: z.string(),
   expectedVersion: z.number().int(),

@@ -25,6 +25,7 @@ export {
   type ContentRevisionDto,
   type ChannelVariantDto,
   type ContentActorOptions,
+  type PlanItemDto,
 } from './service';
 export { contentToolSource } from './tools';
 export {
@@ -34,4 +35,5 @@ export {
   ContentRevisionRepository,
   ChannelVariantRepository,
   CreativeAttributeRepository,
+  PlanItemRepository,
 } from './repositories';

@@ -18,7 +18,9 @@ import {
   RunSteps,
 } from '@oremedia/contracts/agents';
 import { AuditQuery } from '@oremedia/contracts/operations';
+import { ServicePrincipalList } from '@oremedia/contracts/access';
 import { PageRequest } from '@oremedia/contracts/pagination';
+import { SkillTaskKinds, TaskKind } from '@oremedia/contracts/skills';
 import {
   isOremediaError,
   NotFoundError,
@@ -44,7 +46,7 @@ const launchOptions = chromiumPath
 
 const E2E = {
   ownerToken: 'ses_e2e_owner',
-  creatorToken: 'ses_e2e_creator',
+  reviewerToken: 'ses_e2e_reviewer',
   tenantId: 'ten_e2e',
   brandId: 'brd_e2e',
   principalId: 'sp_e2e_agent',
@@ -288,10 +290,10 @@ const domainErrors = t.middleware(async ({ next }) => {
     throw err;
   }
 });
-const roleOf = (headers: IncomingHttpHeaders): 'owner' | 'creator' | null => {
+const roleOf = (headers: IncomingHttpHeaders): 'owner' | 'reviewer' | null => {
   const bearer = first(headers['authorization']);
   if (bearer === `Bearer ${E2E.ownerToken}`) return 'owner';
-  if (bearer === `Bearer ${E2E.creatorToken}`) return 'creator';
+  if (bearer === `Bearer ${E2E.reviewerToken}`) return 'reviewer';
   return null;
 };
 const authed = t.middleware(({ ctx, next }) => {
@@ -339,9 +341,62 @@ function createRouter(backend: Backend) {
   return t.router({
     access: t.router({
       session: authedOnly.query(() => ({ userId: 'usr_e2e', name: 'E2E person', email: 'e2e@example.test' })),
+      /** UX-08: gated as agents.runs.start is (role-grants: not a reviewer); the denial shows before choosing anything. */
+      servicePrincipals: t.router({
+        list: query.input(ServicePrincipalList).query(({ ctx }) => {
+          if (ctx.role !== 'owner')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          return {
+            items: [
+              {
+                id: E2E.principalId,
+                name: 'E2E agent',
+                kind: 'agent' as const,
+                maxAutonomy: 'prepare_release' as const,
+                actions: ['brand.read', 'creative.edit'],
+                createdAt: '2026-09-01T09:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          };
+        }),
+      }),
       listCompanies: authedOnly.query(({ ctx }) => [
         { tenantId: E2E.tenantId, name: 'E2E company', slug: 'e2e', role: ctx.role, allBrands: true },
       ]),
+    }),
+    skills: t.router({
+      taskKinds: query.input(SkillTaskKinds).query(() => ({
+        items: TaskKind.options.map((taskKind) => ({
+          taskKind,
+          skills:
+            taskKind === 'copywriting'
+              ? [
+                  {
+                    skillVersionId: 'skv_copy_3',
+                    skillId: 'sk_copy',
+                    key: 'brand-copywriting',
+                    title: 'Brand copywriting',
+                    description: 'Drafts on-brand copy for the brief.',
+                    versionNumber: 3,
+                    inputSchema: {
+                      type: 'object',
+                      properties: {
+                        goal: { type: 'string', maxLength: 1000, description: 'What the copy must achieve.' },
+                        channels: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+                        tone: { type: 'string', enum: ['warm', 'direct'] },
+                      },
+                      required: ['goal'],
+                      additionalProperties: false,
+                    },
+                  },
+                ]
+              : [],
+        })),
+      })),
     }),
     brand: t.router({
       list: query.query(() => [brand]),
@@ -386,6 +441,8 @@ function createRouter(backend: Backend) {
             );
           if (input.servicePrincipalId !== E2E.principalId)
             throw new ValidationFailedError([{ path: 'servicePrincipalId', issue: 'revoked' }]);
+          if (input.brief['goal'] === 'fail')
+            throw new ValidationFailedError([{ path: 'brief', issue: 'goal must not be "fail"' }]);
           const id = rid('run');
           const r = run(id, 'planned', input.taskKind, 0, []);
           r.brief = input.brief;
@@ -640,15 +697,21 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   it('start run: the new run opens as Queued and the same intent key is kept for the submission', async () => {
     await page.goto(`${origin}${agentsPath()}`);
     await page.getByRole('button', { name: 'New run' }).click();
-    await page.getByLabel('Service principal').fill('sp_wrong');
-    await page.locator('#run-brief').fill('{"goal": "spring launch"}');
+    // UX-08: the principal is picked by name and the brief is the skill's own fields, never typed JSON or ids.
+    await page.locator('#run-principal').click();
+    await page.getByRole('option', { name: /E2E agent/ }).click();
+    await expect.poll(() => page.getByLabel('Goal').count(), { timeout: 15_000 }).toBe(1);
+    // A required field left empty is refused before any request is sent.
     await page.getByRole('button', { name: 'Start run' }).click();
-    await expect.poll(() => page.locator('#run-principal-error').count(), { timeout: 15_000 }).toBe(1);
-    expect(await page.locator('#run-principal-error').textContent()).toContain('revoked');
+    await expect.poll(() => page.locator('#run-brief-goal-error').count(), { timeout: 15_000 }).toBe(1);
+    expect(backend.requests.filter((r) => r.path === 'agents.runs.start')).toHaveLength(0);
+    await page.getByLabel('Goal').fill('fail');
+    await page.getByRole('button', { name: 'Start run' }).click();
+    await expect.poll(() => page.getByRole('alert').count(), { timeout: 15_000 }).toBeGreaterThan(0);
     const firstKey = backend.requests.filter((r) => r.path === 'agents.runs.start').at(-1)?.headers[
       'idempotency-key'
     ];
-    await page.getByLabel('Service principal').fill(E2E.principalId);
+    await page.getByLabel('Goal').fill('spring launch');
     await page.getByRole('button', { name: 'Start run' }).click();
     await expect.poll(() => page.url(), { timeout: 15_000 }).toMatch(/run=run_/);
     const secondKey = backend.requests.filter((r) => r.path === 'agents.runs.start').at(-1)?.headers[
@@ -661,21 +724,20 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(backend.runs.size).toBe(7);
   }, 45_000);
 
-  it('a creator without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
+  it('a reviewer without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
     // At phone width Sign out is in the Menu drawer with the brand navigation.
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
     await page.getByRole('button', { name: 'Sign out' }).click();
     // Sign out navigates to /sign-in itself; a second navigation started before it lands is aborted (ERR_ABORTED).
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
-    await signIn(E2E.creatorToken);
+    await signIn(E2E.reviewerToken);
     await page.goto(`${origin}${agentsPath()}`);
     // The list comes from agents.runs.list (brand.read), not the audit log: no admin role is needed for history.
     await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(7);
     expect(await page.getByTestId('runs').textContent()).not.toContain('audit access');
     await page.getByRole('button', { name: 'New run' }).click();
-    await page.getByLabel('Service principal').fill(E2E.principalId);
-    await page.getByRole('button', { name: 'Start run' }).click();
+    // The principal list is gated as the start is, so the denial shows before anything is chosen.
     await expect.poll(() => page.getByTestId('start-denied').count(), { timeout: 15_000 }).toBe(1);
     expect(await page.getByTestId('start-denied').textContent()).toContain('Permission denied');
     expect(await page.getByTestId('start-denied').textContent()).toContain('agent.start_run');

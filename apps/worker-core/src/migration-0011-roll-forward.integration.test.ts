@@ -13,6 +13,7 @@ import {
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
+import { planItems } from '@oremedia/db/schema/content';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   FixtureProviderAdapter,
@@ -46,7 +47,7 @@ const newId = (kind: keyof typeof PREFIX) =>
 const hashCanonical = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const NEW_TABLES: MySqlTable[] = [publicationRemoteChanges];
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
-const LATER_TABLES: MySqlTable[] = [passwordSetupTokens];
+const LATER_TABLES: MySqlTable[] = [passwordSetupTokens, planItems];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

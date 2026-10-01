@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { passwordSetupTokens, users } from '@oremedia/db/schema/access';
+import { planItems } from '@oremedia/db/schema/content';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService, hashToken } from '@oremedia/module-access';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -17,9 +18,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0012_comment_replies';
 const NEW_TABLES: MySqlTable[] = [passwordSetupTokens];
+/** Added by later migrations (0014). */
+const LATER_TABLES: MySqlTable[] = [planItems];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0013 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

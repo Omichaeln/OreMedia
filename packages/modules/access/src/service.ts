@@ -14,6 +14,7 @@ import {
   PasswordSetup,
   PasswordSignIn,
   ServicePrincipalCreate,
+  ServicePrincipalList,
   ServicePrincipalRevoke,
   SupportSessionEscalate,
   SupportSessionOpen,
@@ -1079,6 +1080,44 @@ export const accessService = {
       tx,
     );
     return { servicePrincipalId: id };
+  },
+
+  /**
+   * UX-08: the active agent principals a run on the brand can start under. Gated on agent.start_run for the brand
+   * (the same right the start needs), and each principal is reported with the actions its grants cover on that
+   * brand, never its whole grant table. The page is cut by the SQL cursor and then filtered to the brand, so it can
+   * be shorter than the limit while more remain.
+   */
+  async listServicePrincipals(actor: ResolvedActor, input: z.infer<typeof ServicePrincipalList>, tx?: Tx) {
+    const parsed = ServicePrincipalList.parse(input);
+    await brands().assertExist([parsed.brandId], tx);
+    await policy.assert(
+      actor,
+      'agent.start_run',
+      { type: 'brand', tenantId: actor.tenantId, brandId: parsed.brandId, id: parsed.brandId },
+      {},
+      tx,
+    );
+    const page = await principalsRepo.listPage({ status: 'active', kind: 'agent' }, parsed.page, tx);
+    const covers = (g: { brandIds: 'all' | string[] }) =>
+      g.brandIds === 'all' || g.brandIds.includes(parsed.brandId);
+    return {
+      items: page.items.flatMap((sp) => {
+        const actions = [...new Set(sp.grants.filter(covers).map((g) => g.action))].sort();
+        if (actions.length === 0) return [];
+        return [
+          {
+            id: sp.id,
+            name: sp.name,
+            kind: sp.kind,
+            maxAutonomy: sp.maxAutonomy,
+            actions,
+            createdAt: sp.createdAt.toISOString(),
+          },
+        ];
+      }),
+      nextCursor: page.nextCursor,
+    };
   },
 
   async revokeServicePrincipal(actor: ResolvedActor, input: z.infer<typeof ServicePrincipalRevoke>, tx: Tx) {

@@ -4,6 +4,7 @@ import {
   SkillGet,
   SkillImport,
   SkillList,
+  SkillTaskKinds,
   SkillVersionCreate,
   SkillVersionEvaluate,
   SkillVersionPublish,
@@ -21,6 +22,9 @@ const mutationCtx = (ctx: MutationCtx) => ({
 export const skillsRouter = router({
   list: tenantQuery.input(SkillList).query(({ ctx, input }) => skillsService.list(ctx.tenant.actor, input)),
   get: tenantQuery.input(SkillGet).query(({ ctx, input }) => skillsService.get(ctx.tenant.actor, input)),
+  taskKinds: tenantQuery
+    .input(SkillTaskKinds)
+    .query(({ ctx, input }) => skillsService.taskKinds(ctx.tenant.actor, input)),
 
   versions: router({
     create: tenantMutation

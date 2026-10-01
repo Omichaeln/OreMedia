@@ -13,7 +13,8 @@
       "startDate": { "type": "string", "format": "date" },
       "endDate": { "type": "string", "format": "date" },
       "channels": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 10 },
-      "notes": { "type": "string", "maxLength": 4000 }
+      "notes": { "type": "string", "maxLength": 4000 },
+      "briefId": { "type": "string" }
     },
     "required": ["objective", "audience", "offerFactIds", "startDate", "endDate", "channels"],
     "additionalProperties": false
@@ -87,7 +88,8 @@
     "facts.list",
     "metrics.query",
     "voice.clusters",
-    "content.createBrief"
+    "content.createBrief",
+    "content.proposePlan"
   ],
   "budgets": {
     "maxSteps": 20,

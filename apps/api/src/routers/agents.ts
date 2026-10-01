@@ -1,4 +1,6 @@
 import {
+  BudgetRead,
+  BudgetSetLimit,
   RoutingPolicySet,
   RunApproveProposal,
   RunCancel,
@@ -40,6 +42,17 @@ export const agentsRouter = router({
       .input(RunApproveProposal)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => agentsService.runs.approveProposal(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+  /** UX-16: spend position and limits, owners and admins (billing.manage). */
+  budgets: router({
+    read: tenantQuery
+      .input(BudgetRead)
+      .query(({ ctx, input }) => agentsService.budgets.read(ctx.tenant.actor, input)),
+    setLimit: tenantMutation
+      .input(BudgetSetLimit)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => agentsService.budgets.setLimit(ctx.tenant.actor, input, tx)),
       ),
   }),
   /** Spec 12.7 tenant model-routing policy: read and replaced by a tenant administrator (billing.manage). */

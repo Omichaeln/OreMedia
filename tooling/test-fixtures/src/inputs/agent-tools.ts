@@ -64,6 +64,14 @@ export const AGENT_TOOL_INPUTS: Record<string, AgentToolFixture> = {
       variants: [{ text: 'Foreign caption', factIds: [], rationale: 'foreign' }],
     }),
   },
+  'content.proposePlan': {
+    buildArguments: (f) => ({
+      briefId: f['briefId'],
+      items: [
+        { date: '2026-11-02', channelKey: 'fixture_provider', theme: 'Foreign plan', formatKey: 'post' },
+      ],
+    }),
+  },
   'creative.proposeOperations': {
     buildArguments: (f) => ({
       documentId: f['creativeDocumentId'],

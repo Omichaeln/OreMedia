@@ -29,6 +29,7 @@ const TABLE: Record<string, [effect: string, action: string]> = {
   'voice.clusters': ['read', 'insight.read'],
   'content.createBrief': ['draft', 'content.plan'],
   'content.draftCopy': ['draft', 'content.edit'],
+  'content.proposePlan': ['draft', 'content.plan'],
   'creative.proposeOperations': ['propose', 'creative.edit'],
   'creative.requestRender': ['draft', 'creative.render'],
   'images.generate': ['draft', 'creative.edit'],
@@ -198,6 +199,10 @@ describe('Release 1 tools (spec 12.4 table)', () => {
           })),
         };
       },
+      async proposePlan(_actor, input) {
+        seen.push(input);
+        return { briefId: input.briefId, planItemIds: input.items.map((_, i) => `pli_${i}`) };
+      },
     };
     const h = harness({ content });
     const brief = await dispatchToolDetailed(
@@ -237,6 +242,41 @@ describe('Release 1 tools (spec 12.4 table)', () => {
       action: 'content.edit',
       resource: { type: 'brief', tenantId: 'ten_A', brandId: 'brd_1', id: 'brf_new' },
     });
+    const planned = await dispatchToolDetailed(
+      call('content.proposePlan', {
+        briefId: 'brf_new',
+        items: [
+          { date: '2026-11-02', channelKey: 'linkedin_page', theme: 'Launch', formatKey: 'post' },
+          {
+            date: '2026-11-04',
+            channelKey: 'x',
+            theme: 'Follow-up',
+            formatKey: 'thread',
+            factIds: ['fct_1'],
+          },
+        ],
+      }),
+      run,
+      h.deps,
+    );
+    expect(planned.result).toEqual({
+      kind: 'ok',
+      output: { briefId: 'brf_new', planItemIds: ['pli_0', 'pli_1'], state: 'draft' },
+    });
+    expect(seen[2]).toMatchObject({ brandId: 'brd_1', runId: 'run_1', briefId: 'brf_new' });
+    expect(h.resources[2]).toEqual({
+      action: 'content.plan',
+      resource: { type: 'brief', tenantId: 'ten_A', brandId: 'brd_1', id: 'brf_new' },
+    });
+    const badDate = await dispatchToolDetailed(
+      call('content.proposePlan', {
+        briefId: 'brf_new',
+        items: [{ date: 'tomorrow', channelKey: 'x', theme: 'Launch', formatKey: 'post' }],
+      }),
+      run,
+      h.deps,
+    );
+    expect(badDate.result.kind).not.toBe('ok');
   });
 
   it('review.request opens a request through the source and reports it open', async () => {

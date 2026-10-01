@@ -10,6 +10,7 @@ import {
   contentPackages,
   contentRevisions,
   creativeAttributes,
+  planItems,
 } from '@oremedia/db/schema/content';
 import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
 
@@ -78,6 +79,26 @@ export class BriefRepository extends BrandScopedRepository<typeof briefs> {
       .orderBy(desc(briefs.id))
       .limit(page.limit + 1);
     return pageOf(rows, page);
+  }
+}
+
+/** UX-09 plan items: a brief's calendar, small (≤ 100 per proposal) and read whole, ordered by date then id. */
+export class PlanItemRepository extends BrandScopedRepository<typeof planItems> {
+  constructor() {
+    super(planItems);
+  }
+  async create(values: Omit<typeof planItems.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  async update(id: string, expectedVersion: number, values: Partial<typeof planItems.$inferInsert>, tx: Tx) {
+    await this.updateScoped(id, expectedVersion, values, tx);
+  }
+  async listByBrief(brandId: string, briefId: string, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(planItems)
+      .where(this.brandScope(brandId, eq(planItems.briefId, briefId)))
+      .orderBy(asc(planItems.date), asc(planItems.id));
   }
 }
 

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { z } from 'zod';
 import {
   BriefAccept,
   BriefCreate,
@@ -14,6 +15,11 @@ import {
   ContentPackageList,
   ContentPackageListForDocument,
   ContentPackageRevise,
+  PlanItemDrop,
+  PlanItemList,
+  PlanItemRestore,
+  PlanItemUpdate,
+  PlanItemsPropose,
 } from '@oremedia/contracts/content';
 import {
   CapabilityUnsupportedError,
@@ -79,6 +85,7 @@ export const P6 = {
     accepted: 'brf_accepted',
   },
   packages: { review: 'pkg_1', approved: 'pkg_2', changes: 'pkg_4' },
+  planItems: { first: 'pli_1', second: 'pli_2' },
   supersededRevision: 'cr_0',
   experiments: {
     designed: 'exp_designed',
@@ -240,6 +247,25 @@ interface Package {
   updatedAt: string;
   version: number;
 }
+/** UX-09: one planned post of a brief; materialised as a package when the brief is accepted. */
+interface PlanItem {
+  id: string;
+  brandId: string;
+  briefId: string;
+  date: string;
+  channelKey: string;
+  channelConnectionId: string | null;
+  theme: string;
+  formatKey: string;
+  factIds: string[];
+  state: 'proposed' | 'dropped' | 'materialised';
+  contentPackageId: string | null;
+  createdByKind: 'user' | 'agent';
+  agentRunId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
 
 export class Phase6Backend {
   readonly insights = new Map<string, Insight>();
@@ -249,6 +275,7 @@ export class Phase6Backend {
   readonly results = new Map<string, Result[]>();
   readonly campaigns = new Map<string, Campaign>();
   readonly briefs = new Map<string, Brief>();
+  readonly planItems = new Map<string, PlanItem>();
   readonly packages = new Map<string, Package>();
   readonly connectStates = new Map<string, { brandId: string; providerKey: string }>();
   /** Account choices `connect.complete` offered (spec 14.7), one-shot, keyed by pending id. */
@@ -554,6 +581,11 @@ export class Phase6Backend {
     const b = this.briefs.get(id);
     if (!b) throw new NotFoundError('Brief', id);
     return b;
+  }
+  planItem(id: string): PlanItem {
+    const i = this.planItems.get(id);
+    if (!i) throw new NotFoundError('PlanItem', id);
+    return i;
   }
   experiment(id: string): Experiment {
     const x = this.experiments.get(id);
@@ -1044,6 +1076,36 @@ export class Phase6Backend {
     });
     brief(P6.briefs.incomplete, { audience: '', message: 'Workshop dates', channelConnectionIds: [] });
     brief(P6.briefs.accepted, { message: 'Autumn offer on lamps', state: 'in_progress' });
+    // The planner's calendar for the suggested brief (UX-09): two proposed posts, one per planned channel.
+    const planItem = (id: string, over: Partial<PlanItem>) =>
+      this.planItems.set(id, {
+        id,
+        brandId: this.brandId,
+        briefId: P6.briefs.suggested,
+        date: '2026-11-02',
+        channelKey: 'linkedin_page',
+        channelConnectionId: P5.channels.ok,
+        theme: 'Answer the shipping question',
+        formatKey: 'post',
+        factIds: ['fct_shipping'],
+        state: 'proposed',
+        contentPackageId: null,
+        createdByKind: 'agent',
+        agentRunId: 'run_planner',
+        createdAt: hoursAgo(48),
+        updatedAt: hoursAgo(48),
+        version: 0,
+        ...over,
+      });
+    planItem(P6.planItems.first, {});
+    planItem(P6.planItems.second, {
+      date: '2026-11-05',
+      channelKey: 'instagram_business',
+      channelConnectionId: null,
+      theme: 'Free shipping, in one line',
+      formatKey: 'story',
+      factIds: [],
+    });
 
     // pkg_1 has revision 2 in review (revision 1 superseded), pkg_4 changes requested, pkg_2 approved.
     const r1 = this.p5.revisions.get(P5.revisions.one);
@@ -1411,6 +1473,61 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
     }),
   });
 
+  /** As the server's packages.create: revision 1 carries the copy; the first package moves an accepted brief on. */
+  const createPackage = (input: z.infer<typeof ContentPackageCreate>) => {
+    brandOf(input.brandId);
+    const id = rid('pkg');
+    const revisionId = rid('cr');
+    const copy = { ...input.copy, master: { ...input.copy.master } };
+    p5.revisions.set(revisionId, {
+      id: revisionId,
+      tenantId: p5.tenantId,
+      brandId: input.brandId,
+      contentPackageId: id,
+      number: 1,
+      brandVersionId: 'bv_e2e',
+      policyVersionId: 'pv_e2e',
+      copy: { schemaVersion: 1, master: { text: copy.master.text, factRefs: copy.master.factRefs } },
+      creativeRevisionIds: input.creativeDocumentIds.map((d) => b.pinDocument(d)),
+      factRefs: [],
+      contentHash: hash(copy),
+      state: 'draft',
+      authorKind: 'user',
+      authorId: 'usr_e2e',
+      agentRunId: null,
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+    });
+    b.packages.set(id, {
+      id,
+      brandId: input.brandId,
+      briefId: input.briefId ?? null,
+      title: input.title,
+      currentRevisionId: revisionId,
+      revisionIds: [revisionId],
+      state: 'draft',
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+    });
+    if (input.briefId) {
+      const brief = b.brief(input.briefId);
+      if (brief.state === 'accepted')
+        Object.assign(brief, { state: 'in_progress', version: brief.version + 1 });
+    }
+    return {
+      contentPackageId: id,
+      contentRevisionId: revisionId,
+      number: 1,
+      contentHash: hash(copy),
+      brandVersionId: 'bv_e2e',
+      policyVersionId: 'pv_e2e',
+      state: 'draft' as const,
+      version: 1,
+    };
+  };
+
   const content = router({
     campaigns: router({
       list: query.input(CampaignList).query(({ input }) => {
@@ -1481,7 +1598,111 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         if (brief.state !== 'draft')
           throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
         Object.assign(brief, { state: 'accepted', updatedAt: now(), version: brief.version + 1 });
-        return { briefId: brief.id, state: 'accepted' as const, version: brief.version };
+        const materialised: Array<{ planItemId: string; contentPackageId: string }> = [];
+        for (const item of [...b.planItems.values()].filter(
+          (i) => i.briefId === brief.id && i.state === 'proposed' && !i.contentPackageId,
+        )) {
+          const created = createPackage({
+            brandId: brief.brandId,
+            briefId: brief.id,
+            title: `${item.date} · ${item.theme}`,
+            copy: { schemaVersion: 1, master: { text: item.theme, factRefs: item.factIds } },
+            creativeDocumentIds: [],
+          });
+          Object.assign(item, {
+            state: 'materialised',
+            contentPackageId: created.contentPackageId,
+            updatedAt: now(),
+            version: item.version + 1,
+          });
+          materialised.push({ planItemId: item.id, contentPackageId: created.contentPackageId });
+        }
+        return { briefId: brief.id, state: brief.state, version: brief.version, materialised };
+      }),
+    }),
+    planItems: router({
+      list: query.input(PlanItemList).query(({ input }) => {
+        const brief = b.brief(input.briefId);
+        return {
+          items: [...b.planItems.values()]
+            .filter((i) => i.briefId === brief.id)
+            .sort((x, y) => x.date.localeCompare(y.date) || x.id.localeCompare(y.id)),
+        };
+      }),
+      propose: mutation.input(PlanItemsPropose).mutation(({ input }) => {
+        const brief = b.brief(input.briefId);
+        if (brief.state !== 'draft')
+          throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
+        const ids: string[] = [];
+        for (const item of input.items) {
+          const id = rid('pli');
+          b.planItems.set(id, {
+            id,
+            brandId: brief.brandId,
+            briefId: brief.id,
+            date: item.date,
+            channelKey: item.channelKey,
+            channelConnectionId:
+              item.channelConnectionId ??
+              (brief.channelConnectionIds.includes(item.channelKey) ? item.channelKey : null),
+            theme: item.theme,
+            formatKey: item.formatKey,
+            factIds: item.factIds,
+            state: 'proposed',
+            contentPackageId: null,
+            createdByKind: 'user',
+            agentRunId: null,
+            createdAt: now(),
+            updatedAt: now(),
+            version: 0,
+          });
+          ids.push(id);
+        }
+        return { briefId: brief.id, planItemIds: ids };
+      }),
+      update: mutation.input(PlanItemUpdate).mutation(({ input }) => {
+        const item = b.planItem(input.planItemId);
+        if (item.version !== input.expectedVersion)
+          throw new ConflictError('PlanItem', item.id, input.expectedVersion);
+        if (item.state === 'materialised')
+          throw new ValidationFailedError([{ path: 'planItemId', issue: 'plan_item_materialised' }]);
+        const brief = b.brief(item.briefId);
+        // As the server: any connection of the brand may be assigned; another brand's is NOT_FOUND.
+        if (input.channelConnectionId) {
+          const channel = p5.channels.get(input.channelConnectionId);
+          if (!channel || channel.brandId !== brief.brandId)
+            throw new NotFoundError('ChannelConnection', input.channelConnectionId);
+        }
+        Object.assign(item, {
+          ...(input.date !== undefined ? { date: input.date } : {}),
+          ...(input.theme !== undefined ? { theme: input.theme } : {}),
+          ...(input.formatKey !== undefined ? { formatKey: input.formatKey } : {}),
+          ...(input.factIds !== undefined ? { factIds: input.factIds } : {}),
+          ...(input.channelConnectionId !== undefined
+            ? { channelConnectionId: input.channelConnectionId }
+            : {}),
+          updatedAt: now(),
+          version: item.version + 1,
+        });
+        return item;
+      }),
+      drop: mutation.input(PlanItemDrop).mutation(({ input }) => {
+        const item = b.planItem(input.planItemId);
+        if (item.version !== input.expectedVersion)
+          throw new ConflictError('PlanItem', item.id, input.expectedVersion);
+        if (item.state !== 'proposed')
+          throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
+        Object.assign(item, { state: 'dropped', updatedAt: now(), version: item.version + 1 });
+        return item;
+      }),
+      restore: mutation.input(PlanItemRestore).mutation(({ input }) => {
+        const item = b.planItem(input.planItemId);
+        if (item.version !== input.expectedVersion)
+          throw new ConflictError('PlanItem', item.id, input.expectedVersion);
+        if (item.state !== 'dropped')
+          throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
+        Object.assign(item, { state: 'proposed', updatedAt: now(), version: item.version + 1 });
+        return item;
       }),
     }),
     packages: router({
@@ -1535,59 +1756,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
             .map(({ copy: _c, ...summary }) => summary),
         };
       }),
-      create: mutation.input(ContentPackageCreate).mutation(({ input }) => {
-        brandOf(input.brandId);
-        const id = rid('pkg');
-        const revisionId = rid('cr');
-        const copy = { ...input.copy, master: { ...input.copy.master } };
-        p5.revisions.set(revisionId, {
-          id: revisionId,
-          tenantId: p5.tenantId,
-          brandId: input.brandId,
-          contentPackageId: id,
-          number: 1,
-          brandVersionId: 'bv_e2e',
-          policyVersionId: 'pv_e2e',
-          copy: { schemaVersion: 1, master: { text: copy.master.text, factRefs: copy.master.factRefs } },
-          creativeRevisionIds: input.creativeDocumentIds.map((d) => b.pinDocument(d)),
-          factRefs: [],
-          contentHash: hash(copy),
-          state: 'draft',
-          authorKind: 'user',
-          authorId: 'usr_e2e',
-          agentRunId: null,
-          createdAt: now(),
-          updatedAt: now(),
-          version: 1,
-        });
-        b.packages.set(id, {
-          id,
-          brandId: input.brandId,
-          briefId: input.briefId ?? null,
-          title: input.title,
-          currentRevisionId: revisionId,
-          revisionIds: [revisionId],
-          state: 'draft',
-          createdAt: now(),
-          updatedAt: now(),
-          version: 1,
-        });
-        if (input.briefId) {
-          const brief = b.brief(input.briefId);
-          if (brief.state === 'accepted')
-            Object.assign(brief, { state: 'in_progress', version: brief.version + 1 });
-        }
-        return {
-          contentPackageId: id,
-          contentRevisionId: revisionId,
-          number: 1,
-          contentHash: hash(copy),
-          brandVersionId: 'bv_e2e',
-          policyVersionId: 'pv_e2e',
-          state: 'draft' as const,
-          version: 1,
-        };
-      }),
+      create: mutation.input(ContentPackageCreate).mutation(({ input }) => createPackage(input)),
       revise: mutation.input(ContentPackageRevise).mutation(({ input }) => {
         const pkg = b.pkg(input.contentPackageId);
         if (pkg.version !== input.expectedVersion)

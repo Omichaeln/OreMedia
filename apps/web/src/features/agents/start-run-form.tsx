@@ -1,38 +1,46 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AutonomyMode } from '@oremedia/contracts/tenancy';
+import { AUTONOMY_ORDER, AutonomyMode } from '@oremedia/contracts/tenancy';
 import { TaskKind } from '@oremedia/contracts/skills';
-import { Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { intentContext, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { SchemaFields, briefFromValues, type BriefValues, type ObjectSchema } from './schema-fields';
+import { useAgentPrincipals, useTaskKinds } from './use-agent-runs';
 
 export interface StartRunFormProps {
   brandId: string;
   brandName: string;
   hrefFor: (runId: string) => string;
+  /** A task kind and brief values another screen prefilled (UX-09 "Plan with agent"); the person can still edit. */
+  initial?: { taskKind: string; values: BriefValues };
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
+/** Runs that start from their own command, never from this form (agents.runs.start refuses them). */
+const COMMAND_ONLY: ReadonlySet<string> = new Set(['brand_onboarding']);
 
 /**
- * Spec 12.5: the mode actually granted is min(requested, principal, tenant policy, entitlement); the server decides
- * and the form only requests. One idempotency key per submission intent, renewed after success.
+ * Spec 12.5 through the skill, not the API (UX-08): the principal is picked from those granted this brand, the task
+ * kind from those a published skill serves here, and the brief is the skill's input schema as fields. The mode
+ * actually granted is min(requested, principal, tenant policy, entitlement); the server decides and the form only
+ * requests, showing the principal's ceiling. One idempotency key per submission intent, renewed after success.
  */
-export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps) {
+export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunFormProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const intent = useIntentKey();
+  const principals = useAgentPrincipals(brandId);
+  const taskKinds = useTaskKinds(brandId);
   const [principalId, setPrincipalId] = useState('');
-  const [taskKind, setTaskKind] = useState<string>('copywriting');
+  const [taskKind, setTaskKind] = useState<string>(initial?.taskKind ?? 'copywriting');
   const [autonomy, setAutonomy] = useState<string>('create');
-  const [brief, setBrief] = useState('{\n  "goal": ""\n}');
-  const [briefError, setBriefError] = useState<string | null>(null);
+  const [values, setValues] = useState<BriefValues>(initial?.values ?? {});
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const start = useMutation(
     trpc.agents.runs.start.mutationOptions({
       trpc: intentContext(intent.key),
@@ -43,30 +51,35 @@ export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps)
       },
     }),
   );
+  const principal = principals.items.find((p) => p.id === principalId) ?? null;
+  const kinds = taskKinds.data?.items ?? [];
+  const kind = kinds.find((k) => k.taskKind === taskKind) ?? null;
+  // The first resolved skill is the one a run would use first (spec 12.3 precedence); its schema shapes the form.
+  const skill = kind?.skills[0] ?? null;
+  const schema = (skill?.inputSchema ?? {}) as ObjectSchema;
+  const ceiling = principal ? AUTONOMY_ORDER.indexOf(principal.maxAutonomy) : AUTONOMY_ORDER.length - 1;
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(brief);
-    } catch (err) {
-      setBriefError(`Not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    if (!isRecord(parsed)) {
-      setBriefError('The brief must be a JSON object.');
-      return;
-    }
-    setBriefError(null);
+    if (!principal) return;
+    const built = briefFromValues(schema, values);
+    setErrors(built.errors);
+    if (Object.keys(built.errors).length > 0) return;
     start.mutate({
       brandId,
-      servicePrincipalId: principalId.trim(),
+      servicePrincipalId: principal.id,
       taskKind: TaskKind.parse(taskKind),
       requestedAutonomy: AutonomyMode.parse(autonomy),
-      brief: parsed,
+      brief: built.brief,
     });
   };
   const ui = start.isError ? toUiError(start.error) : null;
   const fieldIssue = (path: string) => ui?.details.find((d) => d.path === path)?.issue;
+  const blocked = !principal
+    ? 'Choose a service principal'
+    : !skill
+      ? 'No published skill serves this task kind for the brand'
+      : undefined;
   return (
     <section aria-labelledby="start-run-title" id="start-run" className="flex flex-col gap-4">
       <h2 id="start-run-title" className="text-lg font-semibold">
@@ -76,57 +89,125 @@ export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps)
         <Field label="Brand" htmlFor="run-brand" hint="Runs belong to the brand in the address bar.">
           <Input id="run-brand" value={brandName} readOnly aria-readonly="true" />
         </Field>
-        <Field
-          label="Service principal"
-          htmlFor="run-principal"
-          hint="sp_… of an active agent principal (access.servicePrincipals). Its grants and maximum autonomy bound the run."
-          error={fieldIssue('servicePrincipalId')}
-        >
-          <Input
-            id="run-principal"
-            value={principalId}
-            onChange={(e) => setPrincipalId(e.target.value)}
-            autoComplete="off"
-            required
+        {principals.isPending && <Skeleton label="Loading service principals" lines={1} />}
+        {principals.isError && toUiError(principals.error).kind === 'forbidden' && (
+          <StatusBanner
+            tone="critical"
+            title="Permission denied"
+            description={`${toUiError(principals.error).message} Starting a run needs the agent.start_run permission for this brand.`}
+            data-testid="start-denied"
           />
-        </Field>
+        )}
+        {principals.isError && toUiError(principals.error).kind !== 'forbidden' && (
+          <RequestError error={principals.error} onRetry={() => void principals.refetch()} />
+        )}
+        {principals.isSuccess && principals.items.length === 0 && (
+          <StatusBanner
+            tone="warning"
+            title="No agent principal is granted this brand"
+            description="An owner or admin creates one under Settings → Members and mandates with grants for this brand; runs start under a principal's grants and autonomy ceiling."
+            data-testid="no-principals"
+          />
+        )}
+        {principals.isSuccess && principals.items.length > 0 && (
+          <Field
+            label="Service principal"
+            htmlFor="run-principal"
+            hint={
+              principal
+                ? `Ceiling ${principal.maxAutonomy.replace(/_/g, ' ')}; acts on this brand with ${principal.actions.join(', ')}.`
+                : 'The agent identity the run acts as; its grants and autonomy ceiling bound the run.'
+            }
+            error={fieldIssue('servicePrincipalId')}
+          >
+            <Select
+              id="run-principal"
+              value={principalId}
+              onValueChange={(id) => {
+                setPrincipalId(id);
+                const p = principals.items.find((x) => x.id === id);
+                if (
+                  p &&
+                  AUTONOMY_ORDER.indexOf(autonomy as (typeof AUTONOMY_ORDER)[number]) >
+                    AUTONOMY_ORDER.indexOf(p.maxAutonomy)
+                )
+                  setAutonomy(p.maxAutonomy);
+              }}
+              placeholder="Choose a principal"
+              options={principals.items.map((p) => ({
+                value: p.id,
+                label: `${p.name} · up to ${p.maxAutonomy.replace(/_/g, ' ')}`,
+              }))}
+            />
+          </Field>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Task kind" htmlFor="run-task" error={fieldIssue('taskKind')}>
+          <Field
+            label="Task kind"
+            htmlFor="run-task"
+            error={fieldIssue('taskKind')}
+            hint={
+              taskKinds.isPending
+                ? 'Loading the skills published for this brand…'
+                : skill
+                  ? `${skill.title} v${skill.versionNumber} (${skill.key}) serves it here.`
+                  : 'No published skill serves this kind for the brand yet.'
+            }
+          >
             <Select
               id="run-task"
               value={taskKind}
-              onValueChange={setTaskKind}
-              options={TaskKind.options.map((k) => ({ value: k, label: k.replace(/_/g, ' ') }))}
+              onValueChange={(k) => {
+                setTaskKind(k);
+                setValues({});
+                setErrors({});
+              }}
+              options={TaskKind.options
+                .filter((k) => !COMMAND_ONLY.has(k))
+                .map((k) => ({
+                  value: k,
+                  label: `${k.replace(/_/g, ' ')}${kinds.length && !kinds.find((x) => x.taskKind === k)?.skills.length ? ' · no skill' : ''}`,
+                }))}
             />
           </Field>
           <Field
             label="Requested autonomy"
             htmlFor="run-autonomy"
-            hint="Granted mode is the minimum of this, the principal, tenant policy and plan."
+            hint="Granted mode is the minimum of this, the principal's ceiling, tenant policy and plan."
           >
             <Select
               id="run-autonomy"
               value={autonomy}
               onValueChange={setAutonomy}
-              options={AutonomyMode.options.map((m) => ({ value: m, label: m.replace(/_/g, ' ') }))}
+              options={AUTONOMY_ORDER.map((m, i) => ({
+                value: m,
+                label: `${m.replace(/_/g, ' ')}${i > ceiling ? ' · above the principal’s ceiling' : ''}`,
+                disabled: i > ceiling,
+              }))}
             />
           </Field>
         </div>
-        <Field
-          label="Brief (JSON object)"
-          htmlFor="run-brief"
-          error={briefError ?? fieldIssue('brief')}
-          hint="Validated against the skill's input schema when the run starts."
-        >
-          <Textarea
-            id="run-brief"
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            rows={6}
-            spellCheck={false}
-            className="font-mono text-xs"
-          />
-        </Field>
+        <fieldset className="flex flex-col gap-3" data-testid="run-brief">
+          <legend className="text-xs font-medium text-muted-foreground">
+            Brief{skill ? ` for ${skill.title}` : ''}
+          </legend>
+          {skill?.description && <p className="text-xs text-muted-foreground">{skill.description}</p>}
+          {taskKinds.isPending && <Skeleton label="Loading the brief fields" lines={2} />}
+          {skill && (
+            <SchemaFields
+              schema={schema}
+              values={values}
+              errors={errors}
+              onChange={(key, value) => setValues((v) => ({ ...v, [key]: value }))}
+              idPrefix="run-brief"
+            />
+          )}
+          {fieldIssue('brief') && (
+            <p className="text-xs text-status-critical" role="alert">
+              {fieldIssue('brief')}
+            </p>
+          )}
+        </fieldset>
         {ui && ui.kind === 'forbidden' && (
           <StatusBanner
             tone="critical"
@@ -145,8 +226,8 @@ export function StartRunForm({ brandId, brandName, hrefFor }: StartRunFormProps)
           <Button
             type="submit"
             variant="primary"
-            disabled={start.isPending || !principalId.trim()}
-            disabledReason={principalId.trim() ? undefined : 'Enter a service principal id first'}
+            disabled={start.isPending || Boolean(blocked)}
+            disabledReason={blocked}
           >
             {start.isPending ? 'Starting…' : 'Start run'}
           </Button>

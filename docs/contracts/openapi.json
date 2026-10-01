@@ -452,6 +452,39 @@
         }
       }
     },
+    "/trpc/access.servicePrincipals.list": {
+      "get": {
+        "operationId": "access.servicePrincipals.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/access.servicePrincipals.revoke": {
       "post": {
         "operationId": "access.servicePrincipals.revoke",
@@ -524,6 +557,55 @@
                   }
                 },
                 "required": ["tenantId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/agents.budgets.read": {
+      "get": {
+        "operationId": "agents.budgets.read",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/agents.budgets.setLimit": {
+      "post": {
+        "operationId": "agents.budgets.setLimit",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "period": {
+                    "type": "string",
+                    "enum": ["day", "month"]
+                  },
+                  "limitMicros": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "period", "limitMicros"]
               }
             }
           }
@@ -2846,6 +2928,168 @@
                   }
                 },
                 "required": ["contentPackageId", "expectedVersion", "copy"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.planItems.drop": {
+      "post": {
+        "operationId": "content.planItems.drop",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planItemId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["planItemId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.planItems.list": {
+      "get": {
+        "operationId": "content.planItems.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "briefId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["briefId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.planItems.propose": {
+      "post": {
+        "operationId": "content.planItems.propose",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "briefId": {
+                    "type": "string"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string"
+                        },
+                        "channelKey": {
+                          "type": "string"
+                        },
+                        "channelConnectionId": {
+                          "type": "string"
+                        },
+                        "theme": {
+                          "type": "string"
+                        },
+                        "formatKey": {
+                          "type": "string"
+                        },
+                        "factIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["date", "channelKey", "theme", "formatKey"]
+                    }
+                  }
+                },
+                "required": ["briefId", "items"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.planItems.restore": {
+      "post": {
+        "operationId": "content.planItems.restore",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planItemId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["planItemId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.planItems.update": {
+      "post": {
+        "operationId": "content.planItems.update",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planItemId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "date": {
+                    "type": "string"
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "type": "string"
+                  },
+                  "formatKey": {
+                    "type": "string"
+                  },
+                  "factIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["planItemId", "expectedVersion"]
               }
             }
           }
@@ -6708,6 +6952,27 @@
         }
       }
     },
+    "/trpc/skills.taskKinds": {
+      "get": {
+        "operationId": "skills.taskKinds",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/skills.versions.create": {
       "post": {
         "operationId": "skills.versions.create",
@@ -8917,6 +9182,30 @@
           "required": ["kind", "name", "grants"]
         }
       },
+      "access.servicePrincipals.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
       "access.servicePrincipals.revoke": {
         "type": "mutation",
         "input": {
@@ -8964,6 +9253,37 @@
             }
           },
           "required": ["tenantId"]
+        }
+      },
+      "agents.budgets.read": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "agents.budgets.setLimit": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "period": {
+              "type": "string",
+              "enum": ["day", "month"]
+            },
+            "limitMicros": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "period", "limitMicros"]
         }
       },
       "agents.routingPolicy.get": {
@@ -10751,6 +11071,123 @@
             }
           },
           "required": ["contentPackageId", "expectedVersion", "copy"]
+        }
+      },
+      "content.planItems.drop": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "planItemId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["planItemId", "expectedVersion"]
+        }
+      },
+      "content.planItems.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "briefId": {
+              "type": "string"
+            }
+          },
+          "required": ["briefId"]
+        }
+      },
+      "content.planItems.propose": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "briefId": {
+              "type": "string"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string"
+                  },
+                  "channelKey": {
+                    "type": "string"
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "type": "string"
+                  },
+                  "formatKey": {
+                    "type": "string"
+                  },
+                  "factIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["date", "channelKey", "theme", "formatKey"]
+              }
+            }
+          },
+          "required": ["briefId", "items"]
+        }
+      },
+      "content.planItems.restore": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "planItemId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["planItemId", "expectedVersion"]
+        }
+      },
+      "content.planItems.update": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "planItemId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "date": {
+              "type": "string"
+            },
+            "channelConnectionId": {
+              "type": "string"
+            },
+            "theme": {
+              "type": "string"
+            },
+            "formatKey": {
+              "type": "string"
+            },
+            "factIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["planItemId", "expectedVersion"]
         }
       },
       "content.revisions.get": {
@@ -13779,6 +14216,18 @@
             }
           },
           "required": ["page"]
+        }
+      },
+      "skills.taskKinds": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
         }
       },
       "skills.versions.create": {

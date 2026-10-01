@@ -9,6 +9,7 @@ import {
   MemberIssuePasswordSetup,
   MemberSetRole,
   ServicePrincipalCreate,
+  ServicePrincipalList,
   ServicePrincipalRevoke,
   SupportSessionEscalate,
 } from '@oremedia/contracts/access';
@@ -151,6 +152,9 @@ export const accessRouter = router({
   }),
 
   servicePrincipals: router({
+    list: tenantQuery
+      .input(ServicePrincipalList)
+      .query(({ ctx, input }) => accessService.listServicePrincipals(ctx.tenant.actor, input)),
     create: tenantMutation
       .input(ServicePrincipalCreate)
       .mutation(({ ctx, input }) =>
