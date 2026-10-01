@@ -42,7 +42,10 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    api. Then point the application services' `DATABASE_URL` at the application user: a MySQL URL whose user is
    `oremedia_app`, whose password is the reference `${{db-roles.DB_APP_PASSWORD}}`, and whose host and database
    are `${{MySQL.RAILWAY_PRIVATE_DOMAIN}}` and `${{MySQL.MYSQL_DATABASE}}` (nobody types the password); worker-core's
-   `DATABASE_URL_RETENTION` names the retention user the same way. Both SQL files are generated
+   `DATABASE_URL_RETENTION` names the retention user the same way. Migrations need DDL the application role does
+   not hold, so the api (and the approval monitor, which also migrates) keep `DATABASE_URL_MIGRATE` set to the admin
+   connection: `migrate.js` uses it for the pre-deploy step only and the running process never reads it. Both SQL
+   files are generated
    (`pnpm tsx tooling/scripts/generate-db-roles.ts`); redeploy `db-roles` after a migration that adds tables (the
    app role's grants are per table).
 6. Temporal Cloud: create the namespace, upload the client certificate as `TEMPORAL_TLS_CERT_REF`. Self-hosted:
