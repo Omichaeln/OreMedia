@@ -39,9 +39,10 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    when missing, sets their passwords, revokes and re-grants exactly `packages/db/roles/app-role.sql` and
    `retention-role.sql`, then logs the same `PASS`/`FAIL` lines as `pnpm db:roles:check` (section 3b). It waits
    for every table the role names before it grants, so a push carrying a migration can redeploy it alongside the
-   api. Then point the application services' `DATABASE_URL` at the application user
-   (`mysql://oremedia_app:${{db-roles.DB_APP_PASSWORD}}@${{MySQL.RAILWAY_PRIVATE_DOMAIN}}:3306/${{MySQL.MYSQL_DATABASE}}`)
-   and worker-core's `DATABASE_URL_RETENTION` at the retention user the same way. Both SQL files are generated
+   api. Then point the application services' `DATABASE_URL` at the application user: a MySQL URL whose user is
+   `oremedia_app`, whose password is the reference `${{db-roles.DB_APP_PASSWORD}}`, and whose host and database
+   are `${{MySQL.RAILWAY_PRIVATE_DOMAIN}}` and `${{MySQL.MYSQL_DATABASE}}` (nobody types the password); worker-core's
+   `DATABASE_URL_RETENTION` names the retention user the same way. Both SQL files are generated
    (`pnpm tsx tooling/scripts/generate-db-roles.ts`); redeploy `db-roles` after a migration that adds tables (the
    app role's grants are per table).
 6. Temporal Cloud: create the namespace, upload the client certificate as `TEMPORAL_TLS_CERT_REF`. Self-hosted:
