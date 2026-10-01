@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  DESTINATION_KIND_CAPABILITIES,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -9,6 +8,7 @@ import {
   SourceUseCheck,
   SourceUsePolicyList,
   SourceUsePolicySet,
+  sourceUseIssues,
   type DestinationV1,
   type SourceUseCheckResult,
   type SourceUsePolicyV1,
@@ -151,6 +151,11 @@ export function destinationsRouters(
       brandOf(input.brandId);
       if (!CONNECTORS.has(b.role())) throw new PolicyDeniedError('role_missing');
       const existing = b.destinations.find((d) => d.kind === input.kind && d.externalId === input.externalId);
+      if (existing && existing.brandId !== input.brandId)
+        throw new ValidationFailedError(
+          [{ path: 'externalId', issue: 'remote_identity_registered_to_another_brand' }],
+          'This remote identity is already registered to another brand',
+        );
       if (existing) throw new ConflictError('Destination', existing.id, existing.version);
       const row: DestinationV1 = {
         id: `dst_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
@@ -215,19 +220,10 @@ export function destinationsRouters(
       set: mutation.input(SourceUsePolicySet).mutation(({ input }) => {
         brandOf(input.brandId);
         if (!POLICY_MANAGERS.has(b.role())) throw new PolicyDeniedError('role_missing');
-        const capable = DESTINATION_KIND_CAPABILITIES[input.destinationKind].uses;
         const allowedUses = [...new Set(input.allowedUses)];
-        const beyond = allowedUses.filter((u) => !capable.includes(u));
-        if (beyond.length)
-          throw new ValidationFailedError(
-            beyond.map((u) => ({
-              path: 'allowedUses',
-              issue: `${u}_not_supported_by_${input.destinationKind}`,
-            })),
-          );
+        const issues = sourceUseIssues(input.destinationKind, allowedUses, input.retentionDays);
+        if (issues.length) throw new ValidationFailedError(issues);
         const retains = allowedUses.includes('retain');
-        if (retains && !input.retentionDays)
-          throw new ValidationFailedError([{ path: 'retentionDays', issue: 'required_for_retain' }]);
         if (new Date(input.reviewDueAt).getTime() <= Date.now())
           throw new ValidationFailedError([{ path: 'reviewDueAt', issue: 'not_in_future' }]);
         const values = {

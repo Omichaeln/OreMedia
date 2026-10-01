@@ -56,7 +56,7 @@ export const sourceUsePolicies = mysqlTable(
     dataType: varchar('data_type', { length: 80 }).notNull(),
     allowedUses: json('allowed_uses').$type<string[]>().notNull(),
     retentionDays: int('retention_days'),
-    version: int('version').notNull().default(1),
+    version: version(), // the service writes 1 on the first record: a policy is never version 0
     reviewedAt: ts('reviewed_at').notNull(),
     reviewDueAt: ts('review_due_at').notNull(),
     reviewedById: ref('reviewed_by_id').notNull(),

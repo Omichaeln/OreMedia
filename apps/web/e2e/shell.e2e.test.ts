@@ -445,6 +445,47 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       allowedUses: ['read', 'retain'],
       retentionDays: 30,
     });
+    // A validation detail lands on its field: Retain ticked on the Business Profile row cannot happen (no box),
+    // so on the GA4 row the retention period is cleared and the save is refused by the server with the reason.
+    await ga4Policy.getByLabel('Retention (days)').fill('');
+    await ga4Policy.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(() => ga4Policy.getByText('Needed when data is retained').count(), { timeout: 15_000 })
+      .toBe(1);
+    // Add a data type: a new (kind, data type) row starts at version 1.
+    const add = page.getByTestId('source-use-add');
+    await add.locator('#policy-new-kind').click();
+    await page.getByRole('option', { name: 'Website CMS' }).click();
+    await add.getByLabel('Data type').fill('cms.articles');
+    await add.getByRole('checkbox', { name: 'Write' }).check();
+    await add.getByRole('button', { name: 'Save policy' }).click();
+    const added = page.getByTestId('source-use').getByRole('listitem').filter({ hasText: 'cms.articles' });
+    await expect.poll(() => added.count(), { timeout: 15_000 }).toBe(1);
+    expect(await added.getByTestId('policy-version').textContent()).toContain('Version 1');
+    // Registering the GA4 property again is a conflict the form explains, not a second row.
+    await page.locator('#destination-kind').click();
+    await page.getByRole('option', { name: 'Google Analytics 4 property' }).click();
+    await page.getByLabel('External id').fill('properties/424242');
+    await page.getByLabel('Display name').fill('Acme web again');
+    await page.getByRole('button', { name: 'Register destination' }).click();
+    await page.getByTestId('destination-conflict').waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('destinations-ga4_property').getByRole('listitem').count()).toBe(1);
+    // Disconnect behind a confirmation: the row stays, marked disconnected, with no further action.
+    const gbp = page.getByTestId('destination-dst_e2e_gbp');
+    await gbp.getByRole('button', { name: 'Disconnect' }).click();
+    const dialog = page.getByRole('alertdialog', { name: /Disconnect Acme Harare/ });
+    await dialog.waitFor({ timeout: 15_000 });
+    await dialog.getByTestId('confirm-disconnect-destination').click();
+    await expect.poll(() => gbp.textContent(), { timeout: 15_000 }).toContain('Disconnected');
+    expect(await gbp.getByRole('button', { name: 'Disconnect' }).count()).toBe(0);
+    expect(backend.destinations.destinations.find((d) => d.id === 'dst_e2e_gbp')).toMatchObject({
+      status: 'disconnected',
+      version: 1,
+    });
+    Object.assign(backend.destinations.destinations.find((d) => d.id === 'dst_e2e_gbp') ?? {}, {
+      status: 'active',
+      version: 0,
+    });
     await page.close();
   }, 60_000);
 

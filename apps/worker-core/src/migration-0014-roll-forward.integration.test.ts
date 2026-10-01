@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { contentPackages, planItems } from '@oremedia/db/schema/content';
+import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { contentService, registerChannelResolver, resetChannelResolver } from '@oremedia/module-content';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -16,9 +17,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0013_password_setup_tokens';
 const NEW_TABLES: MySqlTable[] = [planItems];
+/** Added after 0014 (R2-0): absent at both heads this suite runs at, so never snapshotted. */
+const LATER_TABLES: MySqlTable[] = [brandDestinations, sourceUsePolicies];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0014 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

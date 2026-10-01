@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
+import type { DestinationKind } from '@oremedia/contracts/destinations';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
@@ -13,7 +14,7 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
 import { sourceUsePolicies } from '@oremedia/db/schema/destinations';
-import { auditEvents } from '@oremedia/db/schema/operations';
+import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { newId } from '@oremedia/domain/ids';
 import { destinationService, sourceUsePolicyService } from './service';
 
@@ -145,16 +146,34 @@ describe('destinations module against MySQL 8', () => {
     expect(audits).toHaveLength(2);
   });
 
-  it('a remote identity is registered once per tenant, whichever brand asks', async () => {
+  it('a remote identity is registered once per tenant: a conflict for its own brand, refused without a trace for another', async () => {
     await expect(
       run(tenantA, (tx) =>
         destinationService.register(
           owner(),
-          { brandId: brandA2, kind: 'ga4_property', externalId: 'properties/1001', displayName: 'Again' },
+          { brandId: brandA, kind: 'ga4_property', externalId: 'properties/1001', displayName: 'Again' },
           tx,
         ),
       ),
-    ).rejects.toBeInstanceOf(ConflictError);
+    ).rejects.toMatchObject({ code: 'CONFLICT', resourceId: propertyId });
+    const refused = await run(tenantA, (tx) =>
+      destinationService.register(
+        owner(),
+        { brandId: brandA2, kind: 'ga4_property', externalId: 'properties/1001', displayName: 'Again' },
+        tx,
+      ),
+    ).catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(ValidationFailedError);
+    expect((refused as ValidationFailedError).details).toEqual([
+      { path: 'externalId', issue: 'remote_identity_registered_to_another_brand' },
+    ]);
+    expect(JSON.stringify(refused)).not.toContain(propertyId); // neither the id nor the version of A1's row
+    expect(JSON.stringify(refused)).not.toContain('version');
+    const events = await tdb.db
+      .select()
+      .from(outboxEvents)
+      .where(and(eq(outboxEvents.tenantId, tenantA), eq(outboxEvents.eventType, 'destination.registered')));
+    expect(events).toHaveLength(2);
     // Another tenant may hold the same remote identity (uq_destination_remote is per tenant).
     await tdb.db.insert(memberships).values({
       id: 'mem_destinations_test_b',
@@ -209,6 +228,12 @@ describe('destinations module against MySQL 8', () => {
     expect(checked.health).toBe('degraded');
     expect(checked.healthCheckedAt).not.toBeNull();
     expect(checked.version).toBe(1);
+    const audits = await tdb.db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'destination.health')));
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toMatchObject({ brandId: brandA, fromState: 'unknown', toState: 'degraded' });
   });
 
   it('disconnects once; a second disconnection is refused', async () => {
@@ -234,6 +259,30 @@ describe('destinations module against MySQL 8', () => {
       .from(auditEvents)
       .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'destination.disconnect')));
     expect(audits).toHaveLength(1);
+    const events = await tdb.db
+      .select()
+      .from(outboxEvents)
+      .where(and(eq(outboxEvents.tenantId, tenantA), eq(outboxEvents.eventType, 'destination.disconnected')));
+    expect(events.map((e) => e.aggregateId)).toEqual([id]);
+    // Still listed and readable, as disconnected; no longer health-checked.
+    const listed = await inTenant(tenantA, () => destinationService.list(owner(), { brandId: brandA }));
+    expect(listed.items.find((d) => d.id === id)?.status).toBe('disconnected');
+    const got = await inTenant(tenantA, () =>
+      destinationService.get(owner(), { brandId: brandA, destinationId: id }),
+    );
+    expect(got.status).toBe('disconnected');
+    await expect(
+      run(tenantA, (tx) =>
+        destinationService.setHealth(
+          owner(),
+          { brandId: brandA, destinationId: id, health: 'healthy', expectedVersion: 1 },
+          tx,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      details: [{ path: 'destinationId', issue: 'disconnected' }],
+    });
   });
 
   it('a source-use policy starts at version 1, then moves on only from the version named', async () => {
@@ -298,6 +347,15 @@ describe('destinations module against MySQL 8', () => {
       ),
     );
     expect(v2).toMatchObject({ id: v1.id, version: 2, allowedUses: ['read'], retentionDays: null });
+    const audits = await tdb.db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'source_use.set')))
+      .orderBy(asc(auditEvents.id));
+    expect(audits.map((a) => a.metadata)).toEqual([
+      expect.objectContaining({ dataType: 'ga4.reports', fromVersion: null, toVersion: 1 }),
+      expect.objectContaining({ dataType: 'ga4.reports', fromVersion: 1, toVersion: 2 }),
+    ]);
     const listed = await inTenant(tenantA, () =>
       sourceUsePolicyService.list(member(tenantA, 'analyst'), { brandId: brandA }),
     );
@@ -358,7 +416,7 @@ describe('destinations module against MySQL 8', () => {
     const ask = (
       dataType: string,
       use: 'read' | 'retain' | 'write',
-      destinationKind = 'ga4_property' as const,
+      destinationKind: DestinationKind = 'ga4_property',
     ) =>
       inTenant(tenantA, () =>
         sourceUsePolicyService.check(member(tenantA, 'analyst'), {
@@ -371,6 +429,24 @@ describe('destinations module against MySQL 8', () => {
     expect(await ask('ga4.events', 'read')).toEqual({ allowed: false, reason: 'no_policy', policy: null });
     expect(await ask('ga4.reports', 'read')).toMatchObject({ allowed: true, reason: 'allowed' });
     expect(await ask('ga4.reports', 'retain')).toMatchObject({ allowed: false, reason: 'not_allowed' });
+    // A use the kind never offers is simply not allowed (the policy could never have listed it).
+    await run(tenantA, (tx) =>
+      sourceUsePolicyService.set(
+        owner(),
+        {
+          brandId: brandA,
+          destinationKind: 'gbp_location',
+          dataType: 'gbp.reviews',
+          allowedUses: ['read'],
+          reviewDueAt: inDays(30),
+        },
+        tx,
+      ),
+    );
+    expect(await ask('gbp.reviews', 'write', 'gbp_location')).toMatchObject({
+      allowed: false,
+      reason: 'not_allowed',
+    });
     const now = new Date();
     await tdb.db.insert(sourceUsePolicies).values({
       id: newId('sourceUsePolicy'),
@@ -390,6 +466,50 @@ describe('destinations module against MySQL 8', () => {
       reason: 'review_overdue',
       policy: { version: 3 },
     });
+  });
+
+  it('a member granted other brands only sees nothing of this one: NOT_FOUND on every read and on register', async () => {
+    const restricted: ResolvedActor = {
+      kind: 'user',
+      id: USER,
+      tenantId: tenantA,
+      membershipId: 'mem_destinations_test',
+      membershipStatus: 'active',
+      role: 'admin',
+      allBrands: false,
+      brandGrants: [{ brandId: brandA2, roles: ['admin'] }],
+      mfaEnrolled: false,
+    };
+    const restrictedCtx: TenantContext = { ...ctx(tenantA), brandIds: new Set([brandA2]) };
+    const as = <T>(fn: (tx: Tx) => Promise<T>) => runInTenant(restrictedCtx, () => withTransaction(fn));
+    await expect(as(() => destinationService.list(restricted, { brandId: brandA }))).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
+    await expect(
+      as(() => destinationService.get(restricted, { brandId: brandA, destinationId: propertyId })),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      as(() => sourceUsePolicyService.list(restricted, { brandId: brandA })),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      as(() =>
+        sourceUsePolicyService.check(restricted, {
+          brandId: brandA,
+          destinationKind: 'ga4_property',
+          dataType: 'ga4.reports',
+          use: 'read',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      as((tx) =>
+        destinationService.register(
+          restricted,
+          { brandId: brandA, kind: 'discord_webhook', externalId: 'hook-9', displayName: 'Nope' },
+          tx,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it('another tenant’s brand, and another brand’s destination, are NOT_FOUND on every read', async () => {

@@ -8,6 +8,7 @@ import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
+import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -25,6 +26,8 @@ const LATER_TABLES: MySqlTable[] = [
   publicationRemoteChanges,
   passwordSetupTokens,
   planItems,
+  brandDestinations,
+  sourceUsePolicies,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

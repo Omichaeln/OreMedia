@@ -167,7 +167,8 @@ export function SettingsScreen() {
         <TabPanel value="destinations">
           <DestinationSettings
             canManage={isAdmin}
-            canConnect={role !== null && DESTINATION_ROLES.has(role)}
+            canConnectDestinations={role !== null && DESTINATION_ROLES.has(role)}
+            canManageDestinations={role !== null && DESTINATION_ROLES.has(role)}
           />
         </TabPanel>
         <TabPanel value="mandates">

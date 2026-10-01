@@ -42,7 +42,9 @@ const STATUS_CHIP: Record<DestinationStatus, { tone: Tone; label: string }> = {
 };
 const USE_LABEL: Record<SourceUse, string> = { read: 'Read', retain: 'Retain', write: 'Write' };
 
-const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+/** Policy dates are days in UTC (the input sends midnight UTC), so the label reads them in UTC too. */
+const day = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: 'UTC' });
 /** A date input's value (`YYYY-MM-DD`) for an instant; the policy's due date is sent as midnight UTC of that day. */
 const toDateInput = (iso: string) => iso.slice(0, 10);
 const fromDateInput = (date: string) => `${date}T00:00:00.000Z`;
@@ -101,6 +103,7 @@ function DisconnectButton({ destination }: { destination: DestinationDto }) {
           tone="critical"
           title="Permission denied"
           description={`${ui.message} Disconnecting needs destination.manage for this brand.`}
+          data-testid="disconnect-denied"
         />
       )}
       {ui && ui.kind !== 'forbidden' && (
@@ -110,7 +113,13 @@ function DisconnectButton({ destination }: { destination: DestinationDto }) {
   );
 }
 
-function DestinationRow({ destination, canConnect }: { destination: DestinationDto; canConnect: boolean }) {
+function DestinationRow({
+  destination,
+  canManageDestinations,
+}: {
+  destination: DestinationDto;
+  canManageDestinations: boolean;
+}) {
   const health = HEALTH_CHIP[destination.health];
   const status = STATUS_CHIP[destination.status];
   return (
@@ -131,7 +140,7 @@ function DestinationRow({ destination, canConnect }: { destination: DestinationD
           ` · checked ${new Date(destination.healthCheckedAt).toLocaleString()}`}
         {destination.grantedScopes.length > 0 && ` · scopes: ${destination.grantedScopes.join(', ')}`}
       </p>
-      {canConnect && destination.status === 'active' && (
+      {canManageDestinations && destination.status === 'active' && (
         <div className="flex flex-wrap items-start gap-2">
           <DisconnectButton destination={destination} />
         </div>
@@ -160,6 +169,9 @@ function RegisterDestination({ brandId }: { brandId: string }) {
     }),
   );
   const ui = register.isError ? toUiError(register.error) : null;
+  const otherBrand = ui?.details.some(
+    (d) => d.path === 'externalId' && d.issue === 'remote_identity_registered_to_another_brand',
+  );
   const ready = externalId.trim().length > 0 && displayName.trim().length > 0;
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -203,17 +215,26 @@ function RegisterDestination({ brandId }: { brandId: string }) {
           tone="critical"
           title="Permission denied"
           description={`${ui.message} Registering needs destination.connect for this brand.`}
+          data-testid="register-denied"
         />
       )}
       {ui && ui.kind === 'conflict' && (
         <StatusBanner
           tone="warning"
           title="Already registered"
-          description="This remote identity is registered for a brand of this company already."
+          description="This brand holds this remote identity already; it is listed above."
           data-testid="destination-conflict"
         />
       )}
-      {ui && ui.kind !== 'forbidden' && ui.kind !== 'conflict' && (
+      {otherBrand && (
+        <StatusBanner
+          tone="warning"
+          title="Registered to another brand"
+          description="Another brand of this company holds this remote identity; a destination belongs to one brand."
+          data-testid="destination-other-brand"
+        />
+      )}
+      {ui && ui.kind !== 'forbidden' && ui.kind !== 'conflict' && !otherBrand && (
         <RequestError error={register.error} title="The destination was not registered" />
       )}
       <div>
@@ -358,6 +379,11 @@ function PolicyRow({ policy, canManage }: { policy: SourceUsePolicyDto; canManag
         setDraft(null);
         void queryClient.invalidateQueries(trpc.destinations.sourceUse.pathFilter());
       },
+      // The policy moved on under this row: the list is refreshed so the next save names the current version.
+      onError: (err) => {
+        if (toUiError(err).kind === 'conflict')
+          void queryClient.invalidateQueries(trpc.destinations.sourceUse.pathFilter());
+      },
     }),
   );
   const ui = set.isError ? toUiError(set.error) : null;
@@ -416,7 +442,15 @@ function PolicyRow({ policy, canManage }: { policy: SourceUsePolicyDto; canManag
           description="Someone saved another version of this policy; the list shows the current one."
         />
       )}
-      {ui && ui.kind !== 'conflict' && !ui.details.length && (
+      {ui && ui.kind === 'forbidden' && (
+        <StatusBanner
+          tone="critical"
+          title="Permission denied"
+          description={`${ui.message} Changing the policy needs source_use.manage for this brand.`}
+          data-testid="source-use-denied"
+        />
+      )}
+      {ui && ui.kind !== 'conflict' && ui.kind !== 'forbidden' && !ui.details.length && (
         <RequestError error={set.error} title="The policy was not saved" />
       )}
     </li>
@@ -443,6 +477,11 @@ function AddPolicy({ brandId }: { brandId: string }) {
         setDataType('');
         setDraft({ uses: [], retentionDays: '', reviewDue: defaultReviewDue() });
         void queryClient.invalidateQueries(trpc.destinations.sourceUse.pathFilter());
+      },
+      // A row for this kind and data type exists already: the list is refreshed so it shows up to edit.
+      onError: (err) => {
+        if (toUiError(err).kind === 'conflict')
+          void queryClient.invalidateQueries(trpc.destinations.sourceUse.pathFilter());
       },
     }),
   );
@@ -501,7 +540,12 @@ function AddPolicy({ brandId }: { brandId: string }) {
         details={ui?.details ?? []}
       />
       {ui && ui.kind === 'forbidden' && (
-        <StatusBanner tone="critical" title="Permission denied" description={ui.message} />
+        <StatusBanner
+          tone="critical"
+          title="Permission denied"
+          description={ui.message}
+          data-testid="source-use-denied"
+        />
       )}
       {ui && ui.kind === 'conflict' && (
         <StatusBanner
@@ -533,7 +577,18 @@ function AddPolicy({ brandId }: { brandId: string }) {
  * edits: one row per kind and data type, uses limited to what the kind offers, retention only when data is
  * retained, a review date, each save the next version.
  */
-export function DestinationSettings({ canManage, canConnect }: { canManage: boolean; canConnect: boolean }) {
+export function DestinationSettings({
+  canManage,
+  canConnectDestinations,
+  canManageDestinations,
+}: {
+  /** source_use.manage: edits the policy table (owners and admins). */
+  canManage: boolean;
+  /** destination.connect: registers a destination. */
+  canConnectDestinations: boolean;
+  /** destination.manage: disconnects one. */
+  canManageDestinations: boolean;
+}) {
   const { brandId, brand } = useBrandContext();
   const destinations = useDestinations(brandId);
   const policies = useSourceUsePolicies(brandId);
@@ -566,12 +621,12 @@ export function DestinationSettings({ canManage, canConnect }: { canManage: bool
             <h3 className="text-sm font-semibold">{kindLabel(group.kind)}</h3>
             <ul className="divide-y divide-border" aria-label={kindLabel(group.kind)}>
               {group.items.map((d) => (
-                <DestinationRow key={d.id} destination={d} canConnect={canConnect} />
+                <DestinationRow key={d.id} destination={d} canManageDestinations={canManageDestinations} />
               ))}
             </ul>
           </div>
         ))}
-        {canConnect && <RegisterDestination brandId={brandId} />}
+        {canConnectDestinations && <RegisterDestination brandId={brandId} />}
       </Section>
       <Section id="source-use-heading" title="Source-use policy" testId="source-use">
         <p className="text-xs text-muted-foreground">

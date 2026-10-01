@@ -155,6 +155,12 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       ready: (page) => testId(page, `channel-${P5.channels.expired}`),
     },
     {
+      // R2-0: the destinations list, the register form and the source-use policy table with its per-row forms.
+      name: 'settings (destinations)',
+      path: () => brandPath('settings?tab=destinations'),
+      ready: (page) => testId(page, 'source-use-sup_e2e_ga4_reports'),
+    },
+    {
       name: 'settings (account)',
       path: () => brandPath('settings?tab=account'),
       ready: (page) => testId(page, 'sign-in-methods'),

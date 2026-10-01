@@ -16,6 +16,7 @@ import * as brandSchema from '@oremedia/db/schema/brand';
 import * as communitySchema from '@oremedia/db/schema/community';
 import * as contentSchema from '@oremedia/db/schema/content';
 import * as creativeSchema from '@oremedia/db/schema/creative';
+import * as destinationsSchema from '@oremedia/db/schema/destinations';
 import * as experimentsSchema from '@oremedia/db/schema/experiments';
 import * as intelligenceSchema from '@oremedia/db/schema/intelligence';
 import * as measurementSchema from '@oremedia/db/schema/measurement';
@@ -98,6 +99,7 @@ const MODULE_TABLES: ReadonlyArray<[name: string, module: Record<string, unknown
   ['publishing', publishingSchema],
   ['measurement', measurementSchema],
   ['community', communitySchema],
+  ['destinations', destinationsSchema],
   ['intelligence', intelligenceSchema],
   ['experiments', experimentsSchema],
   ['content', contentSchema],

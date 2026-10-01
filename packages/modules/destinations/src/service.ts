@@ -10,6 +10,7 @@ import {
   SourceUseCheck,
   SourceUsePolicyList,
   SourceUsePolicySet,
+  sourceUseIssues,
   type DestinationKind,
   type DestinationV1,
   type SourceUseCheckResult,
@@ -26,7 +27,7 @@ import { requireTenant, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
-import { audit } from '@oremedia/module-operations';
+import { audit, outbox } from '@oremedia/module-operations';
 import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
 
 const destinationsRepo = new BrandDestinationRepository();
@@ -47,7 +48,10 @@ const destinationResource = (d: DestinationRow) => ({
 });
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
 
-/** Spec 5.5: a source-use policy is a person's decision; an agent holding the action may only propose. */
+/**
+ * Defence in depth: source_use.manage is AGENT_NEVER (role-grants.ts), so an agent is denied by policy.assert
+ * before this runs; should the action ever gain a propose_only grant, a proposal still never writes a policy.
+ */
 function assertMayDecide(decision: Decision): void {
   if (decision.obligations?.some((o) => o.type === 'propose_only'))
     throw new PolicyDeniedError('propose_only', 'Agents may only propose; an admin must decide');
@@ -92,6 +96,12 @@ const toPolicyDto = (p: PolicyRow): SourceUsePolicyV1 => ({
   updatedAt: p.updatedAt.toISOString(),
 });
 
+/**
+ * Any brand id from a client is read through the brand module first: a brand of another tenant, or one the actor
+ * is not granted, is NOT_FOUND (never FORBIDDEN, spec 5.3), and brand.read is asserted on the way.
+ */
+const visibleBrand = (actor: ResolvedActor, brandId: string, tx?: Tx) => brandService.get(actor, brandId, tx);
+
 /** A destination read by id under a brand: one that belongs to another brand of the tenant does not exist here. */
 async function destinationOf(brandId: string, destinationId: string, row: DestinationRow | null) {
   if (!row || row.brandId !== brandId) throw new NotFoundError('Destination', destinationId);
@@ -102,8 +112,7 @@ export const destinationService = {
   /** A brand's destinations, by kind then name (brand.read). */
   async list(actor: ResolvedActor, input: z.input<typeof DestinationList>, tx?: Tx) {
     const parsed = DestinationList.parse(input);
-    await brandService.assertExist([parsed.brandId], tx); // a foreign or unknown brand is NOT_FOUND
-    await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
+    await visibleBrand(actor, parsed.brandId, tx);
     const rows = await destinationsRepo.listForBrand(parsed.brandId, parsed.kind, tx);
     return { items: rows.map(toDestinationDto) };
   },
@@ -121,14 +130,20 @@ export const destinationService = {
 
   /**
    * Registers a remote identity for the brand (destination.connect, which agents never hold). The person who
-   * registers it owns it; a remote identity already registered in the tenant, under whichever brand, is a conflict
-   * (uq_destination_remote). No credential is stored here: a connect flow attaches one later.
+   * registers it owns it. A remote identity this brand holds already is a conflict; one another brand of the tenant
+   * holds is refused without naming it (uq_destination_remote, as channels do for a remote account). No credential
+   * is stored here: a connect flow attaches one later.
    */
   async register(actor: ResolvedActor, input: z.input<typeof DestinationRegister>, tx: Tx) {
     const parsed = DestinationRegister.parse(input);
-    await brandService.assertExist([parsed.brandId], tx);
+    await visibleBrand(actor, parsed.brandId, tx);
     await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
     const existing = await destinationsRepo.findRemote(parsed.kind, parsed.externalId, tx);
+    if (existing && existing.brandId !== parsed.brandId)
+      throw new ValidationFailedError(
+        [{ path: 'externalId', issue: 'remote_identity_registered_to_another_brand' }],
+        'This remote identity is already registered to another brand',
+      );
     if (existing) throw new ConflictError('Destination', existing.id, existing.version);
     const id = newId('destination');
     await destinationsRepo.create(
@@ -161,10 +176,17 @@ export const destinationService = {
         toState: 'active',
       },
     );
+    await outbox.add(
+      'destination.registered',
+      { type: 'brand_destination', id, version: row.version },
+      { destinationId: id, kind: parsed.kind, actorKind: actor.kind, actorId: actor.id },
+      tx,
+      { brandId: parsed.brandId },
+    );
     return toDestinationDto(row);
   },
 
-  /** Records what a health check found (destination.manage); the time of the check is now. */
+  /** Records what a health check found (destination.manage); the time of the check is now. Not once disconnected. */
   async setHealth(actor: ResolvedActor, input: z.infer<typeof DestinationSetHealth>, tx: Tx) {
     const parsed = DestinationSetHealth.parse(input);
     const row = await destinationOf(
@@ -173,6 +195,11 @@ export const destinationService = {
       await destinationsRepo.lock(parsed.destinationId, tx),
     );
     await policy.assert(actor, 'destination.manage', destinationResource(row), {}, tx);
+    if (row.status === 'disconnected')
+      throw new ValidationFailedError(
+        [{ path: 'destinationId', issue: 'disconnected' }],
+        'A disconnected destination is not health-checked',
+      );
     if (row.version !== parsed.expectedVersion)
       throw new ConflictError('Destination', row.id, parsed.expectedVersion);
     await destinationsRepo.update(
@@ -217,6 +244,13 @@ export const destinationService = {
       tx,
       { brandId: row.brandId, fromState: row.status, toState: 'disconnected' },
     );
+    await outbox.add(
+      'destination.disconnected',
+      { type: 'brand_destination', id: row.id, version: row.version + 1 },
+      { destinationId: row.id, kind: row.kind, actorKind: actor.kind, actorId: actor.id },
+      tx,
+      { brandId: row.brandId },
+    );
     return toDestinationDto(await destinationsRepo.getById(row.id, tx));
   },
 };
@@ -225,40 +259,30 @@ export const sourceUsePolicyService = {
   /** A brand's source-use policies by kind then data type (brand.read). */
   async list(actor: ResolvedActor, input: z.infer<typeof SourceUsePolicyList>, tx?: Tx) {
     const parsed = SourceUsePolicyList.parse(input);
-    await brandService.assertExist([parsed.brandId], tx);
-    await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
+    await visibleBrand(actor, parsed.brandId, tx);
     const rows = await policiesRepo.listForBrand(parsed.brandId, parsed.destinationKind, tx);
     return { items: rows.map(toPolicyDto) };
   },
 
   /**
-   * D-17: an admin records what the product may do with one data type of one destination kind (source_use.manage;
-   * agents may only propose). The uses are limited to the kind's capabilities; `retain` needs a retention period;
+   * D-17: an admin records what the product may do with one data type of one destination kind (source_use.manage,
+   * which agents never hold). The uses are limited to the kind's capabilities; `retain` needs a retention period;
    * the review date is ahead. The first record is version 1; a later one names the version it replaces and moves
    * it on, with who reviewed it and when.
    */
   async set(actor: ResolvedActor, input: z.input<typeof SourceUsePolicySet>, tx: Tx) {
     const parsed = SourceUsePolicySet.parse(input);
-    await brandService.assertExist([parsed.brandId], tx);
+    await visibleBrand(actor, parsed.brandId, tx);
     const decision = await policy.assert(actor, 'source_use.manage', brandResource(parsed.brandId), {}, tx);
     assertMayDecide(decision);
-    const capable = DESTINATION_KIND_CAPABILITIES[parsed.destinationKind].uses;
     const allowedUses = [...new Set(parsed.allowedUses)];
-    const beyond = allowedUses.filter((u) => !capable.includes(u));
-    if (beyond.length)
+    const issues = sourceUseIssues(parsed.destinationKind, allowedUses, parsed.retentionDays);
+    if (issues.length)
       throw new ValidationFailedError(
-        beyond.map((u) => ({
-          path: 'allowedUses',
-          issue: `${u}_not_supported_by_${parsed.destinationKind}`,
-        })),
-        `A ${DESTINATION_KIND_CAPABILITIES[parsed.destinationKind].label} supports ${capable.join(', ')} only`,
+        issues,
+        `A ${DESTINATION_KIND_CAPABILITIES[parsed.destinationKind].label} supports ${DESTINATION_KIND_CAPABILITIES[parsed.destinationKind].uses.join(', ')} only, and retained data needs a retention period`,
       );
     const retains = allowedUses.includes('retain');
-    if (retains && !parsed.retentionDays)
-      throw new ValidationFailedError(
-        [{ path: 'retentionDays', issue: 'required_for_retain' }],
-        'Retaining data needs a retention period',
-      );
     const now = new Date();
     const reviewDueAt = new Date(parsed.reviewDueAt);
     if (reviewDueAt.getTime() <= now.getTime())
@@ -293,7 +317,7 @@ export const sourceUsePolicyService = {
           brandId: parsed.brandId,
           destinationKind: parsed.destinationKind,
           dataType: parsed.dataType,
-          version: 1,
+          version: 1, // the first record is version 1; the column's default (0) is never written
           ...values,
         },
         tx,
@@ -320,8 +344,7 @@ export const sourceUsePolicyService = {
     tx?: Tx,
   ): Promise<SourceUseCheckResult> {
     const parsed = SourceUseCheck.parse(input);
-    await brandService.assertExist([parsed.brandId], tx);
-    await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
+    await visibleBrand(actor, parsed.brandId, tx);
     const row = await policiesRepo.findByKey(parsed.brandId, parsed.destinationKind, parsed.dataType, tx);
     if (!row) return { allowed: false, reason: 'no_policy', policy: null };
     const dto = toPolicyDto(row);

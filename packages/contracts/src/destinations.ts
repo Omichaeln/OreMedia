@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ErrorDetail } from './errors';
 
 /**
  * Brand destinations (ledger R2-0): the non-social places a brand reads from or writes to (an analytics property,
@@ -128,6 +129,24 @@ export const SourceUseCheck = z.object({
   dataType: SourceUseDataType,
   use: SourceUse,
 });
+
+/**
+ * The pure rules of a source-use policy (the service and the UI mock apply them, the unit test proves them): every
+ * allowed use is one the kind offers, and `retain` carries a retention period. Empty when the policy is valid.
+ */
+export function sourceUseIssues(
+  kind: DestinationKind,
+  allowedUses: readonly SourceUse[],
+  retentionDays: number | null | undefined,
+): ErrorDetail[] {
+  const capable = DESTINATION_KIND_CAPABILITIES[kind].uses;
+  const issues: ErrorDetail[] = allowedUses
+    .filter((u, i) => allowedUses.indexOf(u) === i && !capable.includes(u))
+    .map((u) => ({ path: 'allowedUses', issue: `${u}_not_supported_by_${kind}` }));
+  if (allowedUses.includes('retain') && !retentionDays)
+    issues.push({ path: 'retentionDays', issue: 'required_for_retain' });
+  return issues;
+}
 
 export const SourceUseCheckReason = z.enum(['no_policy', 'not_allowed', 'review_overdue', 'allowed']);
 export type SourceUseCheckReason = z.infer<typeof SourceUseCheckReason>;
