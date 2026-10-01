@@ -49,12 +49,21 @@ export function callbackError(search: string): string | null {
 export const CONNECT_CALLBACK_PATH = '/connect/callback';
 export const connectRedirectUri = (origin: string): string => `${origin}${CONNECT_CALLBACK_PATH}`;
 
-/** Which brand's settings a connect flow returns to, remembered in this browser under its `state`. */
+/**
+ * Which brand's settings a connect flow returns to, remembered in this browser under its `state`. `flow` says which
+ * settings tab finishes it: a channel (the default) or, for R2-1, a destination (a Google source grant).
+ */
+export type ConnectFlow = 'channel' | 'destination';
 export interface PendingConnect {
   companyId: string;
   brandId: string;
   expiresAt: string;
+  flow?: ConnectFlow;
 }
+
+/** The settings tab a flow finishes on; the channel flow keeps the tab the settings screen opens by default. */
+export const connectReturnTab = (flow: ConnectFlow | undefined): string | null =>
+  flow === 'destination' ? 'destinations' : null;
 
 const pendingKey = (state: string) => `oremedia.connect.${state}`;
 type KeyValueStore = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
@@ -107,9 +116,13 @@ export function recallConnect(
     const p = JSON.parse(raw) as Partial<PendingConnect>;
     if (typeof p.companyId !== 'string' || typeof p.brandId !== 'string' || typeof p.expiresAt !== 'string')
       return null;
-    return Date.parse(p.expiresAt) > now
-      ? { companyId: p.companyId, brandId: p.brandId, expiresAt: p.expiresAt }
-      : null;
+    if (Date.parse(p.expiresAt) <= now) return null;
+    return {
+      companyId: p.companyId,
+      brandId: p.brandId,
+      expiresAt: p.expiresAt,
+      ...(p.flow === 'destination' ? { flow: 'destination' as const } : {}),
+    };
   } catch {
     return null;
   }

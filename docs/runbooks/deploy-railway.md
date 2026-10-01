@@ -19,10 +19,13 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      hashes run at once, default 4; each needs about 128 MiB, so size the service's memory for 4 × 128 MiB = 512 MiB
      on top of its baseline, or lower it; section 1a step 6), `REVIEW_PORTAL_ORIGIN`, `KMS_KEY_ID_CREDENTIALS`
      (wrap-only permission), `OBJECT_STORE_*`, `LINK_REDIRECT_DOMAIN`, per-provider `PROVIDER_<KEY>_CLIENT_ID_REF` and
-     `PROVIDER_<KEY>_SECRET_REF` (sealed; the code exchange needs both, see `docs/platform-apps/`);
+     `PROVIDER_<KEY>_SECRET_REF` (sealed; the code exchange needs both, see `docs/platform-apps/`), and per source
+     kind `PROVIDER_GA4_PROPERTY_CLIENT_ID_REF` / `PROVIDER_GA4_PROPERTY_SECRET_REF` and
+     `PROVIDER_SEARCH_CONSOLE_SITE_CLIENT_ID_REF` / `PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF` (sealed; one Google
+     OAuth client serves both, `docs/platform-apps/google.md`), optional `OREMEDIA_DISABLED_SOURCES`;
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
-     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both);
+     `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (the daily destination token refresh reads both) with optional `OREMEDIA_DISABLED_SOURCES`;
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OBJECT_STORE_PUBLIC_ORIGIN`
      (runtime: the object store origin allowed in `font-src` and `connect-src`, section 1b; uploads fail without it), `OREMEDIA_DEPLOYMENT_BRAND`
@@ -200,13 +203,15 @@ production keeps running with that capability degraded, and the gap is reported.
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`                                                                                          | api, worker-core, worker-render |
 | `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`), unless the provider key is explicitly listed in comma-separated `OREMEDIA_DISABLED_CHANNELS` on that service | api, worker-core, worker-ingest |
+| `source:<kind>` | `PROVIDER_<KIND>_CLIENT_ID_REF` and `PROVIDER_<KIND>_SECRET_REF`, for every registered source adapter (`ga4_property`, `search_console_site`), unless the kind is explicitly listed in comma-separated `OREMEDIA_DISABLED_SOURCES` on that service                        | api, worker-core                |
 | `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                                                                                                             | worker-core, worker-ingest      |
 | `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                                                                                                              | api                             |
 
 - `uploads` on the api signs upload and download URLs; on worker-core it copies media for publishing and deletes
   objects; on worker-render it ingests uploads and writes renders. `channel:<key>` on the api connects channels; on
   worker-core it publishes and refreshes tokens; on worker-ingest it refreshes tokens and pulls metrics and comments.
-  `models` on worker-core runs agents and generators; on worker-ingest it classifies comments.
+  `models` on worker-core runs agents and generators; on worker-ingest it classifies comments. `source:<kind>` on
+  the api connects destinations (R2-1); on worker-core it refreshes their tokens daily.
 - The `web` service (Caddy) has no report: its `OBJECT_STORE_PUBLIC_ORIGIN` is checked by the production smoke check
   (section 3a) through the CSP it serves. The `redirector` has none either: both its settings (`DATABASE_URL`,
   `LINK_HASH_SECRET_REF`) already stop it at start when missing.
@@ -228,7 +233,8 @@ production keeps running with that capability degraded, and the gap is reported.
   provider that is registered in the product but not part of the current production rollout (for example, `x` while
   its app credentials and certification are unavailable). It defaults to empty, so omitting the variable does not hide
   a missing provider configuration. Set it only on the api, worker-core and worker-ingest services, and remove the key
-  before enabling that channel; this does not certify or connect the provider.
+  before enabling that channel; this does not certify or connect the provider. `OREMEDIA_DISABLED_SOURCES` is the
+  same policy for a source kind (R2-1), set on the api and worker-core.
 
 ## 2. Deploy
 

@@ -489,6 +489,103 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 60_000);
 
+  it('settings destinations (R2-1): a source connect starts with Google’s URL as a new-tab link; only enabled sources are offered', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
+    const sources = page.getByTestId('destination-sources');
+    await sources.waitFor({ timeout: 15_000 });
+    expect(await sources.getByTestId('source-ga4_property').count()).toBe(1);
+    expect(await sources.getByTestId('source-search_console_site').count()).toBe(0); // not enabled here
+    const row = sources.getByTestId('source-ga4_property');
+    await row.getByRole('button', { name: 'Connect Google Analytics 4 property' }).click();
+    const link = row.getByTestId('authorise-link');
+    await expect.poll(() => link.count(), { timeout: 15_000 }).toBe(1);
+    expect(await link.getAttribute('target')).toBe('_blank');
+    expect(await link.getAttribute('rel')).toContain('noopener');
+    const href = (await link.getAttribute('href')) ?? '';
+    const url = new URL(href);
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('access_type')).toBe('offline');
+    expect(url.searchParams.get('prompt')).toBe('consent');
+    expect(url.searchParams.get('redirect_uri')).toBe(`${origin}/connect/callback`);
+    expect(await page.locator('iframe').count()).toBe(0);
+    expect(backend.destinations.connectStates.size).toBe(1);
+    await page.close();
+  }, 45_000);
+
+  it('settings destinations (R2-1): a completed flow with two targets offers the choice; confirming one adds the destination', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
+    const row = page.getByTestId('destination-sources').getByTestId('source-ga4_property');
+    await row.waitFor({ timeout: 15_000 });
+    await row.getByRole('button', { name: 'Connect Google Analytics 4 property' }).click();
+    await expect.poll(() => row.getByTestId('authorise-link').count(), { timeout: 15_000 }).toBe(1);
+    const href = (await row.getByTestId('authorise-link').getAttribute('href')) ?? '';
+    const state = new URL(href).searchParams.get('state') ?? '';
+    // Google sends the person to the shared callback, which hands state and code to this brand's destinations tab.
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_ga4`);
+    await page.getByTestId('destination-connect-callback').waitFor({ timeout: 15_000 });
+    expect(page.url()).toContain('tab=destinations');
+    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    await page.getByRole('button', { name: 'Finish connecting' }).click();
+    const choose = page.getByTestId('destination-connect-choose');
+    await choose.waitFor({ timeout: 15_000 });
+    expect(await choose.getByRole('group', { name: 'Choose what this brand reads' }).count()).toBe(1);
+    expect(await choose.getByRole('radio').count()).toBe(2);
+    expect(await page.getByTestId('destination-connect-completed').count()).toBe(0); // nothing registered yet
+    const confirm = choose.getByRole('button', { name: 'Confirm' });
+    expect(await confirm.getAttribute('aria-disabled')).toBe('true');
+    await choose.getByRole('radio', { name: /Acme app/ }).check();
+    await confirm.click();
+    await page.getByTestId('destination-connect-completed').waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('destination-connect-completed').textContent()).toContain(
+      'Connected: Acme · Acme app (Google Analytics 4 property)',
+    );
+    const ga4Group = page.getByTestId('destinations-ga4_property');
+    await expect.poll(() => ga4Group.textContent(), { timeout: 15_000 }).toContain('properties/9002');
+    expect(await ga4Group.textContent()).not.toContain('properties/9001'); // only the chosen target
+    expect(backend.destinations.connectChoices.size).toBe(0); // one-shot: the flow is consumed
+    expect(backend.destinations.destinations.find((d) => d.externalId === 'properties/9002')).toMatchObject({
+      kind: 'ga4_property',
+      health: 'healthy',
+      status: 'active',
+    });
+    await page.getByRole('button', { name: 'Done' }).click();
+    await expect.poll(() => page.url()).not.toContain('code=');
+    expect(page.url()).toContain('tab=destinations');
+    backend.destinations.destinations.splice(
+      backend.destinations.destinations.findIndex((d) => d.externalId === 'properties/9002'),
+      1,
+    );
+    await page.close();
+  }, 60_000);
+
+  it('settings destinations (R2-1): cancelling the choice discards it and connects nothing', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
+    const row = page.getByTestId('destination-sources').getByTestId('source-ga4_property');
+    await row.waitFor({ timeout: 15_000 });
+    await row.getByRole('button', { name: 'Connect Google Analytics 4 property' }).click();
+    await expect.poll(() => row.getByTestId('authorise-link').count(), { timeout: 15_000 }).toBe(1);
+    const href = (await row.getByTestId('authorise-link').getAttribute('href')) ?? '';
+    const state = new URL(href).searchParams.get('state') ?? '';
+    await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_ga4`);
+    await page.getByTestId('destination-connect-callback').waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Finish connecting' }).click();
+    const choose = page.getByTestId('destination-connect-choose');
+    await choose.waitFor({ timeout: 15_000 });
+    const before = backend.destinations.destinations.length;
+    await choose.getByRole('button', { name: 'Cancel' }).click();
+    await expect
+      .poll(() => page.getByTestId('destination-connect-choose').count(), { timeout: 15_000 })
+      .toBe(0);
+    await expect.poll(() => page.url()).not.toContain('code=');
+    expect(backend.destinations.connectChoices.size).toBe(0);
+    expect(backend.destinations.destinations.length).toBe(before);
+    expect(await page.getByTestId('destinations-ga4_property').textContent()).not.toContain('properties/900');
+    await page.close();
+  }, 60_000);
+
   it('settings budgets: the month and day meters, the ledger by kind, and a day limit set by an admin (UX-16)', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}?tab=budgets`);

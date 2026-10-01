@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
+  DestinationConnectCancel,
+  DestinationConnectComplete,
+  DestinationConnectSelect,
+  DestinationConnectStart,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -9,11 +13,14 @@ import {
   SourceUsePolicyList,
   SourceUsePolicySet,
   sourceUseIssues,
+  type DestinationConnectTarget,
+  type DestinationSourceV1,
   type DestinationV1,
   type SourceUseCheckResult,
   type SourceUsePolicyV1,
 } from '@oremedia/contracts/destinations';
 import {
+  CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
@@ -24,13 +31,25 @@ import type { MockBuilders, t } from './mock-api';
 
 /**
  * Brand destinations slice of the UI-only transport (see mock-api.ts): destinations.list/get/register/setHealth/
- * disconnect and destinations.sourceUse.list/set/check with the same paths, DTO shapes, role gates and error
+ * disconnect, destinations.sourceUse.list/set/check and (R2-1) destinations.sources.list and
+ * destinations.connect.start/complete/select/cancel with the same paths, DTO shapes, role gates and error
  * envelope as apps/api (packages/modules/destinations). A test double, never a second implementation.
  */
 export const PD = {
   destinations: { ga4: 'dst_e2e_ga4', gbp: 'dst_e2e_gbp' },
   policies: { ga4Reports: 'sup_e2e_ga4_reports', gbpReviews: 'sup_e2e_gbp_reviews' },
+  /** What a completed Google grant can read (connect.complete offers both; the person confirms one). */
+  targets: [
+    { externalId: 'properties/9001', displayName: 'Acme · Acme web (new)' },
+    { externalId: 'properties/9002', displayName: 'Acme · Acme app' },
+  ] as readonly DestinationConnectTarget[],
 } as const;
+
+/** The deployment's sources: GA4 certified and enabled; Search Console registered but not enabled here. */
+const SOURCES: readonly DestinationSourceV1[] = [
+  { kind: 'ga4_property', label: 'Google Analytics 4 property', certified: true, enabled: true },
+  { kind: 'search_console_site', label: 'Search Console site', certified: false, enabled: false },
+];
 
 /** Spec 5.5 default grants of destination.connect / destination.manage and source_use.manage. */
 const CONNECTORS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin', 'publisher']);
@@ -42,6 +61,13 @@ const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOS
 export class DestinationsBackend {
   readonly destinations: DestinationV1[] = [];
   readonly policies: SourceUsePolicyV1[] = [];
+  /** connect.start's states (spec 14.7 pattern), consumed once by connect.complete. */
+  readonly connectStates = new Map<string, { brandId: string; kind: DestinationV1['kind'] }>();
+  /** The flows connect.complete offered (one-shot), keyed by pending id. */
+  readonly connectChoices = new Map<
+    string,
+    { brandId: string; kind: DestinationV1['kind']; targets: DestinationConnectTarget[] }
+  >();
 
   constructor(
     readonly brandId: string,
@@ -188,6 +214,91 @@ export function destinationsRouters(
         version: d.version + 1,
       });
       return d;
+    }),
+    sources: router({ list: query.query(() => ({ items: [...SOURCES] })) }),
+    connect: router({
+      start: mutation.input(DestinationConnectStart).mutation(({ input }) => {
+        brandOf(input.brandId);
+        if (!CONNECTORS.has(b.role())) throw new PolicyDeniedError('role_missing');
+        const source = SOURCES.find((s) => s.kind === input.kind);
+        if (!source)
+          throw new CapabilityUnsupportedError([{ path: 'kind', issue: `unknown_provider:${input.kind}` }]);
+        if (!source.certified)
+          throw new CapabilityUnsupportedError([
+            { path: 'kind', issue: `provider_not_certified:${input.kind}` },
+          ]);
+        const state = `st_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+        b.connectStates.set(state, { brandId: input.brandId, kind: input.kind });
+        const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+        url.searchParams.set('state', state);
+        url.searchParams.set('redirect_uri', input.redirectUri ?? '');
+        url.searchParams.set('access_type', 'offline');
+        url.searchParams.set('prompt', 'consent');
+        return { state, url: url.toString(), expiresAt: inDays(1) };
+      }),
+      complete: mutation.input(DestinationConnectComplete).mutation(({ input }) => {
+        const pending = b.connectStates.get(input.state);
+        b.connectStates.delete(input.state);
+        if (!pending)
+          throw new ValidationFailedError(
+            [{ path: 'state', issue: 'connect_state_invalid_or_expired' }],
+            'The connect flow has expired; start again',
+          );
+        const pendingId = `pdg_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+        const targets = PD.targets.map((t) => ({ ...t }));
+        b.connectChoices.set(pendingId, { ...pending, targets });
+        return { pendingId, brandId: pending.brandId, kind: pending.kind, targets, expiresAt: inDays(1) };
+      }),
+      select: mutation.input(DestinationConnectSelect).mutation(({ input }) => {
+        const choice = b.connectChoices.get(input.pendingId);
+        if (!choice)
+          throw new ValidationFailedError(
+            [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+            'The connect flow has expired; start again',
+          );
+        const target = choice.targets.find((t) => t.externalId === input.externalId);
+        if (!target)
+          throw new ValidationFailedError(
+            [{ path: 'externalId', issue: 'target_not_offered' }],
+            'Choose one of the targets offered',
+          );
+        const existing = b.destinations.find(
+          (d) => d.kind === choice.kind && d.externalId === target.externalId,
+        );
+        if (existing && existing.brandId !== choice.brandId)
+          throw new ValidationFailedError(
+            [{ path: 'externalId', issue: 'remote_identity_registered_to_another_brand' }],
+            'This remote identity is already registered to another brand',
+          );
+        if (existing) throw new ConflictError('Destination', existing.id, existing.version);
+        b.connectChoices.delete(input.pendingId);
+        const row: DestinationV1 = {
+          id: `dst_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+          brandId: choice.brandId,
+          kind: choice.kind,
+          externalId: target.externalId,
+          displayName: target.displayName,
+          ownerUserId: 'usr_e2e',
+          grantedScopes: ['https://www.googleapis.com/auth/analytics.readonly'],
+          health: 'healthy',
+          healthCheckedAt: now(),
+          capabilityVersion: 1,
+          status: 'active',
+          version: 0,
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        b.destinations.push(row);
+        return row;
+      }),
+      cancel: mutation.input(DestinationConnectCancel).mutation(({ input }) => {
+        if (!b.connectChoices.delete(input.pendingId))
+          throw new ValidationFailedError(
+            [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+            'The connect flow has expired; start again',
+          );
+        return { pendingId: input.pendingId, cancelled: true as const };
+      }),
     }),
     disconnect: mutation.input(DestinationDisconnect).mutation(({ input }) => {
       const d = destinationOf(input.brandId, input.destinationId);

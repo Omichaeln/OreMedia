@@ -3,6 +3,7 @@ import {
   callbackError,
   callbackParams,
   connectRedirectUri,
+  connectReturnTab,
   providerLabel,
   recallConnect,
   rememberConnect,
@@ -42,6 +43,14 @@ describe('callback parsing (spec 14.7)', () => {
   });
 });
 
+describe('a destination flow (R2-1) returns to the destinations tab', () => {
+  it('names the tab for a destination flow only', () => {
+    expect(connectReturnTab('destination')).toBe('destinations');
+    expect(connectReturnTab('channel')).toBeNull();
+    expect(connectReturnTab(undefined)).toBeNull();
+  });
+});
+
 describe('the shared callback finds its brand (spec 14.7)', () => {
   const memory = () => {
     const m = new Map<string, string>();
@@ -65,6 +74,11 @@ describe('the shared callback finds its brand (spec 14.7)', () => {
     expect(recallConnect('st_other', store, Date.parse('2026-09-28T12:00:00Z'))).toBeNull();
     expect(recallConnect('st_1', store, Date.parse('2026-09-28T12:00:00Z'))).toEqual(pending);
     expect(recallConnect('st_1', store, Date.parse('2026-09-28T12:00:00Z'))).toBeNull(); // used up
+    rememberConnect('st_d', { ...pending, flow: 'destination' }, store, Date.parse('2026-09-28T12:00:00Z'));
+    expect(recallConnect('st_d', store, Date.parse('2026-09-28T12:00:00Z'))).toEqual({
+      ...pending,
+      flow: 'destination',
+    });
     rememberConnect('st_2', pending, store, Date.parse('2026-09-28T12:00:00Z'));
     expect(recallConnect('st_2', store, Date.parse('2026-09-28T12:11:00Z'))).toBeNull(); // expired
     expect(store.size()).toBe(0);
