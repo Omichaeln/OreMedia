@@ -81,9 +81,9 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     expect(overflow).toBe(false);
   }, 30_000);
 
-  it('lists the day’s publications with state chips as text', async () => {
+  it('lists the day’s publications (five channel posts and the website article) with state chips as text', async () => {
     const list = page.getByTestId('day-list');
-    await expect.poll(() => list.getByRole('button').count(), { timeout: 15_000 }).toBe(5);
+    await expect.poll(() => list.getByRole('button').count(), { timeout: 15_000 }).toBe(6);
     const text = await list.textContent();
     for (const label of ['Held', 'Outcome unknown', 'Dispatching', 'Published', 'Failed'])
       expect(text).toContain(label);
@@ -127,7 +127,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     await expect
       .poll(() => detail().getByTestId('publication-state').textContent(), { timeout: 15_000 })
       .toContain('Scheduled');
-    expect(await page.getByTestId('day-list').getByRole('button').count()).toBe(6);
+    expect(await page.getByTestId('day-list').getByRole('button').count()).toBe(7);
     const [failed, retried] = schedules().slice(before);
     expect(typeof failed?.headers['idempotency-key']).toBe('string');
     expect(retried?.headers['idempotency-key']).toBe(failed?.headers['idempotency-key']);
