@@ -165,7 +165,7 @@ export function SettingsScreen() {
         </TabPanel>
         <TabPanel value="policy" className="flex flex-col gap-8">
           <BrandType canManage={role !== null && POLICY_ROLES.has(role)} />
-          <ReleasePolicy />
+          <ReleasePolicy canManage={role !== null && POLICY_ROLES.has(role)} />
           {isAdmin && <KillSwitches />}
         </TabPanel>
         <TabPanel value="skills">

@@ -1,7 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ModelRoutingPolicy, ModelVendor } from '@oremedia/contracts/agents';
-import { BrandClassification, defaultPolicyDocument, type PolicyDocumentV1 } from '@oremedia/contracts/brand';
+import {
+  BrandClassification,
+  OnBrandVersionPublished,
+  defaultPolicyDocument,
+  type PolicyDocumentV1,
+} from '@oremedia/contracts/brand';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { Select } from '../../components/select';
@@ -12,6 +17,7 @@ import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
 import { CLASSIFICATION_LABEL } from '../brand/brand-classification';
+import { ON_PUBLISHED_LABEL } from '../brand/publish-impact';
 import { useKillSwitch, useReleasePolicy, useRoutingPolicy, type KillSwitchScope } from './use-settings';
 
 const yesNo = (b: boolean) => (b ? 'Yes' : 'No');
@@ -37,6 +43,13 @@ function policyRows(p: PolicyDocumentV1): Array<[label: string, hint: string, va
       'Hold on revoked facts',
       'Scheduled posts citing a revoked fact are held rather than flagged.',
       yesNo(p.holdOnDependencyRevocation),
+    ],
+    [
+      'On brand version published',
+      'What publishing a brand version does to approved and scheduled work (D-13).',
+      p.onBrandVersionPublished
+        ? ON_PUBLISHED_LABEL[p.onBrandVersionPublished]
+        : `${ON_PUBLISHED_LABEL.invalidate_and_hold} (default)`,
     ],
     ['MFA to approve', 'Approvers must have multi-factor authentication.', yesNo(p.mfaRequired)],
     ['Restricted topics', 'Topics that need review wherever they appear.', listOrNone(p.restrictedTopics)],
@@ -115,10 +128,38 @@ export function BrandType({ canManage }: { canManage: boolean }) {
 }
 
 /** Spec 8.1: the release policy in force. Every brand member can read it; a new version is activated by an admin. */
-export function ReleasePolicy() {
+export function ReleasePolicy({ canManage }: { canManage: boolean }) {
   const { brandId, brand } = useBrandContext();
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const policy = useReleasePolicy(brandId);
   const ui = policy.isError ? toUiError(policy.error) : null;
+  // UX-20 (D-13): the one choice this screen writes, as a new policy version activated at once.
+  const [onPublished, setOnPublished] = useState<OnBrandVersionPublished>('invalidate_and_hold');
+  const createIntent = useIntentKey();
+  const activateIntent = useIntentKey();
+  const activate = useMutation(
+    trpc.brand.policy.activate.mutationOptions({
+      ...mutationIntent(activateIntent.key),
+      onSuccess: () => {
+        activateIntent.renew();
+        void queryClient.invalidateQueries(trpc.brand.policy.pathFilter());
+      },
+    }),
+  );
+  const createVersion = useMutation(
+    trpc.brand.policy.createVersion.mutationOptions({
+      ...mutationIntent(createIntent.key),
+      onSuccess: (created) => {
+        createIntent.renew();
+        activate.mutate({
+          brandId,
+          policyVersionId: created.policyVersionId,
+          expectedVersion: created.version,
+        });
+      },
+    }),
+  );
   // Without an active version the defaults apply, and the distinct-approver default follows the brand type (D-11).
   const doc =
     policy.data?.document ??
@@ -151,6 +192,44 @@ export function ReleasePolicy() {
           ))}
         </dl>
       )}
+      {doc && canManage && (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          data-testid="on-published-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            createVersion.mutate({ brandId, document: { ...doc, onBrandVersionPublished: onPublished } });
+          }}
+        >
+          <Field
+            label="On brand version published"
+            htmlFor="on-published-select"
+            hint="Recorded as a new policy version and activated at once. Keeping approvals needs approval binding v2, so that choice is not offered yet (D-13)."
+            className="min-w-72"
+          >
+            <Select
+              id="on-published-select"
+              value={onPublished}
+              onValueChange={(v) => setOnPublished(OnBrandVersionPublished.parse(v))}
+              options={OnBrandVersionPublished.options.map((o) => ({
+                value: o,
+                label: ON_PUBLISHED_LABEL[o],
+                disabled: o === 'flag',
+              }))}
+            />
+          </Field>
+          <Button
+            type="submit"
+            disabled={
+              createVersion.isPending || activate.isPending || doc.onBrandVersionPublished === onPublished
+            }
+          >
+            {createVersion.isPending || activate.isPending ? 'Saving…' : 'Save as a new policy version'}
+          </Button>
+        </form>
+      )}
+      {createVersion.isError && <RequestError error={createVersion.error} />}
+      {activate.isError && <RequestError error={activate.error} />}
     </Section>
   );
 }

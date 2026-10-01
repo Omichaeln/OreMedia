@@ -70,3 +70,11 @@ export const versionStateLabel: Record<BrandVersionState, string> = {
   published: 'Published',
   retired: 'Retired',
 };
+
+export type BrandVersionImpactDto = inferOutput<Trpc['brand']['versions']['impact']>;
+
+/** UX-20 (D-13): what publishing a version of the brand reaches now; read each time the preview opens. */
+export function useBrandVersionImpact(brandId: string, enabled = true) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.brand.versions.impact.queryOptions({ brandId }), enabled, staleTime: 0 });
+}

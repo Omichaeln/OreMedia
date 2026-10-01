@@ -338,6 +338,24 @@ describe('brand change impact end to end (worker-core composition, real activiti
     expect(await row(pub.publicationId)).toMatchObject({ state: 'held', version: held.version });
   });
 
+  it('UX-20: the impact preview (composed from review and publishing) names the approval and the scheduled post the workflow then moves', async () => {
+    const pub = await scheduledPublication('Previewed change', []);
+    const before = await runInTenant(ctx(tenantA), () =>
+      brandService.versions.impact(actor, { brandId: brandA }),
+    );
+    expect(before.available).toBe(true);
+    expect(before.approvals).toBeGreaterThanOrEqual(1);
+    expect(before.publications.map((p) => p.publicationId)).toContain(pub.publicationId);
+    expect(before.policy).toMatchObject({ effective: 'invalidate_and_hold' });
+    await publishBrandVersion();
+    await runBrandChangeImpact(acts, await routedInput('brand.version_published'));
+    const after = await runInTenant(ctx(tenantA), () =>
+      brandService.versions.impact(actor, { brandId: brandA }),
+    );
+    expect(after.publications.map((p) => p.publicationId)).not.toContain(pub.publicationId);
+    expect(after.approvals).toBe(0);
+  });
+
   it('a revoked fact under the default policy holds the scheduled publications citing it (facts_valid) and leaves the others scheduled', async () => {
     const fact = await approvedFact('20% off in June');
     const citing = await scheduledPublication('Cites the fact', [fact]);

@@ -6,6 +6,7 @@ import {
   BrandSystemDocumentV1,
   BrandVersionCreateDraft,
   BrandVersionGet,
+  BrandVersionImpact,
   BrandVersionList,
   BrandVersionPublish,
   BrandVersionSubmit,
@@ -133,6 +134,32 @@ export const registerOnboardingRunSource = (source: OnboardingRunSource): void =
 };
 export const resetOnboardingRunSource = (): void => {
   onboardingRunSource = null;
+};
+
+/**
+ * UX-20 (D-13): what publishing a brand version reaches, read before the publish. Requests and approvals are the
+ * review module's rows and scheduled publications the publishing module's, so the composition roots register the
+ * source (as apps/worker-core composes the same modules for brandChangeImpactWorkflowV1). There is no harmless
+ * default: until registered the preview says it is unavailable rather than "nothing is affected".
+ */
+export interface BrandChangeImpactScope {
+  requests: Array<{ id: string; contentRevisionId: string; dueAt: string | null; assignees: number }>;
+  approvals: number;
+  publications: Array<{
+    publicationId: string;
+    contentPackageId: string;
+    contentRevisionId: string;
+    channelConnectionId: string;
+    scheduledFor: string;
+  }>;
+}
+export type BrandChangeImpactSource = (brandId: string, tx?: Tx) => Promise<BrandChangeImpactScope>;
+let brandChangeImpactSource: BrandChangeImpactSource | null = null;
+export const registerBrandChangeImpactSource = (fn: BrandChangeImpactSource): void => {
+  brandChangeImpactSource = fn;
+};
+export const resetBrandChangeImpactSource = (): void => {
+  brandChangeImpactSource = null;
 };
 const onboardingRuns = (): OnboardingRunSource => {
   if (!onboardingRunSource)
@@ -721,6 +748,32 @@ export const brandService = {
       await policy.assert(actor, 'brand.read', brandResource(brand), {}, tx);
       return toVersionDto(await loadVersion(brand.id, parsed.versionId, tx));
     },
+
+    /**
+     * UX-20 (D-13): the open review requests, valid approvals and scheduled publications that publishing a version
+     * of this brand reaches now, with the policy that decides what happens to them. `effective` is what the
+     * workflow does today: `invalidate_and_hold` whatever is stored, until approval binding v2 enables `flag`.
+     * brand.read on the brand; a foreign brand is NOT_FOUND.
+     */
+    async impact(actor: ResolvedActor, input: z.infer<typeof BrandVersionImpact>, tx?: Tx) {
+      const parsed = BrandVersionImpact.parse(input);
+      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      await policy.assert(actor, 'brand.read', brandResource(brand), {}, tx);
+      const active = await policiesRepo.findActive(brand.id, tx);
+      const configured = active
+        ? (PolicyDocumentV1.parse(active.document).onBrandVersionPublished ?? null)
+        : null;
+      const scope = brandChangeImpactSource ? await brandChangeImpactSource(brand.id, tx) : null;
+      return {
+        brandId: brand.id,
+        available: scope !== null,
+        policy: { configured, effective: 'invalidate_and_hold' as const },
+        requests: scope?.requests ?? [],
+        approvals: scope?.approvals ?? 0,
+        publications: scope?.publications ?? [],
+        computedAt: new Date().toISOString(),
+      };
+    },
   },
 
   /** Spec 8.2: facts land as proposed (by a person or an agent); a brand manager approves; revocation is evented. */
@@ -913,6 +966,15 @@ export const brandService = {
         ...parsed.document,
         requireDistinctApprover: parsed.document.requireDistinctApprover ?? brand.classification === 'client',
       });
+      // D-13: `flag` keeps approvals across a brand version, which needs approval binding v2; not enabled yet.
+      if (document.onBrandVersionPublished === 'flag')
+        throw new ValidationFailedError([
+          {
+            path: 'document.onBrandVersionPublished',
+            issue:
+              'flag is designed but not enabled: approvals are bound to the published brand version (D-13)',
+          },
+        ]);
       const id = newId('policyVersion');
       const number = await policiesRepo.nextNumber(brand.id, tx);
       await policiesRepo.create(

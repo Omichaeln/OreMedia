@@ -19,6 +19,7 @@ import {
   brandService,
   registerBrandAssetKindSource,
   registerOnboardingRunSource,
+  registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
 } from '@oremedia/module-brand';
 import {
@@ -262,6 +263,12 @@ export function composeModules(): void {
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
   // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
   registerOnboardingRunSource(onboardingRunSource);
+  // UX-20 (D-13): what publishing a brand version reaches, from the review and publishing modules.
+  registerBrandChangeImpactSource(async (brandId, tx) => {
+    const scope = await reviewService.approvals.brandChangeScope(brandId, tx);
+    const publications = await publicationService.scheduledForBrand(brandId, tx);
+    return { ...scope, publications };
+  });
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }

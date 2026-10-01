@@ -32,7 +32,9 @@ import {
   registerBrandAssetKindSource,
   registerEligibleTemplateSource,
   registerOnboardingRunSource,
+  registerBrandChangeImpactSource,
   resetBrandAssetKindSource,
+  resetBrandChangeImpactSource,
   resetEligibleTemplateSource,
   resetOnboardingRunSource,
   type OnboardingRunSource,
@@ -803,6 +805,78 @@ describe('brand module (spec 8) against MySQL 8', () => {
         brandService.policy.get(A, { brandId: brandA, policyVersionId: p1.policyVersionId }),
       );
       expect(specific.state).toBe('retired');
+    });
+
+    it('UX-20: a policy naming `flag` for a published brand version is refused until approval binding v2 (D-13)', async () => {
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.policy.createVersion(
+            A,
+            { brandId: brandA, document: { ...defaultPolicyDocument(), onBrandVersionPublished: 'flag' } },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      const p = await run(tenantA, (tx) =>
+        brandService.policy.createVersion(
+          A,
+          {
+            brandId: brandA,
+            document: { ...defaultPolicyDocument(), onBrandVersionPublished: 'invalidate_and_hold' },
+          },
+          tx,
+        ),
+      );
+      const stored = await runInTenant(ctx(tenantA), () =>
+        brandService.policy.get(A, { brandId: brandA, policyVersionId: p.policyVersionId }),
+      );
+      expect(stored.document.onBrandVersionPublished).toBe('invalidate_and_hold');
+      // The default document still has no value: older documents and their snapshot hashes are unchanged.
+      expect(defaultPolicyDocument().onBrandVersionPublished).toBeUndefined();
+    });
+
+    it('UX-20: versions.impact reads the registered scope with the policy in force; unavailable until registered; foreign brand is NOT_FOUND', async () => {
+      resetBrandChangeImpactSource();
+      const none = await runInTenant(ctx(tenantA), () =>
+        brandService.versions.impact(A, { brandId: brandA }),
+      );
+      expect(none).toMatchObject({ available: false, requests: [], approvals: 0, publications: [] });
+      expect(none.policy.effective).toBe('invalidate_and_hold');
+      const asked: string[] = [];
+      registerBrandChangeImpactSource(async (brandId) => {
+        asked.push(brandId);
+        return {
+          requests: [{ id: 'rr_1', contentRevisionId: 'cr_1', dueAt: null, assignees: 2 }],
+          approvals: 3,
+          publications: [
+            {
+              publicationId: 'pub_1',
+              contentPackageId: 'pkg_1',
+              contentRevisionId: 'cr_1',
+              channelConnectionId: 'cc_1',
+              scheduledFor: '2026-10-02T09:00:00.000Z',
+            },
+          ],
+        };
+      });
+      try {
+        const res = await runInTenant(ctx(tenantA), () =>
+          brandService.versions.impact(A, { brandId: brandA }),
+        );
+        expect(res.available).toBe(true);
+        expect(res.requests).toHaveLength(1);
+        expect(res.approvals).toBe(3);
+        expect(res.publications[0]?.publicationId).toBe('pub_1');
+        expect(asked).toEqual([brandA]);
+        // The active policy (from the previous test) names no value, so the stored choice is null.
+        expect(res.policy).toEqual({ configured: null, effective: 'invalidate_and_hold' });
+        await expect(
+          runInTenant(ctx(tenantA), () => brandService.versions.impact(A, { brandId: brandB })),
+        ).rejects.toBeInstanceOf(NotFoundError);
+        expect(asked).toEqual([brandA]);
+      } finally {
+        resetBrandChangeImpactSource();
+      }
     });
 
     it('every mutation left an allowed audit event in the command transaction', async () => {
