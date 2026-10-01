@@ -8,6 +8,7 @@ import { passwordSetupTokens, users } from '@oremedia/db/schema/access';
 import { planItems } from '@oremedia/db/schema/content';
 import {
   brandDestinations,
+  destinationReportRows,
   pendingDestinationGrants,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
@@ -29,6 +30,7 @@ const LATER_TABLES: MySqlTable[] = [
   brandDestinations,
   sourceUsePolicies,
   pendingDestinationGrants,
+  destinationReportRows,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

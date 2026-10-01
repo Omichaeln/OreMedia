@@ -25,7 +25,44 @@ export interface SourceCapabilityV1 {
   /** How long the platform takes to make a day's data final (reports and ingestion read behind this). */
   latencyHours: number;
   rateLimits: ProviderCapabilityV1['rateLimits'];
+  /** The reports the source can read (part B); empty for a source that only authorises and lists targets. */
+  reports: SourceReportSpec[];
   certifiedAt: string | null;
+}
+
+/**
+ * One report a source adapter can read (R2-1 part B): its key is `<prefix>.<name>` (`ga4.acquisition`,
+ * `gsc.queries`), the prefix naming the data type a source-use policy covers (`ga4.reports`). The date dimension is
+ * always present; `dimensions` lists the others, `metrics` the platform's metric names as the rows carry them.
+ * `latencyHours` is how far behind a day's figures become final (the sweep re-reads that far back) and
+ * `maxRangeDays` the longest range one run asks for (quota-aware, bounded work).
+ */
+export interface SourceReportSpec {
+  key: string;
+  dimensions: string[];
+  metrics: string[];
+  latencyHours: number;
+  maxRangeDays: number;
+}
+
+/** One row of a report: the UTC day, the dimension values by name and the metric values by name. */
+export interface SourceReportRow {
+  date: string;
+  dimensions: Record<string, string>;
+  metrics: Record<string, number>;
+}
+
+export interface SourceReportRequest {
+  externalId: string;
+  report: string;
+  /** Inclusive ISO dates (YYYY-MM-DD). */
+  dateRange: { start: string; end: string };
+  pageToken?: string;
+}
+
+export interface SourceReportPage {
+  rows: SourceReportRow[];
+  nextPageToken: string | null;
 }
 
 /** What a code exchange yields: the sealed-to-be credentials and the scopes the person actually granted. */
@@ -62,6 +99,18 @@ export interface SourceAdapter {
     client: ClientConfig,
     io: ProviderIO,
   ): Promise<SourceTarget[]>;
+  /**
+   * One page of one report for a target the grant can read (part B). A platform refusal is thrown as a
+   * SourceReadError carrying the adapter's classification (a 401 refresh, a 403 reconnect, a 429 rate limited); a
+   * transport failure propagates as ProviderTransportError. Rows are never invented: a day the platform did not
+   * return is absent.
+   */
+  fetchReport(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+    request: SourceReportRequest,
+  ): Promise<SourceReportPage>;
 
   classifyError(input: {
     status?: number;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ActivityHooks } from './agents';
 import type { ErrorDetail } from './errors';
 import { TenantContextInput } from './tenancy';
 
@@ -231,4 +232,299 @@ export interface SourceUseCheckResult {
   allowed: boolean;
   reason: SourceUseCheckReason;
   policy: SourceUsePolicyV1 | null;
+}
+
+// ---- source reports (R2-1 part B): what the daily sweep stores per destination and the read model over it ----
+
+/** The source-use data type a report key's prefix names: `ga4.acquisition` → `ga4.reports`. */
+export const reportDataType = (reportKey: string): string => `${reportKey.split('.')[0]}.reports`;
+
+/**
+ * Working default under D-17 while a policy allows `read` without `retain`: the rows are an operational cache
+ * (the screen reads the last days; nothing older than this is kept). With `retain`, the policy's retentionDays
+ * applies instead.
+ */
+export const REPORT_CACHE_DAYS = 7;
+/** A first run reads this many days; later runs read from the last stored day minus the report's latency. */
+export const REPORT_FIRST_RUN_DAYS = 28;
+
+/** What each web metric is (D-15, docs/contracts/metrics.md "Web sources"): the kind decides the aggregate. */
+export type WebMetricKind = 'flow' | 'rate' | 'gauge';
+export interface WebMetricSpec {
+  label: string;
+  kind: WebMetricKind;
+  /** A rate pools Σ numerator ÷ Σ denominator; a gauge is a mean weighted by `weight` (null: a plain mean). */
+  numerator?: string;
+  denominator?: string;
+  weight?: string;
+}
+export const WEB_REPORT_METRICS: Readonly<Record<string, WebMetricSpec>> = {
+  sessions: { label: 'Sessions', kind: 'flow' },
+  // GA4 reports a day's total users per row; summed over days it is user-days, labelled so (never a reach).
+  totalUsers: { label: 'Users (daily, summed)', kind: 'flow' },
+  engagedSessions: { label: 'Engaged sessions', kind: 'flow' },
+  keyEvents: { label: 'Key events', kind: 'flow' },
+  averageSessionDuration: { label: 'Avg. session duration (s)', kind: 'gauge', weight: 'sessions' },
+  clicks: { label: 'Clicks', kind: 'flow' },
+  impressions: { label: 'Impressions', kind: 'flow' },
+  ctr: { label: 'CTR', kind: 'rate', numerator: 'clicks', denominator: 'impressions' },
+  position: { label: 'Position', kind: 'gauge', weight: 'impressions' },
+};
+/** Rates derived from two flows of the same report (as spec 15.2 derived rates). */
+export const WEB_DERIVED_RATES: ReadonlyArray<{ key: string; spec: WebMetricSpec }> = [
+  {
+    key: 'engagementRate',
+    spec: { label: 'Engagement rate', kind: 'rate', numerator: 'engagedSessions', denominator: 'sessions' },
+  },
+];
+export const webMetricSpec = (name: string): WebMetricSpec | undefined =>
+  WEB_REPORT_METRICS[name] ?? WEB_DERIVED_RATES.find((r) => r.key === name)?.spec;
+
+/**
+ * The sums one aggregate needs (the repository computes them in SQL, the UI mock in memory): Σ of every flow and
+ * ratio operand, and for a gauge Σ value × weight beside Σ weight. `rows` says whether anything was summed at all.
+ */
+export interface WebMetricSums {
+  rows: number;
+  sums: Record<string, number>;
+  weighted: Record<string, number>;
+}
+
+/** Pure in-memory sums (the mock transport and tests); a metric a row does not carry adds nothing. */
+export function webMetricSums(
+  metricNames: readonly string[],
+  rows: ReadonlyArray<Record<string, number | undefined>>,
+): WebMetricSums {
+  const out: WebMetricSums = { rows: rows.length, sums: {}, weighted: {} };
+  for (const row of rows)
+    for (const name of metricNames) {
+      const value = row[name];
+      if (typeof value !== 'number') continue;
+      const spec = WEB_REPORT_METRICS[name];
+      if (spec?.kind === 'gauge') {
+        const weight = spec.weight ? row[spec.weight] : 1;
+        if (typeof weight !== 'number') continue;
+        out.weighted[name] = (out.weighted[name] ?? 0) + value * weight;
+        out.sums[name] = (out.sums[name] ?? 0) + weight;
+      } else out.sums[name] = (out.sums[name] ?? 0) + value;
+    }
+  return out;
+}
+
+/**
+ * The D-15 aggregate of each metric from its sums: a flow is its sum, a rate Σ numerator ÷ Σ denominator (null on
+ * a zero or missing denominator), a gauge Σ value × weight ÷ Σ weight. A metric without rows is null, never zero.
+ * The derived rates are added when both operands are present.
+ */
+export function webMetricValues(
+  metricNames: readonly string[],
+  sums: WebMetricSums,
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  const flow = (name: string): number | null => (name in sums.sums ? (sums.sums[name] as number) : null);
+  const rate = (spec: WebMetricSpec): number | null => {
+    const n = spec.numerator ? flow(spec.numerator) : null;
+    const d = spec.denominator ? flow(spec.denominator) : null;
+    return n !== null && d !== null && d > 0 ? n / d : null;
+  };
+  for (const name of metricNames) {
+    const spec = WEB_REPORT_METRICS[name];
+    if (sums.rows === 0 || !spec) out[name] = null;
+    else if (spec.kind === 'flow') out[name] = flow(name);
+    else if (spec.kind === 'rate') out[name] = rate(spec);
+    else {
+      const weight = sums.sums[name];
+      const weighted = sums.weighted[name];
+      out[name] = weight !== undefined && weighted !== undefined && weight > 0 ? weighted / weight : null;
+    }
+  }
+  for (const derived of WEB_DERIVED_RATES)
+    if (
+      derived.spec.numerator &&
+      derived.spec.denominator &&
+      metricNames.includes(derived.spec.numerator) &&
+      metricNames.includes(derived.spec.denominator)
+    )
+      out[derived.key] = sums.rows === 0 ? null : rate(derived.spec);
+  return out;
+}
+
+/** The sort key of a report's drill-down: its first metric (sessions, clicks). */
+export const reportPrimaryMetric = (metrics: readonly string[]): string => metrics[0] ?? '';
+
+// ---- router DTOs (destinations.reports.*) ----
+
+export const DESTINATION_REPORT_ROWS_MAX = 200;
+export const DestinationReportSummary = z.object({
+  brandId: z.string(),
+  destinationId: z.string(),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+});
+export const DestinationReportRows = z.object({
+  brandId: z.string(),
+  destinationId: z.string(),
+  reportKey: z.string().max(60),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  limit: z.number().int().min(1).max(DESTINATION_REPORT_ROWS_MAX).default(50),
+  cursor: z.string().max(512).optional(),
+});
+export const DestinationReportOpportunities = z.object({ brandId: z.string(), destinationId: z.string() });
+
+/** Opportunity thresholds (R2-1): enough traffic to mean something, and a rate below half the destination's own. */
+export const OPPORTUNITY_WINDOW_DAYS = 28;
+export const OPPORTUNITY_MIN_IMPRESSIONS = 100;
+export const OPPORTUNITY_MIN_SESSIONS = 50;
+export const OPPORTUNITY_RATE_FRACTION = 0.5;
+export const OPPORTUNITIES_MAX = 20;
+
+export interface DestinationReportFreshnessV1 {
+  /** The latest day with rows, or null when nothing has been read yet. */
+  latestDate: string | null;
+  fetchedAt: string | null;
+  /** Hours since the end of the latest day; stale beyond STALE_FACTOR × the report's latency. */
+  ageHours: number | null;
+  latencyHours: number;
+  stale: boolean;
+}
+export interface DestinationReportWindowV1 {
+  windowStart: string;
+  windowEnd: string;
+  /** Days with at least one row: absent days stay absent (D-15, never a zero). */
+  days: number;
+  rows: number;
+  metrics: Record<string, number | null>;
+}
+export interface DestinationReportComparisonV1 {
+  metric: string;
+  kind: WebMetricKind;
+  current: number | null;
+  previous: number | null;
+  change: number | null;
+}
+export interface DestinationReportSummaryEntryV1 {
+  reportKey: string;
+  dimensions: string[];
+  metrics: string[];
+  freshness: DestinationReportFreshnessV1;
+  current: DestinationReportWindowV1;
+  previous: DestinationReportWindowV1;
+  comparison: DestinationReportComparisonV1[];
+  /** D-14 with days as the unit: below the minimum on either side the comparison reads insufficient. */
+  sample: { current: number; previous: number; minimum: number; sufficient: boolean };
+}
+export interface DestinationReportSummaryV1 {
+  brandId: string;
+  destinationId: string;
+  kind: DestinationKind;
+  /** Whether the source-use policy allows `read` of the kind's reports; nothing is summarised when it does not. */
+  policy: { allowed: boolean; reason: SourceUseCheckReason; dataType: string };
+  windowStart: string;
+  windowEnd: string;
+  reports: DestinationReportSummaryEntryV1[];
+  computedAt: string;
+}
+export interface DestinationReportRowV1 {
+  dimensionKey: string;
+  dimensions: Record<string, string>;
+  days: number;
+  metrics: Record<string, number | null>;
+}
+export const DestinationReportOpportunityKind = z.enum([
+  'low_ctr_query',
+  'low_ctr_page',
+  'low_engagement_page',
+]);
+export type DestinationReportOpportunityKind = z.infer<typeof DestinationReportOpportunityKind>;
+export interface DestinationReportOpportunityV1 {
+  kind: DestinationReportOpportunityKind;
+  reportKey: string;
+  subject: string;
+  metrics: Record<string, number | null>;
+  /** The destination's own pooled rate the subject fell below half of. */
+  benchmark: { metric: string; value: number };
+  suggestedTask: string;
+}
+
+// ---- destinationReportSweepWorkflowV1 / destinationReportsWorkflowV1 (task queue `ingest-metrics`) ----
+
+/** The daily sweep is platform-level (it spans tenants like the token refresh); a schedule starts it with fixed args. */
+export const DestinationReportSweepArgsV1 = z.object({
+  correlationId: z.string().optional(),
+  now: z.string().datetime().optional(),
+});
+export type DestinationReportSweepArgsV1 = z.infer<typeof DestinationReportSweepArgsV1>;
+export interface DestinationReportSweepInputV1 {
+  correlationId: string;
+  now: string;
+}
+/** A destination to read today: references only (spec 14.7 R5). */
+export interface DestinationReportTargetV1 {
+  tenantId: string;
+  destinationId: string;
+}
+export const DestinationReportsInputV1 = TenantContextInput.extend({
+  destinationId: z.string(),
+  now: z.string().datetime(),
+});
+export type DestinationReportsInputV1 = z.infer<typeof DestinationReportsInputV1>;
+export const DestinationReportPlanSkipReason = z.enum([
+  'no_policy',
+  'review_overdue',
+  'not_allowed',
+  'not_active',
+  'source_not_enabled',
+  'locked',
+  'up_to_date',
+]);
+export type DestinationReportPlanSkipReason = z.infer<typeof DestinationReportPlanSkipReason>;
+export interface DestinationReportRangeV1 {
+  reportKey: string;
+  /** Inclusive ISO dates. */
+  start: string;
+  end: string;
+}
+export type DestinationReportPlanV1 =
+  | { outcome: 'skipped'; reason: DestinationReportPlanSkipReason }
+  | { outcome: 'planned'; reports: DestinationReportRangeV1[] };
+export const DestinationReportFetchInputV1 = DestinationReportsInputV1.extend({
+  reportKey: z.string().max(60),
+  start: z.string(),
+  end: z.string(),
+});
+export type DestinationReportFetchInputV1 = z.infer<typeof DestinationReportFetchInputV1>;
+export type DestinationReportFetchResultV1 =
+  | { outcome: 'fetched'; rows: number; days: number }
+  | { outcome: 'rate_limited'; retryAfterMs: number | null }
+  | { outcome: 'unreachable'; reason: 'reconnect_required' | 'rejected' }
+  | { outcome: 'transient'; reason: string }
+  | { outcome: 'skipped'; reason: 'not_active' };
+export const DestinationReportFinishInputV1 = DestinationReportsInputV1.extend({
+  health: DestinationHealth,
+  fetched: z.array(z.object({ reportKey: z.string(), rows: z.number().int() })),
+  reason: z.string().nullable(),
+});
+export type DestinationReportFinishInputV1 = z.infer<typeof DestinationReportFinishInputV1>;
+export interface DestinationReportsActivitiesV1 {
+  /** The policy check, the lock and the incremental ranges; a refusal is recorded as a skipped audit. */
+  planDestinationReports(input: DestinationReportsInputV1): Promise<DestinationReportPlanV1>;
+  /** Reads one report over its range through the broker and replaces the window's rows (never rows in Temporal). */
+  fetchDestinationReport(input: DestinationReportFetchInputV1): Promise<DestinationReportFetchResultV1>;
+  /** Records the run's audit with counts and sets the destination's health from the outcome. */
+  finishDestinationReports(input: DestinationReportFinishInputV1): Promise<{ health: DestinationHealth }>;
+  /** Applies the source-use retention (or the operational cache) to the destination's rows. */
+  pruneDestinationReports(input: DestinationReportsInputV1): Promise<{ deleted: number; cutoff: string }>;
+}
+export interface DestinationReportSweepActivitiesV1 {
+  listDestinationReportTargets(input: DestinationReportSweepInputV1): Promise<DestinationReportTargetV1[]>;
+}
+/** The module-side implementation the activities wrap (tenant context is established by the activity host). */
+export interface DestinationReportsRuntimeV1
+  extends DestinationReportSweepActivitiesV1, Omit<DestinationReportsActivitiesV1, 'fetchDestinationReport'> {
+  /** The fetch heartbeats per page through the hooks the activity host passes. */
+  fetchDestinationReport(
+    input: DestinationReportFetchInputV1,
+    hooks?: ActivityHooks,
+  ): Promise<DestinationReportFetchResultV1>;
 }

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { Client, Connection, type ConnectionOptions } from '@temporalio/client';
 import type { NativeConnectionOptions } from '@temporalio/worker';
 
 export interface TemporalConfig {
@@ -35,4 +36,21 @@ export async function connectionOptions(cfg: TemporalConfig): Promise<NativeConn
   else if (cfg.apiKey || cfg.tls) options.tls = true;
   if (cfg.apiKey) options.apiKey = cfg.apiKey;
   return options;
+}
+
+/** A client for the schedules this worker owns (R2-1 part B), connected as worker-core's connectTemporal is. */
+export async function connectTemporal(cfg: TemporalConfig): Promise<Client> {
+  const options: ConnectionOptions = { address: cfg.address };
+  if (cfg.apiKey) {
+    options.apiKey = cfg.apiKey;
+    options.tls = true;
+  } else if (cfg.tlsCertPath && cfg.tlsKeyPath) {
+    options.tls = {
+      clientCertPair: { crt: await readFile(cfg.tlsCertPath), key: await readFile(cfg.tlsKeyPath) },
+    };
+  } else if (cfg.tls) {
+    options.tls = true;
+  }
+  const connection = await Connection.connect(options);
+  return new Client({ connection, namespace: cfg.namespace });
 }

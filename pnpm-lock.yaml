@@ -412,6 +412,9 @@ importers:
       '@oremedia/module-brand':
         specifier: workspace:*
         version: link:../../packages/modules/brand
+      '@oremedia/module-destinations':
+        specifier: workspace:*
+        version: link:../../packages/modules/destinations
       '@oremedia/module-intelligence':
         specifier: workspace:*
         version: link:../../packages/modules/intelligence
@@ -981,6 +984,9 @@ importers:
       '@oremedia/module-brand':
         specifier: workspace:*
         version: link:../brand
+      '@oremedia/module-measurement':
+        specifier: workspace:*
+        version: link:../measurement
       '@oremedia/module-operations':
         specifier: workspace:*
         version: link:../operations

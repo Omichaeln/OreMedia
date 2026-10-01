@@ -97,6 +97,11 @@ const ingest = (ctx: ActivityContext, f: Ids, own: Ids) => ({
 });
 const quarantineKey = (f: Ids) => `quarantine/${f['tenantId']}/${f['uploadIntentId']}/original`;
 const collectionPlan = (ctx: ActivityContext, f: Ids) => publication(ctx, f);
+const destinationReports = (ctx: ActivityContext, f: Ids) => ({
+  ...ctx,
+  destinationId: f['destinationId'],
+  now: '2026-09-29T04:00:00.000Z',
+});
 /** Brand change impact finds nothing of a foreign brand in the caller's tenant: every list and count is empty. */
 const BRAND_CHANGE_NO_OP =
   'the brand change runs in the caller tenant, where the foreign brand has no approvals or publications';
@@ -275,6 +280,28 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         windowEnd: '2026-01-02T00:00:00.000Z',
       }),
     },
+    // destinationReportSweepWorkflowV1 / destinationReportsWorkflowV1 (ledger R2-1 part B): the target listing is
+    // platform-level; every other activity names one destination of the tenant it runs in, so a foreign id is
+    // NOT_FOUND before any policy, credential or row is read
+    'ingest-metrics.listDestinationReportTargets': { buildInput: null, reason: PLATFORM_SWEEP },
+    'ingest-metrics.planDestinationReports': { buildInput: destinationReports },
+    'ingest-metrics.fetchDestinationReport': {
+      buildInput: (ctx, f) => ({
+        ...destinationReports(ctx, f),
+        reportKey: 'ga4.acquisition',
+        start: '2026-09-01',
+        end: '2026-09-28',
+      }),
+    },
+    'ingest-metrics.finishDestinationReports': {
+      buildInput: (ctx, f) => ({
+        ...destinationReports(ctx, f),
+        health: 'healthy',
+        fetched: [],
+        reason: null,
+      }),
+    },
+    'ingest-metrics.pruneDestinationReports': { buildInput: destinationReports },
     'ingest-comments.readCollectionPlan': { buildInput: collectionPlan },
     'ingest-comments.pullComments': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), pullIndex: 0, since: null, cursor: null }),

@@ -397,6 +397,38 @@ export class ProviderAuthError extends Error {
   }
 }
 
+/**
+ * Raised by a source adapter's fetchReport when the platform answered a read with a failure (R2-1 part B); the
+ * classification is the adapter's own reading of the status, so the ingestion runtime never maps statuses itself.
+ */
+export class SourceReadError extends Error {
+  readonly providerKey: string;
+  readonly status: number;
+  readonly classification: ProviderErrorClass;
+  constructor(providerKey: string, status: number, classification: ProviderErrorClass, detail: string) {
+    super(
+      `${providerKey} read failed (HTTP ${status}, ${classification.kind}): ${truncateForTemporal(redactBody(detail), 300)}`,
+    );
+    this.name = 'SourceReadError';
+    this.providerKey = providerKey;
+    this.status = status;
+    this.classification = classification;
+  }
+}
+
+/** The SourceReadError of a failed read, with the Retry-After header read into a rate-limited classification. */
+export function sourceReadError(key: string, classify: Classifier, res: ProviderResponse): SourceReadError {
+  const classification = classify({ status: res.status, body: res.body, phase: 'after_send' });
+  return new SourceReadError(
+    key,
+    res.status,
+    classification.kind === 'rate_limited' && classification.retryAfterMs === undefined
+      ? { ...classification, retryAfterMs: retryAfterMs(res.headers.get('retry-after'), 60_000) }
+      : classification,
+    summarise(res),
+  );
+}
+
 /** Encodes a multipart/form-data body as bytes (undici's fetch does not accept Node's global FormData). */
 export function multipart(
   parts: Array<{ name: string; value: string | Uint8Array; filename?: string; contentType?: string }>,

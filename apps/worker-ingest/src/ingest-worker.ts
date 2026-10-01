@@ -3,7 +3,17 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NativeConnection, Worker, type WorkerOptions } from '@temporalio/worker';
-import { createCommentIngestionActivities, createMetricCollectionActivities } from '@oremedia/activities';
+import { ScheduleAlreadyRunning, ScheduleOverlapPolicy, type Client } from '@temporalio/client';
+import {
+  createCommentIngestionActivities,
+  createDestinationReportActivities,
+  createMetricCollectionActivities,
+} from '@oremedia/activities';
+import {
+  DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
+  DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
+  createDestinationRuntime,
+} from '@oremedia/module-destinations';
 import {
   INGEST_COMMENTS_TASK_QUEUE,
   INGEST_METRICS_TASK_QUEUE,
@@ -14,7 +24,8 @@ import { logger } from '@oremedia/observability';
 import { connectionOptions, type TemporalConfig } from './temporal';
 
 /**
- * Spec 4.4: worker-ingest hosts task queues `ingest-metrics` (metricCollectionWorkflowV1) and `ingest-comments`
+ * Spec 4.4: worker-ingest hosts task queues `ingest-metrics` (metricCollectionWorkflowV1 and, ledger R2-1 part B,
+ * destinationReportSweepWorkflowV1 with its per-destination children) and `ingest-comments`
  * (commentIngestionWorkflowV1); `listening` and `crm` arrive with Release 2. Both queues serve the same
  * pre-bundled workflow code (tsup.config.ts → dist/workflows.ingest.js), one Worker each so a slow comment pull
  * cannot hold back metric pulls and neither can starve publishing (its own process and queues).
@@ -52,7 +63,10 @@ export async function startIngestWorkers(
     namespace: cfg.namespace,
     taskQueue: INGEST_METRICS_TASK_QUEUE,
     ...workflows,
-    activities: createMetricCollectionActivities(createMetricCollectionRuntime()),
+    activities: {
+      ...createMetricCollectionActivities(createMetricCollectionRuntime()),
+      ...createDestinationReportActivities(createDestinationRuntime().reports),
+    },
     maxConcurrentActivityTaskExecutions: Number(env['INGEST_METRICS_CONCURRENCY'] ?? 8),
   });
   const comments = await Worker.create({
@@ -76,4 +90,32 @@ export async function startIngestWorkers(
     shutdown: () => workers.forEach((w) => w.getState() === 'RUNNING' && w.shutdown()),
     close: () => connection.close(),
   };
+}
+
+/** Daily at 04:00 UTC, after the token refresh (03:10) renewed the grants the reads use. */
+export const DESTINATION_REPORT_SWEEP_CALENDAR = { hour: 4, minute: 0 } as const;
+
+/**
+ * Ledger R2-1 part B: destinationReportSweepWorkflowV1 once a day on `ingest-metrics` (one schedule per namespace,
+ * joined if it exists; copied from worker-core's ensureDestinationTokenRefreshScheduled): every active GA4 and
+ * Search Console destination reads its reports incrementally under the source-use policy.
+ */
+export async function ensureDestinationReportSweepScheduled(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
+      spec: { calendars: [{ ...DESTINATION_REPORT_SWEEP_CALENDAR }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
+        taskQueue: INGEST_METRICS_TASK_QUEUE,
+        args: [{}],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+    });
+    logger().info({ status: DESTINATION_REPORT_SWEEP_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
 }

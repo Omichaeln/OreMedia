@@ -17,6 +17,7 @@ import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
 import { planItems } from '@oremedia/db/schema/content';
 import {
   brandDestinations,
+  destinationReportRows,
   pendingDestinationGrants,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
@@ -53,6 +54,7 @@ const LATER_TABLES: MySqlTable[] = [
   brandDestinations,
   pendingDestinationGrants,
   sourceUsePolicies,
+  destinationReportRows,
 ];
 
 const TABLES = (Object.values(schema) as unknown[])

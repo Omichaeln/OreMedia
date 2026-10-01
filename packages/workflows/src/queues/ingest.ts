@@ -3,3 +3,8 @@
 // dist/workflows.ingest.js and served on both queues; only what those queues serve is exported here.
 export { metricCollectionWorkflowV1 } from '../metric-collection.workflow.v1';
 export { commentIngestionWorkflowV1 } from '../comment-ingestion.workflow.v1';
+// Ledger R2-1 part B: the daily sweep of brand destinations' source reports (GA4, Search Console) and its children.
+export {
+  destinationReportSweepWorkflowV1,
+  destinationReportsWorkflowV1,
+} from '../destination-report-sweep.workflow.v1';

@@ -1,5 +1,6 @@
-import { and, asc, eq, isNotNull, lt, lte, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
+import { WEB_REPORT_METRICS, type WebMetricSums } from '@oremedia/contracts/destinations';
 import {
   BrandScopedRepository,
   PlatformRepository,
@@ -9,9 +10,11 @@ import {
 } from '@oremedia/db';
 import {
   brandDestinations,
+  destinationReportRows,
   pendingDestinationGrants,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
+import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
 
 /** A brand has a handful of destinations and policy rows; a list is bounded, never paged. */
 const LIST_MAX = 200;
@@ -189,4 +192,286 @@ export class SourceUsePolicyRepository extends BrandScopedRepository<typeof sour
       .orderBy(asc(sourceUsePolicies.destinationKind), asc(sourceUsePolicies.dataType))
       .limit(LIST_MAX);
   }
+}
+
+/** Rows the daily report sweep visits per run (spec 17.4 bounded work); the rest wait for the next day. */
+export const REPORT_SWEEP_BATCH = 1000;
+
+/**
+ * The daily report sweep (destinationReportSweepWorkflowV1) spans tenants like the token refresh and runs as a
+ * declared platform job (spec 5.3); it returns references only (tenant and destination ids), never a row.
+ */
+export class DestinationReportTargetRepository extends PlatformRepository {
+  /** Active destinations of the kinds with reports that hold a credential, oldest first. */
+  async listTargets(kinds: readonly string[], tx?: Tx, limit = REPORT_SWEEP_BATCH) {
+    if (kinds.length === 0) return [];
+    return this.conn(tx)
+      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+      .from(brandDestinations)
+      .where(
+        and(
+          eq(brandDestinations.status, 'active'),
+          isNotNull(brandDestinations.credentialRefId),
+          inArray(brandDestinations.kind, [...kinds]),
+        ),
+      )
+      .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
+      .limit(limit);
+  }
+}
+
+/** Rows inserted per statement when a window is replaced. */
+const INSERT_CHUNK = 500;
+type ReportRowInsert = Omit<typeof destinationReportRows.$inferInsert, 'tenantId'>;
+
+/** A metric's SQL sum over the JSON column: Σ value for a flow or ratio operand, Σ value × weight for a gauge. */
+const metricPath = (name: string): string => `$.${name}`;
+const metricSum = (name: string): SQL<number | null> =>
+  sql<number | null>`sum(json_extract(${destinationReportRows.metrics}, ${metricPath(name)}))`;
+const metricWeightedSum = (name: string, weight: string | undefined): SQL<number | null> =>
+  weight
+    ? sql<
+        number | null
+      >`sum(json_extract(${destinationReportRows.metrics}, ${metricPath(name)}) * json_extract(${destinationReportRows.metrics}, ${metricPath(weight)}))`
+    : metricSum(name);
+const weightSum = (name: string, weight: string | undefined): SQL<number | null> =>
+  weight
+    ? sql<
+        number | null
+      >`sum(case when json_extract(${destinationReportRows.metrics}, ${metricPath(name)}) is null then null else json_extract(${destinationReportRows.metrics}, ${metricPath(weight)}) end)`
+    : sql<number | null>`count(json_extract(${destinationReportRows.metrics}, ${metricPath(name)}))`;
+
+/** The select list of one aggregate: `s_<metric>` sums (a gauge's weight sum) and `w_<metric>` weighted sums. */
+function sumColumns(metricNames: readonly string[]) {
+  const columns: Record<string, SQL<number | null>> = {};
+  for (const name of metricNames) {
+    const spec = WEB_REPORT_METRICS[name];
+    if (spec?.kind === 'gauge') {
+      columns[`s_${name}`] = weightSum(name, spec.weight);
+      columns[`w_${name}`] = metricWeightedSum(name, spec.weight);
+    } else columns[`s_${name}`] = metricSum(name);
+  }
+  return columns;
+}
+const num = (v: unknown): number | undefined => {
+  if (v === null || v === undefined) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+function toSums(metricNames: readonly string[], raw: Record<string, unknown>, rows: number): WebMetricSums {
+  const out: WebMetricSums = { rows, sums: {}, weighted: {} };
+  for (const name of metricNames) {
+    const s = num(raw[`s_${name}`]);
+    if (s !== undefined) out.sums[name] = s;
+    const w = num(raw[`w_${name}`]);
+    if (w !== undefined) out.weighted[name] = w;
+  }
+  return out;
+}
+
+export interface ReportDimensionAggregate {
+  dimensionKey: string;
+  dimensions: Record<string, string>;
+  days: number;
+  sums: WebMetricSums;
+}
+
+/**
+ * R2-1 part B: the rows of a destination's reports. The sweep replaces a window (delete range + insert) and prunes
+ * by age; the read model asks for sums (D-15 aggregates are formed from them, never from per-row rates) in SQL so
+ * a quarter of Search Console rows never crosses into memory.
+ */
+export class DestinationReportRowRepository extends BrandScopedRepository<typeof destinationReportRows> {
+  constructor() {
+    super(destinationReportRows);
+  }
+  private reportScope(brandId: string, destinationId: string, reportKey: string, extra?: SQL): SQL {
+    return this.brandScope(
+      brandId,
+      and(
+        eq(destinationReportRows.destinationId, destinationId),
+        eq(destinationReportRows.reportKey, reportKey),
+        extra,
+      ) as SQL,
+    );
+  }
+  private windowScope(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    start: string,
+    end: string,
+  ): SQL {
+    return this.reportScope(
+      brandId,
+      destinationId,
+      reportKey,
+      and(gte(destinationReportRows.date, start), lte(destinationReportRows.date, end)) as SQL,
+    );
+  }
+
+  /** The latest day stored for a report, or null before the first fetch. */
+  async latestDate(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    tx?: Tx,
+  ): Promise<string | null> {
+    const rows = await this.conn(tx)
+      .select({ latest: sql<string | null>`max(${destinationReportRows.date})` })
+      .from(destinationReportRows)
+      .where(this.reportScope(brandId, destinationId, reportKey));
+    return rows[0]?.latest ?? null;
+  }
+
+  /** Replaces every row of the window in the caller's transaction: the delete and the inserts commit together. */
+  async replaceWindow(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    start: string,
+    end: string,
+    rows: ReportRowInsert[],
+    tx: Tx,
+  ): Promise<void> {
+    await tx
+      .delete(destinationReportRows)
+      .where(this.windowScope(brandId, destinationId, reportKey, start, end));
+    const { tenantId } = requireTenant();
+    this.assertBrandAccess(brandId);
+    for (let i = 0; i < rows.length; i += INSERT_CHUNK)
+      await tx
+        .insert(destinationReportRows)
+        .values(rows.slice(i, i + INSERT_CHUNK).map((r) => ({ ...r, tenantId })));
+  }
+
+  /** Deletes the destination's rows of days before the cut-off (every report); returns how many went. */
+  async deleteBefore(brandId: string, destinationId: string, cutoffDate: string, tx: Tx): Promise<number> {
+    return affectedRows(
+      await tx
+        .delete(destinationReportRows)
+        .where(
+          this.brandScope(
+            brandId,
+            and(
+              eq(destinationReportRows.destinationId, destinationId),
+              lt(destinationReportRows.date, cutoffDate),
+            ) as SQL,
+          ),
+        ),
+    );
+  }
+
+  /** Days with rows, rows, the latest day and when it was fetched, inside the window. */
+  async coverage(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    start: string,
+    end: string,
+    tx?: Tx,
+  ) {
+    const rows = await this.conn(tx)
+      .select({
+        days: sql<number>`count(distinct ${destinationReportRows.date})`,
+        rows: sql<number>`count(*)`,
+        latestDate: sql<string | null>`max(${destinationReportRows.date})`,
+        fetchedAt: sql<Date | null>`max(${destinationReportRows.fetchedAt})`,
+      })
+      .from(destinationReportRows)
+      .where(this.windowScope(brandId, destinationId, reportKey, start, end));
+    const r = rows[0];
+    return {
+      days: Number(r?.days ?? 0),
+      rows: Number(r?.rows ?? 0),
+      latestDate: r?.latestDate ?? null,
+      fetchedAt: r?.fetchedAt ? new Date(r.fetchedAt) : null,
+    };
+  }
+
+  /** The window's sums over every row (the summary's totals). */
+  async totals(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    metricNames: readonly string[],
+    start: string,
+    end: string,
+    tx?: Tx,
+  ): Promise<WebMetricSums> {
+    const rows = await this.conn(tx)
+      .select({ rows: sql<number>`count(*)`, ...sumColumns(metricNames) })
+      .from(destinationReportRows)
+      .where(this.windowScope(brandId, destinationId, reportKey, start, end));
+    const r = (rows[0] ?? {}) as Record<string, unknown>;
+    return toSums(metricNames, r, Number(r['rows'] ?? 0));
+  }
+
+  /**
+   * The window's sums per dimension value, sorted by the primary metric's sum (descending, ties by key) with a
+   * cursor over that order; `limit + 1` rows are read to know whether a next page exists.
+   */
+  async aggregateByDimension(
+    brandId: string,
+    destinationId: string,
+    reportKey: string,
+    metricNames: readonly string[],
+    primary: string,
+    start: string,
+    end: string,
+    page: { limit: number; cursor?: string | undefined },
+    tx?: Tx,
+  ): Promise<{ items: ReportDimensionAggregate[]; nextCursor: string | null }> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : null;
+    const primarySum = sql<number | null>`coalesce(${metricSum(primary)}, 0)`;
+    const after =
+      cursor && typeof cursor.sort === 'number'
+        ? (or(
+            lt(primarySum, cursor.sort),
+            and(eq(primarySum, cursor.sort), gt(destinationReportRows.dimensionKey, cursor.id)),
+          ) as SQL)
+        : undefined;
+    const query = this.conn(tx)
+      .select({
+        dimensionKey: destinationReportRows.dimensionKey,
+        dimensions: sql<string>`min(${destinationReportRows.dimensions})`,
+        days: sql<number>`count(distinct ${destinationReportRows.date})`,
+        rows: sql<number>`count(*)`,
+        primary: primarySum,
+        ...sumColumns(metricNames),
+      })
+      .from(destinationReportRows)
+      .where(this.windowScope(brandId, destinationId, reportKey, start, end))
+      .groupBy(destinationReportRows.dimensionKey)
+      .orderBy(desc(primarySum), asc(destinationReportRows.dimensionKey))
+      .limit(page.limit + 1);
+    const rows = (await (after ? query.having(after) : query)) as Array<Record<string, unknown>>;
+    const items = rows.slice(0, page.limit).map((r) => ({
+      dimensionKey: String(r['dimensionKey']),
+      dimensions: parseDimensions(r['dimensions']),
+      days: Number(r['days'] ?? 0),
+      sums: toSums(metricNames, r, Number(r['rows'] ?? 0)),
+    }));
+    const next = rows.length > page.limit ? rows[page.limit - 1] : undefined;
+    return {
+      items,
+      nextCursor: next
+        ? encodeCursor({ id: String(next['dimensionKey']), sort: Number(next['primary'] ?? 0) })
+        : null,
+    };
+  }
+}
+
+/** `min()` over a JSON column comes back as text on MySQL. */
+function parseDimensions(value: unknown): Record<string, string> {
+  if (value && typeof value === 'object') return value as Record<string, string>;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, string>;
+    } catch {
+      /* not JSON */
+    }
+  }
+  return {};
 }

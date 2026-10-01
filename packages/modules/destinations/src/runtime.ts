@@ -2,6 +2,7 @@ import type {
   DestinationRefreshInputV1,
   DestinationRefreshResultV1,
   DestinationRefreshRuntimeV1,
+  DestinationReportsRuntimeV1,
   DestinationTokenRefreshInputV1,
 } from '@oremedia/contracts/destinations';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
@@ -9,6 +10,7 @@ import { requireTenant, runAsPlatform, withTransaction } from '@oremedia/db';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
 import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
+import { createDestinationReportRuntime } from './report-runtime';
 import { BrandDestinationRepository, DestinationRefreshDueRepository } from './repositories';
 import { sourceAdapterFor, sourceIO } from './sources';
 
@@ -22,10 +24,14 @@ export interface DestinationRuntimeOptions {
   now?: () => Date;
   /** Per-destination refresh lock (Redis-backed in production; memory by default). */
   refreshLock?: RateLimiterStore;
+  /** Per-destination report-run lock (R2-1 part B; the same store in production). */
+  reportLock?: RateLimiterStore;
 }
 
 export interface DestinationRuntime {
   refresh: DestinationRefreshRuntimeV1;
+  /** R2-1 part B (worker-ingest): the report sweep's activities, refreshing a dead token through `refresh`. */
+  reports: DestinationReportsRuntimeV1;
 }
 
 /**
@@ -130,5 +136,11 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
     },
   };
 
-  return { refresh };
+  return {
+    refresh,
+    reports: createDestinationReportRuntime(refresh, {
+      now,
+      ...(opts.reportLock ? { reportLock: opts.reportLock } : {}),
+    }),
+  };
 }

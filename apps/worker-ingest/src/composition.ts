@@ -1,6 +1,11 @@
 import { modelsCapability } from '@oremedia/ai';
 import { registerBrandChecker } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
+import {
+  configureSourceAvailability,
+  sourceAvailabilityFromEnv,
+  sourceCapabilities,
+} from '@oremedia/module-destinations';
 import { intelligenceService } from '@oremedia/module-intelligence';
 import {
   authorHashingFromEnv,
@@ -37,6 +42,8 @@ export function composeModules(env: NodeJS.ProcessEnv = process.env): void {
   registerPublishingBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerProviderClients(providerClientsFromEnv(env));
+  // R2-1 part B: the report sweep reads only the sources this deployment enables (PROVIDER_<KIND>_* set, not disabled).
+  configureSourceAvailability(sourceAvailabilityFromEnv(env));
   configureAuthorHashing(authorHashingFromEnv(env));
   configureLinkTracking(linkTrackingFromEnv(env));
   registerCommentClassifier((comment) => intelligenceService.voice.classify(comment));
@@ -63,10 +70,12 @@ export function composeCredentialBroker(env: NodeJS.ProcessEnv = process.env): v
 
 /**
  * What the startup configuration report checks for worker-ingest (docs/runbooks/deploy-railway.md, "Configuration
- * report"): every provider's app credentials (token refresh, metrics and comment pulls) and the models (the voice
- * classifier runs on ingested comments).
+ * report"): every provider's app credentials (token refresh, metrics and comment pulls), every source's (the daily
+ * report sweep reads GA4 and Search Console with them, R2-1 part B) and the models (the voice classifier runs on
+ * ingested comments).
  */
 export const workerIngestCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   ...channelCapabilities(env),
+  ...sourceCapabilities(env),
   modelsCapability,
 ];

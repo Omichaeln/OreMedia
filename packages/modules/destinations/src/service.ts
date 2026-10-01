@@ -73,7 +73,7 @@ export const configureDestinationConnectStateStore = (store: ConnectStateStore):
 type DestinationRow = Awaited<ReturnType<BrandDestinationRepository['getById']>>;
 type PolicyRow = Awaited<ReturnType<SourceUsePolicyRepository['getById']>>;
 
-const brandResource = (brandId: string) => {
+export const brandResource = (brandId: string) => {
   const { tenantId } = requireTenant();
   return { type: 'brand', tenantId, brandId, id: brandId };
 };
@@ -213,7 +213,7 @@ function assertMayDecide(decision: Decision): void {
 }
 
 /** Versioned JSON is validated on read (spec 6.1); a kind unknown to the capability table never reaches a DTO. */
-const StoredKind = z.enum(
+export const StoredKind = z.enum(
   Object.keys(DESTINATION_KIND_CAPABILITIES) as [DestinationKind, ...DestinationKind[]],
 );
 const StoredUses = z.array(SourceUse);
@@ -236,6 +236,20 @@ const toDestinationDto = (d: DestinationRow): DestinationV1 => ({
   updatedAt: d.updatedAt.toISOString(),
 });
 
+/**
+ * The one reading of a policy row for one use, shared by `sourceUsePolicyService.check` and the report sweep
+ * (which runs as a platform job with no person to ask): refused without a row, once the review is overdue, or
+ * when the use is not among the allowed ones.
+ */
+export function sourceUseDecision(row: PolicyRow | null, use: SourceUse, now: Date): SourceUseCheckResult {
+  if (!row) return { allowed: false, reason: 'no_policy', policy: null };
+  const dto = toPolicyDto(row);
+  if (row.reviewDueAt.getTime() < now.getTime())
+    return { allowed: false, reason: 'review_overdue', policy: dto };
+  if (!dto.allowedUses.includes(use)) return { allowed: false, reason: 'not_allowed', policy: dto };
+  return { allowed: true, reason: 'allowed', policy: dto };
+}
+
 const toPolicyDto = (p: PolicyRow): SourceUsePolicyV1 => ({
   id: p.id,
   brandId: p.brandId,
@@ -255,10 +269,11 @@ const toPolicyDto = (p: PolicyRow): SourceUsePolicyV1 => ({
  * Any brand id from a client is read through the brand module first: a brand of another tenant, or one the actor
  * is not granted, is NOT_FOUND (never FORBIDDEN, spec 5.3), and brand.read is asserted on the way.
  */
-const visibleBrand = (actor: ResolvedActor, brandId: string, tx?: Tx) => brandService.get(actor, brandId, tx);
+export const visibleBrand = (actor: ResolvedActor, brandId: string, tx?: Tx) =>
+  brandService.get(actor, brandId, tx);
 
 /** A destination read by id under a brand: one that belongs to another brand of the tenant does not exist here. */
-async function destinationOf(brandId: string, destinationId: string, row: DestinationRow | null) {
+export async function destinationOf(brandId: string, destinationId: string, row: DestinationRow | null) {
   if (!row || row.brandId !== brandId) throw new NotFoundError('Destination', destinationId);
   return row;
 }
@@ -646,11 +661,6 @@ export const sourceUsePolicyService = {
     const parsed = SourceUseCheck.parse(input);
     await visibleBrand(actor, parsed.brandId, tx);
     const row = await policiesRepo.findByKey(parsed.brandId, parsed.destinationKind, parsed.dataType, tx);
-    if (!row) return { allowed: false, reason: 'no_policy', policy: null };
-    const dto = toPolicyDto(row);
-    if (row.reviewDueAt.getTime() < Date.now())
-      return { allowed: false, reason: 'review_overdue', policy: dto };
-    if (!dto.allowedUses.includes(parsed.use)) return { allowed: false, reason: 'not_allowed', policy: dto };
-    return { allowed: true, reason: 'allowed', policy: dto };
+    return sourceUseDecision(row, parsed.use, new Date());
   },
 };
