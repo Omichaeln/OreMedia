@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ErrorDetail } from './errors';
+import { TenantContextInput } from './tenancy';
 
 /**
  * Brand destinations (ledger R2-0): the non-social places a brand reads from or writes to (an analytics property,
@@ -147,6 +148,82 @@ export function sourceUseIssues(
     issues.push({ path: 'retentionDays', issue: 'required_for_retain' });
   return issues;
 }
+
+// ---- connect flow (R2-1 part A): a Google grant attached to a new destination ----
+
+/** `connect.start`: the source adapter's authorisation URL for a kind with a certified, enabled source adapter. */
+export const DestinationConnectStart = z.object({
+  brandId: z.string(),
+  kind: DestinationKind,
+  /** As for channels: used only where the server has no public web origin (development, tests). */
+  redirectUri: z.string().url().optional(),
+});
+export const DestinationConnectComplete = z.object({ state: z.string(), code: z.string() });
+export const DestinationConnectSelect = z.object({
+  pendingId: z.string().max(32),
+  externalId: z.string().min(1).max(200),
+});
+export const DestinationConnectCancel = z.object({ pendingId: z.string().max(32) });
+
+/** One remote thing the grant can read: names only, never tokens. */
+export interface DestinationConnectTarget {
+  externalId: string;
+  displayName: string;
+}
+/**
+ * `connect.complete`'s answer: nothing is registered yet; the person confirms one target with `select`, even when
+ * the grant can read only one.
+ */
+export interface DestinationConnectChoice {
+  pendingId: string;
+  brandId: string;
+  kind: DestinationKind;
+  targets: DestinationConnectTarget[];
+  expiresAt: string;
+}
+
+/** `sources.list`: a kind with a registered source adapter, whether it is certified and enabled on this deployment. */
+export interface DestinationSourceV1 {
+  kind: DestinationKind;
+  label: string;
+  /** The platform the person authorises at (from the adapter's capability), for the screen's copy. */
+  vendor: string;
+  certified: boolean;
+  /** App credentials configured and the kind not listed in OREMEDIA_DISABLED_SOURCES. */
+  enabled: boolean;
+}
+
+// ---- destinationTokenRefreshWorkflowV1 (task queue `core`) ----
+
+/** The daily refresh is platform-level (it spans tenants like the retention sweep); a schedule starts it with fixed args. */
+export const DestinationTokenRefreshArgsV1 = z.object({
+  correlationId: z.string().optional(),
+  now: z.string().datetime().optional(),
+  /** Destinations whose token expires within this many hours of `now` are refreshed (default 24). */
+  withinHours: z.number().int().positive().optional(),
+});
+export type DestinationTokenRefreshArgsV1 = z.infer<typeof DestinationTokenRefreshArgsV1>;
+export interface DestinationTokenRefreshInputV1 {
+  correlationId: string;
+  now: string;
+  withinHours: number;
+}
+/** A destination due for refresh: references only (spec 14.7 R5). */
+export interface DestinationRefreshRefV1 {
+  tenantId: string;
+  destinationId: string;
+}
+export const DestinationRefreshInputV1 = TenantContextInput.extend({ destinationId: z.string() });
+export type DestinationRefreshInputV1 = z.infer<typeof DestinationRefreshInputV1>;
+export type DestinationRefreshResultV1 =
+  | { ok: true; tokenExpiresAt: string | null }
+  | { ok: false; reason: 'locked' | 'transient' | 'reconnect_required' | 'not_active' };
+export interface DestinationRefreshActivitiesV1 {
+  listDueDestinationRefreshes(input: DestinationTokenRefreshInputV1): Promise<DestinationRefreshRefV1[]>;
+  refreshDestinationCredential(input: DestinationRefreshInputV1): Promise<DestinationRefreshResultV1>;
+}
+/** The module-side implementation the activities wrap (tenant context is established by the activity host). */
+export type DestinationRefreshRuntimeV1 = DestinationRefreshActivitiesV1;
 
 export const SourceUseCheckReason = z.enum(['no_policy', 'not_allowed', 'review_overdue', 'allowed']);
 export type SourceUseCheckReason = z.infer<typeof SourceUseCheckReason>;

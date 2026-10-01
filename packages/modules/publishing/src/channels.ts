@@ -84,6 +84,8 @@ let connectCallbackUri: string | null = null;
 export const configureConnectCallback = (webOrigin: string | null | undefined): void => {
   connectCallbackUri = webOrigin ? new URL(CONNECT_CALLBACK_PATH, webOrigin).toString() : null;
 };
+/** The one registered callback, for every connect flow of the deployment (the destinations module's too); null unset. */
+export const connectCallbackUriInUse = (): string | null => connectCallbackUri;
 
 const brandResource = (brandId: string) => {
   const { tenantId } = requireTenant();

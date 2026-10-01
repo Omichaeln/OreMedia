@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DESTINATION_KIND_CAPABILITIES,
@@ -16,12 +17,23 @@ import { Section } from '../../components/section';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
+import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
 import {
+  callbackError,
+  callbackParams,
+  connectRedirectUri,
+  rememberConnect,
+  unavailableReason,
+} from '../publishing/channel-connect';
+import {
+  useDestinationSources,
   useDestinations,
   useSourceUsePolicies,
+  type DestinationConnectChoiceDto,
   type DestinationDto,
+  type DestinationSourceDto,
   type SourceUsePolicyDto,
 } from './use-destinations';
 
@@ -146,6 +158,291 @@ function DestinationRow({
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * R2-1 connect start (as the channel flow): the server returns the vendor's authorisation URL; it opens in a new tab
+ * as a link (never an iframe, the consent screen must be top-level). An uncertified source is refused with its
+ * reason; one not enabled on this deployment is not offered at all.
+ */
+function ConnectSourceButton({
+  brandId,
+  source,
+  redirectUri,
+}: {
+  brandId: string;
+  source: DestinationSourceDto;
+  redirectUri: string;
+}) {
+  const trpc = useTRPC();
+  const deployment = useDeploymentBrand();
+  const { companyId } = useBrandContext();
+  const intent = useIntentKey();
+  const start = useMutation(
+    trpc.destinations.connect.start.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: (data) => {
+        intent.renew();
+        // The vendor returns to the shared callback; this is how it finds its way back to this brand's destinations.
+        rememberConnect(data.state, { companyId, brandId, expiresAt: data.expiresAt, flow: 'destination' });
+      },
+    }),
+  );
+  const ui = start.isError ? toUiError(start.error) : null;
+  const unavailable = ui ? unavailableReason(ui.details) : null;
+  return (
+    <li className="flex flex-col gap-2 py-3" data-testid={`source-${source.kind}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">{source.label}</span>
+        <code className="text-xs text-muted-foreground">{source.kind}</code>
+        {!source.certified && <Badge tone="neutral">Not certified</Badge>}
+      </div>
+      <div>
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => start.mutate({ brandId, kind: source.kind, redirectUri })}
+          disabled={start.isPending || Boolean(unavailable)}
+          disabledReason={unavailable ?? undefined}
+        >
+          {start.isPending ? 'Starting…' : `Connect ${source.label}`}
+        </Button>
+      </div>
+      {start.data && (
+        <StatusBanner
+          tone="info"
+          title={`Continue at ${source.vendor}`}
+          description={
+            <>
+              Authorise {deployment.name} in {source.vendor}&apos;s own window, then return here to choose
+              what it reads. The link expires {new Date(start.data.expiresAt).toLocaleTimeString()}.
+            </>
+          }
+          actions={
+            <Button size="sm" asChild>
+              <a href={start.data.url} target="_blank" rel="noopener noreferrer" data-testid="authorise-link">
+                Open {source.vendor} authorisation (new tab)
+              </a>
+            </Button>
+          }
+          data-testid="destination-connect-started"
+        />
+      )}
+      {unavailable && (
+        <p className="text-xs text-muted-foreground" data-testid="unavailable-reason">
+          {unavailable}
+        </p>
+      )}
+      {ui && ui.kind === 'forbidden' && (
+        <StatusBanner
+          tone="critical"
+          title="Permission denied"
+          description={`${ui.message} Connecting a source needs destination.connect for this brand.`}
+          data-testid="destination-connect-denied"
+        />
+      )}
+      {ui && ui.kind !== 'forbidden' && !unavailable && (
+        <RequestError error={start.error} title="The connection did not start" />
+      )}
+    </li>
+  );
+}
+
+/**
+ * R2-1 target choice: the grant can read several properties or sites, so the person confirms the one this brand
+ * reads, even when there is only one. Nothing is registered until they do; cancelling discards the sealed grant.
+ */
+function ChooseTarget({ choice, onDone }: { choice: DestinationConnectChoiceDto; onDone: () => void }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [selected, setSelected] = useState<string | null>(
+    choice.targets.length === 1 ? (choice.targets[0]?.externalId ?? null) : null,
+  );
+  const select = useMutation(
+    trpc.destinations.connect.select.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        void queryClient.invalidateQueries(trpc.destinations.pathFilter());
+      },
+    }),
+  );
+  const cancel = useMutation(
+    trpc.destinations.connect.cancel.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        onDone();
+      },
+    }),
+  );
+  const selectUi = select.isError ? toUiError(select.error) : null;
+  const otherBrand = selectUi?.details.some(
+    (d) => d.path === 'externalId' && d.issue === 'remote_identity_registered_to_another_brand',
+  );
+  if (select.data)
+    return (
+      <StatusBanner
+        tone="good"
+        title={`Connected: ${select.data.displayName} (${kindLabel(select.data.kind)})`}
+        description="The grant is sealed and stored; the destination is listed above and its token is refreshed daily."
+        actions={
+          <Button size="sm" onClick={onDone}>
+            Done
+          </Button>
+        }
+        data-testid="destination-connect-completed"
+      />
+    );
+  const busy = select.isPending || cancel.isPending;
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (selected) select.mutate({ pendingId: choice.pendingId, externalId: selected });
+  };
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="flex flex-col gap-3 rounded-md border border-border p-3"
+      noValidate
+      data-testid="destination-connect-choose"
+    >
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-semibold">Choose what this brand reads</legend>
+        <p className="text-xs text-muted-foreground">
+          Only the {kindLabel(choice.kind).toLowerCase()} you choose is connected; the choice expires{' '}
+          {new Date(choice.expiresAt).toLocaleTimeString()}.
+        </p>
+        {choice.targets.map((target) => (
+          <label key={target.externalId} className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name={`destination-target-${choice.pendingId}`}
+              value={target.externalId}
+              checked={selected === target.externalId}
+              onChange={() => setSelected(target.externalId)}
+            />
+            <span>
+              {target.displayName} <code className="text-xs text-muted-foreground">{target.externalId}</code>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          type="submit"
+          disabled={busy || !selected}
+          disabledReason={selected ? undefined : 'Choose one first'}
+        >
+          {select.isPending ? 'Connecting…' : 'Confirm'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => cancel.mutate({ pendingId: choice.pendingId })}
+          disabled={busy}
+        >
+          Cancel
+        </Button>
+      </div>
+      {selectUi && selectUi.kind === 'conflict' && (
+        <StatusBanner
+          tone="warning"
+          title="Already registered"
+          description="This brand holds this remote identity already; choose another or cancel."
+          data-testid="destination-conflict"
+        />
+      )}
+      {otherBrand && (
+        <StatusBanner
+          tone="warning"
+          title="Registered to another brand"
+          description="Another brand of this company holds this remote identity; a destination belongs to one brand."
+          data-testid="destination-other-brand"
+        />
+      )}
+      {selectUi && selectUi.kind !== 'conflict' && !otherBrand && (
+        <RequestError error={select.error} title="The destination was not connected" />
+      )}
+      {cancel.isError && <RequestError error={cancel.error} title="The choice was not cancelled" />}
+    </form>
+  );
+}
+
+/** R2-1 completion: the vendor sent the person back with `state` and `code`; exchanging them is explicit. */
+function FinishDestinationConnect({
+  state,
+  code,
+  onDone,
+}: {
+  state: string;
+  code: string;
+  onDone: () => void;
+}) {
+  const trpc = useTRPC();
+  const intent = useIntentKey();
+  const complete = useMutation(
+    trpc.destinations.connect.complete.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => intent.renew(),
+    }),
+  );
+  if (complete.data) return <ChooseTarget choice={complete.data} onDone={onDone} />;
+  return (
+    <div className="flex flex-col gap-2">
+      <StatusBanner
+        tone="info"
+        title="Finish connecting the source"
+        description="The provider sent you back with an authorisation code. Finishing exchanges it once and lists what the grant can read; the code is never stored."
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => complete.mutate({ state, code })}
+              disabled={complete.isPending}
+            >
+              {complete.isPending ? 'Finishing…' : 'Finish connecting'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDone}>
+              Discard
+            </Button>
+          </>
+        }
+        data-testid="destination-connect-callback"
+      />
+      {complete.isError && <RequestError error={complete.error} title="The connection was not completed" />}
+    </div>
+  );
+}
+
+/** The sources this deployment can connect: one button per enabled kind (R2-1); none enabled, nothing is shown. */
+function ConnectSources({ brandId }: { brandId: string }) {
+  const sources = useDestinationSources();
+  const redirectUri = connectRedirectUri(window.location.origin);
+  const enabled = (sources.data?.items ?? []).filter((s) => s.enabled);
+  if (!sources.isSuccess || enabled.length === 0) return null;
+  return (
+    <Section id="destination-sources-heading" title="Connect a source" testId="destination-sources">
+      <p className="text-xs text-muted-foreground">
+        Authorise an account at the source&apos;s vendor, then choose which property or site this brand reads.
+        Only sources certified after their platform review can be connected; the server refuses the others and
+        the reason is shown here.
+      </p>
+      <ul className="divide-y divide-border" aria-label="Sources">
+        {enabled.map((source) => (
+          <ConnectSourceButton
+            key={source.kind}
+            brandId={brandId}
+            source={source}
+            redirectUri={redirectUri}
+          />
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -575,7 +872,8 @@ function AddPolicy({ brandId }: { brandId: string }) {
  * Settings → Destinations (R2-0): the brand's non-social destinations grouped by kind with their health and
  * owner, registration for those who hold destination.connect, and the source-use policy table (D-17) an admin
  * edits: one row per kind and data type, uses limited to what the kind offers, retention only when data is
- * retained, a review date, each save the next version.
+ * retained, a review date, each save the next version. R2-1: a source connected through the flow (start, the
+ * vendor's consent, finish on return, confirm a target), for the kinds enabled on this deployment.
  */
 export function DestinationSettings({
   canManage,
@@ -592,6 +890,11 @@ export function DestinationSettings({
   const { brandId, brand } = useBrandContext();
   const destinations = useDestinations(brandId);
   const policies = useSourceUsePolicies(brandId);
+  const [params, setParams] = useSearchParams();
+  const callback = callbackParams(params.toString());
+  const providerError = callbackError(params.toString());
+  // The vendor's answer is read from the query; dismissing it keeps this tab open.
+  const clearCallback = () => setParams({ tab: 'destinations' }, { replace: true });
   const listUi = destinations.isError ? toUiError(destinations.error) : null;
   const byKind = KINDS.map((kind) => ({
     kind,
@@ -599,6 +902,22 @@ export function DestinationSettings({
   })).filter((g) => g.items.length > 0);
   return (
     <div className="flex flex-col gap-8">
+      {callback && canConnectDestinations && (
+        <FinishDestinationConnect state={callback.state} code={callback.code} onDone={clearCallback} />
+      )}
+      {providerError && (
+        <StatusBanner
+          tone="warning"
+          title="The provider did not authorise the connection"
+          description={providerError}
+          actions={
+            <Button size="sm" onClick={clearCallback}>
+              Dismiss
+            </Button>
+          }
+          data-testid="destination-provider-error"
+        />
+      )}
       <Section id="destinations-heading" title="Destinations" testId="destinations">
         <p className="text-xs text-muted-foreground">
           Where {brand.name} reads performance from and publishes beyond social: analytics, search, its
@@ -628,6 +947,7 @@ export function DestinationSettings({
         ))}
         {canConnectDestinations && <RegisterDestination brandId={brandId} />}
       </Section>
+      {canConnectDestinations && <ConnectSources brandId={brandId} />}
       <Section id="source-use-heading" title="Source-use policy" testId="source-use">
         <p className="text-xs text-muted-foreground">
           What the product may do with each source&apos;s data: read it through a restricted view, keep a copy

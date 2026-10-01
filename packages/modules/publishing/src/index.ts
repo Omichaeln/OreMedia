@@ -3,11 +3,19 @@
 // publicationSweeperWorkflowV1 and the outbox routes that start and signal them on task queue `core`.
 export { LocalKms, WrapOnlyKms, type Kms } from './kms';
 export { seal, open, aadFor, type Envelope } from './envelope';
-export { credentialBroker, configureCredentialBroker, createKmsFromEnv, type ConnectionRef } from './broker';
+export {
+  credentialBroker,
+  configureCredentialBroker,
+  createKmsFromEnv,
+  type ConnectionRef,
+  type CredentialRefTarget,
+} from './broker';
+export type { EnvelopeRow } from './envelope';
 export {
   channelService,
   configureConnectStateStore,
   configureConnectCallback,
+  connectCallbackUriInUse,
   MemoryConnectStateStore,
   CONNECT_STATE_TTL_MS,
   type ChannelConnectResult,
@@ -35,6 +43,7 @@ export {
   registerPublishMediaSource,
   resetPublishMediaSource,
   registerProviderClients,
+  providerClientFor,
   providerClientsFromEnv,
   providerClientSettings,
   channelCapabilities,

@@ -14,7 +14,10 @@ interface Bucket {
 export class MemoryProviderRateLimiter implements RateLimiter {
   private readonly buckets = new Map<string, Bucket>();
   constructor(
-    private readonly capabilities: (providerKey: string) => ProviderCapabilityV1 | undefined,
+    /** The register's entry for a key: a channel's capability, or a source's (only `rateLimits` is read). */
+    private readonly capabilities: (
+      providerKey: string,
+    ) => Pick<ProviderCapabilityV1, 'rateLimits'> | undefined,
     private readonly maxWaitMs = 5_000,
     private readonly now: () => number = () => Date.now(),
   ) {}

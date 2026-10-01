@@ -10,7 +10,11 @@ import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
-import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  pendingDestinationGrants,
+  sourceUsePolicies,
+} from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { MemoryStorageProvider, assetService, configureStorage } from '@oremedia/module-assets';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -35,6 +39,7 @@ const LATER_TABLES: MySqlTable[] = [
   planItems,
   brandDestinations,
   sourceUsePolicies,
+  pendingDestinationGrants,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

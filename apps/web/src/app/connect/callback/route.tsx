@@ -3,12 +3,13 @@ import { Link, Navigate, useLocation } from 'react-router';
 import { Button, StatusBanner } from '@oremedia/ui';
 import { TopBar } from '../../root';
 import { brandPath } from '../../../features/brand/brand-context';
-import { recallConnect, returnQuery } from '../../../features/publishing/channel-connect';
+import { connectReturnTab, recallConnect, returnQuery } from '../../../features/publishing/channel-connect';
 
 /**
- * Spec 14.7: the one callback registered with Meta and LinkedIn. It only routes: the brand that started the flow
- * (remembered in this browser under its `state`) gets the provider's answer on its settings page, where finishing
- * the connection stays an explicit step. Nothing is exchanged here.
+ * Spec 14.7: the one callback registered with Meta, LinkedIn and Google. It only routes: the brand that started the
+ * flow (remembered in this browser under its `state`) gets the provider's answer on its settings page, on the tab
+ * the flow belongs to (channels, or destinations for an R2-1 source grant), where finishing the connection stays an
+ * explicit step. Nothing is exchanged here.
  */
 export function ConnectCallbackRoute() {
   const { search } = useLocation();
@@ -17,13 +18,17 @@ export function ConnectCallbackRoute() {
   const providerError = state ? null : params.get('error');
   // Read once: recallConnect removes the entry, and a re-render must not lose it.
   const [pending] = useState(() => (state ? recallConnect(state) : null));
-  if (pending)
+  if (pending) {
+    const query = new URLSearchParams(returnQuery(search));
+    const tab = connectReturnTab(pending.flow);
+    if (tab) query.set('tab', tab);
     return (
       <Navigate
-        to={`${brandPath(pending.companyId, pending.brandId, 'settings')}?${returnQuery(search)}`}
+        to={`${brandPath(pending.companyId, pending.brandId, 'settings')}?${query.toString()}`}
         replace
       />
     );
+  }
   return (
     <>
       <TopBar title="Connect a channel" />

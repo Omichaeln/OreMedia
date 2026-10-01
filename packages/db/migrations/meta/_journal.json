@@ -113,6 +113,13 @@
       "when": 1790832221976,
       "tag": "0015_brand_destinations",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1790836283334,
+      "tag": "0016_destination_connect",
+      "breakpoints": true
     }
   ]
 }

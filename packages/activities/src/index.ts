@@ -33,6 +33,7 @@ export {
   createRemoteChangeSweepActivities,
 } from './remote-change';
 export { createTokenRefreshActivities } from './token-refresh';
+export { createDestinationRefreshActivities, DESTINATION_REFRESH_ACTOR } from './destination-refresh';
 export { createBrandChangeImpactActivities } from './brand-change-impact';
 export { createMetricCollectionActivities } from './metric-collection';
 export { createCommentIngestionActivities } from './comment-ingestion';

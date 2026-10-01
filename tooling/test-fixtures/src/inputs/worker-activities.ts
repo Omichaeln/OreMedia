@@ -238,6 +238,12 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         result: { outcome: 'accepted', remoteMessageId: 'foreign-remote-comment', remoteUrl: null },
       }),
     },
+    // destinationTokenRefreshWorkflowV1 (ledger R2-1): the due listing is platform-level; a refresh names one
+    // destination of the tenant it runs in, so a foreign id is NOT_FOUND before any credential is read
+    'core.listDueDestinationRefreshes': { buildInput: null, reason: PLATFORM_SWEEP },
+    'core.refreshDestinationCredential': {
+      buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
+    },
     'core.listRetentionTenants': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.applyRetention': {
       buildInput: null,

@@ -49,13 +49,11 @@ describe('credential envelope row mapping (VARBINARY columns travel as text)', (
       accessToken: 'at_secret',
       refreshToken: 'rt',
     });
-    const tampered = {
-      ...row,
-      ciphertext: Buffer.from(
-        'x' + Buffer.from(row.ciphertext, 'base64').toString('binary').slice(1),
-        'binary',
-      ).toString('base64'),
-    };
+    // Flip one bit of the first byte: overwriting it with a constant left the ciphertext untouched whenever
+    // the random first byte already was that constant (one run in 256), and the test then failed.
+    const bytes = Buffer.from(row.ciphertext, 'base64');
+    bytes[0] = (bytes[0] ?? 0) ^ 0x01;
+    const tampered = { ...row, ciphertext: bytes.toString('base64') };
     await expect(open(kms, envelopeFromRow(tampered), aad)).rejects.toThrow();
   });
 });

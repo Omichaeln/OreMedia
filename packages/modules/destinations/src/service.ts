@@ -1,6 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   DESTINATION_KIND_CAPABILITIES,
+  DestinationConnectCancel,
+  DestinationConnectComplete,
+  DestinationConnectSelect,
+  DestinationConnectStart,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -11,27 +16,59 @@ import {
   SourceUsePolicyList,
   SourceUsePolicySet,
   sourceUseIssues,
+  type DestinationConnectChoice,
   type DestinationKind,
+  type DestinationSourceV1,
   type DestinationV1,
   type SourceUseCheckResult,
   type SourceUsePolicyV1,
 } from '@oremedia/contracts/destinations';
 import {
+  CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
-import { requireTenant, type Tx } from '@oremedia/db';
+import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
-import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
+import {
+  CONNECT_STATE_TTL_MS,
+  MemoryConnectStateStore,
+  connectCallbackUriInUse,
+  credentialBroker,
+  providerClientFor,
+  type ConnectStateStore,
+  type EnvelopeRow,
+} from '@oremedia/module-publishing';
+import { logger } from '@oremedia/observability';
+import { missingScopes, type SourceAdapter } from '@oremedia/providers';
+import { sourceAvailable } from './hooks';
+import {
+  BrandDestinationRepository,
+  PendingDestinationGrantRepository,
+  SourceUsePolicyRepository,
+} from './repositories';
+import { registry, sourceAdapterFor, sourceIO } from './sources';
 
 const destinationsRepo = new BrandDestinationRepository();
 const policiesRepo = new SourceUsePolicyRepository();
+const pendingRepo = new PendingDestinationGrantRepository();
+
+/**
+ * The connect flow's server-side state (R2-1), the same shape and lifetime as a channel connect's
+ * (packages/modules/publishing/src/channels.ts): PKCE verifier, redirect, actor, short TTL, consumed once. Its own
+ * store, so a state started for a channel can never complete a destination flow or the other way round;
+ * configureDestinationConnectStateStore swaps in a shared store for a multi-instance deployment.
+ */
+let stateStore: ConnectStateStore = new MemoryConnectStateStore();
+export const configureDestinationConnectStateStore = (store: ConnectStateStore): void => {
+  stateStore = store;
+};
 
 type DestinationRow = Awaited<ReturnType<BrandDestinationRepository['getById']>>;
 type PolicyRow = Awaited<ReturnType<SourceUsePolicyRepository['getById']>>;
@@ -47,6 +84,124 @@ const destinationResource = (d: DestinationRow) => ({
   id: d.id,
 });
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
+
+/** Kinds with a registered source adapter, whether it is certified and enabled here (the settings screen's buttons). */
+const listSources = (): DestinationSourceV1[] =>
+  registry()
+    .list()
+    .filter((s): s is typeof s & { key: DestinationKind } => s.key in DESTINATION_KIND_CAPABILITIES)
+    .map((s) => ({
+      kind: s.key,
+      label: DESTINATION_KIND_CAPABILITIES[s.key].label,
+      vendor: s.capability.vendor,
+      certified: s.certified,
+      enabled: sourceAvailable(s.key),
+    }));
+
+/** A certified source adapter the deployment has enabled; the other refusals read as a channel's (spec 14.6). */
+function enabledSourceAdapter(kind: DestinationKind): SourceAdapter {
+  const adapter = sourceAdapterFor(kind); // CAPABILITY_UNSUPPORTED unless registered and certified
+  if (!sourceAvailable(kind))
+    throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
+  return adapter;
+}
+
+/**
+ * Expired flows are deleted, sealed grants with them, whenever a connect flow runs in the tenant. It commits on its
+ * own so a refused (rolled back) flow still leaves nothing expired behind; a failure here is logged and never fails
+ * the request (as channels do).
+ */
+async function destroyExpiredFlows(): Promise<void> {
+  try {
+    await withTransaction((tx) => pendingRepo.deleteExpired(new Date(), tx));
+  } catch (err) {
+    logger()
+      .child('destinations')
+      .warn(
+        { errorName: (err as Error)?.name, errorCode: (err as { code?: string })?.code },
+        'expired destination connect flows not purged; the next flow will try again',
+      );
+  }
+}
+
+const flowExpired = () =>
+  new ValidationFailedError(
+    [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+    'The connect flow has expired; start again',
+  );
+
+/** The live flow this actor completed, locked; anything else is the same refusal (nothing is revealed). */
+async function takeFlow(actor: ResolvedActor, pendingId: string, tx: Tx) {
+  await destroyExpiredFlows();
+  const row = await pendingRepo.lockPending(pendingId, tx);
+  if (!row || row.actorKind !== actor.kind || row.actorId !== actor.id || row.expiresAt <= new Date())
+    throw flowExpired();
+  await policy.assert(actor, 'destination.connect', brandResource(row.brandId), {}, tx);
+  return row;
+}
+
+/** What a destination registration needs beyond the identity: the sealed grant, or nothing (R2-0's register). */
+interface Grant {
+  credentialRefId: string;
+  tokenExpiresAt: Date | null;
+}
+
+/**
+ * The one destination write (R2-0 register and R2-1 select): a remote identity this brand holds already is a
+ * conflict; one another brand of the tenant holds is refused without naming it (uq_destination_remote, as channels
+ * do for a remote account). One audit row per write, under the action of the command that made it (as
+ * connectAccount records channel.connect or channel.reconnect), with the event.
+ */
+async function registerDestination(
+  actor: ResolvedActor,
+  action: 'destination.register' | 'destination.connect.select',
+  values: {
+    id: string;
+    brandId: string;
+    kind: DestinationKind;
+    externalId: string;
+    displayName: string;
+    grantedScopes: string[];
+    capabilityVersion: number;
+  },
+  grant: Grant | null,
+  tx: Tx,
+) {
+  const existing = await destinationsRepo.findRemote(values.kind, values.externalId, tx);
+  if (existing && existing.brandId !== values.brandId)
+    throw new ValidationFailedError(
+      [{ path: 'externalId', issue: 'remote_identity_registered_to_another_brand' }],
+      'This remote identity is already registered to another brand',
+    );
+  if (existing) throw new ConflictError('Destination', existing.id, existing.version);
+  await destinationsRepo.create(
+    {
+      ...values,
+      ownerUserId: actor.id,
+      credentialRefId: grant?.credentialRefId ?? null,
+      tokenExpiresAt: grant?.tokenExpiresAt ?? null,
+      // A grant that just listed its targets is known to work; a bare registration has not been checked.
+      health: grant ? 'healthy' : 'unknown',
+      healthCheckedAt: grant ? new Date() : null,
+      status: 'active',
+    },
+    tx,
+  );
+  const row = await destinationsRepo.getById(values.id, tx);
+  await audit.record(actorRef(actor), action, { type: 'brand_destination', id: values.id }, 'allowed', tx, {
+    brandId: values.brandId,
+    kind: values.kind,
+    toState: 'active',
+  });
+  await outbox.add(
+    'destination.registered',
+    { type: 'brand_destination', id: values.id, version: row.version },
+    { destinationId: values.id, kind: values.kind, actorKind: actor.kind, actorId: actor.id },
+    tx,
+    { brandId: values.brandId },
+  );
+  return toDestinationDto(row);
+}
 
 /**
  * Defence in depth: source_use.manage is AGENT_NEVER (role-grants.ts), so an agent is denied by policy.assert
@@ -130,60 +285,202 @@ export const destinationService = {
 
   /**
    * Registers a remote identity for the brand (destination.connect, which agents never hold). The person who
-   * registers it owns it. A remote identity this brand holds already is a conflict; one another brand of the tenant
-   * holds is refused without naming it (uq_destination_remote, as channels do for a remote account). No credential
-   * is stored here: a connect flow attaches one later.
+   * registers it owns it. No credential is stored here: `connect` registers a destination with its grant.
    */
   async register(actor: ResolvedActor, input: z.input<typeof DestinationRegister>, tx: Tx) {
     const parsed = DestinationRegister.parse(input);
     await visibleBrand(actor, parsed.brandId, tx);
     await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
-    const existing = await destinationsRepo.findRemote(parsed.kind, parsed.externalId, tx);
-    if (existing && existing.brandId !== parsed.brandId)
-      throw new ValidationFailedError(
-        [{ path: 'externalId', issue: 'remote_identity_registered_to_another_brand' }],
-        'This remote identity is already registered to another brand',
-      );
-    if (existing) throw new ConflictError('Destination', existing.id, existing.version);
-    const id = newId('destination');
-    await destinationsRepo.create(
+    return registerDestination(
+      actor,
+      'destination.register',
       {
-        id,
+        id: newId('destination'),
         brandId: parsed.brandId,
         kind: parsed.kind,
         externalId: parsed.externalId,
         displayName: parsed.displayName,
-        ownerUserId: actor.id,
-        credentialRefId: null,
         grantedScopes: parsed.grantedScopes,
-        health: 'unknown',
-        healthCheckedAt: null,
         capabilityVersion: parsed.capabilityVersion,
-        status: 'active',
       },
+      null,
       tx,
     );
-    const row = await destinationsRepo.getById(id, tx);
-    await audit.record(
-      actorRef(actor),
-      'destination.register',
-      { type: 'brand_destination', id },
-      'allowed',
-      tx,
-      {
+  },
+
+  /** The kinds a connect flow can start here: registered source adapters, certified or not, enabled or not. */
+  sources: {
+    async list(): Promise<{ items: DestinationSourceV1[] }> {
+      return { items: listSources() };
+    },
+  },
+
+  connect: {
+    /**
+     * R2-1 connect start (as spec 14.7 for channels): the source's authorisation URL with a server-side PKCE
+     * verifier, for a kind whose source adapter is registered, certified and enabled on this deployment.
+     */
+    async start(actor: ResolvedActor, input: z.infer<typeof DestinationConnectStart>, tx: Tx) {
+      const parsed = DestinationConnectStart.parse(input);
+      await visibleBrand(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
+      await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
+      const adapter = enabledSourceAdapter(parsed.kind);
+      const redirectUri = connectCallbackUriInUse() ?? parsed.redirectUri;
+      if (!redirectUri)
+        throw new ValidationFailedError(
+          [{ path: 'redirectUri', issue: 'required_without_web_origin' }],
+          'No callback is configured for this deployment; send redirectUri',
+        );
+      const { tenantId } = requireTenant();
+      const state = randomBytes(32).toString('base64url');
+      const codeVerifier = randomBytes(48).toString('base64url');
+      const expiresAt = Date.now() + CONNECT_STATE_TTL_MS;
+      const { url } = await adapter.authorizationUrl({
+        state,
+        codeVerifier,
+        redirectUri,
+        client: providerClientFor(adapter.key),
+      });
+      await stateStore.put(state, {
+        tenantId,
         brandId: parsed.brandId,
-        kind: parsed.kind,
-        toState: 'active',
-      },
-    );
-    await outbox.add(
-      'destination.registered',
-      { type: 'brand_destination', id, version: row.version },
-      { destinationId: id, kind: parsed.kind, actorKind: actor.kind, actorId: actor.id },
-      tx,
-      { brandId: parsed.brandId },
-    );
-    return toDestinationDto(row);
+        providerKey: adapter.key,
+        redirectUri,
+        codeVerifier,
+        actorId: actor.id,
+        expiresAt,
+      });
+      await audit.record(
+        actorRef(actor),
+        'destination.connect.start',
+        { type: 'brand', id: parsed.brandId },
+        'allowed',
+        tx,
+        { brandId: parsed.brandId, kind: parsed.kind },
+      );
+      return { state, url, expiresAt: new Date(expiresAt).toISOString() };
+    },
+
+    /**
+     * The code is exchanged, the grant sealed with a per-record data key bound to the tenant and the destination it
+     * becomes (its id allocated now), and stored as one pending row with the targets the grant can read. Nothing
+     * is registered yet: the person confirms a target with `select`, even when there is only one. Plaintext never
+     * reaches the DB, logs or events; the API process seals without decrypting.
+     */
+    async complete(
+      actor: ResolvedActor,
+      input: z.infer<typeof DestinationConnectComplete>,
+      tx: Tx,
+    ): Promise<DestinationConnectChoice> {
+      const parsed = DestinationConnectComplete.parse(input);
+      const { tenantId } = requireTenant();
+      const pending = await stateStore.take(parsed.state);
+      if (!pending || pending.tenantId !== tenantId || pending.actorId !== actor.id)
+        throw new ValidationFailedError(
+          [{ path: 'state', issue: 'connect_state_invalid_or_expired' }],
+          'The connect flow has expired; start again',
+        );
+      await policy.assert(actor, 'destination.connect', brandResource(pending.brandId), {}, tx);
+      await destroyExpiredFlows();
+      const kind = StoredKind.parse(pending.providerKey);
+      const adapter = enabledSourceAdapter(kind);
+      const client = providerClientFor(adapter.key);
+      const io = sourceIO(adapter.key, tenantId);
+      const grant = await adapter.exchangeCode(
+        { code: parsed.code, codeVerifier: pending.codeVerifier, redirectUri: pending.redirectUri, client },
+        io,
+      );
+      const missing = missingScopes(adapter.capability.requiredScopes, grant.grantedScopes);
+      if (missing.length)
+        throw new ValidationFailedError(
+          missing.map((scope) => ({ path: 'code', issue: `scope_missing:${scope}` })),
+          'The grant does not cover the scopes this source needs; connect again and allow them',
+        );
+      const targets = await adapter.listTargets(grant.credentials, client, io);
+      const destinationId = newId('destination');
+      const envelope = await credentialBroker.seal(tenantId, destinationId, grant.credentials);
+      const pendingId = newId('pendingDestinationGrant');
+      const expiresAt = new Date(Date.now() + CONNECT_STATE_TTL_MS);
+      await pendingRepo.create(
+        {
+          id: pendingId,
+          brandId: pending.brandId,
+          kind,
+          actorKind: actor.kind,
+          actorId: actor.id,
+          destinationId,
+          grantedScopes: grant.grantedScopes,
+          tokenExpiresAt: grant.credentials.expiresAt ? new Date(grant.credentials.expiresAt) : null,
+          targets,
+          ...envelope,
+          expiresAt,
+        },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'destination.connect.complete',
+        { type: 'brand', id: pending.brandId },
+        'allowed',
+        tx,
+        { brandId: pending.brandId, kind, count: targets.length },
+      );
+      return { pendingId, brandId: pending.brandId, kind, targets, expiresAt: expiresAt.toISOString() };
+    },
+
+    /**
+     * Registers the target the person chose among those `complete` offered, with the sealed grant as its
+     * credential (health healthy, the adapter's capability version), through the same write as R2-0's register and
+     * with its refusals. Only the actor who completed the flow, in its tenant and brand, can choose, once, before
+     * it expires; the pending row is deleted with its grant.
+     */
+    async select(actor: ResolvedActor, input: z.infer<typeof DestinationConnectSelect>, tx: Tx) {
+      const parsed = DestinationConnectSelect.parse(input);
+      const row = await takeFlow(actor, parsed.pendingId, tx);
+      const target = row.targets.find((t) => t.externalId === parsed.externalId);
+      if (!target)
+        throw new ValidationFailedError(
+          [{ path: 'externalId', issue: 'target_not_offered' }],
+          'Choose one of the targets offered',
+        );
+      const kind = StoredKind.parse(row.kind);
+      const adapter = sourceAdapterFor(kind);
+      const { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad } = row;
+      const envelope: EnvelopeRow = { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad };
+      await pendingRepo.deletePending(row.id, tx);
+      const credentialRefId = await credentialBroker.createCredentialRef(envelope, tx);
+      return registerDestination(
+        actor,
+        'destination.connect.select',
+        {
+          id: row.destinationId,
+          brandId: row.brandId,
+          kind,
+          externalId: target.externalId,
+          displayName: target.displayName,
+          grantedScopes: row.grantedScopes,
+          capabilityVersion: adapter.capability.version,
+        },
+        { credentialRefId, tokenExpiresAt: row.tokenExpiresAt },
+        tx,
+      );
+    },
+
+    /** Discards a flow: the sealed grant it holds is deleted. Same actor, tenant and brand as `select`. */
+    async cancel(actor: ResolvedActor, input: z.infer<typeof DestinationConnectCancel>, tx: Tx) {
+      const parsed = DestinationConnectCancel.parse(input);
+      const row = await takeFlow(actor, parsed.pendingId, tx);
+      const count = await pendingRepo.deletePending(row.id, tx);
+      await audit.record(
+        actorRef(actor),
+        'destination.connect.cancel',
+        { type: 'brand', id: row.brandId },
+        'allowed',
+        tx,
+        { brandId: row.brandId, kind: row.kind, count },
+      );
+      return { pendingId: parsed.pendingId, cancelled: true as const };
+    },
   },
 
   /** Records what a health check found (destination.manage); the time of the check is now. Not once disconnected. */
@@ -219,7 +516,7 @@ export const destinationService = {
     return toDestinationDto(await destinationsRepo.getById(row.id, tx));
   },
 
-  /** active → disconnected (destination.manage); a destination disconnected already is refused. */
+  /** active → disconnected (destination.manage), its credential destroyed; one disconnected already is refused. */
   async disconnect(actor: ResolvedActor, input: z.infer<typeof DestinationDisconnect>, tx: Tx) {
     const parsed = DestinationDisconnect.parse(input);
     const row = await destinationOf(
@@ -235,7 +532,10 @@ export const destinationService = {
       );
     if (row.version !== parsed.expectedVersion)
       throw new ConflictError('Destination', row.id, parsed.expectedVersion);
-    await destinationsRepo.update(row.id, row.version, { status: 'disconnected' }, tx);
+    await destinationsRepo.update(row.id, row.version, { status: 'disconnected', tokenExpiresAt: null }, tx);
+    // As channels on disconnect: the credential row is destroyed (data key discarded) with the destination.
+    if (row.credentialRefId)
+      await credentialBroker.destroyCredentialRef(row.credentialRefId, 'disconnected', tx);
     await audit.record(
       actorRef(actor),
       'destination.disconnect',

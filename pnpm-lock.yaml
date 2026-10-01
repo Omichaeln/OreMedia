@@ -984,6 +984,15 @@ importers:
       '@oremedia/module-operations':
         specifier: workspace:*
         version: link:../operations
+      '@oremedia/module-publishing':
+        specifier: workspace:*
+        version: link:../publishing
+      '@oremedia/observability':
+        specifier: workspace:*
+        version: link:../../observability
+      '@oremedia/providers':
+        specifier: workspace:*
+        version: link:../../providers
       drizzle-orm:
         specifier: ^0.45.3
         version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(mysql2@3.24.4(@types/node@22.20.4))

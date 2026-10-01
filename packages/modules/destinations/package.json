@@ -16,6 +16,9 @@
     "@oremedia/module-access": "workspace:*",
     "@oremedia/module-brand": "workspace:*",
     "@oremedia/module-operations": "workspace:*",
+    "@oremedia/module-publishing": "workspace:*",
+    "@oremedia/observability": "workspace:*",
+    "@oremedia/providers": "workspace:*",
     "drizzle-orm": "^0.45.3",
     "zod": "^3.25.76"
   }
