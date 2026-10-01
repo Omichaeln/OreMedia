@@ -20,6 +20,7 @@ import {
   createCommunityReplyControlActivities,
   createCommunityReplyProviderActivities,
   createConnectChoicePurgeActivities,
+  createDestinationRefreshActivities,
   createPublicationSweepActivities,
   createPublishControlActivities,
   createPublishProviderActivities,
@@ -43,6 +44,11 @@ import {
   type WorkflowProbe,
 } from '@oremedia/module-publishing';
 import { createCommunityReplyRuntime } from '@oremedia/module-community';
+import {
+  DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
+  DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE,
+  createDestinationRuntime,
+} from '@oremedia/module-destinations';
 import { logger } from '@oremedia/observability';
 import { providerRegistry } from '@oremedia/providers';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
@@ -113,6 +119,8 @@ export async function startPublishingWorkers(
       ...createTokenRefreshActivities(runtime.tokenRefresh),
       ...createPublicationSweepActivities(runtime.sweep),
       ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),
+      // destinationTokenRefreshWorkflowV1 (ledger R2-1): the daily refresh of brand destinations' source grants
+      ...createDestinationRefreshActivities(createDestinationRuntime().refresh),
       // brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 (spec 8.2)
       ...createBrandChangeImpactActivities(createBrandChangeImpactRuntime()),
       // brandAnalystWorkflowV1 / brandAnalystSweepWorkflowV1 / baselineComparisonWorkflowV1 (spec 16.3, 16.8)
@@ -186,6 +194,34 @@ export async function ensureConnectChoicePurgeScheduleRunning(client: Client): P
       policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
     });
     logger().info({ status: CONNECT_CHOICE_PURGE_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
+}
+
+/** Daily at 03:10 UTC, after the retention sweep and outside the top-of-hour publishing burst. */
+export const DESTINATION_TOKEN_REFRESH_CALENDAR = { hour: 3, minute: 10 } as const;
+
+/**
+ * Ledger R2-1: destinationTokenRefreshWorkflowV1 once a day (one schedule per namespace, joined if it exists): every
+ * active destination whose source token expires within the next day is refreshed; a revoked grant leaves it
+ * unreachable until a person connects it again.
+ */
+export async function ensureDestinationTokenRefreshScheduled(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
+      spec: { calendars: [{ ...DESTINATION_TOKEN_REFRESH_CALENDAR }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE,
+        taskQueue: CORE_TASK_QUEUE,
+        args: [{}],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+    });
+    logger().info({ status: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID }, 'schedule created');
   } catch (err) {
     if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
     throw err;

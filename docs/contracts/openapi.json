@@ -4635,6 +4635,109 @@
         }
       }
     },
+    "/trpc/destinations.connect.cancel": {
+      "post": {
+        "operationId": "destinations.connect.cancel",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pendingId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["pendingId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.connect.complete": {
+      "post": {
+        "operationId": "destinations.connect.complete",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": ["state", "code"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.connect.select": {
+      "post": {
+        "operationId": "destinations.connect.select",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pendingId": {
+                    "type": "string"
+                  },
+                  "externalId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["pendingId", "externalId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.connect.start": {
+      "post": {
+        "operationId": "destinations.connect.start",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  },
+                  "redirectUri": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "kind"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/destinations.disconnect": {
       "post": {
         "operationId": "destinations.disconnect",
@@ -4792,6 +4895,12 @@
             }
           }
         }
+      }
+    },
+    "/trpc/destinations.sources.list": {
+      "get": {
+        "operationId": "destinations.sources.list",
+        "x-trpc-type": "query"
       }
     },
     "/trpc/destinations.sourceUse.check": {
@@ -12932,6 +13041,67 @@
           "required": ["brandId", "page"]
         }
       },
+      "destinations.connect.cancel": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "pendingId": {
+              "type": "string"
+            }
+          },
+          "required": ["pendingId"]
+        }
+      },
+      "destinations.connect.complete": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": ["state", "code"]
+        }
+      },
+      "destinations.connect.select": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "pendingId": {
+              "type": "string"
+            },
+            "externalId": {
+              "type": "string"
+            }
+          },
+          "required": ["pendingId", "externalId"]
+        }
+      },
+      "destinations.connect.start": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            },
+            "redirectUri": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "kind"]
+        }
+      },
       "destinations.disconnect": {
         "type": "mutation",
         "input": {
@@ -13033,6 +13203,10 @@
           },
           "required": ["brandId", "destinationId", "health", "expectedVersion"]
         }
+      },
+      "destinations.sources.list": {
+        "type": "query",
+        "input": null
       },
       "destinations.sourceUse.check": {
         "type": "query",

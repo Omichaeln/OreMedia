@@ -21,6 +21,11 @@ import {
 import { runInTenant } from '@oremedia/db';
 import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
+import {
+  configureSourceAvailability,
+  sourceAvailabilityFromEnv,
+  sourceCapabilities,
+} from '@oremedia/module-destinations';
 import { assetService, registerAssetOutboxRoutes, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
@@ -193,6 +198,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
+  // Ledger R2-1: the sources this deployment refreshes (app credentials present, not disabled).
+  configureSourceAvailability(sourceAvailabilityFromEnv());
   registerWorkflowProbe(opts.workflowProbe ?? null);
   // Spec 15: measurement.collection_due starts the collection on worker-ingest's queues; variant links and
   // creative attributes are captured here too because agents run content commands in this process.
@@ -349,10 +356,12 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
 /**
  * What the startup configuration report checks for worker-core (docs/runbooks/deploy-railway.md, "Configuration
  * report"): uploads (publishing copies media to release keys, deletion removes objects), every provider's app
- * credentials (publishing and token refresh) and the models (agents, generators).
+ * credentials (publishing and token refresh), every source's (the daily destination refresh) and the models
+ * (agents, generators).
  */
 export const workerCoreCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   uploadsCapability,
   ...channelCapabilities(env),
+  ...sourceCapabilities(env),
   modelsCapability,
 ];

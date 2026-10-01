@@ -15,6 +15,7 @@ export {
   channelService,
   configureConnectStateStore,
   configureConnectCallback,
+  connectCallbackUriInUse,
   MemoryConnectStateStore,
   CONNECT_STATE_TTL_MS,
   type ChannelConnectResult,

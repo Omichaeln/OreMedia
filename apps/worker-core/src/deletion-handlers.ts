@@ -129,21 +129,27 @@ export function deletionCoverage(): { uncovered: string[]; duplicated: string[] 
  * with no API from here are recorded as operator actions (operations' platform steps).
  */
 export function registerDeletionHandlers(): void {
-  // Social tokens (spec 14.7): overwrite the wrapped data key and ciphertext first, so no copy of the row that a
-  // backup or a later failure keeps can be opened; the rows themselves go with the publishing handler.
+  // Social tokens (spec 14.7) and destination grants (R2-1): overwrite the wrapped data key and ciphertext first,
+  // so no copy of the row that a backup or a later failure keeps can be opened; the rows themselves go with the
+  // publishing handler (a pending destination grant carries its own data key and goes with its table).
   const credentials = new CredentialRefRepository();
   registerDeletionHandler({
     name: 'credentials',
     store: 'database',
     subjects: ['tenant', 'brand'],
     async run(scope, tx) {
-      const ids = new Set(
-        await repoFor(publishingSchema.channelConnections).values(
+      const ids = new Set([
+        ...(await repoFor(publishingSchema.channelConnections).values(
           publishingSchema.channelConnections.credentialRefId,
           scopeOf(scope),
           tx,
-        ),
-      );
+        )),
+        ...(await repoFor(destinationsSchema.brandDestinations).values(
+          destinationsSchema.brandDestinations.credentialRefId,
+          scopeOf(scope),
+          tx,
+        )),
+      ]);
       if (!scope.brandId)
         for (const id of await repoFor(publishingSchema.credentialRefs).values(
           publishingSchema.credentialRefs.id,

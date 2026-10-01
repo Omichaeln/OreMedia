@@ -27,6 +27,23 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
   'destinations.disconnect': {
     buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'], expectedVersion: 0 }),
   },
+  // R2-1 connect flow: the brand is read first (NOT_FOUND); a state or pending id of another tenant is unknown
+  // here (VALIDATION_FAILED, as the channel flow answers), so nothing is revealed and nothing is written.
+  'destinations.sources.list': {
+    buildInput: null,
+    reason:
+      'Lists the registered source adapters of the deployment; takes no ids and returns no tenant content.',
+  },
+  'destinations.connect.start': {
+    buildInput: (f) => ({ brandId: f['brandId'], kind: 'ga4_property' }),
+  },
+  'destinations.connect.complete': {
+    buildInput: (f) => ({ state: f['pendingDestinationGrantId'], code: 'code_foreign' }),
+  },
+  'destinations.connect.select': {
+    buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'], externalId: 'properties/424242' }),
+  },
+  'destinations.connect.cancel': { buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'] }) },
   'destinations.sourceUse.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'destinations.sourceUse.set': {
     buildInput: (f) => ({

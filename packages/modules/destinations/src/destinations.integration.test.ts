@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, asc, eq } from 'drizzle-orm';
 import {
+  CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
   PolicyDeniedError,
@@ -13,10 +14,26 @@ import { runInTenant, withTransaction, type TenantContext, type Tx } from '@orem
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
-import { sourceUsePolicies } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  pendingDestinationGrants,
+  sourceUsePolicies,
+} from '@oremedia/db/schema/destinations';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
+import { credentialRefs } from '@oremedia/db/schema/publishing';
 import { newId } from '@oremedia/domain/ids';
+import {
+  LocalKms,
+  configureCredentialBroker,
+  credentialBroker,
+  registerProviderClients,
+} from '@oremedia/module-publishing';
+import { SourceRegistry } from '@oremedia/providers';
+import { configureSourceAvailability } from './hooks';
+import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
+import { configureDestinationSources } from './sources';
+import { FixtureSourceAdapter, fixtureSourceCapability } from './testing/fixture-source';
 
 /**
  * Brand destinations and source-use policy against MySQL 8: a destination registered with its owner, listed and
@@ -58,6 +75,9 @@ const run = <T>(tenantId: string, fn: (tx: Tx) => Promise<T>) =>
   runInTenant(ctx(tenantId), () => withTransaction(fn));
 const inTenant = <T>(tenantId: string, fn: () => Promise<T>) => runInTenant(ctx(tenantId), fn);
 const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
+const REFRESH_ACTOR = { kind: 'platform_operator' as const, id: 'destination-token-refresh' };
+const asPlatformJob = <T>(tenantId: string, fn: () => Promise<T>) =>
+  runInTenant({ tenantId, actor: REFRESH_ACTOR, brandIds: 'all', correlationId: 'corr_refresh' }, fn);
 
 describe('destinations module against MySQL 8', () => {
   let tdb: TestDatabase;
@@ -548,5 +568,376 @@ describe('destinations module against MySQL 8', () => {
         ),
       ),
     ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  describe('connect flow and token refresh (ledger R2-1 part A)', () => {
+    const fixture = new FixtureSourceAdapter('ga4_property');
+    const uncertified = new FixtureSourceAdapter(
+      'search_console_site',
+      fixtureSourceCapability('search_console_site', { certifiedAt: null }),
+    );
+    const registry = new SourceRegistry().register(fixture).register(uncertified);
+    const runtime = createDestinationRuntime();
+    const REDIRECT = 'https://app.example/connect/callback';
+    /** Another person of the tenant (an admin): a flow is bound to the actor who started it, not to a role. */
+    const otherPerson: ResolvedActor = {
+      ...member(tenantA, 'admin'),
+      id: 'usr_destinations_other',
+      membershipId: 'mem_destinations_other',
+    };
+    let pendingId = '';
+    let connectedId = '';
+    const start = (actor: ResolvedActor, brandId = brandA) =>
+      run(tenantA, (tx) =>
+        destinationService.connect.start(actor, { brandId, kind: 'ga4_property', redirectUri: REDIRECT }, tx),
+      );
+    const complete = (actor: ResolvedActor, state: string, code = 'good') =>
+      run(tenantA, (tx) => destinationService.connect.complete(actor, { state, code }, tx));
+    const select = (actor: ResolvedActor, id: string, externalId: string) =>
+      run(tenantA, (tx) => destinationService.connect.select(actor, { pendingId: id, externalId }, tx));
+    const pendingRows = () =>
+      tdb.db.select().from(pendingDestinationGrants).where(eq(pendingDestinationGrants.tenantId, tenantA));
+    const destinationRow = async (id: string) =>
+      (await tdb.db.select().from(brandDestinations).where(eq(brandDestinations.id, id)))[0]!;
+    const credentialRow = async (id: string) =>
+      (await tdb.db.select().from(credentialRefs).where(eq(credentialRefs.id, id)))[0]!;
+    const auditsOf = (action: string) =>
+      tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, action)));
+
+    beforeAll(() => {
+      configureDestinationSources({ registry });
+      configureCredentialBroker({ kms: new LocalKms('destinations-test-master-secret-0123456789') });
+      registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+      fixture.targets = [
+        { externalId: 'properties/9001', displayName: 'Acme · Acme web' },
+        { externalId: 'properties/9002', displayName: 'Acme · Acme app' },
+        { externalId: 'properties/1001', displayName: 'Acme · Already registered' },
+      ];
+    });
+
+    it('sources.list names each registered kind with its certification and whether it is enabled here', async () => {
+      configureSourceAvailability((kind) => kind === 'ga4_property');
+      const { items } = await destinationService.sources.list();
+      expect(items).toEqual([
+        { kind: 'ga4_property', label: 'Google Analytics 4 property', certified: true, enabled: true },
+        { kind: 'search_console_site', label: 'Search Console site', certified: false, enabled: false },
+      ]);
+    });
+
+    it('start refuses an uncertified kind, a disabled kind, a kind without an adapter, a creator and an agent', async () => {
+      configureSourceAvailability(() => true);
+      const certifiedButDisabled = async () => {
+        configureSourceAvailability((kind) => kind !== 'ga4_property');
+        try {
+          return await start(owner());
+        } finally {
+          configureSourceAvailability(() => true);
+        }
+      };
+      await expect(certifiedButDisabled()).rejects.toMatchObject({
+        code: 'CAPABILITY_UNSUPPORTED',
+        details: [{ path: 'kind', issue: 'source_not_enabled:ga4_property' }],
+      });
+      const notCertified = await run(tenantA, (tx) =>
+        destinationService.connect.start(
+          owner(),
+          { brandId: brandA, kind: 'search_console_site', redirectUri: REDIRECT },
+          tx,
+        ),
+      ).catch((e: unknown) => e);
+      expect(notCertified).toBeInstanceOf(CapabilityUnsupportedError);
+      expect((notCertified as CapabilityUnsupportedError).details).toEqual([
+        { path: 'kind', issue: 'provider_not_certified:search_console_site' },
+      ]);
+      await expect(
+        run(tenantA, (tx) =>
+          destinationService.connect.start(
+            owner(),
+            { brandId: brandA, kind: 'discord_webhook', redirectUri: REDIRECT },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'kind', issue: 'unknown_provider:discord_webhook' }] });
+      await expect(start(member(tenantA, 'creator'))).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(start(agent(tenantA))).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(start(owner(), brandB)).rejects.toBeInstanceOf(NotFoundError); // another tenant's brand
+    });
+
+    it('start gives the source’s authorisation URL (offline access, consent) under a one-shot state', async () => {
+      const started = await start(member(tenantA, 'publisher'));
+      const url = new URL(started.url);
+      expect(url.searchParams.get('access_type')).toBe('offline');
+      expect(url.searchParams.get('prompt')).toBe('consent');
+      expect(url.searchParams.get('state')).toBe(started.state);
+      expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT);
+      expect(url.searchParams.get('client_id')).toBe('fixture-client');
+      expect(Date.parse(started.expiresAt)).toBeGreaterThan(Date.now());
+      // Only the actor who started it, in its tenant, can complete it; then it is spent.
+      await expect(complete(otherPerson, started.state)).rejects.toMatchObject({
+        details: [{ path: 'state', issue: 'connect_state_invalid_or_expired' }],
+      });
+      await expect(complete(member(tenantA, 'publisher'), started.state)).rejects.toMatchObject({
+        details: [{ path: 'state', issue: 'connect_state_invalid_or_expired' }],
+      });
+      expect((await auditsOf('destination.connect.start')).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('complete exchanges the code, seals the grant and offers the targets; nothing is registered yet', async () => {
+      const publisher = member(tenantA, 'publisher');
+      const started = await start(publisher);
+      const choice = await complete(publisher, started.state, 'code_1');
+      pendingId = choice.pendingId;
+      expect(fixture.lastCode).toBe('code_1');
+      expect(choice).toMatchObject({ brandId: brandA, kind: 'ga4_property', targets: fixture.targets });
+      expect(JSON.stringify(choice)).not.toContain('fixture_src');
+      const rows = await pendingRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: pendingId, brandId: brandA, actorKind: 'user', actorId: USER });
+      expect(rows[0]!.aad).toBe(`${tenantA}:${rows[0]!.destinationId}`);
+      expect(JSON.stringify(rows)).not.toContain('fixture_src'); // sealed, never plaintext
+      const before = await tdb.db
+        .select()
+        .from(brandDestinations)
+        .where(eq(brandDestinations.brandId, brandA));
+      expect(before.some((d) => d.externalId.startsWith('properties/900'))).toBe(false);
+      expect(await auditsOf('destination.connect.complete')).toHaveLength(1);
+    });
+
+    it('a grant missing the required scope, or a failed exchange, never leaves a pending row', async () => {
+      const publisher = member(tenantA, 'publisher');
+      const started = await start(publisher);
+      await expect(complete(publisher, started.state, 'bad')).rejects.toMatchObject({
+        name: 'ProviderAuthError',
+        code: 'exchange_failed',
+      });
+      const narrow = await start(publisher);
+      const scopes = fixture.grant.grantedScopes;
+      fixture.grant.grantedScopes = ['openid'];
+      try {
+        await expect(complete(publisher, narrow.state)).rejects.toMatchObject({
+          details: [
+            { path: 'code', issue: 'scope_missing:https://www.googleapis.com/auth/fixture.readonly' },
+          ],
+        });
+      } finally {
+        fixture.grant.grantedScopes = scopes;
+      }
+      expect(await pendingRows()).toHaveLength(1); // the earlier flow only
+    });
+
+    it('select: only the completing actor, among the targets offered; another brand’s identity is refused and the flow kept', async () => {
+      const publisher = member(tenantA, 'publisher');
+      await expect(select(otherPerson, pendingId, 'properties/9001')).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      await expect(select(publisher, pendingId, 'properties/other')).rejects.toMatchObject({
+        details: [{ path: 'externalId', issue: 'target_not_offered' }],
+      });
+      // properties/1001 is brand A1's own registration: a conflict, exactly as register answers.
+      await expect(select(publisher, pendingId, 'properties/1001')).rejects.toBeInstanceOf(ConflictError);
+      expect(await pendingRows()).toHaveLength(1); // refused inside the transaction: the choice is still open
+    });
+
+    it('select registers the chosen target with the sealed grant: credential, scopes, expiry, healthy; one-shot', async () => {
+      const publisher = member(tenantA, 'publisher');
+      const registered = await select(publisher, pendingId, 'properties/9002');
+      connectedId = registered.id;
+      expect(registered).toMatchObject({
+        brandId: brandA,
+        kind: 'ga4_property',
+        externalId: 'properties/9002',
+        displayName: 'Acme · Acme app',
+        ownerUserId: USER,
+        grantedScopes: fixture.grant.grantedScopes,
+        health: 'healthy',
+        capabilityVersion: 1,
+        status: 'active',
+      });
+      expect(JSON.stringify(registered)).not.toContain('credentialRef');
+      const row = await destinationRow(registered.id);
+      expect(row.credentialRefId).toBeTruthy();
+      expect(row.tokenExpiresAt).toBeInstanceOf(Date);
+      expect(row.healthCheckedAt).toBeInstanceOf(Date);
+      const credential = await credentialRow(row.credentialRefId!);
+      expect(credential.aad).toBe(`${tenantA}:${registered.id}`);
+      expect(credential.destroyedAt).toBeNull();
+      // The broker opens it under the destination's AAD (worker-core's path); nothing in the row is plaintext.
+      const opened = await inTenant(tenantA, () =>
+        credentialBroker.withCredentialRef(
+          { tenantId: tenantA, credentialRefId: row.credentialRefId!, aad: `${tenantA}:${registered.id}` },
+          async (creds) => creds.accessToken, // the object itself is scrubbed once fn returns
+        ),
+      );
+      expect(opened).toBe('at_fixture_src');
+      expect(JSON.stringify(credential)).not.toContain('fixture_src');
+      expect(await pendingRows()).toEqual([]);
+      expect(await auditsOf('destination.connect.select')).toHaveLength(1);
+      const events = await tdb.db
+        .select()
+        .from(outboxEvents)
+        .where(and(eq(outboxEvents.tenantId, tenantA), eq(outboxEvents.eventType, 'destination.registered')));
+      expect(events.map((e) => e.payload['destinationId'])).toContain(registered.id);
+      await expect(select(publisher, pendingId, 'properties/9001')).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+    });
+
+    it('cancel deletes the flow with its grant; an expired flow is purged by the next start', async () => {
+      const publisher = member(tenantA, 'publisher');
+      const started = await start(publisher);
+      const choice = await complete(publisher, started.state);
+      await run(tenantA, (tx) =>
+        destinationService.connect.cancel(publisher, { pendingId: choice.pendingId }, tx),
+      );
+      expect(await pendingRows()).toEqual([]);
+      await expect(
+        run(tenantA, (tx) =>
+          destinationService.connect.cancel(publisher, { pendingId: choice.pendingId }, tx),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      expect(await auditsOf('destination.connect.cancel')).toHaveLength(1);
+      const stale = await complete(publisher, (await start(publisher)).state);
+      await tdb.db
+        .update(pendingDestinationGrants)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(pendingDestinationGrants.id, stale.pendingId));
+      await expect(select(publisher, stale.pendingId, 'properties/9001')).rejects.toMatchObject({
+        details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+      });
+      await start(publisher);
+      expect(await pendingRows()).toEqual([]);
+    });
+
+    it('the daily refresh lists what is due across tenants, rotates the credential and audits; a revoked grant leaves the destination unreachable', async () => {
+      const row = await destinationRow(connectedId);
+      const firstRef = row.credentialRefId!;
+      const due = await runtime.refresh.listDueDestinationRefreshes({
+        correlationId: 'corr_refresh',
+        now: new Date().toISOString(),
+        withinHours: 24,
+      });
+      expect(due).toContainEqual({ tenantId: tenantA, destinationId: connectedId });
+      expect(due.some((d) => d.destinationId === propertyId)).toBe(false); // registered without a grant
+      const farAhead = await runtime.refresh.listDueDestinationRefreshes({
+        correlationId: 'corr_refresh',
+        now: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        withinHours: 1,
+      });
+      expect(farAhead.some((d) => d.destinationId === connectedId)).toBe(false);
+
+      const refreshed = await asPlatformJob(tenantA, () =>
+        runtime.refresh.refreshDestinationCredential({
+          tenantId: tenantA,
+          destinationId: connectedId,
+          actor: REFRESH_ACTOR,
+          correlationId: 'corr_refresh',
+        }),
+      );
+      expect(refreshed.ok).toBe(true);
+      expect(fixture.refreshCalls.at(-1)).toMatchObject({ refreshToken: 'rt_fixture_src' });
+      const after = await destinationRow(connectedId);
+      expect(after.credentialRefId).not.toBe(firstRef);
+      expect(after.health).toBe('healthy');
+      expect((await credentialRow(firstRef)).destroyedAt).toBeInstanceOf(Date);
+      expect((await credentialRow(firstRef)).rotatedAt).toBeInstanceOf(Date);
+      const opened = await asPlatformJob(tenantA, () =>
+        credentialBroker.withCredentialRef(
+          { tenantId: tenantA, credentialRefId: after.credentialRefId!, aad: `${tenantA}:${connectedId}` },
+          async (creds) => creds.accessToken,
+        ),
+      );
+      expect(opened).toBe('at_fixture_src_refreshed');
+      const allowed = (await auditsOf('destination.token_refresh')).filter((a) => a.decision === 'allowed');
+      expect(allowed).toHaveLength(1);
+      expect(allowed[0]!.actorKind).toBe('platform_operator');
+
+      fixture.refreshBehaviour = { kind: 'transient' };
+      expect(
+        await asPlatformJob(tenantA, () =>
+          runtime.refresh.refreshDestinationCredential({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_refresh',
+          }),
+        ),
+      ).toEqual({ ok: false, reason: 'locked' }); // the per-destination lock from the refresh a moment ago
+      const unlocked = createDestinationRuntime();
+      expect(
+        await asPlatformJob(tenantA, () =>
+          unlocked.refresh.refreshDestinationCredential({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_refresh',
+          }),
+        ),
+      ).toEqual({ ok: false, reason: 'transient' });
+      expect((await destinationRow(connectedId)).health).toBe('healthy'); // a transient failure changes nothing
+      fixture.refreshBehaviour = { kind: 'revoked' };
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().refresh.refreshDestinationCredential({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_refresh',
+          }),
+        ),
+      ).toEqual({ ok: false, reason: 'reconnect_required' });
+      const revoked = await destinationRow(connectedId);
+      expect(revoked.health).toBe('unreachable');
+      expect(revoked.credentialRefId).toBe(after.credentialRefId); // the grant stays until a person reconnects
+      const denied = (await auditsOf('destination.token_refresh')).filter((a) => a.decision === 'denied');
+      expect(denied.map((a) => a.metadata?.['reason'])).toEqual(['transient', 'reconnect_required']);
+      expect(denied[1]!.metadata).toMatchObject({ fromState: 'healthy', toState: 'unreachable' });
+      fixture.refreshBehaviour = { kind: 'refresh' };
+    });
+
+    it('disconnect destroys the credential; the broker refuses it afterwards and the refresh skips it', async () => {
+      const row = await destinationRow(connectedId);
+      await run(tenantA, (tx) =>
+        destinationService.disconnect(
+          owner(),
+          { brandId: brandA, destinationId: connectedId, expectedVersion: row.version },
+          tx,
+        ),
+      );
+      const after = await destinationRow(connectedId);
+      expect(after).toMatchObject({ status: 'disconnected', tokenExpiresAt: null });
+      const credential = await credentialRow(row.credentialRefId!);
+      expect(credential.destroyedAt).toBeInstanceOf(Date);
+      expect(credential.rotatedAt).toBeNull();
+      expect(credential.wrappedDataKey).toBe('');
+      await expect(
+        inTenant(tenantA, () =>
+          credentialBroker.withCredentialRef(
+            { tenantId: tenantA, credentialRefId: row.credentialRefId!, aad: `${tenantA}:${connectedId}` },
+            async () => 'opened',
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'credential_destroyed' });
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().refresh.refreshDestinationCredential({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_refresh',
+          }),
+        ),
+      ).toEqual({ ok: false, reason: 'not_active' });
+      const due = await runtime.refresh.listDueDestinationRefreshes({
+        correlationId: 'corr_refresh',
+        now: new Date().toISOString(),
+        withinHours: 24,
+      });
+      expect(due.some((d) => d.destinationId === connectedId)).toBe(false);
+    });
   });
 });

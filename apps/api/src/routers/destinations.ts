@@ -1,4 +1,8 @@
 import {
+  DestinationConnectCancel,
+  DestinationConnectComplete,
+  DestinationConnectSelect,
+  DestinationConnectStart,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -21,6 +25,8 @@ const mutationCtx = (ctx: MutationCtx) => ({
  * Brand destinations (R2-0): the non-social places a brand reads from or writes to, registered, health-checked and
  * disconnected by the people who hold destination.connect / destination.manage; and the source-use policy (D-17)
  * per destination kind and data type, set by an admin (source_use.manage) and asked before any ingestion or write.
+ * R2-1: the connect flow that attaches a Google grant (start / complete / select / cancel, as the channel flow) and
+ * the sources this deployment can connect.
  */
 export const destinationsRouter = router({
   list: tenantQuery
@@ -44,6 +50,33 @@ export const destinationsRouter = router({
     .mutation(({ ctx, input }) =>
       idempotent(mutationCtx(ctx), (tx) => destinationService.disconnect(ctx.tenant.actor, input, tx)),
     ),
+  sources: router({
+    list: tenantQuery.query(() => destinationService.sources.list()),
+  }),
+  connect: router({
+    start: tenantMutation
+      .input(DestinationConnectStart)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => destinationService.connect.start(ctx.tenant.actor, input, tx)),
+      ),
+    complete: tenantMutation
+      .input(DestinationConnectComplete)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          destinationService.connect.complete(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    select: tenantMutation
+      .input(DestinationConnectSelect)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => destinationService.connect.select(ctx.tenant.actor, input, tx)),
+      ),
+    cancel: tenantMutation
+      .input(DestinationConnectCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => destinationService.connect.cancel(ctx.tenant.actor, input, tx)),
+      ),
+  }),
   sourceUse: router({
     list: tenantQuery
       .input(SourceUsePolicyList)

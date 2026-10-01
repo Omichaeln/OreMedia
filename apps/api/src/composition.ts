@@ -38,6 +38,11 @@ import {
   contentToolSource,
 } from '@oremedia/module-content';
 import {
+  configureSourceAvailability,
+  sourceAvailabilityFromEnv,
+  sourceCapabilities,
+} from '@oremedia/module-destinations';
+import {
   attributeService,
   configureLinkTracking,
   linkService,
@@ -176,6 +181,8 @@ export function composeModules(): void {
   registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
+  // Ledger R2-1: the sources this deployment connects (app credentials present, not disabled).
+  configureSourceAvailability(sourceAvailabilityFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   // UX-11 / UX-12: the brand's publications in a window, as the calendar reads them.
@@ -280,11 +287,12 @@ export function composeModules(): void {
 
 /**
  * What the startup configuration report checks for the api (docs/runbooks/deploy-railway.md, "Configuration
- * report"): the web origin, uploads (it signs upload and download URLs) and every provider's app credentials (it
- * connects channels).
+ * report"): the web origin, uploads (it signs upload and download URLs), every provider's app credentials (it
+ * connects channels) and every source's (it connects destinations).
  */
 export const apiCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   webOriginCapability,
   uploadsCapability,
   ...channelCapabilities(env),
+  ...sourceCapabilities(env),
 ];

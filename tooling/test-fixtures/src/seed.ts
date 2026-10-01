@@ -252,6 +252,7 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'failure_detail',
   ], // 0012
   users: ['password_origin'], // 0013
+  brand_destinations: ['token_expires_at'], // 0016
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */

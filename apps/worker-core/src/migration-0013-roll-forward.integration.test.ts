@@ -6,7 +6,11 @@ import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { passwordSetupTokens, users } from '@oremedia/db/schema/access';
 import { planItems } from '@oremedia/db/schema/content';
-import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  pendingDestinationGrants,
+  sourceUsePolicies,
+} from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService, hashToken } from '@oremedia/module-access';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -20,7 +24,12 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0012_comment_replies';
 const NEW_TABLES: MySqlTable[] = [passwordSetupTokens];
 /** Added by later migrations (0014). */
-const LATER_TABLES: MySqlTable[] = [planItems, brandDestinations, sourceUsePolicies];
+const LATER_TABLES: MySqlTable[] = [
+  planItems,
+  brandDestinations,
+  sourceUsePolicies,
+  pendingDestinationGrants,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

@@ -77,6 +77,8 @@ export const ID_PREFIXES = {
   destination: 'dst',
   /** A per-kind, per-data-type source-use policy row (D-17). */
   sourceUsePolicy: 'sup',
+  /** A sealed source grant waiting for the person to choose which target it connects (R2-1, one row per flow). */
+  pendingDestinationGrant: 'pdg',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',

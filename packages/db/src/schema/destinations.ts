@@ -1,4 +1,14 @@
-import { foreignKey, int, json, mysqlEnum, mysqlTable, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
+import {
+  foreignKey,
+  index,
+  int,
+  json,
+  mysqlEnum,
+  mysqlTable,
+  uniqueIndex,
+  varbinary,
+  varchar,
+} from 'drizzle-orm/mysql-core';
 import { brandId, createdAt, id, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
@@ -19,6 +29,8 @@ export const brandDestinations = mysqlTable(
     displayName: varchar('display_name', { length: 200 }).notNull(),
     ownerUserId: ref('owner_user_id').notNull(),
     credentialRefId: ref('credential_ref_id'),
+    /** When the stored access token expires (R2-1): the daily refresh renews the ones due within a day. */
+    tokenExpiresAt: ts('token_expires_at'),
     grantedScopes: json('granted_scopes').$type<string[]>().notNull().default([]),
     health: mysqlEnum('health', ['unknown', 'healthy', 'degraded', 'unreachable'])
       .notNull()
@@ -37,6 +49,46 @@ export const brandDestinations = mysqlTable(
       columns: [t.tenantId, t.brandId],
       foreignColumns: [brands.tenantId, brands.id],
       name: 'fk_destination_brand',
+    }),
+  ],
+);
+
+/**
+ * R2-1 connect flow: a source grant the person has authorised but not yet attached to a target, sealed for the
+ * destination it becomes (AAD `${tenantId}:${destinationId}`, the id pre-allocated here), with the targets the
+ * grant can read as names. One row per flow (one Google grant serves every target it lists), mirroring
+ * pending_channel_grants: one-shot (select or cancel deletes it), expired rows deleted by the next connect flow in
+ * the tenant and on tenant or brand deletion.
+ */
+export const pendingDestinationGrants = mysqlTable(
+  'pending_destination_grants',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    kind: varchar('kind', { length: 40 }).notNull(),
+    actorKind: varchar('actor_kind', { length: 24 }).notNull(),
+    actorId: ref('actor_id').notNull(),
+    destinationId: ref('destination_id').notNull(),
+    grantedScopes: json('granted_scopes').$type<string[]>().notNull(),
+    tokenExpiresAt: ts('token_expires_at'),
+    targets: json('targets').$type<Array<{ externalId: string; displayName: string }>>().notNull(),
+    kmsKeyId: varchar('kms_key_id', { length: 200 }).notNull(),
+    wrappedDataKey: varbinary('wrapped_data_key', { length: 512 }).notNull(),
+    ciphertext: varbinary('ciphertext', { length: 8192 }).notNull(),
+    iv: varbinary('iv', { length: 12 }).notNull(),
+    authTag: varbinary('auth_tag', { length: 16 }).notNull(),
+    aad: varchar('aad', { length: 200 }).notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_pending_destination_grant_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_pending_destination_grant_expiry').on(t.tenantId, t.expiresAt),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_pending_destination_grant_brand',
     }),
   ],
 );

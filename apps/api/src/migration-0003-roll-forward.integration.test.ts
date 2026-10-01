@@ -8,7 +8,11 @@ import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
-import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  pendingDestinationGrants,
+  sourceUsePolicies,
+} from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService } from '@oremedia/module-access';
 // Relative import: a workspace dependency here would create an api ↔ test-fixtures cycle (test-fixtures imports the router).
@@ -32,6 +36,7 @@ const LATER_TABLES: MySqlTable[] = [
   planItems,
   brandDestinations,
   sourceUsePolicies,
+  pendingDestinationGrants,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
