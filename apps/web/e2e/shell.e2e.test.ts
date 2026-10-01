@@ -415,9 +415,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.getByLabel('External id').fill('sc-domain:acme.example');
     await page.getByLabel('Display name').fill('Acme search');
     await page.getByRole('button', { name: 'Register destination' }).click();
+    // The kind's group already lists the seeded site (R2-1 part B); the registered one joins it.
     const searchGroup = page.getByTestId('destinations-search_console_site');
-    await expect.poll(() => searchGroup.count(), { timeout: 15_000 }).toBe(1);
-    expect(await searchGroup.textContent()).toContain('Acme search');
+    await expect.poll(() => searchGroup.textContent(), { timeout: 15_000 }).toContain('Acme search');
+    expect(await searchGroup.textContent()).toContain('Acme site');
     expect(
       backend.destinations.destinations.find((d) => d.externalId === 'sc-domain:acme.example'),
     ).toMatchObject({ kind: 'search_console_site', status: 'active', health: 'unknown' });
@@ -486,6 +487,114 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       status: 'active',
       version: 0,
     });
+    await page.close();
+  }, 60_000);
+
+  it('web performance (R2-1): a connected GA4 property shows coverage, tiles compared with the previous week, a drill-down tab and its opportunities', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const section = page.getByTestId('web-performance');
+    await section.waitFor({ timeout: 15_000 });
+    const ga4 = section.getByTestId('web-destination-dst_e2e_ga4');
+    await ga4.getByTestId('web-tile-sessions').waitFor({ timeout: 15_000 });
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain(`data to ${yesterday}`);
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain('Fresh');
+    // The last 7 days include today, which no platform has reported yet: six days of ga4.engagement sessions
+    // (100 + a 0..4 wobble) summed, never averaged, against the full week before.
+    const sessions = await ga4.getByTestId('web-tile-sessions').textContent();
+    expect(sessions).toMatch(/6\d\d/);
+    expect(sessions).toContain('% vs previous');
+    expect(sessions).toContain('6 days with data');
+    expect(await ga4.getByTestId('web-tile-engagementRate').textContent()).toMatch(/4\d\.\d%/); // pooled Σ engaged ÷ Σ sessions
+    expect(await ga4.getByTestId('web-tile-keyEvents').textContent()).toContain('18'); // 3 × 6
+    // The first drill-down is the acquisition channels; Landing pages lists /pricing with its own rate.
+    const drilldown = ga4.getByTestId('web-drilldown');
+    await expect.poll(() => drilldown.locator('tbody tr').count(), { timeout: 15_000 }).toBe(3);
+    expect(await drilldown.locator('tbody tr').first().textContent()).toContain('Organic Search');
+    await ga4.getByRole('tab', { name: 'Landing pages' }).click();
+    await expect
+      .poll(() => drilldown.locator('tr[data-dimension="/pricing"]').count(), { timeout: 15_000 })
+      .toBe(1);
+    expect(await drilldown.locator('tr[data-dimension="/pricing"]').textContent()).toContain('10.0%');
+    expect(await ga4.getByRole('tab', { name: 'Landing pages' }).getAttribute('aria-selected')).toBe('true');
+    // Opportunities: /pricing engages a tenth of its sessions against the property's near-half.
+    const opportunities = ga4.getByTestId('web-opportunities');
+    await opportunities.waitFor({ timeout: 15_000 });
+    expect(await opportunities.getByRole('listitem').count()).toBe(1);
+    expect(await opportunities.textContent()).toContain('Low engagement page');
+    expect(await opportunities.textContent()).toContain('/pricing');
+    // D-19: AI search is a labelled external link to the vendor console, never a figure.
+    const ai = ga4.getByTestId('web-ai-search').getByRole('link');
+    expect(await ai.getAttribute('href')).toBe('https://analytics.google.com/');
+    expect(await ai.getAttribute('target')).toBe('_blank');
+    expect(await ai.getAttribute('rel')).toContain('noopener');
+    expect(await ga4.getByTestId('web-ai-search').textContent()).toContain('no figure is shown');
+    await page.close();
+  }, 60_000);
+
+  it('web performance (R2-1): a 30-day period has no previous days and every tile reads insufficient sample', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=30`);
+    const ga4 = page.getByTestId('web-performance').getByTestId('web-destination-dst_e2e_ga4');
+    await ga4.getByTestId('web-tile-sessions').waitFor({ timeout: 15_000 });
+    const sessions = await ga4.getByTestId('web-tile-sessions').textContent();
+    expect(sessions).toContain('insufficient sample (20 and 0 days of 5)');
+    expect(sessions).not.toContain('% vs previous');
+    expect(sessions).toContain('20 days with data'); // absent days stay absent, never zero
+    expect(await ga4.getByTestId('web-tile-keyEvents').textContent()).toContain('60'); // 3 × 20
+    await page.close();
+  }, 45_000);
+
+  it('web performance (R2-1): a source without a policy allowing reads says so and points at Settings → Destinations', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const gsc = page.getByTestId('web-performance').getByTestId('web-destination-dst_e2e_gsc');
+    await gsc.getByTestId('web-policy-blocked').waitFor({ timeout: 15_000 });
+    expect(await gsc.getByTestId('web-policy-blocked').textContent()).toContain(
+      'Reads not allowed by the source-use policy (no policy for gsc.reports)',
+    );
+    expect(await gsc.getByTestId('web-policy-blocked').getByRole('link').getAttribute('href')).toContain(
+      'tab=destinations',
+    );
+    expect(await gsc.getByRole('tab').count()).toBe(0); // no drill-down, no figure
+    expect(await gsc.getByTestId('web-tile-clicks').count()).toBe(0);
+    expect(await gsc.getByTestId('web-ai-search').getByRole('link').getAttribute('href')).toBe(
+      'https://search.google.com/search-console',
+    );
+    // An admin allows reads: the site's tiles and tabs appear with the search metrics.
+    backend.destinations.policies.push({
+      id: 'sup_e2e_gsc_reports',
+      brandId: E2E.brandId,
+      destinationKind: 'search_console_site',
+      dataType: 'gsc.reports',
+      allowedUses: ['read'],
+      retentionDays: null,
+      version: 1,
+      reviewedAt: new Date().toISOString(),
+      reviewDueAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      reviewedById: 'usr_e2e',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    await page.reload();
+    await gsc.getByTestId('web-tile-clicks').waitFor({ timeout: 15_000 });
+    expect(await gsc.getByTestId('web-tile-ctr').textContent()).toContain('10.7%'); // 32 ÷ 300 pooled
+    expect(await gsc.getByTestId('web-tile-position').textContent()).toContain('weighted mean, not compared');
+    await gsc.getByRole('tab', { name: 'Queries' }).click();
+    await expect
+      .poll(() => gsc.getByTestId('web-drilldown').locator('tr[data-dimension="acme pricing"]').count(), {
+        timeout: 15_000,
+      })
+      .toBe(1);
+    const opportunities = gsc.getByTestId('web-opportunities');
+    await opportunities.waitFor({ timeout: 15_000 });
+    expect(await opportunities.textContent()).toContain('Low CTR query');
+    expect(await opportunities.textContent()).toContain('acme pricing');
+    backend.destinations.policies.splice(
+      backend.destinations.policies.findIndex((p) => p.id === 'sup_e2e_gsc_reports'),
+      1,
+    );
     await page.close();
   }, 60_000);
 

@@ -321,6 +321,11 @@ export function trailingRange(
   };
 }
 
+/** The same last `days` days as day keys (first and last), for sources that report by calendar day (R2-1). */
+export function trailingDayKeys(days: number, todayKey: string): { fromKey: string; toKey: string } {
+  return { fromKey: keyOfUtc(addDays(parseKey(todayKey), -(days - 1))), toKey: todayKey };
+}
+
 /** The instant at which the calendar day `key` starts in `timeZone`. */
 export function localMidnight(key: string, timeZone: string): Date {
   const utcMidnight = parseKey(key);

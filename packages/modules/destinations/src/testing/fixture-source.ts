@@ -7,11 +7,17 @@ import type {
 } from '@oremedia/contracts/providers';
 import {
   ProviderAuthError,
+  ProviderTransportError,
+  SourceReadError,
   classifyByStatus,
+  sourceRegistry,
   type ProviderIO,
   type SourceAdapter,
   type SourceCapabilityV1,
   type SourceGrant,
+  type SourceReportPage,
+  type SourceReportRequest,
+  type SourceReportRow,
   type SourceTarget,
 } from '@oremedia/providers';
 
@@ -30,11 +36,20 @@ export const fixtureSourceCapability = (
   requiredScopes: ['https://www.googleapis.com/auth/fixture.readonly'],
   latencyHours: 1,
   rateLimits: [],
+  // The real kind's reports (ga4.*, gsc.*), so the dictionary and the policy data types apply as in production.
+  reports: sourceRegistry.capability(kind)?.reports ?? [],
   certifiedAt: '2026-01-01T00:00:00.000Z',
   ...over,
 });
 
 export type RefreshBehaviour = { kind: 'refresh' } | { kind: 'revoked' } | { kind: 'transient' };
+/** What the next fetchReport does: answer the scripted rows, or fail as the platform would. */
+export type ReportBehaviour =
+  | { kind: 'rows' }
+  | { kind: 'unauthorised' }
+  | { kind: 'forbidden' }
+  | { kind: 'rate_limited' }
+  | { kind: 'transient' };
 
 export class FixtureSourceAdapter implements SourceAdapter {
   readonly key: DestinationKind;
@@ -55,6 +70,14 @@ export class FixtureSourceAdapter implements SourceAdapter {
   readonly refreshCalls: DecryptedCredentials[] = [];
   /** The last code exchanged. */
   lastCode: string | null = null;
+  /** Rows per report key the next fetches return (page size `reportPageSize`); a report not listed has none. */
+  reportRows: Record<string, SourceReportRow[]> = {};
+  reportPageSize = 1000;
+  reportBehaviour: ReportBehaviour = { kind: 'rows' };
+  /** Behaviours consumed one per call before `reportBehaviour` applies (a 401 on the first read, rows on the retry). */
+  readonly nextReportBehaviours: ReportBehaviour[] = [];
+  /** Every fetchReport call with the request and the access token it was handed. */
+  readonly reportCalls: Array<SourceReportRequest & { accessToken: string }> = [];
 
   constructor(kind: DestinationKind = 'ga4_property', capability?: SourceCapabilityV1) {
     this.key = kind;
@@ -105,12 +128,54 @@ export class FixtureSourceAdapter implements SourceAdapter {
     return this.targets.map((t) => ({ ...t }));
   }
 
+  async fetchReport(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    _io: ProviderIO,
+    request: SourceReportRequest,
+  ): Promise<SourceReportPage> {
+    this.reportCalls.push({ ...request, accessToken: credentials.accessToken });
+    const fail = (status: number) =>
+      new SourceReadError(
+        this.key,
+        status,
+        this.classifyError({ status, phase: 'after_send' }),
+        `fixture ${status}`,
+      );
+    const behaviour = this.nextReportBehaviours.shift() ?? this.reportBehaviour;
+    switch (behaviour.kind) {
+      case 'unauthorised':
+        throw fail(401);
+      case 'forbidden':
+        throw fail(403);
+      case 'rate_limited':
+        throw fail(429);
+      case 'transient':
+        throw new ProviderTransportError('fixture reset', 'after_send');
+      case 'rows': {
+        const all = (this.reportRows[request.report] ?? []).filter(
+          (r) => r.date >= request.dateRange.start && r.date <= request.dateRange.end,
+        );
+        const from = request.pageToken ? Number(request.pageToken) : 0;
+        const rows = all.slice(from, from + this.reportPageSize).map((r) => ({
+          ...r,
+          dimensions: { ...r.dimensions },
+          metrics: { ...r.metrics },
+        }));
+        const next = from + rows.length;
+        return { rows, nextPageToken: next < all.length ? String(next) : null };
+      }
+    }
+  }
+
+  /** As the Google sources: a 429 on a read is rate limited whatever the phase. */
   classifyError(input: {
     status?: number;
     body?: string;
     phase: 'before_send' | 'after_send';
     error?: unknown;
   }): ProviderErrorClass {
+    if (input.status === 429) return { kind: 'rate_limited', phase: 'before_send', retryAfterMs: 60_000 };
     return classifyByStatus(input);
   }
 }

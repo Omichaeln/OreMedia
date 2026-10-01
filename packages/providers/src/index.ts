@@ -27,13 +27,28 @@ export {
 export { validateVariantAgainstCapability, plainMeasure } from './capability';
 export { ProviderRegistry, providerRegistry } from './registry';
 // Ledger R2-1: read-only source adapters behind brand destinations, with their own certification-gated registry.
-export type { SourceAdapter, SourceCapabilityV1, SourceGrant, SourceTarget } from './source-contract';
+export type {
+  SourceAdapter,
+  SourceCapabilityV1,
+  SourceGrant,
+  SourceTarget,
+  SourceReportSpec,
+  SourceReportRow,
+  SourceReportRequest,
+  SourceReportPage,
+} from './source-contract';
 export { SourceRegistry, sourceRegistry } from './source-registry';
 export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/adapter';
-export { ga4PropertyCapability } from './sources/ga4_property/capability';
+export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';
 export { SearchConsoleSiteAdapter, searchConsoleSiteAdapter } from './sources/search_console_site/adapter';
-export { searchConsoleSiteCapability } from './sources/search_console_site/capability';
-export { ProviderAuthError, AmbiguousMutationError, MediaFetchError, textFingerprint } from './shared';
+export { searchConsoleSiteCapability, searchConsoleReports } from './sources/search_console_site/capability';
+export {
+  ProviderAuthError,
+  SourceReadError,
+  AmbiguousMutationError,
+  MediaFetchError,
+  textFingerprint,
+} from './shared';
 export { LinkedInPageAdapter, linkedInPageAdapter } from './linkedin_page/adapter';
 export { linkedInPageCapability } from './linkedin_page/capability';
 export { InstagramBusinessAdapter, instagramBusinessAdapter } from './instagram_business/adapter';

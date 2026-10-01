@@ -21,9 +21,10 @@ import { useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
-import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
+import { dayKey, trailingDayKeys, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
 import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
+import { WebPerformanceSection } from './web-performance';
 
 /** The comparable groups the screen reads, in reading order (spec 15.1 groups); other groups are not asked for. */
 const GROUPS: ReadonlyArray<[group: string, label: string]> = [
@@ -73,6 +74,11 @@ export function PerformanceScreen() {
   const ageDays = AGES.find(([a]) => String(a) === params.get('age'))?.[0] ?? 7;
   const todayKey = dayKey(new Date(), timeZone);
   const range = useMemo(() => trailingRange(days, todayKey, timeZone), [days, todayKey, timeZone]);
+  // Web sources report by calendar day: the same last-N-days window as UTC day bounds (R2-1 part B).
+  const webWindow = useMemo(() => {
+    const { fromKey, toKey } = trailingDayKeys(days, todayKey);
+    return { start: `${fromKey}T00:00:00.000Z`, end: `${toKey}T23:59:59.999Z` };
+  }, [days, todayKey]);
 
   const calendar = useCalendarRange(brandId, range.from, range.to);
   const channels = useChannels(brandId);
@@ -442,6 +448,14 @@ export function PerformanceScreen() {
           <NextCyclePanel companyId={companyId} brandId={brandId} />
         </>
       )}
+
+      <WebPerformanceSection
+        companyId={companyId}
+        brandId={brandId}
+        windowStart={webWindow.start}
+        windowEnd={webWindow.end}
+        days={days}
+      />
     </main>
   );
 }

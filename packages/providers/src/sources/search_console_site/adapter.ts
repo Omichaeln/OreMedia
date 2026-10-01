@@ -4,14 +4,30 @@ import type {
   ProviderErrorClass,
   RefreshResult,
 } from '@oremedia/contracts/providers';
+import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { classifyByStatus } from '../../base';
 import type { ProviderIO } from '../../io';
-import { ProviderAuthError, arr, get, str, summarise } from '../../shared';
-import type { SourceAdapter, SourceGrant, SourceTarget } from '../../source-contract';
-import { googleAuthorizationUrl, googleExchangeCode, googleGet, googleRefresh } from '../google-oauth';
+import { ProviderAuthError, arr, get, num, sourceReadError, str, summarise } from '../../shared';
+import type {
+  SourceAdapter,
+  SourceGrant,
+  SourceReportPage,
+  SourceReportRequest,
+  SourceReportRow,
+  SourceTarget,
+} from '../../source-contract';
+import {
+  googleAuthorizationUrl,
+  googleExchangeCode,
+  googleGet,
+  googlePost,
+  googleRefresh,
+} from '../google-oauth';
 import { searchConsoleSiteCapability } from './capability';
 
 export const SEARCH_CONSOLE_API = 'https://www.googleapis.com/webmasters/v3';
+/** searchAnalytics/query rows per call (the API's documented page size); longer results page by startRow. */
+export const GSC_REPORT_ROW_LIMIT = 1000;
 /** A site the person has no verified access to cannot be read; the listing still names it. */
 const UNVERIFIED = 'siteUnverifiedUser';
 
@@ -59,12 +75,65 @@ export class SearchConsoleSiteAdapter implements SourceAdapter {
     return targets;
   }
 
+  /**
+   * One page of a search analytics report: `searchAnalytics/query` with `date` first among the dimensions, final
+   * data only, `rowLimit` 1000 paged by `startRow` (a full page means there may be more; the token carries the
+   * next start row).
+   */
+  async fetchReport(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+    request: SourceReportRequest,
+  ): Promise<SourceReportPage> {
+    const spec = this.capability.reports.find((r) => r.key === request.report);
+    if (!spec)
+      throw new CapabilityUnsupportedError([{ path: 'report', issue: `unknown_report:${request.report}` }]);
+    const startRow = request.pageToken ? Number(request.pageToken) : 0;
+    const res = await googlePost(
+      io,
+      `${SEARCH_CONSOLE_API}/sites/${encodeURIComponent(request.externalId)}/searchAnalytics/query`,
+      credentials.accessToken,
+      {
+        startDate: request.dateRange.start,
+        endDate: request.dateRange.end,
+        dimensions: ['date', ...spec.dimensions],
+        dataState: 'final',
+        rowLimit: GSC_REPORT_ROW_LIMIT,
+        startRow,
+      },
+    );
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
+    const rows: SourceReportRow[] = [];
+    for (const row of arr(get(res.json, 'rows'))) {
+      const keys = arr(get(row, 'keys')).map((k) => str(k) ?? '');
+      const date = keys[0];
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue; // a row without its day cannot be stored by day
+      const dimensions: Record<string, string> = {};
+      spec.dimensions.forEach((name, i) => {
+        dimensions[name] = keys[i + 1] ?? '';
+      });
+      const metrics: Record<string, number> = {};
+      for (const { name } of spec.metrics) {
+        const value = num(get(row, name));
+        if (value !== undefined) metrics[name] = value; // a metric the API left out is absent, never zero
+      }
+      rows.push({ date, dimensions, metrics });
+    }
+    return {
+      rows,
+      nextPageToken: rows.length >= GSC_REPORT_ROW_LIMIT ? String(startRow + rows.length) : null,
+    };
+  }
+
+  /** Read-only API: a 429 (quota) refused the read before any effect, so it is rate limited whatever the phase. */
   classifyError(input: {
     status?: number;
     body?: string;
     phase: 'before_send' | 'after_send';
     error?: unknown;
   }): ProviderErrorClass {
+    if (input.status === 429) return { kind: 'rate_limited', phase: 'before_send' };
     return classifyByStatus(input);
   }
 }

@@ -7,6 +7,7 @@ import * as schema from '@oremedia/db/schema';
 import { contentPackages, planItems } from '@oremedia/db/schema/content';
 import {
   brandDestinations,
+  destinationReportRows,
   pendingDestinationGrants,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
@@ -22,7 +23,12 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0013_password_setup_tokens';
 const NEW_TABLES: MySqlTable[] = [planItems];
 /** Added after 0014 (R2-0): absent at both heads this suite runs at, so never snapshotted. */
-const LATER_TABLES: MySqlTable[] = [brandDestinations, sourceUsePolicies, pendingDestinationGrants];
+const LATER_TABLES: MySqlTable[] = [
+  brandDestinations,
+  sourceUsePolicies,
+  pendingDestinationGrants,
+  destinationReportRows,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

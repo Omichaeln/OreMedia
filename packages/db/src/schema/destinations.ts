@@ -125,3 +125,47 @@ export const sourceUsePolicies = mysqlTable(
     }),
   ],
 );
+
+/**
+ * R2-1 part B: one day's row of a source report (GA4 Data API, Search Console search analytics) a destination's
+ * daily sweep stored, keyed by report, day and the hash of its sorted dimensions so a re-fetch of a window
+ * replaces its rows in one transaction (delete range + insert; no update, no updatedAt). Only the metrics the
+ * platform returned are stored: an absent day or metric is absent, never zero (D-15). Retention follows the
+ * brand's source-use policy for `<prefix>.reports` (`retain` with its retentionDays), else the operational cache
+ * of REPORT_CACHE_DAYS (D-17 working default); the sweep prunes either way.
+ */
+export const destinationReportRows = mysqlTable(
+  'destination_report_rows',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    destinationId: ref('destination_id').notNull(),
+    reportKey: varchar('report_key', { length: 60 }).notNull(),
+    /** The UTC day the row covers, as YYYY-MM-DD (the platforms report by calendar day). */
+    date: varchar('date', { length: 10 }).notNull(),
+    dimensions: json('dimensions').$type<Record<string, string>>().notNull(),
+    /** hashCanonical of the dimensions: the deterministic identity of a row within (destination, report, day). */
+    dimensionKey: varchar('dimension_key', { length: 200 }).notNull(),
+    metrics: json('metrics').$type<Record<string, number>>().notNull(),
+    fetchedAt: ts('fetched_at').notNull(),
+    source: varchar('source', { length: 40 }).notNull().default('provider'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_destination_report_row').on(
+      t.tenantId,
+      t.destinationId,
+      t.reportKey,
+      t.date,
+      t.dimensionKey,
+    ),
+    uniqueIndex('uq_destination_report_row_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_destination_report_window').on(t.tenantId, t.brandId, t.destinationId, t.reportKey, t.date),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_destination_report_row_brand',
+    }),
+  ],
+);

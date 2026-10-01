@@ -4,7 +4,11 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { brandDestinations, pendingDestinationGrants } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  destinationReportRows,
+  pendingDestinationGrants,
+} from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   FixtureSourceAdapter,
@@ -31,9 +35,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0015_brand_destinations';
 const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];
+/** Added by later migrations (0017). */
+const LATER_TABLES: MySqlTable[] = [destinationReportRows];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0016 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

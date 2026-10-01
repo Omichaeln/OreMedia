@@ -15,6 +15,7 @@
     "@oremedia/domain": "workspace:*",
     "@oremedia/module-access": "workspace:*",
     "@oremedia/module-brand": "workspace:*",
+    "@oremedia/module-measurement": "workspace:*",
     "@oremedia/module-operations": "workspace:*",
     "@oremedia/module-publishing": "workspace:*",
     "@oremedia/observability": "workspace:*",

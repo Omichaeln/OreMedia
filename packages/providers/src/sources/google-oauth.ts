@@ -146,3 +146,26 @@ export async function googleGet(io: ProviderIO, url: string, accessToken: string
   );
   return readResponse(res);
 }
+
+/** A JSON read request of a Google API (reports are POSTed queries that create nothing); same mapping as googleGet. */
+export async function googlePost(
+  io: ProviderIO,
+  url: string,
+  accessToken: string,
+  body: unknown,
+): Promise<ProviderResponse> {
+  const { res } = await io.request(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    { mutation: false },
+  );
+  return readResponse(res);
+}

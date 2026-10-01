@@ -44,6 +44,27 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'], externalId: 'properties/424242' }),
   },
   'destinations.connect.cancel': { buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'] }) },
+  // R2-1 part B: the brand is read first (NOT_FOUND), so a foreign destination's rows are never aggregated.
+  'destinations.reports.summary': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      destinationId: f['destinationId'],
+      windowStart: '2026-09-01T00:00:00.000Z',
+      windowEnd: '2026-09-30T23:59:59.999Z',
+    }),
+  },
+  'destinations.reports.rows': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      destinationId: f['destinationId'],
+      reportKey: 'ga4.acquisition',
+      windowStart: '2026-09-01T00:00:00.000Z',
+      windowEnd: '2026-09-30T23:59:59.999Z',
+    }),
+  },
+  'destinations.reports.opportunities': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
+  },
   'destinations.sourceUse.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'destinations.sourceUse.set': {
     buildInput: (f) => ({

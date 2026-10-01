@@ -38,6 +38,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`credential_refs` TO '__AP
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`customer_voice_clusters` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`deletion_requests` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`design_tokens` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`destination_report_rows` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`element_comments` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`entitlements` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`evaluation_results` TO '__APP_USER__'@'%';

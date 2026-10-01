@@ -1,4 +1,9 @@
-import type { DestinationKind } from '@oremedia/contracts/destinations';
+import type {
+  DestinationKind,
+  DestinationReportOpportunityKind,
+  DestinationReportPresentationV1,
+  SourceReportMetricV1,
+} from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
   DecryptedCredentials,
@@ -25,7 +30,65 @@ export interface SourceCapabilityV1 {
   /** How long the platform takes to make a day's data final (reports and ingestion read behind this). */
   latencyHours: number;
   rateLimits: ProviderCapabilityV1['rateLimits'];
+  /** The reports the source can read (part B); empty for a source that only authorises and lists targets. */
+  reports: SourceReportSpec[];
+  /** The vendor console and the summary tiles the screen shows for this source (part B). */
+  presentation?: DestinationReportPresentationV1;
   certifiedAt: string | null;
+}
+
+/**
+ * An opportunity rule a report declares (part B): subjects (dimension values) with at least `minVolume` of the
+ * volume metric whose rate is below the fraction of the destination's pooled rate; `task` words the suggestion.
+ * The read model applies every rule generically.
+ */
+export interface SourceReportOpportunitySpec {
+  kind: DestinationReportOpportunityKind;
+  rateMetric: string;
+  volumeMetric: string;
+  minVolume: number;
+  task(input: { subject: string; volume: number; rate: number; benchmark: number }): string;
+}
+
+/**
+ * One report a source adapter can read (R2-1 part B): its key is `<prefix>.<name>` (`ga4.acquisition`,
+ * `gsc.queries`), the prefix naming the data type a source-use policy covers (`ga4.reports`). The date dimension is
+ * always present; `dimensions` lists the others, `metrics` the platform's metric names as the rows carry them.
+ * `latencyHours` is how far behind a day's figures become final (the sweep re-reads that far back) and
+ * `maxRangeDays` the longest range one run asks for (quota-aware, bounded work).
+ */
+export interface SourceReportSpec {
+  key: string;
+  label: string;
+  dimensions: string[];
+  dimensionLabels: Record<string, string>;
+  /** The metrics fetched, with their D-15 kind; the rows carry them by name. */
+  metrics: SourceReportMetricV1[];
+  /** Rates derived from two fetched flows (never fetched themselves). */
+  derived: SourceReportMetricV1[];
+  latencyHours: number;
+  maxRangeDays: number;
+  opportunity?: SourceReportOpportunitySpec;
+}
+
+/** One row of a report: the UTC day, the dimension values by name and the metric values by name. */
+export interface SourceReportRow {
+  date: string;
+  dimensions: Record<string, string>;
+  metrics: Record<string, number>;
+}
+
+export interface SourceReportRequest {
+  externalId: string;
+  report: string;
+  /** Inclusive ISO dates (YYYY-MM-DD). */
+  dateRange: { start: string; end: string };
+  pageToken?: string;
+}
+
+export interface SourceReportPage {
+  rows: SourceReportRow[];
+  nextPageToken: string | null;
 }
 
 /** What a code exchange yields: the sealed-to-be credentials and the scopes the person actually granted. */
@@ -62,6 +125,18 @@ export interface SourceAdapter {
     client: ClientConfig,
     io: ProviderIO,
   ): Promise<SourceTarget[]>;
+  /**
+   * One page of one report for a target the grant can read (part B). A platform refusal is thrown as a
+   * SourceReadError carrying the adapter's classification (a 401 refresh, a 403 reconnect, a 429 rate limited); a
+   * transport failure propagates as ProviderTransportError. Rows are never invented: a day the platform did not
+   * return is absent.
+   */
+  fetchReport(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+    request: SourceReportRequest,
+  ): Promise<SourceReportPage>;
 
   classifyError(input: {
     status?: number;

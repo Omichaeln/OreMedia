@@ -1,0 +1,150 @@
+{
+  "provider": "search_console_site",
+  "scenarios": {
+    "queries": {
+      "description": "searchAnalytics/query with date first: one row per day and query, final data only",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "www.googleapis.com",
+            "path": "/webmasters/v3/sites/sc-domain:acme.example/searchAnalytics/query",
+            "bodyIncludes": [
+              "\"startDate\":\"2026-09-25\"",
+              "\"endDate\":\"2026-09-26\"",
+              "\"dimensions\":[\"date\",\"query\"]",
+              "\"dataState\":\"final\"",
+              "\"rowLimit\":1000",
+              "\"startRow\":0"
+            ]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "rows": [
+                {
+                  "keys": ["2026-09-25", "acme pricing"],
+                  "clicks": 12,
+                  "impressions": 400,
+                  "ctr": 0.03,
+                  "position": 4.2
+                },
+                {
+                  "keys": ["2026-09-25", "acme login"],
+                  "clicks": 30,
+                  "impressions": 120,
+                  "ctr": 0.25,
+                  "position": 1.1
+                },
+                {
+                  "keys": ["2026-09-26", "acme pricing"],
+                  "clicks": 10,
+                  "impressions": 380,
+                  "ctr": 0.0263,
+                  "position": 4.5
+                }
+              ],
+              "responseAggregationType": "byProperty"
+            }
+          }
+        }
+      ]
+    },
+    "pages": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "www.googleapis.com",
+            "path": "/webmasters/v3/sites/https://acme.example//searchAnalytics/query",
+            "bodyIncludes": ["\"dimensions\":[\"date\",\"page\"]"]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "rows": [
+                {
+                  "keys": ["2026-09-25", "https://acme.example/pricing"],
+                  "clicks": 12,
+                  "impressions": 400,
+                  "ctr": 0.03,
+                  "position": 4.2
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "countries_devices": {
+      "description": "two dimensions after the day; a metric the API leaves out stays absent",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "www.googleapis.com",
+            "path": "/webmasters/v3/sites/sc-domain:acme.example/searchAnalytics/query",
+            "bodyIncludes": ["\"dimensions\":[\"date\",\"country\",\"device\"]"]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "rows": [
+                {
+                  "keys": ["2026-09-25", "zwe", "MOBILE"],
+                  "clicks": 8,
+                  "impressions": 200,
+                  "ctr": 0.04,
+                  "position": 6.1
+                },
+                { "keys": ["2026-09-25", "zaf", "DESKTOP"], "clicks": 4, "impressions": 90 }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "quota": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "www.googleapis.com",
+            "path": "/webmasters/v3/sites/sc-domain:acme.example/searchAnalytics/query"
+          },
+          "response": {
+            "status": 429,
+            "json": {
+              "error": {
+                "code": 429,
+                "message": "Quota exceeded for quota metric 'Queries' and limit 'Queries per minute per site'.",
+                "status": "RESOURCE_EXHAUSTED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "forbidden": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "www.googleapis.com",
+            "path": "/webmasters/v3/sites/sc-domain:acme.example/searchAnalytics/query"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "error": {
+                "code": 403,
+                "message": "User does not have sufficient permission for site.",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

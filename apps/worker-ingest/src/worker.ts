@@ -10,8 +10,8 @@ import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { definitionService } from '@oremedia/module-measurement';
 import { providerRegistry } from '@oremedia/providers';
 import { composeCredentialBroker, composeModules, workerIngestCapabilities } from './composition';
-import { startIngestWorkers } from './ingest-worker';
-import { temporalConfigFromEnv } from './temporal';
+import { ensureDestinationReportSweepScheduled, startIngestWorkers } from './ingest-worker';
+import { connectTemporal, temporalConfigFromEnv } from './temporal';
 
 const log = startTelemetry({ service: 'oremedia-worker-ingest', version: process.env['OREMEDIA_VERSION'] });
 // Temporal's own logs through the service logger (stdout, their real level), before any connection or worker.
@@ -51,6 +51,10 @@ try {
   );
   log.info({ count: seeded }, 'metric definitions seeded');
   ingestWorkers = await startIngestWorkers(temporalConfig);
+  // Ledger R2-1 part B: the daily sweep of GA4 and Search Console reports (one schedule per namespace, joined).
+  const client = await connectTemporal(temporalConfig);
+  await ensureDestinationReportSweepScheduled(client);
+  await client.connection.close();
 } catch (err) {
   log.error(
     { errorMessage: err instanceof Error ? err.message : String(err) },

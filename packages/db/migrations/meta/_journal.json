@@ -120,6 +120,13 @@
       "when": 1790836283334,
       "tag": "0016_destination_connect",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1790838870020,
+      "tag": "0017_destination_report_rows",
+      "breakpoints": true
     }
   ]
 }

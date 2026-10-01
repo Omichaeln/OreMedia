@@ -79,6 +79,8 @@ export const ID_PREFIXES = {
   sourceUsePolicy: 'sup',
   /** A sealed source grant waiting for the person to choose which target it connects (R2-1, one row per flow). */
   pendingDestinationGrant: 'pdg',
+  /** One day's row of a source report (GA4, Search Console) held for a destination (R2-1 part B). */
+  destinationReportRow: 'drr',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',

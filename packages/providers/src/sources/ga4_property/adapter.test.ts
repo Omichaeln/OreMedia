@@ -120,7 +120,7 @@ describe('GA4 property source adapter (ledger R2-1, spec 14.5 / 14.6)', () => {
     expect((err as Error).message).not.toContain('ya29');
   });
 
-  it('classifyError: 401 refresh, 403 reconnect, 429 before send rate limited (after send ambiguous)', () => {
+  it('classifyError: 401 refresh, 403 reconnect, 429 rate limited whatever the phase (a read has no effect)', () => {
     expect(adapter.classifyError({ status: 401, phase: 'after_send' })).toEqual({ kind: 'refresh_token' });
     expect(adapter.classifyError({ status: 403, phase: 'after_send' })).toEqual({
       kind: 'reconnect_required',
@@ -129,7 +129,10 @@ describe('GA4 property source adapter (ledger R2-1, spec 14.5 / 14.6)', () => {
       kind: 'rate_limited',
       phase: 'before_send',
     });
-    expect(adapter.classifyError({ status: 429, phase: 'after_send' })).toEqual({ kind: 'unknown' });
+    expect(adapter.classifyError({ status: 429, phase: 'after_send' })).toEqual({
+      kind: 'rate_limited',
+      phase: 'before_send',
+    });
     expect(adapter.classifyError({ status: 404, phase: 'after_send' })).toEqual({
       kind: 'rejected',
       code: 'http_404',
