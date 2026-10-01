@@ -75,10 +75,11 @@ export function useBrandPerformanceOf(
   brandId: string,
   windowStart: string,
   windowEnd: string,
+  ageDays: MetricAgeDays,
 ) {
   const trpc = useTRPC();
   const client = useTRPCClient();
-  const input = { brandId, windowStart, windowEnd };
+  const input = { brandId, windowStart, windowEnd, ageDays };
   return useQuery({
     queryKey: [...trpc.measurement.metrics.brandSummary.queryKey(input), { tenantId }],
     queryFn: () => client.measurement.metrics.brandSummary.query(input, { context: { tenantId } }),

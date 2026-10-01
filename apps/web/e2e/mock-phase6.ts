@@ -2301,20 +2301,28 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           const at = Date.parse(pub.scheduledFor);
           return (pub.state === 'published' || pub.state === 'removed') && at >= start && at <= end;
         });
+        // As brandOutcomes: both operands must exist, a missing one is never a zero.
         const outcome = (id: string) => {
-          const of = (group: string) =>
-            b.metricSnapshots
-              .filter((m) => m.subjectId === id && kindGroup(m.metricKey) === group && m.value !== null)
-              .reduce((sum, m) => sum + (m.value as number), 0);
+          const of = (group: string) => {
+            const rows = b.metricSnapshots.filter(
+              (m) => m.subjectId === id && groupOf(m.metricKey) === group && m.value !== null,
+            );
+            return rows.length ? rows.reduce((sum, m) => sum + (m.value as number), 0) : null;
+          };
           const impressions = of('impressions');
-          return impressions > 0 ? { engagement: of('engagement'), impressions } : null;
+          const engagement = of('engagement');
+          return impressions !== null && impressions > 0 && engagement !== null
+            ? { engagement, impressions }
+            : null;
         };
         const brand = { publications: 0, engagement: 0, impressions: 0 };
         const cells = new Map<
           string,
           { feature: string; value: string; publications: number; engagement: number; impressions: number }
         >();
-        let withAttributes = 0;
+        const withAttributes = publications.filter((pub) =>
+          b.revisionAttributes.has(pub.contentRevisionId),
+        ).length;
         for (const pub of publications) {
           const o = outcome(pub.id);
           if (!o) continue;
@@ -2323,7 +2331,6 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           brand.impressions += o.impressions;
           const attrs = b.revisionAttributes.get(pub.contentRevisionId);
           if (!attrs) continue;
-          withAttributes += 1;
           for (const [feature, value] of Object.entries(attrs)) {
             const key = `${feature}:${value}`;
             const cell = cells.get(key) ?? { feature, value, publications: 0, engagement: 0, impressions: 0 };
@@ -2342,21 +2349,21 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           withNumbers: brand.publications,
           minimum: 5,
           brand: { ...brand, rate: brand.impressions > 0 ? brand.engagement / brand.impressions : null },
-          features: [...cells.values()].map((c) => ({
-            ...c,
-            rate: c.impressions > 0 ? c.engagement / c.impressions : null,
-            sufficient: c.publications >= 5,
-          })),
+          features: [...cells.values()]
+            .map((c) => ({
+              ...c,
+              rate: c.impressions > 0 ? c.engagement / c.impressions : null,
+              sufficient: c.publications >= 5,
+            }))
+            .sort((x, y) => x.feature.localeCompare(y.feature) || y.publications - x.publications),
         };
       }),
     }),
   });
-  const kindGroup = (key: string) =>
+  const groupOf = (key: string) =>
     b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
   const queryMetrics = (input: z.infer<typeof MetricsQueryV1>) => {
     brandOf(input.brandId);
-    const groupOf = (key: string) =>
-      b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
     // With ageDays, as the API: a post younger than the age has no pull at it yet, so no number; the window
     // runs from the publication moment to that age.
     const publishedAt = (id: string) => b.p5.publications.get(id)?.scheduledFor ?? null;

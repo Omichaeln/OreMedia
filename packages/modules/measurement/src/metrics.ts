@@ -178,6 +178,8 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       const out = new Map<string, { engagement: number; impressions: number }>();
       const keys = await scalarKeys(tx);
       if (publicationIds.length === 0 || keys.length === 0) return out;
+      // A post with one operand only has no outcome (D-15: a missing number is never a zero).
+      const seen = new Map<string, { engagement: number | null; impressions: number | null }>();
       const result = await service.query(
         actor,
         {
@@ -194,12 +196,14 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       for (const v of result.values) {
         if (v.series !== null || v.value === null || v.completeness === 'unavailable') continue;
         if (v.comparableGroup !== 'engagement' && v.comparableGroup !== 'impressions') continue;
-        const cell = out.get(v.subjectId) ?? { engagement: 0, impressions: 0 };
-        if (v.comparableGroup === 'engagement') cell.engagement += v.value;
-        else cell.impressions += v.value;
-        out.set(v.subjectId, cell);
+        const cell = seen.get(v.subjectId) ?? { engagement: null, impressions: null };
+        if (v.comparableGroup === 'engagement') cell.engagement = (cell.engagement ?? 0) + v.value;
+        else cell.impressions = (cell.impressions ?? 0) + v.value;
+        seen.set(v.subjectId, cell);
       }
-      for (const [id, cell] of out) if (cell.impressions === 0) out.delete(id);
+      for (const [id, cell] of seen)
+        if (cell.engagement !== null && cell.impressions !== null && cell.impressions > 0)
+          out.set(id, { engagement: cell.engagement, impressions: cell.impressions });
       return out;
     },
 

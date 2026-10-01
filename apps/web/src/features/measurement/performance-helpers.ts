@@ -1,4 +1,24 @@
 import type { MetricValueDto } from './use-measurement';
+import { brandPath } from '../brand/brand-context';
+import { dayKey } from '../publishing/publication-state';
+
+export const PERIODS = [
+  [7, '7 days'],
+  [30, '30 days'],
+  [90, '90 days'],
+] as const;
+export const formatNumber = (v: number) => new Intl.NumberFormat().format(v);
+export const percent = (v: number) => `${(v * 100).toFixed(1)}%`;
+/** A value in the group's own unit (D-15): a rate as a percentage, everything else as a count. */
+export const formatValue = (kind: string, v: number) => (kind === 'rate' ? percent(v) : formatNumber(v));
+/** The calendar, opened on the publication's day in the brand zone with the publication selected. */
+export const publicationCalendarHref = (
+  companyId: string,
+  brandId: string,
+  publication: { publicationId: string; scheduledFor: string },
+  timeZone: string,
+) =>
+  `${brandPath(companyId, brandId, 'calendar')}?publication=${encodeURIComponent(publication.publicationId)}&day=${dayKey(publication.scheduledFor, timeZone)}`;
 
 const DAY_MS = 86_400_000;
 /**

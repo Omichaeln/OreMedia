@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
+import { COMPARISON_MINIMUM_SAMPLE } from '@oremedia/contracts/measurement';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
@@ -8,9 +9,16 @@ import { PackageTitle } from '../content/package-title';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { RecommendationCard } from '../intelligence/recommendation-card';
 import { useWorkspace } from '../intelligence/use-intelligence';
-import { dayKey } from '../publishing/publication-state';
 import type { CalendarPublicationDto } from '../publishing/use-publishing';
-import { SLOTS, WEEKDAYS, slotCells, type SlotPost } from './performance-helpers';
+import {
+  SLOTS,
+  WEEKDAYS,
+  formatNumber,
+  percent,
+  publicationCalendarHref,
+  slotCells,
+  type SlotPost,
+} from './performance-helpers';
 import {
   useAttributeAggregate,
   usePublicationQuality,
@@ -18,20 +26,22 @@ import {
   type AttributeAggregateDto,
 } from './use-measurement';
 
-const percent = (v: number) => `${(v * 100).toFixed(1)}%`;
-const number = (v: number) => new Intl.NumberFormat().format(v);
-
-/** The captured attribute features as the screen names them (spec 16.2 CreativeAttributesV1). */
+/** The features the aggregate groups by (attributes.ts AGGREGATED_FEATURES, cta and subtitles), as the screen names them. */
 const FEATURE_LABEL: Record<string, string> = {
   hookType: 'Hook',
-  topic: 'Topic',
-  message: 'Message',
-  offerFact: 'Offer fact',
-  cta: 'Call to action',
   imageryKind: 'Imagery',
-  layoutKind: 'Layout',
+  layoutKey: 'Layout',
+  colourTreatment: 'Colour treatment',
+  templateVersionId: 'Template version',
   distribution: 'Distribution',
+  pacing: 'Pacing',
+  cta: 'Call to action',
+  subtitles: 'Subtitles',
 };
+/** Shading steps for a cell at or above the minimum sample; below it a rate is shown but never shaded (D-14). */
+const SHADE = ['bg-accent/10', 'bg-accent/20', 'bg-accent/30', 'bg-accent/40'] as const;
+const shadeClass = (rate: number, max: number) =>
+  SHADE[Math.min(SHADE.length - 1, Math.floor((rate / max) * SHADE.length))];
 const featureLabel = (feature: string) =>
   FEATURE_LABEL[feature] ?? feature.replace(/([A-Z])/g, ' $1').toLowerCase();
 
@@ -51,7 +61,8 @@ const COMPONENT_LABEL: Record<string, string> = {
  */
 export function SlotHeatmap({ posts, timeZone }: { posts: SlotPost[]; timeZone: string }) {
   const cells = useMemo(() => slotCells(posts, timeZone), [posts, timeZone]);
-  const max = Math.max(0, ...cells.map((c) => c.rate ?? 0));
+  const sufficient = (c: { measured: number }) => c.measured >= COMPARISON_MINIMUM_SAMPLE;
+  const max = Math.max(0, ...cells.filter(sufficient).map((c) => c.rate ?? 0));
   const measured = cells.reduce((n, c) => n + c.measured, 0);
   return (
     <Section id="slots-heading" title="When it lands" testId="slot-heatmap">
@@ -88,17 +99,12 @@ export function SlotHeatmap({ posts, timeZone }: { posts: SlotPost[]; timeZone: 
                         <div
                           className={cn(
                             'flex h-9 flex-col items-center justify-center rounded border border-border tabular-nums',
-                            c.rate === null && 'text-muted-foreground',
+                            (c.rate === null || !sufficient(c)) && 'text-muted-foreground',
+                            c.rate !== null && sufficient(c) && max > 0 && shadeClass(c.rate, max),
                           )}
-                          style={
-                            c.rate !== null && max > 0
-                              ? {
-                                  backgroundColor: `color-mix(in oklab, var(--accent) ${Math.max(12, (c.rate / max) * 100)}%, transparent)`,
-                                }
-                              : undefined
-                          }
                           data-testid="slot-cell"
                           data-slot={`${weekday}:${c.slot}`}
+                          data-sufficient={sufficient(c)}
                           title={
                             c.publications === 0
                               ? `${day} ${SLOTS[c.slot]}: no posts`
@@ -126,7 +132,8 @@ export function SlotHeatmap({ posts, timeZone }: { posts: SlotPost[]; timeZone: 
           </table>
           <p className="mt-2 text-xs text-muted-foreground">
             Each cell pools engagement over impressions of its measured posts (never a mean of rates);
-            measured over posted is shown under the rate. A slot with few posts is a hint, not a finding.
+            measured over posted is shown under the rate. Only a cell with at least{' '}
+            {COMPARISON_MINIMUM_SAMPLE} measured posts is shaded; a smaller one is a hint, not a finding.
           </p>
         </div>
       )}
@@ -195,8 +202,9 @@ function AttributeRows({ data }: { data: AttributeAggregateDto }) {
           {data.brand.rate !== null ? percent(data.brand.rate) : '—'}
         </span>{' '}
         <span className="text-muted-foreground">
-          over {data.withNumbers} measured {data.withNumbers === 1 ? 'post' : 'posts'}, {data.withAttributes}{' '}
-          with attributes · a value with fewer than {data.minimum} posts is listed, not compared
+          over {data.withNumbers} measured {data.withNumbers === 1 ? 'post' : 'posts'} on all channels,{' '}
+          {data.withAttributes} of {data.publications} with attributes · a value with fewer than{' '}
+          {data.minimum} posts is listed, not compared
         </span>
       </p>
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
@@ -264,7 +272,7 @@ export function PublicationDetail({
 }) {
   const quality = usePublicationQuality(brandId, publication.publicationId, windowStart, windowEnd);
   const links = useTrackedLinks(brandId, publication.publicationId);
-  const calendarHref = `${brandPath(companyId, brandId, 'calendar')}?publication=${encodeURIComponent(publication.publicationId)}&day=${dayKey(publication.scheduledFor, timeZone)}`;
+  const calendarHref = publicationCalendarHref(companyId, brandId, publication, timeZone);
   return (
     <aside
       aria-labelledby="post-detail-heading"
@@ -333,7 +341,7 @@ export function PublicationDetail({
                   <dd className="text-right tabular-nums">
                     {c.available && c.value !== null ? (
                       <>
-                        {number(c.value)}
+                        {formatNumber(c.value)}
                         {c.normalised !== null && (
                           <span className="text-xs text-muted-foreground"> · {c.normalised.toFixed(2)}‰</span>
                         )}
@@ -380,7 +388,7 @@ export function PublicationDetail({
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="min-w-0 break-all">{l.destination}</span>
                   <span className="shrink-0 tabular-nums">
-                    {number(l.clicks)} {l.clicks === 1 ? 'click' : 'clicks'}
+                    {formatNumber(l.clicks)} {l.clicks === 1 ? 'click' : 'clicks'}
                   </span>
                 </div>
                 <span className="text-xs text-muted-foreground">

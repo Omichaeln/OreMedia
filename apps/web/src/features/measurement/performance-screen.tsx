@@ -3,26 +3,27 @@ import { Link, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { AGES, DailyTrend } from './daily-trend';
-import { groupValue, type SlotPost } from './performance-helpers';
+import {
+  PERIODS,
+  formatValue,
+  groupValue,
+  percent,
+  publicationCalendarHref,
+  type SlotPost,
+} from './performance-helpers';
 import {
   CreativeAttributesPanel,
   NextCyclePanel,
   PublicationDetail,
   SlotHeatmap,
 } from './performance-panels';
-import { brandPath, useBrandContext } from '../brand/brand-context';
+import { useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
 import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
-
-const PERIODS = [
-  [7, '7 days'],
-  [30, '30 days'],
-  [90, '90 days'],
-] as const;
 
 /** The comparable groups the screen reads, in reading order (spec 15.1 groups); other groups are not asked for. */
 const GROUPS: ReadonlyArray<[group: string, label: string]> = [
@@ -45,13 +46,9 @@ const NOT_SUMMED: Record<string, string> = {
   gauge: 'an intensity: never summed',
   rate: 'pooled from its operands when both are here',
 };
-/** A value in the group's own unit: a rate as a percentage, everything else as a count. */
-const formatValue = (kind: string, v: number) => (kind === 'rate' ? `${(v * 100).toFixed(1)}%` : number(v));
 /** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
 const MAX_SUBJECTS = 200;
 const MAX_KEYS = 50;
-
-const number = (v: number) => new Intl.NumberFormat().format(v);
 
 interface Row {
   publication: CalendarPublicationDto;
@@ -174,13 +171,14 @@ export function PerformanceScreen() {
 
   const update = (next: Record<string, string | null>) => {
     const p = new URLSearchParams(params);
+    // The selected post belongs to one period and channel: another selection drops it.
+    if ('period' in next || 'channel' in next) p.delete('post');
     for (const [k, v] of Object.entries(next)) {
       if (v === null) p.delete(k);
       else p.set(k, v);
     }
     setParams(p, { replace: true });
   };
-  const calendarHref = brandPath(companyId, brandId, 'calendar');
   const queries = [calendar, channels, definitions];
   const failed = [...queries, metrics].find((q) => q.isError);
   const loading = queries.some((q) => q.isPending) || (metrics.isPending && metrics.fetchStatus !== 'idle');
@@ -332,7 +330,7 @@ export function PerformanceScreen() {
                     >
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                         <Link
-                          to={`${calendarHref}?publication=${encodeURIComponent(r.publication.publicationId)}&day=${dayKey(r.publication.scheduledFor, timeZone)}`}
+                          to={publicationCalendarHref(companyId, brandId, r.publication, timeZone)}
                           className="min-w-0 font-medium underline-offset-2 hover:underline"
                         >
                           <PackageTitle contentPackageId={r.publication.contentPackageId} />
@@ -374,7 +372,7 @@ export function PerformanceScreen() {
                         {r.rate !== null && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span>{(r.rate * 100).toFixed(1)}% engagement rate</span>
+                            <span>{percent(r.rate)} engagement rate</span>
                           </>
                         )}
                         {r.fetchedHoursAgo !== null && (

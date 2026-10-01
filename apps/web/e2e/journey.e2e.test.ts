@@ -547,14 +547,16 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await expect.poll(() => sections.count(), { timeout: 15_000 }).toBe(2);
     const sectionA = page.getByRole('region', { name: E2E.companyName });
     const sectionB = page.getByRole('region', { name: E2E_B.companyName });
-    // Company A: its two brands; the e2e brand's three posts in the period (none in the one before) read as
-    // impressions 7,800 without a comparison, the sample being under the minimum on the previous side.
+    // Company A: its two brands; the e2e brand's three posts in the period (none in the one before) are counted
+    // at seven days old (D-14): only the twelve-day-old X post is that old, so impressions read 760 from 1 of the
+    // window's posts, without a comparison, the sample being under the minimum on the previous side.
     await expect.poll(() => sectionA.getByTestId('brand-performance').count(), { timeout: 15_000 }).toBe(2);
     const rowA = sectionA.locator(`[data-testid="brand-performance"][data-brand="${E2E.brandId}"]`);
     await expect.poll(() => rowA.textContent(), { timeout: 15_000 }).toContain('Insufficient sample');
-    expect(await rowA.locator('[data-group="impressions"]').textContent()).toContain('7,800');
+    expect(await rowA.locator('[data-group="impressions"]').textContent()).toContain('760');
+    expect(await rowA.locator('[data-group="impressions"]').textContent()).toMatch(/1\/\d+ posts/);
     expect(await rowA.locator('[data-group="impressions"]').textContent()).toContain('not compared');
-    expect(await rowA.locator('[data-group="rate:engagement/impressions"]').textContent()).toContain('6.0%');
+    expect(await rowA.locator('[data-group="rate:engagement/impressions"]').textContent()).toContain('7.9%');
     expect(await sectionA.textContent()).toContain(BRAND_2.name);
     // Company B: its one brand, asked with B's tenant, with nothing published and none of A's names.
     await expect.poll(() => sectionB.getByTestId('brand-performance').count(), { timeout: 15_000 }).toBe(1);

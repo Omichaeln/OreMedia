@@ -269,7 +269,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect
       .poll(() => attributes.getByTestId('attributes-brand').textContent(), { timeout: 15_000 })
       .toContain('Brand rate 6.0%');
-    expect(await attributes.getByTestId('attributes-brand').textContent()).toContain('3 with attributes');
+    expect(await attributes.getByTestId('attributes-brand').textContent()).toContain(
+      '3 of 3 with attributes',
+    );
+    // Under the minimum sample no slot is shaded (D-14); the rate is still shown.
+    expect(await heatmap.locator('[data-testid="slot-cell"][data-sufficient="true"]').count()).toBe(0);
     const values = attributes.getByTestId('attribute-value');
     expect(await values.count()).toBeGreaterThan(0);
     expect(
