@@ -581,9 +581,15 @@ describe('destinations module against MySQL 8', () => {
     const REDIRECT = 'https://app.example/connect/callback';
     /** Another person of the tenant (an admin): a flow is bound to the actor who started it, not to a role. */
     const otherPerson: ResolvedActor = {
-      ...member(tenantA, 'admin'),
+      kind: 'user',
       id: 'usr_destinations_other',
+      tenantId: tenantA,
       membershipId: 'mem_destinations_other',
+      membershipStatus: 'active',
+      role: 'admin',
+      allBrands: true,
+      brandGrants: [],
+      mfaEnrolled: false,
     };
     let pendingId = '';
     let connectedId = '';
