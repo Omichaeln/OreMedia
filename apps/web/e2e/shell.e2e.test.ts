@@ -752,7 +752,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await blocked.textContent()).toContain(
       'Acme site: reads not allowed by the source-use policy (no policy for gsc.reports). Settings → Destinations sets the policy.',
     );
-    expect(await limits.locator('[data-limit="source_uncertified"]').textContent()).toContain(
+    // Two uncertified sources are seeded (Search Console and the Business Profile location); name the one asserted.
+    const uncertified = limits.locator('[data-limit="source_uncertified"]');
+    expect(await uncertified.count()).toBe(2);
+    expect(await uncertified.filter({ hasText: 'Search Console' }).textContent()).toContain(
       'Search Console site: the source adapter is not certified',
     );
     expect(await limits.locator('[data-limit="not_connected"]').textContent()).toContain(
