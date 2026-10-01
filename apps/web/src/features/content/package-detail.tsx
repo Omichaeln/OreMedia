@@ -7,8 +7,10 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { brandPath } from '../brand/brand-context';
+import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import { CHANNEL_CHIP } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
+import { ArticleEditor, ArticleSummary, articleToDraft, parseArticleDraft } from './article-editor';
 import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
 import { DocumentPicker } from './document-picker';
 import { RequestReview } from './request-review';
@@ -20,9 +22,14 @@ export interface PackageDetailProps {
   brandId: string;
   contentPackageId: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, offered as targets beside the channels. */
+  destinations: ReadonlyMap<string, DestinationDto>;
   /** The brand's time zone: the planned publish time is entered as the brand's wall clock (UX-06). */
   timeZone: string;
 }
+
+/** A website offered as a target: active and not unreachable (the server re-checks at generate and at dispatch). */
+const usableDestination = (d: DestinationDto) => d.status === 'active' && d.health !== 'unreachable';
 
 /**
  * The creative documents the current revision publishes with, from the server (it resolves the pinned creative
@@ -70,6 +77,7 @@ function VariantRow({
   brandId,
   variant,
   channel,
+  destination,
   documents,
   editable,
   schedulable,
@@ -78,6 +86,8 @@ function VariantRow({
   brandId: string;
   variant: PackageVariantDto;
   channel: ChannelDto | undefined;
+  /** R2-3: the website this variant publishes to, when it targets one instead of a channel. */
+  destination: DestinationDto | undefined;
   documents: readonly PackageDocumentDto[];
   /** Only a draft revision's variants are edited (spec 5.5 step 5); the server guards the same. */
   editable: boolean;
@@ -87,12 +97,18 @@ function VariantRow({
   const [editing, setEditing] = useState(false);
   const findings = variantFindings(variant.validation);
   const status = channel ? CHANNEL_CHIP[channel.status] : null;
-  const label = channel ? `${channel.displayName} (${channel.providerKey})` : variant.channelConnectionId;
+  const label = variant.destinationId
+    ? destinationLabel(destination, variant.destinationId)
+    : channel
+      ? `${channel.displayName} (${channel.providerKey})`
+      : (variant.channelConnectionId ?? variant.id);
+  const publishMode = variant.settings['publishMode'] === 'publish' ? 'publish' : 'draft';
   return (
     <li
       className="flex flex-col gap-1 py-2"
       data-testid="variant"
       data-variant-valid={findings.ok ? 'true' : 'false'}
+      data-variant-target={variant.destinationId ? 'destination' : 'channel'}
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">{label}</span>
@@ -122,6 +138,13 @@ function VariantRow({
           documents={documents}
           onDone={() => setEditing(false)}
         />
+      ) : variant.destinationId ? (
+        <p className="text-xs text-muted-foreground" data-testid="variant-publish-mode">
+          Publishes the revision&apos;s article as a{' '}
+          <span className="font-medium">{publishMode === 'publish' ? 'live page' : 'draft'}</span> on the
+          website
+          {publishMode === 'draft' ? ' (preview first; a live publish is chosen on the variant)' : ''}.
+        </p>
       ) : (
         <>
           <p className="whitespace-pre-wrap break-words text-sm">{variant.text}</p>
@@ -152,42 +175,59 @@ function VariantRow({
 function GenerateVariantsForm({
   pkg,
   channels,
+  destinations,
 }: {
   pkg: PackageDto;
   channels: ReadonlyMap<string, ChannelDto>;
+  destinations: ReadonlyMap<string, DestinationDto>;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
-  const existing = new Set(pkg.variants.map((v) => v.channelConnectionId));
+  const existing = new Set(pkg.variants.map((v) => v.channelConnectionId ?? v.destinationId ?? ''));
   const [selected, setSelected] = useState<string[]>([]);
+  const [selectedDestinations, setSelectedDestinations] = useState<string[]>([]);
   const generate = useMutation(
     trpc.content.variants.generate.mutationOptions({
       ...mutationIntent(intent.key),
       onSuccess: () => {
         intent.renew();
         setSelected([]);
+        setSelectedDestinations([]);
         void queryClient.invalidateQueries(trpc.content.pathFilter());
       },
     }),
   );
   const toggle = (id: string) =>
     setSelected((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  const toggleDestination = (id: string) =>
+    setSelectedDestinations((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  const chosen = selected.length + selectedDestinations.length;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (selected.length)
-      generate.mutate({ contentRevisionId: pkg.revision.id, channelConnectionIds: selected });
+    if (chosen)
+      generate.mutate({
+        contentRevisionId: pkg.revision.id,
+        channelConnectionIds: selected,
+        destinationIds: selectedDestinations,
+      });
   };
   const ui = generate.isError ? toUiError(generate.error) : null;
   const options = [...channels.values()];
+  // A website takes an article (R2-3): a plain-copy package is offered none, and says why.
+  const isArticle = Boolean(pkg.revision.copy.article);
+  const sites = [...destinations.values()].filter(usableDestination);
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
       <fieldset className="flex flex-col gap-1">
         <legend className="text-xs font-medium text-muted-foreground">
-          Channels for revision {pkg.revision.number} (one variant per channel; existing ones are kept)
+          Targets for revision {pkg.revision.number} (one variant per channel or website; existing ones are
+          kept)
         </legend>
-        {options.length === 0 && (
-          <p className="text-xs text-muted-foreground">No channels are connected for this brand.</p>
+        {options.length === 0 && sites.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No channels or websites are connected for this brand.
+          </p>
         )}
         {options.map((c) => (
           <label key={c.id} className="flex items-center gap-2 text-sm">
@@ -202,6 +242,25 @@ function GenerateVariantsForm({
             </span>
           </label>
         ))}
+        {sites.map((d) => (
+          <label key={d.id} className="flex items-center gap-2 text-sm" data-testid={`target-${d.id}`}>
+            <input
+              type="checkbox"
+              checked={existing.has(d.id) || selectedDestinations.includes(d.id)}
+              disabled={existing.has(d.id) || !isArticle}
+              onChange={() => toggleDestination(d.id)}
+            />
+            <span>
+              {destinationLabel(d, d.id)}
+              {existing.has(d.id) ? ' · has a variant' : !isArticle ? ' · needs an article' : ''}
+            </span>
+          </label>
+        ))}
+        {sites.length > 0 && !isArticle && (
+          <p className="text-xs text-muted-foreground">
+            A website publishes an article: revise this package with one to offer it there.
+          </p>
+        )}
       </fieldset>
       {generate.data && (
         <StatusBanner
@@ -226,8 +285,8 @@ function GenerateVariantsForm({
           type="submit"
           size="sm"
           variant="primary"
-          disabled={generate.isPending || selected.length === 0}
-          disabledReason={selected.length === 0 ? 'Choose at least one channel' : undefined}
+          disabled={generate.isPending || chosen === 0}
+          disabledReason={chosen === 0 ? 'Choose at least one channel or website' : undefined}
         >
           {generate.isPending ? 'Generating…' : 'Generate variants'}
         </Button>
@@ -241,7 +300,10 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const initialIds = pkg.creativeDocuments.map((d) => d.documentId);
+  const article = pkg.revision.copy.article;
   const [text, setText] = useState(pkg.revision.copy.master.text);
+  const [draft, setDraft] = useState(() => (article ? articleToDraft(article) : null));
+  const [issues, setIssues] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string[]>(initialIds);
   const [summary, setSummary] = useState('');
   const revise = useMutation(
@@ -258,10 +320,31 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
     setSelected((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    // An article package (R2-3) revises its article; the master text stays the excerpt the channels carry.
+    let copy: PackageDto['revision']['copy'] = {
+      schemaVersion: 1,
+      master: { text, factRefs: pkg.revision.copy.master.factRefs },
+    };
+    if (draft) {
+      const parsed = parseArticleDraft(draft);
+      if (!parsed.ok) {
+        setIssues(parsed.issues);
+        return;
+      }
+      setIssues({});
+      copy = {
+        schemaVersion: 1,
+        master: {
+          text: parsed.article.excerpt || parsed.article.title,
+          factRefs: pkg.revision.copy.master.factRefs,
+        },
+        article: parsed.article,
+      };
+    }
     revise.mutate({
       contentPackageId: pkg.id,
       expectedVersion: pkg.version,
-      copy: { schemaVersion: 1, master: { text, factRefs: pkg.revision.copy.master.factRefs } },
+      copy,
       // Omitted when unchanged: the server keeps the current documents, so a copy-only revision never detaches
       // the creative. An empty list is a deliberate removal.
       ...(sameIdSet(selected, initialIds) ? {} : { creativeDocumentIds: selected }),
@@ -271,14 +354,18 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
   const ui = revise.isError ? toUiError(revise.error) : null;
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
-      <Field label="Master copy" htmlFor={`revise-${pkg.id}-copy`}>
-        <Textarea
-          id={`revise-${pkg.id}-copy`}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={3}
-        />
-      </Field>
+      {draft ? (
+        <ArticleEditor draft={draft} onChange={setDraft} idPrefix={`revise-${pkg.id}`} issues={issues} />
+      ) : (
+        <Field label="Master copy" htmlFor={`revise-${pkg.id}-copy`}>
+          <Textarea
+            id={`revise-${pkg.id}-copy`}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+          />
+        </Field>
+      )}
       <DocumentPicker
         brandId={pkg.brandId}
         pinned={pkg.creativeDocuments}
@@ -318,6 +405,7 @@ export function PackageDetail({
   brandId,
   contentPackageId,
   channels,
+  destinations,
   timeZone,
 }: PackageDetailProps) {
   const pkg = usePackage(contentPackageId);
@@ -357,7 +445,11 @@ export function PackageDetail({
                 {current.detail}
               </p>
             )}
-            <p className="whitespace-pre-wrap break-words text-sm">{p.revision.copy.master.text}</p>
+            {p.revision.copy.article ? (
+              <ArticleSummary article={p.revision.copy.article} />
+            ) : (
+              <p className="whitespace-pre-wrap break-words text-sm">{p.revision.copy.master.text}</p>
+            )}
             <p className="text-xs text-muted-foreground">
               Brand version <code>{p.revision.brandVersionId}</code> · policy{' '}
               <code>{p.revision.policyVersionId}</code> · {p.revision.creativeRevisionIds.length} creative
@@ -389,7 +481,7 @@ export function PackageDetail({
           </section>
           <section aria-labelledby={`variants-${p.id}`} className="flex flex-col gap-1">
             <h3 id={`variants-${p.id}`} className="text-sm font-semibold">
-              Channel variants
+              Channel and website variants
             </h3>
             {p.variants.length === 0 ? (
               <p className="text-sm text-muted-foreground">No variants for this revision yet.</p>
@@ -401,7 +493,8 @@ export function PackageDetail({
                     companyId={companyId}
                     brandId={brandId}
                     variant={v}
-                    channel={channels.get(v.channelConnectionId)}
+                    channel={v.channelConnectionId ? channels.get(v.channelConnectionId) : undefined}
+                    destination={v.destinationId ? destinations.get(v.destinationId) : undefined}
                     documents={p.creativeDocuments}
                     editable={p.revision.state === 'draft' || p.revision.state === 'changes_requested'}
                     schedulable={p.revision.state === 'approved'}
@@ -409,7 +502,12 @@ export function PackageDetail({
                 ))}
               </ul>
             )}
-            <GenerateVariantsForm key={p.revision.id} pkg={p} channels={channels} />
+            <GenerateVariantsForm
+              key={p.revision.id}
+              pkg={p}
+              channels={channels}
+              destinations={destinations}
+            />
           </section>
           <section aria-labelledby={`review-${p.id}`} className="flex flex-col gap-1">
             <h3 id={`review-${p.id}`} className="text-sm font-semibold">

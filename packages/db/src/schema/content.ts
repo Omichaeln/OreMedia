@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   foreignKey,
   index,
   int,
@@ -12,6 +14,7 @@ import {
 import type { CopyDocumentV1, CreativeAttributesV1 } from '@oremedia/contracts/content';
 import { brandId, createdAt, hash, id, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
+import { brandDestinations } from './destinations';
 
 export const campaigns = mysqlTable(
   'campaigns',
@@ -133,6 +136,11 @@ export const contentRevisions = mysqlTable(
   ],
 );
 
+/**
+ * One variant per (revision, target). A target is a channel connection or, since R2-3, a write-capable brand
+ * destination (a website): exactly one of `channelConnectionId` and `destinationId` is set (the service writes
+ * them; the unique indexes keep one variant per target either way).
+ */
 export const channelVariants = mysqlTable(
   'channel_variants',
   {
@@ -140,7 +148,8 @@ export const channelVariants = mysqlTable(
     tenantId: tenantId(),
     brandId: brandId(),
     contentRevisionId: ref('content_revision_id').notNull(),
-    channelConnectionId: ref('channel_connection_id').notNull(),
+    channelConnectionId: ref('channel_connection_id'),
+    destinationId: ref('destination_id'),
     text: text('text').notNull(),
     altTexts: json('alt_texts').$type<string[]>().notNull(),
     settings: json('settings').$type<Record<string, unknown>>().notNull(),
@@ -155,11 +164,19 @@ export const channelVariants = mysqlTable(
   },
   (t) => [
     uniqueIndex('uq_variant_target').on(t.tenantId, t.contentRevisionId, t.channelConnectionId),
+    uniqueIndex('uq_variant_destination').on(t.tenantId, t.contentRevisionId, t.destinationId),
+    // R2-3: a variant targets exactly one of a channel or a destination (MySQL 8 enforces CHECK).
+    check('ck_variant_target', sql`(${t.channelConnectionId} is null) <> (${t.destinationId} is null)`),
     uniqueIndex('uq_variant_tbi').on(t.tenantId, t.brandId, t.id),
     foreignKey({
       columns: [t.tenantId, t.brandId, t.contentRevisionId],
       foreignColumns: [contentRevisions.tenantId, contentRevisions.brandId, contentRevisions.id],
       name: 'fk_variant_revision',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.destinationId],
+      foreignColumns: [brandDestinations.tenantId, brandDestinations.brandId, brandDestinations.id],
+      name: 'fk_variant_destination',
     }),
   ],
 );

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
+import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
@@ -132,25 +132,12 @@ describe('migration 0011 rolls forward on a populated database (ledger 1.g4)', (
     for (const state of STATES_BEFORE) {
       const id = newId('publication');
       publicationIds.set(state, id);
-      await tdb.db.insert(publications).values({
-        id,
-        tenantId,
-        brandId: brandIds[0],
-        contentPackageId: newId('contentPackage'),
-        contentRevisionId: newId('contentRevision'),
-        channelVariantId: newId('channelVariant'),
-        channelConnectionId: connectionId,
-        occurrenceKey: `roll-forward-0011:${state}`,
-        authority: 'approval',
-        approvalId: newId('releaseApproval'),
-        scheduledFor: new Date('2026-09-01T10:00:00.000Z'),
-        state,
-        ...(state === 'published'
-          ? { remotePostId: 'post_rf_1', remoteUrl: 'https://fixture.example/p/1' }
-          : {}),
-        scheduledByKind: 'user',
-        scheduledById: ownerUserId,
-      });
+      // Raw sql names only the columns that exist at 0010 (destination_id arrives with 0018).
+      const remotePostId = state === 'published' ? 'post_rf_1' : null;
+      const remoteUrl = state === 'published' ? 'https://fixture.example/p/1' : null;
+      await tdb.db.execute(
+        sql`insert into ${publications} (id, tenant_id, brand_id, content_package_id, content_revision_id, channel_variant_id, channel_connection_id, occurrence_key, authority, approval_id, mandate_id, scheduled_for, state, remote_post_id, remote_url, scheduled_by_kind, scheduled_by_id, created_at, updated_at) values (${id}, ${tenantId}, ${brandIds[0]}, ${newId('contentPackage')}, ${newId('contentRevision')}, ${newId('channelVariant')}, ${connectionId}, ${`roll-forward-0011:${state}`}, 'approval', ${newId('releaseApproval')}, null, ${new Date('2026-09-01T10:00:00.000Z')}, ${state}, ${remotePostId}, ${remoteUrl}, 'user', ${ownerUserId}, ${new Date()}, ${new Date()})`,
+      );
     }
     for (const kind of EVIDENCE_BEFORE) {
       const payload = { kind, remotePostId: 'post_rf_1' };

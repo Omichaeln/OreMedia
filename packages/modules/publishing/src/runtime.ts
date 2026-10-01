@@ -1,4 +1,6 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
+import type { RenderedValidationV1 } from '@oremedia/contracts/article';
+import type { ArticleReadbackV1 } from '@oremedia/contracts/destinations';
 import {
   NotFoundError,
   PolicyDeniedError,
@@ -74,12 +76,22 @@ import {
   forRelease,
   publicationResource,
   reconcileWorkflowId,
+  targetIdOf,
   transition,
   workflowIdOf,
   type AttemptRow,
+  type ConnectionRow,
   type PublicationRow,
 } from './common';
-import { approvals, providerClientFor, publishMedia, review, variants, workflowRunning } from './hooks';
+import {
+  approvals,
+  destinations,
+  providerClientFor,
+  publishMedia,
+  review,
+  variants,
+  workflowRunning,
+} from './hooks';
 import { adapterFor, providerIO, registry } from './providers';
 import {
   ChannelConnectionRepository,
@@ -284,13 +296,13 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     claimForDispatch: ({ publicationId, claimant }: ClaimInputV1): Promise<ClaimResultV1> =>
       withTransaction(async (tx) => {
         const row = await publicationsRepo.lock(publicationId, tx);
-        const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
+        const target = await targetOf(row, tx);
         if (row.state === 'dispatching' && row.claimant === claimant)
           return {
             ok: true,
             fencingToken: row.fencingToken,
-            providerKey: connection.providerKey,
-            channelConnectionId: connection.id,
+            providerKey: target.providerKey,
+            channelConnectionId: targetIdOf(row),
           };
         if (row.state !== 'scheduled') return { ok: false, state: row.state };
         const fencingToken = row.fencingToken + 1;
@@ -304,13 +316,13 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           tx,
         );
         record(METRIC.dispatchLatenessMs, Math.max(0, at.getTime() - row.scheduledFor.getTime()), {
-          providerKey: connection.providerKey,
+          providerKey: target.providerKey,
         });
         return {
           ok: true,
           fencingToken,
-          providerKey: connection.providerKey,
-          channelConnectionId: connection.id,
+          providerKey: target.providerKey,
+          channelConnectionId: targetIdOf(row),
         };
       }),
 
@@ -390,8 +402,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             { path: 'publicationId', issue: `open_attempt_in_state:${row.state}` },
           ]);
         const variant = await variants.get(row.channelVariantId, tx);
-        const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
-        const cap = registry().capability(connection.providerKey);
+        const target = await targetOf(row, tx);
+        const cap = target.connection ? registry().capability(target.providerKey) : undefined;
         const id = newId('publicationAttempt');
         await attemptsRepo.create(
           {
@@ -488,25 +500,27 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             Array.from(
               new Set([
                 ...(await publicationsRepo.listPublishedChannelsForApproval(row.approvalId, tx)),
-                row.channelConnectionId,
+                targetIdOf(row),
               ]),
             ),
             tx,
           );
         // Spec 15.1: measurement collection starts from the publication moment (worker-ingest, its own queue).
+        // A destination publication (R2-3) is measured through the brand's web sources, not per post.
         const actor = workflowActor();
-        await outbox.add(
-          'measurement.collection_due',
-          { type: 'publication', id: row.id, version: row.version + 1 },
-          {
-            publicationId: row.id,
-            channelConnectionId: row.channelConnectionId,
-            actorKind: actor.kind,
-            actorId: actor.id,
-          },
-          tx,
-          { brandId: row.brandId },
-        );
+        if (row.channelConnectionId)
+          await outbox.add(
+            'measurement.collection_due',
+            { type: 'publication', id: row.id, version: row.version + 1 },
+            {
+              publicationId: row.id,
+              channelConnectionId: row.channelConnectionId,
+              actorKind: actor.kind,
+              actorId: actor.id,
+            },
+            tx,
+            { brandId: row.brandId },
+          );
         count(METRIC.publicationOutcomes, 1, { outcome: 'published' });
         return result;
       }),
@@ -620,6 +634,20 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       }),
   };
 
+  /**
+   * A publication's target (R2-3): the channel connection with its provider adapter, or the brand destination
+   * (described through the hook; its writes run behind the same hook, so no adapter is resolved here).
+   */
+  async function targetOf(row: PublicationRow, tx?: Tx) {
+    if (row.destinationId) {
+      const destination = await destinations.describe(row.destinationId, tx);
+      if (!destination) throw new NotFoundError('Destination', row.destinationId);
+      return { connection: null, destination, providerKey: destination.kind };
+    }
+    const connection = await connectionsRepo.getById(row.channelConnectionId ?? '', tx);
+    return { connection, destination: null, providerKey: connection.providerKey };
+  }
+
   /** Loads what one provider call needs, with the fence checked against the live row. */
   async function loadForProvider(input: {
     publicationId: string;
@@ -631,9 +659,72 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     const attempt = input.attemptId ? await loadAttempt(row, input.attemptId) : null;
     if (attempt && input.fencingToken !== undefined && attempt.fencingToken !== input.fencingToken)
       throw new ValidationFailedError([{ path: 'attemptId', issue: 'attempt_fence_mismatch' }]);
-    const connection = await connectionsRepo.getById(row.channelConnectionId);
+    const target = await targetOf(row);
     const variant = await variants.get(row.channelVariantId);
-    return { row, attempt, connection, variant, adapter: adapterFor(connection.providerKey) };
+    return { row, attempt, variant, ...target };
+  }
+
+  /** A channel call on a destination publication (R2-3): the destination has no channel adapter. */
+  function channelOf<T extends { connection: ConnectionRow | null }>(loaded: T) {
+    if (!loaded.connection)
+      throw new ValidationFailedError([{ path: 'publicationId', issue: 'not_a_channel_publication' }]);
+    return { connection: loaded.connection, adapter: adapterFor(loaded.connection.providerKey) };
+  }
+
+  /** The sentAt fence of an attempt: commits under the row lock only while the row is still dispatching. */
+  const preSendFence = (row: PublicationRow, attempt: AttemptRow, hooks?: ActivityHooks) => async () => {
+    hooks?.heartbeat(`publish:${attempt.id}:before_send`);
+    await withTransaction(async (tx) => {
+      const locked = await publicationsRepo.lock(row.id, tx);
+      if (locked.state !== 'dispatching')
+        throw new ValidationFailedError([{ path: 'publicationId', issue: `send_in_state:${locked.state}` }]);
+      assertFence(locked, attempt.fencingToken);
+      await attemptsRepo.markSent(attempt.id, now(), tx);
+    });
+  };
+
+  /** Insert-only evidence of what a destination write read back and what its rendered page showed (R2-3). */
+  async function recordArticleEvidence(
+    row: PublicationRow,
+    attemptId: string,
+    result: { readback?: ArticleReadbackV1; validation?: RenderedValidationV1 },
+    tx: Tx,
+  ) {
+    const at = now();
+    if (result.readback) {
+      const payload = { ...result.readback, attemptId };
+      await evidenceRepo.create(
+        {
+          id: newId('remoteEvidence'),
+          publicationId: row.id,
+          attemptId,
+          kind: 'remote_readback',
+          remotePostId: result.readback.remoteId,
+          remoteUrl: result.readback.remoteUrl,
+          payload,
+          payloadHash: hashCanonical(payload),
+          capturedAt: at,
+        },
+        tx,
+      );
+    }
+    if (result.validation) {
+      const payload = { ...result.validation };
+      await evidenceRepo.create(
+        {
+          id: newId('remoteEvidence'),
+          publicationId: row.id,
+          attemptId,
+          kind: 'rendered_validation',
+          remotePostId: result.readback?.remoteId ?? null,
+          remoteUrl: result.readback?.remoteUrl ?? null,
+          payload,
+          payloadHash: hashCanonical(payload),
+          capturedAt: at,
+        },
+        tx,
+      );
+    }
   }
 
   const provider: PublishProviderRuntimeV1 = {
@@ -644,7 +735,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
      */
     async publishOnce(input: PublishOnceInputV1, hooks?: ActivityHooks): Promise<AttemptResult> {
       const { tenantId, attemptId } = input;
-      const { row, attempt, connection, variant, adapter } = await loadForProvider(input);
+      const loaded = await loadForProvider(input);
+      const { row, attempt, variant } = loaded;
       if (!attempt) throw new NotFoundError('PublicationAttempt', attemptId);
       if (attempt.finishedAt) return attemptResultOf(attempt);
       if (attempt.sentAt) {
@@ -659,6 +751,29 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       }
       let result: AttemptResult;
       try {
+        if (loaded.destination) {
+          // R2-3: the destinations module writes the article behind the hook (the same sentAt fence before the
+          // first mutation leaves) and reads it back; what it read and what the page showed become evidence.
+          const written = await destinations.publish(
+            {
+              tenantId,
+              destinationId: loaded.destination.id,
+              publicationId: row.id,
+              attemptId,
+              idempotencyKey: attempt.providerIdempotencyKey ?? attemptId,
+              variant,
+            },
+            hooks,
+            preSendFence(row, attempt, hooks),
+          );
+          result = fromOutcome(attemptId, written);
+          await withTransaction(async (tx) => {
+            await recordArticleEvidence(row, attemptId, written, tx);
+            await recordAttemptOutcome(attemptId, result, tx);
+          });
+          return result;
+        }
+        const { connection, adapter } = channelOf(loaded);
         const media = await publishMedia.forVariant(variant, {
           providerProcessingWindowSec: adapter.capability.media.publicUrlFetch.processingWindowSec,
         });
@@ -682,18 +797,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           // The pre-send fence: sentAt commits under the row lock only while the row is still dispatching under this
           // attempt's token, so a move that committed first (a restore hold, worker loss declared by the sweeper, a
           // re-release to a newer claim) stops the send; a throw here aborts the request as before_send.
-          const io: ProviderIO = providerIO(adapter.key, tenantId, hooks, async () => {
-            hooks?.heartbeat(`publish:${attemptId}:before_send`);
-            await withTransaction(async (tx) => {
-              const locked = await publicationsRepo.lock(row.id, tx);
-              if (locked.state !== 'dispatching')
-                throw new ValidationFailedError([
-                  { path: 'publicationId', issue: `send_in_state:${locked.state}` },
-                ]);
-              assertFence(locked, attempt.fencingToken);
-              await attemptsRepo.markSent(attemptId, now(), tx);
-            });
-          });
+          const io: ProviderIO = providerIO(adapter.key, tenantId, hooks, preSendFence(row, attempt, hooks));
           try {
             return fromOutcome(attemptId, await adapter.publish(req, creds, io));
           } catch (err) {
@@ -765,7 +869,15 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
 
     async checkStatus(input: PublishOnceInputV1, hooks?: ActivityHooks): Promise<PendingCheck> {
-      const { attempt, connection, adapter } = await loadForProvider(input);
+      const loaded = await loadForProvider(input);
+      const { attempt } = loaded;
+      if (loaded.destination)
+        return {
+          status: 'failed',
+          code: 'not_supported',
+          message: 'a destination write has no status check',
+        };
+      const { connection, adapter } = channelOf(loaded);
       if (!attempt?.pendingState)
         return { status: 'failed', code: 'no_pending_state', message: 'nothing to poll' };
       const checkStatus = adapter.checkStatus?.bind(adapter);
@@ -784,7 +896,11 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
 
     async finalize(input: PublishOnceInputV1, hooks?: ActivityHooks): Promise<PendingCheck> {
-      const { attempt, connection, adapter } = await loadForProvider(input);
+      const loaded = await loadForProvider(input);
+      const { attempt } = loaded;
+      if (loaded.destination)
+        return { status: 'failed', code: 'not_supported', message: 'a destination write has no finalize' };
+      const { connection, adapter } = channelOf(loaded);
       if (!attempt?.pendingState)
         return { status: 'failed', code: 'no_pending_state', message: 'nothing to finalise' };
       const finalize = adapter.finalize?.bind(adapter);
@@ -803,7 +919,12 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
 
     /** Read-only reconciliation (spec 14.3): by id or by fingerprint scan, from the attempt's start time. */
     async findRemotePost(input: FindRemotePostInputV1, hooks?: ActivityHooks): Promise<ReconcileResult> {
-      const { row, attempt, connection, variant, adapter } = await loadForProvider(input);
+      const loaded = await loadForProvider(input);
+      const { row, attempt, variant } = loaded;
+      // R2-3: a website has no post scan by fingerprint; an ambiguous write is settled by a person (held).
+      if (loaded.destination)
+        return { status: 'cannot_determine', reason: 'destination_lookup_not_supported' };
+      const { connection, adapter } = channelOf(loaded);
       return credentialBroker.withCredentials(input.tenantId, connection.id, (creds) =>
         adapter.findRemotePost(
           {
@@ -978,7 +1099,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
                 );
               } else if (row.state === 'dispatching') {
                 const attempt = await attemptsRepo.findByFence(row.id, row.fencingToken, tx);
-                const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
+                const target = await targetOf(row, tx);
                 if (attempt && !attempt.finishedAt)
                   await recordAttemptOutcome(
                     attempt.id,
@@ -1000,7 +1121,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
                   {
                     publicationId: row.id,
                     attemptId: attempt?.id ?? null,
-                    providerKey: connection.providerKey,
+                    providerKey: target.providerKey,
                     workflowId: reconcileWorkflowId(row.id, row.version + 1),
                     actorKind: row.scheduledByKind,
                     actorId: row.scheduledById,
@@ -1033,17 +1154,72 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
   }
 
   /**
+   * R2-3: a change of a live article through the destinations hook. An edit reads the remote first and compares
+   * it with the hash the product last read back; a remote that moved since is a `conflict` outcome, nothing is
+   * overwritten and the refusal is audited. What a successful write reads back is evidence (recorded with the
+   * outcome, recordRemoteChangeOutcome).
+   */
+  async function applyDestinationChange(
+    input: PublicationRemoteChangeInputV1,
+    row: PublicationRow,
+    change: Awaited<ReturnType<typeof changesRepo.getById>>,
+    kind: 'edit' | 'delete' | 'unpublish',
+    remoteId: string,
+    hooks: ActivityHooks | undefined,
+  ): Promise<RemoteChangeAttemptResultV1> {
+    const destinationId = row.destinationId as string;
+    const target = { tenantId: input.tenantId, destinationId, remoteId };
+    try {
+      hooks?.heartbeat(`remote-${kind}:${change.id}:send`);
+      if (kind === 'delete') return await destinations.delete(target, hooks);
+      if (kind === 'unpublish') return await destinations.unpublish(target, hooks);
+      const readback = await evidenceRepo.latestOfKind(row.id, 'remote_readback');
+      const expectedHash =
+        typeof readback?.payload['contentHash'] === 'string' ? readback.payload['contentHash'] : null;
+      const result = await destinations.edit(
+        { ...target, expectedHash, html: change.text ?? '', idempotencyKey: change.id },
+        hooks,
+      );
+      if (result.outcome === 'rejected' && result.code === 'conflict')
+        await withTransaction((tx) =>
+          audit.record(
+            workflowActor(),
+            'publication.edit_remote_conflict',
+            { type: 'publication', id: row.id },
+            'denied',
+            tx,
+            {
+              brandId: row.brandId,
+              publicationId: row.id,
+              destinationId,
+              reason: 'remote_changed_since_readback',
+            },
+          ),
+        );
+      return result;
+    } catch (err) {
+      if (err instanceof ProviderRateLimitWaitExceeded || err instanceof ProviderTransportError)
+        return { outcome: 'retryable_error', code: 'pre_send', message: truncateForTemporal(err, 300) };
+      if (err instanceof PolicyDeniedError)
+        return { outcome: 'rejected', code: err.reason, message: truncateForTemporal(err, 300) };
+      throw err;
+    }
+  }
+
+  /**
    * One platform call for a requested change. Nothing is sent once the change was recorded (a repeat after the
    * outcome, or a superseded workflow); a publication that is no longer published is refused without a call.
    */
   async function applyRemoteChange(
     input: PublicationRemoteChangeInputV1,
-    kind: 'edit' | 'delete',
+    activity: 'edit' | 'delete',
     actor: ResolvedActor,
     hooks: ActivityHooks | undefined,
   ): Promise<RemoteChangeAttemptResultV1> {
     const { row, change } = await loadRemoteChange(input);
-    if (change.kind !== kind)
+    // An unpublish (R2-3) runs under the delete activity: the same converging, once-per-attempt call shape.
+    const kind = change.kind;
+    if ((activity === 'edit') !== (kind === 'edit'))
       throw new ValidationFailedError([{ path: 'changeId', issue: `remote_change_kind:${change.kind}` }]);
     if (change.state !== 'requested') return { outcome: 'skipped', reason: `change_${change.state}` };
     if (row.state !== 'published' || !row.remotePostId)
@@ -1065,7 +1241,14 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         message: 'the requester no longer holds the permission for this change',
       };
     const remotePostId = row.remotePostId;
-    const connection = await connectionsRepo.getById(row.channelConnectionId);
+    if (row.destinationId) return applyDestinationChange(input, row, change, kind, remotePostId, hooks);
+    if (kind === 'unpublish')
+      return {
+        outcome: 'rejected',
+        code: 'unpublish_not_supported',
+        message: 'the channel cannot revert posts',
+      };
+    const connection = await connectionsRepo.getById(row.channelConnectionId ?? '');
     const adapter = adapterFor(connection.providerKey);
     const deletePost = adapter.deletePost?.bind(adapter);
     const editPost = adapter.editPost?.bind(adapter);
@@ -1171,13 +1354,21 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             at,
             tx,
           );
-        const kind = change.kind === 'delete' ? 'remote_deletion' : 'remote_edit';
+        const kind =
+          change.kind === 'delete'
+            ? 'remote_deletion'
+            : change.kind === 'unpublish'
+              ? 'remote_unpublish'
+              : 'remote_edit';
+        const readback = (result as { readback?: Record<string, unknown> }).readback;
         const payload = {
           changeId: change.id,
           remotePostId: row.remotePostId,
           outcome: result.outcome,
           ...(change.textHash ? { textHash: change.textHash } : {}),
           ...(late ? { confirmedAfterStale: true } : {}),
+          // R2-3: the remote revision read back after the write, with its hash (what the next edit must match).
+          ...(readback ? { readback } : {}),
         };
         await evidenceRepo.create(
           {
@@ -1193,6 +1384,21 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           },
           tx,
         );
+        if (readback && change.kind === 'edit')
+          await evidenceRepo.create(
+            {
+              id: newId('remoteEvidence'),
+              publicationId: row.id,
+              attemptId: null,
+              kind: 'remote_readback',
+              remotePostId: row.remotePostId,
+              remoteUrl: row.remoteUrl,
+              payload: { ...readback, changeId: change.id },
+              payloadHash: hashCanonical({ ...readback, changeId: change.id }),
+              capturedAt: at,
+            },
+            tx,
+          );
         count(METRIC.publicationOutcomes, 1, { outcome: `remote_${change.kind}` });
         if (change.kind === 'delete' && row.state === 'published') {
           const moved = await move(

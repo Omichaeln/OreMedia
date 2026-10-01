@@ -1,7 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError, type AnyTRPCProcedure } from '@trpc/server';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
-import { CalendarRange, ChannelVariantGet, ContentRevisionGet } from '@oremedia/contracts/content';
+import {
+  CalendarRange,
+  ChannelVariantGet,
+  ContentRevisionGet,
+  type ArticleDocumentV1,
+  type CopyDocumentV1,
+} from '@oremedia/contracts/content';
+import { RenderedCheckKey } from '@oremedia/contracts/article';
 import {
   ConflictError,
   NotFoundError,
@@ -12,6 +19,8 @@ import {
   CancelCommand,
   ChannelList,
   PublicationDeleteRemote,
+  PublicationUnpublishRemote,
+  PublicationValidateRendered,
   PublicationEditRemote,
   PublicationEvidence,
   PublicationGet,
@@ -48,8 +57,15 @@ import type { MockBuilders, t } from './mock-api';
 export const P5 = {
   brandId: 'brd_e2e',
   channels: { ok: 'cc_linkedin', expired: 'cc_instagram', two: 'cc_x' },
-  variants: { ok: 'cv_ok', invalid: 'cv_invalid', onExpired: 'cv_expired' },
-  revisions: { one: 'cr_1', two: 'cr_2', three: 'cr_3', changes: 'cr_4', measured: 'cr_5' },
+  variants: { ok: 'cv_ok', invalid: 'cv_invalid', onExpired: 'cv_expired', article: 'cv_article' },
+  revisions: {
+    one: 'cr_1',
+    two: 'cr_2',
+    three: 'cr_3',
+    changes: 'cr_4',
+    measured: 'cr_5',
+    article: 'cr_article',
+  },
   publications: {
     held: 'pub_held',
     unknown: 'pub_unknown',
@@ -59,7 +75,10 @@ export const P5 = {
     publishedEarlier: 'pub_published_earlier',
     publishedOlder: 'pub_published_older',
     failed: 'pub_failed',
+    article: 'pub_article',
   },
+  /** R2-3: a website article published as a draft (its destination is the destinations mock's cms site). */
+  destination: 'dst_e2e_cms',
   requests: {
     open: 'rr_open',
     stale: 'rr_stale',
@@ -106,7 +125,7 @@ export interface Revision {
   number: number;
   brandVersionId: string;
   policyVersionId: string;
-  copy: { schemaVersion: 1; master: { text: string; factRefs: string[] } };
+  copy: CopyDocumentV1;
   creativeRevisionIds: string[];
   factRefs: string[];
   contentHash: string;
@@ -124,12 +143,16 @@ export interface Variant {
   brandId: string;
   contentPackageId: string;
   contentRevisionId: string;
-  channelConnectionId: string;
+  /** The channel, or null for a website variant (R2-3); exactly one of the two is set. */
+  channelConnectionId: string | null;
+  destinationId: string | null;
   text: string;
   altTexts: string[];
   settings: Record<string, unknown>;
   exportIds: string[];
   exportHashes: string[];
+  /** The revision's article for a website variant; null otherwise. */
+  article: ArticleDocumentV1 | null;
   capabilityVersion: number;
   validation: { ok: boolean; issues: Array<{ path?: string; issue: string }> };
   createdAt: string;
@@ -164,7 +187,10 @@ interface Evidence {
     | 'human_confirmation'
     | 'metrics_readback'
     | 'remote_edit'
-    | 'remote_deletion';
+    | 'remote_deletion'
+    | 'remote_readback'
+    | 'rendered_validation'
+    | 'remote_unpublish';
   remotePostId: string | null;
   remoteUrl: string | null;
   payload: Record<string, unknown>;
@@ -178,7 +204,8 @@ export interface Publication {
   contentPackageId: string;
   contentRevisionId: string;
   channelVariantId: string;
-  channelConnectionId: string;
+  channelConnectionId: string | null;
+  destinationId: string | null;
   occurrenceKey: string;
   authority: 'approval' | 'mandate';
   approvalId: string | null;
@@ -205,7 +232,7 @@ export interface Publication {
 export interface RemoteChange {
   id: string;
   publicationId: string;
-  kind: 'edit' | 'delete';
+  kind: 'edit' | 'delete' | 'unpublish';
   state: 'requested' | 'succeeded' | 'failed';
   reason: string | null;
   textHash: string | null;
@@ -292,11 +319,11 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
     v.exportIds.map((exportId, i) => ({
       exportId,
       contentHash: v.exportHashes[i] as string,
-      channelConnectionId: v.channelConnectionId,
+      ...targetOf(v),
     })),
   ),
   captions: variants.map((v) => ({
-    channelConnectionId: v.channelConnectionId,
+    ...targetOf(v),
     text: v.text,
     altTexts: v.altTexts,
     settingsHash: hash(v.settings),
@@ -304,7 +331,35 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
   timing: { kind: 'exact', at: todayAt(15) },
   brandVersionId: 'bv_e2e',
   policyVersionId: 'pv_e2e',
+  // R2-3: the article revision the reviewer approves, as the server freezes it.
+  ...(revision.copy.article
+    ? {
+        article: {
+          title: revision.copy.article.title,
+          slug: revision.copy.article.slug,
+          articleHash: hash(revision.copy.article),
+          blocks: revision.copy.article.blocks.length,
+        },
+      }
+    : {}),
 });
+/** A variant's target as a binding names it (the server's variantTarget). */
+const targetOf = (v: Pick<Variant, 'channelConnectionId' | 'destinationId'>) =>
+  v.destinationId ? { destinationId: v.destinationId } : { channelConnectionId: v.channelConnectionId ?? '' };
+
+/** The seeded article (R2-3): what the website received and what its page must show. */
+export const P5_ARTICLE: ArticleDocumentV1 = {
+  kind: 'article',
+  title: 'Why ore and tar last',
+  slug: 'why-ore-and-tar-last',
+  excerpt: 'Why ore and tar last.',
+  blocks: [
+    { type: 'paragraph', text: 'Ore is heavy.' },
+    { type: 'faq', question: 'Is it safe?', answer: 'Yes, mostly.' },
+  ],
+  categories: ['Guides'],
+  tags: ['ore'],
+};
 
 export class Phase5Backend {
   readonly channels = new Map<string, Channel>();
@@ -388,7 +443,20 @@ export class Phase5Backend {
       if (outcome === 'done') {
         Object.assign(c, { state: 'succeeded', finishedAt: now() });
         if (c.kind === 'delete') this.transition(p.id, { state: 'removed', stateReason: 'remote_deleted' });
-        else p.currentText = c.text;
+        else if (c.kind === 'unpublish') {
+          const payload = { changeId: c.id, remotePostId: p.remotePostId, outcome: 'done' };
+          this.evidence.push({
+            id: rid('ev'),
+            publicationId: p.id,
+            attemptId: null,
+            kind: 'remote_unpublish',
+            remotePostId: p.remotePostId,
+            remoteUrl: p.remoteUrl,
+            payload,
+            payloadHash: hash(payload),
+            capturedAt: now(),
+          });
+        } else p.currentText = c.text;
       } else
         Object.assign(c, {
           state: 'failed',
@@ -409,26 +477,83 @@ export class Phase5Backend {
 
   /** publishing.publications.get's `remote` block for a publication, for a caller with `role`. */
   remoteOf(p: Publication, role?: string) {
-    const providerKey = this.channels.get(p.channelConnectionId)?.providerKey ?? '';
-    const rules = LIVE_POST_RULES[providerKey] ?? {
-      edit: false,
-      delete: false,
-      textMaxLength: 0,
-      textWeighted: false,
-    };
+    const providerKey = this.channels.get(p.channelConnectionId ?? '')?.providerKey ?? '';
+    // A website (R2-3) allows every live-article action; a channel what its capability says.
+    const rules = p.destinationId
+      ? { edit: true, delete: true, unpublish: true, textMaxLength: 50_000, textWeighted: false }
+      : {
+          ...(LIVE_POST_RULES[providerKey] ?? {
+            edit: false,
+            delete: false,
+            textMaxLength: 0,
+            textWeighted: false,
+          }),
+          unpublish: false,
+        };
     const allowed = role === 'owner' || role === 'admin' || role === 'publisher';
+    const latest = (kind: Evidence['kind']) =>
+      [...this.evidence].reverse().find((e) => e.publicationId === p.id && e.kind === kind) ?? null;
     return {
       ...rules,
-      allowed: { edit: allowed, delete: allowed },
+      allowed: { edit: allowed, delete: allowed, unpublish: allowed },
       currentText: p.currentText,
       changes: p.remoteChanges.map(({ text: _text, ...c }) => c),
+      article: p.destinationId
+        ? {
+            readback: latest('remote_readback'),
+            validation: latest('rendered_validation'),
+            unpublished: latest('remote_unpublish'),
+          }
+        : null,
     };
+  }
+
+  /** R2-3: a rendered-page validation as the server records it (`rendered_validation` evidence). */
+  renderedValidation(publicationId: string, ok: boolean, at = now()): Evidence {
+    const p = this.publication(publicationId);
+    const payload = {
+      url: p.remoteUrl ?? '',
+      fetchedAt: at,
+      status: ok ? 200 : 404,
+      bytes: ok ? 2048 : 512,
+      truncated: false,
+      ok,
+      checks: RenderedCheckKey.options.map((key) => ({ key, ok: ok || key === 'title_present' })),
+      error: null,
+    };
+    return {
+      id: rid('ev'),
+      publicationId,
+      attemptId: null,
+      kind: 'rendered_validation',
+      remotePostId: p.remotePostId,
+      remoteUrl: p.remoteUrl,
+      payload,
+      payloadHash: hash(payload),
+      capturedAt: at,
+    };
+  }
+
+  /** publishing.publications.validateRendered: the page is fetched again; the mock alternates so a test sees both results. */
+  validateArticle(publicationId: string) {
+    const p = this.publication(publicationId);
+    if (!p.destinationId || p.state !== 'published' || !p.remoteUrl)
+      throw new ValidationFailedError(
+        [{ path: 'publicationId', issue: 'not_a_published_article' }],
+        'Only a published article with a page address can be validated',
+      );
+    const previous = [...this.evidence]
+      .reverse()
+      .find((e) => e.publicationId === p.id && e.kind === 'rendered_validation');
+    const row = this.renderedValidation(p.id, previous ? previous.payload['ok'] !== true : true);
+    this.evidence.push(row);
+    return row.payload;
   }
 
   /** The preconditions the API checks under the row lock before a remote edit or delete is recorded. */
   requestRemoteChange(
     publicationId: string,
-    kind: 'edit' | 'delete',
+    kind: 'edit' | 'delete' | 'unpublish',
     by: string,
     extra: { reason?: string; text?: string },
   ): RemoteChange {
@@ -436,7 +561,7 @@ export class Phase5Backend {
     if (p.state !== 'published' || !p.remotePostId)
       throw new ValidationFailedError(
         [{ path: 'publicationId', issue: 'not_published' }],
-        `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : 'deleted'} remotely`,
+        `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : kind === 'delete' ? 'deleted' : 'reverted'} remotely`,
       );
     if (!this.remoteOf(p, 'owner')[kind])
       throw new ValidationFailedError([{ path: 'providerKey', issue: `${kind}_not_supported` }]);
@@ -615,8 +740,18 @@ export class Phase5Backend {
       version: 1,
     });
   }
-  private revision(id: string, packageId: string, state: Revision['state'], text: string) {
-    const copy = { schemaVersion: 1 as const, master: { text, factRefs: [] } };
+  private revision(
+    id: string,
+    packageId: string,
+    state: Revision['state'],
+    text: string,
+    article?: ArticleDocumentV1,
+  ) {
+    const copy: CopyDocumentV1 = {
+      schemaVersion: 1 as const,
+      master: { text, factRefs: [] },
+      ...(article ? { article } : {}),
+    };
     this.revisions.set(id, {
       id,
       tenantId: this.tenantId,
@@ -647,11 +782,13 @@ export class Phase5Backend {
       contentPackageId: r.contentPackageId,
       contentRevisionId: revisionId,
       channelConnectionId: channelId,
+      destinationId: null,
       text: r.copy.master.text,
       altTexts: ['Product photo'],
       settings: {},
       exportIds: ['exp_seed'],
       exportHashes: [hash('exp_seed')],
+      article: null,
       capabilityVersion: 1,
       validation,
       createdAt: now(),
@@ -662,7 +799,7 @@ export class Phase5Backend {
   private publicationRow(
     id: string,
     revisionId: string,
-    channelId: string,
+    channelId: string | null,
     scheduledFor: string,
     state: PublicationState,
     extra: Partial<Publication> = {},
@@ -675,6 +812,7 @@ export class Phase5Backend {
       contentRevisionId: revisionId,
       channelVariantId: `cv_for_${id}`,
       channelConnectionId: channelId,
+      destinationId: null,
       occurrenceKey: 'default',
       authority: 'approval',
       approvalId: P5.approvalId,
@@ -867,6 +1005,58 @@ export class Phase5Backend {
       payloadHash: hash({ id: 'x_123' }),
       capturedAt: todayAt(11),
     });
+    // R2-3: a website article published as a draft (D-16) with its read-back and a rendered validation.
+    this.revision(P5.revisions.article, 'pkg_article', 'approved', 'Why ore and tar last.', P5_ARTICLE);
+    this.variants.set(P5.variants.article, {
+      id: P5.variants.article,
+      tenantId: this.tenantId,
+      brandId: this.brandId,
+      contentPackageId: 'pkg_article',
+      contentRevisionId: P5.revisions.article,
+      channelConnectionId: null,
+      destinationId: P5.destination,
+      text: 'Why ore and tar last.',
+      altTexts: [],
+      settings: { publishMode: 'draft' },
+      exportIds: [],
+      exportHashes: [],
+      article: P5_ARTICLE,
+      capabilityVersion: 1,
+      validation: { ok: true, issues: [] },
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+    });
+    this.publicationRow(P5.publications.article, P5.revisions.article, null, todayAt(8), 'published', {
+      channelVariantId: P5.variants.article,
+      destinationId: P5.destination,
+      remotePostId: '42',
+      remoteUrl: 'https://acme.example/?p=42',
+    });
+    const readback = {
+      remoteId: '42',
+      remoteUrl: 'https://acme.example/?p=42',
+      title: P5_ARTICLE.title,
+      slug: P5_ARTICLE.slug,
+      status: 'draft',
+      modifiedAt: todayAt(8),
+      contentHash: hash('<p>Ore is heavy.</p>'),
+      attemptId: 'att_article_1',
+    };
+    this.evidence.push(
+      {
+        id: 'ev_article_readback',
+        publicationId: P5.publications.article,
+        attemptId: 'att_article_1',
+        kind: 'remote_readback',
+        remotePostId: '42',
+        remoteUrl: 'https://acme.example/?p=42',
+        payload: readback,
+        payloadHash: hash(readback),
+        capturedAt: todayAt(8),
+      },
+      this.renderedValidation(P5.publications.article, true, todayAt(8)),
+    );
     this.publicationRow(
       P5.publications.publishedEarlier,
       P5.revisions.measured,
@@ -1061,6 +1251,7 @@ export function phase5Routers(
               contentRevisionId: p.contentRevisionId,
               channelVariantId: p.channelVariantId,
               channelConnectionId: p.channelConnectionId,
+              destinationId: p.destinationId,
               scheduledFor: p.scheduledFor,
               state: p.state,
             })),
@@ -1116,6 +1307,7 @@ export function phase5Routers(
           contentRevisionId: v.contentRevisionId,
           channelVariantId: v.id,
           channelConnectionId: v.channelConnectionId,
+          destinationId: v.destinationId,
           occurrenceKey: cmd.occurrence ?? 'default',
           authority: cmd.authority,
           approvalId: cmd.approvalId ?? null,
@@ -1236,6 +1428,24 @@ export function phase5Routers(
         const p = b.publication(input.publicationId);
         return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
       }),
+      /** R2-3 rollback: the article is set back to a draft on its website (publication.delete_remote). */
+      unpublishRemote: mutation.input(PublicationUnpublishRemote).mutation(({ ctx, input }) => {
+        assertMayChangeLivePost(ctx.member?.role, 'publication.delete_remote');
+        const change = b.requestRemoteChange(
+          input.publicationId,
+          'unpublish',
+          ctx.member?.userId ?? 'usr_e2e',
+          {
+            reason: input.reason,
+          },
+        );
+        const p = b.publication(input.publicationId);
+        return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
+      }),
+      /** R2-3: the page fetched again and checked; the result is recorded as evidence. */
+      validateRendered: mutation
+        .input(PublicationValidateRendered)
+        .mutation(({ input }) => b.validateArticle(input.publicationId)),
       editRemote: mutation.input(PublicationEditRemote).mutation(({ ctx, input }) => {
         assertMayChangeLivePost(ctx.member?.role, 'publication.edit_remote');
         const p = b.publication(input.publicationId);
@@ -1342,14 +1552,15 @@ export function phase5Routers(
           expiresAt: string;
         }> = [];
         for (const e of r.frozenManifest.exports) {
+          const target = e.destinationId ?? e.channelConnectionId ?? '';
           const seen = items.find((i) => i.exportId === e.exportId);
           if (seen) {
-            seen.channelConnectionIds.push(e.channelConnectionId);
+            seen.channelConnectionIds.push(target);
             continue;
           }
           items.push({
             exportId: e.exportId,
-            channelConnectionIds: [e.channelConnectionId],
+            channelConnectionIds: [target],
             contentHash: e.contentHash,
             mime: 'image/png',
             width: 1080,

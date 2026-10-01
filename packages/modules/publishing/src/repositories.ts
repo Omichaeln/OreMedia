@@ -314,21 +314,25 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
       .for('update');
   }
   /** Channels already published under one approval (spec 13.1: the approval is spent once every target is out). */
+  /** The targets (channel connection ids, destination ids) published under the approval so far. */
   async listPublishedChannelsForApproval(approvalId: string, tx?: Tx): Promise<string[]> {
     const rows = await this.conn(tx)
-      .selectDistinct({ channelConnectionId: publications.channelConnectionId })
+      .selectDistinct({
+        channelConnectionId: publications.channelConnectionId,
+        destinationId: publications.destinationId,
+      })
       .from(publications)
       .where(
         this.scope(
           and(eq(publications.approvalId, approvalId), inArray(publications.state, [...RELEASED])) as SQL,
         ),
       );
-    return rows.map((r) => r.channelConnectionId);
+    return rows.map((r) => r.destinationId ?? r.channelConnectionId ?? '').filter(Boolean);
   }
-  /** Whether another publication already published on this channel under this approval (single use per target). */
+  /** Whether another publication already published on this target under this approval (single use per target). */
   async publishedElsewhereForApprovalChannel(
     approvalId: string,
-    channelConnectionId: string,
+    targetId: string,
     exceptPublicationId: string,
     tx?: Tx,
   ): Promise<boolean> {
@@ -339,7 +343,10 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
         this.scope(
           and(
             eq(publications.approvalId, approvalId),
-            eq(publications.channelConnectionId, channelConnectionId),
+            or(
+              eq(publications.channelConnectionId, targetId),
+              eq(publications.destinationId, targetId),
+            ) as SQL,
             inArray(publications.state, [...RELEASED]),
             ne(publications.id, exceptPublicationId),
           ) as SQL,
@@ -603,6 +610,20 @@ export class RemoteEvidenceRepository extends TenantScopedRepository<typeof remo
   }
   async create(values: Omit<typeof remoteEvidence.$inferInsert, 'tenantId'>, tx: Tx) {
     await this.insertScoped(values, tx);
+  }
+  /** The latest evidence row of one kind (R2-3: the last read-back, validation or revert of an article). */
+  async latestOfKind(publicationId: string, kind: (typeof remoteEvidence.$inferSelect)['kind'], tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(remoteEvidence)
+      .where(
+        this.scope(
+          and(eq(remoteEvidence.publicationId, publicationId), eq(remoteEvidence.kind, kind)) as SQL,
+        ),
+      )
+      .orderBy(desc(remoteEvidence.capturedAt), desc(remoteEvidence.id))
+      .limit(1);
+    return rows[0] ?? null;
   }
   async listForPublication(publicationId: string, tx?: Tx) {
     return this.conn(tx)

@@ -536,6 +536,7 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
       contentRevisionId: row.contentRevisionId,
       channelVariantId: row.channelVariantId,
       channelConnectionId: row.channelConnectionId,
+      destinationId: row.destinationId,
       authority: 'mandate' as const,
       approvalId: null,
       mandateId: null,

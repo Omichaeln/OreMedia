@@ -35,6 +35,7 @@ import {
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { ValidationResult } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
+import { articlePlainText } from '@oremedia/contracts/article';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
@@ -103,6 +104,30 @@ export const registerChannelResolver = (fn: ChannelResolver): void => {
 /** Test seam: back to the loud default. */
 export const resetChannelResolver = (): void => {
   channelResolver = unregisteredChannelResolver;
+};
+
+/**
+ * R2-3: a brand destination (a website) as a variant target. The destinations module registers how to describe
+ * one (spec 4.2): its brand, kind, capability version and whether its kind can be written to.
+ */
+export interface DestinationDescription {
+  brandId: string;
+  kind: string;
+  capabilityVersion: number;
+  writable: boolean;
+}
+export type DestinationResolver = (destinationId: string, tx?: Tx) => Promise<DestinationDescription | null>;
+const unregisteredDestinationResolver: DestinationResolver = async () => {
+  throw new Error(
+    'destination resolver not registered (composition root must call registerDestinationResolver)',
+  );
+};
+let destinationResolver: DestinationResolver = unregisteredDestinationResolver;
+export const registerDestinationResolver = (fn: DestinationResolver): void => {
+  destinationResolver = fn;
+};
+export const resetDestinationResolver = (): void => {
+  destinationResolver = unregisteredDestinationResolver;
 };
 
 /**
@@ -563,24 +588,29 @@ const toRevisionSummary = (r: RevisionRow) => {
   const { copy: _copy, ...summary } = toRevisionDto(r);
   return summary;
 };
-/** The publishing shape (contracts ChannelVariantForPublishing) plus the row's remaining columns. */
+/**
+ * The publishing shape (contracts ChannelVariantForPublishing) plus the row's remaining columns. A destination
+ * variant (R2-3) carries the revision's article, the document it publishes; a channel variant carries null.
+ */
 async function toVariantDto(
   v: VariantRow,
-  contentPackageId: string,
+  revision: Pick<RevisionRow, 'packageId' | 'copy'>,
   tx?: Tx,
 ): Promise<ChannelVariantForPublishing & Record<string, unknown>> {
   return {
     id: v.id,
     tenantId: v.tenantId,
     brandId: v.brandId,
-    contentPackageId,
+    contentPackageId: revision.packageId,
     contentRevisionId: v.contentRevisionId,
     channelConnectionId: v.channelConnectionId,
+    destinationId: v.destinationId,
     text: v.text,
     altTexts: v.altTexts,
     settings: v.settings,
     exportIds: v.exportIds,
     exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx),
+    article: v.destinationId ? (CopyDocumentV1.parse(revision.copy).article ?? null) : null,
     capabilityVersion: v.capabilityVersion,
     validation: v.validation,
     createdAt: v.createdAt.toISOString(),
@@ -597,18 +627,30 @@ export type ChannelVariantDto = Awaited<ReturnType<typeof toVariantDto>>;
  * holds it on channel_active / the capability check anyway (spec 13.4).
  */
 async function validationFor(
-  v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes'>,
-  contentPackageId: string,
+  v: Omit<ChannelVariantForPublishing, 'contentPackageId' | 'exportHashes' | 'article'>,
+  revision: Pick<RevisionRow, 'packageId' | 'copy'>,
   tx?: Tx,
 ): Promise<ValidationResult> {
   try {
     return await variantValidator(
-      { ...v, contentPackageId, exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx) },
+      {
+        ...v,
+        contentPackageId: revision.packageId,
+        exportHashes: await exportHashesFor(v.brandId, v.exportIds, tx),
+        article: v.destinationId ? (CopyDocumentV1.parse(revision.copy).article ?? null) : null,
+      },
       tx,
     );
   } catch (err) {
     if (err instanceof NotFoundError)
-      return { ok: false, issues: [{ path: 'channelConnectionId', issue: 'channel_unavailable' }] };
+      return {
+        ok: false,
+        issues: [
+          v.destinationId
+            ? { path: 'destinationId', issue: 'destination_unavailable' }
+            : { path: 'channelConnectionId', issue: 'channel_unavailable' },
+        ],
+      };
     if (err instanceof CapabilityUnsupportedError) return { ok: false, issues: err.details ?? [] };
     throw err;
   }
@@ -1232,7 +1274,7 @@ export const contentService = {
       const variants = await variantsRepo.listForRevision(pkg.brandId, current.id, tx);
       const history = await revisionsRepo.listForPackage(pkg.brandId, pkg.id, tx);
       const variantDtos = [];
-      for (const v of variants) variantDtos.push(await toVariantDto(v, pkg.id, tx));
+      for (const v of variants) variantDtos.push(await toVariantDto(v, current, tx));
       return {
         ...toPackageDto(pkg),
         revision: toRevisionDto(current),
@@ -1272,7 +1314,11 @@ export const contentService = {
         id: revision.id,
         brandId: revision.brandId,
         state: revision.state,
-        variants: variants.map((v) => ({ id: v.id, channelConnectionId: v.channelConnectionId })),
+        variants: variants.map((v) => ({
+          id: v.id,
+          channelConnectionId: v.channelConnectionId,
+          destinationId: v.destinationId,
+        })),
       };
     },
 
@@ -1333,7 +1379,7 @@ export const contentService = {
      * empty, and the export ids are the revision's pinned creative revisions' ready exports, in id order. Existing
      * targets are returned untouched.
      */
-    async generate(actor: ResolvedActor, input: z.infer<typeof ChannelVariantGenerate>, tx: Tx) {
+    async generate(actor: ResolvedActor, input: z.input<typeof ChannelVariantGenerate>, tx: Tx) {
       const parsed = ChannelVariantGenerate.parse(input);
       const revision = await revisionsRepo.getById(parsed.contentRevisionId, tx);
       await policy.assert(actor, 'content.edit', revisionResource(revision), {}, tx);
@@ -1359,7 +1405,7 @@ export const contentService = {
       for (const [i, channelConnectionId] of [...new Set(parsed.channelConnectionIds)].entries()) {
         const found = existing.get(channelConnectionId);
         if (found) {
-          variants.push(await toVariantDto(found, revision.packageId, tx));
+          variants.push(await toVariantDto(found, revision, tx));
           continue;
         }
         const channel = await channelResolver(channelConnectionId, tx);
@@ -1371,13 +1417,15 @@ export const contentService = {
           brandId: revision.brandId,
           contentRevisionId: revision.id,
           channelConnectionId,
+          destinationId: null,
+          // An article package's channels carry its excerpt (or the master text) as the caption.
           text: await linkTracker(
             {
               brandId: revision.brandId,
               contentRevisionId: revision.id,
               channelVariantId: id,
               channelConnectionId,
-              text: copy.master.text,
+              text: copy.article?.excerpt || copy.master.text,
             },
             tx,
           ),
@@ -1391,14 +1439,14 @@ export const contentService = {
             ...values,
             validation: await validationFor(
               { ...values, tenantId: revision.tenantId, version: 0 },
-              revision.packageId,
+              revision,
               tx,
             ),
           },
           tx,
         );
         created.push(id);
-        variants.push(await toVariantDto(await variantsRepo.getById(id, tx), revision.packageId, tx));
+        variants.push(await toVariantDto(await variantsRepo.getById(id, tx), revision, tx));
         await audit.record(
           actorRef(actor),
           'content.variant.generate',
@@ -1411,6 +1459,60 @@ export const contentService = {
             channelConnectionId,
             path: `channelConnectionIds.${i}`,
           },
+        );
+      }
+      // R2-3: a destination variant publishes the revision's article; its text is the article as plain text (the
+      // document itself travels with the variant), no media, settings start with the draft publish mode (D-16).
+      const existingDestinations = new Map(
+        [...existing.values()].filter((v) => v.destinationId).map((v) => [v.destinationId as string, v]),
+      );
+      for (const [i, destinationId] of [...new Set(parsed.destinationIds)].entries()) {
+        const found = existingDestinations.get(destinationId);
+        if (found) {
+          variants.push(await toVariantDto(found, revision, tx));
+          continue;
+        }
+        const destination = await destinationResolver(destinationId, tx);
+        if (!destination || destination.brandId !== revision.brandId)
+          throw new NotFoundError('Destination', destinationId); // never reveal another brand's destination
+        if (!destination.writable)
+          throw new ValidationFailedError(
+            [{ path: `destinationIds.${i}`, issue: `destination_not_writable:${destination.kind}` }],
+            'This destination cannot be published to',
+          );
+        const id = newId('channelVariant');
+        const values = {
+          id,
+          brandId: revision.brandId,
+          contentRevisionId: revision.id,
+          channelConnectionId: null,
+          destinationId,
+          text: copy.article ? articlePlainText(copy.article) : copy.master.text,
+          altTexts: [] as string[],
+          settings: { publishMode: 'draft' },
+          exportIds: [] as string[],
+          capabilityVersion: destination.capabilityVersion,
+        };
+        await variantsRepo.create(
+          {
+            ...values,
+            validation: await validationFor(
+              { ...values, tenantId: revision.tenantId, version: 0 },
+              revision,
+              tx,
+            ),
+          },
+          tx,
+        );
+        created.push(id);
+        variants.push(await toVariantDto(await variantsRepo.getById(id, tx), revision, tx));
+        await audit.record(
+          actorRef(actor),
+          'content.variant.generate',
+          { type: 'channel_variant', id },
+          'allowed',
+          tx,
+          { brandId: revision.brandId, revisionId: revision.id, destinationId, path: `destinationIds.${i}` },
         );
       }
       if (created.length)
@@ -1452,7 +1554,7 @@ export const contentService = {
       await variantsRepo.update(
         variant.id,
         parsed.expectedVersion,
-        { ...edited, validation: await validationFor({ ...variant, ...edited }, revision.packageId, tx) },
+        { ...edited, validation: await validationFor({ ...variant, ...edited }, revision, tx) },
         tx,
       );
       await notifyRevisionChange(
@@ -1473,11 +1575,12 @@ export const contentService = {
         {
           brandId: revision.brandId,
           revisionId: revision.id,
-          channelConnectionId: variant.channelConnectionId,
+          ...(variant.channelConnectionId ? { channelConnectionId: variant.channelConnectionId } : {}),
+          ...(variant.destinationId ? { destinationId: variant.destinationId } : {}),
           expectedVersion: parsed.expectedVersion,
         },
       );
-      return toVariantDto(await variantsRepo.getById(variant.id, tx), revision.packageId, tx);
+      return toVariantDto(await variantsRepo.getById(variant.id, tx), revision, tx);
     },
 
     /** Spec 14.1: what a publication needs from a variant, with the exports' hashes resolved; brand.read. */
@@ -1486,14 +1589,14 @@ export const contentService = {
       const variant = await variantsRepo.getById(parsed.variantId, tx);
       await policy.assert(actor, 'brand.read', brandResource(variant.brandId), {}, tx);
       const revision = await revisionsRepo.getById(variant.contentRevisionId, tx);
-      return toVariantDto(variant, revision.packageId, tx);
+      return toVariantDto(variant, revision, tx);
     },
 
     /** Scoped read without a policy decision (see revisions.read). */
     async read(variantId: string, tx?: Tx) {
       const variant = await variantsRepo.getById(variantId, tx);
       const revision = await revisionsRepo.getById(variant.contentRevisionId, tx);
-      return toVariantDto(variant, revision.packageId, tx);
+      return toVariantDto(variant, revision, tx);
     },
 
     /** Every variant of a revision in channel-connection order, hashes resolved (the binding's targets). */
@@ -1501,7 +1604,7 @@ export const contentService = {
       const revision = await revisionsRepo.getById(revisionId, tx);
       const rows = await variantsRepo.listForRevision(revision.brandId, revision.id, tx);
       const out = [];
-      for (const v of rows) out.push(await toVariantDto(v, revision.packageId, tx));
+      for (const v of rows) out.push(await toVariantDto(v, revision, tx));
       return out;
     },
   },

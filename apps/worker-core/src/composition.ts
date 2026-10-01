@@ -22,7 +22,11 @@ import { runInTenant } from '@oremedia/db';
 import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
 import {
+  cmsCapabilities,
   configureSourceAvailability,
+  destinationArticles,
+  destinationService,
+  registerDestinationOutboxRoutes,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
 } from '@oremedia/module-destinations';
@@ -76,6 +80,7 @@ import {
   registerAttributeCapturer,
   registerCalendarSource,
   registerChannelResolver,
+  registerDestinationResolver,
   registerLinkTracker,
   registerVariantValidator,
 } from '@oremedia/module-content';
@@ -113,6 +118,7 @@ import {
   registerVariantSource,
   registerWorkflowProbe,
   registerPublishingBrandChecker,
+  registerDestinationPublisher,
   type WorkflowProbe,
 } from '@oremedia/module-publishing';
 
@@ -155,6 +161,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // Spec 14: publications start and are signalled through the outbox on task queue `core`; the runtime reads
   // variants and the release decision through hooks (the worker's KMS may decrypt: publishing-worker.ts).
   registerPublishingOutboxRoutes();
+  // R2-3: destination.registered with a secret to verify → destinationVerifyWorkflowV1 on task queue `core`.
+  registerDestinationOutboxRoutes();
   // Spec 8.2: brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 on task queue `core`.
   registerReviewOutboxRoutes();
   registerPublishingBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
@@ -184,6 +192,13 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   });
   registerReleaseCheckers({
     channelUsable: (channelConnectionId, tx) => channelService.channelUsable(channelConnectionId, tx),
+    // R2-3: a destination target stands in for the channel; its write needs the brand's source-use policy (D-17).
+    destinationUsable: async (destinationId, tx) =>
+      (await destinationArticles.describe(destinationId, tx))?.usable ?? false,
+    destinationWriteAllowed: async (destinationId, tx) => {
+      const d = await destinationArticles.describe(destinationId, tx);
+      return d ? destinationArticles.useAllowed(d.brandId, d.kind, 'write', tx) : false;
+    },
     validateVariant: (channelVariantId, tx) => channelService.validateVariant(channelVariantId, tx),
     countForMandateOnDay: (mandateId, at, tx) => publicationService.countForMandateOnDay(mandateId, at, tx),
     publishedElsewhereForApprovalChannel: (approvalId, channelConnectionId, exceptPublicationId, tx) =>
@@ -195,6 +210,11 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
       ),
   });
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
+  // R2-3: a website as a variant target (content) and the publisher behind it (publishing); the API registers the
+  // publisher for the description, the draft check and the credential-free rendered validation, while a write
+  // only ever runs where the broker may open the destination's secret (worker-core).
+  registerDestinationResolver((destinationId, tx) => destinationService.describe(destinationId, tx));
+  registerDestinationPublisher(destinationArticles);
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
@@ -363,5 +383,6 @@ export const workerCoreCapabilities = (env: NodeJS.ProcessEnv = process.env): Ca
   uploadsCapability,
   ...channelCapabilities(env),
   ...sourceCapabilities(env),
+  ...cmsCapabilities(env),
   modelsCapability,
 ];

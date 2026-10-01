@@ -156,11 +156,13 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       contentPackageId: newId('contentPackage'),
       contentRevisionId: newId('contentRevision'),
       channelConnectionId,
+      destinationId: null,
       text,
       altTexts: [],
       settings: {},
       exportIds: [],
       exportHashes: [],
+      article: null,
       version: 0,
     };
     variantsById.set(v.id, v);
@@ -889,7 +891,11 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         id: newId('contentRevision'),
         brandId,
         state,
-        variants: channelIds.map((c) => ({ id: newId('channelVariant'), channelConnectionId: c })),
+        variants: channelIds.map((c) => ({
+          id: newId('channelVariant'),
+          channelConnectionId: c,
+          destinationId: null,
+        })),
       };
       revisionsById.set(`${tenantId}:${r.id}`, r);
       return r;

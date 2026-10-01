@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   channelConnections,
   credentialRefs,
@@ -43,24 +44,12 @@ export const PUBLISHING_SEED: SeedExtension = async (db, { tenantId, brandIds, o
     tokenExpiresAt: new Date(Date.now() + 3600_000),
     capabilityVersion: 1,
   });
-  await db.insert(publications).values({
-    id: publicationId,
-    tenantId,
-    brandId,
-    contentPackageId: newId('contentPackage'),
-    contentRevisionId: newId('contentRevision'),
-    channelVariantId: newId('channelVariant'),
-    channelConnectionId: publishingChannelConnectionId,
-    occurrenceKey: `seed:${publicationId}`,
-    authority: 'approval',
-    approvalId: newId('releaseApproval'),
-    mandateId: null,
-    scheduledFor: new Date(Date.now() + 3600_000),
-    state: 'scheduled',
-    claimant: `pub:${publicationId}`,
-    scheduledByKind: 'user',
-    scheduledById: ownerUserId,
-  });
+  // sql``, not insert(publications).values(): Drizzle would name destination_id (0018), which the roll-forward
+  // suites' earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${publications} (id, tenant_id, brand_id, content_package_id, content_revision_id, channel_variant_id, channel_connection_id, occurrence_key, authority, approval_id, mandate_id, scheduled_for, state, claimant, scheduled_by_kind, scheduled_by_id, created_at, updated_at) values (${publicationId}, ${tenantId}, ${brandId}, ${newId('contentPackage')}, ${newId('contentRevision')}, ${newId('channelVariant')}, ${publishingChannelConnectionId}, ${`seed:${publicationId}`}, 'approval', ${newId('releaseApproval')}, null, ${new Date(Date.now() + 3600_000)}, 'scheduled', ${`pub:${publicationId}`}, 'user', ${ownerUserId}, ${at}, ${at})`,
+  );
   await db.insert(publicationAttempts).values({
     id: publicationAttemptId,
     tenantId,

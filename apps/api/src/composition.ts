@@ -31,6 +31,7 @@ import {
   registerAttributeCapturer,
   registerCalendarSource,
   registerChannelResolver,
+  registerDestinationResolver,
   registerLinkTracker,
   registerRevisionChangeListener,
   registerVariantValidator,
@@ -38,7 +39,10 @@ import {
   contentToolSource,
 } from '@oremedia/module-content';
 import {
+  cmsCapabilities,
   configureSourceAvailability,
+  destinationArticles,
+  destinationService,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
 } from '@oremedia/module-destinations';
@@ -67,6 +71,7 @@ import {
   registerReleaseEvaluator,
   registerVariantSource,
   registerPublishingBrandChecker,
+  registerDestinationPublisher,
 } from '@oremedia/module-publishing';
 import {
   registerAssetAuthoriser as registerReleaseAssetAuthoriser,
@@ -165,6 +170,13 @@ export function composeModules(): void {
   });
   registerReleaseCheckers({
     channelUsable: (channelConnectionId, tx) => channelService.channelUsable(channelConnectionId, tx),
+    // R2-3: a destination target stands in for the channel; its write needs the brand's source-use policy (D-17).
+    destinationUsable: async (destinationId, tx) =>
+      (await destinationArticles.describe(destinationId, tx))?.usable ?? false,
+    destinationWriteAllowed: async (destinationId, tx) => {
+      const d = await destinationArticles.describe(destinationId, tx);
+      return d ? destinationArticles.useAllowed(d.brandId, d.kind, 'write', tx) : false;
+    },
     validateVariant: (channelVariantId, tx) => channelService.validateVariant(channelVariantId, tx),
     countForMandateOnDay: (mandateId, at, tx) => publicationService.countForMandateOnDay(mandateId, at, tx),
     publishedElsewhereForApprovalChannel: (approvalId, channelConnectionId, exceptPublicationId, tx) =>
@@ -176,6 +188,11 @@ export function composeModules(): void {
       ),
   });
   registerChannelResolver((channelConnectionId, tx) => channelService.describe(channelConnectionId, tx));
+  // R2-3: a website as a variant target (content) and the publisher behind it (publishing); the API registers the
+  // publisher for the description, the draft check and the credential-free rendered validation, while a write
+  // only ever runs where the broker may open the destination's secret (worker-core).
+  registerDestinationResolver((destinationId, tx) => destinationService.describe(destinationId, tx));
+  registerDestinationPublisher(destinationArticles);
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   // Spec 13.3: the review inbox and portal show the frozen files; the assets module's storage signs the GETs.
   registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
@@ -295,4 +312,5 @@ export const apiCapabilities = (env: NodeJS.ProcessEnv = process.env): Capabilit
   uploadsCapability,
   ...channelCapabilities(env),
   ...sourceCapabilities(env),
+  ...cmsCapabilities(env),
 ];

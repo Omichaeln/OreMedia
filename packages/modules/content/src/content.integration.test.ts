@@ -964,6 +964,7 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           contentRevisionId: revisionId,
           channelVariantId: variantId,
           channelConnectionId: channelA,
+          destinationId: null,
           scheduledFor: '2026-06-01T09:00:00.000Z',
           state: `scheduled:${brandId}`,
         },

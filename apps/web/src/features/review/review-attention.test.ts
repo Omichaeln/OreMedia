@@ -70,6 +70,21 @@ describe('manifest summary', () => {
     const channels = manifestChannels(manifest);
     expect(channels.map((c) => c.exportCount)).toEqual([2, 1]);
     expect(channels[0]?.text).toBe('Hello');
+    expect(channels.every((c) => c.kind === 'channel')).toBe(true);
+  });
+  it('names a destination target (R2-3) beside the channels, with its own exports', () => {
+    const channels = manifestChannels({
+      ...manifest,
+      exports: [{ exportId: 'exp_9', contentHash: 'a'.repeat(64), destinationId: 'dst_1' }],
+      captions: [
+        { channelConnectionId: 'cc_1', text: 'Hello', altTexts: [], settingsHash: 'e'.repeat(64) },
+        { destinationId: 'dst_1', text: 'Why ore', altTexts: [], settingsHash: 'f'.repeat(64) },
+      ],
+    });
+    expect(channels.map((c) => [c.channelConnectionId, c.kind, c.exportCount])).toEqual([
+      ['cc_1', 'channel', 0],
+      ['dst_1', 'destination', 1],
+    ]);
   });
   it('describes timing kinds', () => {
     expect(timingText(manifest.timing)).toMatch(/^Exactly at /);

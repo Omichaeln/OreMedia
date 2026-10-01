@@ -6,6 +6,7 @@ import { RequestError } from '../../../../../../components/request-state';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { PackageTitle } from '../../../../../../features/content/package-title';
 import { useChannels, type ChannelDto } from '../../../../../../features/publishing/use-publishing';
+import { useDestinationMap } from '../../../../../../features/destinations/use-destinations';
 import { RequestDetail } from '../../../../../../features/review/request-detail';
 import {
   ATTENTION_CHIP,
@@ -37,6 +38,7 @@ export function ReviewInboxRoute() {
   const { brandId } = useBrandContext();
   const inbox = useReviewInboxPages(brandId);
   const channels = useChannels(brandId);
+  const destinationMap = useDestinationMap(brandId);
   const channelMap = useMemo(
     () => new Map<string, ChannelDto>((channels.data ?? []).map((c) => [c.id, c])),
     [channels.data],
@@ -212,6 +214,7 @@ export function ReviewInboxRoute() {
         <RequestDetail
           reviewRequestId={selectedId}
           channels={channelMap}
+          destinations={destinationMap}
           title={selected ? <PackageTitle contentPackageId={selected.contentPackageId} /> : undefined}
         />
       </div>

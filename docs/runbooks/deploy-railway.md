@@ -204,6 +204,7 @@ production keeps running with that capability degraded, and the gap is reported.
 | `uploads`       | `OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `OBJECT_STORE_ENDPOINT` (or `OBJECT_STORE_REGION`), `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`                                                                                          | api, worker-core, worker-render |
 | `channel:<key>` | `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF`, for every registered provider (`linkedin_page`, `instagram_business`, `facebook_page`, `x`), unless the provider key is explicitly listed in comma-separated `OREMEDIA_DISABLED_CHANNELS` on that service | api, worker-core, worker-ingest |
 | `source:<kind>` | `PROVIDER_<KIND>_CLIENT_ID_REF` and `PROVIDER_<KIND>_SECRET_REF`, for every registered source adapter (`ga4_property`, `search_console_site`), unless the kind is explicitly listed in comma-separated `OREMEDIA_DISABLED_SOURCES` on that service                        | api, worker-core, worker-ingest |
+| `cms:<vendor>`  | Nothing: a website (`cms_site`, R2-3) is connected per brand with its own integration identity, sealed by the broker. The line reports the registered adapter (`cms:wordpress`) unless `cms_site` is listed in `OREMEDIA_DISABLED_SOURCES` on that service                | api, worker-core, worker-ingest |
 | `models`        | `OPENROUTER_API_KEY_REF` with `OREMEDIA_MODEL_ID` (or `MODEL_ROUTING_POLICY_REF`); or `ANTHROPIC_API_KEY_REF`                                                                                                                                                             | worker-core, worker-ingest      |
 | `web_origin`    | `WEB_ORIGIN`                                                                                                                                                                                                                                                              | api                             |
 
@@ -215,7 +216,10 @@ production keeps running with that capability degraded, and the gap is reported.
   their GA4 and Search Console reports daily (the `destination-report-sweep` schedule, 04:00 UTC, created by
   worker-ingest at start on task queue `ingest-metrics`, overlap skipped; one child per destination per day, so a
   rerun of a day is refused by its workflow id, and a quota 429 leaves the destination `degraded` until the next
-  day's run catches up from the last stored day).
+  day's run catches up from the last stored day). `cms:<vendor>` on the api connects websites (the secret is sealed
+  there, never opened); on worker-core it verifies the secret (`destinationVerifyWorkflowV1`) and publishes articles
+  on `publish-cms_site`; the adapter is uncertified (`certifiedAt: null`, D-16) until its read-back tests ran on the
+  pilot site, so tenants are refused the connect until then.
 - The `web` service (Caddy) has no report: its `OBJECT_STORE_PUBLIC_ORIGIN` is checked by the production smoke check
   (section 3a) through the CSP it serves. The `redirector` has none either: both its settings (`DATABASE_URL`,
   `LINK_HASH_SECRET_REF`) already stop it at start when missing.

@@ -61,4 +61,9 @@ export const PUBLISHING_INPUTS: Record<string, CrossTenantFixture> = {
   'publishing.publications.editRemote': {
     buildInput: (f) => ({ publicationId: f['publicationId'], text: 'Corrected text' }),
   },
+  'publishing.publications.unpublishRemote': {
+    buildInput: (f) => ({ publicationId: f['publicationId'], reason: 'x' }),
+  },
+  // R2-3: the publication is read first (NOT_FOUND); nothing is fetched for a foreign publication.
+  'publishing.publications.validateRendered': { buildInput: (f) => ({ publicationId: f['publicationId'] }) },
 };

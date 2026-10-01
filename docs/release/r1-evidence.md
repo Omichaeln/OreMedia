@@ -32,7 +32,8 @@ From `docs/programme/production-ui/03-implementation-ledger.md`; the ledger is t
 | WP-10        | R1-F, R1-G, R1-H, R1-I           | merged #11, deployed (3363900; smoke run 13); roles applied on staging and production (#13, #14, smoke run 14); database restore rehearsed on staging; staging walk waits on credentials |
 | WP-11        | R2-0                             | merged #15, deployed (5711b3a; migrations 0015 and 0016, roles PASS; smoke run 16)                                                                                                       |
 | WP-12        | R2-1 part A                      | merged #17, deployed (884ad96; roles PASS; token-refresh schedule created on worker-core; smoke run 17); source certification waits on the Google platform app                           |
-| WP-13        | R2-1 part B, R2-5 (read model)   | this PR; migration 0017; report sweep schedule on worker-ingest                                                                                                                          |
+| WP-13        | R2-1 part B, R2-5 (read model)   | merged #18, deployed (99953fd; migration 0017, roles PASS; report sweep schedule created on worker-ingest; smoke run 18)                                                                 |
+| WP-14        | R2-3                             | this PR; migration 0018; WordPress adapter uncertified until the pilot site is named (D-16)                                                                                              |
 
 Every row's verification state (FU done; LW and SB pending per row) is in the ledger.
 
@@ -49,8 +50,8 @@ Run on every change by `.github/workflows/ci.yml` (job names as the checks on ea
 | Temporal time-skipping tests                                 | schedule and dispatch timing                                                                                                                                                                                                                             | #9, #10       |
 | Dependency and container scans, Trivy                        | supply chain                                                                                                                                                                                                                                             | #9, #10       |
 
-Outside CI: `pnpm smoke:prod` against production every six hours and on demand (runs 7 to 17 passed, 30 September
-to 1 October 2026; run 12 on the WP-8 commit, run 13 on the WP-10 commit, run 16 on WP-11, run 17 on WP-12); the staging job waits on `STAGING_SMOKE_ENABLED` (R1-F).
+Outside CI: `pnpm smoke:prod` against production every six hours and on demand (runs 7 to 18 passed, 30 September
+to 1 October 2026; run 12 on the WP-8 commit, run 13 on the WP-10 commit, run 16 on WP-11, run 17 on WP-12, run 18 on WP-13); the staging job waits on `STAGING_SMOKE_ENABLED` (R1-F).
 
 ## 4. Certification matrix (UX-10, D-04)
 

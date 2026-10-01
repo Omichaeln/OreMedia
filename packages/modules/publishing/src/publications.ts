@@ -16,6 +16,8 @@ import {
   PublicationGet,
   PublicationHoldRestored,
   PublicationList,
+  PublicationUnpublishRemote,
+  PublicationValidateRendered,
   ReconcileCommand,
   RescheduleCommand,
   ScheduleCommand,
@@ -23,6 +25,7 @@ import {
   type PublicationForRelease,
   type PublicationState,
 } from '@oremedia/contracts/publishing';
+import { articleFirstParagraph, renderedValidationOk } from '@oremedia/contracts/article';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
@@ -38,6 +41,7 @@ import {
   publicationWorkflowId,
   reconcileWorkflowId,
   remoteChangeWorkflowId,
+  targetIdOf,
   toAttemptDto,
   toEvidenceDto,
   toPublicationDto,
@@ -47,7 +51,7 @@ import {
   type PublicationRow,
 } from './common';
 import { channelService } from './channels';
-import { approvals, assertBrandExists, review, revisions, variants } from './hooks';
+import { approvals, assertBrandExists, destinations, review, revisions, variants } from './hooks';
 import { registry } from './providers';
 import {
   ChannelConnectionRepository,
@@ -218,19 +222,73 @@ async function holdWhereReleaseFails(rows: PublicationRow[], reason: string, tx:
 }
 
 /**
- * The preconditions of changing a live post (publication.edit_remote / delete_remote), under the publication row
- * lock: published with a remote id, the channel's capability allows the change, and no other change of this post
+ * A variant's target as a publication records it (R2-3): the channel connection, or the brand destination, of the
+ * variant's brand; a foreign or other-brand target is NOT_FOUND / refused without naming it. `providerKey` is what
+ * names the activity queue: the channel's provider key or the destination's kind.
+ */
+async function targetOfVariant(
+  variant: { brandId: string; channelConnectionId: string | null; destinationId: string | null },
+  path: string,
+  tx: Tx,
+) {
+  if (variant.destinationId) {
+    const destination = await destinations.describe(variant.destinationId, tx);
+    if (!destination) throw new NotFoundError('Destination', variant.destinationId);
+    if (destination.brandId !== variant.brandId)
+      throw new ValidationFailedError(
+        [{ path, issue: 'destination_belongs_to_another_brand' }],
+        'The variant targets a destination of another brand',
+      );
+    return {
+      channelConnectionId: null,
+      destinationId: destination.id,
+      providerKey: destination.kind,
+      resource: { channelId: undefined as string | undefined },
+    };
+  }
+  const connection = await connectionsRepo.getById(variant.channelConnectionId ?? '', tx); // foreign → NOT_FOUND
+  if (connection.brandId !== variant.brandId)
+    throw new ValidationFailedError(
+      [{ path, issue: 'channel_belongs_to_another_brand' }],
+      'The variant targets a channel of another brand',
+    );
+  return {
+    channelConnectionId: connection.id,
+    destinationId: null,
+    providerKey: connection.providerKey,
+    resource: { channelId: connection.id as string | undefined },
+  };
+}
+
+/** What a target allows on a live post: the channel capability's edit/delete, or the destination's actions (R2-3). */
+async function remoteActionsOf(row: PublicationRow, tx?: Tx) {
+  if (row.destinationId) {
+    const d = await destinations.describe(row.destinationId, tx);
+    return d ? { ...d.actions, providerKey: d.kind } : null;
+  }
+  const connection = await connectionsRepo.getById(row.channelConnectionId ?? '', tx);
+  const cap = registry().capability(connection.providerKey);
+  return {
+    edit: cap?.edit ?? false,
+    delete: cap?.delete ?? false,
+    unpublish: false,
+    providerKey: connection.providerKey,
+  };
+}
+
+/**
+ * The preconditions of changing a live post (publication.edit_remote / delete_remote / unpublish), under the
+ * publication row lock: published with a remote id, the target allows the change, and no other change of this post
  * is still waiting on the platform (so an edit never races a delete, and a delete is never requested twice).
  */
-async function assertRemoteChangeAllowed(row: PublicationRow, kind: 'edit' | 'delete', tx: Tx) {
+async function assertRemoteChangeAllowed(row: PublicationRow, kind: 'edit' | 'delete' | 'unpublish', tx: Tx) {
   if (row.state !== 'published' || !row.remotePostId)
     throw new ValidationFailedError(
       [{ path: 'publicationId', issue: 'not_published' }],
-      `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : 'deleted'} remotely`,
+      `Only a published post with a remote id can be ${kind === 'edit' ? 'edited' : kind === 'delete' ? 'deleted' : 'reverted'} remotely`,
     );
-  const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
-  const cap = registry().capability(connection.providerKey);
-  if (!cap?.[kind])
+  const actions = await remoteActionsOf(row, tx);
+  if (!actions?.[kind])
     throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: `${kind}_not_supported` }]);
   const open = await changesRepo.findOpenForPublication(row.id, tx);
   if (open && !isStaleRequest(open))
@@ -256,7 +314,67 @@ async function assertRemoteChangeAllowed(row: PublicationRow, kind: 'edit' | 'de
       { brandId: row.brandId, publicationId: row.id, reason: 'superseded_stale' },
     );
   }
-  return { connection, remotePostId: row.remotePostId };
+  return { providerKey: actions.providerKey, remotePostId: row.remotePostId };
+}
+
+/**
+ * A delete (spec 13.5) or an unpublish (R2-3) of a live post: recorded as a remote change, audited under its own
+ * action and emitted as publication.delete_remote_requested, which starts publicationRemoteDeleteWorkflowV1 on the
+ * target's queue. The v1 payload is kept as it was; the change, provider key and workflow id are appended (additive).
+ */
+async function requestRemoval(
+  actor: ResolvedActor,
+  row: PublicationRow,
+  kind: 'delete' | 'unpublish',
+  reason: string,
+  tx: Tx,
+) {
+  const { providerKey, remotePostId } = await assertRemoteChangeAllowed(row, kind, tx);
+  const changeId = newId('publicationRemoteChange');
+  await changesRepo.create(
+    {
+      id: changeId,
+      brandId: row.brandId,
+      publicationId: row.id,
+      kind,
+      state: 'requested',
+      reason,
+      requestedByKind: scheduledByOf(actor),
+      requestedById: actor.id,
+      requestedAt: new Date(),
+    },
+    tx,
+  );
+  await audit.record(
+    actorRef(actor),
+    kind === 'delete' ? 'publication.delete_remote' : 'publication.unpublish_remote',
+    { type: 'publication', id: row.id },
+    'allowed',
+    tx,
+    {
+      brandId: row.brandId,
+      publicationId: row.id,
+      ...(row.channelConnectionId ? { channelConnectionId: row.channelConnectionId } : {}),
+      ...(row.destinationId ? { destinationId: row.destinationId } : {}),
+      reason,
+    },
+  );
+  await outbox.add(
+    'publication.delete_remote_requested',
+    { type: 'publication', id: row.id, version: row.version },
+    {
+      publicationId: row.id,
+      remotePostId,
+      requestedByKind: actor.kind,
+      requestedById: actor.id,
+      changeId,
+      providerKey,
+      workflowId: remoteChangeWorkflowId(row.id, changeId),
+    },
+    tx,
+    { brandId: row.brandId },
+  );
+  return { accepted: true, publicationId: row.id, remotePostId, changeId };
 }
 
 export const publicationService = {
@@ -275,12 +393,7 @@ export const publicationService = {
     const { tenantId } = requireTenant();
     const variant = await variants.get(cmd.channelVariantId, tx);
     if (variant.tenantId !== tenantId) throw new NotFoundError('ChannelVariant', cmd.channelVariantId);
-    const connection = await connectionsRepo.getById(variant.channelConnectionId, tx); // foreign → NOT_FOUND
-    if (connection.brandId !== variant.brandId)
-      throw new ValidationFailedError(
-        [{ path: 'channelVariantId', issue: 'channel_belongs_to_another_brand' }],
-        'The variant targets a channel of another brand',
-      );
+    const target = await targetOfVariant(variant, 'channelVariantId', tx);
     const decision = await policy.assert(
       actor,
       'publication.schedule',
@@ -289,7 +402,7 @@ export const publicationService = {
         tenantId,
         brandId: variant.brandId,
         id: variant.id,
-        channelId: connection.id,
+        ...(target.resource.channelId ? { channelId: target.resource.channelId } : {}),
       },
       opts,
       tx,
@@ -307,7 +420,8 @@ export const publicationService = {
       contentPackageId: variant.contentPackageId,
       contentRevisionId: variant.contentRevisionId,
       channelVariantId: variant.id,
-      channelConnectionId: connection.id,
+      channelConnectionId: target.channelConnectionId,
+      destinationId: target.destinationId,
       authority: cmd.authority,
       approvalId: cmd.approvalId ?? null,
       mandateId: cmd.mandateId ?? null,
@@ -317,7 +431,7 @@ export const publicationService = {
     const pre = await review.evaluateRelease(preview, scheduledFor, tx); // fail fast for UX; dispatch re-evaluates
     if (!pre.allow) throw new ApprovalInvalidError(pre.reasons);
 
-    const occurrenceKey = `${variant.contentRevisionId}:${variant.channelConnectionId}:${cmd.occurrence ?? 'once'}`;
+    const occurrenceKey = `${variant.contentRevisionId}:${targetIdOf(target)}:${cmd.occurrence ?? 'once'}`;
     const existing = await publicationsRepo.findByOccurrenceKey(occurrenceKey, tx);
     if (existing) throw new ConflictError('Publication', existing.id, existing.version);
     const id = newId('publication');
@@ -330,7 +444,8 @@ export const publicationService = {
           contentPackageId: variant.contentPackageId,
           contentRevisionId: variant.contentRevisionId,
           channelVariantId: variant.id,
-          channelConnectionId: connection.id,
+          channelConnectionId: target.channelConnectionId,
+          destinationId: target.destinationId,
           occurrenceKey,
           authority: cmd.authority,
           approvalId: cmd.approvalId ?? null,
@@ -364,7 +479,8 @@ export const publicationService = {
     await audit.record(actorRef(actor), 'publication.schedule', { type: 'publication', id }, 'allowed', tx, {
       brandId: variant.brandId,
       publicationId: id,
-      channelConnectionId: connection.id,
+      ...(target.channelConnectionId ? { channelConnectionId: target.channelConnectionId } : {}),
+      ...(target.destinationId ? { destinationId: target.destinationId } : {}),
       toState: 'scheduled',
     });
     return toPublicationDto(await publicationsRepo.getById(id, tx));
@@ -449,6 +565,7 @@ export const publicationService = {
       contentPackageId: p.contentPackageId,
       contentRevisionId: p.contentRevisionId,
       channelConnectionId: p.channelConnectionId,
+      destinationId: p.destinationId,
       scheduledFor: p.scheduledFor.toISOString(),
     }));
   },
@@ -556,14 +673,14 @@ export const publicationService = {
           tx,
         );
         await recordStateChange(actor, 'publication.outcome_unknown', row, toState, RESTORED_FROM_BACKUP, tx);
-        const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
+        const actions = await remoteActionsOf(row, tx);
         await outbox.add(
           'publication.reconcile_requested',
           { type: 'publication', id: row.id, version: row.version + 1 },
           {
             publicationId: row.id,
             attemptId: attempt?.id ?? null,
-            providerKey: connection.providerKey,
+            providerKey: actions?.providerKey ?? '',
             workflowId: reconcileWorkflowId(row.id, row.version + 1),
             actorKind: row.scheduledByKind,
             actorId: row.scheduledById,
@@ -684,22 +801,45 @@ export const publicationService = {
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
     const attempts = await attemptsRepo.listForPublication(row.id, tx);
     const changes = await changesRepo.listForPublication(row.id, tx);
-    const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
-    const cap = registry().capability(connection.providerKey);
+    const actions = await remoteActionsOf(row, tx);
+    const cap = row.channelConnectionId ? registry().capability(actions?.providerKey ?? '') : undefined;
+    const readback = row.destinationId
+      ? await evidenceRepo.latestOfKind(row.id, 'remote_readback', tx)
+      : null;
+    const validation = row.destinationId
+      ? await evidenceRepo.latestOfKind(row.id, 'rendered_validation', tx)
+      : null;
+    const unpublished = row.destinationId
+      ? await evidenceRepo.latestOfKind(row.id, 'remote_unpublish', tx)
+      : null;
     return {
       ...toPublicationDto(row),
       attempts: attempts.map(toAttemptDto),
-      /** Changing the live post: what the channel allows, the current text after an edit, the recent requests. */
+      /** Changing the live post: what the target allows, the current text after an edit, the recent requests. */
       remote: {
-        edit: cap?.edit ?? false,
-        delete: cap?.delete ?? false,
+        edit: actions?.edit ?? false,
+        delete: actions?.delete ?? false,
+        /** R2-3: a live article can be set back to a draft on its website (the rollback of a publish). */
+        unpublish: actions?.unpublish ?? false,
         /** Whether this caller holds the permissions (brand-level grants included); the commands re-check. */
         allowed: {
           edit: policy.allows(actor, 'publication.edit_remote', publicationResource(row)),
           delete: policy.allows(actor, 'publication.delete_remote', publicationResource(row)),
+          unpublish: policy.allows(actor, 'publication.delete_remote', publicationResource(row)),
         },
         textMaxLength: cap?.text.maxLength ?? null,
         textWeighted: cap?.text.weighted ?? false,
+        /**
+         * R2-3 (destination publications only): the latest read-back of the remote article, the latest rendered
+         * validation and whether the article was reverted to a draft since, each as its evidence payload.
+         */
+        article: row.destinationId
+          ? {
+              readback: readback ? toEvidenceDto(readback) : null,
+              validation: validation ? toEvidenceDto(validation) : null,
+              unpublished: unpublished ? toEvidenceDto(unpublished) : null,
+            }
+          : null,
         /** The text of the latest edit that went through; null while the post shows the variant's text. */
         currentText: (await changesRepo.latestSucceededEdit(row.id, tx))?.text ?? null,
         changes: changes.map(toRemoteChangeDto),
@@ -813,7 +953,7 @@ export const publicationService = {
             Array.from(
               new Set([
                 ...(await publicationsRepo.listPublishedChannelsForApproval(row.approvalId, tx)),
-                row.channelConnectionId,
+                targetIdOf(row),
               ]),
             ),
             tx,
@@ -856,47 +996,81 @@ export const publicationService = {
     const cmd = PublicationDeleteRemote.parse(input);
     const row = await publicationsRepo.lock(cmd.publicationId, tx);
     await policy.assert(actor, 'publication.delete_remote', publicationResource(row), {}, tx);
-    const { connection, remotePostId } = await assertRemoteChangeAllowed(row, 'delete', tx);
-    const changeId = newId('publicationRemoteChange');
-    await changesRepo.create(
+    return requestRemoval(actor, row, 'delete', cmd.reason, tx);
+  },
+
+  /**
+   * R2-3 rollback (publication.delete_remote): a published article is set back to a draft on its website. The
+   * request is a remote change of kind `unpublish`, carried out by publicationRemoteDeleteWorkflowV1 on the
+   * destination's queue (the same converging call shape as a delete); the publication stays published and the
+   * website's confirmation is recorded as `remote_unpublish` evidence.
+   */
+  async unpublishRemote(actor: ResolvedActor, input: z.infer<typeof PublicationUnpublishRemote>, tx: Tx) {
+    const cmd = PublicationUnpublishRemote.parse(input);
+    const row = await publicationsRepo.lock(cmd.publicationId, tx);
+    await policy.assert(actor, 'publication.delete_remote', publicationResource(row), {}, tx);
+    return requestRemoval(actor, row, 'unpublish', cmd.reason, tx);
+  },
+
+  /**
+   * R2-3 on-demand validation (brand.read): the published page is fetched again, checked and the result stored as
+   * `rendered_validation` evidence. No credential is used (the page is public), so the API process runs it.
+   */
+  async validateRendered(actor: ResolvedActor, input: PublicationValidateRendered, tx: Tx) {
+    const parsed = PublicationValidateRendered.parse(input);
+    const row = await publicationsRepo.getById(parsed.publicationId, tx);
+    await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
+    if (!row.destinationId || row.state !== 'published' || !row.remoteUrl)
+      throw new ValidationFailedError(
+        [{ path: 'publicationId', issue: 'not_a_published_article' }],
+        'Only a published article with a page address can be validated',
+      );
+    const variant = await variants.get(row.channelVariantId, tx);
+    if (!variant.article)
+      throw new ValidationFailedError([{ path: 'publicationId', issue: 'article_missing' }]);
+    const readback = await evidenceRepo.latestOfKind(row.id, 'remote_readback', tx);
+    const draft = readback ? readback.payload['status'] !== 'publish' : true;
+    const result = await destinations.validateRendered({
+      tenantId: row.tenantId,
+      destinationId: row.destinationId,
+      url: row.remoteUrl,
+      title: variant.article.title,
+      firstParagraph: articleFirstParagraph(variant.article),
+      draft,
+    });
+    const payload = { ...result, checks: result.checks };
+    await evidenceRepo.create(
       {
-        id: changeId,
-        brandId: row.brandId,
+        id: newId('remoteEvidence'),
         publicationId: row.id,
-        kind: 'delete',
-        state: 'requested',
-        reason: cmd.reason,
-        requestedByKind: scheduledByOf(actor),
-        requestedById: actor.id,
-        requestedAt: new Date(),
+        attemptId: null,
+        kind: 'rendered_validation',
+        remotePostId: row.remotePostId,
+        remoteUrl: row.remoteUrl,
+        payload,
+        payloadHash: hashCanonical(payload),
+        capturedAt: new Date(),
       },
       tx,
     );
     await audit.record(
       actorRef(actor),
-      'publication.delete_remote',
+      'publication.validate_rendered',
       { type: 'publication', id: row.id },
-      'allowed',
+      renderedValidationOk(result.checks) ? 'allowed' : 'denied',
       tx,
-      { brandId: row.brandId, publicationId: row.id, channelConnectionId: connection.id, reason: cmd.reason },
-    );
-    // The v1 payload is kept as it was; the change, provider key and workflow id are appended (additive).
-    await outbox.add(
-      'publication.delete_remote_requested',
-      { type: 'publication', id: row.id, version: row.version },
       {
+        brandId: row.brandId,
         publicationId: row.id,
-        remotePostId,
-        requestedByKind: actor.kind,
-        requestedById: actor.id,
-        changeId,
-        providerKey: connection.providerKey,
-        workflowId: remoteChangeWorkflowId(row.id, changeId),
+        destinationId: row.destinationId,
+        reason:
+          result.checks
+            .filter((c) => !c.ok)
+            .map((c) => c.key)
+            .join(',') || null,
       },
-      tx,
-      { brandId: row.brandId },
     );
-    return { accepted: true, publicationId: row.id, remotePostId, changeId };
+    return result;
   },
 
   /**
@@ -908,7 +1082,7 @@ export const publicationService = {
     const cmd = PublicationEditRemote.parse(input);
     const row = await publicationsRepo.lock(cmd.publicationId, tx);
     await policy.assert(actor, 'publication.edit_remote', publicationResource(row), {}, tx);
-    const { connection } = await assertRemoteChangeAllowed(row, 'edit', tx);
+    const { providerKey } = await assertRemoteChangeAllowed(row, 'edit', tx);
     if (cmd.text.trim() === '')
       throw new ValidationFailedError([{ path: 'text', issue: 'text_empty' }], 'The new text is empty');
     const current =
@@ -919,6 +1093,7 @@ export const publicationService = {
         [{ path: 'text', issue: 'text_unchanged' }],
         'The new text is the same as the live text',
       );
+    // For an article (R2-3) the text is the new body: the destination's rules apply (sanitised at send).
     const check = await channelService.validateVariantDetailed(row.channelVariantId, tx, { text: cmd.text });
     const textIssues = check.issues.filter((i) => i.path === 'text');
     if (textIssues.length > 0)
@@ -950,7 +1125,8 @@ export const publicationService = {
       {
         brandId: row.brandId,
         publicationId: row.id,
-        channelConnectionId: connection.id,
+        ...(row.channelConnectionId ? { channelConnectionId: row.channelConnectionId } : {}),
+        ...(row.destinationId ? { destinationId: row.destinationId } : {}),
         reason: cmd.reason ?? null,
       },
     );
@@ -961,7 +1137,7 @@ export const publicationService = {
         publicationId: row.id,
         changeId,
         textHash,
-        providerKey: connection.providerKey,
+        providerKey,
         workflowId: remoteChangeWorkflowId(row.id, changeId),
         requestedByKind: actor.kind,
         requestedById: actor.id,
@@ -1000,6 +1176,7 @@ export const publicationService = {
         contentRevisionId: p.contentRevisionId,
         channelVariantId: p.channelVariantId,
         channelConnectionId: p.channelConnectionId,
+        destinationId: p.destinationId,
         scheduledFor: p.scheduledFor.toISOString(),
         state: p.state,
       }));

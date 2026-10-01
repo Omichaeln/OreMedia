@@ -168,6 +168,7 @@ describe('a preview export is never bound or released (ledger 3.10)', () => {
     brandId,
     contentPackageId,
     contentRevisionId,
+    destinationId: null,
     channelVariantId: variantId,
     channelConnectionId: channelId,
     authority: 'approval',
@@ -195,6 +196,8 @@ describe('a preview export is never bound or released (ledger 3.10)', () => {
     );
     registerReleaseCheckers({
       channelUsable: async () => true,
+      destinationUsable: async () => true,
+      destinationWriteAllowed: async () => true,
       validateVariant: async () => true,
       countForMandateOnDay: async () => 0,
       publishedElsewhereForApprovalChannel: async () => false,

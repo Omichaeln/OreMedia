@@ -134,11 +134,13 @@ describe('publish media source end to end (worker-core composition, fake Tempora
       contentPackageId: 'pkg_e2e_media',
       contentRevisionId: `pr_${id.slice(3)}`,
       channelConnectionId: connA,
+      destinationId: null,
       text,
       altTexts: ['A square visual'],
       settings: {},
       exportIds: [exp.id],
       exportHashes: [exp.contentHash],
+      article: null,
       version: 0,
     };
     variantsById.set(id, v);

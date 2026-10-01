@@ -22,16 +22,35 @@ export const FrozenManifestV1 = z.object({
   contentHash: z.string(),
   creativeRevisionIds: z.array(z.string()),
   exports: z.array(
-    z.object({ exportId: z.string(), contentHash: z.string(), channelConnectionId: z.string() }),
+    z
+      .object({
+        exportId: z.string(),
+        contentHash: z.string(),
+        /** The channel, or (R2-3) the brand destination the variant targets; exactly one is set. */
+        channelConnectionId: z.string().optional(),
+        destinationId: z.string().optional(),
+      })
+      .refine((e) => !!e.channelConnectionId !== !!e.destinationId, {
+        message: 'exactly one of channelConnectionId or destinationId',
+      }),
   ),
   captions: z.array(
-    z.object({
-      channelConnectionId: z.string(),
-      text: z.string(),
-      altTexts: z.array(z.string()),
-      settingsHash: z.string(),
-    }),
+    z
+      .object({
+        channelConnectionId: z.string().optional(),
+        destinationId: z.string().optional(),
+        text: z.string(),
+        altTexts: z.array(z.string()),
+        settingsHash: z.string(),
+      })
+      .refine((c) => !!c.channelConnectionId !== !!c.destinationId, {
+        message: 'exactly one of channelConnectionId or destinationId',
+      }),
   ),
+  /** R2-3: the article revision the reviewer approves (its hash is what the destination variant publishes). */
+  article: z
+    .object({ title: z.string(), slug: z.string(), articleHash: z.string(), blocks: z.number().int() })
+    .optional(),
   timing: z.union([
     z.object({ kind: z.literal('exact'), at: z.string().datetime() }),
     z.object({ kind: z.literal('window'), from: z.string().datetime(), to: z.string().datetime() }),
@@ -144,6 +163,8 @@ export const RELEASE_CHECK_KEYS = [
   'kill_switch_off',
   'brand_review_clean',
   'channel_active',
+  // R2-3: a destination target's write is allowed by the brand's source-use policy (default deny, D-17)
+  'source_use_write',
   'assets_rights_valid',
   'facts_valid',
   'capability_valid',

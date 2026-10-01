@@ -31,7 +31,13 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 const publishedIn = (list: CalendarPublicationDto[] | undefined, channelFilter: string | null) =>
   (list ?? [])
-    .filter((p) => wasReleased(p.state) && (!channelFilter || p.channelConnectionId === channelFilter))
+    .filter(
+      (p) =>
+        // A website article (R2-3) has no post metrics: it is measured through the brand's web sources.
+        p.channelConnectionId !== null &&
+        wasReleased(p.state) &&
+        (!channelFilter || p.channelConnectionId === channelFilter),
+    )
     .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));
 
 /**

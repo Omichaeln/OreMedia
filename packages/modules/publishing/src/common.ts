@@ -29,7 +29,9 @@ export const publicationResource = (p: PublicationRow) => ({
   tenantId: p.tenantId,
   brandId: p.brandId,
   id: p.id,
-  channelId: p.channelConnectionId,
+  // A destination publication (R2-3) has no channel: agent grants are brand-level for it (agents never hold the
+  // remote actions anyway, and schedule only with an approval).
+  ...(p.channelConnectionId ? { channelId: p.channelConnectionId } : {}),
   state: p.state,
 });
 
@@ -101,6 +103,7 @@ export const toPublicationDto = (p: PublicationRow) => ({
   contentRevisionId: p.contentRevisionId,
   channelVariantId: p.channelVariantId,
   channelConnectionId: p.channelConnectionId,
+  destinationId: p.destinationId,
   occurrenceKey: p.occurrenceKey,
   authority: p.authority,
   approvalId: p.approvalId,
@@ -189,9 +192,14 @@ export const forRelease = (p: PublicationRow): PublicationForRelease => ({
   contentRevisionId: p.contentRevisionId,
   channelVariantId: p.channelVariantId,
   channelConnectionId: p.channelConnectionId,
+  destinationId: p.destinationId,
   authority: p.authority,
   approvalId: p.approvalId,
   mandateId: p.mandateId,
   scheduledFor: p.scheduledFor.toISOString(),
   state: p.state,
 });
+
+/** The id of a publication's target (the destination when it has one, else the channel), as bindings name it. */
+export const targetIdOf = (p: Pick<PublicationRow, 'channelConnectionId' | 'destinationId'>): string =>
+  p.destinationId ?? p.channelConnectionId ?? '';

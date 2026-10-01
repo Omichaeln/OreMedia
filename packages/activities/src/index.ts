@@ -34,6 +34,7 @@ export {
 } from './remote-change';
 export { createTokenRefreshActivities } from './token-refresh';
 export { createDestinationRefreshActivities, DESTINATION_REFRESH_ACTOR } from './destination-refresh';
+export { createDestinationVerifyActivities } from './destination-verify';
 export { createDestinationReportActivities, DESTINATION_REPORTS_ACTOR } from './destination-reports';
 export { createBrandChangeImpactActivities } from './brand-change-impact';
 export { createMetricCollectionActivities } from './metric-collection';

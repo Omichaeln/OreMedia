@@ -3,6 +3,7 @@ import {
   DestinationConnectComplete,
   DestinationConnectSelect,
   DestinationConnectStart,
+  DestinationConnectWithSecret,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -83,6 +84,14 @@ export const destinationsRouter = router({
       .input(DestinationConnectCancel)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => destinationService.connect.cancel(ctx.tenant.actor, input, tx)),
+      ),
+    /** R2-3: a website connected with its integration identity and secret, sealed here and verified by the worker. */
+    withSecret: tenantMutation
+      .input(DestinationConnectWithSecret)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          destinationService.connect.withSecret(ctx.tenant.actor, input, tx),
+        ),
       ),
   }),
   reports: router({

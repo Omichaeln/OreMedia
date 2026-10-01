@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   char,
+  check,
   foreignKey,
   index,
   int,
@@ -15,6 +17,7 @@ import {
 import type { ProviderCapabilityV1 } from '@oremedia/contracts/providers';
 import { brandId, createdAt, hash, id, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
+import { brandDestinations } from './destinations';
 
 export const credentialRefs = mysqlTable(
   'credential_refs',
@@ -114,6 +117,10 @@ export const pendingChannelGrants = mysqlTable(
   ],
 );
 
+/**
+ * A publication's target is its variant's: a channel connection or (R2-3) a brand destination, exactly one of the
+ * two set; the provider queue is the channel's provider key or the destination's kind.
+ */
 export const publications = mysqlTable(
   'publications',
   {
@@ -123,7 +130,8 @@ export const publications = mysqlTable(
     contentPackageId: ref('content_package_id').notNull(),
     contentRevisionId: ref('content_revision_id').notNull(),
     channelVariantId: ref('channel_variant_id').notNull(),
-    channelConnectionId: ref('channel_connection_id').notNull(),
+    channelConnectionId: ref('channel_connection_id'),
+    destinationId: ref('destination_id'),
     occurrenceKey: varchar('occurrence_key', { length: 120 }).notNull(), // stable dedupe identity
     authority: mysqlEnum('authority', ['approval', 'mandate']).notNull(),
     approvalId: ref('approval_id'),
@@ -160,6 +168,9 @@ export const publications = mysqlTable(
     uniqueIndex('uq_publication_ti').on(t.tenantId, t.id),
     index('ix_publication_due').on(t.state, t.scheduledFor),
     index('ix_publication_brand_state').on(t.tenantId, t.brandId, t.state, t.scheduledFor),
+    index('ix_publication_destination').on(t.tenantId, t.destinationId),
+    // R2-3: a publication targets exactly one of a channel or a destination (MySQL 8 enforces CHECK).
+    check('ck_publication_target', sql`(${t.channelConnectionId} is null) <> (${t.destinationId} is null)`),
     foreignKey({
       columns: [t.tenantId, t.brandId],
       foreignColumns: [brands.tenantId, brands.id],
@@ -169,6 +180,11 @@ export const publications = mysqlTable(
       columns: [t.tenantId, t.brandId, t.channelConnectionId],
       foreignColumns: [channelConnections.tenantId, channelConnections.brandId, channelConnections.id],
       name: 'fk_publication_channel',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.destinationId],
+      foreignColumns: [brandDestinations.tenantId, brandDestinations.brandId, brandDestinations.id],
+      name: 'fk_publication_destination',
     }),
   ],
 );
@@ -227,6 +243,12 @@ export const remoteEvidence = mysqlTable(
       'metrics_readback',
       'remote_edit', // the platform accepted a text edit made through the product (publication_remote_changes)
       'remote_deletion', // the platform confirmed the post is deleted (or was already gone)
+      // R2-3 (appended): the article read back from its website after a write, with its remote content hash
+      'remote_readback',
+      // R2-3 (appended): what the rendered page showed when it was fetched for validation
+      'rendered_validation',
+      // R2-3 (appended): the website confirmed the article is a draft again (the rollback of a publish)
+      'remote_unpublish',
     ]).notNull(),
     remotePostId: varchar('remote_post_id', { length: 200 }),
     remoteUrl: varchar('remote_url', { length: 1000 }),
@@ -251,7 +273,7 @@ export const publicationRemoteChanges = mysqlTable(
     tenantId: tenantId(),
     brandId: brandId(),
     publicationId: ref('publication_id').notNull(),
-    kind: mysqlEnum('kind', ['edit', 'delete']).notNull(),
+    kind: mysqlEnum('kind', ['edit', 'delete', 'unpublish']).notNull(), // unpublish: R2-3 revert to draft
     state: mysqlEnum('state', ['requested', 'succeeded', 'failed']).notNull(),
     text: text('text'), // edits only
     textHash: hash('text_hash'),

@@ -87,7 +87,13 @@ export function PerformanceScreen() {
   const published = useMemo(
     () =>
       (calendar.data?.publications ?? [])
-        .filter((p) => wasReleased(p.state) && (!channelFilter || p.channelConnectionId === channelFilter))
+        .filter(
+          (p) =>
+            // A website article (R2-3) has no post metrics: it is measured through the brand's web sources.
+            p.channelConnectionId !== null &&
+            wasReleased(p.state) &&
+            (!channelFilter || p.channelConnectionId === channelFilter),
+        )
         .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor)),
     [calendar.data, channelFilter],
   );
@@ -165,8 +171,9 @@ export function PerformanceScreen() {
     if (selected && !selected.additive) return []; // D-15: no per-channel sum of a unique count, level or rate
     for (const r of rows) {
       if (r.value === null) continue;
-      const t = totals.get(r.publication.channelConnectionId) ?? { value: 0, publications: 0 };
-      totals.set(r.publication.channelConnectionId, {
+      const key = r.publication.channelConnectionId ?? 'website';
+      const t = totals.get(key) ?? { value: 0, publications: 0 };
+      totals.set(key, {
         value: t.value + r.value,
         publications: t.publications + 1,
       });
@@ -366,7 +373,7 @@ export function PerformanceScreen() {
                       </div>
                       <Bar value={r.value} max={max} />
                       <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                        <span>{channelName(r.publication.channelConnectionId)}</span>
+                        <span>{channelName(r.publication.channelConnectionId ?? 'website')}</span>
                         <span aria-hidden="true">·</span>
                         <span>
                           {new Date(r.publication.scheduledFor).toLocaleDateString(undefined, {
@@ -403,7 +410,7 @@ export function PerformanceScreen() {
                     timeZone={timeZone}
                     windowStart={range.from}
                     windowEnd={range.to}
-                    channelName={channelName(selectedPost.channelConnectionId)}
+                    channelName={channelName(selectedPost.channelConnectionId ?? 'website')}
                     onClose={() => update({ post: null })}
                   />
                 )}

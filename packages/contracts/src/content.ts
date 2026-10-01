@@ -11,12 +11,99 @@ export const ContentPackageState = z.enum([
   'archived',
 ]);
 
+// ---- Website articles and FAQs (ledger R2-3, D-16): a structured document type beside the master copy ----
+
+export const ARTICLE_TITLE_MAX = 200;
+export const ARTICLE_SLUG_MAX = 200;
+/** Lower-case words joined by single hyphens, as a CMS slugs a path segment. */
+export const ARTICLE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const ARTICLE_EXCERPT_MAX = 1000;
+export const ARTICLE_BLOCKS_MAX = 500;
+/** The body's text over every block, before rendering (the CMS stores the rendered HTML). */
+export const ARTICLE_BODY_MAX_CHARS = 50_000;
+export const ARTICLE_TERM_MAX = 100;
+export const ARTICLE_TERMS_MAX = 20;
+
+/** The body is an ordered list of blocks; a FAQ block renders as a question with its answer. */
+export const ArticleBlockV1 = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('paragraph'), text: z.string().max(10_000) }),
+  z.object({
+    type: z.literal('heading'),
+    level: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+    text: z.string().max(300),
+  }),
+  z.object({
+    type: z.literal('list'),
+    ordered: z.boolean().default(false),
+    items: z.array(z.string().max(2000)).min(1).max(100),
+  }),
+  z.object({ type: z.literal('faq'), question: z.string().max(500), answer: z.string().max(5000) }),
+]);
+export type ArticleBlockV1 = z.infer<typeof ArticleBlockV1>;
+
+/** The characters the body carries over every block (headings, items, questions and answers included). */
+export const articleBodyChars = (blocks: readonly ArticleBlockV1[]): number =>
+  blocks.reduce((n, b) => {
+    switch (b.type) {
+      case 'paragraph':
+      case 'heading':
+        return n + b.text.length;
+      case 'list':
+        return n + b.items.reduce((m, i) => m + i.length, 0);
+      case 'faq':
+        return n + b.question.length + b.answer.length;
+    }
+  }, 0);
+
+/**
+ * An article as the website receives it: title, slug, excerpt, the body as blocks, the terms it is filed under and
+ * an optional featured asset. Rendered to HTML in one place (`article.ts`, allow-listed tags only). `kind` is the
+ * discriminator for the document types to come.
+ */
+export const ArticleDocumentV1 = z
+  .object({
+    kind: z.literal('article'),
+    title: z.string().min(1).max(ARTICLE_TITLE_MAX),
+    slug: z
+      .string()
+      .min(1)
+      .max(ARTICLE_SLUG_MAX)
+      .regex(ARTICLE_SLUG_PATTERN, 'lower-case words joined by hyphens'),
+    excerpt: z.string().max(ARTICLE_EXCERPT_MAX).default(''),
+    blocks: z.array(ArticleBlockV1).max(ARTICLE_BLOCKS_MAX),
+    categories: z.array(z.string().min(1).max(ARTICLE_TERM_MAX)).max(ARTICLE_TERMS_MAX).default([]),
+    tags: z.array(z.string().min(1).max(ARTICLE_TERM_MAX)).max(ARTICLE_TERMS_MAX).default([]),
+    featuredAssetId: z.string().optional(),
+  })
+  .superRefine((a, ctx) => {
+    const chars = articleBodyChars(a.blocks);
+    if (chars > ARTICLE_BODY_MAX_CHARS)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['blocks'],
+        message: `body_too_long:${chars}>${ARTICLE_BODY_MAX_CHARS}`,
+      });
+  });
+export type ArticleDocumentV1 = z.infer<typeof ArticleDocumentV1>;
+
+/**
+ * The master copy of a content revision. `article` (R2-3) is additive: a document without it is the plain text
+ * every channel variant is generated from, parsed and hashed exactly as before; with it the package is a website
+ * article whose channel variants carry the excerpt (or the master text) and whose destination variant carries the
+ * rendered article.
+ */
 export const CopyDocumentV1 = z.object({
   schemaVersion: z.literal(1),
   master: z.object({ text: z.string().max(10000), factRefs: z.array(z.string()).default([]) }),
   rationale: z.string().max(2000).optional(),
+  article: ArticleDocumentV1.optional(),
 });
 export type CopyDocumentV1 = z.infer<typeof CopyDocumentV1>;
+
+/** What a copy document is: `article` when it carries one, else the plain `text` master. */
+export type CopyDocumentKind = 'text' | 'article';
+export const copyDocumentKind = (copy: Pick<CopyDocumentV1, 'article'>): CopyDocumentKind =>
+  copy.article ? 'article' : 'text';
 
 export const BriefCreate = z.object({
   brandId: z.string(),
@@ -151,11 +238,20 @@ export const ContentPackageList = z.object({ brandId: z.string(), page: PageRequ
 export const ContentPackageListForDocument = z.object({ documentId: z.string() });
 export const ContentRevisionGet = z.object({ revisionId: z.string() });
 
-/** One variant per (content revision, channel connection); existing targets are returned, never duplicated. */
-export const ChannelVariantGenerate = z.object({
-  contentRevisionId: z.string(),
-  channelConnectionIds: z.array(z.string()).min(1).max(20),
-});
+/**
+ * One variant per (content revision, target); existing targets are returned, never duplicated. A target is a channel
+ * connection or (R2-3) a write-capable brand destination (a website); at least one of either is named.
+ */
+export const ChannelVariantGenerate = z
+  .object({
+    contentRevisionId: z.string(),
+    channelConnectionIds: z.array(z.string()).max(20).default([]),
+    destinationIds: z.array(z.string()).max(20).default([]),
+  })
+  .refine((v) => v.channelConnectionIds.length + v.destinationIds.length > 0, {
+    path: ['channelConnectionIds'],
+    message: 'at least one channel or destination',
+  });
 export const ChannelVariantGet = z.object({ variantId: z.string() });
 
 export const CalendarRange = z.object({
@@ -170,7 +266,10 @@ export interface CalendarPublication {
   contentPackageId: string;
   contentRevisionId: string;
   channelVariantId: string;
-  channelConnectionId: string;
+  /** The channel, or null for a publication to a brand destination (R2-3). */
+  channelConnectionId: string | null;
+  /** The brand destination (a website), or null for a channel publication. */
+  destinationId: string | null;
   scheduledFor: string;
   state: string;
 }

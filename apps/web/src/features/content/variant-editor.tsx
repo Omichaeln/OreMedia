@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
@@ -27,10 +28,17 @@ export function parseSettings(text: string): { ok: true; value: Record<string, u
   }
 }
 
+const PUBLISH_MODE_OPTIONS = [
+  { value: 'draft', label: 'Draft on the website (preview first)' },
+  { value: 'publish', label: 'Live page (only when the connection allows it)' },
+];
+
 /**
  * Spec 14.1 channel variant editing: caption, alt texts (one per line, in media order), provider settings and the
  * media selection from the pinned revisions' ready exports. The server re-runs the channel capability check on
- * every save and stores the findings, so the "Valid" badge is never stale after an edit.
+ * every save and stores the findings, so the "Valid" badge is never stale after an edit. A website variant (R2-3)
+ * carries the revision's article instead: the only setting is whether it lands as a draft or a live page (D-16:
+ * draft by default), and it has no media or alt texts.
  */
 export function VariantEditor({ variant, documents, onDone }: VariantEditorProps) {
   const trpc = useTRPC();
@@ -42,7 +50,11 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
     Object.keys(variant.settings).length ? JSON.stringify(variant.settings, null, 2) : '',
   );
   const [exportIds, setExportIds] = useState<string[]>(variant.exportIds);
+  const [publishMode, setPublishMode] = useState(
+    variant.settings['publishMode'] === 'publish' ? 'publish' : 'draft',
+  );
   const [error, setError] = useState<string | null>(null);
+  const website = variant.destinationId !== null;
   const update = useMutation(
     trpc.content.variants.update.mutationOptions({
       ...mutationIntent(intent.key),
@@ -59,6 +71,17 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
   const parsedSettings = parseSettings(settings);
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (website) {
+      update.mutate({
+        channelVariantId: variant.id,
+        expectedVersion: variant.version,
+        text: variant.text,
+        altTexts: [],
+        settings: { publishMode },
+        exportIds: [],
+      });
+      return;
+    }
     const parsed = parsedSettings;
     if (!parsed.ok) {
       setError('Provider settings must be a JSON object, for example {"firstComment": "…"}.');
@@ -78,12 +101,60 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
     });
   };
   const ui = update.isError ? toUiError(update.error) : null;
-  const unchanged =
-    text === variant.text &&
-    altTexts === variant.altTexts.join('\n') &&
-    sameIdSet(exportIds, variant.exportIds) &&
-    parsedSettings.ok &&
-    JSON.stringify(parsedSettings.value) === JSON.stringify(variant.settings);
+  const unchanged = website
+    ? publishMode === (variant.settings['publishMode'] === 'publish' ? 'publish' : 'draft')
+    : text === variant.text &&
+      altTexts === variant.altTexts.join('\n') &&
+      sameIdSet(exportIds, variant.exportIds) &&
+      parsedSettings.ok &&
+      JSON.stringify(parsedSettings.value) === JSON.stringify(variant.settings);
+  if (website)
+    return (
+      <form
+        onSubmit={submit}
+        className="flex flex-col gap-2 rounded-md border border-border p-3"
+        aria-label={`Edit variant ${variant.id}`}
+        data-testid="variant-editor"
+        noValidate
+      >
+        <Field
+          label="Publish mode"
+          htmlFor={`variant-${variant.id}-mode`}
+          hint="Every write lands as a draft unless the website connection was granted live publishing; the server refuses the rest."
+        >
+          <Select
+            id={`variant-${variant.id}-mode`}
+            value={publishMode}
+            onValueChange={setPublishMode}
+            options={PUBLISH_MODE_OPTIONS}
+          />
+        </Field>
+        {ui && ui.kind === 'forbidden' && (
+          <StatusBanner
+            tone="critical"
+            title="Permission denied"
+            description={`${ui.message} Editing a variant needs content.edit on a draft revision.`}
+          />
+        )}
+        {ui && ui.kind !== 'forbidden' && (
+          <RequestError error={update.error} title="The variant was not saved" />
+        )}
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            size="sm"
+            variant="primary"
+            disabled={update.isPending || unchanged}
+            disabledReason={unchanged ? 'Nothing has changed' : undefined}
+          >
+            {update.isPending ? 'Saving…' : 'Save variant'}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    );
   return (
     <form
       onSubmit={submit}

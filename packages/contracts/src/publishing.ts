@@ -97,6 +97,7 @@ export const MandateCreate = z.object({
 import { PAGE_MAX, PageRequest } from './pagination';
 import { TenantContextInput } from './tenancy';
 import type { ActivityHooks } from './agents';
+import type { ArticleDocumentV1 } from './content';
 import type { ResolvedActor } from './policy';
 import type {
   ChannelConnectionStatus,
@@ -128,6 +129,15 @@ export const PublicationEditRemote = z.object({
   publicationId: z.string(),
   text: z.string().min(1).max(70_000),
   reason: z.string().max(500).optional(),
+});
+/**
+ * R2-3 rollback: a published article is set back to a draft on its website (publication.delete_remote: the same
+ * people who may remove a post). The request is recorded as a remote change of kind `unpublish` and carried out by
+ * publicationRemoteDeleteWorkflowV1 on the destination's queue; the publication stays published with the evidence.
+ */
+export const PublicationUnpublishRemote = z.object({
+  publicationId: z.string(),
+  reason: z.string().max(500),
 });
 /**
  * Spec 17.6 restore rule (runbook "restore a single tenant", step 5): the restored tenant's in-flight publications,
@@ -187,7 +197,9 @@ export interface PublicationForRelease {
   contentPackageId: string;
   contentRevisionId: string;
   channelVariantId: string;
-  channelConnectionId: string;
+  /** The channel, or null for a publication to a brand destination (R2-3); exactly one of the two is set. */
+  channelConnectionId: string | null;
+  destinationId: string | null;
   authority: PublicationAuthority;
   approvalId: string | null;
   mandateId: string | null;
@@ -202,14 +214,23 @@ export interface ChannelVariantForPublishing {
   brandId: string;
   contentPackageId: string;
   contentRevisionId: string;
-  channelConnectionId: string;
+  /** The channel, or null for a variant targeting a brand destination (R2-3); exactly one of the two is set. */
+  channelConnectionId: string | null;
+  destinationId: string | null;
   text: string;
   altTexts: string[];
   settings: Record<string, unknown>;
   exportIds: string[];
   exportHashes: string[];
+  /** The revision's article (R2-3) for a destination variant; null for a channel variant or a plain copy. */
+  article: ArticleDocumentV1 | null;
   version: number;
 }
+
+/** A publication's target: the channel connection or the brand destination it writes to (exactly one). */
+export type PublishTargetRef = { channelConnectionId: string | null; destinationId: string | null };
+export const publishTargetId = (t: PublishTargetRef): string =>
+  t.destinationId ?? t.channelConnectionId ?? '';
 
 // ---- workflow contract (publicationWorkflowV1 on task queue `core`, workflow id `pub:<publicationId>`) ----
 
@@ -253,7 +274,14 @@ export interface ReadScheduleResultV1 {
 }
 export type ClaimInputV1 = PublicationWorkflowInputV1 & { claimant: string };
 export type ClaimResultV1 =
-  | { ok: true; fencingToken: number; providerKey: string; channelConnectionId: string }
+  | {
+      ok: true;
+      fencingToken: number;
+      /** The key that names a publication target's activity queue: the channel's provider key or the destination's kind. */
+      providerKey: string;
+      /** The target's id: the channel connection, or (R2-3) the destination. Kept under its v1 name; the workflow does not read it. */
+      channelConnectionId: string;
+    }
   | { ok: false; state: PublicationState };
 export type FencedInputV1 = PublicationWorkflowInputV1 & { fencingToken: number };
 export type ReleaseEvaluationResultV1 = { allow: true } | { allow: false; reasons: string[] };
@@ -367,7 +395,8 @@ export type PublicationSweepRuntimeV1 = PublicationSweepActivitiesV1;
 // publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1 on task queue `core`, which call the provider
 // activity on `publish-<providerKey>` and record the outcome on `core`.
 // ---------------------------------------------------------------------------------------------------------------
-export const RemoteChangeKind = z.enum(['edit', 'delete']);
+/** `unpublish` (R2-3): the live article is set back to a draft on its website (the rollback of a publish). */
+export const RemoteChangeKind = z.enum(['edit', 'delete', 'unpublish']);
 export type RemoteChangeKind = z.infer<typeof RemoteChangeKind>;
 /** requested → succeeded | failed; a publication has at most one requested change at a time. */
 export const RemoteChangeState = z.enum(['requested', 'succeeded', 'failed']);
@@ -382,6 +411,9 @@ export const PublicationRemoteChangeInputV1 = PublicationWorkflowInputV1.extend(
 export type PublicationRemoteChangeInputV1 = z.infer<typeof PublicationRemoteChangeInputV1>;
 
 /** `skipped`: the change is no longer requested (already recorded, or superseded); nothing was sent. */
+/** `publishing.publications.validateRendered` (R2-3): fetch the published page again and record what it shows. */
+export const PublicationValidateRendered = z.object({ publicationId: z.string() });
+export type PublicationValidateRendered = z.infer<typeof PublicationValidateRendered>;
 export type RemoteChangeAttemptResultV1 = RemoteMutationOutcome | { outcome: 'skipped'; reason: string };
 export type RecordRemoteChangeInputV1 = PublicationRemoteChangeInputV1 & { result: RemoteMutationOutcome };
 /** Idempotent: a repeat reports `changed: false` and what it found. */

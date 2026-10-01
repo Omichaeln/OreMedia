@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  cmsCapabilities,
   configureSourceAvailability,
   sourceAvailabilityFromEnv,
   sourceAvailable,
@@ -50,5 +51,19 @@ describe('source availability and the configuration report (ledger R2-1)', () =>
     expect(
       sourceCapabilities(env({ OREMEDIA_DISABLED_SOURCES: 'search_console_site' })).map((c) => c.capability),
     ).toEqual(['source:ga4_property']);
+  });
+});
+
+describe('cms availability and the configuration report (ledger R2-3)', () => {
+  it('a CMS kind needs no app credentials: available unless listed in OREMEDIA_DISABLED_SOURCES', () => {
+    expect(sourceAvailabilityFromEnv(env({}))('cms_site')).toBe(true);
+    expect(sourceAvailabilityFromEnv(env({ OREMEDIA_DISABLED_SOURCES: 'cms_site' }))('cms_site')).toBe(false);
+  });
+
+  it('cms:<vendor> capabilities report each registered adapter with nothing to set, unless disabled', () => {
+    const checks = cmsCapabilities(env({}));
+    expect(checks.map((c) => c.capability)).toEqual(['cms:wordpress']);
+    expect(checks[0]!.missing(env({}))).toEqual([]);
+    expect(cmsCapabilities(env({ OREMEDIA_DISABLED_SOURCES: 'cms_site' }))).toEqual([]);
   });
 });

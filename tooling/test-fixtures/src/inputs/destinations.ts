@@ -44,6 +44,16 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'], externalId: 'properties/424242' }),
   },
   'destinations.connect.cancel': { buildInput: (f) => ({ pendingId: f['pendingDestinationGrantId'] }) },
+  // R2-3: the brand is read first (NOT_FOUND), so no secret is ever sealed for a foreign brand.
+  'destinations.connect.withSecret': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      kind: 'cms_site',
+      siteUrl: 'https://site.example',
+      username: 'editor',
+      secret: 'not-a-real-secret',
+    }),
+  },
   // R2-1 part B: the brand is read first (NOT_FOUND), so a foreign destination's rows are never aggregated.
   'destinations.reports.summary': {
     buildInput: (f) => ({

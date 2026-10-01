@@ -7,6 +7,10 @@ import { PackageTitle } from '../../../../../../features/content/package-title';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
 import { CalendarGrid } from '../../../../../../features/publishing/calendar-grid';
 import { ChannelStatus } from '../../../../../../features/publishing/channel-status';
+import {
+  destinationLabel,
+  useDestinationMap,
+} from '../../../../../../features/destinations/use-destinations';
 import { PublicationDetail } from '../../../../../../features/publishing/publication-detail';
 import {
   dayKey,
@@ -65,6 +69,7 @@ export function CalendarRoute() {
     () => new Map<string, ChannelDto>((channels.data ?? []).map((c) => [c.id, c])),
     [channels.data],
   );
+  const destinationMap = useDestinationMap(brandId);
   const byDay = useMemo(
     () => groupByDay(calendar.data?.publications ?? [], timeZone),
     [calendar.data, timeZone],
@@ -211,7 +216,10 @@ export function CalendarRoute() {
             >
               {dayItems.map((p) => {
                 const chip = publicationChip(p.state);
-                const channel = channelMap.get(p.channelConnectionId);
+                const channel = p.channelConnectionId ? channelMap.get(p.channelConnectionId) : undefined;
+                const website = p.destinationId
+                  ? destinationLabel(destinationMap.get(p.destinationId), p.destinationId)
+                  : null;
                 const selected = p.publicationId === selectedId;
                 return (
                   <li key={p.publicationId}>
@@ -233,9 +241,10 @@ export function CalendarRoute() {
                           <PackageTitle contentPackageId={p.contentPackageId} />
                         </span>
                         <span className="block truncate text-xs text-muted-foreground">
-                          {channel
-                            ? `${channel.displayName} (${channel.providerKey})`
-                            : p.channelConnectionId}
+                          {website ??
+                            (channel
+                              ? `${channel.displayName} (${channel.providerKey})`
+                              : p.channelConnectionId)}
                           {' · '}
                           <code>{p.publicationId}</code>
                         </span>
@@ -252,6 +261,7 @@ export function CalendarRoute() {
           brandId={brandId}
           publicationId={selectedId}
           channels={channelMap}
+          destinations={destinationMap}
           timeZone={timeZone}
         />
       </div>
@@ -262,6 +272,7 @@ export function CalendarRoute() {
           brandId={brandId}
           timeZone={timeZone}
           channels={channelMap}
+          destinations={destinationMap}
           variantId={params.get('schedule')}
           onScheduled={(publicationId, key) => {
             setAnchorKey(key);

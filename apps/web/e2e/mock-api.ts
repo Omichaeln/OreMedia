@@ -584,6 +584,11 @@ export class MockBackend {
     };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
+    // R2-3: a website is a variant target (content).
+    this.phase6.destinationOf = (destinationId) => {
+      const d = this.destinations.destinations.find((x) => x.id === destinationId && x.kind === 'cms_site');
+      return d ? { brandId: d.brandId, displayName: d.displayName, usable: d.status === 'active' } : null;
+    };
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
