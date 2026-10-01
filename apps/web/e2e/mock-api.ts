@@ -444,6 +444,8 @@ export class MockBackend {
       findings: unknown[];
       createdAt: string;
       reads: number;
+      /** A decision a person recorded; the run applies it on its next read, as the workflow does. */
+      decision: { decision: 'accept' | 'reject' | 'modify'; stepId: string } | null;
     }
   >();
   /** Skills visible to the company (skills.list): built in, company-wide and this brand's own. */
@@ -1490,6 +1492,7 @@ export function createMockRouter(backend: MockBackend) {
                 findings: e.findings,
                 createdAt: now(),
                 reads: 0,
+                decision: null,
               });
             }
           }
@@ -1513,7 +1516,10 @@ export function createMockRouter(backend: MockBackend) {
             items: [...backend.runProposals.entries()]
               .flatMap(([runId, p]) => {
                 const run = backend.runs.get(runId);
-                return run && run.state === 'waiting_for_review' && p.documentId === input.documentId
+                return run &&
+                  run.state === 'waiting_for_review' &&
+                  p.documentId === input.documentId &&
+                  !p.decision
                   ? [{ run, p }]
                   : [];
               })
@@ -1547,8 +1553,10 @@ export function createMockRouter(backend: MockBackend) {
             throw new ValidationFailedError([
               { path: 'runId', issue: `run is ${run.state}, not waiting_for_review` },
             ]);
+          if (p.decision)
+            throw new ValidationFailedError([{ path: 'stepId', issue: 'proposal_already_decided' }]);
           let appliedRevisionId: string | null = null;
-          let note = `proposal ${input.stepId} ${input.decision} by user usr_e2e`;
+          const note = `proposal ${input.stepId} ${input.decision} by user usr_e2e`;
           if (input.decision === 'modify') {
             const batch = (input.batch ?? {}) as {
               baseRevisionId: string;
@@ -1563,28 +1571,14 @@ export function createMockRouter(backend: MockBackend) {
               origin: 'user',
             });
             appliedRevisionId = applied.revision.id;
-            note += `: revision ${appliedRevisionId}`;
-          } else if (input.decision === 'accept') {
-            try {
-              const applied = backend.apply({
-                documentId: p.documentId,
-                baseRevisionId: p.baseRevisionId,
-                operations: p.operations,
-                summary: p.summary,
-                origin: 'agent',
-                agentRunId: run.id,
-              });
-              note += `: revision ${applied.revision.id} created`;
-            } catch (err) {
-              note += `: apply failed (${err instanceof StaleRevisionError ? 'stale_revision' : 'error'})`;
-            }
           }
-          backend.runProposals.delete(run.id);
+          // As the server: the decision is recorded and relayed; the run stays parked until it records it.
+          p.decision = { decision: input.decision, stepId: input.stepId };
           run.steps.push({
             id: `st_${run.id}_${run.steps.length}`,
             index: run.steps.length,
             kind: 'validation',
-            summary: note,
+            summary: appliedRevisionId ? `${note}: revision ${appliedRevisionId}` : note,
             tokensIn: 0,
             tokensOut: 0,
             costMicros: 0,
@@ -1592,12 +1586,7 @@ export function createMockRouter(backend: MockBackend) {
             createdAt: now(),
             invocations: [],
           });
-          Object.assign(run, {
-            state: 'completed',
-            finishedAt: now(),
-            updatedAt: now(),
-            version: run.version + 1,
-          });
+          Object.assign(run, { updatedAt: now(), version: run.version + 1 });
           return { runId: run.id, stepId: input.stepId, decision: input.decision, appliedRevisionId };
         }),
         list: query.input(RunList).query(({ input }) =>
@@ -1614,7 +1603,45 @@ export function createMockRouter(backend: MockBackend) {
           if (!run) throw new NotFoundError('AgentRun', input.runId);
           // A studio-started run parks on its proposal on the second read (the worker has produced it by then).
           const p = backend.runProposals.get(run.id);
-          if (p && run.state === 'running') {
+          if (p && p.decision && run.state === 'waiting_for_review') {
+            // The workflow records the decision: an accepted batch is applied from the stored payload (refused
+            // when the head moved), then the run finishes.
+            let note = `decision ${p.decision.decision} recorded`;
+            if (p.decision.decision === 'accept') {
+              try {
+                const applied = backend.apply({
+                  documentId: p.documentId,
+                  baseRevisionId: p.baseRevisionId,
+                  operations: p.operations,
+                  summary: p.summary,
+                  origin: 'agent',
+                  agentRunId: run.id,
+                });
+                note += `: revision ${applied.revision.id} created`;
+              } catch (err) {
+                note += `: apply failed (${err instanceof StaleRevisionError ? 'stale_revision' : 'error'})`;
+              }
+            }
+            backend.runProposals.delete(run.id);
+            run.steps.push({
+              id: `st_${run.id}_${run.steps.length}`,
+              index: run.steps.length,
+              kind: 'validation',
+              summary: note,
+              tokensIn: 0,
+              tokensOut: 0,
+              costMicros: 0,
+              durationMs: 5,
+              createdAt: now(),
+              invocations: [],
+            });
+            Object.assign(run, {
+              state: 'completed',
+              finishedAt: now(),
+              updatedAt: now(),
+              version: run.version + 1,
+            });
+          } else if (p && run.state === 'running') {
             p.reads += 1;
             if (p.reads >= 2) {
               run.steps.push({

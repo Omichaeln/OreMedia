@@ -153,15 +153,28 @@ export function AgentPanel({
       },
     }),
   );
+  // The reducer state and the studio api change identity every render; the effects below read them through refs
+  // (as use-studio.ts does) so they run on the facts that matter, never on every render.
+  const stateRef = useRef(state);
+  const studioRef = useRef(studio);
+  useEffect(() => {
+    stateRef.current = state;
+    studioRef.current = studio;
+  });
+  // Proposals this tab already decided: the server lists them until the run records the decision and moves on.
+  const decided = useRef(new Set<string>());
   const decide = useMutation(
     trpc.agents.runs.approveProposal.mutationOptions({
       trpc: intentContext(intent.key),
       onSuccess: async (res) => {
         intent.renew();
+        decided.current.add(res.stepId);
+        setRunId(res.runId);
+        writeRun(documentId, res.runId);
         studio.clearProposal();
         void queryClient.invalidateQueries(trpc.agents.runs.pathFilter());
-        // A modified batch is applied at once; an accepted one is applied by the run, so the head is re-read as
-        // the run moves on (the poll below) and once more now in case it already has.
+        // A modified batch is applied at once; an accepted one is applied by the run once it records the decision,
+        // so the head is re-read now and again when the run moves on (the effect below).
         await studio.refreshHead();
         studio.dispatch({
           type: 'notice',
@@ -169,7 +182,7 @@ export function AgentPanel({
             tone: 'info',
             text:
               res.decision === 'accept'
-                ? 'Accepted: the agent applies its proposal as the next revision.'
+                ? 'Accepted: the agent applies its proposal as the next revision once it records the decision.'
                 : res.decision === 'modify'
                   ? 'Applied as your revision; edit on from here.'
                   : 'Rejected: the agent is told and continues.',
@@ -180,29 +193,49 @@ export function AgentPanel({
   );
 
   // The server-side proposal for this document is the studio's pending proposal (and vanishes once decided).
-  const serverProposal = pending.data?.items[0] ?? null;
+  const serverProposal = pending.data?.items.find((p) => !decided.current.has(p.stepId)) ?? null;
+  const serverStepId = serverProposal?.stepId ?? null;
   const shownRun = state.proposal?.run?.stepId ?? null;
   useEffect(() => {
     if (serverProposal && shownRun !== serverProposal.stepId)
-      studio.setProposal(proposalOf(serverProposal, state));
-    else if (!serverProposal && shownRun !== null && pending.isSuccess) studio.clearProposal();
-  }, [serverProposal, shownRun, pending.isSuccess, state, studio]);
+      studioRef.current.setProposal(proposalOf(serverProposal, stateRef.current));
+    else if (!serverProposal && shownRun !== null && pending.isSuccess) studioRef.current.clearProposal();
+    // serverProposal is identified by its step id; a new object for the same step is the same proposal.
+  }, [serverStepId, shownRun, pending.isSuccess]);
 
-  // Once the run has moved on (it applied, or was told), re-read the head once so the agent's revision shows.
+  // Once the run has moved on (it applied, or was told), re-read the head once so the agent's revision shows; a
+  // decision the run could not apply (the head moved first) is said, not hidden.
   const runState = run.data?.state ?? null;
   const settled = useRef<string | null>(null);
   useEffect(() => {
-    if (!runId || !runState || LIVE.has(runState)) return;
+    if (!runId || !runState || runState === 'waiting_for_review' || runState === 'planned') return;
     const mark = `${runId}:${runState}`;
     if (settled.current === mark) return;
     settled.current = mark;
-    void studio.refreshHead();
-    writeRun(documentId, null);
-  }, [runId, runState, studio, documentId]);
+    void studioRef.current.refreshHead();
+    if (!LIVE.has(runState)) writeRun(documentId, null);
+  }, [runId, runState, documentId]);
+  const applyFailed = steps.data?.items.find(
+    (st) => st.kind === 'validation' && st.summary.includes('apply failed'),
+  );
+  const applyFailedShown = useRef<string | null>(null);
+  useEffect(() => {
+    if (!applyFailed || applyFailedShown.current === applyFailed.id) return;
+    applyFailedShown.current = applyFailed.id;
+    studioRef.current.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'warning',
+        text: 'The agent could not apply the accepted proposal: the document had moved on. Ask again from the current revision.',
+      },
+    });
+  }, [applyFailed]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!chosen || !instruction.trim()) return;
+    // The layout skill needs the copy it lays out: the page's own headline; the request itself travels as notes.
+    // A page with no editable text has no headline yet, so the request stands in for it.
     const headline = page.elements.find((el) => el.type === 'text' && !el.locked && !el.protected);
     start.mutate({
       brandId,
@@ -226,9 +259,11 @@ export function AgentPanel({
       ? 'No agent principal is granted this brand'
       : !instruction.trim()
         ? 'Say what the agent should change'
-        : live
-          ? 'Wait for the current run'
-          : undefined;
+        : hasLocalWork
+          ? 'Save your pending changes first'
+          : live
+            ? 'Wait for the current run'
+            : undefined;
 
   return (
     <div className="flex flex-col gap-3" data-testid="agent-panel">

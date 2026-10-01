@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, like, sql } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import { BrandScopedRepository, TenantScopedRepository, requireTenant, type Tx } from '@oremedia/db';
@@ -72,6 +72,28 @@ export class AgentStepRepository extends TenantScopedRepository<typeof agentStep
   }
   async append(values: Omit<typeof agentSteps.$inferInsert, 'tenantId'>, tx?: Tx) {
     await this.insertScoped(values, tx);
+  }
+  /**
+   * The decision steps recorded on these runs (approveProposal appends `proposal <stepId> <decision> …`), so a
+   * proposal a person already decided is neither offered again nor decided twice while the run has not yet moved.
+   */
+  async decidedProposalStepIds(runIds: readonly string[], tx?: Tx): Promise<Set<string>> {
+    if (runIds.length === 0) return new Set();
+    const rows = await this.conn(tx)
+      .select({ summary: agentSteps.summary })
+      .from(agentSteps)
+      .where(
+        this.scope(
+          and(
+            inArray(agentSteps.runId, [...runIds]),
+            eq(agentSteps.kind, 'validation'),
+            like(agentSteps.summary, 'proposal %'),
+          ),
+        ),
+      );
+    return new Set(
+      rows.map((r) => r.summary.split(' ')[1]).filter((id): id is string => typeof id === 'string'),
+    );
   }
   async nextIndex(runId: string, tx?: Tx): Promise<number> {
     const rows = await this.conn(tx)

@@ -780,6 +780,23 @@ describe('agents module (spec 12) against MySQL 8', () => {
         ),
       );
       expect(decided).toMatchObject({ decision: 'accept', appliedRevisionId: null });
+      // Decided but not yet recorded by the run (still parked): it is no longer pending and cannot be decided twice.
+      expect(
+        (
+          await run(tenantA, () =>
+            agentsService.runs.pendingProposals(A, { brandId: brandA, documentId: docId }),
+          )
+        ).items,
+      ).toEqual([]);
+      await expect(
+        run(tenantA, (tx) =>
+          agentsService.runs.approveProposal(
+            A,
+            { runId: started.runId, stepId: decisionStepId, decision: 'reject' },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'stepId', issue: 'proposal_already_decided' }] });
       const events = await tdb.db
         .select()
         .from(outboxEvents)

@@ -55,10 +55,10 @@ function TabCount({ n, label }: { n: number; label: string }) {
  * Tailwind sees them.
  */
 const GRID = {
-  both: 'md:grid-cols-[13rem_minmax(20rem,1fr)_18rem] lg:grid-cols-[16rem_minmax(20rem,1fr)_22rem] xl:grid-cols-[18rem_minmax(24rem,1fr)_24rem]',
-  left: 'md:grid-cols-[13rem_minmax(20rem,1fr)] lg:grid-cols-[16rem_minmax(20rem,1fr)] xl:grid-cols-[18rem_minmax(24rem,1fr)]',
+  both: 'md:grid-cols-[12rem_minmax(20rem,1fr)_14rem] lg:grid-cols-[16rem_minmax(20rem,1fr)_22rem] xl:grid-cols-[18rem_minmax(24rem,1fr)_24rem]',
+  left: 'md:grid-cols-[12rem_minmax(20rem,1fr)] lg:grid-cols-[16rem_minmax(20rem,1fr)] xl:grid-cols-[18rem_minmax(24rem,1fr)]',
   right:
-    'md:grid-cols-[minmax(20rem,1fr)_18rem] lg:grid-cols-[minmax(20rem,1fr)_22rem] xl:grid-cols-[minmax(24rem,1fr)_24rem]',
+    'md:grid-cols-[minmax(20rem,1fr)_14rem] lg:grid-cols-[minmax(20rem,1fr)_22rem] xl:grid-cols-[minmax(24rem,1fr)_24rem]',
   none: 'md:grid-cols-[minmax(20rem,1fr)]',
 } as const;
 const gridKey = (p: { left: boolean; right: boolean }): keyof typeof GRID =>

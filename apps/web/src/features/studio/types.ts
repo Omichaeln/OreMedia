@@ -60,10 +60,10 @@ export interface Conflict {
   conflicts: RebaseConflict[];
 }
 
-/** An agent proposal awaiting Accept / Modify / Reject (spec 11.4, 21.4). */
 /** What the studio needs of a proposal's evaluation: the server's dry run carries it, a run's payload reproduces it. */
 export type ProposalResult = Omit<ProposeResult, 'preview'> & { preview?: ProposeResult['preview'] };
 
+/** An agent proposal awaiting Accept / Modify / Reject (spec 11.4, 21.4). */
 export interface Proposal {
   id: string;
   batch: IntentBatch;

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { CreativeDocumentV1, Operation } from '@oremedia/contracts/creative';
 import type { TemplateDocument } from '@oremedia/editor';
 import { Badge, Button, StatusBanner, type Tone } from '@oremedia/ui';
@@ -120,7 +121,10 @@ export function ConflictDialog({
     ),
   ];
   const kept = conflict.localOps.length - conflict.conflicts.length;
-  const mine = keepMineOps(conflict.head, conflict.localOps, templates);
+  const mine = useMemo(
+    () => keepMineOps(conflict.head, conflict.localOps, templates),
+    [conflict.head, conflict.localOps, templates],
+  );
   return (
     <Dialog open>
       <DialogContent

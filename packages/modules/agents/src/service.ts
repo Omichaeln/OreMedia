@@ -90,8 +90,8 @@ function transition(from: AgentRunState, event: AgentRunEvent, path: string): Ag
   }
 }
 
-/** Parked runs read for a document's proposals: a brand rarely has more than a few awaiting a person. */
-const PARKED_RUNS_MAX = 50;
+/** Parked runs read for a document's proposals (newest first): a brand rarely has more than a few awaiting a person. */
+const PARKED_RUNS_MAX = 200;
 
 const toRunDto = (r: RunRow) => ({
   id: r.id,
@@ -259,14 +259,21 @@ export const agentsService = {
       const parsed = RunPendingProposals.parse(input);
       const brand = await brandService.get(actor, parsed.brandId, tx);
       const parked = await runsRepo.listInState(brand.id, 'waiting_for_review', PARKED_RUNS_MAX, tx);
-      const proposals = await invocationsRepo.listProposalsForRuns(
-        parked.map((r) => r.id),
-        tx,
-      );
-      const items = [];
+      const runIds = parked.map((r) => r.id);
+      const proposals = await invocationsRepo.listProposalsForRuns(runIds, tx);
+      const decided = await stepsRepo.decidedProposalStepIds(runIds, tx);
+      const items: Array<{
+        runId: string;
+        stepId: string;
+        taskKind: string;
+        brief: Record<string, unknown>;
+        createdAt: string;
+        proposal: CreativeProposalPayload;
+      }> = [];
       for (const run of parked) {
         const latest = proposals.find((p) => p.runId === run.id);
-        if (!latest) continue;
+        // Decided but not yet applied (the run moves once the workflow records the decision): no longer pending.
+        if (!latest || decided.has(latest.stepId)) continue;
         const payload = CreativeProposalPayload.safeParse(latest.proposalPayload);
         if (!payload.success || payload.data.documentId !== parsed.documentId) continue;
         items.push({
@@ -370,6 +377,9 @@ export const agentsService = {
         throw new ValidationFailedError([
           { path: 'runId', issue: `run is ${run.state}, not waiting_for_review` },
         ]);
+      // One decision per proposal: the run moves only once the workflow records it, so the row alone cannot tell.
+      if ((await stepsRepo.decidedProposalStepIds([run.id], tx)).has(parsed.stepId))
+        throw new ValidationFailedError([{ path: 'stepId', issue: 'proposal_already_decided' }]);
       let appliedRevisionId: string | null = null;
       if (parsed.decision === 'modify') {
         // A pending proposal a person completes through its own command (a proposed schedule) has no batch to modify.
