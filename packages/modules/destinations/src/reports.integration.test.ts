@@ -15,6 +15,7 @@ import { LocalKms, configureCredentialBroker, registerProviderClients } from '@o
 import { SourceRegistry, type SourceReportRow } from '@oremedia/providers';
 import { configureSourceAvailability } from './hooks';
 import { createDestinationReportService } from './reports';
+import { MAX_REPORT_PAGES } from './report-runtime';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
@@ -291,6 +292,27 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
       reports: expect.arrayContaining([{ reportKey: 'gsc.queries', start: '2026-09-25', end: '2026-09-28' }]),
     });
     await lock.reset(`lock:destination-report-sweep:${tenantA}:${siteId}`);
+  });
+
+  it('a report beyond the page cap is not stored at all: the fetch is transient and the window stays as it was', async () => {
+    fixture.reportPageSize = 1; // 56 rows → 56 pages, over MAX_REPORT_PAGES
+    fixture.reportCalls.length = 0;
+    const before = await storedRows(siteId, 'gsc.queries');
+    expect(
+      await asPlatformJob(tenantA, () =>
+        runtime.reports.fetchDestinationReport({
+          ...ctx(tenantA),
+          destinationId: siteId,
+          now: NOW,
+          reportKey: 'gsc.queries',
+          start: '2026-09-01',
+          end: '2026-09-28',
+        }),
+      ),
+    ).toEqual({ outcome: 'transient', reason: 'page_cap' });
+    expect(fixture.reportCalls).toHaveLength(MAX_REPORT_PAGES);
+    expect(await storedRows(siteId, 'gsc.queries')).toEqual(before); // nothing truncated was written
+    fixture.reportPageSize = 1000;
   });
 
   it('a 401 is refreshed once through the daily refresh and the read retried with the new token', async () => {

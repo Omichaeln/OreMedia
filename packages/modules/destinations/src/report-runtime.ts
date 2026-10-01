@@ -12,6 +12,7 @@ import {
   type DestinationReportsInputV1,
   type DestinationReportsRuntimeV1,
   type DestinationRefreshRuntimeV1,
+  type SourceUseCheckResult,
 } from '@oremedia/contracts/destinations';
 import {
   CapabilityUnsupportedError,
@@ -48,10 +49,49 @@ const targetsRepo = new DestinationReportTargetRepository();
 const REPORT_JOB = 'destination-report-sweep';
 /** One run per destination at a time; a second plan inside the window is skipped (the next day's run reads on). */
 const REPORT_LOCK_SECONDS = 15 * 60;
-/** Pages read per report and run (Search Console: 1000 rows each); beyond it the rest waits for the next run. */
-const MAX_REPORT_PAGES = 50;
+/**
+ * Pages read per report and run (Search Console: 1000 rows each). A report that needs more is not stored at all
+ * (a truncated window would read as the day's truth and never be re-read): the fetch ends `transient` with reason
+ * `page_cap`, the destination is degraded for today and the whole range is read again tomorrow.
+ */
+export const MAX_REPORT_PAGES = 50;
 const DAY_MS = 86_400_000;
 type ReportRowInsert = Parameters<DestinationReportRowRepository['replaceWindow']>[5][number];
+
+/** Raised inside the broker call when a report exceeds the page cap; mapped to a `transient` result, never stored. */
+class ReportPageCapError extends Error {
+  constructor() {
+    super('report page cap reached');
+    this.name = 'ReportPageCapError';
+  }
+}
+
+/** The source-use data types a kind's reports fall under (one per report-key prefix: `ga4.reports`). */
+export const reportDataTypes = (reports: readonly { key: string }[]): string[] => [
+  ...new Set(reports.map((r) => reportDataType(r.key))),
+];
+
+/** One use of every data type of the kind's reports: the first refusal stands, else allowed (D-17). */
+export async function reportUseDecision(
+  brandId: string,
+  kind: string,
+  reports: readonly { key: string }[],
+  use: 'read' | 'retain',
+  now: Date,
+  tx?: Tx,
+): Promise<{ dataType: string; decision: SourceUseCheckResult }> {
+  const dataTypes = reportDataTypes(reports);
+  let last: { dataType: string; decision: SourceUseCheckResult } = {
+    dataType: dataTypes[0] ?? `${kind}.reports`,
+    decision: { allowed: false, reason: 'no_policy', policy: null },
+  };
+  for (const dataType of dataTypes) {
+    const decision = sourceUseDecision(await policiesRepo.findByKey(brandId, kind, dataType, tx), use, now);
+    last = { dataType, decision };
+    if (!decision.allowed) return last;
+  }
+  return last;
+}
 
 export const dateKey = (d: Date): string => d.toISOString().slice(0, 10);
 export const addDays = (date: string, days: number): string =>
@@ -115,8 +155,13 @@ export function createDestinationReportRuntime(
       { brandId: row.brandId, kind: row.kind, reason },
     );
 
-  /** The fetch's failure as the workflow reads it; anything that is not a platform answer propagates. */
+  /**
+   * The fetch's failure as the workflow reads it (a returned result, never a thrown error: the activity retry
+   * policy does not apply, the destination is degraded for today and the next day's run reads again); anything
+   * that is not a platform answer propagates.
+   */
   const failureOf = (err: unknown): DestinationReportFetchResultV1 => {
+    if (err instanceof ReportPageCapError) return { outcome: 'transient', reason: 'page_cap' };
     if (err instanceof SourceReadError) {
       switch (err.classification.kind) {
         case 'rate_limited':
@@ -159,20 +204,19 @@ export function createDestinationReportRuntime(
       }
       if (reports.length === 0) return { outcome: 'skipped', reason: 'source_not_enabled' };
       // D-17: no read without a current policy allowing it; the refusal is recorded, nothing is fetched.
-      const dataTypes = [...new Set(reports.map((r) => reportDataType(r.key)))];
-      for (const dataType of dataTypes) {
-        const decision = sourceUseDecision(
-          await policiesRepo.findByKey(row.brandId, row.kind, dataType),
-          'read',
-          new Date(at),
-        );
-        if (!decision.allowed) {
-          await withTransaction((tx) => skippedAudit(row, `${decision.reason}:${dataType}`, tx));
-          return {
-            outcome: 'skipped',
-            reason: decision.reason as 'no_policy' | 'review_overdue' | 'not_allowed',
-          };
-        }
+      const { dataType, decision } = await reportUseDecision(
+        row.brandId,
+        row.kind,
+        reports,
+        'read',
+        new Date(at),
+      );
+      if (!decision.allowed) {
+        await withTransaction((tx) => skippedAudit(row, `${decision.reason}:${dataType}`, tx));
+        return {
+          outcome: 'skipped',
+          reason: decision.reason as 'no_policy' | 'review_overdue' | 'not_allowed',
+        };
       }
       const lock = await reportLock.hit(
         `lock:${REPORT_JOB}:${tenantId}:${destinationId}`,
@@ -227,7 +271,7 @@ export function createDestinationReportRuntime(
               pageToken = result.nextPageToken;
             }
             log.warn({ destinationId, reportKey, pages: MAX_REPORT_PAGES }, 'report page cap reached');
-            return rows;
+            throw new ReportPageCapError();
           },
         );
       let fetched: SourceReportRow[];
@@ -332,11 +376,13 @@ export function createDestinationReportRuntime(
      */
     async pruneDestinationReports({ destinationId, now: at }: DestinationReportsInputV1) {
       const row = await destinationsRepo.getById(destinationId);
-      const first = registry().capability(row.kind)?.reports[0];
+      const reports = registry().capability(row.kind)?.reports ?? [];
       const cutoffFor = (days: number) => addDays(dateKey(new Date(at)), -days);
-      if (!first) return { deleted: 0, cutoff: cutoffFor(REPORT_CACHE_DAYS) };
-      const decision = sourceUseDecision(
-        await policiesRepo.findByKey(row.brandId, row.kind, reportDataType(first.key)),
+      if (reports.length === 0) return { deleted: 0, cutoff: cutoffFor(REPORT_CACHE_DAYS) };
+      const { dataType, decision } = await reportUseDecision(
+        row.brandId,
+        row.kind,
+        reports,
         'retain',
         new Date(at),
       );
@@ -358,7 +404,7 @@ export function createDestinationReportRuntime(
               brandId: row.brandId,
               kind: row.kind,
               count: n,
-              scope: reportDataType(first.key),
+              scope: dataType,
               reason: `cutoff=${cutoff},retentionDays=${days}`,
             },
           );
