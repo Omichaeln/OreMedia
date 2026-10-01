@@ -3,10 +3,10 @@ import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { SourceRegistry, sourceRegistry } from './source-registry';
 import { certifiedForTest } from './testing';
 
-const KINDS = ['ga4_property', 'search_console_site'];
+const KINDS = ['ga4_property', 'search_console_site', 'gbp_location'];
 
 describe('source registry (ledger R2-1): registered, none enabled for tenants until certified', () => {
-  it('registers both source adapters with scopes, rate limits and certifiedAt null', () => {
+  it('registers every source adapter with scopes, rate limits and certifiedAt null', () => {
     const listed = sourceRegistry.list();
     expect(listed.map((l) => l.key).sort()).toEqual([...KINDS].sort());
     for (const entry of listed) {
