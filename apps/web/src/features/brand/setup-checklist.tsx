@@ -54,7 +54,8 @@ export function SetupChecklist() {
       ...mutationIntent(intent.key),
       onSuccess: () => {
         intent.renew();
-        void queryClient.invalidateQueries(trpc.brand.pathFilter());
+        void queryClient.invalidateQueries(trpc.brand.get.pathFilter());
+        void queryClient.invalidateQueries(trpc.brand.list.pathFilter());
       },
     }),
   );

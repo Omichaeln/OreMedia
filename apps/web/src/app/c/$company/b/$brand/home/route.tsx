@@ -63,7 +63,7 @@ export function BrandHomeRoute() {
           {brand.name}: what needs you, and where to start.
         </p>
       </header>
-      {(brand.status === 'setup' || !brand.publishedVersionId || newerDraft) && (
+      {((brand.status !== 'setup' && !brand.publishedVersionId) || newerDraft) && (
         <div className="flex flex-col gap-2">
           {brand.status !== 'setup' && !brand.publishedVersionId && (
             <StatusBanner

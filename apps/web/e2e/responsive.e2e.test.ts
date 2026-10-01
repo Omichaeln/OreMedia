@@ -77,7 +77,12 @@ const overflow = (page: Page) =>
     offenders: [...document.querySelectorAll<HTMLElement>('body *')]
       .filter((el) => {
         const r = el.getBoundingClientRect();
-        return r.width > 0 && r.right > window.innerWidth + 1 && getComputedStyle(el).position !== 'fixed';
+        if (!(r.width > 0 && r.right > window.innerWidth + 1) || getComputedStyle(el).position === 'fixed')
+          return false;
+        // Clipped by an ancestor: it cannot widen the page, so it is not the cause.
+        for (let p = el.parentElement; p; p = p.parentElement)
+          if (/hidden|clip|auto|scroll/.test(getComputedStyle(p).overflowX)) return false;
+        return true;
       })
       .slice(0, 5)
       .map(
@@ -164,22 +169,18 @@ describe.skipIf(!enabled)('responsive parity (built app in Chromium, mock transp
       );
     });
 
-  it('at 200% zoom on a desktop the brand home, calendar and settings reflow without horizontal scrolling', async () => {
+  it('at 200% browser zoom on a 1440 px desktop (a 720 px CSS viewport) the brand home, calendar and settings reflow without horizontal scrolling', async () => {
+    // Browser zoom halves the CSS viewport, so media queries and layout both see 720 px; a CSS `zoom` would not.
     const { context, page } = await signedIn(1440);
+    await page.setViewportSize({ width: 720, height: 450 });
     for (const screen of SCREENS.filter((s) => ['brand home', 'calendar', 'settings'].includes(s.name))) {
       await open(page, screen);
-      await page.evaluate(() => {
-        document.documentElement.style.zoom = '2';
-      });
-      await page.waitForTimeout(100);
       const o = await overflow(page);
       expect(
         o.scrollWidth,
-        `${screen.name} at 200% overflows: ${o.offenders.join(', ')}`,
+        `${screen.name} at 200% zoom overflows: ${o.offenders.join(', ')}`,
       ).toBeLessThanOrEqual(o.innerWidth);
-      await page.evaluate(() => {
-        document.documentElement.style.zoom = '';
-      });
+      expect(await page.getByRole('button', { name: 'Menu' }).isVisible()).toBe(true);
     }
     await context.close();
   }, 60_000);

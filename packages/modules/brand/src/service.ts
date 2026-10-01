@@ -572,8 +572,13 @@ export const brandService = {
   async completeSetup(actor: ResolvedActor, input: z.infer<typeof BrandCompleteSetup>, tx: Tx) {
     const parsed = BrandCompleteSetup.parse(input);
     const brand = await brandsRepo.lock(parsed.brandId, tx);
-    await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+    const decision = await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+    assertMayDecide(decision); // an agent may only propose standards; it never finishes a brand's setup
     if (brand.status === 'active') return { brandId: brand.id, status: brand.status, version: brand.version };
+    if (brand.status === 'archived')
+      throw new ValidationFailedError([
+        { path: 'brandId', issue: 'an archived brand cannot complete setup' },
+      ]);
     if (!brand.publishedVersionId)
       throw new ValidationFailedError([
         { path: 'brandId', issue: 'publish the brand standards before completing setup' },

@@ -1589,6 +1589,25 @@ describe('brand module (spec 8) against MySQL 8', () => {
       await expect(
         run(tenantA, (tx) => brandService.completeSetup(A, { brandId: brandB, expectedVersion: 0 }, tx)),
       ).rejects.toBeInstanceOf(NotFoundError);
+      // An agent proposes standards but never finishes setup; an archived brand is never re-activated.
+      const second = await run(tenantA, (tx) =>
+        brandService.create(
+          A,
+          { name: 'Agent brand', timezone: 'UTC', defaultLocale: 'en', classification: 'client' },
+          tx,
+        ),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.completeSetup(agent(tenantA), { brandId: second.brandId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await tdb.db.update(brands).set({ status: 'archived' }).where(eq(brands.id, second.brandId));
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.completeSetup(A, { brandId: second.brandId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
     });
   });
 });

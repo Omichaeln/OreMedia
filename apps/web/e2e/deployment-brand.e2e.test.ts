@@ -164,7 +164,7 @@ describe.skipIf(!enabled)('deployment brand packs (built app in Chromium, mock t
     await context.close();
   }, 60_000);
 
-  it('UX-19: a malformed brand.json, and one that never answers, fall back to the neutral brand within the budget and never flash later', async () => {
+  it('UX-19: a malformed brand.json, and one that never answers, fall back to the neutral brand within the budget and stay neutral afterwards', async () => {
     const neutralPrimary = await (async () => {
       const page = await open('oremedia', 'light');
       const v = await token(page, '--primary');
@@ -190,7 +190,7 @@ describe.skipIf(!enabled)('deployment brand packs (built app in Chromium, mock t
       expect(elapsed, `${mode}: first render waited ${elapsed} ms`).toBeLessThan(6_000);
       await expect(page.title()).resolves.toBe('Oremedia');
       await expect(token(page, '--primary')).resolves.toBe(neutralPrimary);
-      // Nothing applies late: the tokens are the same after the pack's budget has long passed.
+      // A malformed or absent pack has nothing to apply late: the tokens are the same well past the budget.
       await page.waitForTimeout(2_500);
       await expect(token(page, '--primary')).resolves.toBe(neutralPrimary);
       await expect(page.title()).resolves.toBe('Oremedia');
