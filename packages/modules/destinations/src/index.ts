@@ -29,7 +29,24 @@ export {
   registerDestinationOutboxRoutes,
   DESTINATION_VERIFY_WORKFLOW_TYPE,
   destinationVerifyWorkflowId,
+  SEO_AUDIT_WORKFLOW_TYPE,
+  seoAuditWorkflowId,
 } from './outbox-routes';
+// R2-4: the bounded technical SEO audit of a website destination (seoAuditSweepWorkflowV1 weekly on task queue
+// `ingest-metrics`, seoAuditWorkflowV1 per run); seoAuditService is the restricted read model (summary, runs,
+// pages, findings with suggested tasks) and the on-demand `run` command (seo_audit.run, AGENT_NEVER).
+export { seoAuditService, createSeoAuditService } from './audit';
+export { createSeoAuditRuntime, type SeoAuditRuntimeOptions } from './audit-runtime';
+export {
+  robotsDisallowFor,
+  robotsAllows,
+  sitemapUrls,
+  extractLinks,
+  auditPage,
+  crossPageChecks,
+  findingsOf,
+  FINDING_RULES,
+} from './audit-crawl';
 export {
   destinationReportService,
   createDestinationReportService,
@@ -47,6 +64,9 @@ export {
   DestinationReportRowRepository,
   DestinationReportTargetRepository,
   PendingDestinationGrantRepository,
+  SeoAuditPageRepository,
+  SeoAuditRunRepository,
+  SeoAuditTargetRepository,
   SourceUsePolicyRepository,
 } from './repositories';
 export {
@@ -71,6 +91,9 @@ export const DESTINATION_TOKEN_REFRESH_SCHEDULE_ID = 'destination-token-refresh'
 /** R2-1 part B: the daily report sweep, one schedule per namespace on task queue `ingest-metrics` (worker-ingest). */
 export const DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE = 'destinationReportSweepWorkflowV1';
 export const DESTINATION_REPORT_SWEEP_SCHEDULE_ID = 'destination-report-sweep';
+/** R2-4: the weekly audit sweep, one schedule per namespace on task queue `ingest-metrics` (worker-ingest). */
+export const SEO_AUDIT_SWEEP_WORKFLOW_TYPE = 'seoAuditSweepWorkflowV1';
+export const SEO_AUDIT_SWEEP_SCHEDULE_ID = 'seo-audit-sweep';
 /** Test fixtures only (an in-memory source); never registered by a production composition root. */
 export {
   FixtureSourceAdapter,

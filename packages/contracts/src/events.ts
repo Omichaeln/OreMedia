@@ -64,5 +64,7 @@ export const EVENT_TYPES = {
   // Brand destinations (R2-0; appended; additive only): a destination registered for a brand, and one disconnected
   'destination.registered': 1,
   'destination.disconnected': 1,
+  // Technical SEO audit (R2-4; appended; additive only): a person asked for a run; seoAuditWorkflowV1 crawls
+  'destination.audit_requested': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

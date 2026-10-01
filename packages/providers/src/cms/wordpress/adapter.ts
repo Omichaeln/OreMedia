@@ -24,6 +24,7 @@ import {
   textFingerprint,
   type ProviderResponse,
 } from '../../shared';
+import { RenderedPageError, fetchPageBounded } from '../../page-fetch';
 import { assertSafeUrl } from '../../ssrf';
 import { wordpressCmsCapability } from './capability';
 
@@ -296,8 +297,8 @@ export class WordPressCmsAdapter implements CmsAdapter {
   }
 
   /**
-   * Validation without credentials: the page as the public sees it. Every hop is re-checked against the SSRF
-   * policy and the site's host before it is followed; the body is read against the cap and marked truncated beyond.
+   * Validation without credentials: the page as the public sees it, through the shared bounded fetch (every hop
+   * re-checked against the SSRF policy and the site's host; the body read against the cap, truncated beyond).
    */
   async fetchRendered(
     site: CmsSite,
@@ -305,52 +306,18 @@ export class WordPressCmsAdapter implements CmsAdapter {
     url: string,
     maxBytes: number,
   ): Promise<CmsRenderedPage> {
-    const host = assertSafeUrl(site.siteUrl).host;
-    let current = url;
-    for (let hop = 0; ; hop++) {
-      const target = assertSafeUrl(current);
-      if (target.host !== host)
-        throw new RenderedPageError('other_host', `${target.host} is not the site's host`);
-      const { res } = await io.request(
-        current,
-        { method: 'GET', headers: { accept: 'text/html' } },
-        { mutation: false },
-      );
-      if ([301, 302, 303, 307, 308].includes(res.status)) {
-        await res.body?.cancel();
-        const location = res.headers.get('location');
-        if (!location || hop >= WP_RENDERED_MAX_HOPS)
-          throw new RenderedPageError('redirect_limit', 'too many redirects or no location');
-        current = new URL(location, current).toString();
-        continue;
-      }
-      const chunks: Buffer[] = [];
-      let total = 0;
-      let truncated = false;
-      if (res.body) {
-        const reader = res.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = Buffer.from(value as Uint8Array);
-          total += chunk.length;
-          if (total > maxBytes) {
-            chunks.push(chunk.subarray(0, Math.max(0, chunk.length - (total - maxBytes))));
-            truncated = true;
-            await reader.cancel();
-            break;
-          }
-          chunks.push(chunk);
-        }
-      }
-      return {
-        status: res.status,
-        html: Buffer.concat(chunks).toString('utf8'),
-        bytes: Math.min(total, maxBytes),
-        truncated,
-        url: current,
-      };
-    }
+    const page = await fetchPageBounded(io, url, {
+      host: assertSafeUrl(site.siteUrl).host,
+      maxBytes,
+      maxHops: WP_RENDERED_MAX_HOPS,
+    });
+    return {
+      status: page.status,
+      html: page.html,
+      bytes: page.bytes,
+      truncated: page.truncated,
+      url: page.url,
+    };
   }
 
   /** A site has no documented quota: a 429 (a plugin or CDN) is a throttle before any effect, the rest is the default. */
@@ -436,16 +403,8 @@ class TermError extends Error {
   }
 }
 
-/** A rendered page that could not be read within the policy (another host, too many redirects). */
-export class RenderedPageError extends Error {
-  constructor(
-    readonly code: 'other_host' | 'redirect_limit',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'RenderedPageError';
-  }
-}
+/** Kept here for the adapter's callers; the class lives with the shared fetch (page-fetch.ts). */
+export { RenderedPageError };
 
 type Classifier = WordPressCmsAdapter['classifyError'];
 

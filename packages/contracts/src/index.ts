@@ -18,6 +18,7 @@ export * from './content';
 export * from './measurement';
 export * from './community';
 export * from './destinations';
+export * from './seo-audit';
 export * from './intelligence';
 export * from './experiments';
 export * from './billing';

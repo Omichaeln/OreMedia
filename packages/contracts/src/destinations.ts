@@ -38,8 +38,8 @@ export const SourceUseDataType = z
 /**
  * What each kind of destination can be used for; the only place the kinds differ. Every service and UI rule reads
  * it generically: a policy may allow only the uses listed here. gbp_location is read-only with no retention
- * (D-17: no permanent ingestion, writes off); cms_site reads and writes (D-16); a Discord webhook only writes
- * (D-18: announcements, no inbound).
+ * (D-17: no permanent ingestion, writes off); cms_site reads and writes (D-16) and may retain its audit runs
+ * (R2-4, `cms.audit`); a Discord webhook only writes (D-18: announcements, no inbound).
  */
 export const DESTINATION_KIND_CAPABILITIES: Readonly<
   Record<DestinationKind, { label: string; uses: readonly SourceUse[] }>
@@ -47,7 +47,7 @@ export const DESTINATION_KIND_CAPABILITIES: Readonly<
   ga4_property: { label: 'Google Analytics 4 property', uses: ['read', 'retain'] },
   search_console_site: { label: 'Search Console site', uses: ['read', 'retain'] },
   gbp_location: { label: 'Google Business Profile location', uses: ['read'] },
-  cms_site: { label: 'Website CMS', uses: ['read', 'write'] },
+  cms_site: { label: 'Website CMS', uses: ['read', 'retain', 'write'] },
   discord_webhook: { label: 'Discord webhook', uses: ['write'] },
 };
 

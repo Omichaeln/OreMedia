@@ -26,6 +26,7 @@ export const Action = z.enum([
   'destination.connect',
   'destination.manage',
   'source_use.manage',
+  'seo_audit.run',
   'mandate.manage',
   'agent.start_run',
   'agent.cancel_run',
