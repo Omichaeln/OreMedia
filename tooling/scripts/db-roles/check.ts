@@ -6,10 +6,18 @@
  * exits 1 when any role fails, 2 when it cannot run.
  * Run it where the repository and the environment's variables meet: locally through the Railway CLI
  * (`railway run pnpm db:roles:check` with the environment and api service linked), never against a URL copied
- * into a chat. The deployed images carry no tooling, so it does not run from a service shell.
+ * into a chat. The deployed images carry no tooling, so it does not run from a service shell; inside an environment
+ * the api image's `db-roles-apply` entrypoint applies the roles and runs this same comparison.
  */
-import { generateRetentionRoleSql, generateRoleSql, readHeldGrants } from '@oremedia/db/roles';
-import { compareGrants, formatDiff, grantSetOf, userOf } from './compare';
+import {
+  compareGrants,
+  formatDiff,
+  generateRetentionRoleSql,
+  generateRoleSql,
+  grantSetOf,
+  readHeldGrants,
+  userOf,
+} from '@oremedia/db/roles';
 
 async function checkRole(
   role: 'application' | 'retention',

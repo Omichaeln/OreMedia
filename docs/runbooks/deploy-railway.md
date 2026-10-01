@@ -30,11 +30,20 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      neutral product brand; the pack also serves the public legal pages at `/legal/*`), `VITE_REVIEW_PORTAL_ORIGIN`
      (build arg). `VITE_API_URL` stays unset: the app calls `/trpc` on its own origin.
      No variable disables SSRF protection; there is no such flag in the hosted product.
-5. Apply the application DB role: replace the placeholders in `packages/db/roles/app-role.sql` and run it as the
-   MySQL admin; point `DATABASE_URL` at that user. Apply the retention role the same way with
-   `packages/db/roles/retention-role.sql` (a second user, its own password in the secret store) and point
-   worker-core's `DATABASE_URL_RETENTION` at it. Both files are generated (`pnpm tsx tooling/scripts/generate-db-roles.ts`)
-   and must be re-applied after a migration that adds tables (the app role's grants are per table).
+5. Apply the database roles from inside the environment (Railway's MySQL is reachable only on the private
+   network): add a `db-roles` service from this repository with `OREMEDIA_APP=api`, Dockerfile
+   `infra/railway/Dockerfile`, start command `node dist/db-roles-apply.js`, restart policy never and no health
+   check, and the variables `DATABASE_URL` (the admin connection, `${{MySQL.MYSQL_URL}}`), `DB_APP_PASSWORD` and
+   `DB_RETENTION_PASSWORD` (generated, for example `${{secret(48)}}`; optional `DB_APP_USER` and
+   `DB_RETENTION_USER` default to `oremedia_app` and `oremedia_retention`). Each deploy of it creates the users
+   when missing, sets their passwords, revokes and re-grants exactly `packages/db/roles/app-role.sql` and
+   `retention-role.sql`, then logs the same `PASS`/`FAIL` lines as `pnpm db:roles:check` (section 3b). It waits
+   for every table the role names before it grants, so a push carrying a migration can redeploy it alongside the
+   api. Then point the application services' `DATABASE_URL` at the application user
+   (`mysql://oremedia_app:${{db-roles.DB_APP_PASSWORD}}@${{MySQL.RAILWAY_PRIVATE_DOMAIN}}:3306/${{MySQL.MYSQL_DATABASE}}`)
+   and worker-core's `DATABASE_URL_RETENTION` at the retention user the same way. Both SQL files are generated
+   (`pnpm tsx tooling/scripts/generate-db-roles.ts`); redeploy `db-roles` after a migration that adds tables (the
+   app role's grants are per table).
 6. Temporal Cloud: create the namespace, upload the client certificate as `TEMPORAL_TLS_CERT_REF`. Self-hosted:
    deploy `infra/railway/temporal` with `MYSQL_SEEDS`, `DB_PORT`, `MYSQL_USER`, `MYSQL_PWD` from the second MySQL.
 
@@ -352,8 +361,10 @@ generated grants: run locally through the Railway CLI with the service's variabl
 the environment and api service, then `railway run pnpm db:roles:check`; the deployed images carry no tooling), it
 reads `DATABASE_URL` and, when set, `DATABASE_URL_RETENTION`, runs only `SELECT CURRENT_USER()` and `SHOW GRANTS`
 (roles expanded), prints one line per finding and no credential, and exits 1 on root, on a database-wide or
-wildcard privilege, on GRANT OPTION, on a missing grant or on one beyond the role. Run it after step 5 of section 1
-on staging, then on production, and paste its output into `docs/release/r1-evidence.md`.
+wildcard privilege, on GRANT OPTION, on a missing grant or on one beyond the role. The `db-roles` service of
+section 1 step 5 logs the same lines after it applies the roles (`db-roles-apply`), so its deploy log is the
+in-environment form of this check: read it after step 5 on staging, then on production, and paste the lines into
+`docs/release/r1-evidence.md`.
 
 ## 4. Rollback
 

@@ -4,6 +4,11 @@ import mysql from 'mysql2/promise';
 import * as schema from './schema';
 import { INSERT_ONLY_TABLES, RETENTION_ROLE_GRANTS } from './global-tables';
 
+import { compareGrants, formatDiff, grantSetOf, parseGrant, userOf } from './roles-compare';
+
+export { compareGrants, formatDiff, grantSetOf, parseGrant, userOf };
+export type { GrantDiff, GrantSet } from './roles-compare';
+
 /**
  * Spec 6.1 immutability: the application DB role has no UPDATE/DELETE on insert-only tables. The SQL is generated
  * from the schema and INSERT_ONLY_TABLES so the grant list cannot drift (tooling/scripts/generate-db-roles.ts).
@@ -74,4 +79,64 @@ export async function readHeldGrants(url: string): Promise<{ user: string; grant
   } finally {
     await conn.end();
   }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The tables the generated role SQL grants on, in the database it names. */
+const tablesNamedBy = (statements: readonly string[], database: string): string[] =>
+  statements
+    .map((s) => parseGrant(s)?.target ?? '')
+    .filter((t) => t.startsWith(`${database}.`))
+    .map((t) => t.slice(database.length + 1));
+
+/**
+ * R1-G (D-25): applies a generated role to the database `adminUrl` names, as the admin that URL connects as, and
+ * returns the same lines `pnpm db:roles:check` prints for it (`formatDiff`). The user is created when missing, its
+ * password set, every privilege revoked and the role's grants re-applied, so a re-run after a migration brings
+ * the grants up to date. Before touching the user it waits (up to `waitForTablesMs`, default ten minutes) for every
+ * table the role names to exist, so a redeploy that races the api's migration never leaves a table without its
+ * grant and never revokes the running user's privileges while a table is still missing. Logs and returns no
+ * password and no URL.
+ */
+export async function applyRoleSql(
+  adminUrl: string,
+  role: string,
+  user: string,
+  password: string,
+  sqlFor: (dbName: string, user: string) => string,
+  waitForTablesMs = 10 * 60_000,
+): Promise<string[]> {
+  const { database } = userOf(adminUrl);
+  const statements = sqlFor(database, user).split('\n');
+  const admin = await mysql.createConnection({ uri: adminUrl });
+  try {
+    const deadline = Date.now() + waitForTablesMs;
+    for (;;) {
+      const [rows] = await admin.query<mysql.RowDataPacket[]>(
+        'SELECT table_name AS t FROM information_schema.tables WHERE table_schema = ?',
+        [database],
+      );
+      const present = new Set(rows.map((r) => String(r['t'])));
+      const missing = tablesNamedBy(statements, database).filter((t) => !present.has(t));
+      if (!missing.length) break;
+      if (Date.now() >= deadline)
+        throw new Error(`${role}: tables the role names do not exist yet: ${missing.join(', ')}`);
+      await sleep(15_000);
+    }
+    for (const statement of statements) {
+      const text = statement.trim();
+      if (!text || text.startsWith('--')) continue;
+      await admin.query(text);
+    }
+    await admin.query(`ALTER USER ${admin.escape(user)}@'%' IDENTIFIED BY ${admin.escape(password)}`);
+  } finally {
+    await admin.end();
+  }
+  const asRole = new URL(adminUrl);
+  asRole.username = encodeURIComponent(user);
+  asRole.password = encodeURIComponent(password);
+  const held = await readHeldGrants(asRole.toString());
+  const diff = compareGrants(grantSetOf(statements, database), grantSetOf(held.grants, database));
+  return [`${role}: applied to ${held.user} on ${database}`, ...formatDiff(role, user, diff)];
 }
