@@ -533,6 +533,38 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 60_000);
 
+  it('web performance (R2-2): a connected Business Profile location shows its tiles, the surface drill-down and the console link, with no opportunity for a single location', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const gbp = page.getByTestId('web-performance').getByTestId('web-destination-dst_e2e_gbp');
+    await gbp.getByTestId('web-tile-impressions').waitFor({ timeout: 15_000 });
+    // Six reported days of the last seven (today is not reported yet): flows summed, never averaged.
+    expect(await gbp.getByTestId('web-tile-impressions').textContent()).toContain('900');
+    expect(await gbp.getByTestId('web-tile-impressions').textContent()).toContain('6 days with data');
+    expect(await gbp.getByTestId('web-tile-websiteClicks').textContent()).toContain('36');
+    expect(await gbp.getByTestId('web-tile-callClicks').textContent()).toContain('18');
+    expect(await gbp.getByTestId('web-tile-directionRequests').textContent()).toContain('24');
+    expect(await gbp.getByTestId('web-tile-websiteClickRate').count()).toBe(0); // not a tile of this kind
+    // The first drill-down is the day alone; Impressions by surface lists the four surfaces.
+    await gbp.getByRole('tab', { name: 'Impressions by surface' }).click();
+    const drilldown = gbp.getByTestId('web-drilldown');
+    await expect.poll(() => drilldown.locator('tbody tr').count(), { timeout: 15_000 }).toBe(4);
+    expect(await drilldown.locator('tbody tr').first().textContent()).toContain('Mobile Search');
+    expect(await drilldown.locator('tr[data-dimension="Desktop Maps"]').textContent()).toContain('60');
+    const opportunities = gbp.getByTestId('web-opportunities');
+    expect(await opportunities.count()).toBe(0);
+    expect(await gbp.textContent()).toContain('Nothing below half');
+    // D-19: the console link, never a figure; the kind is not offered for connecting while the flag is off.
+    const console = gbp.getByTestId('web-ai-search').getByRole('link');
+    expect(await console.getAttribute('href')).toBe('https://business.google.com/');
+    await page.goto(`${origin}${home.replace('/home', '/settings')}?tab=destinations`);
+    const sources = page.getByTestId('destination-sources');
+    await sources.waitFor({ timeout: 15_000 });
+    expect(await sources.getByTestId('source-ga4_property').count()).toBe(1);
+    expect(await sources.getByTestId('source-gbp_location').count()).toBe(0); // not enabled here
+    await page.close();
+  }, 60_000);
+
   it('web performance (R2-1): a 30-day period has no previous days and every tile reads insufficient sample', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/performance')}?period=30`);

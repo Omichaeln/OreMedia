@@ -72,6 +72,7 @@ export const PD = {
   policies: {
     ga4Reports: 'sup_e2e_ga4_reports',
     gbpReviews: 'sup_e2e_gbp_reviews',
+    gbpReports: 'sup_e2e_gbp_reports',
     cmsAudit: 'sup_e2e_cms_audit',
   },
   auditRun: 'sar_e2e_1',
@@ -82,7 +83,11 @@ export const PD = {
   ] as readonly DestinationConnectTarget[],
 } as const;
 
-/** The deployment's sources: GA4 certified and enabled; Search Console registered but not enabled here. */
+/**
+ * The deployment's sources: GA4 certified and enabled; Search Console registered but not enabled here; the
+ * Business Profile location (R2-2) registered, uncertified and off (OREMEDIA_ENABLE_GBP unset), so the settings
+ * screen does not offer it while the Performance screen still reads a connected location.
+ */
 const SOURCES: readonly DestinationSourceV1[] = [
   {
     kind: 'ga4_property',
@@ -94,6 +99,13 @@ const SOURCES: readonly DestinationSourceV1[] = [
   {
     kind: 'search_console_site',
     label: 'Search Console site',
+    vendor: 'Google',
+    certified: false,
+    enabled: false,
+  },
+  {
+    kind: 'gbp_location',
+    label: 'Google Business Profile location',
     vendor: 'Google',
     certified: false,
     enabled: false,
@@ -182,6 +194,22 @@ const lowCtr = (
   task: ({ subject, volume, rate, benchmark }) =>
     `Rewrite the title and description of ${what(subject)} (${volume} impressions, CTR ${pct(rate)} against ${pct(benchmark)} for the site)`,
 });
+const GBP_METRIC: Record<string, SourceReportMetricV1> = {
+  impressions: { name: 'impressions', label: 'Impressions', kind: 'flow' },
+  websiteClicks: { name: 'websiteClicks', label: 'Website clicks', kind: 'flow' },
+  callClicks: { name: 'callClicks', label: 'Calls', kind: 'flow' },
+  directionRequests: { name: 'directionRequests', label: 'Direction requests', kind: 'flow' },
+  conversations: { name: 'conversations', label: 'Conversations', kind: 'flow' },
+  bookings: { name: 'bookings', label: 'Bookings', kind: 'flow' },
+};
+const gbp = (...names: string[]) => names.map((n) => GBP_METRIC[n] as SourceReportMetricV1);
+const WEBSITE_CLICK_RATE: SourceReportMetricV1 = {
+  name: 'websiteClickRate',
+  label: 'Website click rate',
+  kind: 'rate',
+  numerator: 'websiteClicks',
+  denominator: 'impressions',
+};
 const REPORTS: Readonly<Record<string, MockReportSpec[]>> = {
   ga4_property: [
     {
@@ -251,6 +279,34 @@ const REPORTS: Readonly<Record<string, MockReportSpec[]>> = {
       latencyHours: 72,
     },
   ],
+  // R2-2: a destination is one location, so the performance report carries the day alone; no opportunity rule.
+  gbp_location: [
+    {
+      key: 'gbp.performance',
+      label: 'Profile performance',
+      dimensions: [],
+      dimensionLabels: {},
+      metrics: gbp(
+        'impressions',
+        'websiteClicks',
+        'callClicks',
+        'directionRequests',
+        'conversations',
+        'bookings',
+      ),
+      derived: [WEBSITE_CLICK_RATE],
+      latencyHours: 120,
+    },
+    {
+      key: 'gbp.surfaces',
+      label: 'Impressions by surface',
+      dimensions: ['surface'],
+      dimensionLabels: { surface: 'Surface' },
+      metrics: gbp('impressions'),
+      derived: [],
+      latencyHours: 120,
+    },
+  ],
 };
 const PRESENTATION: Readonly<Record<string, DestinationReportPresentationV1>> = {
   ga4_property: {
@@ -263,6 +319,13 @@ const PRESENTATION: Readonly<Record<string, DestinationReportPresentationV1>> = 
   search_console_site: {
     console: { label: 'Search Console', href: 'https://search.google.com/search-console' },
     tiles: { reportKey: 'gsc.countries_devices', metrics: ['clicks', 'impressions', 'ctr', 'position'] },
+  },
+  gbp_location: {
+    console: { label: 'Google Business Profile', href: 'https://business.google.com/' },
+    tiles: {
+      reportKey: 'gbp.performance',
+      metrics: ['impressions', 'websiteClicks', 'callClicks', 'directionRequests'],
+    },
   },
 };
 
@@ -277,10 +340,12 @@ export interface SeededReportRow {
 /**
  * The GA4 property's last 20 days (to yesterday): three acquisition channels, three landing pages (of which
  * /pricing engages a tenth of its sessions against the property's near-half) and the day's engagement; the Search
- * Console site's last 20 days of queries, pages and countries. A 7-day period therefore compares against a full
- * previous week; a 30-day period has no previous days and reads "insufficient sample".
+ * Console site's last 20 days of queries, pages and countries; the Business Profile location's last 20 days of
+ * performance (150 impressions, 6 website clicks, 3 calls, 4 direction requests a day) and the impressions by
+ * surface (R2-2). A 7-day period therefore compares against a full previous week; a 30-day period has no previous
+ * days and reads "insufficient sample".
  */
-function seededReportRows(ga4Id: string, gscId: string): SeededReportRow[] {
+function seededReportRows(ga4Id: string, gscId: string, gbpId: string): SeededReportRow[] {
   const rows: SeededReportRow[] = [];
   const yesterday = addDays(dayKey(new Date()), -1);
   for (let i = -19; i <= 0; i++) {
@@ -348,6 +413,26 @@ function seededReportRows(ga4Id: string, gscId: string): SeededReportRow[] {
       dimensions: { country: 'zwe', device: 'MOBILE' },
       metrics: { clicks: 32, impressions: 300, ctr: 32 / 300, position: 4 },
     });
+    rows.push({
+      destinationId: gbpId,
+      reportKey: 'gbp.performance',
+      date,
+      dimensions: {},
+      metrics: { impressions: 150, websiteClicks: 6, callClicks: 3, directionRequests: 4 },
+    });
+    for (const [surface, impressions] of [
+      ['Mobile Search', 75],
+      ['Desktop Search', 40],
+      ['Mobile Maps', 25],
+      ['Desktop Maps', 10],
+    ] as const)
+      rows.push({
+        destinationId: gbpId,
+        reportKey: 'gbp.surfaces',
+        date,
+        dimensions: { surface },
+        metrics: { impressions },
+      });
   }
   return rows;
 }
@@ -470,6 +555,21 @@ export class DestinationsBackend {
         createdAt: at,
         updatedAt: at,
       },
+      // R2-2: reads of the location's performance allowed (the kind offers no retention, D-17).
+      {
+        id: PD.policies.gbpReports,
+        brandId,
+        destinationKind: 'gbp_location',
+        dataType: 'gbp.reports',
+        allowedUses: ['read'],
+        retentionDays: null,
+        version: 1,
+        reviewedAt: at,
+        reviewDueAt: inDays(60),
+        reviewedById: 'usr_e2e',
+        createdAt: at,
+        updatedAt: at,
+      },
     );
     this.policies.push({
       id: PD.policies.cmsAudit,
@@ -486,7 +586,7 @@ export class DestinationsBackend {
       updatedAt: at,
     });
     // No policy for gsc.reports: the Search Console site's reads are refused until an admin sets one (D-17).
-    this.reportRows.push(...seededReportRows(PD.destinations.ga4, PD.destinations.gsc));
+    this.reportRows.push(...seededReportRows(PD.destinations.ga4, PD.destinations.gsc, PD.destinations.gbp));
     this.auditRuns.push(seededAuditRun(brandId, PD.destinations.cms));
     this.auditPages.push(...seededAuditPages(PD.auditRun));
   }
