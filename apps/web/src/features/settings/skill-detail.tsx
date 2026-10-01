@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Field, Skeleton, StatusBanner, type Tone } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
@@ -73,7 +73,7 @@ function VersionRow({
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        {(version.state === 'draft' || version.state === 'in_review') && (
+        {version.state === 'draft' && (
           <Button
             type="button"
             size="sm"
@@ -81,7 +81,7 @@ function VersionRow({
             disabled={evaluate.isPending}
             onClick={() => evaluate.mutate({ skillVersionId: version.id, expectedVersion: version.version })}
           >
-            {evaluate.isPending ? 'Requesting…' : version.state === 'draft' ? 'Evaluate' : 'Evaluate again'}
+            {evaluate.isPending ? 'Requesting…' : 'Evaluate'}
           </Button>
         )}
         {version.state === 'sandbox_evaluation' && (
@@ -271,6 +271,13 @@ export function SkillDetail({ skillId, brandId }: { skillId: string; brandId: st
   const skill = useSkill(skillId);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exported, setExported] = useState<{ version: number; url: string } | null>(null);
+  // A blob URL lives until revoked: release the previous one when it is replaced or the sheet closes.
+  useEffect(
+    () => () => {
+      if (exported) URL.revokeObjectURL(exported.url);
+    },
+    [exported],
+  );
   const exportVersion = async (versionId: string, number: number) => {
     setExportError(null);
     try {
@@ -324,7 +331,6 @@ export function SkillDetail({ skillId, brandId }: { skillId: string; brandId: st
             )}
             {exportError && <span className="text-status-critical">{exportError}</span>}
           </div>
-          {skill.data.scope !== 'platform' && <SkillImportForm brandId={brandId} />}
         </>
       )}
     </section>

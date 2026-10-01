@@ -18,6 +18,7 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { StartRunForm } from '../agents/start-run-form';
+import { dayKey } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { briefChip, briefGaps, isSuggested, packageChip } from './content-helpers';
 import { DocumentPicker } from './document-picker';
@@ -34,21 +35,26 @@ export interface BriefDetailProps {
   onSelectPackage: (contentPackageId: string) => void;
   /** Where a run started from "Plan with agent" is followed (the brand's agents screen). */
   brandName: string;
+  /** The brand's zone: the planning window is prefilled in brand-zone dates. */
+  timeZone: string;
   agentRunHref: (runId: string) => string;
 }
 
 /** The campaign_planning brief prefilled from the brief being planned (UX-09); a person edits it before starting. */
-function planningValues(b: BriefDto, channels: ReadonlyMap<string, ChannelDto>): Record<string, string> {
+function planningValues(
+  b: BriefDto,
+  channels: ReadonlyMap<string, ChannelDto>,
+  timeZone: string,
+): Record<string, string> {
   const today = new Date();
   const end = new Date(today.getTime() + 28 * 86_400_000);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
   return {
     briefId: b.id,
     objective: b.message,
     audience: b.audience,
     offerFactIds: b.offerFactIds.join(', '),
-    startDate: iso(today),
-    endDate: iso(end),
+    startDate: dayKey(today, timeZone),
+    endDate: dayKey(end, timeZone),
     channels: [...new Set(b.channelConnectionIds.map((id) => channels.get(id)?.providerKey ?? id))].join(
       ', ',
     ),
@@ -153,6 +159,7 @@ export function BriefDetail({
   selectedPackageId,
   onSelectPackage,
   brandName,
+  timeZone,
   agentRunHref,
 }: BriefDetailProps) {
   const trpc = useTRPC();
@@ -282,7 +289,7 @@ export function BriefDetail({
                   brandId={brandId}
                   brandName={brandName}
                   hrefFor={agentRunHref}
-                  initial={{ taskKind: 'campaign_planning', values: planningValues(b, channels) }}
+                  initial={{ taskKind: 'campaign_planning', values: planningValues(b, channels, timeZone) }}
                 />
               )}
             </DrawerContent>

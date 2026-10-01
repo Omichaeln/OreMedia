@@ -1667,8 +1667,12 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         if (item.state === 'materialised')
           throw new ValidationFailedError([{ path: 'planItemId', issue: 'plan_item_materialised' }]);
         const brief = b.brief(item.briefId);
-        if (input.channelConnectionId && !brief.channelConnectionIds.includes(input.channelConnectionId))
-          throw new NotFoundError('ChannelConnection', input.channelConnectionId);
+        // As the server: any connection of the brand may be assigned; another brand's is NOT_FOUND.
+        if (input.channelConnectionId) {
+          const channel = p5.channels.get(input.channelConnectionId);
+          if (!channel || channel.brandId !== brief.brandId)
+            throw new NotFoundError('ChannelConnection', input.channelConnectionId);
+        }
         Object.assign(item, {
           ...(input.date !== undefined ? { date: input.date } : {}),
           ...(input.theme !== undefined ? { theme: input.theme } : {}),

@@ -44,7 +44,6 @@ export const agentsRouter = router({
         idempotent(mutationCtx(ctx), (tx) => agentsService.runs.approveProposal(ctx.tenant.actor, input, tx)),
       ),
   }),
-  /** Spec 12.7 tenant model-routing policy: read and replaced by a tenant administrator (billing.manage). */
   /** UX-16: spend position and limits, owners and admins (billing.manage). */
   budgets: router({
     read: tenantQuery
@@ -56,6 +55,7 @@ export const agentsRouter = router({
         idempotent(mutationCtx(ctx), (tx) => agentsService.budgets.setLimit(ctx.tenant.actor, input, tx)),
       ),
   }),
+  /** Spec 12.7 tenant model-routing policy: read and replaced by a tenant administrator (billing.manage). */
   routingPolicy: router({
     get: tenantQuery.query(({ ctx }) => agentsService.routingPolicy.get(ctx.tenant.actor)),
     set: tenantMutation

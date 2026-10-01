@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AutonomyMode } from '@oremedia/contracts/tenancy';
+import { AUTONOMY_ORDER, AutonomyMode } from '@oremedia/contracts/tenancy';
 import { TaskKind } from '@oremedia/contracts/skills';
 import { Button, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
@@ -22,7 +22,6 @@ export interface StartRunFormProps {
 
 /** Runs that start from their own command, never from this form (agents.runs.start refuses them). */
 const COMMAND_ONLY: ReadonlySet<string> = new Set(['brand_onboarding']);
-const AUTONOMY_ORDER = AutonomyMode.options;
 
 /**
  * Spec 12.5 through the skill, not the API (UX-08): the principal is picked from those granted this brand, the task

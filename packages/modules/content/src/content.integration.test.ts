@@ -1078,6 +1078,22 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           ),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
+      // A fact the brand does not own (or that does not exist) is refused at proposal, as briefs.create refuses it.
+      await expect(
+        runAsPlanner((tx) =>
+          contentToolSource.proposePlan(
+            planner(tenantA),
+            {
+              brandId: brandA,
+              runId: 'run_plan',
+              autonomyMode: 'create',
+              briefId: planBriefId,
+              items: [item({ factIds: ['fct_nope'] })],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
       const proposed = await runAsPlanner((tx) =>
         contentToolSource.proposePlan(
           planner(tenantA),
@@ -1173,10 +1189,23 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
 
     it('accepting the brief materialises every proposed item as a draft package once; a retry creates no second package; an ineffective fact names its item', async () => {
       const [, second, third] = ids as [string, string, string];
+      // A fact of the brand that is proposed, not approved: it exists (so the item may cite it) but is not effective.
+      const pending = await run(tenantA, (tx) =>
+        brandService.facts.propose(
+          A,
+          {
+            brandId: brandA,
+            kind: 'claim',
+            statement: 'Pending claim',
+            evidence: [{ kind: 'other', ref: 't' }],
+          },
+          tx,
+        ),
+      );
       await run(tenantA, (tx) =>
         contentService.planItems.update(
           A,
-          { planItemId: third, expectedVersion: 0, factIds: ['fct_gone'] },
+          { planItemId: third, expectedVersion: 0, factIds: [pending.factId] },
           tx,
         ),
       );
@@ -1231,15 +1260,35 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         .from(contentPackages)
         .where(and(eq(contentPackages.tenantId, tenantA), eq(contentPackages.briefId, planBriefId)));
       expect(packagesAfter).toHaveLength(2);
-      // A materialised item is read-only; proposing against a brief that is no longer a draft is refused.
+      // Once the brief has moved, nothing on its plan moves either (the materialised item is its package now).
       await expect(
         run(tenantA, (tx) =>
           contentService.planItems.update(A, { planItemId: second, expectedVersion: 2, theme: 'late' }, tx),
         ),
-      ).rejects.toMatchObject({ details: [{ issue: 'plan_item_materialised' }] });
+      ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
       await expect(
         run(tenantA, (tx) =>
           contentService.planItems.propose(A, { briefId: planBriefId, items: [item()] }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
+      // Nor can a dropped item be restored (or edited) once the brief has moved: nothing would materialise it.
+      const droppedRow = rows[0]!;
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.restore(
+            A,
+            { planItemId: droppedRow.id, expectedVersion: droppedRow.version },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.update(
+            A,
+            { planItemId: droppedRow.id, expectedVersion: droppedRow.version, theme: 'late' },
+            tx,
+          ),
         ),
       ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
       expect((await auditOf(tenantA, 'content.plan_item.propose')).length).toBeGreaterThan(0);

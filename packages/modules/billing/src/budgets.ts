@@ -290,14 +290,13 @@ export const budgets = {
     ]);
     const monthLimit = monthRow ? Math.min(monthRow.limitMicros, entitlementMicros) : entitlementMicros;
     const dayLimit = dayRow ? dayRow.limitMicros : DEFAULT_BRAND_DAY_MICROS;
-    const [monthCommitted, dayCommitted, ledgerRows, recent] = await withTransaction(tx, (t) =>
-      Promise.all([
-        reservations.committedMicros({ periodKey: month }, t),
-        reservations.committedMicros({ brandId, dayKey: day }, t),
-        ledger.sumByKind(brandId, month, t),
-        reservations.listForBrandPeriod(brandId, month, 50, t),
-      ]),
-    );
+    // Sequential on the one connection, as reserveSpend reads.
+    const [monthCommitted, dayCommitted, ledgerRows, recent] = await withTransaction(tx, async (t) => [
+      await reservations.committedMicros({ periodKey: month }, t),
+      await reservations.committedMicros({ brandId, dayKey: day }, t),
+      await ledger.sumByKind(brandId, month, t),
+      await reservations.listForBrandPeriod(brandId, month, 50, t),
+    ]);
     return {
       month: {
         periodKey: month,

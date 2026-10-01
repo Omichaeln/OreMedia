@@ -7,9 +7,16 @@ export type SkillDetailDto = inferOutput<Trpc['skills']['get']>;
 export type BudgetsDto = inferOutput<Trpc['agents']['budgets']['read']>;
 
 /** UX-17: one skill with its versions, evaluations and bindings (skill.read). */
+/** A version in the sandbox is polled until the worker reports (as runs are while live). */
+const SANDBOX_POLL_MS = 2000;
 export function useSkill(skillId: string | null) {
   const trpc = useTRPC();
-  return useQuery({ ...trpc.skills.get.queryOptions({ skillId: skillId ?? '' }), enabled: skillId !== null });
+  return useQuery({
+    ...trpc.skills.get.queryOptions({ skillId: skillId ?? '' }),
+    enabled: skillId !== null,
+    refetchInterval: (query) =>
+      query.state.data?.versions.some((v) => v.state === 'sandbox_evaluation') ? SANDBOX_POLL_MS : false,
+  });
 }
 
 /** UX-16, spec 12.6: the brand's spend position and limits. Owners and admins only (billing.manage). */

@@ -498,6 +498,21 @@ async function resolvePlanChannel(
   return matches.length === 1 && only ? only : null;
 }
 
+/** Plan items move only while the brief is a draft: acceptance materialises them, and nothing runs it twice. */
+function assertBriefDraft(brief: BriefRow): void {
+  if (brief.state !== 'draft')
+    throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
+}
+
+/** Every fact a plan item cites must exist on the brand (as briefs.create checks its offer facts). */
+async function assertFactsInBrand(brandId: string, factIds: string[], path: string, tx?: Tx): Promise<void> {
+  for (const [i, factId] of factIds.entries()) {
+    const fact = await factsRepo.getById(factId, tx);
+    if (fact.brandId !== brandId)
+      throw new ValidationFailedError([{ path: `${path}.${i}`, issue: 'fact_not_in_brand' }]);
+  }
+}
+
 async function loadPlanItem(planItemId: string, tx?: Tx) {
   const item = await planItemsRepo.getById(planItemId, tx);
   const brief = await briefsRepo.getById(item.briefId, tx);
@@ -685,6 +700,7 @@ async function movePlanItem(
   const parsed = PlanItemDrop.parse(input);
   const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
   await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+  assertBriefDraft(brief);
   if (item.state !== from)
     throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
   await planItemsRepo.update(item.id, parsed.expectedVersion, { state: to }, tx);
@@ -905,10 +921,10 @@ export const contentService = {
         { autonomyMode: opts.autonomyMode },
         tx,
       );
-      if (brief.state !== 'draft')
-        throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
+      assertBriefDraft(brief);
       const ids: string[] = [];
-      for (const item of parsed.items) {
+      for (const [i, item] of parsed.items.entries()) {
+        await assertFactsInBrand(brief.brandId, item.factIds, `items.${i}.factIds`, tx);
         const id = newId('planItem');
         await planItemsRepo.create(
           {
@@ -957,8 +973,11 @@ export const contentService = {
       const parsed = PlanItemUpdate.parse(input);
       const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
       await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+      assertBriefDraft(brief);
       if (item.state === 'materialised')
         throw new ValidationFailedError([{ path: 'planItemId', issue: 'plan_item_materialised' }]);
+      if (parsed.factIds !== undefined)
+        await assertFactsInBrand(brief.brandId, parsed.factIds, 'factIds', tx);
       const values: Partial<PlanItemRow> = {};
       if (parsed.date !== undefined) values.date = parsed.date;
       if (parsed.theme !== undefined) values.theme = parsed.theme;

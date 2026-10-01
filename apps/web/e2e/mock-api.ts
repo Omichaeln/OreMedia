@@ -955,7 +955,8 @@ export function createMockRouter(backend: MockBackend) {
       /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
       servicePrincipals: t.router({
         list: query.input(ServicePrincipalList).query(({ ctx, input }) => {
-          if (ctx.member?.role === 'creator' || ctx.member?.role === 'reviewer')
+          // agent.start_run: managers, creator and analyst (role-grants); a reviewer or publisher is refused.
+          if (ctx.member?.role === 'reviewer' || ctx.member?.role === 'publisher')
             throw new PolicyDeniedError(
               'role_missing',
               'Your role does not include agent.start_run for this brand',
@@ -1181,6 +1182,12 @@ export function createMockRouter(backend: MockBackend) {
         const skill = backend.skills.find((k) => k.id === input.skillId);
         if (!skill) throw new NotFoundError('Skill', input.skillId);
         const versions = backend.skillVersions.get(skill.id) ?? [];
+        // The sandbox has reported by the time the client polls again: in_review, its result already recorded.
+        for (const v of versions)
+          if (v.state === 'sandbox_evaluation') {
+            v.state = 'in_review';
+            v.version += 1;
+          }
         return {
           ...skill,
           versions,
@@ -1210,7 +1217,8 @@ export function createMockRouter(backend: MockBackend) {
           if (!v) throw new NotFoundError('SkillVersion', input.skillVersionId);
           if (v.version !== input.expectedVersion)
             throw new ConflictError('SkillVersion', v.id, input.expectedVersion);
-          v.state = 'in_review';
+          // As the server: the version waits in the sandbox; the worker's report (here: the next read) moves it on.
+          v.state = 'sandbox_evaluation';
           v.version += 1;
           backend.skillEvaluations.push({
             id: rid('ser'),

@@ -438,6 +438,7 @@ export function CampaignsScreen() {
             selectedPackageId={packageId}
             onSelectPackage={(id) => update({ package: id })}
             brandName={brand.name}
+            timeZone={brand.timezone || 'UTC'}
             agentRunHref={(runId) =>
               `/c/${encodeURIComponent(companyId)}/b/${encodeURIComponent(brandId)}/agents?run=${encodeURIComponent(runId)}`
             }

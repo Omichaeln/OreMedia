@@ -76,6 +76,7 @@ function PlanRow({
     });
   };
   const channel = item.channelConnectionId ? channels.get(item.channelConnectionId) : null;
+  const packageId = item.contentPackageId;
   return (
     <li
       className={`flex flex-col gap-2 rounded-md border border-border p-2 text-sm ${item.state === 'dropped' ? 'opacity-70' : ''}`}
@@ -162,8 +163,8 @@ function PlanRow({
               Restore
             </Button>
           )}
-          {item.state === 'materialised' && item.contentPackageId && (
-            <Button size="sm" variant="ghost" onClick={() => onSelectPackage(item.contentPackageId ?? '')}>
+          {item.state === 'materialised' && packageId !== null && (
+            <Button size="sm" variant="ghost" onClick={() => onSelectPackage(packageId)}>
               Open package
             </Button>
           )}
@@ -174,13 +175,20 @@ function PlanRow({
   );
 }
 
-function AddPlanItemForm({ brief }: { brief: BriefDto }) {
+function AddPlanItemForm({
+  brief,
+  channels,
+}: {
+  brief: BriefDto;
+  channels: ReadonlyMap<string, ChannelDto>;
+}) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [date, setDate] = useState('');
   const [theme, setTheme] = useState('');
   const [formatKey, setFormatKey] = useState('post');
+  const [channelId, setChannelId] = useState(brief.channelConnectionIds[0] ?? NO_CHANNEL);
   const propose = useMutation(
     trpc.content.planItems.propose.mutationOptions({
       ...mutationIntent(intent.key),
@@ -195,13 +203,15 @@ function AddPlanItemForm({ brief }: { brief: BriefDto }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!date || !theme.trim()) return;
+    // The channel key is the provider the planner would name; the connection binds the item to it.
+    const channel = channelId === NO_CHANNEL ? null : channels.get(channelId);
     propose.mutate({
       briefId: brief.id,
       items: [
         {
           date,
-          channelKey: brief.channelConnectionIds[0] ?? 'unassigned',
-          ...(brief.channelConnectionIds[0] ? { channelConnectionId: brief.channelConnectionIds[0] } : {}),
+          channelKey: channel?.providerKey ?? (channelId === NO_CHANNEL ? 'unassigned' : channelId),
+          ...(channelId === NO_CHANNEL ? {} : { channelConnectionId: channelId }),
           theme: theme.trim(),
           formatKey: formatKey.trim() || 'post',
         },
@@ -211,6 +221,15 @@ function AddPlanItemForm({ brief }: { brief: BriefDto }) {
   const ui = propose.isError ? toUiError(propose.error) : null;
   return (
     <form onSubmit={submit} className="grid gap-2 sm:grid-cols-[8rem_1fr_7rem_auto]" noValidate>
+      <Field label="Channel" htmlFor="plan-new-channel" className="sm:col-span-4">
+        <Select
+          id="plan-new-channel"
+          value={channelId}
+          onValueChange={setChannelId}
+          options={channelOptions(brief, channels)}
+          size="sm"
+        />
+      </Field>
       <Field label="Date" htmlFor="plan-new-date">
         <Input
           id="plan-new-date"
@@ -319,7 +338,7 @@ export function PlanGrid({
           ))}
         </ul>
       )}
-      {draft && <AddPlanItemForm brief={brief} />}
+      {draft && <AddPlanItemForm brief={brief} channels={channels} />}
     </section>
   );
 }

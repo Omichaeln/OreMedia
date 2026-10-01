@@ -46,7 +46,7 @@ const launchOptions = chromiumPath
 
 const E2E = {
   ownerToken: 'ses_e2e_owner',
-  creatorToken: 'ses_e2e_creator',
+  reviewerToken: 'ses_e2e_reviewer',
   tenantId: 'ten_e2e',
   brandId: 'brd_e2e',
   principalId: 'sp_e2e_agent',
@@ -290,10 +290,10 @@ const domainErrors = t.middleware(async ({ next }) => {
     throw err;
   }
 });
-const roleOf = (headers: IncomingHttpHeaders): 'owner' | 'creator' | null => {
+const roleOf = (headers: IncomingHttpHeaders): 'owner' | 'reviewer' | null => {
   const bearer = first(headers['authorization']);
   if (bearer === `Bearer ${E2E.ownerToken}`) return 'owner';
-  if (bearer === `Bearer ${E2E.creatorToken}`) return 'creator';
+  if (bearer === `Bearer ${E2E.reviewerToken}`) return 'reviewer';
   return null;
 };
 const authed = t.middleware(({ ctx, next }) => {
@@ -341,7 +341,7 @@ function createRouter(backend: Backend) {
   return t.router({
     access: t.router({
       session: authedOnly.query(() => ({ userId: 'usr_e2e', name: 'E2E person', email: 'e2e@example.test' })),
-      /** UX-08: gated as agents.runs.start is; the creator gets the same denial before choosing anything. */
+      /** UX-08: gated as agents.runs.start is (role-grants: not a reviewer); the denial shows before choosing anything. */
       servicePrincipals: t.router({
         list: query.input(ServicePrincipalList).query(({ ctx }) => {
           if (ctx.role !== 'owner')
@@ -724,14 +724,14 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(backend.runs.size).toBe(7);
   }, 45_000);
 
-  it('a creator without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
+  it('a reviewer without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
     // At phone width Sign out is in the Menu drawer with the brand navigation.
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
     await page.getByRole('button', { name: 'Sign out' }).click();
     // Sign out navigates to /sign-in itself; a second navigation started before it lands is aborted (ERR_ABORTED).
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
-    await signIn(E2E.creatorToken);
+    await signIn(E2E.reviewerToken);
     await page.goto(`${origin}${agentsPath()}`);
     // The list comes from agents.runs.list (brand.read), not the audit log: no admin role is needed for history.
     await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(7);
