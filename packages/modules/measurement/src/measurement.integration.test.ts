@@ -34,6 +34,7 @@ import {
   registerProviderClients,
   registerPublishingBrandChecker,
   connectedChannel,
+  publicationService,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
 import { attributeService } from './attributes';
@@ -46,6 +47,7 @@ import {
   registerBrandChecker,
   registerCommentClassifier,
   registerCommentSink,
+  registerPublicationSource,
   resetCommentSinks,
   type IngestedComment,
 } from './hooks';
@@ -264,6 +266,9 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
     };
     registerPublishingBrandChecker(checker);
     registerBrandChecker(checker);
+    registerPublicationSource((brandId, from, to, tx) =>
+      publicationService.calendarRange(brandId, from, to, tx),
+    );
     configureAuthorHashing({ secret: 'author-hash-secret' });
     configureLinkTracking({ redirectBaseUrl: 'https://ore.link/' });
     registerCommentSink(async (comments) => {
@@ -605,6 +610,106 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
             windowStart: T0.toISOString(),
             windowEnd: now.toISOString(),
             grouping: 'subject',
+          }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('brand summary (UX-11, D-14) and the attribute aggregate (UX-12, D-15)', () => {
+    it('rolls a window up from the released publications: flows summed, the rate pooled, reach not summed; the previous window beside it; the sample named', async () => {
+      now = new Date(T0.getTime() + 25 * HOUR);
+      const res = await inTenant(tenantA, () =>
+        metrics.brandSummary(A, {
+          brandId: brandA,
+          windowStart: new Date(T0.getTime() - HOUR).toISOString(),
+          windowEnd: new Date(T0.getTime() + 24 * HOUR).toISOString(),
+        }),
+      );
+      // pubA and the post removed from its channel (released, no numbers); tenant B's publication never counts.
+      expect(res.current.publications).toBe(2);
+      const impressions = res.current.aggregates.find((a) => a.comparableGroup === 'impressions');
+      expect(impressions).toMatchObject({ kind: 'flow', additive: true, value: 1000, subjectsWithData: 1 });
+      expect(res.current.coverage).toMatchObject({ subjectsRequested: 2, subjectsWithData: 1 });
+      const rate = res.current.aggregates.find((a) => a.comparableGroup === 'rate:engagement/impressions');
+      expect(rate).toMatchObject({ kind: 'rate', additive: false, value: 0.05 });
+      expect(res.previous.publications).toBe(0);
+      expect(res.previous.aggregates).toEqual([]);
+      expect(res.sample).toEqual({ current: 2, previous: 0, minimum: 5, sufficient: false });
+      // The comparison lists flows and rates only, with no change below the minimum sample.
+      expect(res.comparison.every((c) => c.kind === 'flow' || c.kind === 'rate')).toBe(true);
+      expect(res.comparison.find((c) => c.comparableGroup === 'impressions')).toMatchObject({
+        current: 1000,
+        previous: null,
+        change: null,
+      });
+      // A window with nothing released reads empty, never zero totals.
+      const empty = await inTenant(tenantA, () =>
+        metrics.brandSummary(A, {
+          brandId: brandA,
+          windowStart: new Date(T0.getTime() + 100 * HOUR).toISOString(),
+          windowEnd: new Date(T0.getTime() + 200 * HOUR).toISOString(),
+        }),
+      );
+      expect(empty.current).toMatchObject({ publications: 0, aggregates: [] });
+      await expect(
+        inTenant(tenantA, () =>
+          metrics.brandSummary(A, {
+            brandId: brandB,
+            windowStart: T0.toISOString(),
+            windowEnd: now.toISOString(),
+          }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('groups the window’s publications by their captured attributes with the pooled rate of each value beside the brand’s', async () => {
+      now = new Date(T0.getTime() + 25 * HOUR);
+      const [row] = await tdb.db.select().from(publications).where(eq(publications.id, pubA));
+      await tdb.db.insert(creativeAttributes).values({
+        id: newId('creativeAttributes'),
+        tenantId: tenantA,
+        brandId: brandA,
+        contentRevisionId: row!.contentRevisionId,
+        channelVariantId: null,
+        attributes: {
+          hookType: 'question',
+          imageryKind: 'photography',
+          cta: 'Shop now',
+          distribution: 'user',
+        },
+        source: 'captured',
+      });
+      const res = await inTenant(tenantA, () =>
+        attributeService.aggregate(A, {
+          brandId: brandA,
+          windowStart: new Date(T0.getTime() - HOUR).toISOString(),
+          windowEnd: new Date(T0.getTime() + 24 * HOUR).toISOString(),
+        }),
+      );
+      // The removed post has neither attributes nor numbers: counted as a publication, nowhere else.
+      expect(res).toMatchObject({ publications: 2, withAttributes: 1, withNumbers: 1, minimum: 5 });
+      expect(res.brand).toEqual({ publications: 1, engagement: 50, impressions: 1000, rate: 0.05 });
+      expect(res.features).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            feature: 'hookType',
+            value: 'question',
+            publications: 1,
+            rate: 0.05,
+            sufficient: false,
+          }),
+          expect.objectContaining({ feature: 'imageryKind', value: 'photography', publications: 1 }),
+          expect.objectContaining({ feature: 'cta', value: 'present', publications: 1 }),
+          expect.objectContaining({ feature: 'distribution', value: 'user', publications: 1 }),
+        ]),
+      );
+      await expect(
+        inTenant(tenantA, () =>
+          attributeService.aggregate(A, {
+            brandId: brandB,
+            windowStart: T0.toISOString(),
+            windowEnd: now.toISOString(),
           }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);

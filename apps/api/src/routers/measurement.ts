@@ -1,4 +1,6 @@
 import {
+  BrandPerformanceSummary,
+  CreativeAttributesAggregate,
   CreativeAttributesCorrect,
   CreativeAttributesGet,
   EngagementQualityGet,
@@ -41,6 +43,10 @@ export const measurementRouter = router({
     query: tenantQuery
       .input(MetricsQueryV1)
       .query(({ ctx, input }) => metricService.query(ctx.tenant.actor, input)),
+    /** UX-11: a brand's window beside the previous one (D-14), by the dictionary's rules (D-15). */
+    brandSummary: tenantQuery
+      .input(BrandPerformanceSummary)
+      .query(({ ctx, input }) => metricService.brandSummary(ctx.tenant.actor, input)),
   }),
   quality: router({
     get: tenantQuery
@@ -56,6 +62,10 @@ export const measurementRouter = router({
     get: tenantQuery
       .input(CreativeAttributesGet)
       .query(({ ctx, input }) => attributeService.get(ctx.tenant.actor, input)),
+    /** UX-12: the pooled engagement rate per captured attribute value over the window's publications. */
+    aggregate: tenantQuery
+      .input(CreativeAttributesAggregate)
+      .query(({ ctx, input }) => attributeService.aggregate(ctx.tenant.actor, input)),
     correct: tenantMutation
       .input(CreativeAttributesCorrect)
       .mutation(({ ctx, input }) =>

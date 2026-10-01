@@ -5381,6 +5381,33 @@
         }
       }
     },
+    "/trpc/measurement.attributes.aggregate": {
+      "get": {
+        "operationId": "measurement.attributes.aggregate",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/measurement.attributes.correct": {
       "post": {
         "operationId": "measurement.attributes.correct",
@@ -5615,6 +5642,49 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/measurement.metrics.brandSummary": {
+      "get": {
+        "operationId": "measurement.metrics.brandSummary",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  },
+                  "ageDays": {
+                    "anyOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "const": 3
+                      },
+                      {
+                        "const": 7
+                      },
+                      {
+                        "const": 28
+                      }
+                    ]
+                  }
+                },
+                "required": ["brandId", "windowStart", "windowEnd"]
               }
             }
           }
@@ -13105,6 +13175,24 @@
           "required": ["brandId"]
         }
       },
+      "measurement.attributes.aggregate": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "windowStart", "windowEnd"]
+        }
+      },
       "measurement.attributes.correct": {
         "type": "mutation",
         "input": {
@@ -13282,6 +13370,40 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "measurement.metrics.brandSummary": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            },
+            "ageDays": {
+              "anyOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "const": 3
+                },
+                {
+                  "const": 7
+                },
+                {
+                  "const": 28
+                }
+              ]
+            }
+          },
+          "required": ["brandId", "windowStart", "windowEnd"]
         }
       },
       "measurement.metrics.query": {

@@ -3,6 +3,7 @@ import type { MetricValueV1 } from '@oremedia/contracts/measurement';
 import {
   STALE_FACTOR,
   aggregateByComparableGroup,
+  kindFor,
   aggregationFor,
   atAge,
   comparableGroupFor,
@@ -145,14 +146,91 @@ describe('normalisation rules (spec 15.2)', () => {
     expect(agg).toEqual([
       expect.objectContaining({
         comparableGroup: 'impressions',
+        kind: 'flow',
+        additive: true,
         value: 15,
         snapshotIds: ['a', 'b'],
         subjectsWithData: 2,
         subjectsUnavailable: 1,
       }),
-      expect.objectContaining({ comparableGroup: 'reach', value: 7, subjectsWithData: 1 }),
+      // D-15: reach is a unique count; it is never summed across posts, so the aggregate carries no value.
+      expect.objectContaining({
+        comparableGroup: 'reach',
+        kind: 'unique',
+        additive: false,
+        value: null,
+        snapshotIds: ['d'],
+        subjectsWithData: 1,
+      }),
     ]);
     expect(agg[0]?.metricKeys).toEqual(['impressionCount', 'impressions']);
+  });
+  it('D-15: each comparable group has a kind; a rate across posts is the pooled ratio of its operands, never a mean of rates', () => {
+    expect(['impressions', 'clicks', 'likes'].map(kindFor)).toEqual(['flow', 'flow', 'flow']);
+    expect(kindFor('reach')).toBe('unique');
+    expect(kindFor('followers')).toBe('snapshot');
+    expect(kindFor('watch_time')).toBe('gauge');
+    expect(kindFor('rate:engagement/impressions')).toBe('rate');
+    expect(kindFor('other:post_total_media_view_unique')).toBe('unique');
+    expect(kindFor('other:quoteCount')).toBe('flow');
+    const agg = aggregateByComparableGroup([
+      value({ snapshotId: 'i1', subjectId: 'p1', comparableGroup: 'impressions', value: 100 }),
+      value({ snapshotId: 'i2', subjectId: 'p2', comparableGroup: 'impressions', value: 300 }),
+      value({
+        snapshotId: 'e1',
+        subjectId: 'p1',
+        comparableGroup: 'engagement',
+        metricKey: 'engagement',
+        value: 10,
+      }),
+      value({
+        snapshotId: 'e2',
+        subjectId: 'p2',
+        comparableGroup: 'engagement',
+        metricKey: 'engagement',
+        value: 6,
+      }),
+      value({
+        snapshotId: 'r1',
+        subjectId: 'p1',
+        comparableGroup: 'rate:engagement/impressions',
+        metricKey: 'engagement_rate',
+        value: 0.1,
+      }),
+      value({
+        snapshotId: 'r2',
+        subjectId: 'p2',
+        comparableGroup: 'rate:engagement/impressions',
+        metricKey: 'engagement_rate',
+        value: 0.02,
+      }),
+      value({
+        snapshotId: 'f1',
+        subjectId: 'p1',
+        comparableGroup: 'followers',
+        metricKey: 'followers_count',
+        value: 900,
+      }),
+    ]);
+    const rate = agg.find((a) => a.comparableGroup === 'rate:engagement/impressions');
+    expect(rate).toMatchObject({ kind: 'rate', additive: false, value: 16 / 400 }); // not (0.1 + 0.02) / 2
+    expect(agg.find((a) => a.comparableGroup === 'followers')).toMatchObject({
+      kind: 'snapshot',
+      additive: false,
+      value: null,
+      subjectsWithData: 1,
+    });
+    // A rate whose denominator flow is absent from the result has no pooled value.
+    const alone = aggregateByComparableGroup([
+      value({
+        snapshotId: 'r1',
+        subjectId: 'p1',
+        comparableGroup: 'rate:clicks/impressions',
+        metricKey: 'click_through_rate',
+        value: 0.1,
+      }),
+    ]);
+    expect(alone[0]).toMatchObject({ kind: 'rate', value: null, subjectsWithData: 1 });
   });
   it('series are never summed and an aggregate is stale when any input is', () => {
     const stale = freshnessOf(T0, 1, new Date(T0.getTime() + 10 * 3_600_000));
