@@ -80,6 +80,7 @@ import {
   linkService,
   linkTrackingFromEnv,
   registerMeasurementBrandChecker,
+  registerMeasurementPublicationSource,
   registerMeasurementOutboxRoutes,
   metricService,
   registerCommentSink,
@@ -197,6 +198,10 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // creative attributes are captured here too because agents run content commands in this process.
   registerMeasurementOutboxRoutes();
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
+  // UX-11 / UX-12: the brand's publications in a window, as the calendar reads them.
+  registerMeasurementPublicationSource((brandId, from, to, tx) =>
+    publicationService.calendarRange(brandId, from, to, tx),
+  );
   // Comment inbox: community.reply_requested starts communityReplyWorkflowV1 on `core`.
   registerCommunityOutboxRoutes();
   configureLinkTracking(linkTrackingFromEnv());

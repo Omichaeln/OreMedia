@@ -7,6 +7,7 @@ import { RouteErrorBoundary, NotFoundRoute } from './error';
 import { SignInRoute } from './sign-in/route';
 import { SetPasswordRoute } from './set-password/route';
 import { PortfolioRoute } from './portfolio/route';
+import { PortfolioPerformanceRoute } from './portfolio/performance';
 import { CompanyRoute } from './c/$company/route';
 import { BrandLayout } from './c/$company/b/$brand/layout';
 import { BrandHomeRoute } from './c/$company/b/$brand/home/route';
@@ -55,6 +56,12 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
         {
           path: 'portfolio',
           Component: PortfolioRoute,
+          loader: () =>
+            prefetch(queryClient.ensureQueryData(trpcFor(null).access.listCompanies.queryOptions())),
+        },
+        {
+          path: 'portfolio/performance',
+          Component: PortfolioPerformanceRoute,
           loader: () =>
             prefetch(queryClient.ensureQueryData(trpcFor(null).access.listCompanies.queryOptions())),
         },

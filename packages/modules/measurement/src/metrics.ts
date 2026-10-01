@@ -1,6 +1,8 @@
 import type { z } from 'zod';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import {
+  BrandPerformanceSummary,
+  COMPARISON_MINIMUM_SAMPLE,
   EngagementQualityGet,
   MetricsQueryV1,
   type MetricAggregateV1,
@@ -13,7 +15,7 @@ import { BrandObjectiveRepository } from '@oremedia/module-brand';
 import { PublicationRepository } from '@oremedia/module-publishing';
 import { brandResource, latencyHoursFor, providerKeyOfSource } from './common';
 import { definitionService } from './definitions';
-import { assertBrandExists } from './hooks';
+import { assertBrandExists, releasedPublications } from './hooks';
 import {
   aggregateByComparableGroup,
   ageWindowSeconds,
@@ -24,13 +26,19 @@ import {
   latestPerSubjectMetric,
 } from './normalise';
 import { engagementQuality, type QualityComponent, type QualityComponentInput } from './quality';
-import { ConversationRepository, MessageRepository, MetricSnapshotRepository } from './repositories';
+import {
+  ConversationRepository,
+  MessageRepository,
+  MetricDefinitionRepository,
+  MetricSnapshotRepository,
+} from './repositories';
 
 /**
  * Spec 15.2 query surface: values with freshness and completeness, aggregates only within a comparable_group,
  * and a coverage statement with every result. Spec 15.3: the engagement quality composite with drill-down.
  */
 const snapshotsRepo = new MetricSnapshotRepository();
+const definitionsRepo = new MetricDefinitionRepository();
 const conversationsRepo = new ConversationRepository();
 const messagesRepo = new MessageRepository();
 const objectivesRepo = new BrandObjectiveRepository();
@@ -84,9 +92,24 @@ const groupBy = <T>(items: T[], key: (t: T) => string): Array<{ key: string; val
   return [...m.entries()].map(([k, values]) => ({ key: k, values }));
 };
 
+/** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
+const SUBJECTS_MAX = 200;
+const KEYS_MAX = 50;
+
 export function createMetricService(opts: MetricsQueryOptions = {}) {
   const now = opts.now ?? (() => new Date());
-  return {
+  /**
+   * The scalar metric keys the register holds (every provider's, the derived rates); the brand's connected
+   * providers decide which carry numbers. Rates and flows first, so the cap keeps what the rollup reads.
+   */
+  const scalarKeys = async (tx?: Tx) => {
+    const defs = (await definitionsRepo.list(undefined, tx)).filter((d) => d.aggregation !== 'series');
+    const rank = (group: string) => (group.startsWith('rate:') ? 0 : group.startsWith('other:') ? 2 : 1);
+    return [
+      ...new Set(defs.sort((a, b) => rank(a.comparableGroup) - rank(b.comparableGroup)).map((d) => d.key)),
+    ].slice(0, KEYS_MAX);
+  };
+  const service = {
     /**
      * insight.read on the brand; the latest fetch per (subject, metric) inside the range is the number, or with
      * `ageDays` the post's total at that age (normalise.atAge).
@@ -136,6 +159,140 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
         aggregates,
         coverage,
         computedAt: at.toISOString(),
+      };
+    },
+
+    /**
+     * Per publication, the engagement and impressions flows (summed within their groups, D-15) the attribute
+     * aggregate pools; a publication with no impressions number is left out (never zero). insight.read is asserted
+     * by the query it runs.
+     */
+    async brandOutcomes(
+      actor: ResolvedActor,
+      brandId: string,
+      publicationIds: string[],
+      windowStart: Date,
+      windowEnd: Date,
+      tx?: Tx,
+    ): Promise<Map<string, { engagement: number; impressions: number }>> {
+      const out = new Map<string, { engagement: number; impressions: number }>();
+      const keys = await scalarKeys(tx);
+      if (publicationIds.length === 0 || keys.length === 0) return out;
+      // A post with one operand only has no outcome (D-15: a missing number is never a zero).
+      const seen = new Map<string, { engagement: number | null; impressions: number | null }>();
+      const result = await service.query(
+        actor,
+        {
+          brandId,
+          subjectType: 'publication',
+          subjectIds: publicationIds.slice(0, SUBJECTS_MAX),
+          metricKeys: keys,
+          windowStart: windowStart.toISOString(),
+          windowEnd: windowEnd.toISOString(),
+          grouping: 'subject',
+        },
+        tx,
+      );
+      for (const v of result.values) {
+        if (v.series !== null || v.value === null || v.completeness === 'unavailable') continue;
+        if (v.comparableGroup !== 'engagement' && v.comparableGroup !== 'impressions') continue;
+        const cell = seen.get(v.subjectId) ?? { engagement: null, impressions: null };
+        if (v.comparableGroup === 'engagement') cell.engagement = (cell.engagement ?? 0) + v.value;
+        else cell.impressions = (cell.impressions ?? 0) + v.value;
+        seen.set(v.subjectId, cell);
+      }
+      for (const [id, cell] of seen)
+        if (cell.engagement !== null && cell.impressions !== null && cell.impressions > 0)
+          out.set(id, { engagement: cell.engagement, impressions: cell.impressions });
+      return out;
+    },
+
+    /**
+     * UX-11 (D-14, D-15): the brand's released publications in the window and the aggregates over them, with the
+     * previous window of equal length for comparison at the same post age. Flows and pooled rates compare; unique
+     * counts, levels and gauges are listed, never summed. Below the minimum sample on either side the comparison
+     * reads insufficient. insight.read on the brand; a foreign brand is NOT_FOUND.
+     */
+    async brandSummary(actor: ResolvedActor, input: z.infer<typeof BrandPerformanceSummary>, tx?: Tx) {
+      const parsed = BrandPerformanceSummary.parse(input);
+      await assertBrandExists(parsed.brandId, tx);
+      await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
+      const windowStart = new Date(parsed.windowStart);
+      const windowEnd = new Date(parsed.windowEnd);
+      const length = windowEnd.getTime() - windowStart.getTime();
+      const keys = await scalarKeys(tx);
+      const window = async (from: Date, to: Date) => {
+        const publications = (await releasedPublications(parsed.brandId, from, to, tx)).slice(
+          0,
+          SUBJECTS_MAX,
+        );
+        if (publications.length === 0 || keys.length === 0)
+          return {
+            windowStart: from.toISOString(),
+            windowEnd: to.toISOString(),
+            publications: publications.length,
+            aggregates: [] as MetricAggregateV1[],
+            coverage: coverageOf([], { subjectIds: [], metricKeys: keys, windowStart: from, windowEnd: to }),
+          };
+        const result = await service.query(
+          actor,
+          {
+            brandId: parsed.brandId,
+            subjectType: 'publication',
+            subjectIds: publications.map((p) => p.publicationId),
+            metricKeys: keys,
+            windowStart: from.toISOString(),
+            windowEnd: to.toISOString(),
+            grouping: 'comparable_group',
+            ...(parsed.ageDays ? { ageDays: parsed.ageDays } : {}),
+          },
+          tx,
+        );
+        return {
+          windowStart: from.toISOString(),
+          windowEnd: to.toISOString(),
+          publications: publications.length,
+          aggregates: result.aggregates,
+          coverage: result.coverage,
+        };
+      };
+      const current = await window(windowStart, windowEnd);
+      const previous = await window(
+        new Date(windowStart.getTime() - length),
+        new Date(windowStart.getTime() - 1),
+      );
+      const sufficient =
+        current.publications >= COMPARISON_MINIMUM_SAMPLE &&
+        previous.publications >= COMPARISON_MINIMUM_SAMPLE;
+      const comparison = current.aggregates
+        .filter((a) => a.kind === 'flow' || a.kind === 'rate')
+        .map((a) => {
+          const before = previous.aggregates.find((b) => b.comparableGroup === a.comparableGroup) ?? null;
+          const change =
+            sufficient && a.value !== null && before && before.value !== null && before.value > 0
+              ? (a.value - before.value) / before.value
+              : null;
+          return {
+            comparableGroup: a.comparableGroup,
+            kind: a.kind,
+            current: a.value,
+            previous: before ? before.value : null,
+            change,
+          };
+        });
+      return {
+        brandId: parsed.brandId,
+        ageDays: parsed.ageDays ?? null,
+        current,
+        previous,
+        comparison,
+        sample: {
+          current: current.publications,
+          previous: previous.publications,
+          minimum: COMPARISON_MINIMUM_SAMPLE,
+          sufficient,
+        },
+        computedAt: now().toISOString(),
       };
     },
 
@@ -231,6 +388,7 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       };
     },
   };
+  return service;
 }
 
 /** The metric keys with any snapshot for the publication in the window (the composite reads them all). */

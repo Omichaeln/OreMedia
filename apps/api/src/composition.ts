@@ -45,6 +45,7 @@ import {
   metricService,
   registerCommentSink,
   registerMeasurementBrandChecker,
+  registerMeasurementPublicationSource,
 } from '@oremedia/module-measurement';
 import {
   channelService,
@@ -177,6 +178,10 @@ export function composeModules(): void {
   registerProviderClients(providerClientsFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
+  // UX-11 / UX-12: the brand's publications in a window, as the calendar reads them.
+  registerMeasurementPublicationSource((brandId, from, to, tx) =>
+    publicationService.calendarRange(brandId, from, to, tx),
+  );
   configureLinkTracking(linkTrackingFromEnv());
   registerLinkTracker((input, tx) => linkService.trackVariantLinks(input, tx));
   // Spec 16.6: a randomised link experiment's arm links at start and its exposures from the redirector's clicks.

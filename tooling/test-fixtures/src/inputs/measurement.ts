@@ -21,6 +21,20 @@ export const MEASUREMENT_INPUTS: Record<string, CrossTenantFixture> = {
       windowEnd: new Date().toISOString(),
     }),
   },
+  'measurement.metrics.brandSummary': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      windowStart: new Date(Date.now() - 30 * 24 * 3600_000).toISOString(),
+      windowEnd: new Date().toISOString(),
+    }),
+  },
+  'measurement.attributes.aggregate': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      windowStart: new Date(Date.now() - 30 * 24 * 3600_000).toISOString(),
+      windowEnd: new Date().toISOString(),
+    }),
+  },
   'measurement.quality.get': {
     buildInput: (f) => ({
       brandId: f['brandId'],

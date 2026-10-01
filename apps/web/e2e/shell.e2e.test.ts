@@ -251,6 +251,63 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('performance panels (UX-12): slots pool the rate, attributes are listed with their sample, a post opens its quality and links, briefs come from the workspace', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}`);
+    const metric = page.getByRole('group', { name: 'Metric' });
+    await metric.getByRole('button', { name: /^Impressions/ }).waitFor({ timeout: 15_000 });
+    // Engagement rate is pooled from its operands over the three posts: (150 + 260 + 60) / 7,800.
+    expect(await metric.getByRole('button', { name: /^Engagement rate/ }).textContent()).toContain('6.0%');
+    // When it lands: 7 × 4 cells, the three posts in three cells, each cell a pooled rate (never summed).
+    const heatmap = page.getByTestId('slot-heatmap');
+    expect(await heatmap.getByTestId('slot-cell').count()).toBe(28);
+    const withPosts = heatmap.locator('[data-testid="slot-cell"]:has-text("%")');
+    expect(await withPosts.count()).toBe(3);
+    expect(await withPosts.first().textContent()).toContain('1/1');
+    // What the creative did: every captured value with its pooled rate; under the minimum sample it is listed, not compared.
+    const attributes = page.getByTestId('creative-attributes');
+    await expect
+      .poll(() => attributes.getByTestId('attributes-brand').textContent(), { timeout: 15_000 })
+      .toContain('Brand rate 6.0%');
+    expect(await attributes.getByTestId('attributes-brand').textContent()).toContain(
+      '3 of 3 with attributes',
+    );
+    // Under the minimum sample no slot is shaded (D-14); the rate is still shown.
+    expect(await heatmap.locator('[data-testid="slot-cell"][data-sufficient="true"]').count()).toBe(0);
+    const values = attributes.getByTestId('attribute-value');
+    expect(await values.count()).toBeGreaterThan(0);
+    expect(
+      await values.evaluateAll((els) => els.every((el) => el.getAttribute('data-sufficient') === 'false')),
+    ).toBe(true);
+    expect(await attributes.textContent()).toContain('Small sample');
+    expect(await attributes.textContent()).not.toContain('Above brand');
+    // One post: its quality composite with what is unavailable named, and its tracked link with the clicks.
+    const row = page.getByTestId('performance-posts').locator('[data-publication="pub_published"]');
+    await row.getByRole('button', { name: 'Details' }).click();
+    const detail = page.getByTestId('post-detail');
+    await detail.getByTestId('post-quality').waitFor({ timeout: 15_000 });
+    expect(new URL(page.url()).searchParams.get('post')).toBe('pub_published');
+    const components = detail.getByTestId('quality-component');
+    expect(await components.count()).toBe(5);
+    expect(await components.first().textContent()).toContain('Saves');
+    expect(await components.first().textContent()).toContain('14');
+    expect(await components.nth(2).textContent()).toContain('Unavailable');
+    expect(await detail.textContent()).toContain('never counted as zero');
+    await detail.getByTestId('post-links').waitFor({ timeout: 15_000 });
+    expect(await detail.getByTestId('post-links').textContent()).toContain('31 clicks');
+    expect(await detail.getByTestId('post-links').textContent()).toContain('https://ore.link/k3n9qz');
+    await detail.getByRole('button', { name: 'Close' }).click();
+    await expect.poll(() => page.getByTestId('post-detail').count(), { timeout: 15_000 }).toBe(0);
+    expect(new URL(page.url()).searchParams.get('post')).toBeNull();
+    // Next cycle: the workspace's open recommendations that propose a brief, on the same card as the workspace.
+    const next = page.getByTestId('next-cycle');
+    await next.getByTestId('recommendation').first().waitFor({ timeout: 15_000 });
+    expect(await next.getByTestId('recommendation').count()).toBe(1);
+    expect(await next.textContent()).toContain('Answer the shipping question in a post');
+    expect(await next.textContent()).not.toContain('Test price-first carousels');
+    await page.close();
+  }, 60_000);
+
   it('settings: channels and skills are tabs; a skill without a published version says so', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}`);

@@ -31,6 +31,16 @@ export function useBrandSummary(tenantId: string) {
   });
 }
 
+/** The brands the person may see in one company, asked with that tenant (the portfolio performance view). */
+export function useBrandsOf(tenantId: string) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  return useQuery({
+    queryKey: [...trpc.brand.list.queryKey(), { tenantId }],
+    queryFn: () => client.brand.list.query(undefined, { context: { tenantId } }),
+  });
+}
+
 export function useBrand(brandId: string) {
   const trpc = useTRPC();
   return useQuery(trpc.brand.get.queryOptions({ brandId }));

@@ -2,7 +2,12 @@ import type { z } from 'zod';
 import { CreativeAttributesV1, type CopyDocumentV1 } from '@oremedia/contracts/content';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
 import { NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
-import { CreativeAttributesCorrect, CreativeAttributesGet } from '@oremedia/contracts/measurement';
+import {
+  COMPARISON_MINIMUM_SAMPLE,
+  CreativeAttributesAggregate,
+  CreativeAttributesCorrect,
+  CreativeAttributesGet,
+} from '@oremedia/contracts/measurement';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
@@ -10,6 +15,8 @@ import { policy } from '@oremedia/module-access';
 import { CreativeAttributeRepository, type AttributeCaptureInput } from '@oremedia/module-content';
 import { CreativeRevisionRepository } from '@oremedia/module-creative';
 import { audit } from '@oremedia/module-operations';
+import { assertBrandExists, releasedPublications } from './hooks';
+import { metricService } from './metrics';
 
 /**
  * Spec 16.2: creative attributes are captured at creation from the structured inputs (the copy document and the
@@ -112,6 +119,40 @@ export const toAttributesDto = (a: Awaited<ReturnType<CreativeAttributeRepositor
   version: a.version,
 });
 
+/** The query's subject bound (MetricsQuery: subjectIds ≤ 200). */
+const AGGREGATE_SUBJECTS_MAX = 200;
+
+export interface AttributeFeatureAggregate {
+  feature: string;
+  value: string;
+  publications: number;
+  engagement: number;
+  impressions: number;
+  rate: number | null;
+  sufficient: boolean;
+}
+
+/** The attribute values a post is grouped by: the captured scalars, and whether a call to action was present. */
+const AGGREGATED_FEATURES = [
+  'hookType',
+  'imageryKind',
+  'layoutKey',
+  'colourTreatment',
+  'templateVersionId',
+  'distribution',
+  'pacing',
+] as const;
+function featureValues(attributes: CreativeAttributesV1): Array<[feature: string, value: string]> {
+  const out: Array<[string, string]> = [];
+  for (const feature of AGGREGATED_FEATURES) {
+    const v = attributes[feature];
+    if (typeof v === 'string' && v) out.push([feature, v]);
+  }
+  out.push(['cta', attributes.cta ? 'present' : 'absent']);
+  if (attributes.subtitles !== undefined) out.push(['subtitles', attributes.subtitles ? 'yes' : 'no']);
+  return out;
+}
+
 export const attributeService = {
   /**
    * The content module's AttributeCapturer (registered by the composition root): runs inside the revision's
@@ -138,6 +179,91 @@ export const attributeService = {
       tx,
     );
     return id;
+  },
+
+  /**
+   * UX-12 "what the creative did": for the brand's released publications in the window, the pooled engagement
+   * rate (Σ engagement ÷ Σ impressions, D-15) of the posts sharing each captured attribute value, beside the
+   * brand's own pooled rate; a value below the minimum sample is listed but marked insufficient. Attributes are
+   * the captured ones (spec 16.2), never reconstructed. insight.read on the brand; a foreign brand is NOT_FOUND.
+   */
+  async aggregate(actor: ResolvedActor, input: z.infer<typeof CreativeAttributesAggregate>, tx?: Tx) {
+    const parsed = CreativeAttributesAggregate.parse(input);
+    await assertBrandExists(parsed.brandId, tx);
+    await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
+    const windowStart = new Date(parsed.windowStart);
+    const windowEnd = new Date(parsed.windowEnd);
+    const publications = (await releasedPublications(parsed.brandId, windowStart, windowEnd, tx)).slice(
+      0,
+      AGGREGATE_SUBJECTS_MAX,
+    );
+    const empty = {
+      brandId: parsed.brandId,
+      windowStart: parsed.windowStart,
+      windowEnd: parsed.windowEnd,
+      publications: publications.length,
+      withAttributes: 0,
+      withNumbers: 0,
+      minimum: COMPARISON_MINIMUM_SAMPLE,
+      brand: { publications: 0, engagement: 0, impressions: 0, rate: null as number | null },
+      features: [] as AttributeFeatureAggregate[],
+    };
+    if (publications.length === 0) return empty;
+    const rows = await attributesRepo.listForRevisions(
+      parsed.brandId,
+      publications.map((p) => p.contentRevisionId),
+      tx,
+    );
+    const byRevision = new Map(rows.map((r) => [r.contentRevisionId, r.attributes]));
+    const outcomes = await metricService.brandOutcomes(
+      actor,
+      parsed.brandId,
+      publications.map((p) => p.publicationId),
+      windowStart,
+      windowEnd,
+      tx,
+    );
+    const brand = { publications: 0, engagement: 0, impressions: 0 };
+    const cells = new Map<string, AttributeFeatureAggregate>();
+    for (const p of publications) {
+      const outcome = outcomes.get(p.publicationId);
+      if (!outcome) continue;
+      brand.publications += 1;
+      brand.engagement += outcome.engagement;
+      brand.impressions += outcome.impressions;
+      const attributes = byRevision.get(p.contentRevisionId);
+      if (!attributes) continue;
+      for (const [feature, value] of featureValues(attributes)) {
+        const key = `${feature}\u0000${value}`;
+        const cell = cells.get(key) ?? {
+          feature,
+          value,
+          publications: 0,
+          engagement: 0,
+          impressions: 0,
+          rate: null,
+          sufficient: false,
+        };
+        cell.publications += 1;
+        cell.engagement += outcome.engagement;
+        cell.impressions += outcome.impressions;
+        cells.set(key, cell);
+      }
+    }
+    const features = [...cells.values()]
+      .map((c) => ({
+        ...c,
+        rate: c.impressions > 0 ? c.engagement / c.impressions : null,
+        sufficient: c.publications >= COMPARISON_MINIMUM_SAMPLE,
+      }))
+      .sort((a, b) => a.feature.localeCompare(b.feature) || b.publications - a.publications);
+    return {
+      ...empty,
+      withAttributes: publications.filter((p) => byRevision.has(p.contentRevisionId)).length,
+      withNumbers: brand.publications,
+      brand: { ...brand, rate: brand.impressions > 0 ? brand.engagement / brand.impressions : null },
+      features,
+    };
   },
 
   /** insight.read on the brand of the attributes row; a foreign id is NOT_FOUND. */

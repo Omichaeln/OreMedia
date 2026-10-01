@@ -280,6 +280,24 @@ export class CreativeAttributeRepository extends BrandScopedRepository<typeof cr
     if (ctx.brandIds !== 'all' && !ctx.brandIds.has(row.brandId)) return null;
     return row;
   }
+  /** The latest attributes row per content revision, for a brand's published revisions (ID_LIST_MAX bounded). */
+  async listForRevisions(brandId: string, contentRevisionIds: readonly string[], tx?: Tx) {
+    if (contentRevisionIds.length === 0) return [];
+    const rows = await this.conn(tx)
+      .select()
+      .from(creativeAttributes)
+      .where(
+        this.brandScope(
+          brandId,
+          inArray(creativeAttributes.contentRevisionId, contentRevisionIds.slice(0, ID_LIST_MAX)),
+        ),
+      )
+      .orderBy(desc(creativeAttributes.id));
+    const latest = new Map<string, (typeof rows)[number]>();
+    for (const row of rows)
+      if (row.contentRevisionId && !latest.has(row.contentRevisionId)) latest.set(row.contentRevisionId, row);
+    return [...latest.values()];
+  }
   async findForVariant(channelVariantId: string, tx?: Tx) {
     const rows = await this.conn(tx)
       .select()
