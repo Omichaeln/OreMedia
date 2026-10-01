@@ -442,6 +442,17 @@ export const publicationService = {
     return holdWhereReleaseFails(rows, reason, tx);
   },
 
+  /** UX-20: the scheduled publications reevaluateScheduledForBrand would re-check now, read without locking. */
+  async scheduledForBrand(brandId: string, tx?: Tx) {
+    return (await publicationsRepo.listScheduledForBrandRead(brandId, tx)).map((p) => ({
+      publicationId: p.id,
+      contentPackageId: p.contentPackageId,
+      contentRevisionId: p.contentRevisionId,
+      channelConnectionId: p.channelConnectionId,
+      scheduledFor: p.scheduledFor.toISOString(),
+    }));
+  },
+
   /**
    * Spec 8.2 brand.fact_revoked: the scheduled publications whose content revision cites the fact. With `hold`
    * (policy holdOnDependencyRevocation, the default) each one that fails the release check moves to `held`;

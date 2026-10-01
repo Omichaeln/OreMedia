@@ -400,6 +400,17 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await brandType.getByRole('button', { name: 'Save' }).click();
     await expect.poll(() => brandType.textContent(), { timeout: 15_000 }).toContain('Internal brand.');
     await expect.poll(() => policy.textContent(), { timeout: 15_000 }).toMatch(/Distinct approver.*No/);
+    // UX-20 (D-13): the brand-version choice is recorded as a new policy version; `flag` is offered but not enabled.
+    expect(await policy.textContent()).toMatch(/On brand version published.*\(default\)/);
+    await page.getByLabel('On brand version published').click();
+    const flag = page.getByRole('option', { name: /Keep approvals and flag/ });
+    expect(await flag.getAttribute('data-disabled')).not.toBeNull();
+    await page.keyboard.press('Escape');
+    await policy.getByRole('button', { name: 'Save as a new policy version' }).click();
+    await expect.poll(() => policy.textContent(), { timeout: 15_000 }).toContain('Policy version 1.');
+    expect(await policy.textContent()).toMatch(
+      /On brand version published.*Invalidate approvals and hold scheduled posts(?! \(default\))/,
+    );
     expect(backend.brands.find((b) => b.id === E2E.brandId)?.classification).toBe('internal');
     await page.getByLabel('Change the type').click();
     await page.getByRole('option', { name: 'Client brand' }).click();
@@ -523,7 +534,26 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.getByRole('button', { name: 'Review changes' }).click();
     const changes = page.getByTestId('version-changes');
     await expect.poll(() => changes.textContent(), { timeout: 15_000 }).toContain('Imagery');
-    expect(await changes.textContent()).toContain('approvals of this brand are invalidated');
+    // UX-20: the preview names what the publish reaches, from the review and publishing stores. Whether the
+    // settings test above recorded a choice or not, the policy line names today's behaviour.
+    const impact = changes.getByTestId('publish-impact');
+    await expect
+      .poll(() => impact.textContent(), { timeout: 15_000 })
+      .toMatch(/Publishing version 2 reaches/);
+    const openRequests = [...backend.phase5.requests.values()].filter((r) => r.state === 'open').length;
+    const scheduled = [...backend.phase5.publications.values()].filter((p) => p.state === 'scheduled').length;
+    expect(await impact.textContent()).toContain(
+      `${openRequests} open review ${openRequests === 1 ? 'request' : 'requests'}`,
+    );
+    expect(await impact.textContent()).toContain(
+      `${scheduled} scheduled ${scheduled === 1 ? 'post' : 'posts'}`,
+    );
+    expect(await impact.getByTestId('publish-impact-policy').textContent()).toContain(
+      'Policy: Invalidate approvals and hold scheduled posts',
+    );
+    const recorded = backend.policyVersions.some((p) => p.state === 'active');
+    const policyLine = (await impact.getByTestId('publish-impact-policy').textContent()) ?? '';
+    expect(policyLine.includes('(no choice recorded; this is the default)')).toBe(!recorded);
     await page.goto(`${origin}${home.replace('/home', '/system?section=voice')}`);
     await page.getByLabel('Draft copy').fill('A cheap and cheerful roast');
     const findings = page.getByTestId('draft-findings');

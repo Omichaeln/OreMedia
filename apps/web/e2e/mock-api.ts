@@ -55,11 +55,16 @@ import {
 import {
   BrandClassify,
   BrandVersionGet,
+  BrandVersionImpact,
   BrandVersionList,
   BrandVersionUpdate,
   FactList,
   ObjectiveList,
   OnboardingStart,
+  PolicyGet,
+  PolicyVersionActivate,
+  PolicyVersionCreate,
+  PolicyDocumentV1,
 } from '@oremedia/contracts/brand';
 import {
   ConflictError,
@@ -491,6 +496,18 @@ export class MockBackend {
   readonly skillBindings = new Map<string, { id: string; skillVersionId: string; skillId: string }>();
   /** Spend limits and the ledger (agents.budgets): the company's month row is brandId ''. */
   readonly spendLimits = new Map<string, number>([['', 100_000_000]]);
+  /** UX-20: the brand's policy versions (brand.policy.*); none until the settings screen writes one. */
+  readonly policyVersions: Array<{
+    id: string;
+    brandId: string;
+    number: number;
+    state: 'draft' | 'active' | 'retired';
+    document: PolicyDocumentV1;
+    createdByUserId: string;
+    createdAt: string;
+    updatedAt: string;
+    version: number;
+  }> = [];
   /** Kill switches by `${scope}:${brandId ?? ''}` (operations.killSwitch); '' is the company-wide row. */
   readonly killSwitches = new Map<string, { engaged: boolean; reason: string | null }>();
   /** The company's stored model-routing policy (agents.routingPolicy); null = none stored, the platform default. */
@@ -1727,12 +1744,53 @@ export function createMockRouter(backend: MockBackend) {
     }),
     brand: t.router({
       policy: t.router({
-        // No policy version is activated in the mock brand: the screen shows the defaults in force.
-        get: query
-          .input(z.object({ brandId: z.string(), policyVersionId: z.string().optional() }))
-          .query(() => {
-            throw new NotFoundError('PolicyVersion', 'active');
-          }),
+        // No policy version is activated until the screen creates and activates one (UX-20); until then the
+        // defaults are in force, as the API answers NOT_FOUND.
+        get: query.input(PolicyGet).query(({ input }) => {
+          const mine = backend.policyVersions.filter((p) => p.brandId === input.brandId);
+          const found = input.policyVersionId
+            ? mine.find((p) => p.id === input.policyVersionId)
+            : mine.find((p) => p.state === 'active');
+          if (!found) throw new NotFoundError('PolicyVersion', input.policyVersionId ?? 'active');
+          return found;
+        }),
+        createVersion: mutation.input(PolicyVersionCreate).mutation(({ input }) => {
+          // D-13: `flag` is refused as the server refuses it, until approval binding v2.
+          if (input.document.onBrandVersionPublished === 'flag')
+            throw new ValidationFailedError([
+              { path: 'document.onBrandVersionPublished', issue: 'flag is designed but not enabled' },
+            ]);
+          const id = `pv_${backend.policyVersions.length + 1}`;
+          backend.policyVersions.push({
+            id,
+            brandId: input.brandId,
+            number: backend.policyVersions.length + 1,
+            state: 'draft',
+            document: PolicyDocumentV1.parse({
+              ...input.document,
+              // D-11 as the API: a client brand needs a distinct approver unless the document says otherwise.
+              requireDistinctApprover:
+                input.document.requireDistinctApprover ??
+                (backend.brands.find((b) => b.id === input.brandId)?.classification ?? 'client') === 'client',
+            }),
+            createdByUserId: 'usr_e2e',
+            createdAt: now(),
+            updatedAt: now(),
+            version: 0,
+          });
+          return { policyVersionId: id, number: backend.policyVersions.length, version: 0 };
+        }),
+        activate: mutation.input(PolicyVersionActivate).mutation(({ input }) => {
+          const pv = backend.policyVersions.find((p) => p.id === input.policyVersionId);
+          if (!pv) throw new NotFoundError('PolicyVersion', input.policyVersionId);
+          if (pv.version !== input.expectedVersion)
+            throw new ConflictError('PolicyVersion', input.policyVersionId, pv.version);
+          for (const other of backend.policyVersions)
+            if (other.brandId === pv.brandId && other.state === 'active') other.state = 'retired';
+          pv.state = 'active';
+          pv.version += 1;
+          return { policyVersionId: pv.id, state: 'active' as const, version: pv.version };
+        }),
       }),
       list: query.query(({ ctx }) =>
         backend.brands
@@ -1805,6 +1863,42 @@ export function createMockRouter(backend: MockBackend) {
         get: query
           .input(BrandVersionGet)
           .query(({ input }) => (input.versionId === brandDraft.id ? brandDraft : brandVersion)),
+        /** UX-20: what a publish reaches now, from the review and publishing stores as the API composes them. */
+        impact: query.input(BrandVersionImpact).query(({ input }) => {
+          const requests = [...backend.phase5.requests.values()].filter(
+            (r) => r.brandId === input.brandId && r.state === 'open',
+          );
+          const approvals = backend.phase5.approvals.filter(
+            (a) => a.brandId === input.brandId && a.state === 'valid',
+          ).length;
+          const publications = [...backend.phase5.publications.values()].filter(
+            (p) => p.brandId === input.brandId && p.state === 'scheduled',
+          );
+          const active = backend.policyVersions.find((p) => p.state === 'active');
+          return {
+            brandId: input.brandId,
+            available: true,
+            policy: {
+              configured: active?.document.onBrandVersionPublished ?? null,
+              effective: 'invalidate_and_hold' as const,
+            },
+            requests: requests.map((r) => ({
+              id: r.id,
+              contentRevisionId: r.contentRevisionId,
+              dueAt: r.dueAt,
+              assignees: r.assignees.length,
+            })),
+            approvals,
+            publications: publications.map((p) => ({
+              publicationId: p.id,
+              contentPackageId: p.contentPackageId,
+              contentRevisionId: p.contentRevisionId,
+              channelConnectionId: p.channelConnectionId,
+              scheduledFor: p.scheduledFor,
+            })),
+            computedAt: now(),
+          };
+        }),
         update: mutation.input(BrandVersionUpdate).mutation(({ input }) => {
           backend.brandDraftDocument = input.document as { voice?: unknown };
           brandDraft = {

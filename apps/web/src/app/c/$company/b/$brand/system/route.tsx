@@ -33,6 +33,9 @@ import {
   VoiceView,
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
+import { PublishImpact } from '../../../../../../features/brand/publish-impact';
+import { useBrandVersionImpact } from '../../../../../../features/brand/use-brand';
+import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
 import {
   useBrandVersion,
   useBrandVersions,
@@ -422,11 +425,7 @@ function VersionChanges({
           ))}
         </ul>
       )}
-      <p className="text-xs text-muted-foreground">
-        If version {version.number} is published, approvals of this brand are invalidated and every scheduled
-        publication is re-checked against the release policy; any that fail are held with the failed checks
-        (spec 8.2).
-      </p>
+      <PublishImpact brandId={brandId} versionNumber={version.number} />
     </section>
   );
 }
@@ -449,6 +448,10 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
   const { toast } = useToast();
   const versions = useBrandVersions(brandId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // UX-20: the publish is confirmed over what it reaches; the confirmation waits for that read.
+  const [publishing, setPublishing] = useState<BrandVersionSummary | null>(null);
+  const impact = useBrandVersionImpact(brandId, publishing !== null);
+  const impactKnown = impact.data?.available === true;
   const selected = useBrandVersion(brandId, selectedId);
   const { conflict, onError, clear } = useConflict();
   const invalidate = () => {
@@ -488,6 +491,7 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
       ...mutationIntent(publishIntent.key),
       onSuccess: () => {
         publishIntent.renew();
+        setPublishing(null);
         invalidate();
         toast({ tone: 'good', title: 'Version published' });
       },
@@ -591,9 +595,7 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
                         <Button
                           size="sm"
                           variant="primary"
-                          onClick={() =>
-                            publish.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
-                          }
+                          onClick={() => setPublishing(v)}
                           disabled={publish.isPending}
                         >
                           Publish
@@ -608,6 +610,39 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
               ))}
             </tbody>
           </table>
+          <Dialog open={publishing !== null} onOpenChange={(open) => !open && setPublishing(null)}>
+            {publishing && (
+              <DialogContent
+                role="alertdialog"
+                title={`Publish version ${publishing.number}?`}
+                description="What publishing this version reaches, before it happens."
+              >
+                <PublishImpact brandId={brandId} versionNumber={publishing.number} />
+                <DialogActions>
+                  <DialogClose asChild>
+                    <Button size="sm" variant="ghost">
+                      Cancel
+                    </Button>
+                  </DialogClose>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() =>
+                      publish.mutate({
+                        brandId,
+                        versionId: publishing.id,
+                        expectedVersion: publishing.version,
+                      })
+                    }
+                    disabled={publish.isPending || !impactKnown}
+                    disabledReason={impactKnown ? undefined : 'Wait for what the publish reaches to load'}
+                  >
+                    {publish.isPending ? 'Publishing…' : `Publish version ${publishing.number}`}
+                  </Button>
+                </DialogActions>
+              </DialogContent>
+            )}
+          </Dialog>
         </div>
       )}
       {selectedId && (
