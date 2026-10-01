@@ -1463,7 +1463,11 @@ describe('brand module (spec 8) against MySQL 8', () => {
   describe('brand setup (R1-D)', () => {
     it('setup completes only once the standards are published; then the brand is active, audited, idempotent; foreign is NOT_FOUND', async () => {
       const created = await run(tenantA, (tx) =>
-        brandService.create(A, { name: 'Setup brand', timezone: 'Europe/Berlin', defaultLocale: 'en' }, tx),
+        brandService.create(
+          A,
+          { name: 'Setup brand', timezone: 'Europe/Berlin', defaultLocale: 'en', classification: 'client' },
+          tx,
+        ),
       );
       const id = created.brandId;
       expect((await tdb.db.select().from(brands).where(eq(brands.id, id)))[0]!.status).toBe('setup');
