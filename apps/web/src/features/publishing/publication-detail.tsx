@@ -18,6 +18,7 @@ import { useToast } from '../../components/toast';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
+import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import {
   actionsFor,
   channelOutcomeSummary,
@@ -45,6 +46,8 @@ export interface PublicationDetailProps {
   brandId: string;
   publicationId: string | null;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, named when the publication targets one. */
+  destinations: ReadonlyMap<string, DestinationDto>;
   /** The brand's time zone: reschedule times are entered as the brand's wall clock (UX-06). */
   timeZone: string;
 }
@@ -60,7 +63,13 @@ const channelName = (channels: ReadonlyMap<string, ChannelDto>, id: string) => {
  * its revision (spec 14.4) and the actions the state allows (spec 13.1, 13.5). Every action has a keyboard path
  * and every result is written out as text.
  */
-export function PublicationDetail({ brandId, publicationId, channels, timeZone }: PublicationDetailProps) {
+export function PublicationDetail({
+  brandId,
+  publicationId,
+  channels,
+  destinations,
+  timeZone,
+}: PublicationDetailProps) {
   const publication = usePublication(publicationId);
   return (
     <Panel title="Publication" data-testid="publication-detail">
@@ -75,7 +84,13 @@ export function PublicationDetail({ brandId, publicationId, channels, timeZone }
         <RequestError error={publication.error} onRetry={() => void publication.refetch()} />
       )}
       {publication.isSuccess && (
-        <Loaded brandId={brandId} publication={publication.data} channels={channels} timeZone={timeZone} />
+        <Loaded
+          brandId={brandId}
+          publication={publication.data}
+          channels={channels}
+          destinations={destinations}
+          timeZone={timeZone}
+        />
       )}
     </Panel>
   );
@@ -85,11 +100,13 @@ function Loaded({
   brandId,
   publication: p,
   channels,
+  destinations,
   timeZone,
 }: {
   brandId: string;
   publication: PublicationDto;
   channels: ReadonlyMap<string, ChannelDto>;
+  destinations: ReadonlyMap<string, DestinationDto>;
   timeZone: string;
 }) {
   const trpc = useTRPC();
@@ -97,7 +114,10 @@ function Loaded({
   const { toast } = useToast();
   const chip = publicationChip(p.state);
   const actions = actionsFor(p.state);
-  const channel = channels.get(p.channelConnectionId);
+  const channel = p.channelConnectionId ? channels.get(p.channelConnectionId) : undefined;
+  const website = p.destinationId
+    ? destinationLabel(destinations.get(p.destinationId), p.destinationId)
+    : null;
   const [cancelResult, setCancelResult] = useState<CancelResultDto | null>(null);
   const [lastError, setLastError] = useState<unknown>(null);
   const siblings = useRevisionPublications(brandId, p.contentRevisionId);
@@ -142,12 +162,17 @@ function Loaded({
           {chip.label}
         </Badge>
         <span className="text-muted-foreground">{when(p.scheduledFor)}</span>
-        {channel && (
+        {channel && p.channelConnectionId && (
           <Badge
             tone={CHANNEL_CHIP[channel.status].tone}
             glyph={CHANNEL_CHIP[channel.status].tone !== 'good'}
           >
             {channelName(channels, p.channelConnectionId)}: {CHANNEL_CHIP[channel.status].label}
+          </Badge>
+        )}
+        {website && (
+          <Badge tone="info" glyph={false} data-testid="publication-target-website">
+            {website}
           </Badge>
         )}
       </div>
@@ -289,7 +314,10 @@ function Loaded({
           description={`The post was deleted on the channel${deletedAt ? ` on ${when(deletedAt)}` : ''}. The publication record and its evidence stay.`}
         />
       )}
-      {p.state === 'published' && !p.remote.edit && !p.remote.delete && (
+      {p.remote.article && (
+        <ArticlePanel publication={p} onDone={refresh} onError={fail('Validation failed')} />
+      )}
+      {p.state === 'published' && !p.remote.edit && !p.remote.delete && !p.remote.unpublish && (
         <p className="text-xs text-muted-foreground" data-testid="remote-change-unsupported">
           This channel does not let Oremedia edit or delete a published post; change or delete it on the
           platform itself.
@@ -322,6 +350,9 @@ function Loaded({
         )}
         {actions.deleteRemote && p.remote.delete && p.remote.allowed.delete && !remote.open && (
           <DeleteRemoteAction publication={p} onDone={refresh} onError={fail('Delete request failed')} />
+        )}
+        {actions.deleteRemote && p.remote.unpublish && p.remote.allowed.unpublish && !remote.open && (
+          <RevertToDraftAction publication={p} onDone={refresh} onError={fail('Revert request failed')} />
         )}
       </div>
 
@@ -420,7 +451,11 @@ function Loaded({
                 return (
                   <li key={s.id} className="flex flex-wrap items-center gap-2">
                     <Badge tone={c.tone}>{c.label}</Badge>
-                    <span>{channelName(channels, s.channelConnectionId)}</span>
+                    <span>
+                      {s.destinationId
+                        ? destinationLabel(destinations.get(s.destinationId), s.destinationId)
+                        : channelName(channels, s.channelConnectionId ?? '')}
+                    </span>
                     {s.id === p.id && <span className="text-muted-foreground">(this one)</span>}
                     {s.remoteUrl && (
                       <a href={s.remoteUrl} target="_blank" rel="noreferrer noopener" className="underline">
@@ -449,7 +484,220 @@ const EVIDENCE_KIND_TEXT: Record<string, string> = {
   metrics_readback: 'Metrics read-back',
   remote_edit: 'Remote edit',
   remote_deletion: 'Remote deletion',
+  remote_readback: 'Article read back from the website',
+  rendered_validation: 'Rendered page validation',
+  remote_unpublish: 'Reverted to draft on the website',
 };
+
+const RENDERED_CHECK_TEXT: Record<string, string> = {
+  status_ok: 'The page answered 200',
+  title_present: 'The title is in the page title or its heading',
+  canonical_present: 'A canonical link is present',
+  indexable: 'No noindex (a draft is allowed one)',
+  body_present: 'The first paragraph is in the page',
+};
+
+/** What the evidence payload of a rendered validation carries (recorded by the server, read as data). */
+function renderedChecks(payload: Record<string, unknown>): Array<{ key: string; ok: boolean }> {
+  const checks = payload['checks'];
+  return Array.isArray(checks)
+    ? checks
+        .filter((c): c is { key: string; ok: boolean } => typeof c === 'object' && c !== null && 'key' in c)
+        .map((c) => ({ key: String(c.key), ok: c.ok === true }))
+    : [];
+}
+
+/**
+ * R2-3: what the website said back after the article was written (the read-back with its content hash), what the
+ * rendered page showed (the validation, re-run on demand) and whether the article was reverted to a draft since.
+ */
+function ArticlePanel({
+  publication: p,
+  onDone,
+  onError,
+}: {
+  publication: PublicationDto;
+  onDone: () => void;
+  onError: (err: unknown) => void;
+}) {
+  const trpc = useTRPC();
+  const { toast } = useToast();
+  const intent = useIntentKey();
+  const article = p.remote.article;
+  const validate = useMutation(
+    trpc.destinations.articles.validate.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: (res) => {
+        intent.renew();
+        onDone();
+        toast(
+          res.ok
+            ? { tone: 'good', title: 'The page checks out' }
+            : {
+                tone: 'warning',
+                title: 'The page did not pass every check',
+                description: 'See the checks below.',
+              },
+        );
+      },
+      onError,
+    }),
+  );
+  if (!article) return null;
+  const readback = article.readback?.payload ?? null;
+  const validation = article.validation?.payload ?? null;
+  const checks = validation ? renderedChecks(validation) : [];
+  const ok = validation ? validation['ok'] === true : null;
+  return (
+    <section
+      aria-labelledby={`article-${p.id}`}
+      className="flex flex-col gap-2 rounded-md border border-border p-3"
+      data-testid="article-panel"
+    >
+      <h3 id={`article-${p.id}`} className="text-xs font-semibold">
+        Website article
+      </h3>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {readback ? (
+          <Badge tone={readback['status'] === 'publish' ? 'good' : 'info'} data-testid="article-readback">
+            Read back: {String(readback['status'])}
+          </Badge>
+        ) : (
+          <Badge tone="neutral" data-testid="article-readback">
+            Not read back yet
+          </Badge>
+        )}
+        {article.unpublished && (
+          <Badge tone="warning" data-testid="article-unpublished">
+            Reverted to draft {when(article.unpublished.capturedAt)}
+          </Badge>
+        )}
+        {ok === null ? (
+          <Badge tone="neutral" data-testid="article-validation">
+            Page not validated
+          </Badge>
+        ) : (
+          <Badge tone={ok ? 'good' : 'critical'} data-testid="article-validation">
+            {ok ? 'Page validated' : 'Page validation failed'}
+          </Badge>
+        )}
+      </div>
+      {readback && (
+        <p className="text-xs text-muted-foreground">
+          Remote revision <code>{String(readback['remoteId'])}</code>
+          {typeof readback['modifiedAt'] === 'string' ? ` modified ${when(readback['modifiedAt'])}` : ''} ·
+          content hash <code>{String(readback['contentHash']).slice(0, 12)}…</code>. An edit from here is
+          refused when the website moved past this hash; nothing is overwritten.
+        </p>
+      )}
+      {validation && (
+        <ul
+          className="flex flex-col gap-0.5 text-xs"
+          aria-label="Rendered page checks"
+          data-testid="article-checks"
+        >
+          {checks.map((c) => (
+            <li key={c.key} data-check={c.key} data-ok={c.ok ? 'true' : 'false'}>
+              {c.ok ? 'Pass' : 'Fail'}: {RENDERED_CHECK_TEXT[c.key] ?? c.key}
+            </li>
+          ))}
+          {typeof validation['error'] === 'string' && validation['error'] && (
+            <li>
+              The page could not be read: <code>{validation['error']}</code>
+            </li>
+          )}
+        </ul>
+      )}
+      {p.state === 'published' && p.remoteUrl && (
+        <div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={validate.isPending}
+            onClick={() => validate.mutate({ publicationId: p.id })}
+            data-testid="validate-article"
+          >
+            {validate.isPending ? 'Checking the page…' : 'Validate the page now'}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** R2-3 rollback: the live article is set back to a draft on its website (publication.delete_remote), recorded. */
+function RevertToDraftAction({
+  publication: p,
+  onDone,
+  onError,
+}: {
+  publication: PublicationDto;
+  onDone: () => void;
+  onError: (err: unknown) => void;
+}) {
+  const trpc = useTRPC();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const intent = useIntentKey();
+  const revert = useMutation(
+    trpc.publishing.publications.unpublishRemote.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setOpen(false);
+        onDone();
+        toast({
+          tone: 'info',
+          title: 'Revert requested',
+          description:
+            'The article is set back to a draft on the website shortly; this screen shows when it is done.',
+        });
+      },
+      onError,
+    }),
+  );
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button size="sm" variant="danger" onClick={() => setOpen(true)} data-testid="revert-to-draft">
+        Revert to draft
+      </Button>
+      <DialogContent
+        role="alertdialog"
+        title="Revert the article to a draft?"
+        description="The page stops being public on the website; the article and its revisions stay. Reverting is a separate, recorded action, never an automatic rollback. Give the reason that will be audited."
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (reason.trim()) revert.mutate({ publicationId: p.id, reason: reason.trim() });
+          }}
+          className="flex flex-col gap-3"
+          noValidate
+        >
+          <Field label="Reason" htmlFor={`revert-reason-${p.id}`}>
+            <Textarea
+              id={`revert-reason-${p.id}`}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={500}
+              required
+            />
+          </Field>
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="ghost">Keep it live</Button>
+            </DialogClose>
+            <Button type="submit" variant="danger" disabled={revert.isPending || !reason.trim()}>
+              Request revert
+            </Button>
+          </DialogActions>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /**
  * R1-C attempt ledger: the evidence rows behind the attempts (spec 14.4), newest last, as the record of what the

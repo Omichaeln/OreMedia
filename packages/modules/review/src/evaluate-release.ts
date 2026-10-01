@@ -426,7 +426,9 @@ export async function evaluateRelease(
     checks.push(
       check(
         'mandate_channel',
-        m !== null && pub.channelConnectionId !== null && m.channelConnectionIds.includes(pub.channelConnectionId),
+        m !== null &&
+          pub.channelConnectionId !== null &&
+          m.channelConnectionIds.includes(pub.channelConnectionId),
       ),
     );
     checks.push(check('mandate_content_class', m !== null && m.allowedContentClasses.includes(classOf)));
@@ -461,7 +463,8 @@ export async function evaluateRelease(
     // R2-3: the destination stands in for the channel, and its write needs the brand's source-use policy (D-17).
     checks.push(check('channel_active', await checkers.destinationUsable(pub.destinationId, tx)));
     checks.push(check('source_use_write', await checkers.destinationWriteAllowed(pub.destinationId, tx)));
-  } else checks.push(check('channel_active', await checkers.channelUsable(pub.channelConnectionId ?? '', tx)));
+  } else
+    checks.push(check('channel_active', await checkers.channelUsable(pub.channelConnectionId ?? '', tx)));
   checks.push(check('assets_rights_valid', assetsOk));
   checks.push(check('facts_valid', factsOk)); // expired offers block
   checks.push(check('capability_valid', await checkers.validateVariant(pub.channelVariantId, tx)));

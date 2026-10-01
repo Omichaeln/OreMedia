@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
+  DestinationArticleValidate,
   DestinationConnectCancel,
   DestinationConnectComplete,
   DestinationConnectSelect,
   DestinationConnectStart,
+  DestinationConnectWithSecret,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -55,7 +57,7 @@ import type { MockBuilders, t } from './mock-api';
  * A test double, never a second implementation.
  */
 export const PD = {
-  destinations: { ga4: 'dst_e2e_ga4', gbp: 'dst_e2e_gbp', gsc: 'dst_e2e_gsc' },
+  destinations: { ga4: 'dst_e2e_ga4', gbp: 'dst_e2e_gbp', gsc: 'dst_e2e_gsc', cms: 'dst_e2e_cms' },
   policies: { ga4Reports: 'sup_e2e_ga4_reports', gbpReviews: 'sup_e2e_gbp_reviews' },
   /** What a completed grant can read (connect.complete offers both; the person confirms one). */
   targets: [
@@ -79,6 +81,19 @@ const SOURCES: readonly DestinationSourceV1[] = [
     vendor: 'Google',
     certified: false,
     enabled: false,
+  },
+  // R2-3: the website CMS, connected with a site address and an application password (D-16).
+  {
+    kind: 'cms_site',
+    label: 'Website CMS',
+    vendor: 'WordPress',
+    certified: true,
+    enabled: true,
+    connect: 'secret',
+    credential: {
+      label: 'Application password',
+      hint: 'Created under the site user’s profile (Users → Profile → Application Passwords); the user needs the editor or administrator role.',
+    },
   },
 ];
 
@@ -333,6 +348,10 @@ export class DestinationsBackend {
   >();
   /** R2-1 part B: what the daily sweep would have stored (seeded for the GA4 property and the Search Console site). */
   readonly reportRows: SeededReportRow[] = [];
+  /** R2-3: destinations.articles.validate reaches the publications (set by the owning MockBackend). */
+  validateArticle: (publicationId: string) => Record<string, unknown> = () => {
+    throw new Error('validateArticle not wired');
+  };
 
   constructor(
     readonly brandId: string,
@@ -366,6 +385,22 @@ export class DestinationsBackend {
         displayName: 'Acme site',
         ownerUserId: 'usr_e2e',
         grantedScopes: ['webmasters.readonly'],
+        health: 'healthy',
+        healthCheckedAt: '2026-09-30T06:00:00.000Z',
+        capabilityVersion: 1,
+        status: 'active',
+        version: 0,
+        createdAt: at,
+        updatedAt: at,
+      },
+      {
+        id: PD.destinations.cms,
+        brandId,
+        kind: 'cms_site',
+        externalId: 'https://acme.example',
+        displayName: 'acme.example',
+        ownerUserId: 'usr_e2e',
+        grantedScopes: ['articles:write'],
         health: 'healthy',
         healthCheckedAt: '2026-09-30T06:00:00.000Z',
         capabilityVersion: 1,
@@ -637,6 +672,45 @@ export function destinationsRouters(
         b.destinations.push(row);
         return row;
       }),
+      /**
+       * R2-3: a website connected with its integration identity and secret. The mock keeps the DTO shape the API
+       * returns (never the secret) and registers the destination with health unknown: the worker verifies it.
+       */
+      withSecret: mutation.input(DestinationConnectWithSecret).mutation(({ input }) => {
+        brandOf(input.brandId);
+        if (!CONNECTORS.has(b.role())) throw new PolicyDeniedError('role_missing');
+        let site: URL;
+        try {
+          site = new URL(input.siteUrl);
+        } catch {
+          site = new URL('https://invalid.example');
+        }
+        if (site.protocol !== 'https:' || site.hostname === 'localhost')
+          throw new ValidationFailedError(
+            [{ path: 'siteUrl', issue: 'site_url_not_allowed' }],
+            'The site address must be https on a public host',
+          );
+        const existing = b.destinations.find((d) => d.kind === 'cms_site' && d.externalId === site.origin);
+        if (existing) throw new ConflictError('Destination', existing.id, existing.version);
+        const row: DestinationV1 = {
+          id: `dst_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+          brandId: input.brandId,
+          kind: 'cms_site',
+          externalId: site.origin,
+          displayName: input.displayName ?? site.host,
+          ownerUserId: 'usr_e2e',
+          grantedScopes: input.allowPublish ? ['articles:write', 'articles:publish'] : ['articles:write'],
+          health: 'unknown',
+          healthCheckedAt: null,
+          capabilityVersion: 1,
+          status: 'active',
+          version: 0,
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        b.destinations.push(row);
+        return row;
+      }),
       cancel: mutation.input(DestinationConnectCancel).mutation(({ input }) => {
         if (!b.connectChoices.delete(input.pendingId))
           throw new ValidationFailedError(
@@ -786,6 +860,12 @@ export function destinationsRouters(
         }
         return { items, windowStart: start, windowEnd: end };
       }),
+    }),
+    articles: router({
+      /** R2-3: the page fetched again and checked; the publications mock records the evidence. */
+      validate: mutation
+        .input(DestinationArticleValidate)
+        .mutation(({ input }) => b.validateArticle(input.publicationId)),
     }),
     sourceUse: router({
       list: query.input(SourceUsePolicyList).query(({ input }) => {

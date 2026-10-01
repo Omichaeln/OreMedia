@@ -322,28 +322,44 @@ export interface DestinationPublisher {
 }
 const unregisteredDestinationPublisher: DestinationPublisher = {
   describe: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   validateVariant: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   useAllowed: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   publish: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   edit: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   unpublish: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   delete: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
   validateRendered: async () => {
-    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+    throw new Error(
+      'destination publisher not registered (composition root must call registerDestinationPublisher)',
+    );
   },
 };
 let destinationPublisher: DestinationPublisher = unregisteredDestinationPublisher;

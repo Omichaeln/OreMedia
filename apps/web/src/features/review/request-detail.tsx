@@ -8,6 +8,7 @@ import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
 import type { ChannelDto } from '../publishing/use-publishing';
+import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import {
   ATTENTION_CHIP,
   REQUEST_STATE_CHIP,
@@ -109,17 +110,22 @@ export function ManifestSummary({
   manifest,
   manifestHash,
   channels,
+  destinations,
   reviewRequestId,
 }: {
   manifest: FrozenManifestV1;
   manifestHash: string;
   channels?: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, so a destination target is named like a channel. */
+  destinations?: ReadonlyMap<string, DestinationDto>;
   /** When given, the frozen files are loaded and shown (spec 13.3); the summary alone lists their counts. */
   reviewRequestId?: string;
 }) {
   const name = (id: string) => {
     const c = channels?.get(id);
-    return c ? `${c.displayName} (${c.providerKey})` : id;
+    if (c) return `${c.displayName} (${c.providerKey})`;
+    const d = destinations?.get(id);
+    return d ? destinationLabel(d, id) : id;
   };
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="manifest">
@@ -151,11 +157,24 @@ export function ManifestSummary({
             {manifestHash}
           </code>
         </dd>
+        {manifest.article && (
+          <>
+            <dt className="text-muted-foreground">Article</dt>
+            <dd data-testid="manifest-article">
+              {manifest.article.title} <code>/{manifest.article.slug}</code> · {manifest.article.blocks} block
+              {manifest.article.blocks === 1 ? '' : 's'} · article hash{' '}
+              <code>{shortHash(manifest.article.articleHash)}</code>
+            </dd>
+          </>
+        )}
       </dl>
       <ul className="flex flex-col gap-2" aria-label="Channel variants in this manifest">
         {manifestChannels(manifest).map((c) => (
           <li key={c.channelConnectionId} className="rounded-md border border-border p-2">
-            <p className="text-xs font-semibold">{name(c.channelConnectionId)}</p>
+            <p className="text-xs font-semibold">
+              {name(c.channelConnectionId)}
+              {c.kind === 'destination' && manifest.article ? ' · publishes the article above' : ''}
+            </p>
             <p className="mt-1 whitespace-pre-wrap">{c.text}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {c.exportCount} rendered file{c.exportCount === 1 ? '' : 's'}
@@ -176,12 +195,14 @@ export function ManifestSummary({
 export interface RequestDetailProps {
   reviewRequestId: string | null;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, named beside the channels in the frozen manifest. */
+  destinations?: ReadonlyMap<string, DestinationDto>;
   /** What the request is about (the package title), shown as the heading. */
   title?: ReactNode;
 }
 
 /** Spec 21.2 inbox states: changes requested, stale approval, revoked external access, decided. */
-export function RequestDetail({ reviewRequestId, channels, title }: RequestDetailProps) {
+export function RequestDetail({ reviewRequestId, channels, destinations, title }: RequestDetailProps) {
   const request = useReviewRequest(reviewRequestId);
   return (
     <section
@@ -218,7 +239,7 @@ export function RequestDetail({ reviewRequestId, channels, title }: RequestDetai
         />
       )}
       {request.isSuccess && isMemberView(request.data) && (
-        <MemberDetail request={request.data} channels={channels} />
+        <MemberDetail request={request.data} channels={channels} destinations={destinations} />
       )}
     </section>
   );
@@ -227,9 +248,11 @@ export function RequestDetail({ reviewRequestId, channels, title }: RequestDetai
 function MemberDetail({
   request: r,
   channels,
+  destinations,
 }: {
   request: MemberReviewRequestDto;
   channels: ReadonlyMap<string, ChannelDto>;
+  destinations?: ReadonlyMap<string, DestinationDto>;
 }) {
   const state = REQUEST_STATE_CHIP[r.state];
   const validApproval = r.approvals.find((a) => a.state === 'valid');
@@ -294,6 +317,7 @@ function MemberDetail({
           manifest={r.frozenManifest}
           manifestHash={r.manifestHash}
           channels={channels}
+          destinations={destinations}
           reviewRequestId={r.id}
         />
       </section>

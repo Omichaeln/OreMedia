@@ -118,7 +118,9 @@ export interface DestinationDescription {
 }
 export type DestinationResolver = (destinationId: string, tx?: Tx) => Promise<DestinationDescription | null>;
 const unregisteredDestinationResolver: DestinationResolver = async () => {
-  throw new Error('destination resolver not registered (composition root must call registerDestinationResolver)');
+  throw new Error(
+    'destination resolver not registered (composition root must call registerDestinationResolver)',
+  );
 };
 let destinationResolver: DestinationResolver = unregisteredDestinationResolver;
 export const registerDestinationResolver = (fn: DestinationResolver): void => {
@@ -1435,7 +1437,11 @@ export const contentService = {
         await variantsRepo.create(
           {
             ...values,
-            validation: await validationFor({ ...values, tenantId: revision.tenantId, version: 0 }, revision, tx),
+            validation: await validationFor(
+              { ...values, tenantId: revision.tenantId, version: 0 },
+              revision,
+              tx,
+            ),
           },
           tx,
         );
@@ -1490,7 +1496,11 @@ export const contentService = {
         await variantsRepo.create(
           {
             ...values,
-            validation: await validationFor({ ...values, tenantId: revision.tenantId, version: 0 }, revision, tx),
+            validation: await validationFor(
+              { ...values, tenantId: revision.tenantId, version: 0 },
+              revision,
+              tx,
+            ),
           },
           tx,
         );

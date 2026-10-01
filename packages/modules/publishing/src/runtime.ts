@@ -871,7 +871,12 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     async checkStatus(input: PublishOnceInputV1, hooks?: ActivityHooks): Promise<PendingCheck> {
       const loaded = await loadForProvider(input);
       const { attempt } = loaded;
-      if (loaded.destination) return { status: 'failed', code: 'not_supported', message: 'a destination write has no status check' };
+      if (loaded.destination)
+        return {
+          status: 'failed',
+          code: 'not_supported',
+          message: 'a destination write has no status check',
+        };
       const { connection, adapter } = channelOf(loaded);
       if (!attempt?.pendingState)
         return { status: 'failed', code: 'no_pending_state', message: 'nothing to poll' };
@@ -893,7 +898,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     async finalize(input: PublishOnceInputV1, hooks?: ActivityHooks): Promise<PendingCheck> {
       const loaded = await loadForProvider(input);
       const { attempt } = loaded;
-      if (loaded.destination) return { status: 'failed', code: 'not_supported', message: 'a destination write has no finalize' };
+      if (loaded.destination)
+        return { status: 'failed', code: 'not_supported', message: 'a destination write has no finalize' };
       const { connection, adapter } = channelOf(loaded);
       if (!attempt?.pendingState)
         return { status: 'failed', code: 'no_pending_state', message: 'nothing to finalise' };
@@ -916,7 +922,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       const loaded = await loadForProvider(input);
       const { row, attempt, variant } = loaded;
       // R2-3: a website has no post scan by fingerprint; an ambiguous write is settled by a person (held).
-      if (loaded.destination) return { status: 'cannot_determine', reason: 'destination_lookup_not_supported' };
+      if (loaded.destination)
+        return { status: 'cannot_determine', reason: 'destination_lookup_not_supported' };
       const { connection, adapter } = channelOf(loaded);
       return credentialBroker.withCredentials(input.tenantId, connection.id, (creds) =>
         adapter.findRemotePost(
@@ -1167,7 +1174,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       if (kind === 'delete') return await destinations.delete(target, hooks);
       if (kind === 'unpublish') return await destinations.unpublish(target, hooks);
       const readback = await evidenceRepo.latestOfKind(row.id, 'remote_readback');
-      const expectedHash = typeof readback?.payload['contentHash'] === 'string' ? readback.payload['contentHash'] : null;
+      const expectedHash =
+        typeof readback?.payload['contentHash'] === 'string' ? readback.payload['contentHash'] : null;
       const result = await destinations.edit(
         { ...target, expectedHash, html: change.text ?? '', idempotencyKey: change.id },
         hooks,
@@ -1180,7 +1188,12 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             { type: 'publication', id: row.id },
             'denied',
             tx,
-            { brandId: row.brandId, publicationId: row.id, destinationId, reason: 'remote_changed_since_readback' },
+            {
+              brandId: row.brandId,
+              publicationId: row.id,
+              destinationId,
+              reason: 'remote_changed_since_readback',
+            },
           ),
         );
       return result;
@@ -1230,7 +1243,11 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     const remotePostId = row.remotePostId;
     if (row.destinationId) return applyDestinationChange(input, row, change, kind, remotePostId, hooks);
     if (kind === 'unpublish')
-      return { outcome: 'rejected', code: 'unpublish_not_supported', message: 'the channel cannot revert posts' };
+      return {
+        outcome: 'rejected',
+        code: 'unpublish_not_supported',
+        message: 'the channel cannot revert posts',
+      };
     const connection = await connectionsRepo.getById(row.channelConnectionId ?? '');
     const adapter = adapterFor(connection.providerKey);
     const deletePost = adapter.deletePost?.bind(adapter);
@@ -1338,7 +1355,11 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             tx,
           );
         const kind =
-          change.kind === 'delete' ? 'remote_deletion' : change.kind === 'unpublish' ? 'remote_unpublish' : 'remote_edit';
+          change.kind === 'delete'
+            ? 'remote_deletion'
+            : change.kind === 'unpublish'
+              ? 'remote_unpublish'
+              : 'remote_edit';
         const readback = (result as { readback?: Record<string, unknown> }).readback;
         const payload = {
           changeId: change.id,

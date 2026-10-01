@@ -298,6 +298,7 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
       contentPackageId: 'pkg_scan',
       contentRevisionId: `pr_${id.slice(3)}`,
       channelConnectionId: connectionId,
+      destinationId: null,
       text: 'Secret scan publication',
       altTexts: [],
       settings: {},

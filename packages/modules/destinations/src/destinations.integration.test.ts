@@ -634,6 +634,7 @@ describe('destinations module against MySQL 8', () => {
           vendor: 'Fixture',
           certified: true,
           enabled: true,
+          connect: 'oauth',
         },
         {
           kind: 'search_console_site',
@@ -641,6 +642,20 @@ describe('destinations module against MySQL 8', () => {
           vendor: 'Fixture',
           certified: false,
           enabled: false,
+          connect: 'oauth',
+        },
+        // R2-3: the CMS kind connects with a secret; registered but not certified and not enabled here.
+        {
+          kind: 'cms_site',
+          label: 'Website CMS',
+          vendor: 'WordPress',
+          certified: false,
+          enabled: false,
+          connect: 'secret',
+          credential: {
+            label: 'Application password',
+            hint: 'Created under the site user’s profile (Users → Profile → Application Passwords); the user needs the editor or administrator role.',
+          },
         },
       ]);
     });

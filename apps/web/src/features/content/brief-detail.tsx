@@ -14,6 +14,7 @@ import {
 import { Drawer, DrawerContent } from '../../components/drawer';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
+import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
@@ -21,6 +22,7 @@ import { StartRunForm } from '../agents/start-run-form';
 import { dayKey } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { briefChip, briefGaps, isSuggested, packageChip } from './content-helpers';
+import { ArticleEditor, emptyArticleDraft, parseArticleDraft } from './article-editor';
 import { DocumentPicker } from './document-picker';
 import { PlanGrid } from './plan-grid';
 import { useBrief, usePlanItems, type BriefDto, type PackagesQuery } from './use-content';
@@ -62,6 +64,11 @@ function planningValues(
   };
 }
 
+const PACKAGE_KIND_OPTIONS = [
+  { value: 'text', label: 'Social post (master copy)' },
+  { value: 'article', label: 'Website article' },
+];
+
 function CreatePackageForm({
   brandId,
   briefId,
@@ -76,6 +83,10 @@ function CreatePackageForm({
   const intent = useIntentKey();
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  // R2-3: a package is a social post (master copy) or a website article (a structured document).
+  const [kind, setKind] = useState<'text' | 'article'>('text');
+  const [draft, setDraft] = useState(emptyArticleDraft);
+  const [issues, setIssues] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string[]>([]);
   const create = useMutation(
     trpc.content.packages.create.mutationOptions({
@@ -84,6 +95,7 @@ function CreatePackageForm({
         intent.renew();
         setTitle('');
         setText('');
+        setDraft(emptyArticleDraft());
         setSelected([]);
         void queryClient.invalidateQueries(trpc.content.pathFilter());
         onCreated(res.contentPackageId);
@@ -95,6 +107,26 @@ function CreatePackageForm({
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    if (kind === 'article') {
+      const parsed = parseArticleDraft(draft);
+      if (!parsed.ok) {
+        setIssues(parsed.issues);
+        return;
+      }
+      setIssues({});
+      create.mutate({
+        brandId,
+        briefId,
+        title: title.trim(),
+        copy: {
+          schemaVersion: 1,
+          master: { text: parsed.article.excerpt || parsed.article.title, factRefs: [] },
+          article: parsed.article,
+        },
+        creativeDocumentIds: selected,
+      });
+      return;
+    }
     create.mutate({
       brandId,
       briefId,
@@ -106,18 +138,32 @@ function CreatePackageForm({
   const ui = create.isError ? toUiError(create.error) : null;
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
-      <Field label="Package title" htmlFor="pkg-title">
-        <Input
-          id="pkg-title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={200}
-          required
-        />
-      </Field>
-      <Field label="Master copy" htmlFor="pkg-copy">
-        <Textarea id="pkg-copy" value={text} onChange={(e) => setText(e.target.value)} rows={3} />
-      </Field>
+      <div className="grid gap-2 sm:grid-cols-[1fr_14rem]">
+        <Field label="Package title" htmlFor="pkg-title">
+          <Input
+            id="pkg-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={200}
+            required
+          />
+        </Field>
+        <Field label="Package type" htmlFor="pkg-kind">
+          <Select
+            id="pkg-kind"
+            value={kind}
+            onValueChange={(v) => setKind(v === 'article' ? 'article' : 'text')}
+            options={PACKAGE_KIND_OPTIONS}
+          />
+        </Field>
+      </div>
+      {kind === 'article' ? (
+        <ArticleEditor draft={draft} onChange={setDraft} idPrefix="pkg-article" issues={issues} />
+      ) : (
+        <Field label="Master copy" htmlFor="pkg-copy">
+          <Textarea id="pkg-copy" value={text} onChange={(e) => setText(e.target.value)} rows={3} />
+        </Field>
+      )}
       <DocumentPicker
         brandId={brandId}
         pinned={[]}

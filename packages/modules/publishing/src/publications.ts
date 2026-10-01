@@ -803,7 +803,9 @@ export const publicationService = {
     const changes = await changesRepo.listForPublication(row.id, tx);
     const actions = await remoteActionsOf(row, tx);
     const cap = row.channelConnectionId ? registry().capability(actions?.providerKey ?? '') : undefined;
-    const readback = row.destinationId ? await evidenceRepo.latestOfKind(row.id, 'remote_readback', tx) : null;
+    const readback = row.destinationId
+      ? await evidenceRepo.latestOfKind(row.id, 'remote_readback', tx)
+      : null;
     const validation = row.destinationId
       ? await evidenceRepo.latestOfKind(row.id, 'rendered_validation', tx)
       : null;
@@ -1061,10 +1063,11 @@ export const publicationService = {
         brandId: row.brandId,
         publicationId: row.id,
         destinationId: row.destinationId,
-        reason: result.checks
-          .filter((c) => !c.ok)
-          .map((c) => c.key)
-          .join(',') || null,
+        reason:
+          result.checks
+            .filter((c) => !c.ok)
+            .map((c) => c.key)
+            .join(',') || null,
       },
     );
     return result;

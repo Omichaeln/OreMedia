@@ -155,7 +155,10 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       tenantId,
       destinationId,
     }: DestinationVerifyInputV1): Promise<DestinationVerifyResultV1> {
-      const lock = await refreshLock.hit(`lock:destination-verify:${tenantId}:${destinationId}`, REFRESH_LOCK_SECONDS);
+      const lock = await refreshLock.hit(
+        `lock:destination-verify:${tenantId}:${destinationId}`,
+        REFRESH_LOCK_SECONDS,
+      );
       if (lock.count > 1) return { ok: false, reason: 'locked' };
       const row = await destinationsRepo.getById(destinationId);
       if (row.status !== 'active') return { ok: false, reason: 'not_active' };
@@ -208,7 +211,9 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
             reason: verified.ok ? null : verified.reason,
           },
         );
-        return verified.ok ? { ok: true, health } : { ok: false, reason: verified.reason === 'rejected' ? 'reconnect_required' : verified.reason };
+        return verified.ok
+          ? { ok: true, health }
+          : { ok: false, reason: verified.reason === 'rejected' ? 'reconnect_required' : verified.reason };
       });
     },
   };

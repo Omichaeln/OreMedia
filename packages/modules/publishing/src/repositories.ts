@@ -616,7 +616,11 @@ export class RemoteEvidenceRepository extends TenantScopedRepository<typeof remo
     const rows = await this.conn(tx)
       .select()
       .from(remoteEvidence)
-      .where(this.scope(and(eq(remoteEvidence.publicationId, publicationId), eq(remoteEvidence.kind, kind)) as SQL))
+      .where(
+        this.scope(
+          and(eq(remoteEvidence.publicationId, publicationId), eq(remoteEvidence.kind, kind)) as SQL,
+        ),
+      )
       .orderBy(desc(remoteEvidence.capturedAt), desc(remoteEvidence.id))
       .limit(1);
     return rows[0] ?? null;

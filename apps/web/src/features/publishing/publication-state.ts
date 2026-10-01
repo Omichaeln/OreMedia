@@ -83,7 +83,8 @@ export const HOLD_REASON_TEXT: Record<string, string> = {
   owner_still_authorised: 'The mandate owner no longer has mandate rights on this brand.',
   kill_switch_off: 'The kill switch is on for this brand.',
   brand_review_clean: 'Brand review found blocking findings.',
-  channel_active: 'The channel is not usable (disconnected or needs reconnecting).',
+  channel_active: 'The channel or website is not usable (disconnected, unreachable or needs reconnecting).',
+  source_use_write: 'The source-use policy does not allow writing to this website (Settings → Destinations).',
   assets_rights_valid: 'An asset in the package lost its usage rights.',
   facts_valid: 'A fact the copy relies on is no longer valid (an expired offer, for example).',
   capability_valid: 'The variant no longer passes the channel capability check.',
@@ -168,7 +169,7 @@ export function actionsFor(state: string): PublicationActions {
 export const wasReleased = (state: string): boolean => state === 'published' || state === 'removed';
 
 export interface RemoteChangeLike {
-  kind: 'edit' | 'delete';
+  kind: 'edit' | 'delete' | 'unpublish';
   state: 'requested' | 'succeeded' | 'failed';
   errorCode: string | null;
   errorDetail: string | null;
@@ -197,7 +198,7 @@ export function remoteChangeStatus<C extends RemoteChangeLike>(changes: readonly
 }
 
 export const remoteChangeNoun = (kind: RemoteChangeLike['kind']): string =>
-  kind === 'edit' ? 'text edit' : 'deletion';
+  kind === 'edit' ? 'text edit' : kind === 'unpublish' ? 'revert to draft' : 'deletion';
 
 /** Unweighted characters as the capability's plain counting does it (NFC code points); weighted channels say so. */
 export const plainLength = (text: string): number => [...text.normalize('NFC')].length;

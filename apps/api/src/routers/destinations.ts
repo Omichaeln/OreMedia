@@ -101,7 +101,9 @@ export const destinationsRouter = router({
     validate: tenantMutation
       .input(DestinationArticleValidate)
       .mutation(({ ctx, input }) =>
-        idempotent(mutationCtx(ctx), (tx) => publicationService.validateRendered(ctx.tenant.actor, input, tx)),
+        idempotent(mutationCtx(ctx), (tx) =>
+          publicationService.validateRendered(ctx.tenant.actor, input, tx),
+        ),
       ),
   }),
   reports: router({

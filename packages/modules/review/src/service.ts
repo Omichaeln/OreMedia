@@ -493,7 +493,8 @@ export const reviewService = {
         const target = bindingTargetId(e);
         const seen = frozen.find((f) => f.exportId === e.exportId);
         if (seen) seen.channelConnectionIds.push(target);
-        else frozen.push({ exportId: e.exportId, contentHash: e.contentHash, channelConnectionIds: [target] });
+        else
+          frozen.push({ exportId: e.exportId, contentHash: e.contentHash, channelConnectionIds: [target] });
       }
       // A frozen export that no longer exists is reported unverified, never a 404 for the whole manifest.
       const exports = new Map(

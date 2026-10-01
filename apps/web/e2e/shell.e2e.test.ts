@@ -913,6 +913,148 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
 
   // Runs last: the screens above (home, switcher, portfolio, menu, assets, performance, settings, brand system) under
   // the production CSP.
+  it('settings destinations (R2-3): a website is connected with its address, username and application password; the secret is never echoed', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
+    const form = page.getByTestId('destination-sources').getByTestId('connect-website');
+    await form.waitFor({ timeout: 15_000 });
+    expect(await form.locator('#website-secret').getAttribute('type')).toBe('password');
+    const connect = form.getByRole('button', { name: 'Connect website' });
+    expect(await connect.getAttribute('aria-disabled')).toBe('true');
+    await form.locator('#website-url').fill('https://blog.acme.example');
+    await form.locator('#website-username').fill('ore-editor');
+    await form.locator('#website-secret').fill('abcd efgh ijkl mnop');
+    await connect.click();
+    await form.getByTestId('website-connected').waitFor({ timeout: 15_000 });
+    expect(await form.getByTestId('website-connected').textContent()).toContain(
+      'Connected: blog.acme.example',
+    );
+    expect(await form.locator('#website-secret').inputValue()).toBe(''); // typed once, cleared, never shown
+    const group = page.getByTestId('destinations-cms_site');
+    await expect.poll(() => group.textContent(), { timeout: 15_000 }).toContain('blog.acme.example');
+    const added = backend.destinations.destinations.find((d) => d.externalId === 'https://blog.acme.example');
+    expect(added).toMatchObject({ kind: 'cms_site', health: 'unknown', grantedScopes: ['articles:write'] });
+    expect(JSON.stringify(backend.destinations.destinations)).not.toContain('abcd efgh');
+    expect(await group.getByTestId(`destination-${added?.id ?? ''}`).textContent()).toContain('Not checked');
+    // A second connect of the same site is a conflict the form explains, not a second row.
+    await form.locator('#website-url').fill('https://blog.acme.example');
+    await form.locator('#website-username').fill('ore-editor');
+    await form.locator('#website-secret').fill('abcd efgh ijkl mnop');
+    await connect.click();
+    await form.getByTestId('website-conflict').waitFor({ timeout: 15_000 });
+    expect(
+      backend.destinations.destinations.filter((d) => d.externalId === 'https://blog.acme.example'),
+    ).toHaveLength(1);
+    backend.destinations.destinations.splice(backend.destinations.destinations.indexOf(added!), 1);
+    await page.close();
+  }, 60_000);
+
+  it('campaigns (R2-3): a website article package is created with the block editor, revised with a FAQ block, and offered to the website as a target', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/campaigns?brief=brf_accepted')}`);
+    await page.locator('#pkg-title').waitFor({ timeout: 15_000 });
+    await page.locator('#pkg-title').fill('Why ore and tar last');
+    await page.locator('#pkg-kind').click();
+    await page.getByRole('option', { name: 'Website article' }).click();
+    await page.locator('#pkg-article-title').fill('Why ore and tar last');
+    expect(await page.locator('#pkg-article-slug').inputValue()).toBe('why-ore-and-tar-last'); // follows the title
+    await page.locator('#pkg-article-excerpt').fill('A short answer.');
+    await page.locator('#pkg-article-block-0-text').fill('Ore is heavy.');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'FAQ (question and answer)' }).click();
+    await page.locator('#pkg-article-block-1-question').fill('Is it safe?');
+    await page.locator('#pkg-article-block-1-answer').fill('Yes, mostly.');
+    await page.getByRole('button', { name: 'Create package' }).click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('package') ?? '', { timeout: 15_000 })
+      .toMatch(/^pkg_/);
+    const packageId = new URL(page.url()).searchParams.get('package') ?? '';
+    const detail = page.getByTestId('package-detail');
+    const summary = detail.getByTestId('article-summary');
+    await summary.waitFor({ timeout: 15_000 });
+    expect(await summary.textContent()).toContain('/why-ore-and-tar-last');
+    expect(await summary.locator('[data-block-type="faq"]').textContent()).toContain(
+      'Is it safe? — Yes, mostly.',
+    );
+    // Revise with the editor: the heading moves above the paragraph and the title changes; revision 2 shows it.
+    const editor = detail.getByTestId('article-editor');
+    await editor.locator(`#revise-${packageId}-title`).fill('Why ore and tar last longer');
+    await editor.locator(`#revise-${packageId}-add`).click();
+    await page.getByRole('option', { name: 'Heading' }).click();
+    await editor.locator(`#revise-${packageId}-block-2-text`).fill('The question');
+    await editor.getByRole('button', { name: 'Move block 3 up' }).click();
+    await editor.getByRole('button', { name: 'Move block 2 up' }).click();
+    await detail.getByRole('button', { name: 'Create next revision' }).click();
+    await expect
+      .poll(() => summary.textContent(), { timeout: 15_000 })
+      .toContain('Why ore and tar last longer');
+    expect(await detail.getByTestId('revision-history').getByRole('listitem').count()).toBe(2);
+    expect(await summary.locator('li').first().getAttribute('data-block-type')).toBe('heading');
+    const revision = [...backend.phase5.revisions.values()].find(
+      (r) => r.contentPackageId === packageId && r.state === 'draft',
+    );
+    expect(revision?.copy.article?.blocks.map((b) => b.type)).toEqual(['heading', 'paragraph', 'faq']);
+    // The website is offered as a target because the package carries an article; a channel stays beside it.
+    await detail.getByTestId('target-dst_e2e_cms').getByRole('checkbox').check();
+    await detail.getByRole('button', { name: 'Generate variants' }).click();
+    await expect
+      .poll(() => detail.locator('[data-testid="variant"][data-variant-target="destination"]').count(), {
+        timeout: 15_000,
+      })
+      .toBe(1);
+    const row = detail.locator('[data-testid="variant"][data-variant-target="destination"]');
+    expect(await row.textContent()).toContain('acme.example (website)');
+    expect(await row.getByTestId('variant-publish-mode').textContent()).toContain('draft');
+    const variantId = (await row.locator('code').first().textContent()) ?? '';
+    expect(variantId).toMatch(/^cv_/);
+    expect(backend.phase5.variants.get(variantId)).toMatchObject({
+      destinationId: 'dst_e2e_cms',
+      channelConnectionId: null,
+      settings: { publishMode: 'draft' },
+    });
+    // The schedule form names the website as the target instead of a channel.
+    await page.goto(
+      `${origin}${home.replace('/home', `/calendar?schedule=${encodeURIComponent(variantId)}`)}`,
+    );
+    const badge = page.getByTestId('schedule-target-website');
+    await badge.waitFor({ timeout: 15_000 });
+    expect(await badge.textContent()).toContain('acme.example (website)');
+    await page.close();
+  }, 90_000);
+
+  it('calendar (R2-3): a published article shows its read-back and validation; validating again records the new result; it can be reverted to a draft', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/calendar?publication=pub_article')}`);
+    const panel = page.getByTestId('article-panel');
+    await panel.waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('publication-target-website').textContent()).toContain(
+      'acme.example (website)',
+    );
+    expect(await panel.getByTestId('article-readback').textContent()).toContain('Read back: draft');
+    expect(await panel.getByTestId('article-validation').textContent()).toContain('Page validated');
+    await panel.getByTestId('validate-article').click();
+    await expect
+      .poll(() => panel.getByTestId('article-validation').textContent(), { timeout: 15_000 })
+      .toContain('Page validation failed');
+    expect(await panel.getByTestId('article-checks').locator('[data-ok="false"]').count()).toBeGreaterThan(0);
+    expect(
+      backend.phase5.evidence.filter(
+        (e) => e.publicationId === 'pub_article' && e.kind === 'rendered_validation',
+      ),
+    ).toHaveLength(2);
+    await page.getByTestId('revert-to-draft').click();
+    const dialog = page.getByRole('alertdialog');
+    await dialog.getByLabel('Reason').fill('Wrong launch date');
+    await dialog.getByRole('button', { name: 'Request revert' }).click();
+    await expect
+      .poll(() => backend.phase5.publication('pub_article').remoteChanges[0]?.kind ?? '', { timeout: 15_000 })
+      .toBe('unpublish');
+    backend.phase5.settleRemoteChanges('pub_article', 'done');
+    await page.reload();
+    await expect.poll(() => page.getByTestId('article-unpublished').count(), { timeout: 15_000 }).toBe(1);
+    await page.close();
+  }, 60_000);
+
   it('no screen above triggered a Content-Security-Policy violation', () => {
     expect(cspViolations).toEqual([]);
   });

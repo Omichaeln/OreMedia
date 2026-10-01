@@ -18,7 +18,13 @@ export {
 // publisher the publishing module reaches through its destination hook (createArticle as a draft by default, the
 // read-back, the conflict-refusing edit, the revert to draft, the rendered-page validation).
 export { destinationArticles, effectivePublishMode } from './articles';
-export { configureDestinationCms, cmsAdapterFor, cmsIO, cmsRegistryInUse, type DestinationCmsOptions } from './cms';
+export {
+  configureDestinationCms,
+  cmsAdapterFor,
+  cmsIO,
+  cmsRegistryInUse,
+  type DestinationCmsOptions,
+} from './cms';
 export {
   registerDestinationOutboxRoutes,
   DESTINATION_VERIFY_WORKFLOW_TYPE,

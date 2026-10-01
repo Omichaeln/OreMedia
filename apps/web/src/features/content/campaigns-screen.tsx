@@ -9,6 +9,7 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { useDestinationMap } from '../destinations/use-destinations';
 import { localInputToIso } from '../publishing/publication-state';
 import { useChannels, type ChannelDto } from '../publishing/use-publishing';
 import { BriefDetail } from './brief-detail';
@@ -223,6 +224,7 @@ export function CampaignsScreen() {
     () => new Map<string, ChannelDto>((channels.data ?? []).map((c) => [c.id, c])),
     [channels.data],
   );
+  const destinationMap = useDestinationMap(brandId);
   const update = (next: Record<string, string | null>) => {
     const p = new URLSearchParams(params);
     for (const [k, v] of Object.entries(next)) {
@@ -465,6 +467,7 @@ export function CampaignsScreen() {
             brandId={brandId}
             contentPackageId={packageId}
             channels={channelMap}
+            destinations={destinationMap}
             timeZone={brand.timezone || 'UTC'}
           />
         )}

@@ -420,6 +420,163 @@ function FinishDestinationConnect({
 }
 
 /** The sources this deployment can connect: one button per enabled kind (R2-1); none enabled, nothing is shown. */
+/**
+ * R2-3 (D-16): a website connected with its address and an integration identity's secret (an application
+ * password), typed once into a password field and never shown again: the server seals it and the worker verifies
+ * it, so the row appears as "Not checked" until the check ran. Writes land as drafts unless live publishing is
+ * granted here.
+ */
+function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: DestinationSourceDto }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [siteUrl, setSiteUrl] = useState('');
+  const [username, setUsername] = useState('');
+  const [secret, setSecret] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [allowPublish, setAllowPublish] = useState(false);
+  const connect = useMutation(
+    trpc.destinations.connect.withSecret.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setSiteUrl('');
+        setUsername('');
+        setSecret('');
+        setDisplayName('');
+        setAllowPublish(false);
+        void queryClient.invalidateQueries(trpc.destinations.pathFilter());
+      },
+    }),
+  );
+  const ui = connect.isError ? toUiError(connect.error) : null;
+  const siteIssue = ui?.details.find((d) => d.path === 'siteUrl')?.issue;
+  const ready = siteUrl.trim().startsWith('https://') && username.trim() !== '' && secret !== '';
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (ready)
+      connect.mutate({
+        brandId,
+        kind: 'cms_site',
+        siteUrl: siteUrl.trim(),
+        username: username.trim(),
+        secret,
+        allowPublish,
+        ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
+      });
+  };
+  return (
+    <li className="flex flex-col gap-2 py-3" data-testid={`source-${source.kind}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">Connect a website ({source.vendor})</span>
+        <code className="text-xs text-muted-foreground">{source.kind}</code>
+        {!source.certified && <Badge tone="neutral">Not certified</Badge>}
+      </div>
+      <form onSubmit={submit} className="flex flex-col gap-3" noValidate data-testid="connect-website">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="Site address"
+            htmlFor="website-url"
+            hint="The site's https origin, for example https://www.example.com."
+            error={
+              siteIssue === 'site_url_not_allowed'
+                ? 'The address must be https on a public host'
+                : siteIssue === 'site_url_not_an_origin'
+                  ? 'Give the address without a path'
+                  : undefined
+            }
+          >
+            <Input
+              id="website-url"
+              value={siteUrl}
+              onChange={(e) => setSiteUrl(e.target.value)}
+              placeholder="https://"
+              maxLength={200}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="Website name (optional)" htmlFor="website-name">
+            <Input
+              id="website-name"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              maxLength={200}
+            />
+          </Field>
+          <Field
+            label="Username"
+            htmlFor="website-username"
+            hint="The site user the application password belongs to."
+          >
+            <Input
+              id="website-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              maxLength={200}
+              autoComplete="off"
+            />
+          </Field>
+          <Field
+            label={source.credential?.label ?? 'Secret'}
+            htmlFor="website-secret"
+            hint={source.credential?.hint}
+          >
+            <Input
+              id="website-secret"
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              maxLength={500}
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={allowPublish} onChange={(e) => setAllowPublish(e.target.checked)} />
+          Allow live publishing (otherwise every article lands as a draft to preview first)
+        </label>
+        {connect.data && (
+          <StatusBanner
+            tone="good"
+            title={`Connected: ${connect.data.displayName}`}
+            description="The secret is sealed and never shown again. The website is checked in the background; its health updates here once the check ran."
+            data-testid="website-connected"
+          />
+        )}
+        {ui && ui.kind === 'forbidden' && (
+          <StatusBanner
+            tone="critical"
+            title="Permission denied"
+            description={`${ui.message} Connecting a website needs destination.connect for this brand.`}
+          />
+        )}
+        {ui && ui.kind === 'conflict' && (
+          <StatusBanner
+            tone="warning"
+            title="Already connected"
+            description="This brand holds this website already; it is listed above."
+            data-testid="website-conflict"
+          />
+        )}
+        {ui && ui.kind !== 'forbidden' && ui.kind !== 'conflict' && !siteIssue && (
+          <RequestError error={connect.error} title="The website was not connected" />
+        )}
+        <div>
+          <Button
+            type="submit"
+            size="sm"
+            variant="primary"
+            disabled={!ready || connect.isPending}
+            disabledReason={ready ? undefined : 'Give the https site address, the username and the secret'}
+          >
+            {connect.isPending ? 'Connecting…' : 'Connect website'}
+          </Button>
+        </div>
+      </form>
+    </li>
+  );
+}
+
 function ConnectSources({ brandId }: { brandId: string }) {
   const sources = useDestinationSources();
   const redirectUri = connectRedirectUri(window.location.origin);
@@ -428,19 +585,24 @@ function ConnectSources({ brandId }: { brandId: string }) {
   return (
     <Section id="destination-sources-heading" title="Connect a source" testId="destination-sources">
       <p className="text-xs text-muted-foreground">
-        Authorise an account at the source&apos;s vendor, then choose which property or site this brand reads.
-        Only sources certified after their platform review can be connected; the server refuses the others and
-        the reason is shown here.
+        Authorise an account at the source&apos;s vendor, then choose which property or site this brand reads;
+        a website is connected with its address and an application password instead. Only sources certified
+        after their platform review can be connected; the server refuses the others and the reason is shown
+        here.
       </p>
       <ul className="divide-y divide-border" aria-label="Sources">
-        {enabled.map((source) => (
-          <ConnectSourceButton
-            key={source.kind}
-            brandId={brandId}
-            source={source}
-            redirectUri={redirectUri}
-          />
-        ))}
+        {enabled.map((source) =>
+          source.connect === 'secret' ? (
+            <ConnectWebsiteForm key={source.kind} brandId={brandId} source={source} />
+          ) : (
+            <ConnectSourceButton
+              key={source.kind}
+              brandId={brandId}
+              source={source}
+              redirectUri={redirectUri}
+            />
+          ),
+        )}
       </ul>
     </Section>
   );

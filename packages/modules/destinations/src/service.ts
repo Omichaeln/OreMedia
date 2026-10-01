@@ -612,7 +612,9 @@ export const destinationService = {
       brandId: row.brandId,
       kind: row.kind,
       capabilityVersion: row.capabilityVersion,
-      writable: DESTINATION_KIND_CAPABILITIES[StoredKind.parse(row.kind)].uses.includes('write') && cmsWritable(row.kind),
+      writable:
+        DESTINATION_KIND_CAPABILITIES[StoredKind.parse(row.kind)].uses.includes('write') &&
+        cmsWritable(row.kind),
     };
   },
 

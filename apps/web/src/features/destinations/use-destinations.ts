@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import type { DestinationKind } from '@oremedia/contracts/destinations';
@@ -26,3 +27,16 @@ export function useSourceUsePolicies(brandId: string) {
   const trpc = useTRPC();
   return useQuery(trpc.destinations.sourceUse.list.queryOptions({ brandId }));
 }
+
+/** R2-3: the brand's websites by id, for the screens that name a publication's or a variant's target. */
+export function useDestinationMap(brandId: string): ReadonlyMap<string, DestinationDto> {
+  const destinations = useDestinations(brandId, 'cms_site');
+  return useMemo(
+    () => new Map<string, DestinationDto>((destinations.data?.items ?? []).map((d) => [d.id, d])),
+    [destinations.data],
+  );
+}
+
+/** How a target is named beside a channel: the website's display name with its kind. */
+export const destinationLabel = (d: DestinationDto | undefined, id: string): string =>
+  d ? `${d.displayName} (website)` : id;

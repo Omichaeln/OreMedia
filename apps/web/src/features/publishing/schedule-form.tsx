@@ -13,6 +13,7 @@ import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
 import { brandPath } from '../brand/brand-context';
+import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import { useApprovals, type ApprovalDto } from '../review/use-review';
 import { useMandates } from '../settings/use-settings';
 import { CHANNEL_CHIP, dayKey, isoToZonedInput, zonedInputToIso } from './publication-state';
@@ -23,6 +24,8 @@ export interface ScheduleFormProps {
   brandId: string;
   timeZone: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, named when the variant targets one. */
+  destinations: ReadonlyMap<string, DestinationDto>;
   /** The variant to schedule, chosen on its content package (the calendar's `schedule` search param). */
   variantId: string | null;
   /** Called with the scheduled instant's day key so the calendar shows it. */
@@ -50,6 +53,7 @@ export function ScheduleForm({
   brandId,
   timeZone,
   channels,
+  destinations,
   variantId,
   onScheduled,
 }: ScheduleFormProps) {
@@ -66,7 +70,12 @@ export function ScheduleForm({
   const variant = useChannelVariant(variantId);
   const approvals = useApprovals(brandId, variant.data?.contentRevisionId ?? null);
   const mandates = useMandates(brandId);
-  const channel = variant.data ? channels.get(variant.data.channelConnectionId) : undefined;
+  const channel = variant.data?.channelConnectionId
+    ? channels.get(variant.data.channelConnectionId)
+    : undefined;
+  const website = variant.data?.destinationId
+    ? destinationLabel(destinations.get(variant.data.destinationId), variant.data.destinationId)
+    : null;
   const findings = variant.data?.validation as
     { ok: boolean; issues: Array<{ path?: string; issue: string }> } | undefined;
   const intent = useIntentKey();
@@ -154,8 +163,12 @@ export function ScheduleForm({
       {variant.isSuccess && (
         <div className="flex flex-col gap-3" data-testid="variant-preview">
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span>Channel:</span>
-            {channel ? (
+            <span>{website ? 'Website:' : 'Channel:'}</span>
+            {website ? (
+              <Badge tone="info" glyph={false} data-testid="schedule-target-website">
+                {website}
+              </Badge>
+            ) : channel ? (
               <Badge
                 tone={CHANNEL_CHIP[channel.status].tone}
                 glyph={CHANNEL_CHIP[channel.status].tone !== 'good'}

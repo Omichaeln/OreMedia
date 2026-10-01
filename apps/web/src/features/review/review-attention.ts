@@ -84,7 +84,9 @@ export function orderAttention(flags: readonly InboxAttention[]): InboxAttention
 }
 
 export interface ManifestChannelSummary {
+  /** The target's id: the channel connection, or (R2-3) the brand destination the caption is for. */
   channelConnectionId: string;
+  kind: 'channel' | 'destination';
   text: string;
   altTexts: string[];
   settingsHash: string;
@@ -92,12 +94,20 @@ export interface ManifestChannelSummary {
   exportHashes: string[];
 }
 
-/** Spec 13.3: the frozen manifest, grouped per channel for display (captions with their exports). */
+/** A frozen target's id: a manifest written before destinations existed names a channel. */
+const targetOf = (t: { channelConnectionId?: string; destinationId?: string }) =>
+  t.destinationId
+    ? { id: t.destinationId, kind: 'destination' as const }
+    : { id: t.channelConnectionId ?? '', kind: 'channel' as const };
+
+/** Spec 13.3: the frozen manifest, grouped per target for display (captions with their exports). */
 export function manifestChannels(manifest: FrozenManifestV1): ManifestChannelSummary[] {
   return manifest.captions.map((c) => {
-    const exports = manifest.exports.filter((e) => e.channelConnectionId === c.channelConnectionId);
+    const target = targetOf(c);
+    const exports = manifest.exports.filter((e) => targetOf(e).id === target.id);
     return {
-      channelConnectionId: c.channelConnectionId,
+      channelConnectionId: target.id,
+      kind: target.kind,
       text: c.text,
       altTexts: c.altTexts,
       settingsHash: c.settingsHash,

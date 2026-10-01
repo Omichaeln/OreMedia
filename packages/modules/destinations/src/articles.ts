@@ -18,7 +18,11 @@ import {
   type ArticleReadbackV1,
 } from '@oremedia/contracts/destinations';
 import { CapabilityUnsupportedError, PolicyDeniedError } from '@oremedia/contracts/errors';
-import type { DecryptedCredentials, RemoteMutationOutcome, ValidationResult } from '@oremedia/contracts/providers';
+import type {
+  DecryptedCredentials,
+  RemoteMutationOutcome,
+  ValidationResult,
+} from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { Tx } from '@oremedia/db';
 import {
@@ -111,7 +115,10 @@ async function validateWith(
   input: Pick<DestinationValidateInput, 'url' | 'title' | 'firstParagraph' | 'draft'>,
   hooks?: ActivityHooks,
 ): Promise<RenderedValidationV1> {
-  const io = cmsIO(adapter.key, tenantId, { timeoutMs: RENDERED_PAGE_TIMEOUT_MS, ...(hooks ? { hooks } : {}) });
+  const io = cmsIO(adapter.key, tenantId, {
+    timeoutMs: RENDERED_PAGE_TIMEOUT_MS,
+    ...(hooks ? { hooks } : {}),
+  });
   try {
     const page = await adapter.fetchRendered(site, io, input.url, RENDERED_PAGE_MAX_BYTES);
     const checks = validateRenderedPage({
@@ -183,7 +190,9 @@ export const destinationArticles: DestinationPublisher = {
   async validateVariant(variant: ChannelVariantForPublishing, tx?: Tx): Promise<ValidationResult> {
     const row = await destinationsRepo.getById(variant.destinationId ?? '', tx); // foreign → NOT_FOUND
     if (!cmsWritable(row.kind))
-      throw new CapabilityUnsupportedError([{ path: 'destinationId', issue: `destination_not_writable:${row.kind}` }]);
+      throw new CapabilityUnsupportedError([
+        { path: 'destinationId', issue: `destination_not_writable:${row.kind}` },
+      ]);
     const issues: ValidationResult['issues'] = [];
     if (!variant.article) issues.push({ path: 'article', issue: 'article_missing' });
     const mode = variant.settings['publishMode'];
@@ -210,18 +219,30 @@ export const destinationArticles: DestinationPublisher = {
   ): Promise<DestinationPublishResult> {
     const row = await destinationsRepo.getById(input.destinationId);
     if (!usable(row))
-      return { outcome: 'rejected', code: 'destination_not_usable', message: 'the destination cannot be written to' };
+      return {
+        outcome: 'rejected',
+        code: 'destination_not_usable',
+        message: 'the destination cannot be written to',
+      };
     if (!(await destinationArticles.useAllowed(row.brandId, row.kind, 'write')))
-      return { outcome: 'rejected', code: 'source_use_denied', message: 'the source-use policy does not allow a write' };
+      return {
+        outcome: 'rejected',
+        code: 'source_use_denied',
+        message: 'the source-use policy does not allow a write',
+      };
     const article = input.variant.article;
-    if (!article) return { outcome: 'rejected', code: 'article_missing', message: 'the revision carries no article' };
+    if (!article)
+      return { outcome: 'rejected', code: 'article_missing', message: 'the revision carries no article' };
     const status = effectivePublishMode(input.variant.settings, row.grantedScopes);
     const readAllowed = await destinationArticles.useAllowed(row.brandId, row.kind, 'read');
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
-        const io = cmsIO(adapter.key, input.tenantId, { ...(hooks ? { hooks } : {}), ...(beforeSend ? { beforeSend } : {}) });
+        const io = cmsIO(adapter.key, input.tenantId, {
+          ...(hooks ? { hooks } : {}),
+          ...(beforeSend ? { beforeSend } : {}),
+        });
         const written = await adapter.createArticle(
           site,
           creds,
@@ -238,7 +259,11 @@ export const destinationArticles: DestinationPublisher = {
           input.idempotencyKey,
         );
         if (written.outcome === 'conflict')
-          return { outcome: 'rejected', code: 'conflict', message: 'the site refused the new article as a conflict' };
+          return {
+            outcome: 'rejected',
+            code: 'conflict',
+            message: 'the site refused the new article as a conflict',
+          };
         if (written.outcome !== 'done') return written;
         // Read-back (D-16): the remote revision as evidence, when the policy allows a read; else what the write returned.
         let remote = written.article;
@@ -259,17 +284,36 @@ export const destinationArticles: DestinationPublisher = {
           },
           hooks,
         );
-        return { outcome: 'accepted', remotePostId: remote.remoteId, remoteUrl: remote.remoteUrl, readback, validation };
+        return {
+          outcome: 'accepted',
+          remotePostId: remote.remoteId,
+          remoteUrl: remote.remoteUrl,
+          readback,
+          validation,
+        };
       },
-      () => ({ outcome: 'rejected', code: 'reconnect_required', message: 'the destination credential was revoked' }),
+      () => ({
+        outcome: 'rejected',
+        code: 'reconnect_required',
+        message: 'the destination credential was revoked',
+      }),
     );
   },
 
   async edit(input: DestinationEditInput, hooks?: ActivityHooks): Promise<DestinationMutationResult> {
     const row = await destinationsRepo.getById(input.destinationId);
-    if (!usable(row)) return { outcome: 'rejected', code: 'destination_not_usable', message: 'the destination cannot be written to' };
+    if (!usable(row))
+      return {
+        outcome: 'rejected',
+        code: 'destination_not_usable',
+        message: 'the destination cannot be written to',
+      };
     if (!(await destinationArticles.useAllowed(row.brandId, row.kind, 'write')))
-      return { outcome: 'rejected', code: 'source_use_denied', message: 'the source-use policy does not allow a write' };
+      return {
+        outcome: 'rejected',
+        code: 'source_use_denied',
+        message: 'the source-use policy does not allow a write',
+      };
     return withSite(
       input.tenantId,
       row,
@@ -289,7 +333,10 @@ export const destinationArticles: DestinationPublisher = {
           case 'conflict':
             logger()
               .child('destinations')
-              .warn({ destinationId: row.id, reason: 'remote_changed_since_readback' }, 'article edit refused: the remote moved');
+              .warn(
+                { destinationId: row.id, reason: 'remote_changed_since_readback' },
+                'article edit refused: the remote moved',
+              );
             return {
               outcome: 'rejected',
               code: 'conflict',
@@ -301,50 +348,99 @@ export const destinationArticles: DestinationPublisher = {
             return result;
         }
       },
-      () => ({ outcome: 'rejected', code: 'reconnect_required', message: 'the destination credential was revoked' }),
+      () => ({
+        outcome: 'rejected',
+        code: 'reconnect_required',
+        message: 'the destination credential was revoked',
+      }),
     );
   },
 
   async unpublish(input, hooks?: ActivityHooks): Promise<DestinationMutationResult> {
     const row = await destinationsRepo.getById(input.destinationId);
-    if (!usable(row)) return { outcome: 'rejected', code: 'destination_not_usable', message: 'the destination cannot be written to' };
+    if (!usable(row))
+      return {
+        outcome: 'rejected',
+        code: 'destination_not_usable',
+        message: 'the destination cannot be written to',
+      };
     if (!(await destinationArticles.useAllowed(row.brandId, row.kind, 'write')))
-      return { outcome: 'rejected', code: 'source_use_denied', message: 'the source-use policy does not allow a write' };
+      return {
+        outcome: 'rejected',
+        code: 'source_use_denied',
+        message: 'the source-use policy does not allow a write',
+      };
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
-        const result = await adapter.unpublishArticle(site, creds, cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}), input.remoteId);
+        const result = await adapter.unpublishArticle(
+          site,
+          creds,
+          cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}),
+          input.remoteId,
+        );
         return result.outcome === 'done'
           ? { outcome: 'done', ...(result.article ? { readback: toReadback(result.article) } : {}) }
           : result;
       },
-      () => ({ outcome: 'rejected', code: 'reconnect_required', message: 'the destination credential was revoked' }),
+      () => ({
+        outcome: 'rejected',
+        code: 'reconnect_required',
+        message: 'the destination credential was revoked',
+      }),
     );
   },
 
   async delete(input, hooks?: ActivityHooks): Promise<RemoteMutationOutcome> {
     const row = await destinationsRepo.getById(input.destinationId);
-    if (!usable(row)) return { outcome: 'rejected', code: 'destination_not_usable', message: 'the destination cannot be written to' };
+    if (!usable(row))
+      return {
+        outcome: 'rejected',
+        code: 'destination_not_usable',
+        message: 'the destination cannot be written to',
+      };
     if (!(await destinationArticles.useAllowed(row.brandId, row.kind, 'write')))
-      return { outcome: 'rejected', code: 'source_use_denied', message: 'the source-use policy does not allow a write' };
+      return {
+        outcome: 'rejected',
+        code: 'source_use_denied',
+        message: 'the source-use policy does not allow a write',
+      };
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
-        const result = await adapter.deleteArticle(site, creds, cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}), input.remoteId);
+        const result = await adapter.deleteArticle(
+          site,
+          creds,
+          cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}),
+          input.remoteId,
+        );
         return result.outcome === 'done' ? { outcome: 'done' } : result;
       },
-      () => ({ outcome: 'rejected', code: 'reconnect_required', message: 'the destination credential was revoked' }),
+      () => ({
+        outcome: 'rejected',
+        code: 'reconnect_required',
+        message: 'the destination credential was revoked',
+      }),
     );
   },
 
   /** No credential: the page as the public sees it, on the site's own host, bounded (any process may run it). */
-  async validateRendered(input: DestinationValidateInput, hooks?: ActivityHooks): Promise<RenderedValidationV1> {
+  async validateRendered(
+    input: DestinationValidateInput,
+    hooks?: ActivityHooks,
+  ): Promise<RenderedValidationV1> {
     const row = await destinationsRepo.getById(input.destinationId);
     const adapter = cmsAdapterFor(row.kind);
     try {
-      return await validateWith(adapter, { siteUrl: row.externalId, username: '' }, input.tenantId, input, hooks);
+      return await validateWith(
+        adapter,
+        { siteUrl: row.externalId, username: '' },
+        input.tenantId,
+        input,
+        hooks,
+      );
     } catch (err) {
       return failedValidation(input.url, truncateForTemporal((err as Error)?.name ?? 'error', 80));
     }

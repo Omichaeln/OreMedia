@@ -286,6 +286,9 @@ export class Phase6Backend {
   readonly planItems = new Map<string, PlanItem>();
   readonly packages = new Map<string, Package>();
   readonly connectStates = new Map<string, { brandId: string; providerKey: string }>();
+  /** R2-3: a website as a variant target (set by the owning MockBackend from its destinations store). */
+  destinationOf: (destinationId: string) => { brandId: string; displayName: string; usable: boolean } | null =
+    () => null;
   /** Account choices `connect.complete` offered (spec 14.7), one-shot, keyed by pending id. */
   readonly connectChoices = new Map<
     string,
@@ -1573,7 +1576,11 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       number: 1,
       brandVersionId: 'bv_e2e',
       policyVersionId: 'pv_e2e',
-      copy: { schemaVersion: 1, master: { text: copy.master.text, factRefs: copy.master.factRefs } },
+      copy: {
+        schemaVersion: 1,
+        master: { text: copy.master.text, factRefs: copy.master.factRefs },
+        ...(input.copy.article ? { article: input.copy.article } : {}),
+      },
       creativeRevisionIds: input.creativeDocumentIds.map((d) => b.pinDocument(d)),
       factRefs: [],
       contentHash: hash(copy),
@@ -1863,6 +1870,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           copy: {
             schemaVersion: 1,
             master: { text: input.copy.master.text, factRefs: input.copy.master.factRefs },
+            ...(input.copy.article ? { article: input.copy.article } : {}),
           },
           creativeRevisionIds: documentIds.map((d) => b.pinDocument(d)),
           contentHash: hash(input.copy),
@@ -1919,11 +1927,13 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           contentPackageId: revision.contentPackageId,
           contentRevisionId: revision.id,
           channelConnectionId: channelId,
-          text: revision.copy.master.text,
+          destinationId: null,
+          text: revision.copy.article?.excerpt || revision.copy.master.text,
           altTexts: [],
           settings: {},
           exportIds: [],
           exportHashes: [],
+          article: null,
           capabilityVersion: channel.capabilityVersion,
           validation: tooLong
             ? {
@@ -1936,6 +1946,46 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
                 ],
               }
             : { ok: true, issues: [] },
+          createdAt: now(),
+          updatedAt: now(),
+          version: 1,
+        };
+        p5.variants.set(id, variant);
+        created.push(id);
+        out.push(variant);
+      }
+      // R2-3: one variant per website, carrying the revision's article (a draft on the website by default).
+      for (const destinationId of [...new Set(input.destinationIds)]) {
+        const existing = [...p5.variants.values()].find(
+          (v) => v.contentRevisionId === revision.id && v.destinationId === destinationId,
+        );
+        if (existing) {
+          out.push(existing);
+          continue;
+        }
+        const destination = b.destinationOf(destinationId);
+        if (!destination || destination.brandId !== revision.brandId)
+          throw new NotFoundError('Destination', destinationId);
+        const id = rid('cv');
+        const article = revision.copy.article ?? null;
+        const variant = {
+          id,
+          tenantId: p5.tenantId,
+          brandId: revision.brandId,
+          contentPackageId: revision.contentPackageId,
+          contentRevisionId: revision.id,
+          channelConnectionId: null,
+          destinationId,
+          text: article ? article.excerpt || article.title : revision.copy.master.text,
+          altTexts: [],
+          settings: { publishMode: 'draft' },
+          exportIds: [],
+          exportHashes: [],
+          article,
+          capabilityVersion: 1,
+          validation: article
+            ? { ok: true, issues: [] }
+            : { ok: false, issues: [{ path: 'article', issue: 'article_missing' }] },
           createdAt: now(),
           updatedAt: now(),
           version: 1,
@@ -1963,7 +2013,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         allowed.has(id) ? [] : [{ path: `exportIds.${i}`, issue: 'export_not_in_revision' }],
       );
       if (details.length) throw new ValidationFailedError(details);
-      const limit = P6.captionLimits[variant.channelConnectionId];
+      const limit = variant.channelConnectionId ? P6.captionLimits[variant.channelConnectionId] : undefined;
       const tooLong = limit !== undefined && input.text.length > limit;
       Object.assign(variant, {
         text: input.text,
@@ -2166,7 +2216,13 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           const publications = [...p5.publications.values()]
             .filter((pub) => {
               const at = Date.parse(pub.scheduledFor);
-              return (pub.state === 'published' || pub.state === 'removed') && at >= from && at <= to;
+              // A website article (R2-3) has no post metrics (the server's releasedPublications skips it).
+              return (
+                pub.channelConnectionId !== null &&
+                (pub.state === 'published' || pub.state === 'removed') &&
+                at >= from &&
+                at <= to
+              );
             })
             .map((pub) => pub.id);
           const result =
@@ -2299,7 +2355,12 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         const end = Date.parse(input.windowEnd);
         const publications = [...p5.publications.values()].filter((pub) => {
           const at = Date.parse(pub.scheduledFor);
-          return (pub.state === 'published' || pub.state === 'removed') && at >= start && at <= end;
+          return (
+            pub.channelConnectionId !== null &&
+            (pub.state === 'published' || pub.state === 'removed') &&
+            at >= start &&
+            at <= end
+          );
         });
         // As brandOutcomes: both operands must exist, a missing one is never a zero.
         const outcome = (id: string) => {
