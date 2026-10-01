@@ -1,5 +1,6 @@
 import { getTableName } from 'drizzle-orm';
 import { MySqlTable } from 'drizzle-orm/mysql-core';
+import mysql from 'mysql2/promise';
 import * as schema from './schema';
 import { INSERT_ONLY_TABLES, RETENTION_ROLE_GRANTS } from './global-tables';
 
@@ -55,4 +56,22 @@ export function generateRetentionRoleSql(dbName: string, user: string, host = '%
   }
   lines.push('FLUSH PRIVILEGES;');
   return lines.join('\n') + '\n';
+}
+
+/**
+ * R1-G (D-25): what a connection URL's user actually holds, read with `SELECT CURRENT_USER()` and `SHOW GRANTS`
+ * only (the roles granted to the user are expanded with `USING`, so a privilege held through a role is seen).
+ * Used by `pnpm db:roles:check` (tooling/scripts/db-roles); never logs the URL.
+ */
+export async function readHeldGrants(url: string): Promise<{ user: string; grants: string[] }> {
+  const conn = await mysql.createConnection({ uri: url });
+  try {
+    const [who] = await conn.query<mysql.RowDataPacket[]>('SELECT CURRENT_USER() AS u, CURRENT_ROLE() AS r');
+    const roles = String(who[0]?.['r'] ?? 'NONE');
+    const using = roles === 'NONE' ? '' : ` USING ${roles}`;
+    const [rows] = await conn.query<mysql.RowDataPacket[]>(`SHOW GRANTS FOR CURRENT_USER()${using}`);
+    return { user: String(who[0]?.['u'] ?? ''), grants: rows.map((r) => String(Object.values(r)[0] ?? '')) };
+  } finally {
+    await conn.end();
+  }
 }

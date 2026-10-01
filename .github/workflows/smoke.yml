@@ -5,6 +5,9 @@
 # are passed to the script as environment variables only; the script prints no secret and no signed URL query.
 name: Production smoke check
 
+# The staging job (R1-F) runs the same checks against the staging origin from STAGING_SMOKE_* secrets; it runs
+# only once the repository variable STAGING_SMOKE_ENABLED is '1' (staging credentials are an operator step).
+
 on:
   workflow_dispatch:
   schedule:
@@ -42,3 +45,31 @@ jobs:
           SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
           SMOKE_TENANT_ID: ${{ secrets.SMOKE_TENANT_ID }}
           SMOKE_BRAND_ID: ${{ secrets.SMOKE_BRAND_ID }}
+  staging:
+    name: Smoke check against staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: ${{ vars.STAGING_SMOKE_ENABLED == '1' }}
+    concurrency:
+      group: staging-smoke
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm smoke:prod (staging)
+        run: pnpm smoke:prod
+        env:
+          SMOKE_BASE_URL: ${{ secrets.STAGING_SMOKE_BASE_URL }}
+          SMOKE_EXPECT_STORE_ORIGIN: ${{ secrets.STAGING_SMOKE_EXPECT_STORE_ORIGIN }}
+          SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          SMOKE_TENANT_ID: ${{ secrets.STAGING_SMOKE_TENANT_ID }}
+          SMOKE_BRAND_ID: ${{ secrets.STAGING_SMOKE_BRAND_ID }}
