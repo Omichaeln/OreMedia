@@ -10,7 +10,11 @@ import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { definitionService } from '@oremedia/module-measurement';
 import { providerRegistry } from '@oremedia/providers';
 import { composeCredentialBroker, composeModules, workerIngestCapabilities } from './composition';
-import { ensureDestinationReportSweepScheduled, startIngestWorkers } from './ingest-worker';
+import {
+  ensureDestinationReportSweepScheduled,
+  ensureSeoAuditSweepScheduled,
+  startIngestWorkers,
+} from './ingest-worker';
 import { connectTemporal, temporalConfigFromEnv } from './temporal';
 
 const log = startTelemetry({ service: 'oremedia-worker-ingest', version: process.env['OREMEDIA_VERSION'] });
@@ -54,6 +58,8 @@ try {
   // Ledger R2-1 part B: the daily sweep of GA4 and Search Console reports (one schedule per namespace, joined).
   const client = await connectTemporal(temporalConfig);
   await ensureDestinationReportSweepScheduled(client);
+  // Ledger R2-4: the weekly technical SEO audit of website destinations (Mondays 05:00 UTC, overlap skipped).
+  await ensureSeoAuditSweepScheduled(client);
   await client.connection.close();
 } catch (err) {
   log.error(

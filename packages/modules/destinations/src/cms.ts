@@ -1,12 +1,14 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
 import {
   MemoryProviderRateLimiter,
+  assertSafeUrl,
   cmsRegistry,
   createProviderIO,
   type CmsAdapter,
   type CmsRegistry,
   type ProviderIO,
   type RateLimiter,
+  type SafeDispatcherOptions,
 } from '@oremedia/providers';
 
 /**
@@ -40,6 +42,12 @@ export const configureDestinationCms = (opts: DestinationCmsOptions): void => {
 };
 
 export const cmsRegistryInUse = (): CmsRegistry => options.registry;
+
+/** The dispatcher options cmsIO applies (tests only: loopback allowed), for the fetches that check URLs themselves. */
+export const cmsFetchOptions = (): SafeDispatcherOptions =>
+  options.insecureAllowLoopback ? { insecureAllowLoopback: true } : {};
+/** The URL policy every site address and crawled URL passes (https, no credentials, no blocked host), as cmsIO applies it. */
+export const cmsSafeUrl = (url: string): URL => assertSafeUrl(url, cmsFetchOptions());
 
 /** Certified CMS adapters only; an unknown or uncertified kind is CAPABILITY_UNSUPPORTED (spec 14.6). */
 export const cmsAdapterFor = (kind: string): CmsAdapter => options.registry.get(kind);

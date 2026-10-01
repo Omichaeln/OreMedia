@@ -3,6 +3,7 @@ import {
   brandDestinations,
   destinationReportRows,
   pendingDestinationGrants,
+  seoAuditRuns,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
 import { hashCanonical } from '@oremedia/domain/hash';
@@ -21,7 +22,8 @@ export const DESTINATIONS_SEED: SeedExtension = async (db, { tenantId, brandIds,
   const destinationId = newId('destination');
   const sourceUsePolicyId = newId('sourceUsePolicy');
   const pendingDestinationGrantId = newId('pendingDestinationGrant');
-  const ids = { destinationId, sourceUsePolicyId, pendingDestinationGrantId };
+  const seoAuditRunId = newId('seoAuditRun');
+  const ids = { destinationId, sourceUsePolicyId, pendingDestinationGrantId, seoAuditRunId };
   const present = await db.execute(
     sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'destination_report_rows'`,
   );
@@ -44,6 +46,22 @@ export const DESTINATIONS_SEED: SeedExtension = async (db, { tenantId, brandIds,
     capabilityVersion: 1,
     status: 'active',
   });
+  // R2-4 (migration 0019): one audit run of the destination, so a foreign crawl or finish names a real run id.
+  const auditAtHead = await db.execute(
+    sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'seo_audit_runs'`,
+  );
+  if (Array.isArray(auditAtHead[0]) && auditAtHead[0].length > 0)
+    await db.insert(seoAuditRuns).values({
+      id: seoAuditRunId,
+      tenantId,
+      brandId,
+      destinationId,
+      origin: 'https://site.example',
+      trigger: 'scheduled',
+      requestedById: null,
+      startedAt: now,
+      outcome: 'running',
+    });
   await db.insert(sourceUsePolicies).values({
     id: sourceUsePolicyId,
     tenantId,

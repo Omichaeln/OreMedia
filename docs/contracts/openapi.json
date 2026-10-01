@@ -399,6 +399,7 @@
                             "destination.connect",
                             "destination.manage",
                             "source_use.manage",
+                            "seo_audit.run",
                             "mandate.manage",
                             "agent.start_run",
                             "agent.cancel_run",
@@ -4855,6 +4856,145 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.audit.findings": {
+      "get": {
+        "operationId": "destinations.audit.findings",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.audit.pages.list": {
+      "get": {
+        "operationId": "destinations.audit.pages.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": ["ok", "critical", "major", "minor"]
+                  },
+                  "limit": {
+                    "type": "number"
+                  },
+                  "cursor": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.audit.run": {
+      "post": {
+        "operationId": "destinations.audit.run",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.audit.runs.list": {
+      "get": {
+        "operationId": "destinations.audit.runs.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.audit.summary": {
+      "get": {
+        "operationId": "destinations.audit.summary",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
               }
             }
           }
@@ -10181,6 +10321,7 @@
                       "destination.connect",
                       "destination.manage",
                       "source_use.manage",
+                      "seo_audit.run",
                       "mandate.manage",
                       "agent.start_run",
                       "agent.cancel_run",
@@ -13778,6 +13919,100 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "destinations.audit.findings": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "runId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.audit.pages.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "runId": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string",
+              "enum": ["ok", "critical", "major", "minor"]
+            },
+            "limit": {
+              "type": "number"
+            },
+            "cursor": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.audit.run": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.audit.runs.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.audit.summary": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
         }
       },
       "destinations.connect.cancel": {

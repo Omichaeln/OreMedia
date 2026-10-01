@@ -8,3 +8,5 @@ export {
   destinationReportSweepWorkflowV1,
   destinationReportsWorkflowV1,
 } from '../destination-report-sweep.workflow.v1';
+// Ledger R2-4: the weekly technical SEO audit of website destinations and its per-run children (also on demand).
+export { seoAuditSweepWorkflowV1, seoAuditWorkflowV1 } from '../seo-audit.workflow.v1';

@@ -9,12 +9,14 @@ import type {
   DestinationVerifyResultV1,
   DestinationVerifyRuntimeV1,
 } from '@oremedia/contracts/destinations';
+import type { SeoAuditRuntimeV1 } from '@oremedia/contracts/seo-audit';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import { requireTenant, runAsPlatform, withTransaction } from '@oremedia/db';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
 import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
 import { cmsIO } from './cms';
+import { createSeoAuditRuntime } from './audit-runtime';
 import { createDestinationReportRuntime } from './report-runtime';
 import { BrandDestinationRepository, DestinationRefreshDueRepository } from './repositories';
 import { StoredKind, enabledCmsAdapter } from './service';
@@ -32,6 +34,8 @@ export interface DestinationRuntimeOptions {
   refreshLock?: RateLimiterStore;
   /** Per-destination report-run lock (R2-1 part B; the same store in production). */
   reportLock?: RateLimiterStore;
+  /** Per-destination audit-run lock (R2-4; the same store in production). */
+  auditLock?: RateLimiterStore;
 }
 
 export interface DestinationRuntime {
@@ -40,6 +44,8 @@ export interface DestinationRuntime {
   reports: DestinationReportsRuntimeV1;
   /** R2-3 (worker-core): destinationVerifyWorkflowV1, the health check of a destination connected with a secret. */
   verify: DestinationVerifyRuntimeV1;
+  /** R2-4 (worker-ingest): the weekly audit sweep's and an on-demand audit's activities. */
+  audit: SeoAuditRuntimeV1;
 }
 
 /**
@@ -225,5 +231,6 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       ...(opts.reportLock ? { reportLock: opts.reportLock } : {}),
     }),
     verify,
+    audit: createSeoAuditRuntime({ now, ...(opts.auditLock ? { auditLock: opts.auditLock } : {}) }),
   };
 }

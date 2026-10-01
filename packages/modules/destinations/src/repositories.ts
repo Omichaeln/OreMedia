@@ -12,6 +12,8 @@ import {
   brandDestinations,
   destinationReportRows,
   pendingDestinationGrants,
+  seoAuditPages,
+  seoAuditRuns,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
 import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
@@ -476,4 +478,209 @@ function parseDimensions(value: unknown): Record<string, string> {
     }
   }
   return {};
+}
+
+/**
+ * R2-4: the weekly audit sweep spans tenants like the report sweep and runs as a declared platform job (spec 5.3);
+ * it returns references only (tenant and destination ids), never a row.
+ */
+export class SeoAuditTargetRepository extends PlatformRepository {
+  /** Active destinations of the website kind (a credential is not needed: public pages only), oldest first. */
+  async listTargets(kind: string, tx?: Tx, limit = REPORT_SWEEP_BATCH) {
+    return this.conn(tx)
+      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+      .from(brandDestinations)
+      .where(and(eq(brandDestinations.status, 'active'), eq(brandDestinations.kind, kind)))
+      .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
+      .limit(limit);
+  }
+}
+
+type SeoAuditRunRow = typeof seoAuditRuns.$inferSelect;
+
+/** R2-4: one row per crawl of a website destination; the runtime opens, closes and prunes them. */
+export class SeoAuditRunRepository extends BrandScopedRepository<typeof seoAuditRuns> {
+  constructor() {
+    super(seoAuditRuns);
+  }
+  async create(values: Omit<typeof seoAuditRuns.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  async update(
+    id: string,
+    expectedVersion: number,
+    values: Partial<typeof seoAuditRuns.$inferInsert>,
+    tx: Tx,
+  ) {
+    await this.updateScoped(id, expectedVersion, values, tx);
+  }
+  /** SELECT ... FOR UPDATE: the outcome moves under the row lock (the finish and a stale-run sweep both close). */
+  async lock(id: string, tx: Tx) {
+    const rows = await tx
+      .select()
+      .from(seoAuditRuns)
+      .where(this.scope(eq(seoAuditRuns.id, id)))
+      .for('update');
+    const row = rows[0];
+    if (!row) throw new NotFoundError('SeoAuditRun', id);
+    this.assertBrandAccess(row.brandId);
+    return row;
+  }
+  private destinationScope(brandId: string, destinationId: string, extra?: SQL): SQL {
+    return this.brandScope(brandId, and(eq(seoAuditRuns.destinationId, destinationId), extra) as SQL);
+  }
+  /** The destination's runs, newest first (a bounded list: retention keeps a handful). */
+  async listForDestination(
+    brandId: string,
+    destinationId: string,
+    limit: number,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(this.destinationScope(brandId, destinationId))
+      .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id))
+      .limit(limit);
+  }
+  /** The latest run of an outcome (the last completed one is what the screen reads), or null. */
+  async latest(
+    brandId: string,
+    destinationId: string,
+    outcome: SeoAuditRunRow['outcome'] | undefined,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow | null> {
+    const rows = await this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          outcome ? eq(seoAuditRuns.outcome, outcome) : undefined,
+        ),
+      )
+      .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /** Runs started inside [from, to): the on-demand idempotency per day and the "already ran this week" check. */
+  async startedBetween(
+    brandId: string,
+    destinationId: string,
+    from: Date,
+    to: Date,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          and(gte(seoAuditRuns.startedAt, from), lt(seoAuditRuns.startedAt, to)) as SQL,
+        ),
+      )
+      .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id))
+      .limit(LIST_MAX);
+  }
+  /** Deletes the given runs of the brand (their pages first, by the caller); returns how many went. */
+  async deleteRuns(brandId: string, ids: readonly string[], tx: Tx): Promise<number> {
+    if (ids.length === 0) return 0;
+    return affectedRows(
+      await tx.delete(seoAuditRuns).where(this.brandScope(brandId, inArray(seoAuditRuns.id, [...ids]))),
+    );
+  }
+}
+
+type SeoAuditPageRow = typeof seoAuditPages.$inferSelect;
+type SeoAuditPageInsert = Omit<typeof seoAuditPages.$inferInsert, 'tenantId'>;
+
+/** R2-4: the pages of a run (one row per URL); the body is never stored, only the checks and the link facts. */
+export class SeoAuditPageRepository extends BrandScopedRepository<typeof seoAuditPages> {
+  constructor() {
+    super(seoAuditPages);
+  }
+  private runScope(brandId: string, runId: string, extra?: SQL): SQL {
+    return this.brandScope(brandId, and(eq(seoAuditPages.runId, runId), extra) as SQL);
+  }
+  /** Inserts the page, or replaces its facts when a retried activity fetched the same URL again (uq_seo_audit_page). */
+  async upsert(values: SeoAuditPageInsert, tx: Tx): Promise<void> {
+    const existing = await tx
+      .select({ id: seoAuditPages.id })
+      .from(seoAuditPages)
+      .where(this.runScope(values.brandId, values.runId, eq(seoAuditPages.urlHash, values.urlHash)))
+      .limit(1);
+    const { id: _id, brandId: _b, runId: _r, urlHash: _h, ...rest } = values;
+    void _id;
+    void _b;
+    void _r;
+    void _h;
+    if (existing[0]) {
+      await tx
+        .update(seoAuditPages)
+        .set(rest)
+        .where(this.scope(eq(seoAuditPages.id, existing[0].id)));
+      return;
+    }
+    await this.insertBrandScoped(values, tx);
+  }
+  /** Every page of a run (bounded by SEO_AUDIT_MAX_PAGES): what the cross-page checks read. */
+  async listForRun(brandId: string, runId: string, tx?: Tx): Promise<SeoAuditPageRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoAuditPages)
+      .where(this.runScope(brandId, runId))
+      .orderBy(asc(seoAuditPages.id))
+      .limit(LIST_MAX * 5);
+  }
+  async setChecks(
+    brandId: string,
+    id: string,
+    values: Pick<typeof seoAuditPages.$inferInsert, 'checks' | 'severity'>,
+    tx: Tx,
+  ): Promise<void> {
+    await tx
+      .update(seoAuditPages)
+      .set(values)
+      .where(this.brandScope(brandId, eq(seoAuditPages.id, id)));
+  }
+  /** The run's pages by severity, in id order (fetch order), paged by cursor; `limit + 1` rows read for the next page. */
+  async pageByRun(
+    brandId: string,
+    runId: string,
+    severity: SeoAuditPageRow['severity'] | undefined,
+    page: { limit: number; cursor?: string | undefined },
+    tx?: Tx,
+  ): Promise<{ items: SeoAuditPageRow[]; nextCursor: string | null }> {
+    const cursor = page.cursor ? decodeCursor(page.cursor) : null;
+    const rows = await this.conn(tx)
+      .select()
+      .from(seoAuditPages)
+      .where(
+        this.runScope(
+          brandId,
+          runId,
+          and(
+            severity ? eq(seoAuditPages.severity, severity) : undefined,
+            cursor ? gt(seoAuditPages.id, cursor.id) : undefined,
+          ) as SQL,
+        ),
+      )
+      .orderBy(asc(seoAuditPages.id))
+      .limit(page.limit + 1);
+    const items = rows.slice(0, page.limit);
+    const last = items[items.length - 1];
+    return { items, nextCursor: rows.length > page.limit && last ? encodeCursor({ id: last.id }) : null };
+  }
+  /** Deletes the pages of the given runs; returns how many went. */
+  async deleteForRuns(brandId: string, runIds: readonly string[], tx: Tx): Promise<number> {
+    if (runIds.length === 0) return 0;
+    return affectedRows(
+      await tx
+        .delete(seoAuditPages)
+        .where(this.brandScope(brandId, inArray(seoAuditPages.runId, [...runIds]))),
+    );
+  }
 }

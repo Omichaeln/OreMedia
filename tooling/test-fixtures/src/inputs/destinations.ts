@@ -75,6 +75,22 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
   'destinations.reports.opportunities': {
     buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
   },
+  // R2-4: the brand is read first (NOT_FOUND), so a foreign website is never summarised, listed or crawled.
+  'destinations.audit.summary': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
+  },
+  'destinations.audit.runs.list': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
+  },
+  'destinations.audit.pages.list': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'], severity: 'critical' }),
+  },
+  'destinations.audit.findings': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
+  },
+  'destinations.audit.run': {
+    buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
+  },
   'destinations.sourceUse.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'destinations.sourceUse.set': {
     buildInput: (f) => ({

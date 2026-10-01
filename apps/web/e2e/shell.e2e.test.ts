@@ -913,6 +913,99 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
 
   // Runs last: the screens above (home, switcher, portfolio, menu, assets, performance, settings, brand system) under
   // the production CSP.
+  it('audit (R2-4): the website shows its last run as tiles labelled lab data, findings with a copyable task and pages by severity', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const section = page.getByTestId('seo-audit');
+    await section.waitFor({ timeout: 15_000 });
+    const site = section.getByTestId('seo-audit-dst_e2e_cms');
+    await site.getByTestId('seo-audit-tile-pages').waitFor({ timeout: 15_000 });
+    expect(await site.getByTestId('seo-audit-tile-pages').textContent()).toContain('42');
+    expect(await site.getByTestId('seo-audit-tile-critical').textContent()).toContain('1');
+    expect(await site.getByTestId('seo-audit-tile-major').textContent()).toContain('1');
+    expect(await site.getByTestId('seo-audit-tile-minor').textContent()).toContain('1');
+    // Lab data only: the note is the contract's, and the caps the run hit are named.
+    expect(await site.getByTestId('seo-audit-data-note').textContent()).toBe(
+      'lab data only; field data not connected',
+    );
+    expect(await site.getByTestId('seo-audit-limits').textContent()).toContain('depth 3');
+    expect(await site.getByTestId('seo-audit-meta').textContent()).toContain('weekly sweep');
+    // Findings: worst first, each with its count, example URLs and the task a person copies into a brief.
+    const findings = site.getByTestId('seo-audit-findings');
+    await findings.waitFor({ timeout: 15_000 });
+    expect(await findings.getByRole('listitem').count()).toBe(3);
+    const first = findings.getByRole('listitem').first();
+    expect(await first.textContent()).toContain('Pages excluded by robots meta');
+    expect(await first.textContent()).toContain('Critical');
+    expect(await first.textContent()).toContain('/old-offer');
+    expect(await first.textContent()).toContain('Confirm 1 page should carry noindex');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await first.getByRole('button', { name: 'Copy task for Pages excluded by robots meta' }).click();
+    await expect.poll(() => first.getByRole('button').textContent(), { timeout: 5_000 }).toBe('Task copied');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+      'Confirm 1 page should carry noindex',
+    );
+    // Pages: all four, then the severity filter narrows to the one critical page.
+    const pages = site.getByTestId('seo-audit-pages');
+    await expect.poll(() => pages.locator('tbody tr').count(), { timeout: 15_000 }).toBe(4);
+    await site.getByRole('button', { name: 'Critical', pressed: false }).click();
+    await expect.poll(() => pages.locator('tbody tr').count(), { timeout: 15_000 }).toBe(1);
+    expect(await pages.locator('tbody tr').first().getAttribute('data-severity')).toBe('critical');
+    expect(await pages.locator('tbody tr').first().textContent()).toContain('robots meta (noindex)');
+    await page.close();
+  }, 60_000);
+
+  it('audit (R2-4): "Run audit" opens a run for an admin and is disabled while it runs; an analyst cannot start one', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const site = page.getByTestId('seo-audit').getByTestId('seo-audit-dst_e2e_cms');
+    const button = site.getByTestId('seo-audit-run');
+    await button.waitFor({ timeout: 15_000 });
+    expect(await button.isDisabled()).toBe(false);
+    await button.click();
+    await expect.poll(() => button.textContent(), { timeout: 15_000 }).toBe('Audit running…');
+    expect(await button.isDisabled()).toBe(true);
+    expect(backend.destinations.auditRuns.filter((r) => r.outcome === 'running')).toHaveLength(1);
+    // The last finished run stays on screen while the new one runs; the summary says so.
+    await expect
+      .poll(() => site.getByTestId('seo-audit-meta').textContent(), { timeout: 15_000 })
+      .toContain('Running');
+    expect(await site.getByTestId('seo-audit-tile-pages').textContent()).toContain('42');
+    backend.destinations.auditRuns.splice(1);
+    backend.role = 'analyst';
+    await page.reload();
+    await site.getByTestId('seo-audit-run').waitFor({ timeout: 15_000 });
+    expect(await site.getByTestId('seo-audit-run').isDisabled()).toBe(true);
+    expect(await site.getByTestId('seo-audit-run').getAttribute('title')).toContain('admins and publishers');
+    backend.role = 'owner';
+    await page.close();
+  }, 60_000);
+
+  it('audit (R2-4): a website without a policy allowing cms.audit reads says so and points at Settings → Destinations; nothing is listed', async () => {
+    const policies = backend.destinations.policies;
+    const removed = policies.splice(
+      policies.findIndex((p) => p.dataType === 'cms.audit'),
+      1,
+    );
+    try {
+      const page = await signedIn(1440);
+      await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+      const site = page.getByTestId('seo-audit').getByTestId('seo-audit-dst_e2e_cms');
+      await site.getByTestId('seo-audit-policy-blocked').waitFor({ timeout: 15_000 });
+      expect(await site.getByTestId('seo-audit-policy-blocked').textContent()).toContain(
+        'no policy for cms.audit',
+      );
+      expect(
+        await site.getByTestId('seo-audit-policy-blocked').getByRole('link').getAttribute('href'),
+      ).toContain('tab=destinations');
+      expect(await site.getByTestId('seo-audit-tile-pages').count()).toBe(0);
+      expect(await site.getByTestId('seo-audit-run').count()).toBe(0);
+      await page.close();
+    } finally {
+      policies.push(...removed);
+    }
+  }, 60_000);
+
   it('settings destinations (R2-3): a website is connected with its address, username and application password; the secret is never echoed', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);

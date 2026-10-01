@@ -23,6 +23,7 @@ export {
   destinationReportSweepWorkflowV1,
   destinationReportsWorkflowV1,
 } from './destination-report-sweep.workflow.v1';
+export { seoAuditSweepWorkflowV1, seoAuditWorkflowV1 } from './seo-audit.workflow.v1';
 export { brandChangeImpactWorkflowV1 } from './brand-change-impact.workflow.v1';
 export { metricCollectionWorkflowV1 } from './metric-collection.workflow.v1';
 export { commentIngestionWorkflowV1 } from './comment-ingestion.workflow.v1';

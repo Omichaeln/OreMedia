@@ -9,7 +9,7 @@ import {
   varbinary,
   varchar,
 } from 'drizzle-orm/mysql-core';
-import { brandId, createdAt, id, ref, tenantId, ts, updatedAt, version } from './_columns';
+import { brandId, createdAt, hash, id, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
 /**
@@ -166,6 +166,103 @@ export const destinationReportRows = mysqlTable(
       columns: [t.tenantId, t.brandId],
       foreignColumns: [brands.tenantId, brands.id],
       name: 'fk_destination_report_row_brand',
+    }),
+  ],
+);
+
+/**
+ * R2-4: one bounded crawl of a website destination (its origin, never a free URL) under the brand's `cms.audit`
+ * source-use policy. The row is created when the run starts (`running`) and closed by the finish activity with
+ * the outcome, the caps it hit and the summary counts; its pages live in seo_audit_pages. Retention follows the
+ * policy's retentionDays with `retain`, else the last SEO_AUDIT_KEEP_RUNS runs per destination are kept.
+ */
+export const seoAuditRuns = mysqlTable(
+  'seo_audit_runs',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    destinationId: ref('destination_id').notNull(),
+    /** The authorised origin the crawl stayed on (the destination's externalId origin at the time). */
+    origin: varchar('origin', { length: 200 }).notNull(),
+    trigger: mysqlEnum('trigger', ['scheduled', 'on_demand']).notNull(),
+    /** The person who asked for an on-demand run; null for the weekly sweep. */
+    requestedById: ref('requested_by_id'),
+    startedAt: ts('started_at').notNull(),
+    finishedAt: ts('finished_at'),
+    outcome: mysqlEnum('outcome', ['running', 'completed', 'failed']).notNull().default('running'),
+    reason: varchar('reason', { length: 200 }),
+    pagesCrawled: int('pages_crawled').notNull().default(0),
+    limitsHit: json('limits_hit').$type<string[]>().notNull().default([]),
+    /** robots.txt `Disallow` rules for `*` read at the start (path prefixes with `*` and `$`), bounded. */
+    robotsDisallow: json('robots_disallow').$type<string[]>().notNull().default([]),
+    summary: json('summary')
+      .$type<{ critical: number; major: number; minor: number; byCheck: Record<string, number> }>()
+      .notNull()
+      .default({ critical: 0, major: 0, minor: 0, byCheck: {} }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_seo_audit_run_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_seo_audit_run_destination').on(t.tenantId, t.brandId, t.destinationId, t.startedAt),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_seo_audit_run_brand',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.destinationId],
+      foreignColumns: [brandDestinations.tenantId, brandDestinations.brandId, brandDestinations.id],
+      name: 'fk_seo_audit_run_destination',
+    }),
+  ],
+);
+
+/**
+ * R2-4: one page a run fetched, with its lab checks as JSON and the facts the cross-page checks need (the hashes
+ * of its title and description, the same-origin links it carried); neither the body nor any text of the page is
+ * stored. One row per (run, URL).
+ */
+export const seoAuditPages = mysqlTable(
+  'seo_audit_pages',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    runId: ref('run_id').notNull(),
+    url: varchar('url', { length: 2000 }).notNull(),
+    /** sha-256 of the URL: the row's identity within the run (the URL itself is too long for a key). */
+    urlHash: hash('url_hash').notNull(),
+    depth: int('depth').notNull(),
+    status: int('status'),
+    bytes: int('bytes').notNull().default(0),
+    severity: mysqlEnum('severity', ['ok', 'critical', 'major', 'minor']).notNull().default('ok'),
+    checks: json('checks')
+      .$type<Array<{ key: string; ok: boolean; severity: string | null; detail: string | null }>>()
+      .notNull()
+      .default([]),
+    /** sha-256 of the lower-cased title / meta description (the duplicate checks compare them); null when absent. */
+    titleHash: hash('title_hash'),
+    metaDescriptionHash: hash('meta_description_hash'),
+    links: json('links').$type<string[]>().notNull().default([]),
+    fetchedAt: ts('fetched_at').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('uq_seo_audit_page').on(t.tenantId, t.runId, t.urlHash),
+    uniqueIndex('uq_seo_audit_page_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_seo_audit_page_severity').on(t.tenantId, t.brandId, t.runId, t.severity, t.id),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_seo_audit_page_brand',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.runId],
+      foreignColumns: [seoAuditRuns.tenantId, seoAuditRuns.brandId, seoAuditRuns.id],
+      name: 'fk_seo_audit_page_run',
     }),
   ],
 );

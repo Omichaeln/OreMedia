@@ -81,6 +81,9 @@ export const ID_PREFIXES = {
   pendingDestinationGrant: 'pdg',
   /** One day's row of a source report (GA4, Search Console) held for a destination (R2-1 part B). */
   destinationReportRow: 'drr',
+  /** One bounded crawl of a website destination and one page it fetched (R2-4 technical SEO audit). */
+  seoAuditRun: 'sar',
+  seoAuditPage: 'sap',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',
