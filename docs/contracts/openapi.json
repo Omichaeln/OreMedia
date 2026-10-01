@@ -6891,6 +6891,49 @@
         }
       }
     },
+    "/trpc/overview.summary": {
+      "get": {
+        "operationId": "overview.summary",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  },
+                  "ageDays": {
+                    "anyOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "const": 3
+                      },
+                      {
+                        "const": 7
+                      },
+                      {
+                        "const": 28
+                      }
+                    ]
+                  }
+                },
+                "required": ["brandId", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/publishing.channels.connect.cancel": {
       "post": {
         "operationId": "publishing.channels.connect.cancel",
@@ -15386,6 +15429,40 @@
             }
           },
           "required": ["eventId"]
+        }
+      },
+      "overview.summary": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            },
+            "ageDays": {
+              "anyOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "const": 3
+                },
+                {
+                  "const": 7
+                },
+                {
+                  "const": 28
+                }
+              ]
+            }
+          },
+          "required": ["brandId", "windowStart", "windowEnd"]
         }
       },
       "publishing.channels.connect.cancel": {
