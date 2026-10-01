@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   char,
+  check,
   foreignKey,
   index,
   int,
@@ -167,6 +169,8 @@ export const publications = mysqlTable(
     index('ix_publication_due').on(t.state, t.scheduledFor),
     index('ix_publication_brand_state').on(t.tenantId, t.brandId, t.state, t.scheduledFor),
     index('ix_publication_destination').on(t.tenantId, t.destinationId),
+    // R2-3: a publication targets exactly one of a channel or a destination (MySQL 8 enforces CHECK).
+    check('ck_publication_target', sql`(${t.channelConnectionId} is null) <> (${t.destinationId} is null)`),
     foreignKey({
       columns: [t.tenantId, t.brandId],
       foreignColumns: [brands.tenantId, brands.id],

@@ -22,22 +22,30 @@ export const FrozenManifestV1 = z.object({
   contentHash: z.string(),
   creativeRevisionIds: z.array(z.string()),
   exports: z.array(
-    z.object({
-      exportId: z.string(),
-      contentHash: z.string(),
-      /** The channel, or (R2-3) the brand destination the variant targets; exactly one is set. */
-      channelConnectionId: z.string().optional(),
-      destinationId: z.string().optional(),
-    }),
+    z
+      .object({
+        exportId: z.string(),
+        contentHash: z.string(),
+        /** The channel, or (R2-3) the brand destination the variant targets; exactly one is set. */
+        channelConnectionId: z.string().optional(),
+        destinationId: z.string().optional(),
+      })
+      .refine((e) => !!e.channelConnectionId !== !!e.destinationId, {
+        message: 'exactly one of channelConnectionId or destinationId',
+      }),
   ),
   captions: z.array(
-    z.object({
-      channelConnectionId: z.string().optional(),
-      destinationId: z.string().optional(),
-      text: z.string(),
-      altTexts: z.array(z.string()),
-      settingsHash: z.string(),
-    }),
+    z
+      .object({
+        channelConnectionId: z.string().optional(),
+        destinationId: z.string().optional(),
+        text: z.string(),
+        altTexts: z.array(z.string()),
+        settingsHash: z.string(),
+      })
+      .refine((c) => !!c.channelConnectionId !== !!c.destinationId, {
+        message: 'exactly one of channelConnectionId or destinationId',
+      }),
   ),
   /** R2-3: the article revision the reviewer approves (its hash is what the destination variant publishes). */
   article: z

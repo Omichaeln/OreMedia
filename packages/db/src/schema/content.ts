@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   foreignKey,
   index,
   int,
@@ -163,6 +165,8 @@ export const channelVariants = mysqlTable(
   (t) => [
     uniqueIndex('uq_variant_target').on(t.tenantId, t.contentRevisionId, t.channelConnectionId),
     uniqueIndex('uq_variant_destination').on(t.tenantId, t.contentRevisionId, t.destinationId),
+    // R2-3: a variant targets exactly one of a channel or a destination (MySQL 8 enforces CHECK).
+    check('ck_variant_target', sql`(${t.channelConnectionId} is null) <> (${t.destinationId} is null)`),
     uniqueIndex('uq_variant_tbi').on(t.tenantId, t.brandId, t.id),
     foreignKey({
       columns: [t.tenantId, t.brandId, t.contentRevisionId],

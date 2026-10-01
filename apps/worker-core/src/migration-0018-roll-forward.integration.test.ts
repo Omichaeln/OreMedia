@@ -18,7 +18,8 @@ const sha256 = (value: unknown) => createHash('sha256').update(JSON.stringify(va
  * beside it (FK to brand_destinations, unique per revision, indexed), the `unpublish` remote change and the
  * read-back, validation and revert evidence kinds. Every existing row is unchanged (its destination_id reads
  * null); on the migrated data a variant and a publication can target a destination of the same brand, a second
- * variant for the same revision and destination is refused, and the new evidence kind is accepted.
+ * variant for the same revision and destination is refused, a row naming neither or both targets is refused by the
+ * CHECK constraints, and the new evidence kind is accepted.
  */
 const PREVIOUS_HEAD = '0017_destination_report_rows';
 const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
@@ -101,6 +102,26 @@ describe('migration 0018 rolls forward on a populated database (ledger 1.g4)', (
         validation: { ok: true, issues: [] },
       }),
     ).rejects.toMatchObject({ cause: { code: 'ER_DUP_ENTRY' } }); // uq_variant_destination
+    // Exactly one target: neither, and both, are refused by ck_variant_target (MySQL 8 enforces CHECK).
+    for (const target of [
+      { channelConnectionId: null, destinationId: null },
+      { channelConnectionId: seeded.channelConnectionId, destinationId },
+    ])
+      await expect(
+        tdb.db.insert(channelVariants).values({
+          id: newId('cv'),
+          tenantId: tenantA.tenantId,
+          brandId,
+          contentRevisionId: seeded.contentRevisionId,
+          ...target,
+          text: 'x',
+          altTexts: [],
+          settings: {},
+          exportIds: [],
+          capabilityVersion: 1,
+          validation: { ok: true, issues: [] },
+        }),
+      ).rejects.toMatchObject({ cause: { code: 'ER_CHECK_CONSTRAINT_VIOLATED' } });
     const publicationId = newId('pub');
     await tdb.db.insert(publications).values({
       id: publicationId,
@@ -143,6 +164,27 @@ describe('migration 0018 rolls forward on a populated database (ledger 1.g4)', (
         scheduledById: tenantA.ownerUserId,
       }),
     ).rejects.toMatchObject({ cause: { code: 'ER_NO_REFERENCED_ROW_2' } });
+    await expect(
+      tdb.db.insert(publications).values({
+        id: newId('pub'),
+        tenantId: tenantA.tenantId,
+        brandId,
+        contentPackageId: 'pkg_x',
+        contentRevisionId: seeded.contentRevisionId,
+        channelVariantId: variantId,
+        channelConnectionId: null,
+        destinationId: null,
+        occurrenceKey: `${seeded.contentRevisionId}:none:once`,
+        authority: 'approval',
+        approvalId: null,
+        mandateId: null,
+        scheduledFor: new Date(),
+        state: 'scheduled',
+        claimant: 'pub:y',
+        scheduledByKind: 'user',
+        scheduledById: tenantA.ownerUserId,
+      }),
+    ).rejects.toMatchObject({ cause: { code: 'ER_CHECK_CONSTRAINT_VIOLATED' } }); // ck_publication_target
     const payload = { remoteId: '42', contentHash: 'a'.repeat(64) };
     await tdb.db.insert(remoteEvidence).values({
       id: newId('ev'),

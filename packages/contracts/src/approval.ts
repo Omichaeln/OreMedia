@@ -10,15 +10,19 @@ export const ApprovalBindingV1 = z.object({
   policyVersionId: z.string(),
   targets: z
     .array(
-      z.object({
-        /** The channel, or (R2-3) the brand destination; exactly one is set. A binding written before destinations existed names a channel. */
-        channelConnectionId: z.string().optional(),
-        destinationId: z.string().optional(),
-        textHash: z.string(), // exact caption, normalised (NFC, trimmed trailing whitespace)
-        altTextHashes: z.array(z.string()),
-        settingsHash: z.string(), // provider settings, canonical JSON
-        exportHashes: z.array(z.string()), // exact rendered files, in order
-      }),
+      z
+        .object({
+          /** The channel, or (R2-3) the brand destination; exactly one is set. A binding written before destinations existed names a channel. */
+          channelConnectionId: z.string().optional(),
+          destinationId: z.string().optional(),
+          textHash: z.string(), // exact caption, normalised (NFC, trimmed trailing whitespace)
+          altTextHashes: z.array(z.string()),
+          settingsHash: z.string(), // provider settings, canonical JSON
+          exportHashes: z.array(z.string()), // exact rendered files, in order
+        })
+        .refine((t) => !!t.channelConnectionId !== !!t.destinationId, {
+          message: 'exactly one of channelConnectionId or destinationId',
+        }),
     )
     .min(1),
   timing: z.union([

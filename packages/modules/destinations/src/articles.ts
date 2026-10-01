@@ -314,6 +314,14 @@ export const destinationArticles: DestinationPublisher = {
         code: 'source_use_denied',
         message: 'the source-use policy does not allow a write',
       };
+    // D-16: never an overwrite. Without a read-back hash there is nothing to compare the remote against.
+    if (input.expectedHash === null)
+      return {
+        outcome: 'rejected',
+        code: 'no_readback',
+        message: 'the article was never read back from the site; reconcile it before editing',
+      };
+    const expectedHash = input.expectedHash;
     return withSite(
       input.tenantId,
       row,
@@ -325,7 +333,7 @@ export const destinationArticles: DestinationPublisher = {
           io,
           input.remoteId,
           { html: sanitizeArticleHtml(input.html) },
-          input.expectedHash ? { expectedHash: input.expectedHash } : {},
+          { expectedHash },
         );
         switch (result.outcome) {
           case 'done':

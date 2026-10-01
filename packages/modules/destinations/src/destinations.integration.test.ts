@@ -1321,6 +1321,23 @@ describe('destinations module against MySQL 8', () => {
       expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
     });
 
+    it('an edit with no read-back to compare against is refused before any call: never an overwrite (D-16)', async () => {
+      cms.calls.length = 0;
+      const refused = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: null,
+          html: '<p>Blind edit.</p>',
+          idempotencyKey: 'idem_edit_3',
+        }),
+      );
+      expect(refused).toMatchObject({ outcome: 'rejected', code: 'no_readback' });
+      expect(cms.calls).toEqual([]);
+      expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+    });
+
     it('unpublish sets the article back to a draft and reads it back; a rendered validation runs without the secret; a disconnected site is refused', async () => {
       cms.articles.set('100', { ...cms.articles.get('100')!, status: 'publish' });
       const reverted = await inTenant(tenantA, () =>

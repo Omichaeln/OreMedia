@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "a30d965e-1bea-4c56-80b8-2e987d8964d2",
+  "id": "395cdb3a-a9db-422b-8af4-d4b47bdb6ddd",
   "prevId": "a0eecc83-ea2d-4a64-95b5-30666144547c",
   "tables": {
     "api_clients": {
@@ -5140,7 +5140,12 @@
         }
       },
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraint": {
+        "ck_variant_target": {
+          "name": "ck_variant_target",
+          "value": "(`channel_variants`.`channel_connection_id` is null) <> (`channel_variants`.`destination_id` is null)"
+        }
+      }
     },
     "content_packages": {
       "name": "content_packages",
@@ -8742,7 +8747,12 @@
         }
       },
       "uniqueConstraints": {},
-      "checkConstraint": {}
+      "checkConstraint": {
+        "ck_publication_target": {
+          "name": "ck_publication_target",
+          "value": "(`publications`.`channel_connection_id` is null) <> (`publications`.`destination_id` is null)"
+        }
+      }
     },
     "remote_evidence": {
       "name": "remote_evidence",
