@@ -11,7 +11,7 @@ import { requireTenant, runAsPlatform, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { audit } from '@oremedia/module-operations';
-import { aggregationFor, comparableGroupFor, DERIVED_RATES } from './normalise';
+import { aggregationFor, comparableGroupFor, DERIVED_RATES, kindFor } from './normalise';
 import { MetricDefinitionRepository, MetricDefinitionSeedRepository } from './repositories';
 
 /**
@@ -31,6 +31,8 @@ export const toDefinitionDto = (d: Awaited<ReturnType<MetricDefinitionRepository
   unit: d.unit,
   aggregation: d.aggregation,
   comparableGroup: d.comparableGroup,
+  /** D-15: what the number is, from the dictionary; decides whether it may be summed. */
+  kind: kindFor(d.comparableGroup),
   definitionVersion: d.definitionVersion,
   separatesPaidOrganic: d.separatesPaidOrganic,
   definition: d.definition,

@@ -3,20 +3,27 @@ import { Link, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { AGES, DailyTrend } from './daily-trend';
-import { groupValue } from './performance-helpers';
-import { brandPath, useBrandContext } from '../brand/brand-context';
+import {
+  PERIODS,
+  formatValue,
+  groupValue,
+  percent,
+  publicationCalendarHref,
+  type SlotPost,
+} from './performance-helpers';
+import {
+  CreativeAttributesPanel,
+  NextCyclePanel,
+  PublicationDetail,
+  SlotHeatmap,
+} from './performance-panels';
+import { useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
 import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
-
-const PERIODS = [
-  [7, '7 days'],
-  [30, '30 days'],
-  [90, '90 days'],
-] as const;
 
 /** The comparable groups the screen reads, in reading order (spec 15.1 groups); other groups are not asked for. */
 const GROUPS: ReadonlyArray<[group: string, label: string]> = [
@@ -28,14 +35,20 @@ const GROUPS: ReadonlyArray<[group: string, label: string]> = [
   ['shares', 'Shares'],
   ['saves', 'Saves'],
   ['clicks', 'Clicks'],
+  ['rate:engagement/impressions', 'Engagement rate'],
 ];
 const GROUP_LABEL = new Map(GROUPS);
 const ENGAGEMENT_RATE = 'rate:engagement/impressions';
+/** D-15: why a group has no total, in the words of the dictionary (docs/contracts/metrics.md). */
+const NOT_SUMMED: Record<string, string> = {
+  unique: 'unique people: never summed across posts',
+  snapshot: 'a level at a moment: never summed',
+  gauge: 'an intensity: never summed',
+  rate: 'pooled from its operands when both are here',
+};
 /** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
 const MAX_SUBJECTS = 200;
 const MAX_KEYS = 50;
-
-const number = (v: number) => new Intl.NumberFormat().format(v);
 
 interface Row {
   publication: CalendarPublicationDto;
@@ -56,6 +69,7 @@ export function PerformanceScreen() {
   const [params, setParams] = useSearchParams();
   const days = PERIODS.find(([d]) => String(d) === params.get('period'))?.[0] ?? 30;
   const channelFilter = params.get('channel');
+  const postParam = params.get('post');
   const ageDays = AGES.find(([a]) => String(a) === params.get('age'))?.[0] ?? 7;
   const todayKey = dayKey(new Date(), timeZone);
   const range = useMemo(() => trailingRange(days, todayKey, timeZone), [days, todayKey, timeZone]);
@@ -121,6 +135,19 @@ export function PerformanceScreen() {
     });
   }, [current, subjects, selected?.comparableGroup]);
   const sorted = [...rows].sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+  // UX-12: the slot grid pools engagement over impressions per post, whatever metric the tiles show.
+  const slotPosts: SlotPost[] = useMemo(() => {
+    const values = current?.values ?? [];
+    return subjects.map((p) => {
+      const mine = values.filter((v) => v.subjectId === p.publicationId);
+      return {
+        scheduledFor: p.scheduledFor,
+        engagement: groupValue(mine.filter((v) => v.comparableGroup === 'engagement')).value,
+        impressions: groupValue(mine.filter((v) => v.comparableGroup === 'impressions')).value,
+      };
+    });
+  }, [current, subjects]);
+  const selectedPost = subjects.find((p) => p.publicationId === postParam) ?? null;
   const max = Math.max(0, ...rows.map((r) => r.value ?? 0));
 
   const channelName = (id: string) => {
@@ -129,6 +156,7 @@ export function PerformanceScreen() {
   };
   const byChannel = useMemo(() => {
     const totals = new Map<string, { value: number; publications: number }>();
+    if (selected && !selected.additive) return []; // D-15: no per-channel sum of a unique count, level or rate
     for (const r of rows) {
       if (r.value === null) continue;
       const t = totals.get(r.publication.channelConnectionId) ?? { value: 0, publications: 0 };
@@ -138,18 +166,19 @@ export function PerformanceScreen() {
       });
     }
     return [...totals.entries()].sort((a, b) => b[1].value - a[1].value);
-  }, [rows]);
+  }, [rows, selected]);
   const channelMax = Math.max(0, ...byChannel.map(([, t]) => t.value));
 
   const update = (next: Record<string, string | null>) => {
     const p = new URLSearchParams(params);
+    // The selected post belongs to one period and channel: another selection drops it.
+    if ('period' in next || 'channel' in next) p.delete('post');
     for (const [k, v] of Object.entries(next)) {
       if (v === null) p.delete(k);
       else p.set(k, v);
     }
     setParams(p, { replace: true });
   };
-  const calendarHref = brandPath(companyId, brandId, 'calendar');
   const queries = [calendar, channels, definitions];
   const failed = [...queries, metrics].find((q) => q.isError);
   const loading = queries.some((q) => q.isPending) || (metrics.isPending && metrics.fetchStatus !== 'idle');
@@ -264,8 +293,9 @@ export function PerformanceScreen() {
                 {coverage.subjectsRequested === 1 ? 'publication has' : 'publications have'} numbers
                 {coverage.staleValues > 0 &&
                   ` · ${coverage.staleValues} stale ${coverage.staleValues === 1 ? 'value' : 'values'}`}
-                {' · '}totals add only numbers of the same kind across channels; a missing number is never
-                counted as zero
+                {' · '}totals add only flows of the same kind across channels; unique counts and levels are
+                never summed and rates are pooled from their operands; a missing number is never counted as
+                zero
                 {published.length > MAX_SUBJECTS &&
                   ` · the newest ${MAX_SUBJECTS} of ${published.length} publications`}
                 {allKeys.length > MAX_KEYS && ` · the first ${MAX_KEYS} of ${allKeys.length} metrics`}
@@ -293,16 +323,39 @@ export function PerformanceScreen() {
               <Section id="posts-heading" title={`Posts by ${selected.label.toLowerCase()}`}>
                 <ol className="flex flex-col divide-y divide-border" data-testid="performance-posts">
                   {sorted.map((r) => (
-                    <li key={r.publication.publicationId} className="flex flex-col gap-1.5 py-3 text-sm">
+                    <li
+                      key={r.publication.publicationId}
+                      className="flex flex-col gap-1.5 py-3 text-sm"
+                      data-publication={r.publication.publicationId}
+                    >
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                         <Link
-                          to={`${calendarHref}?publication=${encodeURIComponent(r.publication.publicationId)}&day=${dayKey(r.publication.scheduledFor, timeZone)}`}
+                          to={publicationCalendarHref(companyId, brandId, r.publication, timeZone)}
                           className="min-w-0 font-medium underline-offset-2 hover:underline"
                         >
                           <PackageTitle contentPackageId={r.publication.contentPackageId} />
                         </Link>
-                        <span className="tabular-nums">
-                          {r.value === null ? <Badge tone="neutral">Unavailable</Badge> : number(r.value)}
+                        <span className="flex items-baseline gap-2 tabular-nums">
+                          {r.value === null ? (
+                            <Badge tone="neutral">Unavailable</Badge>
+                          ) : (
+                            formatValue(selected.kind, r.value)
+                          )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={postParam === r.publication.publicationId}
+                            onClick={() =>
+                              update({
+                                post:
+                                  postParam === r.publication.publicationId
+                                    ? null
+                                    : r.publication.publicationId,
+                              })
+                            }
+                          >
+                            Details
+                          </Button>
                         </span>
                       </div>
                       <Bar value={r.value} max={max} />
@@ -319,7 +372,7 @@ export function PerformanceScreen() {
                         {r.rate !== null && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span>{(r.rate * 100).toFixed(1)}% engagement rate</span>
+                            <span>{percent(r.rate)} engagement rate</span>
                           </>
                         )}
                         {r.fetchedHoursAgo !== null && (
@@ -335,31 +388,58 @@ export function PerformanceScreen() {
                 </ol>
               </Section>
 
-              <Section id="channels-heading" title="By channel">
-                {byChannel.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No channel returned {selected.label.toLowerCase()}.
-                  </p>
-                ) : (
-                  <ul className="flex flex-col divide-y divide-border" data-testid="performance-channels">
-                    {byChannel.map(([id, t]) => (
-                      <li key={id} className="flex flex-col gap-1.5 py-3 text-sm">
-                        <div className="flex items-baseline justify-between gap-3">
-                          <span className="min-w-0 break-words">{channelName(id)}</span>
-                          <span className="tabular-nums">{number(t.value)}</span>
-                        </div>
-                        <Bar value={t.value} max={channelMax} />
-                        <p className="text-xs text-muted-foreground">
-                          {t.publications} {t.publications === 1 ? 'publication' : 'publications'} with
-                          numbers
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
+              <div className="flex flex-col gap-8">
+                {selectedPost && (
+                  <PublicationDetail
+                    companyId={companyId}
+                    brandId={brandId}
+                    publication={selectedPost}
+                    timeZone={timeZone}
+                    windowStart={range.from}
+                    windowEnd={range.to}
+                    channelName={channelName(selectedPost.channelConnectionId)}
+                    onClose={() => update({ post: null })}
+                  />
                 )}
-              </Section>
+                <Section id="channels-heading" title="By channel">
+                  {byChannel.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {selected.additive
+                        ? `No channel returned ${selected.label.toLowerCase()}.`
+                        : `${selected.label} is not summed per channel (${NOT_SUMMED[selected.kind] ?? 'not additive'}).`}
+                    </p>
+                  ) : (
+                    <ul className="flex flex-col divide-y divide-border" data-testid="performance-channels">
+                      {byChannel.map(([id, t]) => (
+                        <li key={id} className="flex flex-col gap-1.5 py-3 text-sm">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="min-w-0 break-words">{channelName(id)}</span>
+                            <span className="tabular-nums">{formatValue(selected.kind, t.value)}</span>
+                          </div>
+                          <Bar value={t.value} max={channelMax} />
+                          <p className="text-xs text-muted-foreground">
+                            {t.publications} {t.publications === 1 ? 'publication' : 'publications'} with
+                            numbers
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Section>
+              </div>
             </div>
           )}
+
+          <div className="grid gap-8 lg:grid-cols-2">
+            <SlotHeatmap posts={slotPosts} timeZone={timeZone} />
+            <CreativeAttributesPanel
+              brandId={brandId}
+              windowStart={range.from}
+              windowEnd={range.to}
+              enabled={subjects.length > 0}
+            />
+          </div>
+          <NextCyclePanel companyId={companyId} brandId={brandId} />
         </>
       )}
     </main>
@@ -392,11 +472,16 @@ function MetricTile({
     >
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="text-2xl font-semibold tabular-nums">
-        {aggregate.value === null ? 'Unavailable' : number(aggregate.value)}
+        {aggregate.value !== null
+          ? formatValue(aggregate.kind, aggregate.value)
+          : aggregate.additive || aggregate.subjectsWithData === 0
+            ? 'Unavailable'
+            : 'Not summed'}
       </span>
       <span className="text-xs text-muted-foreground">
         {aggregate.subjectsWithData} of {requested} {requested === 1 ? 'post' : 'posts'}
         {aggregate.freshness && ` · oldest ${ageText(aggregate.freshness.ageHours)}`}
+        {!aggregate.additive && aggregate.subjectsWithData > 0 && ` · ${NOT_SUMMED[aggregate.kind] ?? ''}`}
       </span>
       {aggregate.stale && (
         <span>

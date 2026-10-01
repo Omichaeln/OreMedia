@@ -1,4 +1,24 @@
 import type { MetricValueDto } from './use-measurement';
+import { brandPath } from '../brand/brand-context';
+import { dayKey } from '../publishing/publication-state';
+
+export const PERIODS = [
+  [7, '7 days'],
+  [30, '30 days'],
+  [90, '90 days'],
+] as const;
+export const formatNumber = (v: number) => new Intl.NumberFormat().format(v);
+export const percent = (v: number) => `${(v * 100).toFixed(1)}%`;
+/** A value in the group's own unit (D-15): a rate as a percentage, everything else as a count. */
+export const formatValue = (kind: string, v: number) => (kind === 'rate' ? percent(v) : formatNumber(v));
+/** The calendar, opened on the publication's day in the brand zone with the publication selected. */
+export const publicationCalendarHref = (
+  companyId: string,
+  brandId: string,
+  publication: { publicationId: string; scheduledFor: string },
+  timeZone: string,
+) =>
+  `${brandPath(companyId, brandId, 'calendar')}?publication=${encodeURIComponent(publication.publicationId)}&day=${dayKey(publication.scheduledFor, timeZone)}`;
 
 const DAY_MS = 86_400_000;
 /**
@@ -86,4 +106,76 @@ export function periodComparison(current: TrendPost[], previous: TrendPost[]) {
     measured: measuredValues(current).length,
     change: currentMean !== null && baseline ? ((currentMean - baseline) / baseline) * 100 : null,
   };
+}
+
+// ---- UX-12 "when it lands": publication moments by weekday and slot in the brand's zone ----
+
+export const SLOT_HOURS = 6;
+export const SLOTS = ['00–06', '06–12', '12–18', '18–24'] as const;
+export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+
+/** Monday-first weekday (0 = Monday) and hour of an instant on the brand's wall clock. */
+export function zoneWeekdayHour(iso: string, timeZone: string): { weekday: number; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    weekday: 'short',
+    hour: '2-digit',
+  }).formatToParts(new Date(iso));
+  const weekday = WEEKDAYS.indexOf(
+    (parts.find((p) => p.type === 'weekday')?.value ?? 'Mon') as (typeof WEEKDAYS)[number],
+  );
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+  return { weekday: weekday < 0 ? 0 : weekday, hour: Number.isNaN(hour) ? 0 : hour };
+}
+
+export interface SlotPost {
+  scheduledFor: string;
+  engagement: number | null;
+  impressions: number | null;
+}
+export interface SlotCell {
+  weekday: number;
+  slot: number;
+  /** Publications in the cell, whatever their numbers. */
+  publications: number;
+  /** Publications whose engagement and impressions both exist: the rate's denominator in posts. */
+  measured: number;
+  /** Σ engagement ÷ Σ impressions over the measured posts (D-15), null when none. */
+  rate: number | null;
+}
+
+/** 7 × 4 cells, every one present (an empty cell says 0 posts, never a rate). */
+export function slotCells(posts: SlotPost[], timeZone: string): SlotCell[] {
+  const cells: SlotCell[] = [];
+  const sums = new Map<string, { engagement: number; impressions: number }>();
+  const counts = new Map<string, { publications: number; measured: number }>();
+  for (const p of posts) {
+    const { weekday, hour } = zoneWeekdayHour(p.scheduledFor, timeZone);
+    const key = `${weekday}:${Math.floor(hour / SLOT_HOURS)}`;
+    const c = counts.get(key) ?? { publications: 0, measured: 0 };
+    c.publications += 1;
+    if (p.engagement !== null && p.impressions !== null && p.impressions > 0) {
+      c.measured += 1;
+      const s = sums.get(key) ?? { engagement: 0, impressions: 0 };
+      s.engagement += p.engagement;
+      s.impressions += p.impressions;
+      sums.set(key, s);
+    }
+    counts.set(key, c);
+  }
+  for (let weekday = 0; weekday < WEEKDAYS.length; weekday += 1)
+    for (let slot = 0; slot < SLOTS.length; slot += 1) {
+      const key = `${weekday}:${slot}`;
+      const c = counts.get(key) ?? { publications: 0, measured: 0 };
+      const s = sums.get(key);
+      cells.push({
+        weekday,
+        slot,
+        publications: c.publications,
+        measured: c.measured,
+        rate: s && s.impressions > 0 ? s.engagement / s.impressions : null,
+      });
+    }
+  return cells;
 }

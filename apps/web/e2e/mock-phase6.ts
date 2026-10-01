@@ -54,7 +54,15 @@ import {
   type EvidenceStrength,
   type RecommendationAction,
 } from '@oremedia/contracts/intelligence';
-import { MetricDefinitionList, MetricsQueryV1 } from '@oremedia/contracts/measurement';
+import {
+  BrandPerformanceSummary,
+  CreativeAttributesAggregate,
+  EngagementQualityGet,
+  MetricDefinitionList,
+  MetricsQueryV1,
+  TrackedLinkList,
+  kindFor,
+} from '@oremedia/contracts/measurement';
 import {
   ChannelConnectCancel,
   ChannelConnectComplete,
@@ -341,6 +349,13 @@ export class Phase6Backend {
     },
     { key: 'clicks', providerKey: 'linkedin', comparableGroup: 'clicks', unit: 'count', aggregation: 'last' },
     {
+      key: 'engagement',
+      providerKey: 'linkedin',
+      comparableGroup: 'engagement',
+      unit: 'count',
+      aggregation: 'last',
+    },
+    {
       key: 'impression_count',
       providerKey: 'x',
       comparableGroup: 'impressions',
@@ -348,6 +363,13 @@ export class Phase6Backend {
       aggregation: 'last',
     },
     { key: 'like_count', providerKey: 'x', comparableGroup: 'likes', unit: 'count', aggregation: 'last' },
+    {
+      key: 'engagements',
+      providerKey: 'x',
+      comparableGroup: 'engagement',
+      unit: 'count',
+      aggregation: 'last',
+    },
     {
       key: 'url_link_clicks',
       providerKey: 'x',
@@ -361,6 +383,37 @@ export class Phase6Backend {
       comparableGroup: 'rate:engagement/impressions',
       unit: 'ratio',
       aggregation: 'last',
+    },
+  ];
+  /** UX-12: the captured attributes behind the measured revisions (what the creative did). */
+  readonly revisionAttributes = new Map<string, Record<string, string>>([
+    [
+      P5.revisions.measured,
+      { hookType: 'statement', imageryKind: 'photography', cta: 'present', distribution: 'user' },
+    ],
+    [
+      P5.revisions.one,
+      { hookType: 'question', imageryKind: 'illustration', cta: 'absent', distribution: 'user' },
+    ],
+    [
+      P5.revisions.three,
+      { hookType: 'question', imageryKind: 'photography', cta: 'present', distribution: 'user' },
+    ],
+  ]);
+  /** Spec 15.4: a tracked link on the published post with the clicks the redirector recorded. */
+  readonly trackedLinks = [
+    {
+      id: 'tl_1',
+      publicationId: P5.publications.published,
+      variantId: P5.variants.ok,
+      experimentId: null,
+      experimentVariantId: null,
+      destination: 'https://acme.example/lamps?utm_source=x',
+      utm: { utm_source: 'x', utm_medium: 'social' },
+      shortCode: 'k3n9qz',
+      shortUrl: 'https://ore.link/k3n9qz',
+      clicks: 31,
+      createdAt: hoursAgo(50),
     },
   ];
   /** value null = the provider did not return it (unavailable, never zero); ageHours drives freshness. */
@@ -397,6 +450,23 @@ export class Phase6Backend {
       source: 'provider:x',
     },
     {
+      subjectId: P5.publications.published,
+      metricKey: 'engagements',
+      value: 150,
+      ageHours: 2,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    /** Spec 15.3: a saves count the quality composite reads (no definition: not a tile on the screen). */
+    {
+      subjectId: P5.publications.published,
+      metricKey: 'bookmark_count',
+      value: 14,
+      ageHours: 2,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
       subjectId: P5.publications.publishedEarlier,
       metricKey: 'impressions',
       value: 5200,
@@ -421,6 +491,14 @@ export class Phase6Backend {
       source: 'provider:linkedin',
     },
     {
+      subjectId: P5.publications.publishedEarlier,
+      metricKey: 'engagement',
+      value: 260,
+      ageHours: 30,
+      latencyHours: 24,
+      source: 'provider:linkedin',
+    },
+    {
       subjectId: P5.publications.publishedOlder,
       metricKey: 'impression_count',
       value: 760,
@@ -432,6 +510,14 @@ export class Phase6Backend {
       subjectId: P5.publications.publishedOlder,
       metricKey: 'like_count',
       value: 12,
+      ageHours: 5,
+      latencyHours: 6,
+      source: 'provider:x',
+    },
+    {
+      subjectId: P5.publications.publishedOlder,
+      metricKey: 'engagements',
+      value: 60,
       ageHours: 5,
       latencyHours: 6,
       source: 'provider:x',
@@ -2050,6 +2136,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           .map((d, i) => ({
             id: `md_${i}`,
             scope: 'global' as const,
+            kind: kindFor(d.comparableGroup),
             key: d.key,
             providerKey: d.providerKey,
             nativeName: d.key,
@@ -2065,95 +2152,124 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
     }),
     metrics: router({
       /** Spec 15.2: the latest value per (subject, metric), freshness on each, sums only within a comparable group. */
-      query: query.input(MetricsQueryV1).query(({ input }) => {
+      query: query.input(MetricsQueryV1).query(({ input }) => queryMetrics(input)),
+      /**
+       * UX-11: the window's released publications rolled up by the dictionary's rules, beside the previous window
+       * of equal length; the sample is named (D-14) and the comparison carries no change below the minimum.
+       */
+      brandSummary: query.input(BrandPerformanceSummary).query(({ input }) => {
         brandOf(input.brandId);
-        const groupOf = (key: string) =>
-          b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
-        // With ageDays, as the API: a post younger than the age has no pull at it yet, so no number; the window
-        // runs from the publication moment to that age.
-        const publishedAt = (id: string) => b.p5.publications.get(id)?.scheduledFor ?? null;
-        const matured = (id: string) => {
-          const at = publishedAt(id);
-          return !input.ageDays || (at !== null && Date.now() - Date.parse(at) >= input.ageDays * 86_400_000);
+        const keys = b.metricDefinitions.map((d) => d.key);
+        const start = Date.parse(input.windowStart);
+        const end = Date.parse(input.windowEnd);
+        const window = (from: number, to: number) => {
+          const publications = [...p5.publications.values()]
+            .filter((pub) => {
+              const at = Date.parse(pub.scheduledFor);
+              return (pub.state === 'published' || pub.state === 'removed') && at >= from && at <= to;
+            })
+            .map((pub) => pub.id);
+          const result =
+            publications.length === 0
+              ? null
+              : queryMetrics({
+                  brandId: input.brandId,
+                  subjectType: 'publication',
+                  subjectIds: publications,
+                  metricKeys: keys,
+                  windowStart: new Date(from).toISOString(),
+                  windowEnd: new Date(to).toISOString(),
+                  grouping: 'comparable_group',
+                  ...(input.ageDays ? { ageDays: input.ageDays } : {}),
+                });
+          return {
+            windowStart: new Date(from).toISOString(),
+            windowEnd: new Date(to).toISOString(),
+            publications: publications.length,
+            aggregates: result?.aggregates ?? [],
+            coverage: result?.coverage ?? {
+              subjectsRequested: 0,
+              subjectsWithData: 0,
+              metricsRequested: keys,
+              metricsWithData: [],
+              metricsUnavailable: keys,
+              staleValues: 0,
+              windowStart: new Date(from).toISOString(),
+              windowEnd: new Date(to).toISOString(),
+            },
+          };
         };
-        const windowOf = (id: string) => {
-          const at = publishedAt(id);
-          return input.ageDays && at
-            ? {
-                windowStart: at,
-                windowEnd: new Date(Date.parse(at) + input.ageDays * 86_400_000).toISOString(),
-              }
-            : { windowStart: input.windowStart, windowEnd: input.windowEnd };
-        };
-        const values = b.metricSnapshots
-          .filter(
-            (m) =>
-              input.subjectIds.includes(m.subjectId) &&
-              input.metricKeys.includes(m.metricKey) &&
-              matured(m.subjectId),
-          )
-          .map((m, i) => {
-            const freshness = {
-              fetchedAt: hoursAgo(m.ageHours),
-              ageHours: m.ageHours,
-              latencyHours: m.latencyHours,
-              stale: m.ageHours > m.latencyHours * 2,
-            };
-            return {
-              snapshotId: `ms_${i}_${m.subjectId}`,
-              subjectType: input.subjectType,
-              subjectId: m.subjectId,
-              metricKey: m.metricKey,
-              comparableGroup: groupOf(m.metricKey),
-              value: m.value,
-              series: null,
-              completeness: m.value === null ? ('unavailable' as const) : ('complete' as const),
-              freshness,
-              source: m.source,
-              definitionVersion: 1,
-              ...windowOf(m.subjectId),
-              brandTimezone: 'UTC',
-              numeratorSnapshotId: null,
-              denominatorSnapshotId: null,
-            };
-          });
-        const withData = values.filter((v) => v.value !== null);
-        const groups = [...new Set(values.map((v) => v.comparableGroup))].sort();
-        const aggregates =
-          input.grouping === 'comparable_group'
-            ? groups.map((g) => {
-                const inGroup = values.filter((v) => v.comparableGroup === g);
-                const data = inGroup.filter((v) => v.value !== null);
-                const oldest = data.reduce<(typeof data)[number] | null>(
-                  (acc, v) => (!acc || v.freshness.fetchedAt < acc.freshness.fetchedAt ? v : acc),
-                  null,
-                );
-                return {
-                  comparableGroup: g,
-                  metricKeys: [...new Set(inGroup.map((v) => v.metricKey))].sort(),
-                  value: data.length ? data.reduce((sum, v) => sum + (v.value as number), 0) : null,
-                  snapshotIds: data.map((v) => v.snapshotId),
-                  subjectsWithData: new Set(data.map((v) => v.subjectId)).size,
-                  subjectsUnavailable: new Set(
-                    inGroup.filter((v) => v.value === null).map((v) => v.subjectId),
-                  ).size,
-                  freshness: oldest?.freshness ?? null,
-                  stale: data.some((v) => v.freshness.stale),
-                };
-              })
-            : [];
+        const current = window(start, end);
+        const previous = window(start - (end - start), start - 1);
+        const sufficient = current.publications >= 5 && previous.publications >= 5;
         return {
-          grouping: input.grouping,
-          values,
-          groups: [],
-          aggregates,
+          brandId: input.brandId,
+          ageDays: input.ageDays ?? null,
+          current,
+          previous,
+          comparison: current.aggregates
+            .filter((a) => a.kind === 'flow' || a.kind === 'rate')
+            .map((a) => {
+              const before = previous.aggregates.find((x) => x.comparableGroup === a.comparableGroup) ?? null;
+              const change =
+                sufficient && a.value !== null && before && before.value !== null && before.value > 0
+                  ? (a.value - before.value) / before.value
+                  : null;
+              return {
+                comparableGroup: a.comparableGroup,
+                kind: a.kind,
+                current: a.value,
+                previous: before ? before.value : null,
+                change,
+              };
+            }),
+          sample: { current: current.publications, previous: previous.publications, minimum: 5, sufficient },
+          computedAt: now(),
+        };
+      }),
+    }),
+    quality: router({
+      /** Spec 15.3, as the API shapes it: components from the snapshots; what the data cannot supply is unavailable. */
+      get: query.input(EngagementQualityGet).query(({ input }) => {
+        brandOf(input.brandId);
+        const pub = p5.publications.get(input.publicationId);
+        if (!pub) throw new NotFoundError('Publication', input.publicationId);
+        const of = (key: string) =>
+          b.metricSnapshots.find((m) => m.subjectId === pub.id && m.metricKey === key)?.value ?? null;
+        const impressions = of('impression_count') ?? of('impressions');
+        const component = (name: string, value: number | null, weight = 1) => ({
+          component: name,
+          weight,
+          value,
+          normalised: value !== null && impressions ? (value / impressions) * 1000 : null,
+          contribution: value !== null && impressions ? (value / impressions) * 1000 * weight : null,
+          evidence: value !== null ? [`ms_${name}_${pub.id}`] : [],
+          available: value !== null,
+        });
+        const components = [
+          component('saves', of('bookmark_count')),
+          component('shares', of('retweet_count')),
+          component('substantive_comments', null),
+          component('repeat_engagers', null),
+          component('negative_feedback', null, 1),
+        ];
+        const available = components.filter((c) => c.available && c.contribution !== null);
+        return {
+          publicationId: pub.id,
+          objectiveId: null,
+          score: available.length ? available.reduce((s, c) => s + (c.contribution as number), 0) : null,
+          components,
+          weightsSource: 'default' as const,
+          unavailable: components.filter((c) => !c.available).map((c) => c.component),
+          impressionsBase: impressions,
+          freshness: [],
           coverage: {
-            subjectsRequested: input.subjectIds.length,
-            subjectsWithData: new Set(withData.map((v) => v.subjectId)).size,
-            metricsRequested: input.metricKeys,
-            metricsWithData: [...new Set(withData.map((v) => v.metricKey))].sort(),
-            metricsUnavailable: input.metricKeys.filter((k) => !withData.some((v) => v.metricKey === k)),
-            staleValues: withData.filter((v) => v.freshness.stale).length,
+            subjectsRequested: 1,
+            subjectsWithData: available.length ? 1 : 0,
+            metricsRequested: ['bookmark_count', 'retweet_count'],
+            metricsWithData: available.map((c) => c.component),
+            metricsUnavailable: [],
+            staleValues: 0,
             windowStart: input.windowStart,
             windowEnd: input.windowEnd,
           },
@@ -2161,7 +2277,216 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         };
       }),
     }),
+    links: router({
+      /** Spec 15.4: the tracked links of a publication with the clicks the redirector recorded. */
+      list: query.input(TrackedLinkList).query(({ input }) => {
+        brandOf(input.brandId);
+        const items = b.trackedLinks
+          .filter(
+            (l) =>
+              (!input.publicationId || l.publicationId === input.publicationId) &&
+              (!input.variantId || l.variantId === input.variantId),
+          )
+          .map((l) => ({ ...l, brandId: b.brandId }));
+        return { items, nextCursor: null };
+      }),
+    }),
+    attributes: router({
+      /** UX-12: the pooled rate per captured attribute value over the window's publications, beside the brand's. */
+      aggregate: query.input(CreativeAttributesAggregate).query(({ input }) => {
+        brandOf(input.brandId);
+        const start = Date.parse(input.windowStart);
+        const end = Date.parse(input.windowEnd);
+        const publications = [...p5.publications.values()].filter((pub) => {
+          const at = Date.parse(pub.scheduledFor);
+          return (pub.state === 'published' || pub.state === 'removed') && at >= start && at <= end;
+        });
+        // As brandOutcomes: both operands must exist, a missing one is never a zero.
+        const outcome = (id: string) => {
+          const of = (group: string) => {
+            const rows = b.metricSnapshots.filter(
+              (m) => m.subjectId === id && groupOf(m.metricKey) === group && m.value !== null,
+            );
+            return rows.length ? rows.reduce((sum, m) => sum + (m.value as number), 0) : null;
+          };
+          const impressions = of('impressions');
+          const engagement = of('engagement');
+          return impressions !== null && impressions > 0 && engagement !== null
+            ? { engagement, impressions }
+            : null;
+        };
+        const brand = { publications: 0, engagement: 0, impressions: 0 };
+        const cells = new Map<
+          string,
+          { feature: string; value: string; publications: number; engagement: number; impressions: number }
+        >();
+        const withAttributes = publications.filter((pub) =>
+          b.revisionAttributes.has(pub.contentRevisionId),
+        ).length;
+        for (const pub of publications) {
+          const o = outcome(pub.id);
+          if (!o) continue;
+          brand.publications += 1;
+          brand.engagement += o.engagement;
+          brand.impressions += o.impressions;
+          const attrs = b.revisionAttributes.get(pub.contentRevisionId);
+          if (!attrs) continue;
+          for (const [feature, value] of Object.entries(attrs)) {
+            const key = `${feature}:${value}`;
+            const cell = cells.get(key) ?? { feature, value, publications: 0, engagement: 0, impressions: 0 };
+            cell.publications += 1;
+            cell.engagement += o.engagement;
+            cell.impressions += o.impressions;
+            cells.set(key, cell);
+          }
+        }
+        return {
+          brandId: input.brandId,
+          windowStart: input.windowStart,
+          windowEnd: input.windowEnd,
+          publications: publications.length,
+          withAttributes,
+          withNumbers: brand.publications,
+          minimum: 5,
+          brand: { ...brand, rate: brand.impressions > 0 ? brand.engagement / brand.impressions : null },
+          features: [...cells.values()]
+            .map((c) => ({
+              ...c,
+              rate: c.impressions > 0 ? c.engagement / c.impressions : null,
+              sufficient: c.publications >= 5,
+            }))
+            .sort((x, y) => x.feature.localeCompare(y.feature) || y.publications - x.publications),
+        };
+      }),
+    }),
   });
+  const groupOf = (key: string) =>
+    b.metricDefinitions.find((d) => d.key === key)?.comparableGroup ?? `other:${key}`;
+  const queryMetrics = (input: z.infer<typeof MetricsQueryV1>) => {
+    brandOf(input.brandId);
+    // With ageDays, as the API: a post younger than the age has no pull at it yet, so no number; the window
+    // runs from the publication moment to that age.
+    const publishedAt = (id: string) => b.p5.publications.get(id)?.scheduledFor ?? null;
+    const matured = (id: string) => {
+      const at = publishedAt(id);
+      return !input.ageDays || (at !== null && Date.now() - Date.parse(at) >= input.ageDays * 86_400_000);
+    };
+    const windowOf = (id: string) => {
+      const at = publishedAt(id);
+      return input.ageDays && at
+        ? {
+            windowStart: at,
+            windowEnd: new Date(Date.parse(at) + input.ageDays * 86_400_000).toISOString(),
+          }
+        : { windowStart: input.windowStart, windowEnd: input.windowEnd };
+    };
+    const values = b.metricSnapshots
+      .filter(
+        (m) =>
+          input.subjectIds.includes(m.subjectId) &&
+          input.metricKeys.includes(m.metricKey) &&
+          matured(m.subjectId),
+      )
+      .map((m, i) => {
+        const freshness = {
+          fetchedAt: hoursAgo(m.ageHours),
+          ageHours: m.ageHours,
+          latencyHours: m.latencyHours,
+          stale: m.ageHours > m.latencyHours * 2,
+        };
+        return {
+          snapshotId: `ms_${i}_${m.subjectId}`,
+          subjectType: input.subjectType,
+          subjectId: m.subjectId,
+          metricKey: m.metricKey,
+          comparableGroup: groupOf(m.metricKey),
+          value: m.value,
+          series: null,
+          completeness: m.value === null ? ('unavailable' as const) : ('complete' as const),
+          freshness,
+          source: m.source,
+          definitionVersion: 1,
+          ...windowOf(m.subjectId),
+          brandTimezone: 'UTC',
+          numeratorSnapshotId: null as string | null,
+          denominatorSnapshotId: null as string | null,
+        };
+      });
+    // Spec 15.2 derived rates, as the API: per subject, numerator group over denominator group when the rate's
+    // key is asked for; an unavailable operand yields an unavailable rate (a row without a value, never zero).
+    if (input.metricKeys.includes('engagement_rate')) {
+      for (const subjectId of new Set(values.map((v) => v.subjectId))) {
+        const n = values.find((v) => v.subjectId === subjectId && v.comparableGroup === 'engagement');
+        const d = values.find((v) => v.subjectId === subjectId && v.comparableGroup === 'impressions');
+        if (!n || !d) continue;
+        const unavailable = n.value === null || d.value === null || d.value === 0;
+        values.push({
+          ...n,
+          snapshotId: `ms_rate_${subjectId}`,
+          metricKey: 'engagement_rate',
+          comparableGroup: 'rate:engagement/impressions',
+          value: unavailable ? null : (n.value as number) / (d.value as number),
+          completeness: unavailable ? ('unavailable' as const) : ('complete' as const),
+          source: 'derived',
+          numeratorSnapshotId: n.snapshotId,
+          denominatorSnapshotId: d.snapshotId,
+        });
+      }
+    }
+    const withData = values.filter((v) => v.value !== null);
+    const groups = [...new Set(values.map((v) => v.comparableGroup))].sort();
+    const aggregates =
+      input.grouping === 'comparable_group'
+        ? groups.map((g) => {
+            const inGroup = values.filter((v) => v.comparableGroup === g);
+            const data = inGroup.filter((v) => v.value !== null);
+            const oldest = data.reduce<(typeof data)[number] | null>(
+              (acc, v) => (!acc || v.freshness.fetchedAt < acc.freshness.fetchedAt ? v : acc),
+              null,
+            );
+            // D-15: a flow is summed; a unique count, snapshot or gauge is not additive; a rate is pooled below.
+            const kind = kindFor(g);
+            return {
+              comparableGroup: g,
+              kind,
+              additive: kind === 'flow',
+              metricKeys: [...new Set(inGroup.map((v) => v.metricKey))].sort(),
+              value:
+                kind === 'flow' && data.length ? data.reduce((sum, v) => sum + (v.value as number), 0) : null,
+              snapshotIds: data.map((v) => v.snapshotId),
+              subjectsWithData: new Set(data.map((v) => v.subjectId)).size,
+              subjectsUnavailable: new Set(inGroup.filter((v) => v.value === null).map((v) => v.subjectId))
+                .size,
+              freshness: oldest?.freshness ?? null,
+              stale: data.some((v) => v.freshness.stale),
+            };
+          })
+        : [];
+    for (const agg of aggregates) {
+      if (agg.kind !== 'rate') continue;
+      const [numerator, denominator] = agg.comparableGroup.slice('rate:'.length).split('/');
+      const n = aggregates.find((a) => a.comparableGroup === numerator)?.value ?? null;
+      const d = aggregates.find((a) => a.comparableGroup === denominator)?.value ?? null;
+      agg.value = n !== null && d !== null && d > 0 ? n / d : null;
+    }
+    return {
+      grouping: input.grouping,
+      values,
+      groups: [],
+      aggregates,
+      coverage: {
+        subjectsRequested: input.subjectIds.length,
+        subjectsWithData: new Set(withData.map((v) => v.subjectId)).size,
+        metricsRequested: input.metricKeys,
+        metricsWithData: [...new Set(withData.map((v) => v.metricKey))].sort(),
+        metricsUnavailable: input.metricKeys.filter((k) => !withData.some((v) => v.metricKey === k)),
+        staleValues: withData.filter((v) => v.freshness.stale).length,
+        windowStart: input.windowStart,
+        windowEnd: input.windowEnd,
+      },
+      computedAt: now(),
+    };
+  };
 
   return { intelligence, experiments, content, variants, channels, measurement };
 }
