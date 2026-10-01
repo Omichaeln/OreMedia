@@ -714,8 +714,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.goto(`${origin}${home.replace('/home', '/overview')}?period=7`);
     const limits = page.getByTestId('overview-limits');
     await limits.waitFor({ timeout: 15_000 });
-    await limits.locator('[data-limit="policy_blocked"]').waitFor({ timeout: 15_000 });
-    expect(await limits.locator('[data-limit="policy_blocked"]').textContent()).toContain(
+    // Earlier cases register destinations without a policy: the Acme site's row is the one asserted here.
+    const blocked = limits.locator('[data-limit="policy_blocked"]', { hasText: 'Acme site' });
+    await blocked.waitFor({ timeout: 15_000 });
+    expect(await blocked.textContent()).toContain(
       'Acme site: reads not allowed by the source-use policy (no policy for gsc.reports). Settings → Destinations sets the policy.',
     );
     expect(await limits.locator('[data-limit="source_uncertified"]').textContent()).toContain(
