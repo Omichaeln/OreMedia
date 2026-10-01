@@ -9,6 +9,7 @@ import {
   PublicationDeleteRemote,
   PublicationEditRemote,
   PublicationUnpublishRemote,
+  PublicationValidateRendered,
   PublicationEvidence,
   PublicationGet,
   PublicationHoldRestored,
@@ -123,6 +124,14 @@ export const publishingRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx, 72), (tx) =>
           publicationService.unpublishRemote(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    /** R2-3: the published page fetched again and checked; the result is recorded as publication evidence. */
+    validateRendered: tenantMutation
+      .input(PublicationValidateRendered)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          publicationService.validateRendered(ctx.tenant.actor, input, tx),
         ),
       ),
   }),

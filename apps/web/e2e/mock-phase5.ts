@@ -20,6 +20,7 @@ import {
   ChannelList,
   PublicationDeleteRemote,
   PublicationUnpublishRemote,
+  PublicationValidateRendered,
   PublicationEditRemote,
   PublicationEvidence,
   PublicationGet,
@@ -533,7 +534,7 @@ export class Phase5Backend {
     };
   }
 
-  /** destinations.articles.validate: the page is fetched again; the mock alternates so a test sees both results. */
+  /** publishing.publications.validateRendered: the page is fetched again; the mock alternates so a test sees both results. */
   validateArticle(publicationId: string) {
     const p = this.publication(publicationId);
     if (!p.destinationId || p.state !== 'published' || !p.remoteUrl)
@@ -1441,6 +1442,10 @@ export function phase5Routers(
         const p = b.publication(input.publicationId);
         return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
       }),
+      /** R2-3: the page fetched again and checked; the result is recorded as evidence. */
+      validateRendered: mutation
+        .input(PublicationValidateRendered)
+        .mutation(({ input }) => b.validateArticle(input.publicationId)),
       editRemote: mutation.input(PublicationEditRemote).mutation(({ ctx, input }) => {
         assertMayChangeLivePost(ctx.member?.role, 'publication.edit_remote');
         const p = b.publication(input.publicationId);

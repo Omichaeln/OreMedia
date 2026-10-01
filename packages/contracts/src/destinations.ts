@@ -586,6 +586,3 @@ export interface ArticleReadbackV1 {
   /** The adapter's hash of the remote content; an edit refuses when the current remote hash differs. */
   contentHash: string;
 }
-
-/** `destinations.articles.validate`: fetch the published page again and record what it shows. */
-export const DestinationArticleValidate = z.object({ publicationId: z.string() });

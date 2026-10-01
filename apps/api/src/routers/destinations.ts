@@ -1,5 +1,4 @@
 import {
-  DestinationArticleValidate,
   DestinationConnectCancel,
   DestinationConnectComplete,
   DestinationConnectSelect,
@@ -23,7 +22,6 @@ import {
   sourceUsePolicyService,
 } from '@oremedia/module-destinations';
 import { idempotent } from '@oremedia/module-operations';
-import { publicationService } from '@oremedia/module-publishing';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
 
 const mutationCtx = (ctx: MutationCtx) => ({
@@ -93,16 +91,6 @@ export const destinationsRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) =>
           destinationService.connect.withSecret(ctx.tenant.actor, input, tx),
-        ),
-      ),
-  }),
-  articles: router({
-    /** R2-3: the published page fetched again and checked; the result is recorded as publication evidence. */
-    validate: tenantMutation
-      .input(DestinationArticleValidate)
-      .mutation(({ ctx, input }) =>
-        idempotent(mutationCtx(ctx), (tx) =>
-          publicationService.validateRendered(ctx.tenant.actor, input, tx),
         ),
       ),
   }),

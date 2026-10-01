@@ -54,8 +54,6 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
       secret: 'not-a-real-secret',
     }),
   },
-  // R2-3: the publication is read first (NOT_FOUND); nothing is fetched for a foreign publication.
-  'destinations.articles.validate': { buildInput: (f) => ({ publicationId: f['publicationId'] }) },
   // R2-1 part B: the brand is read first (NOT_FOUND), so a foreign destination's rows are never aggregated.
   'destinations.reports.summary': {
     buildInput: (f) => ({

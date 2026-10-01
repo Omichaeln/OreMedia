@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -435,11 +435,14 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
   const [secret, setSecret] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [allowPublish, setAllowPublish] = useState(false);
+  const [connected, setConnected] = useState<string | null>(null);
+  const credentialLabel = source.credential?.label ?? 'Secret';
   const connect = useMutation(
     trpc.destinations.connect.withSecret.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: () => {
+      onSuccess: (data) => {
         intent.renew();
+        setConnected(data.displayName);
         setSiteUrl('');
         setUsername('');
         setSecret('');
@@ -449,6 +452,11 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
       },
     }),
   );
+  // Once the mutation settled as a success its cache still holds the variables (the secret): drop them.
+  const { isSuccess, reset } = connect;
+  useEffect(() => {
+    if (isSuccess) reset();
+  }, [isSuccess, reset]);
   const ui = connect.isError ? toUiError(connect.error) : null;
   const siteIssue = ui?.details.find((d) => d.path === 'siteUrl')?.issue;
   const ready = siteUrl.trim().startsWith('https://') && username.trim() !== '' && secret !== '';
@@ -506,7 +514,7 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
           <Field
             label="Username"
             htmlFor="website-username"
-            hint="The site user the application password belongs to."
+            hint={`The site user the ${credentialLabel.toLowerCase()} belongs to.`}
           >
             <Input
               id="website-username"
@@ -516,11 +524,7 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
               autoComplete="off"
             />
           </Field>
-          <Field
-            label={source.credential?.label ?? 'Secret'}
-            htmlFor="website-secret"
-            hint={source.credential?.hint}
-          >
+          <Field label={credentialLabel} htmlFor="website-secret" hint={source.credential?.hint}>
             <Input
               id="website-secret"
               type="password"
@@ -535,10 +539,10 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
           <input type="checkbox" checked={allowPublish} onChange={(e) => setAllowPublish(e.target.checked)} />
           Allow live publishing (otherwise every article lands as a draft to preview first)
         </label>
-        {connect.data && (
+        {connected !== null && (
           <StatusBanner
             tone="good"
-            title={`Connected: ${connect.data.displayName}`}
+            title={`Connected: ${connected}`}
             description="The secret is sealed and never shown again. The website is checked in the background; its health updates here once the check ran."
             data-testid="website-connected"
           />
@@ -581,14 +585,15 @@ function ConnectSources({ brandId }: { brandId: string }) {
   const sources = useDestinationSources();
   const redirectUri = connectRedirectUri(window.location.origin);
   const enabled = (sources.data?.items ?? []).filter((s) => s.enabled);
+  const secretLabel = enabled.find((s) => s.connect === 'secret')?.credential?.label ?? 'a credential';
   if (!sources.isSuccess || enabled.length === 0) return null;
   return (
     <Section id="destination-sources-heading" title="Connect a source" testId="destination-sources">
       <p className="text-xs text-muted-foreground">
         Authorise an account at the source&apos;s vendor, then choose which property or site this brand reads;
-        a website is connected with its address and an application password instead. Only sources certified
-        after their platform review can be connected; the server refuses the others and the reason is shown
-        here.
+        a website is connected with its address and {secretLabel.toLowerCase()} instead. Only sources
+        certified after their platform review can be connected; the server refuses the others and the reason
+        is shown here.
       </p>
       <ul className="divide-y divide-border" aria-label="Sources">
         {enabled.map((source) =>

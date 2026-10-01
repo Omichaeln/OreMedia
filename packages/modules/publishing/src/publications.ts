@@ -17,6 +17,7 @@ import {
   PublicationHoldRestored,
   PublicationList,
   PublicationUnpublishRemote,
+  PublicationValidateRendered,
   ReconcileCommand,
   RescheduleCommand,
   ScheduleCommand,
@@ -24,7 +25,6 @@ import {
   type PublicationForRelease,
   type PublicationState,
 } from '@oremedia/contracts/publishing';
-import { DestinationArticleValidate } from '@oremedia/contracts/destinations';
 import { articleFirstParagraph, renderedValidationOk } from '@oremedia/contracts/article';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
@@ -1016,8 +1016,8 @@ export const publicationService = {
    * R2-3 on-demand validation (brand.read): the published page is fetched again, checked and the result stored as
    * `rendered_validation` evidence. No credential is used (the page is public), so the API process runs it.
    */
-  async validateRendered(actor: ResolvedActor, input: z.infer<typeof DestinationArticleValidate>, tx: Tx) {
-    const parsed = DestinationArticleValidate.parse(input);
+  async validateRendered(actor: ResolvedActor, input: PublicationValidateRendered, tx: Tx) {
+    const parsed = PublicationValidateRendered.parse(input);
     const row = await publicationsRepo.getById(parsed.publicationId, tx);
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
     if (!row.destinationId || row.state !== 'published' || !row.remoteUrl)

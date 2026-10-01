@@ -60,14 +60,14 @@ agents: runs.{start,get,cancel,steps,approveProposal}, routingPolicy.{get,set} �
 assets: uploads.{createIntent,complete,get}, search, get, versions.list, rights.set, approve, retire, usages.list, grants.create, fonts.{list,importGoogle}, media.signedUrl ·
 brand: create, classify, list, get, summary, versions.{createDraft,update,submitForReview,publish,list,get}, facts.{propose,approve,revoke,list}, objectives.{set,list}, policy.{createVersion,activate,get}, guidelines.import, onboarding.start ·
 community: conversations.list, messages.list, reply ·
-destinations: list, get, register, setHealth, disconnect, sources.list, connect.{start,complete,select,cancel,withSecret}, articles.validate, sourceUse.{list,set,check}, reports.{summary,rows,opportunities} ·
+destinations: list, get, register, setHealth, disconnect, sources.list, connect.{start,complete,select,cancel,withSecret}, sourceUse.{list,set,check}, reports.{summary,rows,opportunities} ·
 content: campaigns.{create,list,get}, briefs.{create,accept,list,get}, packages.{create,revise,list,get}, revisions.get, variants.{generate,update,get}, calendar.range ·
 creative: documents.{create,get}, revisions.{list,get}, operations.{applyBatch,propose}, renders.{request,get}, comments.{add,resolve,list}, templates.{create,createVersion,approve,list,get} ·
 experiments: create, preRegister, start, stop, results.{compute,get}, assign, list, get ·
 intelligence: insights.list, recommendations.{list,get,accept,dismiss}, playbook.{list,propose,approve}, voice.clusters, anomalies.list, workspace.get, analyst.run ·
 measurement: definitions.{list,get,create}, metrics.query, quality.get, links.list, attributes.{get,correct} ·
 operations: audit.query, flags.snapshot, killSwitch.{get,set}, outbox.{deadLetters,replay}, deletion.request ·
-publishing: channels.connect.{start,complete,select,cancel}, channels.{list,disconnect}, publications.{schedule,cancel,reschedule,get,list,evidence,reconcile,holdRestored,deleteRemote,editRemote,unpublishRemote} ·
+publishing: channels.connect.{start,complete,select,cancel}, channels.{list,disconnect}, publications.{schedule,cancel,reschedule,get,list,evidence,reconcile,holdRestored,deleteRemote,editRemote,unpublishRemote,validateRendered} ·
 review: requests.{create,get}, decisions.submit, inbox.list, externalLinks.{create,revoke}, approvals.get, mandates.{create,pause,revoke,get,list} ·
 skills: list, get, versions.{create,evaluate,publish}, bindings.set, import, export
 

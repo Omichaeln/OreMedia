@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  DestinationArticleValidate,
   DestinationConnectCancel,
   DestinationConnectComplete,
   DestinationConnectSelect,
@@ -348,10 +347,6 @@ export class DestinationsBackend {
   >();
   /** R2-1 part B: what the daily sweep would have stored (seeded for the GA4 property and the Search Console site). */
   readonly reportRows: SeededReportRow[] = [];
-  /** R2-3: destinations.articles.validate reaches the publications (set by the owning MockBackend). */
-  validateArticle: (publicationId: string) => Record<string, unknown> = () => {
-    throw new Error('validateArticle not wired');
-  };
 
   constructor(
     readonly brandId: string,
@@ -860,12 +855,6 @@ export function destinationsRouters(
         }
         return { items, windowStart: start, windowEnd: end };
       }),
-    }),
-    articles: router({
-      /** R2-3: the page fetched again and checked; the publications mock records the evidence. */
-      validate: mutation
-        .input(DestinationArticleValidate)
-        .mutation(({ input }) => b.validateArticle(input.publicationId)),
     }),
     sourceUse: router({
       list: query.input(SourceUsePolicyList).query(({ input }) => {

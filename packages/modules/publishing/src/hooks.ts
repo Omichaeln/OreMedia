@@ -105,8 +105,8 @@ export const resetApprovalConsumer = (): void => {
   approvalConsumer = unregisteredApprovalConsumer;
 };
 export const approvals = {
-  consume: (approvalId: string, publicationId: string, publishedChannelConnectionIds: string[], tx: Tx) =>
-    approvalConsumer(approvalId, publicationId, publishedChannelConnectionIds, tx),
+  consume: (approvalId: string, publicationId: string, publishedTargetIds: string[], tx: Tx) =>
+    approvalConsumer(approvalId, publicationId, publishedTargetIds, tx),
 };
 
 /**

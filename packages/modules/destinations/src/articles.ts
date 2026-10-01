@@ -4,6 +4,7 @@ import {
   RENDERED_PAGE_TIMEOUT_MS,
   RenderedCheckKey,
   articleFirstParagraph,
+  articlePlainText,
   renderArticleHtml,
   renderedValidationOk,
   sanitizeArticleHtml,
@@ -17,6 +18,7 @@ import {
   DESTINATION_KIND_CAPABILITIES,
   type ArticleReadbackV1,
 } from '@oremedia/contracts/destinations';
+import { ARTICLE_BODY_MAX_CHARS } from '@oremedia/contracts/content';
 import { CapabilityUnsupportedError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type {
   DecryptedCredentials,
@@ -166,6 +168,22 @@ async function withSite<T>(
   }
 }
 
+/**
+ * An edit's `text` override (publications.editRemote → validateVariantDetailed) is the HTML the site receives; the
+ * variant's own text is the article's plain text and needs no check here. The override must still sanitise to a
+ * body and stay under the article limit, or an edit would land an empty or oversized article.
+ */
+export const articleTextIssues = (
+  variant: Pick<ChannelVariantForPublishing, 'text' | 'article'>,
+): ValidationResult['issues'] => {
+  if (!variant.article || variant.text === articlePlainText(variant.article)) return [];
+  const html = sanitizeArticleHtml(variant.text);
+  if (html.trim() === '') return [{ path: 'text', issue: 'body_empty' }];
+  if (html.length > ARTICLE_BODY_MAX_CHARS)
+    return [{ path: 'text', issue: `body_too_long:${html.length}>${ARTICLE_BODY_MAX_CHARS}` }];
+  return [];
+};
+
 export const destinationArticles: DestinationPublisher = {
   async describe(destinationId: string, tx?: Tx): Promise<DestinationTargetDescription | null> {
     const row = await destinationsRepo.findById(destinationId, tx);
@@ -200,6 +218,7 @@ export const destinationArticles: DestinationPublisher = {
       issues.push({ path: 'settings.publishMode', issue: 'publish_mode_invalid' });
     if (mode === 'publish' && !row.grantedScopes.includes(CMS_SCOPE_PUBLISH))
       issues.push({ path: 'settings.publishMode', issue: 'publish_not_granted' });
+    issues.push(...articleTextIssues(variant));
     if (!usable(row)) issues.push({ path: 'destinationId', issue: 'destination_unavailable' });
     return { ok: issues.length === 0, issues };
   },

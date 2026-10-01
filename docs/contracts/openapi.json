@@ -4861,27 +4861,6 @@
         }
       }
     },
-    "/trpc/destinations.articles.validate": {
-      "post": {
-        "operationId": "destinations.articles.validate",
-        "x-trpc-type": "mutation",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "publicationId": {
-                    "type": "string"
-                  }
-                },
-                "required": ["publicationId"]
-              }
-            }
-          }
-        }
-      }
-    },
     "/trpc/destinations.connect.cancel": {
       "post": {
         "operationId": "destinations.connect.cancel",
@@ -7218,6 +7197,27 @@
                   }
                 },
                 "required": ["publicationId", "reason"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/publishing.publications.validateRendered": {
+      "post": {
+        "operationId": "publishing.publications.validateRendered",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "publicationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["publicationId"]
               }
             }
           }
@@ -13780,18 +13780,6 @@
           "required": ["brandId", "page"]
         }
       },
-      "destinations.articles.validate": {
-        "type": "mutation",
-        "input": {
-          "type": "object",
-          "properties": {
-            "publicationId": {
-              "type": "string"
-            }
-          },
-          "required": ["publicationId"]
-        }
-      },
       "destinations.connect.cancel": {
         "type": "mutation",
         "input": {
@@ -15462,6 +15450,18 @@
             }
           },
           "required": ["publicationId", "reason"]
+        }
+      },
+      "publishing.publications.validateRendered": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "publicationId": {
+              "type": "string"
+            }
+          },
+          "required": ["publicationId"]
         }
       },
       "review.approvals.get": {

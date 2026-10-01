@@ -274,9 +274,15 @@ export interface ReadScheduleResultV1 {
 }
 export type ClaimInputV1 = PublicationWorkflowInputV1 & { claimant: string };
 export type ClaimResultV1 =
-  | { ok: true; fencingToken: number; providerKey: string; channelConnectionId: string }
+  | {
+      ok: true;
+      fencingToken: number;
+      /** The key that names a publication target's activity queue: the channel's provider key or the destination's kind. */
+      providerKey: string;
+      /** The target's id: the channel connection, or (R2-3) the destination. Kept under its v1 name; the workflow does not read it. */
+      channelConnectionId: string;
+    }
   | { ok: false; state: PublicationState };
-/** The key that names a publication target's activity queue: the channel's provider key or the destination's kind. */
 export type FencedInputV1 = PublicationWorkflowInputV1 & { fencingToken: number };
 export type ReleaseEvaluationResultV1 = { allow: true } | { allow: false; reasons: string[] };
 export type HoldInputV1 = PublicationWorkflowInputV1 & { reasons: string[] };
@@ -405,6 +411,9 @@ export const PublicationRemoteChangeInputV1 = PublicationWorkflowInputV1.extend(
 export type PublicationRemoteChangeInputV1 = z.infer<typeof PublicationRemoteChangeInputV1>;
 
 /** `skipped`: the change is no longer requested (already recorded, or superseded); nothing was sent. */
+/** `publishing.publications.validateRendered` (R2-3): fetch the published page again and record what it shows. */
+export const PublicationValidateRendered = z.object({ publicationId: z.string() });
+export type PublicationValidateRendered = z.infer<typeof PublicationValidateRendered>;
 export type RemoteChangeAttemptResultV1 = RemoteMutationOutcome | { outcome: 'skipped'; reason: string };
 export type RecordRemoteChangeInputV1 = PublicationRemoteChangeInputV1 & { result: RemoteMutationOutcome };
 /** Idempotent: a repeat reports `changed: false` and what it found. */

@@ -525,7 +525,7 @@ function ArticlePanel({
   const intent = useIntentKey();
   const article = p.remote.article;
   const validate = useMutation(
-    trpc.destinations.articles.validate.mutationOptions({
+    trpc.publishing.publications.validateRendered.mutationOptions({
       ...mutationIntent(intent.key),
       onSuccess: (res) => {
         intent.renew();
