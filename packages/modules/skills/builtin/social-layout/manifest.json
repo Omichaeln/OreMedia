@@ -20,7 +20,8 @@
       },
       "formatKeys": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 6 },
       "templateVersionId": { "type": "string" },
-      "assetVersionIds": { "type": "array", "items": { "type": "string" }, "maxItems": 10 }
+      "assetVersionIds": { "type": "array", "items": { "type": "string" }, "maxItems": 10 },
+      "notes": { "type": "string", "maxLength": 4000 }
     },
     "required": ["copy", "formatKeys"],
     "additionalProperties": false

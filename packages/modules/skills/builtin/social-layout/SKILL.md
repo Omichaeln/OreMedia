@@ -13,6 +13,8 @@ elements and never place an asset that is not eligible.
 - `documentId` + `baseRevisionId`: when given, you edit that document from that revision; otherwise you start
   from `templateVersionId` or from an empty document.
 - `assetVersionIds`: preferred imagery; each must be in the eligible list or it is ignored with a finding.
+- `notes` (optional): what the requester asked for in their words (from the studio); a task brief, never a fact,
+  and never a reason to touch a protected element.
 
 ## Context you receive
 

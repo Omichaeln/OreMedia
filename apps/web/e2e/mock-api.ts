@@ -27,8 +27,12 @@ import {
   BudgetRead,
   BudgetSetLimit,
   RoutingPolicySet,
+  RunApproveProposal,
+  RunCancel,
   RunGet,
   RunList,
+  RunPendingProposals,
+  RunStart,
   RunSteps,
   type ModelRoutingPolicy,
 } from '@oremedia/contracts/agents';
@@ -424,6 +428,26 @@ export class MockBackend {
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
   readonly runs = new Map<string, AgentRunRow>();
+  /**
+   * UX-07: the proposal a studio-started layout run parks on (as tool_invocations.proposal_payload); produced on
+   * the second read of the run, decided through agents.runs.approveProposal.
+   */
+  readonly runProposals = new Map<
+    string,
+    {
+      stepId: string;
+      documentId: string;
+      baseRevisionId: string;
+      operations: Operation[];
+      summary: string;
+      contentHash: string;
+      findings: unknown[];
+      createdAt: string;
+      reads: number;
+      /** A decision a person recorded; the run applies it on its next read, as the workflow does. */
+      decision: { decision: 'accept' | 'reject' | 'modify'; stepId: string } | null;
+    }
+  >();
   /** Skills visible to the company (skills.list): built in, company-wide and this brand's own. */
   readonly skills = [
     ['sk_onboarding', 'platform', null, 'brand-onboarding', 'Brand onboarding', 'skv_onboarding_1'],
@@ -1419,6 +1443,152 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       runs: t.router({
+        /** UX-07: a layout run on a document; as the server it is accepted at once and works on its own. */
+        start: mutation.input(RunStart).mutation(({ input }) => {
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          if (input.servicePrincipalId !== 'sp_e2e_agent')
+            throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
+          const id = rid('run');
+          const run = backend.addRun(id, input.taskKind, 'running', 0);
+          run.brief = input.brief;
+          run.autonomyMode = input.requestedAutonomy;
+          run.steps = [
+            {
+              id: `st_${id}_0`,
+              index: 0,
+              kind: 'plan',
+              summary: 'reading the document and the brand snapshot',
+              tokensIn: 0,
+              tokensOut: 0,
+              costMicros: 0,
+              durationMs: 10,
+              createdAt: now(),
+              invocations: [],
+            },
+          ];
+          const documentId = typeof input.brief['documentId'] === 'string' ? input.brief['documentId'] : null;
+          if (documentId && input.taskKind === 'layout') {
+            const doc = backend.doc(documentId);
+            const head = backend.head(documentId);
+            const firstPage = head.snapshot.pages[0];
+            const text = firstPage?.elements.find((e) => e.type === 'text' && !e.locked && !e.protected);
+            if (firstPage && text && text.type === 'text') {
+              const operations: Operation[] = [
+                {
+                  op: 'setText',
+                  pageId: firstPage.id,
+                  elementId: text.id,
+                  text: `${text.text} — proposed by the agent`,
+                },
+              ];
+              const e = backend.evaluate(head, { operations, summary: 'x', origin: 'agent' });
+              backend.runProposals.set(id, {
+                stepId: `st_${id}_1`,
+                documentId: doc.id,
+                baseRevisionId: head.id,
+                operations,
+                summary: `Layout proposal: ${String(input.brief['notes'] ?? '').slice(0, 80) || 'tighten the headline'}`,
+                contentHash: e.contentHash,
+                findings: e.findings,
+                createdAt: now(),
+                reads: 0,
+                decision: null,
+              });
+            }
+          }
+          return { runId: id, state: 'planned' as const, autonomyMode: input.requestedAutonomy };
+        }),
+        cancel: mutation.input(RunCancel).mutation(({ input }) => {
+          const run = backend.runs.get(input.runId);
+          if (!run) throw new NotFoundError('AgentRun', input.runId);
+          Object.assign(run, {
+            state: 'cancelled',
+            finishedAt: now(),
+            updatedAt: now(),
+            version: run.version + 1,
+          });
+          backend.runProposals.delete(run.id);
+          return { runId: run.id, state: 'cancelled' as const };
+        }),
+        pendingProposals: query.input(RunPendingProposals).query(({ input }) => {
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          return {
+            items: [...backend.runProposals.entries()]
+              .flatMap(([runId, p]) => {
+                const run = backend.runs.get(runId);
+                return run &&
+                  run.state === 'waiting_for_review' &&
+                  p.documentId === input.documentId &&
+                  !p.decision
+                  ? [{ run, p }]
+                  : [];
+              })
+              .map(({ run, p }) => {
+                const runId = run.id;
+                return {
+                  runId,
+                  stepId: p.stepId,
+                  taskKind: run.taskKind,
+                  brief: run.brief,
+                  createdAt: p.createdAt,
+                  proposal: {
+                    documentId: p.documentId,
+                    baseRevisionId: p.baseRevisionId,
+                    operations: p.operations,
+                    summary: p.summary,
+                    contentHash: p.contentHash,
+                    findings: p.findings,
+                  },
+                };
+              }),
+          };
+        }),
+        /** As the server: the batch is applied from the stored payload on accept (refused when the head moved). */
+        approveProposal: mutation.input(RunApproveProposal).mutation(({ input }) => {
+          const run = backend.runs.get(input.runId);
+          if (!run) throw new NotFoundError('AgentRun', input.runId);
+          const p = backend.runProposals.get(run.id);
+          if (!p || p.stepId !== input.stepId) throw new NotFoundError('Proposal', input.stepId);
+          if (run.state !== 'waiting_for_review')
+            throw new ValidationFailedError([
+              { path: 'runId', issue: `run is ${run.state}, not waiting_for_review` },
+            ]);
+          if (p.decision)
+            throw new ValidationFailedError([{ path: 'stepId', issue: 'proposal_already_decided' }]);
+          let appliedRevisionId: string | null = null;
+          const note = `proposal ${input.stepId} ${input.decision} by user usr_e2e`;
+          if (input.decision === 'modify') {
+            const batch = (input.batch ?? {}) as {
+              baseRevisionId: string;
+              operations: Operation[];
+              summary: string;
+            };
+            const applied = backend.apply({
+              documentId: p.documentId,
+              baseRevisionId: batch.baseRevisionId,
+              operations: batch.operations,
+              summary: batch.summary,
+              origin: 'user',
+            });
+            appliedRevisionId = applied.revision.id;
+          }
+          // As the server: the decision is recorded and relayed; the run stays parked until it records it.
+          p.decision = { decision: input.decision, stepId: input.stepId };
+          run.steps.push({
+            id: `st_${run.id}_${run.steps.length}`,
+            index: run.steps.length,
+            kind: 'validation',
+            summary: appliedRevisionId ? `${note}: revision ${appliedRevisionId}` : note,
+            tokensIn: 0,
+            tokensOut: 0,
+            costMicros: 0,
+            durationMs: 5,
+            createdAt: now(),
+            invocations: [],
+          });
+          Object.assign(run, { updatedAt: now(), version: run.version + 1 });
+          return { runId: run.id, stepId: input.stepId, decision: input.decision, appliedRevisionId };
+        }),
         list: query.input(RunList).query(({ input }) =>
           paged(
             [...backend.runs.values()]
@@ -1431,6 +1601,64 @@ export function createMockRouter(backend: MockBackend) {
         get: query.input(RunGet).query(({ input }) => {
           const run = backend.runs.get(input.runId);
           if (!run) throw new NotFoundError('AgentRun', input.runId);
+          // A studio-started run parks on its proposal on the second read (the worker has produced it by then).
+          const p = backend.runProposals.get(run.id);
+          if (p && p.decision && run.state === 'waiting_for_review') {
+            // The workflow records the decision: an accepted batch is applied from the stored payload (refused
+            // when the head moved), then the run finishes.
+            let note = `decision ${p.decision.decision} recorded`;
+            if (p.decision.decision === 'accept') {
+              try {
+                const applied = backend.apply({
+                  documentId: p.documentId,
+                  baseRevisionId: p.baseRevisionId,
+                  operations: p.operations,
+                  summary: p.summary,
+                  origin: 'agent',
+                  agentRunId: run.id,
+                });
+                note += `: revision ${applied.revision.id} created`;
+              } catch (err) {
+                note += `: apply failed (${err instanceof StaleRevisionError ? 'stale_revision' : 'error'})`;
+              }
+            }
+            backend.runProposals.delete(run.id);
+            run.steps.push({
+              id: `st_${run.id}_${run.steps.length}`,
+              index: run.steps.length,
+              kind: 'validation',
+              summary: note,
+              tokensIn: 0,
+              tokensOut: 0,
+              costMicros: 0,
+              durationMs: 5,
+              createdAt: now(),
+              invocations: [],
+            });
+            Object.assign(run, {
+              state: 'completed',
+              finishedAt: now(),
+              updatedAt: now(),
+              version: run.version + 1,
+            });
+          } else if (p && run.state === 'running') {
+            p.reads += 1;
+            if (p.reads >= 2) {
+              run.steps.push({
+                id: p.stepId,
+                index: run.steps.length,
+                kind: 'tool_call',
+                summary: 'creative.proposeOperations: proposal awaits a person',
+                tokensIn: 400,
+                tokensOut: 120,
+                costMicros: 1_200,
+                durationMs: 900,
+                createdAt: now(),
+                invocations: [],
+              });
+              Object.assign(run, { state: 'waiting_for_review', updatedAt: now(), version: run.version + 1 });
+            }
+          }
           const { steps: _s, ...dto } = run;
           return dto;
         }),

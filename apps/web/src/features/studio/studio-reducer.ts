@@ -31,6 +31,7 @@ export type StudioAction =
   | { type: 'rebase:applied'; head: Committed; operations: Operation[]; key: string }
   | { type: 'rebase:conflict'; head: Committed; localOps: Operation[]; conflicts: RebaseConflict[] }
   | { type: 'conflict:keep-server'; key: string }
+  | { type: 'conflict:keep-mine'; key: string }
   | { type: 'conflict:discard-all' }
   | { type: 'head:refresh'; head: Committed }
   | { type: 'select'; ids: string[] }
@@ -94,6 +95,30 @@ export function coalesce(operations: Operation[], next: Operation): Operation[] 
 
 const restStatus = (s: StudioState): StudioState['save'] =>
   s.pending ? { kind: 'pending' } : { kind: 'saved', at: Date.now() };
+
+/**
+ * UX-15 "keep my version": every local op is re-applied on the head in order; an op the head can no longer take
+ * (its element was removed, its page replaced) is dropped and named, the rest stay as one pending intent. Nothing
+ * of theirs is undone: the kept ops write over their values for the conflicting elements, as a new revision.
+ */
+export function keepMineOps(
+  head: Committed,
+  localOps: Operation[],
+  templates: Record<string, TemplateDocument>,
+): { kept: Operation[]; dropped: Array<{ op: Operation; reason: string }> } {
+  const kept: Operation[] = [];
+  const dropped: Array<{ op: Operation; reason: string }> = [];
+  let snapshot = head.snapshot;
+  for (const op of localOps) {
+    try {
+      snapshot = applyBatch(snapshot, { operations: [op] }, { templates });
+      kept.push(op);
+    } catch (err) {
+      dropped.push({ op, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { kept, dropped };
+}
 
 /** Local ops that touch none of the conflicting elements survive a "keep the server version" resolution. */
 export function dropConflicting(localOps: Operation[], conflicts: RebaseConflict[]): Operation[] {
@@ -250,6 +275,26 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
         notice: {
           tone: 'info',
           text: `Kept the server version for ${state.conflict.conflicts.length} element${state.conflict.conflicts.length === 1 ? '' : 's'}; ${kept.length} of your changes re-applied.`,
+        },
+      };
+    }
+    case 'conflict:keep-mine': {
+      if (!state.conflict) return state;
+      const { kept, dropped } = keepMineOps(state.conflict.head, state.conflict.localOps, state.templates);
+      return {
+        ...state,
+        committed: state.conflict.head,
+        conflict: null,
+        pending:
+          kept.length > 0
+            ? { operations: kept, summary: 'Kept my version after conflict', key: action.key }
+            : null,
+        undo: [],
+        redo: [],
+        save: kept.length > 0 ? { kind: 'pending' } : { kind: 'saved', at: Date.now() },
+        notice: {
+          tone: dropped.length > 0 ? 'warning' : 'info',
+          text: `Kept your version for ${state.conflict.conflicts.length} element${state.conflict.conflicts.length === 1 ? '' : 's'} on revision ${state.conflict.head.number}${dropped.length > 0 ? `; ${dropped.length} of your changes no longer apply (${dropped.map((d) => d.op.op).join(', ')})` : ''}.`,
         },
       };
     }
