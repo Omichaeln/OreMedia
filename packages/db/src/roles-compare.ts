@@ -1,7 +1,8 @@
 /**
  * R1-G (D-25): compares the grants a database user actually holds (`SHOW GRANTS`) with the role SQL generated from
  * the schema (packages/db/roles/*.sql, `generateRoleSql`), so a deployed environment can prove it runs on the
- * application role rather than root. Pure: the connection lives in check.ts.
+ * application role rather than root. Pure: the connection lives in `readHeldGrants` (roles.ts); used by
+ * `pnpm db:roles:check` (tooling/scripts/db-roles) and the api's `db-roles-apply` entrypoint.
  */
 export interface GrantSet {
   /** `table` → the privileges held on it, upper-case, sorted. */
@@ -19,13 +20,13 @@ const PRIV_RE = /^GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+/i;
 export function parseGrant(statement: string): { target: string; privileges: string[] } | null {
   const m = PRIV_RE.exec(statement.trim());
   if (!m) return null;
-  const privileges = m[1]!
+  const privileges = (m[1] ?? '')
     .replace(/\([^)]*\)/g, '') // column-level grants: the privilege, not its columns
     .split(',')
     .map((p) => p.trim().toUpperCase())
     .filter(Boolean)
     .sort();
-  const target = m[2]!.replace(/`/g, '').trim();
+  const target = (m[2] ?? '').replace(/`/g, '').trim();
   return { target, privileges };
 }
 

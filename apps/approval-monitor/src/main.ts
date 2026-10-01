@@ -216,7 +216,8 @@ async function persistStatuses(messages: ReviewMessage[], checkedAt: Date): Prom
 export async function runApprovalMonitor(): Promise<{ messages: number; matchedProviders: number }> {
   const databaseUrl = process.env['DATABASE_URL'];
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
-  await runMigrations(databaseUrl);
+  // Migrations need DDL the application role lacks (D-25): the admin connection when set, as apps/api/src/migrate.ts.
+  await runMigrations(process.env['DATABASE_URL_MIGRATE'] ?? databaseUrl);
   configureDatabase({ url: databaseUrl, connectionLimit: 2 });
   const accessToken = await gmailAccessToken();
   const messages = await fetchReviewMessages(accessToken);
