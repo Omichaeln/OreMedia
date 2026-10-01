@@ -72,3 +72,32 @@ stand.
 - Every figure names its denominator or coverage: "n of m posts have numbers", "k stale".
 - A brand-level rollup (UX-11) separates additive totals (flows, pooled rates) from non-additive figures (reach,
   followers), which are listed, never summed across brands.
+
+## Web sources (R2-1: GA4 and Search Console reports)
+
+The daily sweep stores one row per report, day and dimension set (`destination_report_rows`); the read model
+(`destinations.reports.summary`, `rows`) forms the aggregates below with `webMetricSums` / `webMetricValues` in
+`packages/contracts/src/destinations.ts`, the same rules as the kinds above. A day the platform did not return is
+absent, never a zero; a metric a row does not carry adds nothing. Comparisons (D-14) use the previous window of
+equal length in days and read "insufficient sample" below 5 days with data on either side.
+
+| Metric                   | Source                   | Kind    | Aggregate across days and dimension values                                                                    |
+| ------------------------ | ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `sessions`               | GA4 (`ga4.*`)            | `flow`  | Summed                                                                                                        |
+| `engagedSessions`        | GA4                      | `flow`  | Summed                                                                                                        |
+| `keyEvents`              | GA4                      | `flow`  | Summed                                                                                                        |
+| `totalUsers`             | GA4                      | `flow`  | Summed as user-days (a day's total users per row), labelled "Users (daily, summed)"; never presented as reach |
+| `averageSessionDuration` | GA4                      | `gauge` | Mean weighted by `sessions`; never compared                                                                   |
+| `engagementRate`         | derived (GA4)            | `rate`  | Σ `engagedSessions` ÷ Σ `sessions`                                                                            |
+| `clicks`                 | Search Console (`gsc.*`) | `flow`  | Summed                                                                                                        |
+| `impressions`            | Search Console           | `flow`  | Summed                                                                                                        |
+| `ctr`                    | Search Console           | `rate`  | Σ `clicks` ÷ Σ `impressions` (the per-row `ctr` is never averaged)                                            |
+| `position`               | Search Console           | `gauge` | Mean weighted by `impressions`; never compared                                                                |
+
+Reports and their dimensions (the date is always a dimension): `ga4.acquisition` (`sessionDefaultChannelGroup`),
+`ga4.landing_pages` (`landingPage`), `ga4.engagement` (none); `gsc.queries` (`query`), `gsc.pages` (`page`),
+`gsc.countries_devices` (`country`, `device`). Freshness: a report is stale when its latest day ended more than
+latency × 2 ago (GA4 48 h, Search Console 72 h). The opportunity queue (`destinations.reports.opportunities`) is
+computed over the last 28 days: queries and pages with ≥ 100 impressions and a CTR below half the site's pooled CTR,
+landing pages with ≥ 50 sessions and an engagement rate below half the property's pooled rate. AI search (D-19):
+no figure; the screen links to the vendor's console.
