@@ -777,6 +777,30 @@
         }
       }
     },
+    "/trpc/agents.runs.pendingProposals": {
+      "get": {
+        "operationId": "agents.runs.pendingProposals",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "documentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/agents.runs.start": {
       "post": {
         "operationId": "agents.runs.start",
@@ -9472,6 +9496,21 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "agents.runs.pendingProposals": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "documentId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "documentId"]
         }
       },
       "agents.runs.start": {

@@ -27,6 +27,7 @@ import {
   type CommitMode,
   type Committed,
   type DocumentDto,
+  type Proposal,
   type StudioState,
 } from './types';
 
@@ -56,6 +57,7 @@ export interface StudioApi {
   undoBlocked: string | null;
   redoBlocked: string | null;
   keepServer: () => void;
+  keepMine: () => void;
   discardAll: () => void;
   select: (ids: string[]) => void;
   setPage: (id: string) => void;
@@ -64,6 +66,11 @@ export interface StudioApi {
   acceptProposal: () => void;
   modifyProposal: () => void;
   rejectProposal: () => void;
+  /** UX-07: a run's proposal (read from the server) shown as the pending proposal; cleared once decided. */
+  setProposal: (proposal: Proposal) => void;
+  clearProposal: () => void;
+  /** Re-reads the document head (after a run applied a decision) and adopts it when nothing local is pending. */
+  refreshHead: () => Promise<void>;
   blocker: ReturnType<typeof useBlocker>;
 }
 
@@ -342,6 +349,12 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     }
   }, [client, documentId]);
 
+  const refreshHead = useCallback(async () => {
+    const head = await client.creative.documents.get.query({ documentId });
+    afterCommit(committedOf(head), head.revision);
+    dispatch({ type: 'head:refresh', head: committedOf(head) });
+  }, [afterCommit, client, documentId]);
+
   const acceptProposal = useCallback(() => {
     const s = stateRef.current;
     const p = s.proposal;
@@ -379,6 +392,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     undoBlocked: blockedReason(state.undo, 'undo'),
     redoBlocked: blockedReason(state.redo, 'redo'),
     keepServer: () => dispatch({ type: 'conflict:keep-server', key: newIntentKey() }),
+    keepMine: () => dispatch({ type: 'conflict:keep-mine', key: newIntentKey() }),
     discardAll: () => dispatch({ type: 'conflict:discard-all' }),
     select: (ids) =>
       dispatch({
@@ -391,6 +405,9 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     acceptProposal,
     modifyProposal: () => dispatch({ type: 'proposal:modify', key: newIntentKey() }),
     rejectProposal: () => dispatch({ type: 'proposal:clear' }),
+    setProposal: (proposal) => dispatch({ type: 'proposal:set', proposal }),
+    clearProposal: () => dispatch({ type: 'proposal:clear' }),
+    refreshHead,
     blocker,
   };
 }

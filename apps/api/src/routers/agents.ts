@@ -6,6 +6,7 @@ import {
   RunCancel,
   RunGet,
   RunList,
+  RunPendingProposals,
   RunStart,
   RunSteps,
 } from '@oremedia/contracts/agents';
@@ -35,6 +36,9 @@ export const agentsRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => agentsService.runs.cancel(ctx.tenant.actor, input, tx)),
       ),
+    pendingProposals: tenantQuery
+      .input(RunPendingProposals)
+      .query(({ ctx, input }) => agentsService.runs.pendingProposals(ctx.tenant.actor, input)),
     steps: tenantQuery
       .input(RunSteps)
       .query(({ ctx, input }) => agentsService.runs.steps(ctx.tenant.actor, input)),

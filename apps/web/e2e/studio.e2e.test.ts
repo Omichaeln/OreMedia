@@ -243,6 +243,34 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     expect(await page.getByTestId('save-state').textContent()).toContain(`revision ${before + 2}`);
   }, 45_000);
 
+  it('a conflict on the SAME element can keep MY version: theirs stays in the history and mine lands as the next revision (UX-15)', async () => {
+    const documentId = documentIdFromUrl();
+    const before = await headNumber(documentId);
+    await outOfBand(documentId, [
+      { op: 'setText', pageId: 'page_1', elementId: ids.headline, text: 'Their earlier headline' },
+    ]);
+    await page
+      .getByTestId('layers')
+      .getByRole('option', { name: /^Headline/ })
+      .click();
+    await headlineTextarea().fill('My kept headline');
+    await expect.poll(saveKind, { timeout: 15_000 }).toBe('conflict');
+    const dialog = page.getByRole('alertdialog');
+    const list = await dialog.getByTestId('conflict-list').textContent();
+    expect(list).toContain('Theirs');
+    expect(list).toContain('Their earlier headline');
+    expect(list).toContain('Mine');
+    expect(list).toContain('My kept headline');
+    expect(await dialog.textContent()).toContain(`Their version is revision ${before + 1}`);
+    await page.getByTestId('conflict-keep-mine').click();
+    await expect.poll(() => page.getByRole('alertdialog').count()).toBe(0);
+    await expect.poll(() => page.getByText(/Kept your version for 1 element/).count()).toBe(1);
+    await waitSaved();
+    expect(await headNumber(documentId)).toBe(before + 2); // theirs (+1) then mine on top (+2)
+    expect(await headText(documentId, ids.headline)).toBe('My kept headline');
+    await expect.poll(() => headlineTextarea().inputValue()).toBe('My kept headline');
+  }, 45_000);
+
   it('a stale base on the SAME element shows the conflict dialog naming the element; keeping theirs re-applies the rest', async () => {
     const documentId = documentIdFromUrl();
     const before = await headNumber(documentId);
@@ -303,6 +331,65 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     expect(await latest.textContent()).toContain('Current');
     await page.getByRole('tab', { name: /^Agent/ }).click();
   }, 45_000);
+
+  it('agent conversation (UX-07): a request starts a run, its proposal survives a reload, Accept lands it as the agent’s revision; a stale proposal cannot overwrite', async () => {
+    if (realApi) return; // the run is produced by the mock worker; against the real API it needs a model
+    const documentId = documentIdFromUrl();
+    const n = await headNumber(documentId);
+    await waitSaved();
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    await page.getByLabel('Ask the agent').fill('Tighten the headline');
+    await page.getByTestId('agent-send').click();
+    await expect.poll(() => page.getByTestId('agent-run').count(), { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 15_000 })
+      .toContain('Working');
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 30_000 })
+      .toContain('Proposal ready');
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('proposal').textContent()).toContain(
+      'Layout proposal: Tighten the headline',
+    );
+    expect(await page.getByTestId('proposal-overlay').count()).toBe(1);
+    // Leave and return: the proposal is the run's, not the browser's.
+    await page.reload();
+    await expect.poll(() => page.getByTestId('document-title').count(), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('agent-run').textContent()).toContain('Proposal ready');
+    await page.getByRole('button', { name: 'Accept' }).click();
+    await expect.poll(() => headNumber(documentId), { timeout: 15_000 }).toBe(n + 1);
+    expect(await headText(documentId, ids.headline)).toBe('Before undo — proposed — proposed by the agent');
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(0);
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 15_000 })
+      .toContain('Finished');
+    await expect
+      .poll(() => page.getByTestId('save-state').textContent(), { timeout: 15_000 })
+      .toContain(`revision ${n + 1}`);
+    await page.getByTestId('agent-run').getByRole('button', { name: 'Dismiss' }).click();
+    // A second request; the person edits meanwhile, so the proposal is stale and Accept is refused.
+    await page.getByLabel('Ask the agent').fill('Once more');
+    await page.getByTestId('agent-send').click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 30_000 }).toBe(1);
+    await page
+      .getByTestId('layers')
+      .getByRole('option', { name: /^Headline/ })
+      .click();
+    await headlineTextarea().fill('Edited while the agent worked');
+    await waitSaved();
+    expect(await headNumber(documentId)).toBe(n + 2);
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    const accept = page.getByRole('button', { name: 'Accept' });
+    expect(await accept.getAttribute('aria-disabled')).toBe('true');
+    expect(await accept.getAttribute('title')).toContain('proposed again');
+    await page.getByRole('button', { name: 'Reject' }).click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(0);
+    expect(await headNumber(documentId)).toBe(n + 2); // nothing of the stale proposal landed
+    expect(await headText(documentId, ids.headline)).toBe('Edited while the agent worked');
+    await page.getByTestId('agent-run').getByRole('button', { name: 'Dismiss' }).click();
+  }, 120_000);
 
   it('arrow keys nudge the selected element by 1px (10px with Shift) through the keyboard path', async () => {
     const documentId = documentIdFromUrl();
@@ -398,6 +485,38 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     expect(await request.getAttribute('aria-disabled')).toBe('true');
     expect(await request.getAttribute('title')).toBe('Generate at least one channel variant first');
     expect(await panel.getByTestId('studio-review-stale').count()).toBe(0);
+  }, 45_000);
+
+  it('side panels give way to the canvas by width and by choice, and the choice survives a reload (UX-18)', async () => {
+    const canvasWidth = () =>
+      page.getByTestId('canvas-column').evaluate((el) => el.getBoundingClientRect().width);
+    expect(await page.getByTestId('left-panels').count()).toBe(1);
+    expect(await page.getByTestId('right-panels').count()).toBe(1);
+    // A fresh device at tablet width starts with the properties hidden so the canvas keeps its minimum.
+    await page.evaluate(() => localStorage.removeItem('oremedia.studio.panels'));
+    await page.setViewportSize({ width: 768, height: 900 });
+    await page.reload();
+    await expect.poll(() => page.getByTestId('document-title').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('right-panels').count()).toBe(0);
+    expect(await page.getByTestId('left-panels').count()).toBe(1);
+    expect(await canvasWidth()).toBeGreaterThanOrEqual(320);
+    // Showing the properties is the person's choice, kept across a reload.
+    await page.getByTestId('toggle-right-panels').click();
+    expect(await page.getByTestId('right-panels').count()).toBe(1);
+    expect(await page.getByTestId('toggle-right-panels').getAttribute('aria-pressed')).toBe('true');
+    await page.reload();
+    await expect.poll(() => page.getByTestId('document-title').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('right-panels').count()).toBe(1);
+    expect(await canvasWidth()).toBeGreaterThanOrEqual(320);
+    // Hiding the layers as well leaves the canvas alone.
+    await page.getByTestId('toggle-left-panels').click();
+    expect(await page.getByTestId('left-panels').count()).toBe(0);
+    await page.getByTestId('toggle-left-panels').click();
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.reload();
+    await expect.poll(() => page.getByTestId('document-title').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('left-panels').count()).toBe(1);
+    expect(await page.getByTestId('right-panels').count()).toBe(1);
   }, 45_000);
 
   it('creates a format variant from the strip and switches pages', async () => {
