@@ -7,6 +7,7 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: null,
     reason: "no resource ids; the brand is created in the caller's tenant",
   },
+  'brand.completeSetup': { buildInput: (f) => ({ brandId: f['brandId'], expectedVersion: 0 }) },
   'brand.classify': {
     buildInput: (f) => ({ brandId: f['brandId'], classification: 'internal', expectedVersion: 0 }),
   },

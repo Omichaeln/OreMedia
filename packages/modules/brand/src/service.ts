@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import {
   BrandClassify,
+  BrandCompleteSetup,
   BrandCreate,
   BrandSnapshotResolve,
   BrandSystemDocumentV1,
@@ -561,6 +562,41 @@ export const brandService = {
       to: parsed.classification,
     });
     return { brandId: brand.id, classification: parsed.classification, version: parsed.expectedVersion + 1 };
+  },
+
+  /**
+   * R1-D: the brand's setup is complete once its standards are published; connections, assets and a first package
+   * are optional steps the home screen offers, never gates (missing integrations do not block creation). Brand
+   * managers and above (brand.edit_standards); a brand already active changes nothing.
+   */
+  async completeSetup(actor: ResolvedActor, input: z.infer<typeof BrandCompleteSetup>, tx: Tx) {
+    const parsed = BrandCompleteSetup.parse(input);
+    const brand = await brandsRepo.lock(parsed.brandId, tx);
+    const decision = await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+    assertMayDecide(decision); // an agent may only propose standards; it never finishes a brand's setup
+    if (brand.status === 'active') return { brandId: brand.id, status: brand.status, version: brand.version };
+    if (brand.status === 'archived')
+      throw new ValidationFailedError([
+        { path: 'brandId', issue: 'an archived brand cannot complete setup' },
+      ]);
+    if (!brand.publishedVersionId)
+      throw new ValidationFailedError([
+        { path: 'brandId', issue: 'publish the brand standards before completing setup' },
+      ]);
+    await brandsRepo.update(brand.id, parsed.expectedVersion, { status: 'active' }, tx);
+    await audit.record(
+      actorRef(actor),
+      'brand.setup.complete',
+      { type: 'brand', id: brand.id },
+      'allowed',
+      tx,
+      {
+        brandId: brand.id,
+        from: brand.status,
+        to: 'active',
+      },
+    );
+    return { brandId: brand.id, status: 'active' as const, version: parsed.expectedVersion + 1 };
   },
 
   /**

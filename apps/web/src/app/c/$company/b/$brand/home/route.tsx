@@ -5,6 +5,7 @@ import { Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oreme
 import { LoadMore } from '../../../../../../components/load-more';
 import { RequestError } from '../../../../../../components/request-state';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
+import { SetupChecklist } from '../../../../../../features/brand/setup-checklist';
 import { useBrandVersions } from '../../../../../../features/brand/use-brand';
 import { AgentActivity } from '../../../../../../features/home/agent-activity';
 import { NeedsYou } from '../../../../../../features/home/needs-you';
@@ -62,17 +63,13 @@ export function BrandHomeRoute() {
           {brand.name}: what needs you, and where to start.
         </p>
       </header>
-      {(brand.status === 'setup' || !brand.publishedVersionId || newerDraft) && (
+      {((brand.status !== 'setup' && !brand.publishedVersionId) || newerDraft) && (
         <div className="flex flex-col gap-2">
-          {(brand.status === 'setup' || !brand.publishedVersionId) && (
+          {brand.status !== 'setup' && !brand.publishedVersionId && (
             <StatusBanner
               tone="warning"
-              title="Setup incomplete"
-              description={
-                brand.publishedVersionId
-                  ? 'The brand is still marked as in setup.'
-                  : 'No brand standards have been published. Documents cannot be created until a brand version is published.'
-              }
+              title="No published standards"
+              description="No brand standards have been published. Documents cannot be created until a brand version is published."
               actions={
                 <Button asChild size="sm">
                   <Link to={system}>Open brand system</Link>
@@ -94,6 +91,7 @@ export function BrandHomeRoute() {
           )}
         </div>
       )}
+      {brand.status === 'setup' && <SetupChecklist />}
       <NeedsYou />
       <WeekStrip />
       <div className="grid gap-8 md:grid-cols-2">

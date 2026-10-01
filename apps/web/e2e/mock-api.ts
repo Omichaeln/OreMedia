@@ -54,6 +54,7 @@ import {
 } from '@oremedia/contracts/assets';
 import {
   BrandClassify,
+  BrandCompleteSetup,
   BrandVersionGet,
   BrandVersionImpact,
   BrandVersionList,
@@ -155,6 +156,8 @@ interface BrandRow {
   publishedVersionId: string | null;
   classification?: 'client' | 'internal';
   version?: number;
+  /** R1-D: a brand starts in `setup` until a person completes it; absent means active. */
+  status?: 'setup' | 'active';
 }
 
 /** Agent runs as agents.runs.get returns them (the steps are served by agents.runs.steps). */
@@ -1800,7 +1803,7 @@ export function createMockRouter(backend: MockBackend) {
             name: b.name,
             timezone: 'UTC',
             defaultLocale: 'en',
-            status: 'active' as const,
+            status: b.status ?? ('active' as const),
             classification: b.classification ?? ('client' as const),
             publishedVersionId: b.publishedVersionId,
             version: b.version ?? 1,
@@ -1839,12 +1842,28 @@ export function createMockRouter(backend: MockBackend) {
           name: b.name,
           timezone: 'UTC',
           defaultLocale: 'en',
-          status: 'active' as const,
+          status: b.status ?? ('active' as const),
           classification: b.classification ?? ('client' as const),
           publishedVersionId: b.publishedVersionId,
           activePolicyVersionId: null,
           version: b.version ?? 1,
         };
+      }),
+      /** R1-D as the API: the standards must be published; an active brand changes nothing. */
+      completeSetup: mutation.input(BrandCompleteSetup).mutation(({ input }) => {
+        const b = backend.brands.find((x) => x.id === input.brandId);
+        if (!b) throw new NotFoundError('Brand', input.brandId);
+        if ((b.status ?? 'active') === 'active')
+          return { brandId: b.id, status: 'active' as const, version: b.version ?? 1 };
+        if (!b.publishedVersionId)
+          throw new ValidationFailedError([
+            { path: 'brandId', issue: 'publish the brand standards before completing setup' },
+          ]);
+        if (input.expectedVersion !== (b.version ?? 1))
+          throw new ConflictError('Brand', b.id, input.expectedVersion);
+        b.status = 'active';
+        b.version = (b.version ?? 1) + 1;
+        return { brandId: b.id, status: 'active' as const, version: b.version };
       }),
       // As the API: optimistic on the brand's version (the mock does not check who may reclassify).
       classify: mutation.input(BrandClassify).mutation(({ input }) => {
