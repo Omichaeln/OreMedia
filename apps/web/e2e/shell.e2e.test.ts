@@ -999,7 +999,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await button.isDisabled()).toBe(true);
     expect(backend.destinations.auditRuns.filter((r) => r.outcome === 'running')).toHaveLength(1);
     // The last finished run stays on screen while the new one runs; the summary says so.
-    expect(await site.getByTestId('seo-audit-meta').textContent()).toContain('Running');
+    await expect
+      .poll(() => site.getByTestId('seo-audit-meta').textContent(), { timeout: 15_000 })
+      .toContain('Running');
     expect(await site.getByTestId('seo-audit-tile-pages').textContent()).toContain('42');
     backend.destinations.auditRuns.splice(1);
     backend.role = 'analyst';
