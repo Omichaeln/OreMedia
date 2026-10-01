@@ -14,6 +14,16 @@ export {
   sourceUseDecision,
   configureDestinationConnectStateStore,
 } from './service';
+// R2-3: a website connected with a sealed secret, verified by destinationVerifyWorkflowV1 (core); the article
+// publisher the publishing module reaches through its destination hook (createArticle as a draft by default, the
+// read-back, the conflict-refusing edit, the revert to draft, the rendered-page validation).
+export { destinationArticles, effectivePublishMode } from './articles';
+export { configureDestinationCms, cmsAdapterFor, cmsIO, cmsRegistryInUse, type DestinationCmsOptions } from './cms';
+export {
+  registerDestinationOutboxRoutes,
+  DESTINATION_VERIFY_WORKFLOW_TYPE,
+  destinationVerifyWorkflowId,
+} from './outbox-routes';
 export {
   destinationReportService,
   createDestinationReportService,
@@ -38,6 +48,7 @@ export {
   sourceAvailable,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
+  cmsCapabilities,
   type SourceAvailability,
 } from './hooks';
 export {

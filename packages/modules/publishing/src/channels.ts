@@ -22,7 +22,7 @@ import { missingScopes, type ProviderAdapter, type ProviderIO } from '@oremedia/
 import { credentialBroker } from './broker';
 import { actorRef, connectionUsable, toConnectionDto, transition, type ConnectionRow } from './common';
 import type { EnvelopeRow } from './envelope';
-import { assertBrandExists, providerClientFor, publishMedia, variants } from './hooks';
+import { assertBrandExists, destinations, providerClientFor, publishMedia, variants } from './hooks';
 import { adapterFor, providerIO } from './providers';
 import {
   ChannelConnectionRepository,
@@ -599,7 +599,9 @@ export const channelService = {
    * validator, so a generated or edited variant carries the capability findings it will be released against.
    */
   async validateVariantDraft(variant: ChannelVariantForPublishing, tx?: Tx): Promise<ValidationResult> {
-    const connection = await connectionsRepo.getById(variant.channelConnectionId, tx);
+    // R2-3: a destination variant is checked by the destinations module against its kind's rules.
+    if (variant.destinationId) return destinations.validateVariant(variant, tx);
+    const connection = await connectionsRepo.getById(variant.channelConnectionId ?? '', tx);
     const adapter = adapterFor(connection.providerKey);
     const media = await publishMedia.describeForVariant(variant, tx); // dimensions only: nothing is minted
     const input: ChannelVariantInput = {

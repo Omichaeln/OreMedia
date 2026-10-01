@@ -108,11 +108,13 @@ describe('publication workflow end to end (worker-core, fake Temporal host)', ()
       contentPackageId: 'pkg_e2e',
       contentRevisionId: `pr_${id.slice(3)}`,
       channelConnectionId: connectionId,
+      destinationId: null,
       text,
       altTexts: [],
       settings: {},
       exportIds: [],
       exportHashes: [],
+      article: null,
       version: 0,
     };
     variantsById.set(id, v);

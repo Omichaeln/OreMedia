@@ -37,6 +37,9 @@ export const brandResource = (brandId: string) => {
 /** The publication, its connection and the brand's timezone, all inside the tenant and brand scope. */
 export async function loadPublication(publicationId: string, tx?: Tx) {
   const row = await publicationsRepo.getById(publicationId, tx);
+  // A destination publication (R2-3, a website article) has no channel to collect from: its measurement is the
+  // brand's web sources, so here it reads as a publication without a channel.
+  if (!row.channelConnectionId) throw new NotFoundError('ChannelConnection', publicationId);
   const connection = await connectionsRepo.getById(row.channelConnectionId, tx);
   if (connection.brandId !== row.brandId)
     throw new NotFoundError('ChannelConnection', row.channelConnectionId);

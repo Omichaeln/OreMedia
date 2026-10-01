@@ -246,7 +246,7 @@ export class ChannelVariantRepository extends BrandScopedRepository<typeof chann
       .select()
       .from(channelVariants)
       .where(this.brandScope(brandId, eq(channelVariants.contentRevisionId, contentRevisionId)))
-      .orderBy(asc(channelVariants.channelConnectionId))
+      .orderBy(asc(channelVariants.channelConnectionId), asc(channelVariants.destinationId))
       .limit(200);
   }
 }

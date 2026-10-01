@@ -21,6 +21,7 @@ export const LOG_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
   'principalId',
   'supportSessionId',
   'channelConnectionId',
+  'destinationId',
   'providerKey',
   // operational
   'action',

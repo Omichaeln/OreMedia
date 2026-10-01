@@ -1,4 +1,4 @@
-import { ApprovalBindingV1 } from '@oremedia/contracts/approval';
+import { ApprovalBindingV1, bindingTargetId } from '@oremedia/contracts/approval';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq, ne } from 'drizzle-orm';
 import {
@@ -332,6 +332,7 @@ describe('review module (spec 13) against MySQL 8', () => {
     contentRevisionId: revisionId,
     channelVariantId: variantId,
     channelConnectionId: channelA,
+    destinationId: null,
     authority: 'approval',
     approvalId: null,
     mandateId: null,
@@ -382,6 +383,8 @@ describe('review module (spec 13) against MySQL 8', () => {
     });
     const checkers: ReleaseCheckers = {
       channelUsable: async () => checks.channelUsable,
+      destinationUsable: async () => checks.channelUsable,
+      destinationWriteAllowed: async () => true,
       validateVariant: async () => checks.validateVariant,
       countForMandateOnDay: async () => checks.count,
       publishedElsewhereForApprovalChannel: async () => checks.publishedElsewhere,
@@ -900,7 +903,7 @@ describe('review module (spec 13) against MySQL 8', () => {
         state: 'valid',
         version: 0,
       });
-      const targets = ApprovalBindingV1.parse(original.binding).targets.map((t) => t.channelConnectionId);
+      const targets = ApprovalBindingV1.parse(original.binding).targets.map(bindingTargetId);
       expect(await runA((tx) => reviewService.approvals.consume(spentId, tx, pubId, targets))).toEqual({
         approvalId: spentId,
         state: 'consumed',
@@ -1013,6 +1016,8 @@ describe('review module (spec 13) against MySQL 8', () => {
       );
       registerReleaseCheckers({
         channelUsable: async () => checks.channelUsable,
+        destinationUsable: async () => checks.channelUsable,
+        destinationWriteAllowed: async () => true,
         validateVariant: async () => checks.validateVariant,
         countForMandateOnDay: async () => checks.count,
         publishedElsewhereForApprovalChannel: async () => checks.publishedElsewhere,

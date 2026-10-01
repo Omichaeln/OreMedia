@@ -123,7 +123,8 @@ export const assertBrandExists = (brandId: string, tx?: Tx): Promise<void> =>
 export interface PublicationInWindow {
   publicationId: string;
   contentRevisionId: string;
-  channelConnectionId: string;
+  /** Null for a publication to a brand destination (R2-3), which post metrics never cover. */
+  channelConnectionId: string | null;
   scheduledFor: string;
   state: string;
 }
@@ -139,8 +140,11 @@ let publicationSource: PublicationSource = async () => {
 export const registerPublicationSource = (fn: PublicationSource): void => {
   publicationSource = fn;
 };
-/** Released publications of the brand in the window, newest first. */
+/** Released channel publications of the brand in the window, newest first (a website article has no post metrics). */
 export const releasedPublications = async (brandId: string, from: Date, to: Date, tx?: Tx) =>
   (await publicationSource(brandId, from, to, tx))
-    .filter((p) => p.state === 'published' || p.state === 'removed')
+    .filter(
+      (p): p is PublicationInWindow & { channelConnectionId: string } =>
+        p.channelConnectionId !== null && (p.state === 'published' || p.state === 'removed'),
+    )
     .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));

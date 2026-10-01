@@ -192,6 +192,10 @@ export interface DestinationSourceV1 {
   certified: boolean;
   /** App credentials configured and the kind not listed in OREMEDIA_DISABLED_SOURCES. */
   enabled: boolean;
+  /** How it connects (R2-3, appended): a vendor OAuth flow, or a site address with an integration secret. */
+  connect?: 'oauth' | 'secret';
+  /** For a secret connect: what the secret is called and where it comes from (the adapter's capability). */
+  credential?: { label: string; hint: string };
 }
 
 // ---- destinationTokenRefreshWorkflowV1 (task queue `core`) ----

@@ -43,6 +43,8 @@ const METADATA_ALLOWLIST = new Set([
   'dataType',
   'fromVersion',
   'toVersion',
+  // Website articles (R2-3): the destination a publication, a verification or a remote change names
+  'destinationId',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

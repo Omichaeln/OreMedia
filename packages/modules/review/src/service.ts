@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { ApprovalBindingV1 } from '@oremedia/contracts/approval';
+import { ApprovalBindingV1, bindingTargetId } from '@oremedia/contracts/approval';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
 import { ConflictError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
@@ -44,6 +44,7 @@ import {
   bindingForRevision,
   buildLiveBinding,
   decisionPolicyOptions,
+  variantTarget,
   evaluateRelease,
   hasNoBlockingFindings,
   type ApprovalRow,
@@ -302,11 +303,11 @@ async function freezeManifest(
       v.exportIds.map((exportId, i) => ({
         exportId,
         contentHash: v.exportHashes[i] as string,
-        channelConnectionId: v.channelConnectionId,
+        ...variantTarget(v),
       })),
     ),
     captions: variants.map((v) => ({
-      channelConnectionId: v.channelConnectionId,
+      ...variantTarget(v),
       text: v.text,
       altTexts: v.altTexts,
       settingsHash: hashesForVariant(v).settingsHash,
@@ -314,6 +315,17 @@ async function freezeManifest(
     timing,
     brandVersionId: revision.brandVersionId,
     policyVersionId: revision.policyVersionId,
+    // R2-3: the article revision the reviewer sees and approves (the destination variant publishes exactly it).
+    ...(revision.copy.article
+      ? {
+          article: {
+            title: revision.copy.article.title,
+            slug: revision.copy.article.slug,
+            articleHash: hashCanonical(revision.copy.article),
+            blocks: revision.copy.article.blocks.length,
+          },
+        }
+      : {}),
   });
 }
 
@@ -475,17 +487,13 @@ export const reviewService = {
         await policy.assert(actor, 'review.decide', requestResource(request), {}, tx);
       else await policy.assert(actor, 'brand.read', brandResource(request.brandId), {}, tx);
       const manifest = FrozenManifestV1.parse(request.frozenManifest);
-      // One file frozen for several channels is one file, delivered once, naming the channels it serves.
+      // One file frozen for several targets is one file, delivered once, naming the targets it serves.
       const frozen: Array<{ exportId: string; contentHash: string; channelConnectionIds: string[] }> = [];
       for (const e of manifest.exports) {
+        const target = bindingTargetId(e);
         const seen = frozen.find((f) => f.exportId === e.exportId);
-        if (seen) seen.channelConnectionIds.push(e.channelConnectionId);
-        else
-          frozen.push({
-            exportId: e.exportId,
-            contentHash: e.contentHash,
-            channelConnectionIds: [e.channelConnectionId],
-          });
+        if (seen) seen.channelConnectionIds.push(target);
+        else frozen.push({ exportId: e.exportId, contentHash: e.contentHash, channelConnectionIds: [target] });
       }
       // A frozen export that no longer exists is reported unverified, never a 404 for the whole manifest.
       const exports = new Map(
@@ -783,7 +791,7 @@ export const reviewService = {
       if (apr.state !== 'valid') return { approvalId: apr.id, state: apr.state, version: apr.version };
       if (publishedChannelConnectionIds) {
         const published = new Set(publishedChannelConnectionIds);
-        const targets = ApprovalBindingV1.parse(apr.binding).targets.map((t) => t.channelConnectionId);
+        const targets = ApprovalBindingV1.parse(apr.binding).targets.map(bindingTargetId);
         if (targets.some((c) => !published.has(c)))
           return { approvalId: apr.id, state: apr.state, version: apr.version };
       }

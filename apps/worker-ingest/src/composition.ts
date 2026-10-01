@@ -5,6 +5,7 @@ import {
   configureSourceAvailability,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
+  cmsCapabilities,
 } from '@oremedia/module-destinations';
 import { intelligenceService } from '@oremedia/module-intelligence';
 import {
@@ -77,5 +78,6 @@ export function composeCredentialBroker(env: NodeJS.ProcessEnv = process.env): v
 export const workerIngestCapabilities = (env: NodeJS.ProcessEnv = process.env): CapabilityCheck[] => [
   ...channelCapabilities(env),
   ...sourceCapabilities(env),
+  ...cmsCapabilities(env),
   modelsCapability,
 ];

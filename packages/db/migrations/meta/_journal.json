@@ -127,6 +127,13 @@
       "when": 1790838870020,
       "tag": "0017_destination_report_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1790844013985,
+      "tag": "0018_cms_articles",
+      "breakpoints": true
     }
   ]
 }

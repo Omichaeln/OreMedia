@@ -61,4 +61,7 @@ export const PUBLISHING_INPUTS: Record<string, CrossTenantFixture> = {
   'publishing.publications.editRemote': {
     buildInput: (f) => ({ publicationId: f['publicationId'], text: 'Corrected text' }),
   },
+  'publishing.publications.unpublishRemote': {
+    buildInput: (f) => ({ publicationId: f['publicationId'], reason: 'x' }),
+  },
 };

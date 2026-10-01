@@ -303,6 +303,7 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
       settings: {},
       exportIds: [],
       exportHashes: [],
+      article: null,
       version: 0,
     });
     const pub = await run((tx) =>
@@ -476,11 +477,13 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
         contentPackageId: 'pkg_scan',
         contentRevisionId: `pr_${id.slice(3)}`,
         channelConnectionId: connectionId,
+        destinationId: null,
         text,
         altTexts: [],
         settings: {},
         exportIds: [],
         exportHashes: [],
+        article: null,
         version: 0,
       });
       return (

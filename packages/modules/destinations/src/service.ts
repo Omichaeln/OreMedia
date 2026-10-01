@@ -1,11 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
+  CMS_SCOPE_PUBLISH,
+  CMS_SCOPE_WRITE,
   DESTINATION_KIND_CAPABILITIES,
   DestinationConnectCancel,
   DestinationConnectComplete,
   DestinationConnectSelect,
   DestinationConnectStart,
+  DestinationConnectWithSecret,
   DestinationDisconnect,
   DestinationGet,
   DestinationList,
@@ -46,7 +49,8 @@ import {
   type EnvelopeRow,
 } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
-import { missingScopes, type SourceAdapter } from '@oremedia/providers';
+import { assertSafeUrl, missingScopes, type CmsAdapter, type SourceAdapter } from '@oremedia/providers';
+import { cmsAdapterFor, cmsRegistryInUse } from './cms';
 import { sourceAvailable } from './hooks';
 import {
   BrandDestinationRepository,
@@ -85,9 +89,12 @@ const destinationResource = (d: DestinationRow) => ({
 });
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
 
-/** Kinds with a registered source adapter, whether it is certified and enabled here (the settings screen's buttons). */
-const listSources = (): DestinationSourceV1[] =>
-  registry()
+/**
+ * Kinds with a registered adapter, whether it is certified and enabled here (the settings screen's buttons): the
+ * read-only sources (R2-1) and the CMS kinds connected with a secret (R2-3), each with the platform it names.
+ */
+const listSources = (): DestinationSourceV1[] => [
+  ...registry()
     .list()
     .filter((s): s is typeof s & { key: DestinationKind } => s.key in DESTINATION_KIND_CAPABILITIES)
     .map((s) => ({
@@ -96,7 +103,21 @@ const listSources = (): DestinationSourceV1[] =>
       vendor: s.capability.vendor,
       certified: s.certified,
       enabled: sourceAvailable(s.key),
-    }));
+      connect: 'oauth' as const,
+    })),
+  ...cmsRegistryInUse()
+    .list()
+    .filter((c): c is typeof c & { key: DestinationKind } => c.key in DESTINATION_KIND_CAPABILITIES)
+    .map((c) => ({
+      kind: c.key,
+      label: DESTINATION_KIND_CAPABILITIES[c.key].label,
+      vendor: c.capability.vendor,
+      certified: c.certified,
+      enabled: sourceAvailable(c.key),
+      connect: 'secret' as const,
+      credential: c.capability.credential,
+    })),
+];
 
 /** A certified source adapter the deployment has enabled; the other refusals read as a channel's (spec 14.6). */
 function enabledSourceAdapter(kind: DestinationKind): SourceAdapter {
@@ -104,6 +125,25 @@ function enabledSourceAdapter(kind: DestinationKind): SourceAdapter {
   if (!sourceAvailable(kind))
     throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
   return adapter;
+}
+
+/** A certified CMS adapter the deployment has enabled (R2-3), with the same refusals. */
+export function enabledCmsAdapter(kind: DestinationKind): CmsAdapter {
+  const adapter = cmsAdapterFor(kind); // CAPABILITY_UNSUPPORTED unless registered and certified
+  if (!sourceAvailable(kind))
+    throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
+  return adapter;
+}
+
+/** Whether a CMS kind can be written to here: registered, certified and enabled (the gate reads false, never throws). */
+export function cmsWritable(kind: string): boolean {
+  try {
+    enabledCmsAdapter(StoredKind.parse(kind));
+    return true;
+  } catch (err) {
+    if (err instanceof CapabilityUnsupportedError || err instanceof z.ZodError) return false;
+    throw err;
+  }
 }
 
 /**
@@ -140,10 +180,15 @@ async function takeFlow(actor: ResolvedActor, pendingId: string, tx: Tx) {
   return row;
 }
 
-/** What a destination registration needs beyond the identity: the sealed grant, or nothing (R2-0's register). */
+/**
+ * What a destination registration needs beyond the identity: the sealed grant, or nothing (R2-0's register). A
+ * grant that just listed its targets is known to work; a sealed secret (R2-3) is not until the worker verifies it,
+ * which the registered event asks for (`verify`).
+ */
 interface Grant {
   credentialRefId: string;
   tokenExpiresAt: Date | null;
+  verified: boolean;
 }
 
 /**
@@ -154,7 +199,7 @@ interface Grant {
  */
 async function registerDestination(
   actor: ResolvedActor,
-  action: 'destination.register' | 'destination.connect.select',
+  action: 'destination.register' | 'destination.connect.select' | 'destination.connect.secret',
   values: {
     id: string;
     brandId: string;
@@ -180,9 +225,10 @@ async function registerDestination(
       ownerUserId: actor.id,
       credentialRefId: grant?.credentialRefId ?? null,
       tokenExpiresAt: grant?.tokenExpiresAt ?? null,
-      // A grant that just listed its targets is known to work; a bare registration has not been checked.
-      health: grant ? 'healthy' : 'unknown',
-      healthCheckedAt: grant ? new Date() : null,
+      // A grant that just listed its targets is known to work; a bare registration or a sealed secret has not
+      // been checked (the worker verifies the secret and sets the health).
+      health: grant?.verified ? 'healthy' : 'unknown',
+      healthCheckedAt: grant?.verified ? new Date() : null,
       status: 'active',
     },
     tx,
@@ -196,7 +242,14 @@ async function registerDestination(
   await outbox.add(
     'destination.registered',
     { type: 'brand_destination', id: values.id, version: row.version },
-    { destinationId: values.id, kind: values.kind, actorKind: actor.kind, actorId: actor.id },
+    {
+      destinationId: values.id,
+      kind: values.kind,
+      actorKind: actor.kind,
+      actorId: actor.id,
+      // Appended (additive): a sealed secret is verified by destinationVerifyWorkflowV1 (R2-3).
+      verify: grant !== null && !grant.verified,
+    },
     tx,
     { brandId: values.brandId },
   );
@@ -476,7 +529,57 @@ export const destinationService = {
           grantedScopes: row.grantedScopes,
           capabilityVersion: adapter.capability.version,
         },
-        { credentialRefId, tokenExpiresAt: row.tokenExpiresAt },
+        { credentialRefId, tokenExpiresAt: row.tokenExpiresAt, verified: true },
+        tx,
+      );
+    },
+
+    /**
+     * R2-3 (D-16): a website connected with its integration identity and secret (an application password). The
+     * site must be https on a public host; the secret is sealed here under the destination's AAD and stored as
+     * the destination's credential, never returned, logged or opened in this process (WrapOnlyKms). The destination
+     * registers with health `unknown`; the worker verifies the secret (destinationVerifyWorkflowV1) and sets it.
+     * Writes land as drafts by default; `allowPublish` grants the scope a live publish needs.
+     */
+    async withSecret(actor: ResolvedActor, input: z.input<typeof DestinationConnectWithSecret>, tx: Tx) {
+      const parsed = DestinationConnectWithSecret.parse(input);
+      await visibleBrand(actor, parsed.brandId, tx);
+      await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
+      const adapter = enabledCmsAdapter(parsed.kind);
+      let site: URL;
+      try {
+        site = assertSafeUrl(parsed.siteUrl);
+      } catch {
+        throw new ValidationFailedError(
+          [{ path: 'siteUrl', issue: 'site_url_not_allowed' }],
+          'The site address must be https on a public host',
+        );
+      }
+      if (site.pathname !== '/' || site.search || site.hash)
+        throw new ValidationFailedError(
+          [{ path: 'siteUrl', issue: 'site_url_not_an_origin' }],
+          'Give the site address as its origin, without a path',
+        );
+      const { tenantId } = requireTenant();
+      const destinationId = newId('destination');
+      const envelope = await credentialBroker.seal(tenantId, destinationId, {
+        accessToken: parsed.secret,
+        extra: { username: parsed.username, siteUrl: site.origin },
+      });
+      const credentialRefId = await credentialBroker.createCredentialRef(envelope, tx);
+      return registerDestination(
+        actor,
+        'destination.connect.secret',
+        {
+          id: destinationId,
+          brandId: parsed.brandId,
+          kind: parsed.kind,
+          externalId: site.origin,
+          displayName: parsed.displayName ?? site.host,
+          grantedScopes: parsed.allowPublish ? [CMS_SCOPE_WRITE, CMS_SCOPE_PUBLISH] : [CMS_SCOPE_WRITE],
+          capabilityVersion: adapter.capability.version,
+        },
+        { credentialRefId, tokenExpiresAt: null, verified: false },
         tx,
       );
     },
@@ -496,6 +599,21 @@ export const destinationService = {
       );
       return { pendingId: parsed.pendingId, cancelled: true as const };
     },
+  },
+
+  /**
+   * R2-3: a description for the content module's destination resolver (spec 4.2: never the row); null for a
+   * foreign or unknown id. `writable` says whether the kind can be published to on this deployment.
+   */
+  async describe(destinationId: string, tx?: Tx) {
+    const row = await destinationsRepo.findById(destinationId, tx);
+    if (!row || row.status !== 'active') return null;
+    return {
+      brandId: row.brandId,
+      kind: row.kind,
+      capabilityVersion: row.capabilityVersion,
+      writable: DESTINATION_KIND_CAPABILITIES[StoredKind.parse(row.kind)].uses.includes('write') && cmsWritable(row.kind),
+    };
   },
 
   /** Records what a health check found (destination.manage); the time of the check is now. Not once disconnected. */

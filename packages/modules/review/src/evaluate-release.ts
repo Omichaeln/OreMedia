@@ -7,6 +7,7 @@ import type { PublicationForRelease } from '@oremedia/contracts/publishing';
 import type { Check, LiveBinding, ReleaseCheckKey, ReleaseDecision } from '@oremedia/contracts/review';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { ApprovalBindingV1, bindingHash, withinTiming } from '@oremedia/domain/approval-binding';
+import { publishTargetId } from '@oremedia/contracts/publishing';
 import {
   ExternalReviewerLinkRepository,
   policy,
@@ -64,18 +65,28 @@ type Revision = Awaited<ReturnType<typeof contentService.revisions.read>>;
  */
 export interface ReleaseCheckers {
   channelUsable(channelConnectionId: string, tx?: Tx): Promise<boolean>;
+  /** R2-3 channel_active for a destination target: active, credential present, not unreachable, adapter enabled. */
+  destinationUsable(destinationId: string, tx?: Tx): Promise<boolean>;
+  /** R2-3 source_use_write: the brand's source-use policy allows a write to the destination's kind (D-17 default deny). */
+  destinationWriteAllowed(destinationId: string, tx?: Tx): Promise<boolean>;
   validateVariant(channelVariantId: string, tx?: Tx): Promise<boolean>;
   countForMandateOnDay(mandateId: string, at: Date, tx?: Tx): Promise<number>;
-  /** Whether another publication already published on this channel under this approval (single use per target). */
+  /** Whether another publication already published on this target under this approval (single use per target). */
   publishedElsewhereForApprovalChannel(
     approvalId: string,
-    channelConnectionId: string,
+    targetId: string,
     exceptPublicationId: string,
     tx?: Tx,
   ): Promise<boolean>;
 }
 const unregisteredCheckers: ReleaseCheckers = {
   channelUsable: async () => {
+    throw new Error('release checkers not registered (composition root must call registerReleaseCheckers)');
+  },
+  destinationUsable: async () => {
+    throw new Error('release checkers not registered (composition root must call registerReleaseCheckers)');
+  },
+  destinationWriteAllowed: async () => {
     throw new Error('release checkers not registered (composition root must call registerReleaseCheckers)');
   },
   validateVariant: async () => {
@@ -220,6 +231,13 @@ export async function stillAuthorised(
 
 // ---- the binding, computed one way for the manifest, the approval and dispatch (spec 13.2) ----
 
+/** A variant's target as a binding names it: the channel, or (R2-3) the destination; never both, never neither. */
+export const variantTarget = (v: {
+  channelConnectionId: string | null;
+  destinationId: string | null;
+}): { channelConnectionId?: string; destinationId?: string } =>
+  v.destinationId ? { destinationId: v.destinationId } : { channelConnectionId: v.channelConnectionId ?? '' };
+
 /**
  * The binding of a revision from CURRENT rows: the brand's published version and active policy (not the ids the
  * revision was written against, so a brand change after approval changes the hash), every variant's caption, alt
@@ -240,7 +258,7 @@ export async function bindingForRevision(
     contentRevisionId: revision.id,
     brandVersionId: published?.id ?? '',
     policyVersionId: active?.id ?? '',
-    targets: variants.map((v) => ({ channelConnectionId: v.channelConnectionId, ...hashesForVariant(v) })),
+    targets: variants.map((v) => ({ ...variantTarget(v), ...hashesForVariant(v) })),
     timing,
   });
   return { binding, bindingHash: bindingHash(binding), variants };
@@ -321,7 +339,7 @@ async function assetsUsable(
   const ctx = {
     tenantId: pub.tenantId,
     brandId: pub.brandId,
-    channelConnectionIds: [pub.channelConnectionId],
+    channelConnectionIds: pub.channelConnectionId ? [pub.channelConnectionId] : [],
     scheduledFor: at,
   };
   try {
@@ -366,7 +384,7 @@ export async function evaluateRelease(
       check(
         'approval_valid',
         apr?.state === 'valid' &&
-          !(await checkers.publishedElsewhereForApprovalChannel(apr.id, pub.channelConnectionId, pub.id, tx)),
+          !(await checkers.publishedElsewhereForApprovalChannel(apr.id, publishTargetId(pub), pub.id, tx)),
       ),
     );
     checks.push(check('approval_matches', apr !== null && apr.bindingHash === live.bindingHash));
@@ -404,8 +422,12 @@ export async function evaluateRelease(
           at.getTime() <= m.windowEnd.getTime(),
       ),
     );
+    // A mandate names channels only: a destination publication (R2-3) is never released under one.
     checks.push(
-      check('mandate_channel', m !== null && m.channelConnectionIds.includes(pub.channelConnectionId)),
+      check(
+        'mandate_channel',
+        m !== null && pub.channelConnectionId !== null && m.channelConnectionIds.includes(pub.channelConnectionId),
+      ),
     );
     checks.push(check('mandate_content_class', m !== null && m.allowedContentClasses.includes(classOf)));
     checks.push(
@@ -435,7 +457,11 @@ export async function evaluateRelease(
     checks.push(check('brand_review_clean', clean));
   }
 
-  checks.push(check('channel_active', await checkers.channelUsable(pub.channelConnectionId, tx)));
+  if (pub.destinationId) {
+    // R2-3: the destination stands in for the channel, and its write needs the brand's source-use policy (D-17).
+    checks.push(check('channel_active', await checkers.destinationUsable(pub.destinationId, tx)));
+    checks.push(check('source_use_write', await checkers.destinationWriteAllowed(pub.destinationId, tx)));
+  } else checks.push(check('channel_active', await checkers.channelUsable(pub.channelConnectionId ?? '', tx)));
   checks.push(check('assets_rights_valid', assetsOk));
   checks.push(check('facts_valid', factsOk)); // expired offers block
   checks.push(check('capability_valid', await checkers.validateVariant(pub.channelVariantId, tx)));

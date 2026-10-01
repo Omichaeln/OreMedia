@@ -48,6 +48,8 @@ export {
   providerClientSettings,
   channelCapabilities,
   registerWorkflowProbe,
+  registerDestinationPublisher,
+  resetDestinationPublisher,
   registerBrandChecker as registerPublishingBrandChecker,
   type BrandChecker as PublishingBrandChecker,
   type VariantSource,
@@ -60,6 +62,13 @@ export {
   type PublishMediaDescription,
   type ProviderClientSource,
   type WorkflowProbe,
+  type DestinationPublisher,
+  type DestinationTargetDescription,
+  type DestinationPublishInput,
+  type DestinationPublishResult,
+  type DestinationEditInput,
+  type DestinationMutationResult,
+  type DestinationValidateInput,
 } from './hooks';
 export {
   configurePublishingProviders,

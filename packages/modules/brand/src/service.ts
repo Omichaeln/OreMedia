@@ -153,7 +153,9 @@ export interface BrandChangeImpactScope {
     publicationId: string;
     contentPackageId: string;
     contentRevisionId: string;
-    channelConnectionId: string;
+    /** The channel, or null for a publication to a brand destination (R2-3). */
+    channelConnectionId: string | null;
+    destinationId?: string | null;
     scheduledFor: string;
   }>;
 }

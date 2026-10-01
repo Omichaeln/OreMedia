@@ -1,4 +1,12 @@
-import type { ClientConfig } from '@oremedia/contracts/providers';
+import type { ActivityHooks } from '@oremedia/contracts/agents';
+import type { RenderedValidationV1 } from '@oremedia/contracts/article';
+import type { ArticleReadbackV1 } from '@oremedia/contracts/destinations';
+import type {
+  ClientConfig,
+  PublishOutcome,
+  RemoteMutationOutcome,
+  ValidationResult,
+} from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing, PublicationForRelease } from '@oremedia/contracts/publishing';
 import type { ReleaseDecision } from '@oremedia/contracts/review';
 import type { Tx } from '@oremedia/db';
@@ -34,7 +42,7 @@ export interface RevisionWithVariants {
   id: string;
   brandId: string;
   state: string;
-  variants: Array<{ id: string; channelConnectionId: string }>;
+  variants: Array<{ id: string; channelConnectionId: string | null; destinationId: string | null }>;
 }
 export type RevisionVariantSource = (contentRevisionId: string, tx?: Tx) => Promise<RevisionWithVariants>;
 const unregisteredRevisionVariantSource: RevisionVariantSource = async () => {
@@ -82,7 +90,8 @@ export const review = {
 export type ApprovalConsumer = (
   approvalId: string,
   publicationId: string,
-  publishedChannelConnectionIds: string[],
+  /** The targets published so far: channel connection ids and (R2-3) destination ids, as the binding names them. */
+  publishedTargetIds: string[],
   tx: Tx,
 ) => Promise<void>;
 const unregisteredApprovalConsumer: ApprovalConsumer = async () => {
@@ -237,3 +246,120 @@ export const registerWorkflowProbe = (probe: WorkflowProbe | null): void => {
   workflowProbe = probe ?? { isRunning: async () => false };
 };
 export const workflowRunning = (workflowId: string): Promise<boolean> => workflowProbe.isRunning(workflowId);
+
+/**
+ * Ledger R2-3: a publication whose target is a write-capable brand destination (a website) is carried out by the
+ * destinations module behind this hook, as a channel's is by its provider adapter: generic code here knows a
+ * target kind and an outcome, never a CMS. The composition root registers `destinationArticles` from the
+ * destinations module; the API registers it too (describe, capability and the draft check run there), while only
+ * the worker's broker can open the destination's secret for a write.
+ */
+export interface DestinationTargetDescription {
+  id: string;
+  brandId: string;
+  kind: string;
+  displayName: string;
+  capabilityVersion: number;
+  /** Active, with a credential, not unreachable, and with a certified, enabled adapter (spec 13.4 channel_active). */
+  usable: boolean;
+  /** The remote actions the kind's adapter offers on a live article. */
+  actions: { edit: boolean; delete: boolean; unpublish: boolean };
+}
+export interface DestinationPublishInput {
+  tenantId: string;
+  destinationId: string;
+  publicationId: string;
+  attemptId: string;
+  idempotencyKey: string;
+  variant: ChannelVariantForPublishing;
+}
+/** A publish outcome with, when the write went through, the read-back and the rendered validation as evidence. */
+export type DestinationPublishResult = PublishOutcome & {
+  readback?: ArticleReadbackV1;
+  validation?: RenderedValidationV1;
+};
+export interface DestinationEditInput {
+  tenantId: string;
+  destinationId: string;
+  remoteId: string;
+  /** The remote hash the product last read back; a remote that moved since is a conflict, never overwritten. */
+  expectedHash: string | null;
+  html: string;
+  idempotencyKey: string;
+}
+export type DestinationMutationResult = RemoteMutationOutcome & { readback?: ArticleReadbackV1 };
+export interface DestinationValidateInput {
+  tenantId: string;
+  destinationId: string;
+  url: string;
+  title: string;
+  firstParagraph: string;
+  draft: boolean;
+}
+export interface DestinationPublisher {
+  /** A description, never the row; null for a foreign or unknown id (spec 4.2). */
+  describe(destinationId: string, tx?: Tx): Promise<DestinationTargetDescription | null>;
+  /** Spec 13.4 for a destination variant: what it will publish passes the kind's rules (an article is present…). */
+  validateVariant(variant: ChannelVariantForPublishing, tx?: Tx): Promise<ValidationResult>;
+  /** D-17 default deny: whether the brand's source-use policy allows the use of the kind's data type now. */
+  useAllowed(brandId: string, kind: string, use: 'read' | 'write', tx?: Tx): Promise<boolean>;
+  publish(
+    input: DestinationPublishInput,
+    hooks?: ActivityHooks,
+    beforeSend?: () => Promise<void>,
+  ): Promise<DestinationPublishResult>;
+  edit(input: DestinationEditInput, hooks?: ActivityHooks): Promise<DestinationMutationResult>;
+  unpublish(
+    input: { tenantId: string; destinationId: string; remoteId: string },
+    hooks?: ActivityHooks,
+  ): Promise<DestinationMutationResult>;
+  delete(
+    input: { tenantId: string; destinationId: string; remoteId: string },
+    hooks?: ActivityHooks,
+  ): Promise<RemoteMutationOutcome>;
+  /** Fetches the rendered page (no credential) and records what it showed; never throws for a page that fails. */
+  validateRendered(input: DestinationValidateInput, hooks?: ActivityHooks): Promise<RenderedValidationV1>;
+}
+const unregisteredDestinationPublisher: DestinationPublisher = {
+  describe: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  validateVariant: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  useAllowed: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  publish: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  edit: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  unpublish: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  delete: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+  validateRendered: async () => {
+    throw new Error('destination publisher not registered (composition root must call registerDestinationPublisher)');
+  },
+};
+let destinationPublisher: DestinationPublisher = unregisteredDestinationPublisher;
+export const registerDestinationPublisher = (p: DestinationPublisher): void => {
+  destinationPublisher = p;
+};
+export const resetDestinationPublisher = (): void => {
+  destinationPublisher = unregisteredDestinationPublisher;
+};
+export const destinations: DestinationPublisher = {
+  describe: (id, tx) => destinationPublisher.describe(id, tx),
+  validateVariant: (variant, tx) => destinationPublisher.validateVariant(variant, tx),
+  useAllowed: (brandId, kind, use, tx) => destinationPublisher.useAllowed(brandId, kind, use, tx),
+  publish: (input, hooks, beforeSend) => destinationPublisher.publish(input, hooks, beforeSend),
+  edit: (input, hooks) => destinationPublisher.edit(input, hooks),
+  unpublish: (input, hooks) => destinationPublisher.unpublish(input, hooks),
+  delete: (input, hooks) => destinationPublisher.delete(input, hooks),
+  validateRendered: (input, hooks) => destinationPublisher.validateRendered(input, hooks),
+};

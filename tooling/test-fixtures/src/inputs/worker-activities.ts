@@ -246,6 +246,10 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     // destinationTokenRefreshWorkflowV1 (ledger R2-1): the due listing is platform-level; a refresh names one
     // destination of the tenant it runs in, so a foreign id is NOT_FOUND before any credential is read
     'core.listDueDestinationRefreshes': { buildInput: null, reason: PLATFORM_SWEEP },
+    // destinationVerifyWorkflowV1 (ledger R2-3): a verification names one destination; a foreign one is NOT_FOUND.
+    'core.verifyDestinationCredential': {
+      buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
+    },
     'core.refreshDestinationCredential': {
       buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
     },

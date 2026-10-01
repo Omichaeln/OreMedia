@@ -21,6 +21,7 @@ import {
   createCommunityReplyProviderActivities,
   createConnectChoicePurgeActivities,
   createDestinationRefreshActivities,
+  createDestinationVerifyActivities,
   createPublicationSweepActivities,
   createPublishControlActivities,
   createPublishProviderActivities,
@@ -50,7 +51,7 @@ import {
   createDestinationRuntime,
 } from '@oremedia/module-destinations';
 import { logger } from '@oremedia/observability';
-import { providerRegistry } from '@oremedia/providers';
+import { cmsRegistry, providerRegistry } from '@oremedia/providers';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
 import { intelligenceActivities } from './intelligence-worker';
 import { operationsActivities } from './operations-worker';
@@ -105,6 +106,7 @@ export async function startPublishingWorkers(
   configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: true }, env) }); // loud without a key
   const runtime = createPublishingRuntime();
   const replies = createCommunityReplyRuntime();
+  const destinations = createDestinationRuntime();
   const connection = await NativeConnection.connect(await connectionOptions(cfg));
   const core = await Worker.create({
     connection,
@@ -120,7 +122,9 @@ export async function startPublishingWorkers(
       ...createPublicationSweepActivities(runtime.sweep),
       ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),
       // destinationTokenRefreshWorkflowV1 (ledger R2-1): the daily refresh of brand destinations' source grants
-      ...createDestinationRefreshActivities(createDestinationRuntime().refresh),
+      ...createDestinationRefreshActivities(destinations.refresh),
+      // destinationVerifyWorkflowV1 (ledger R2-3): the health check of a destination connected with a secret
+      ...createDestinationVerifyActivities(destinations.verify),
       // brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 (spec 8.2)
       ...createBrandChangeImpactActivities(createBrandChangeImpactRuntime()),
       // brandAnalystWorkflowV1 / brandAnalystSweepWorkflowV1 / baselineComparisonWorkflowV1 (spec 16.3, 16.8)
@@ -132,8 +136,12 @@ export async function startPublishingWorkers(
     },
     maxConcurrentActivityTaskExecutions: Number(env['CORE_CONCURRENCY'] ?? 16),
   });
-  // One activity-only worker per certified provider; the per-queue cap is the fairness bound (spec 17.4).
-  const providers = providerRegistry.list().filter((p) => p.certified);
+  // One activity-only worker per certified provider; the per-queue cap is the fairness bound (spec 17.4). A
+  // certified CMS kind (R2-3) gets its own `publish-<kind>` queue the same way: its writes run beside publishOnce.
+  const providers = [
+    ...providerRegistry.list().filter((p) => p.certified),
+    ...cmsRegistry.list().filter((c) => c.certified),
+  ];
   const publishWorkers = await Promise.all(
     providers.map((p) =>
       Worker.create({
