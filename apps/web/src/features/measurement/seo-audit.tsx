@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn, type Tone } from '@oremedia/ui';
 import {
@@ -85,6 +85,9 @@ export function SeoAuditSection({ companyId, brandId }: { companyId: string; bra
   );
 }
 
+/** How long a started run holds the button while the summary has not yet reported it (as the stale rule's window). */
+const AWAITING_RUN_MAX_MS = 30_000;
+
 function SeoAuditCard({
   companyId,
   brandId,
@@ -101,7 +104,25 @@ function SeoAuditCard({
   const findings = useSeoAuditFindings(brandId, destination.id, allowed && lastRun !== null);
   const pages = useSeoAuditPages(brandId, destination.id, severity, allowed && lastRun !== null);
   const run = useRunSeoAudit();
-  const running = summary.data?.running === true || run.isPending;
+  // A started run holds the button from the click until the summary reports it (or a newer last run) or the start
+  // failed: the mutation settles before the refetch lands, and without this the button re-enables for a frame.
+  const [awaitingRun, setAwaitingRun] = useState<{ since: number; lastRunId: string | null } | null>(null);
+  const summaryRunning = summary.data?.running === true;
+  const summaryLastRunId = lastRun?.id ?? null;
+  useEffect(() => {
+    if (!awaitingRun) return;
+    if (run.isError || summaryRunning || summaryLastRunId !== awaitingRun.lastRunId) {
+      setAwaitingRun(null);
+      return;
+    }
+    // Never stranded: if the summary says nothing new within the window, the button is released.
+    const timer = setTimeout(
+      () => setAwaitingRun(null),
+      Math.max(0, AWAITING_RUN_MAX_MS - (Date.now() - awaitingRun.since)),
+    );
+    return () => clearTimeout(timer);
+  }, [awaitingRun, run.isError, summaryRunning, summaryLastRunId]);
+  const running = summaryRunning || run.isPending || awaitingRun !== null;
   const canRun = summary.data?.canRun === true;
 
   return (
@@ -130,7 +151,10 @@ function SeoAuditCard({
                   ? 'An audit is in progress'
                   : undefined
             }
-            onClick={() => run.mutate({ brandId, destinationId: destination.id })}
+            onClick={() => {
+              setAwaitingRun({ since: Date.now(), lastRunId: summaryLastRunId });
+              run.mutate({ brandId, destinationId: destination.id });
+            }}
           >
             {running ? 'Audit running…' : 'Run audit'}
           </Button>
