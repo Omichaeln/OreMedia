@@ -30,9 +30,16 @@ describe("sourceUseIssues (D-17: a policy within the kind's capabilities)", () =
     expect(sourceUseIssues('ga4_property', ['read'], null)).toEqual([]);
   });
   it('reports both rules at once', () => {
-    expect(sourceUseIssues('cms_site', ['retain', 'write'], null)).toEqual([
-      { path: 'allowedUses', issue: 'retain_not_supported_by_cms_site' },
+    expect(sourceUseIssues('gbp_location', ['retain', 'write'], null)).toEqual([
+      { path: 'allowedUses', issue: 'retain_not_supported_by_gbp_location' },
+      { path: 'allowedUses', issue: 'write_not_supported_by_gbp_location' },
       { path: 'retentionDays', issue: 'required_for_retain' },
     ]);
+  });
+  it('a website may retain its audit runs (R2-4, cms.audit) for a stated period', () => {
+    expect(sourceUseIssues('cms_site', ['read', 'retain', 'write'], null)).toEqual([
+      { path: 'retentionDays', issue: 'required_for_retain' },
+    ]);
+    expect(sourceUseIssues('cms_site', ['read', 'retain', 'write'], 90)).toEqual([]);
   });
 });

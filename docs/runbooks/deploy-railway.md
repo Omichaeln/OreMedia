@@ -218,7 +218,11 @@ production keeps running with that capability degraded, and the gap is reported.
   rerun of a day is refused by its workflow id, and a quota 429 leaves the destination `degraded` until the next
   day's run catches up from the last stored day). `cms:<vendor>` on the api connects websites (the secret is sealed
   there, never opened); on worker-core it verifies the secret (`destinationVerifyWorkflowV1`) and publishes articles
-  on `publish-cms_site`; the adapter is uncertified (`certifiedAt: null`, D-16) until its read-back tests ran on the
+  on `publish-cms_site`; on worker-ingest the technical SEO audit (R2-4) crawls each website's public pages weekly
+  (the `seo-audit-sweep` schedule, Mondays 05:00 UTC, created by worker-ingest at start on `ingest-metrics`, overlap
+  skipped; one child per website per ISO week; 200 pages, depth 3, 20 min, ≥ 250 ms between fetches, 2 MiB per page;
+  only under a `cms.audit` source-use policy allowing reads; docs/contracts/seo-audit.md) and an admin or publisher
+  can run one from the Performance screen (once per website per day); the adapter is uncertified (`certifiedAt: null`, D-16) until its read-back tests ran on the
   pilot site, so tenants are refused the connect until then.
 - The `web` service (Caddy) has no report: its `OBJECT_STORE_PUBLIC_ORIGIN` is checked by the production smoke check
   (section 3a) through the CSP it serves. The `redirector` has none either: both its settings (`DATABASE_URL`,

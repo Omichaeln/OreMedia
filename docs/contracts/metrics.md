@@ -101,3 +101,8 @@ latency × 2 ago (GA4 48 h, Search Console 72 h). The opportunity queue (`destin
 computed over the last 28 days: queries and pages with ≥ 100 impressions and a CTR below half the site's pooled CTR,
 landing pages with ≥ 50 sessions and an engagement rate below half the property's pooled rate. AI search (D-19):
 no figure; the screen links to the vendor's console.
+
+## Technical SEO audit (R2-4)
+
+The audit's checks, limits and findings are catalogued in [seo-audit.md](./seo-audit.md). They are lab data the
+crawler measured, never field data; nothing in them is aggregated with the metrics above.

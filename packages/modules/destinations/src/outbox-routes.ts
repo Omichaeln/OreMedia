@@ -1,5 +1,6 @@
 import { DestinationVerifyInputV1 } from '@oremedia/contracts/destinations';
 import { SeoAuditInputV1 } from '@oremedia/contracts/seo-audit';
+import { INGEST_METRICS_TASK_QUEUE } from '@oremedia/module-measurement';
 import { registerOutboxRoute } from '@oremedia/module-operations';
 
 /** R2-3: one verification workflow per registration of a destination with a secret, on task queue `core`. */
@@ -8,7 +9,6 @@ export const DESTINATION_VERIFY_WORKFLOW_TYPE = 'destinationVerifyWorkflowV1';
 export const destinationVerifyWorkflowId = (destinationId: string, version: number): string =>
   `destination-verify:${destinationId}:${version}`;
 /** R2-4: an on-demand audit crawls on worker-ingest's `ingest-metrics` queue, one workflow per run row. */
-export const INGEST_METRICS_TASK_QUEUE = 'ingest-metrics';
 export const SEO_AUDIT_WORKFLOW_TYPE = 'seoAuditWorkflowV1';
 export const seoAuditWorkflowId = (runId: string): string => `seo-audit:${runId}`;
 

@@ -51,6 +51,7 @@ a breaking change creates a new event type or schema version with dual publishin
 | `community.reply_requested`           | 1              |
 | `destination.registered`              | 1              |
 | `destination.disconnected`            | 1              |
+| `destination.audit_requested`         | 1              |
 
 ## Error codes (spec 7.2)
 
