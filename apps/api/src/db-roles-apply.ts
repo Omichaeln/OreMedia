@@ -46,9 +46,10 @@ try {
     );
   else lines.push('SKIP retention: DB_RETENTION_PASSWORD not set; the retention role is not applied');
   const failed = lines.some((l) => l.startsWith('FAIL'));
-  for (const line of lines) {
-    if (failed) log.error({ line }, 'db roles');
-    else log.info({ line }, 'db roles');
+  // `status` is an allowlisted log field (observability allowlist); the lines carry names only, never a credential.
+  for (const status of lines) {
+    if (failed) log.error({ status }, 'db roles');
+    else log.info({ status }, 'db roles');
   }
   process.exitCode = failed ? 1 : 0;
 } catch (err) {
