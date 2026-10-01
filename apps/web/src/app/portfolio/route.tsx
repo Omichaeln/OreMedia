@@ -16,12 +16,20 @@ export function PortfolioRoute() {
     <>
       <TopBar title="Portfolio" />
       <main id="main" className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-8">
-        <header>
-          <h1 className="text-xl font-semibold">Portfolio</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Companies you are a member of. Each company is a separate tenant; nothing is shared between them,
-            and the server re-checks your membership on every request.
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold">Portfolio</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Companies you are a member of. Each company is a separate tenant; nothing is shared between
+              them, and the server re-checks your membership on every request.
+            </p>
+          </div>
+          <Link
+            to="/portfolio/performance"
+            className="text-sm font-medium underline-offset-2 hover:underline"
+          >
+            Performance across brands
+          </Link>
         </header>
         {companies.isPending && <Skeleton label="Loading companies" lines={4} />}
         {companies.isError && (

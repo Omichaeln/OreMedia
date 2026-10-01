@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { periodComparison, trendDays, trendStatus, type TrendPost } from './performance-helpers';
+import { periodComparison, slotCells, trendDays, trendStatus, type TrendPost } from './performance-helpers';
 
 const NOW = Date.parse('2026-09-26T12:00:00Z');
 const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
@@ -44,5 +44,35 @@ describe('periodComparison', () => {
     expect(periodComparison([m(150)], []).change).toBeNull();
     expect(periodComparison([m(150)], [m(0)]).change).toBeNull();
     expect(periodComparison([], [m(10)]).currentMean).toBeNull();
+  });
+});
+
+describe('slotCells (UX-12 "when it lands")', () => {
+  it('places posts by weekday and six-hour slot on the brand clock and pools the rate per cell', () => {
+    // 2026-09-21 is a Monday; 23:30 UTC is Tuesday 01:30 in Berlin (slot 0), 09:00 and 08:00 UTC are Monday 11:00 and 10:00 (slot 1).
+    const cells = slotCells(
+      [
+        { scheduledFor: '2026-09-21T09:00:00.000Z', engagement: 10, impressions: 100 },
+        { scheduledFor: '2026-09-21T08:00:00.000Z', engagement: 30, impressions: 100 },
+        { scheduledFor: '2026-09-21T23:30:00.000Z', engagement: null, impressions: 50 },
+      ],
+      'Europe/Berlin',
+    );
+    expect(cells).toHaveLength(28);
+    expect(cells.find((c) => c.weekday === 0 && c.slot === 1)).toEqual({
+      weekday: 0,
+      slot: 1,
+      publications: 2,
+      measured: 2,
+      rate: 40 / 200, // pooled, not the mean of 0.1 and 0.3
+    });
+    expect(cells.find((c) => c.weekday === 1 && c.slot === 0)).toEqual({
+      weekday: 1,
+      slot: 0,
+      publications: 1,
+      measured: 0,
+      rate: null,
+    });
+    expect(cells.filter((c) => c.publications === 0)).toHaveLength(26);
   });
 });

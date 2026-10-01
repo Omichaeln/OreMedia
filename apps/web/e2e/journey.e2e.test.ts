@@ -540,6 +540,39 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
       .toBe('NOT_FOUND');
   }, 90_000);
 
+  it('portfolio performance (UX-11): every company’s brands under their own tenant, nothing summed across them', async () => {
+    const requestsBefore = companyB.requests.length;
+    await open('/portfolio/performance');
+    const sections = page.getByTestId('company-performance');
+    await expect.poll(() => sections.count(), { timeout: 15_000 }).toBe(2);
+    const sectionA = page.getByRole('region', { name: E2E.companyName });
+    const sectionB = page.getByRole('region', { name: E2E_B.companyName });
+    // Company A: its two brands; the e2e brand's three posts in the period (none in the one before) read as
+    // impressions 7,800 without a comparison, the sample being under the minimum on the previous side.
+    await expect.poll(() => sectionA.getByTestId('brand-performance').count(), { timeout: 15_000 }).toBe(2);
+    const rowA = sectionA.locator(`[data-testid="brand-performance"][data-brand="${E2E.brandId}"]`);
+    await expect.poll(() => rowA.textContent(), { timeout: 15_000 }).toContain('Insufficient sample');
+    expect(await rowA.locator('[data-group="impressions"]').textContent()).toContain('7,800');
+    expect(await rowA.locator('[data-group="impressions"]').textContent()).toContain('not compared');
+    expect(await rowA.locator('[data-group="rate:engagement/impressions"]').textContent()).toContain('6.0%');
+    expect(await sectionA.textContent()).toContain(BRAND_2.name);
+    // Company B: its one brand, asked with B's tenant, with nothing published and none of A's names.
+    await expect.poll(() => sectionB.getByTestId('brand-performance').count(), { timeout: 15_000 }).toBe(1);
+    const rowB = sectionB.getByTestId('brand-performance');
+    await expect.poll(() => rowB.textContent(), { timeout: 15_000 }).toContain('Insufficient sample');
+    expect(await rowB.textContent()).toContain(E2E_B.brandName);
+    expect(await rowB.locator('[data-group="impressions"]').textContent()).toContain('Unavailable');
+    expect(await sectionB.textContent()).not.toContain(E2E.brandName);
+    expect(await sectionB.textContent()).not.toContain(BRAND_2.name);
+    expect(companyB.requests.length).toBeGreaterThan(requestsBefore);
+    expect(
+      companyB.requests.slice(requestsBefore).every((r) => r.headers['x-oremedia-tenant'] === E2E_B.tenantId),
+    ).toBe(true);
+    // The brand name links into that brand's own performance screen.
+    await rowA.getByRole('link', { name: E2E.brandName }).click();
+    await expect.poll(() => page.url(), { timeout: 15_000 }).toContain(pathA('performance'));
+  }, 60_000);
+
   it('a creator restricted to brand 1 sees only it; brand 2’s routes are NOT_FOUND', async () => {
     await signOut();
     await signIn(TOKENS.creator);

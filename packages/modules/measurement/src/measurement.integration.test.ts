@@ -672,7 +672,12 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
         brandId: brandA,
         contentRevisionId: row!.contentRevisionId,
         channelVariantId: null,
-        attributes: { hookType: 'question', imageryKind: 'photo', cta: 'Shop now', distribution: 'user' },
+        attributes: {
+          hookType: 'question',
+          imageryKind: 'photography',
+          cta: 'Shop now',
+          distribution: 'user',
+        },
         source: 'captured',
       });
       const res = await inTenant(tenantA, () =>
@@ -694,7 +699,7 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
             rate: 0.05,
             sufficient: false,
           }),
-          expect.objectContaining({ feature: 'imageryKind', value: 'photo', publications: 1 }),
+          expect.objectContaining({ feature: 'imageryKind', value: 'photography', publications: 1 }),
           expect.objectContaining({ feature: 'cta', value: 'present', publications: 1 }),
           expect.objectContaining({ feature: 'distribution', value: 'user', publications: 1 }),
         ]),

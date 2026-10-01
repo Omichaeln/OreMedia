@@ -3,7 +3,13 @@ import { Link, useSearchParams } from 'react-router';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { AGES, DailyTrend } from './daily-trend';
-import { groupValue } from './performance-helpers';
+import { groupValue, type SlotPost } from './performance-helpers';
+import {
+  CreativeAttributesPanel,
+  NextCyclePanel,
+  PublicationDetail,
+  SlotHeatmap,
+} from './performance-panels';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { PackageTitle } from '../content/package-title';
 import { Section } from '../../components/section';
@@ -66,6 +72,7 @@ export function PerformanceScreen() {
   const [params, setParams] = useSearchParams();
   const days = PERIODS.find(([d]) => String(d) === params.get('period'))?.[0] ?? 30;
   const channelFilter = params.get('channel');
+  const postParam = params.get('post');
   const ageDays = AGES.find(([a]) => String(a) === params.get('age'))?.[0] ?? 7;
   const todayKey = dayKey(new Date(), timeZone);
   const range = useMemo(() => trailingRange(days, todayKey, timeZone), [days, todayKey, timeZone]);
@@ -131,6 +138,19 @@ export function PerformanceScreen() {
     });
   }, [current, subjects, selected?.comparableGroup]);
   const sorted = [...rows].sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+  // UX-12: the slot grid pools engagement over impressions per post, whatever metric the tiles show.
+  const slotPosts: SlotPost[] = useMemo(() => {
+    const values = current?.values ?? [];
+    return subjects.map((p) => {
+      const mine = values.filter((v) => v.subjectId === p.publicationId);
+      return {
+        scheduledFor: p.scheduledFor,
+        engagement: groupValue(mine.filter((v) => v.comparableGroup === 'engagement')).value,
+        impressions: groupValue(mine.filter((v) => v.comparableGroup === 'impressions')).value,
+      };
+    });
+  }, [current, subjects]);
+  const selectedPost = subjects.find((p) => p.publicationId === postParam) ?? null;
   const max = Math.max(0, ...rows.map((r) => r.value ?? 0));
 
   const channelName = (id: string) => {
@@ -305,7 +325,11 @@ export function PerformanceScreen() {
               <Section id="posts-heading" title={`Posts by ${selected.label.toLowerCase()}`}>
                 <ol className="flex flex-col divide-y divide-border" data-testid="performance-posts">
                   {sorted.map((r) => (
-                    <li key={r.publication.publicationId} className="flex flex-col gap-1.5 py-3 text-sm">
+                    <li
+                      key={r.publication.publicationId}
+                      className="flex flex-col gap-1.5 py-3 text-sm"
+                      data-publication={r.publication.publicationId}
+                    >
                       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                         <Link
                           to={`${calendarHref}?publication=${encodeURIComponent(r.publication.publicationId)}&day=${dayKey(r.publication.scheduledFor, timeZone)}`}
@@ -313,12 +337,27 @@ export function PerformanceScreen() {
                         >
                           <PackageTitle contentPackageId={r.publication.contentPackageId} />
                         </Link>
-                        <span className="tabular-nums">
+                        <span className="flex items-baseline gap-2 tabular-nums">
                           {r.value === null ? (
                             <Badge tone="neutral">Unavailable</Badge>
                           ) : (
                             formatValue(selected.kind, r.value)
                           )}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-pressed={postParam === r.publication.publicationId}
+                            onClick={() =>
+                              update({
+                                post:
+                                  postParam === r.publication.publicationId
+                                    ? null
+                                    : r.publication.publicationId,
+                              })
+                            }
+                          >
+                            Details
+                          </Button>
                         </span>
                       </div>
                       <Bar value={r.value} max={max} />
@@ -351,33 +390,58 @@ export function PerformanceScreen() {
                 </ol>
               </Section>
 
-              <Section id="channels-heading" title="By channel">
-                {byChannel.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {selected.additive
-                      ? `No channel returned ${selected.label.toLowerCase()}.`
-                      : `${selected.label} is not summed per channel (${NOT_SUMMED[selected.kind] ?? 'not additive'}).`}
-                  </p>
-                ) : (
-                  <ul className="flex flex-col divide-y divide-border" data-testid="performance-channels">
-                    {byChannel.map(([id, t]) => (
-                      <li key={id} className="flex flex-col gap-1.5 py-3 text-sm">
-                        <div className="flex items-baseline justify-between gap-3">
-                          <span className="min-w-0 break-words">{channelName(id)}</span>
-                          <span className="tabular-nums">{formatValue(selected.kind, t.value)}</span>
-                        </div>
-                        <Bar value={t.value} max={channelMax} />
-                        <p className="text-xs text-muted-foreground">
-                          {t.publications} {t.publications === 1 ? 'publication' : 'publications'} with
-                          numbers
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
+              <div className="flex flex-col gap-8">
+                {selectedPost && (
+                  <PublicationDetail
+                    companyId={companyId}
+                    brandId={brandId}
+                    publication={selectedPost}
+                    timeZone={timeZone}
+                    windowStart={range.from}
+                    windowEnd={range.to}
+                    channelName={channelName(selectedPost.channelConnectionId)}
+                    onClose={() => update({ post: null })}
+                  />
                 )}
-              </Section>
+                <Section id="channels-heading" title="By channel">
+                  {byChannel.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {selected.additive
+                        ? `No channel returned ${selected.label.toLowerCase()}.`
+                        : `${selected.label} is not summed per channel (${NOT_SUMMED[selected.kind] ?? 'not additive'}).`}
+                    </p>
+                  ) : (
+                    <ul className="flex flex-col divide-y divide-border" data-testid="performance-channels">
+                      {byChannel.map(([id, t]) => (
+                        <li key={id} className="flex flex-col gap-1.5 py-3 text-sm">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="min-w-0 break-words">{channelName(id)}</span>
+                            <span className="tabular-nums">{formatValue(selected.kind, t.value)}</span>
+                          </div>
+                          <Bar value={t.value} max={channelMax} />
+                          <p className="text-xs text-muted-foreground">
+                            {t.publications} {t.publications === 1 ? 'publication' : 'publications'} with
+                            numbers
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Section>
+              </div>
             </div>
           )}
+
+          <div className="grid gap-8 lg:grid-cols-2">
+            <SlotHeatmap posts={slotPosts} timeZone={timeZone} />
+            <CreativeAttributesPanel
+              brandId={brandId}
+              windowStart={range.from}
+              windowEnd={range.to}
+              enabled={subjects.length > 0}
+            />
+          </div>
+          <NextCyclePanel companyId={companyId} brandId={brandId} />
         </>
       )}
     </main>
