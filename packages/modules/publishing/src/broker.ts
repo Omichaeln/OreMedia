@@ -1,6 +1,7 @@
 import { NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { DecryptedCredentials } from '@oremedia/contracts/providers';
 import { requireTenant, type Tx } from '@oremedia/db';
+import { newId } from '@oremedia/domain/ids';
 import { aadFor, envelopeFromRow, envelopeToRow, open, seal, type EnvelopeRow } from './envelope';
 import { LocalKms, WrapOnlyKms, type Kms } from './kms';
 import { ChannelConnectionRepository, CredentialRefRepository } from './repositories';
@@ -23,6 +24,18 @@ export const configureCredentialBroker = (cfg: CredentialBrokerConfig | null): v
 
 const connectionsRepo = new ChannelConnectionRepository();
 const credentialsRepo = new CredentialRefRepository();
+
+/**
+ * A credential reference as another module holds it (ledger R2-1: a brand destination's Google grant): the owning
+ * tenant, the credential_refs row id and the AAD the owner sealed it under (`${tenantId}:${destinationId}`). The
+ * owner module never reads credential_refs itself; it stores the id the broker returns and asks the broker to
+ * open, rotate or destroy the row.
+ */
+export interface CredentialRefTarget {
+  tenantId: string;
+  credentialRefId: string;
+  aad: string;
+}
 
 /** What the broker hands the caller next to the plaintext: references the adapter needs, never the row. */
 export interface ConnectionRef {
@@ -65,6 +78,52 @@ export const credentialBroker = {
     credentials: DecryptedCredentials,
   ): Promise<EnvelopeRow> {
     return envelopeToRow(await seal(kms(), credentials, aadFor(tenantId, channelConnectionId)));
+  },
+
+  /** Stores a sealed grant as a new credential_refs row in the tenant in context; the id is what the owner keeps. */
+  async createCredentialRef(envelope: EnvelopeRow, tx: Tx): Promise<string> {
+    const id = newId('credentialRef');
+    await credentialsRepo.create({ id, ...envelope }, tx);
+    return id;
+  },
+
+  /** Crypto-shreds a credential row (data key and ciphertext overwritten); one destroyed already is left as it is. */
+  async destroyCredentialRef(
+    credentialRefId: string,
+    reason: 'rotated' | 'disconnected',
+    tx: Tx,
+  ): Promise<void> {
+    const row = await credentialsRepo.getById(credentialRefId, tx);
+    if (!row.destroyedAt) await credentialsRepo.destroy(row.id, row.version, reason, tx);
+  },
+
+  /**
+   * The generic form of withCredentials for a credential another module owns: decrypts in memory under the AAD
+   * the owner names, hands the plaintext to `fn`, scrubs it afterwards. The same process boundary applies (the
+   * API's WrapOnlyKms refuses), the tenant in context must be the owner (a mismatch or a foreign id is NOT_FOUND,
+   * spec 5.3) and a destroyed row is credential_destroyed.
+   */
+  async withCredentialRef<T>(
+    target: CredentialRefTarget,
+    fn: (credentials: DecryptedCredentials) => Promise<T>,
+    tx?: Tx,
+  ): Promise<T> {
+    if (!this.canDecrypt())
+      throw new PolicyDeniedError(
+        'credential_decrypt_not_permitted',
+        'This process is not permitted to decrypt credentials',
+      );
+    const ctx = requireTenant();
+    if (ctx.tenantId !== target.tenantId) throw new NotFoundError('CredentialRef', target.credentialRefId);
+    const credential = await credentialsRepo.getById(target.credentialRefId, tx);
+    if (credential.destroyedAt)
+      throw new PolicyDeniedError('credential_destroyed', 'The credential has been revoked');
+    const credentials = await open(kms(), envelopeFromRow(credential), target.aad);
+    try {
+      return await fn(credentials);
+    } finally {
+      scrub(credentials);
+    }
   },
 
   /**
