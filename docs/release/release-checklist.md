@@ -11,8 +11,8 @@ ticked only with the evidence in hand; "it should work" is not a status. Owner d
        (`docs/programme/production-ui/03-implementation-ledger.md`).
 3. [ ] Open owner decisions that affect behaviour are either decided or carry a working default the owner has seen
        (D-13, D-14, D-15; `docs/decisions/DECISIONS.md`).
-4. [ ] Database roles applied on staging, then production, and proven: `pnpm db:roles:check` run from the api
-       service's shell reports PASS for the application role and the retention role (R1-G, D-25).
+4. [ ] Database roles applied on staging, then production, and proven: `railway run pnpm db:roles:check` (the
+       api service linked) reports PASS for the application role and the retention role (R1-G, D-25).
 5. [ ] Staging smoke green (`STAGING_SMOKE_ENABLED=1`, `smoke.yml` staging job) and the eight UAT journeys walked on
        staging (`docs/runbooks/uat-journeys.md`), results recorded (R1-F).
 6. [ ] Restore rehearsal done on Railway: PITR into a separate instance, object retrieval, held-vs-reconciled

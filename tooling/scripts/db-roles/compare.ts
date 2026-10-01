@@ -6,7 +6,10 @@
 export interface GrantSet {
   /** `table` → the privileges held on it, upper-case, sorted. */
   tables: Map<string, string[]>;
-  /** Privileges held on `*.*` or on the whole database (e.g. ALL PRIVILEGES): anything here is wider than the role. */
+  /**
+   * Anything wider than the role: privileges on `*.*` or the whole database (e.g. ALL PRIVILEGES), a wildcard
+   * database, GRANT OPTION, PROXY, a routine, a role grant or a GRANT the parser does not understand (fail closed).
+   */
   wide: string[];
 }
 
@@ -17,6 +20,7 @@ export function parseGrant(statement: string): { target: string; privileges: str
   const m = PRIV_RE.exec(statement.trim());
   if (!m) return null;
   const privileges = m[1]!
+    .replace(/\([^)]*\)/g, '') // column-level grants: the privilege, not its columns
     .split(',')
     .map((p) => p.trim().toUpperCase())
     .filter(Boolean)
@@ -30,12 +34,28 @@ export function grantSetOf(statements: readonly string[], database: string): Gra
   const tables = new Map<string, string[]>();
   const wide: string[] = [];
   for (const s of statements) {
-    const g = parseGrant(s);
-    if (!g) continue;
+    const text = s.trim();
+    if (!/^GRANT\s/i.test(text)) continue;
+    if (/WITH\s+GRANT\s+OPTION/i.test(text)) wide.push('GRANT OPTION');
+    const g = parseGrant(text);
+    if (!g) {
+      // A role grant (`GRANT role@host TO user`) or a shape this parser does not know: wider until proven otherwise.
+      const roleGrant = /^GRANT\s+(`?[^`\s]+`?@`?[^`\s]*`?)\s+TO\s/i.exec(text);
+      wide.push(roleGrant ? `ROLE ${roleGrant[1]}` : 'UNRECOGNISED GRANT');
+      continue;
+    }
     if (g.privileges.length === 1 && g.privileges[0] === 'USAGE') continue;
+    if (g.privileges.includes('PROXY') || /^(PROCEDURE|FUNCTION)\s/i.test(g.target)) {
+      wide.push(...g.privileges.map((p) => `${p} ON ${g.target}`));
+      continue;
+    }
     const [db, table] = g.target.split('.') as [string, string | undefined];
     if (g.target === '*.*' || (db === database && (table === '*' || table === undefined))) {
       wide.push(...g.privileges);
+      continue;
+    }
+    if (/[%_]/.test(db) && db !== database) {
+      wide.push(...g.privileges.map((p) => `${p} ON ${g.target}`));
       continue;
     }
     if (db !== database || !table) continue;
@@ -73,7 +93,7 @@ export function compareGrants(expected: GrantSet, held: GrantSet): GrantDiff {
   return { missing, extra, wide: held.wide, matches: !missing.length && !extra.length && !held.wide.length };
 }
 
-/** The user and host a MySQL URL connects as, without the password. */
+/** The user and database a MySQL URL names; the password is never read. */
 export function userOf(url: string): { user: string; database: string } {
   const u = new URL(url);
   return { user: decodeURIComponent(u.username), database: u.pathname.replace(/^\//, '') };

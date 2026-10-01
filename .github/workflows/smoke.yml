@@ -5,8 +5,8 @@
 # are passed to the script as environment variables only; the script prints no secret and no signed URL query.
 name: Production smoke check
 
-# The staging job (R1-F) runs the same checks against the staging origin from STAGING_SMOKE_* secrets; it is
-# skipped, not failed, until STAGING_SMOKE_BASE_URL is set (staging credentials are an operator step).
+# The staging job (R1-F) runs the same checks against the staging origin from STAGING_SMOKE_* secrets; it runs
+# only once the repository variable STAGING_SMOKE_ENABLED is '1' (staging credentials are an operator step).
 
 on:
   workflow_dispatch:

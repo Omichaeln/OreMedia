@@ -348,10 +348,12 @@ secrets (the six above, prefixed) once the repository variable `STAGING_SMOKE_EN
 journeys it stands in front of are in `uat-journeys.md`.
 
 `pnpm db:roles:check` (R1-G, D-25) proves which user each connection runs as and whether it holds exactly the
-generated grants: from a shell on the api service (its variables set), it reads `DATABASE_URL` and, when set,
-`DATABASE_URL_RETENTION`, runs only `SELECT CURRENT_USER()` and `SHOW GRANTS`, prints one line per finding and no
-credential, and exits 1 on root, on a database-wide privilege, on a missing grant or on one beyond the role. Run it
-after step 5 of section 1 on staging, then on production, and paste its output into `docs/release/r1-evidence.md`.
+generated grants: run locally through the Railway CLI with the service's variables injected (`railway link` to
+the environment and api service, then `railway run pnpm db:roles:check`; the deployed images carry no tooling), it
+reads `DATABASE_URL` and, when set, `DATABASE_URL_RETENTION`, runs only `SELECT CURRENT_USER()` and `SHOW GRANTS`
+(roles expanded), prints one line per finding and no credential, and exits 1 on root, on a database-wide or
+wildcard privilege, on GRANT OPTION, on a missing grant or on one beyond the role. Run it after step 5 of section 1
+on staging, then on production, and paste its output into `docs/release/r1-evidence.md`.
 
 ## 4. Rollback
 
