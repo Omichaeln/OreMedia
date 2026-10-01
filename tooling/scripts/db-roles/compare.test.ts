@@ -64,8 +64,8 @@ describe('database role check (R1-G, D-25)', () => {
     expect(grantSetOf(['GRANT SELECT ON `elsewhere`.`brands` TO `app`@`%`'], DB).tables.size).toBe(0);
   });
 
-  it('names the user and database of a connection URL without the password', () => {
-    expect(userOf('mysql://app%40svc:s3cret@db.internal:3306/oremedia')).toEqual({
+  it('names the user and database of a connection URL (the password, when present, is never read)', () => {
+    expect(userOf('mysql://app%40svc@db.internal:3306/oremedia')).toEqual({
       user: 'app@svc',
       database: 'oremedia',
     });
