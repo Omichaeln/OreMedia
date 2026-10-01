@@ -102,6 +102,11 @@ const destinationReports = (ctx: ActivityContext, f: Ids) => ({
   destinationId: f['destinationId'],
   now: '2026-09-29T04:00:00.000Z',
 });
+const seoAudit = (ctx: ActivityContext, f: Ids) => ({
+  ...destinationReports(ctx, f),
+  trigger: 'scheduled',
+  runId: f['seoAuditRunId'],
+});
 /** Brand change impact finds nothing of a foreign brand in the caller's tenant: every list and count is empty. */
 const BRAND_CHANGE_NO_OP =
   'the brand change runs in the caller tenant, where the foreign brand has no approvals or publications';
@@ -306,6 +311,18 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
       }),
     },
     'ingest-metrics.pruneDestinationReports': { buildInput: destinationReports },
+    // seoAuditSweepWorkflowV1 / seoAuditWorkflowV1 (ledger R2-4): the target listing is platform-level; every other
+    // activity names one destination (and run) of the tenant it runs in, so a foreign id is NOT_FOUND before any
+    // policy is read or any page fetched
+    'ingest-metrics.listSeoAuditTargets': { buildInput: null, reason: PLATFORM_SWEEP },
+    'ingest-metrics.planSeoAudit': { buildInput: seoAudit },
+    'ingest-metrics.crawlSeoAuditPage': {
+      buildInput: (ctx, f) => ({ ...seoAudit(ctx, f), url: 'https://site.example/', depth: 0 }),
+    },
+    'ingest-metrics.finishSeoAudit': {
+      buildInput: (ctx, f) => ({ ...seoAudit(ctx, f), limitsHit: [], failedPages: 0 }),
+    },
+    'ingest-metrics.pruneSeoAudits': { buildInput: seoAudit },
     'ingest-comments.readCollectionPlan': { buildInput: collectionPlan },
     'ingest-comments.pullComments': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), pullIndex: 0, since: null, cursor: null }),

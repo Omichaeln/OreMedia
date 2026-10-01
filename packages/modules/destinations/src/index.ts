@@ -22,6 +22,7 @@ export {
   configureDestinationCms,
   cmsAdapterFor,
   cmsIO,
+  cmsSafeUrl,
   cmsRegistryInUse,
   type DestinationCmsOptions,
 } from './cms';

@@ -17,8 +17,16 @@ import {
   SourceUsePolicySet,
 } from '@oremedia/contracts/destinations';
 import {
+  SeoAuditFindings,
+  SeoAuditPagesList,
+  SeoAuditRun,
+  SeoAuditRunsList,
+  SeoAuditSummary,
+} from '@oremedia/contracts/seo-audit';
+import {
   destinationReportService,
   destinationService,
+  seoAuditService,
   sourceUsePolicyService,
 } from '@oremedia/module-destinations';
 import { idempotent } from '@oremedia/module-operations';
@@ -36,6 +44,8 @@ const mutationCtx = (ctx: MutationCtx) => ({
  * R2-1: the connect flow that attaches a Google grant (start / complete / select / cancel, as the channel flow) and
  * the sources this deployment can connect; part B: the read model over the stored GA4 and Search Console reports
  * (summary, drill-down rows, opportunities), a restricted view under the brand's source-use policy (brand.read).
+ * R2-4: the technical SEO audit of a website destination (summary, runs, pages, findings with suggested tasks under
+ * the brand's `cms.audit` policy) and the on-demand `run` (seo_audit.run; once per destination per day).
  */
 export const destinationsRouter = router({
   list: tenantQuery
@@ -104,6 +114,29 @@ export const destinationsRouter = router({
     opportunities: tenantQuery
       .input(DestinationReportOpportunities)
       .query(({ ctx, input }) => destinationReportService.opportunities(ctx.tenant.actor, input)),
+  }),
+  audit: router({
+    summary: tenantQuery
+      .input(SeoAuditSummary)
+      .query(({ ctx, input }) => seoAuditService.summary(ctx.tenant.actor, input)),
+    runs: router({
+      list: tenantQuery
+        .input(SeoAuditRunsList)
+        .query(({ ctx, input }) => seoAuditService.runs.list(ctx.tenant.actor, input)),
+    }),
+    pages: router({
+      list: tenantQuery
+        .input(SeoAuditPagesList)
+        .query(({ ctx, input }) => seoAuditService.pages.list(ctx.tenant.actor, input)),
+    }),
+    findings: tenantQuery
+      .input(SeoAuditFindings)
+      .query(({ ctx, input }) => seoAuditService.findings(ctx.tenant.actor, input)),
+    run: tenantMutation
+      .input(SeoAuditRun)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => seoAuditService.run(ctx.tenant.actor, input, tx)),
+      ),
   }),
   sourceUse: router({
     list: tenantQuery

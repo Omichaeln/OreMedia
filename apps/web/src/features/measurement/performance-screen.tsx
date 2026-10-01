@@ -24,6 +24,7 @@ import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingDayKeys, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
 import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
+import { SeoAuditSection } from './seo-audit';
 import { WebPerformanceSection } from './web-performance';
 
 /** The comparable groups the screen reads, in reading order (spec 15.1 groups); other groups are not asked for. */
@@ -463,6 +464,7 @@ export function PerformanceScreen() {
         windowEnd={webWindow.end}
         days={days}
       />
+      <SeoAuditSection companyId={companyId} brandId={brandId} />
     </main>
   );
 }

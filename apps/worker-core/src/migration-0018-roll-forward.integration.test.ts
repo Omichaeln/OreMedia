@@ -4,7 +4,7 @@ import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
 import { channelVariants } from '@oremedia/db/schema/content';
-import { brandDestinations } from '@oremedia/db/schema/destinations';
+import { brandDestinations, seoAuditPages, seoAuditRuns } from '@oremedia/db/schema/destinations';
 import { publicationRemoteChanges, publications, remoteEvidence } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -22,7 +22,11 @@ const sha256 = (value: unknown) => createHash('sha256').update(JSON.stringify(va
  * CHECK constraints, and the new evidence kind is accepted.
  */
 const PREVIOUS_HEAD = '0017_destination_report_rows';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+/** Added by migration 0019 (R2-4); absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [seoAuditRuns, seoAuditPages];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t));
 
 describe('migration 0018 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

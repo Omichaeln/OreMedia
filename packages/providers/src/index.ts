@@ -14,7 +14,14 @@ export {
   type ProviderRequestMeta,
   type SendPhase,
 } from './io';
-export { ssrfSafeDispatcher, ssrfSafeLookup, isBlockedIp, assertSafeUrl, BlockedAddressError } from './ssrf';
+export {
+  ssrfSafeDispatcher,
+  ssrfSafeLookup,
+  isBlockedIp,
+  assertSafeUrl,
+  BlockedAddressError,
+  type SafeDispatcherOptions,
+} from './ssrf';
 export { MemoryProviderRateLimiter, ProviderRateLimitWaitExceeded, type RateLimiter } from './rate-limiter';
 export {
   truncateForTemporal,

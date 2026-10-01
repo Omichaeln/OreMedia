@@ -37,6 +37,18 @@ import {
   type SourceUsePolicyV1,
 } from '@oremedia/contracts/destinations';
 import {
+  SEO_AUDIT_DATA_NOTE,
+  SeoAuditFindings,
+  SeoAuditPagesList,
+  SeoAuditRun,
+  SeoAuditRunsList,
+  SeoAuditSummary,
+  type SeoAuditFindingV1,
+  type SeoAuditPageV1,
+  type SeoAuditRunV1,
+  type SeoAuditSummaryV1,
+} from '@oremedia/contracts/seo-audit';
+import {
   CapabilityUnsupportedError,
   ConflictError,
   NotFoundError,
@@ -57,7 +69,12 @@ import type { MockBuilders, t } from './mock-api';
  */
 export const PD = {
   destinations: { ga4: 'dst_e2e_ga4', gbp: 'dst_e2e_gbp', gsc: 'dst_e2e_gsc', cms: 'dst_e2e_cms' },
-  policies: { ga4Reports: 'sup_e2e_ga4_reports', gbpReviews: 'sup_e2e_gbp_reviews' },
+  policies: {
+    ga4Reports: 'sup_e2e_ga4_reports',
+    gbpReviews: 'sup_e2e_gbp_reviews',
+    cmsAudit: 'sup_e2e_cms_audit',
+  },
+  auditRun: 'sar_e2e_1',
   /** What a completed grant can read (connect.complete offers both; the person confirms one). */
   targets: [
     { externalId: 'properties/9001', displayName: 'Acme · Acme web (new)' },
@@ -347,6 +364,9 @@ export class DestinationsBackend {
   >();
   /** R2-1 part B: what the daily sweep would have stored (seeded for the GA4 property and the Search Console site). */
   readonly reportRows: SeededReportRow[] = [];
+  /** R2-4: the website's last audit (one finished run with its pages); `run` opens a second, left running. */
+  readonly auditRuns: SeoAuditRunV1[] = [];
+  readonly auditPages: SeoAuditPageV1[] = [];
 
   constructor(
     readonly brandId: string,
@@ -451,10 +471,130 @@ export class DestinationsBackend {
         updatedAt: at,
       },
     );
+    this.policies.push({
+      id: PD.policies.cmsAudit,
+      brandId,
+      destinationKind: 'cms_site',
+      dataType: 'cms.audit',
+      allowedUses: ['read'],
+      retentionDays: null,
+      version: 1,
+      reviewedAt: at,
+      reviewDueAt: inDays(45),
+      reviewedById: 'usr_e2e',
+      createdAt: at,
+      updatedAt: at,
+    });
     // No policy for gsc.reports: the Search Console site's reads are refused until an admin sets one (D-17).
     this.reportRows.push(...seededReportRows(PD.destinations.ga4, PD.destinations.gsc));
+    this.auditRuns.push(seededAuditRun(brandId, PD.destinations.cms));
+    this.auditPages.push(...seededAuditPages(PD.auditRun));
   }
 }
+
+const ORIGIN = 'https://acme.example';
+const check = (
+  key: string,
+  ok: boolean,
+  severity: 'critical' | 'major' | 'minor' | null = null,
+  detail: string | null = null,
+) => ({
+  key: key as SeoAuditPageV1['checks'][number]['key'],
+  ok,
+  severity,
+  detail,
+});
+/** The last weekly run of the website: 42 pages, two with issues, the depth cap hit. */
+function seededAuditRun(brandId: string, destinationId: string): SeoAuditRunV1 {
+  return {
+    id: PD.auditRun,
+    brandId,
+    destinationId,
+    origin: ORIGIN,
+    trigger: 'scheduled',
+    startedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    finishedAt: new Date(Date.now() - 2 * 86_400_000 + 240_000).toISOString(),
+    outcome: 'completed',
+    reason: null,
+    pagesCrawled: 42,
+    limitsHit: ['max_depth'],
+    summary: { critical: 1, major: 1, minor: 1, byCheck: { robots_meta: 1, broken_links: 2, title: 1 } },
+  };
+}
+function seededAuditPages(runId: string): SeoAuditPageV1[] {
+  const at = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const ok = (url: string): SeoAuditPageV1 => ({
+    id: `sap_${url.replace(/\W/g, '')}`,
+    runId,
+    url,
+    depth: 1,
+    status: 200,
+    bytes: 24_000,
+    severity: 'ok',
+    checks: [check('status', true), check('title', true)],
+    fetchedAt: at,
+  });
+  return [
+    {
+      id: 'sap_e2e_home',
+      runId,
+      url: `${ORIGIN}/`,
+      depth: 0,
+      status: 200,
+      bytes: 51_000,
+      severity: 'major',
+      checks: [check('status', true), check('title', true), check('broken_links', false, 'major', 'count=1')],
+      fetchedAt: at,
+    },
+    {
+      id: 'sap_e2e_old',
+      runId,
+      url: `${ORIGIN}/old-offer`,
+      depth: 1,
+      status: 200,
+      bytes: 30_000,
+      severity: 'critical',
+      checks: [
+        check('status', true),
+        check('title', false, 'minor', 'length=68'),
+        check('robots_meta', false, 'critical', 'noindex'),
+        check('broken_links', false, 'major', 'count=1'),
+      ],
+      fetchedAt: at,
+    },
+    ok(`${ORIGIN}/about`),
+    ok(`${ORIGIN}/contact`),
+  ];
+}
+/** The findings of the seeded run, as the audit module's rule table words them (one per failing check). */
+const seededFindings = (): SeoAuditFindingV1[] => [
+  {
+    check: 'robots_meta',
+    label: 'Pages excluded by robots meta',
+    severity: 'critical',
+    count: 1,
+    examples: [`${ORIGIN}/old-offer`],
+    suggestedTask:
+      'Confirm 1 page should carry noindex or nofollow; remove the directive where they should rank.',
+  },
+  {
+    check: 'broken_links',
+    label: 'Broken internal links',
+    severity: 'major',
+    count: 2,
+    examples: [`${ORIGIN}/`, `${ORIGIN}/old-offer`],
+    suggestedTask: 'Fix or remove the internal links on 2 pages that lead to pages answering with an error.',
+  },
+  {
+    check: 'title',
+    label: 'Missing or long titles',
+    severity: 'minor',
+    count: 1,
+    examples: [`${ORIGIN}/old-offer`],
+    suggestedTask:
+      'Write a unique title of 60 characters or fewer for 1 page whose title is missing or too long.',
+  },
+];
 
 export interface DestinationsBuilders {
   router: typeof t.router;
@@ -854,6 +994,79 @@ export function destinationsRouters(
           }
         }
         return { items, windowStart: start, windowEnd: end };
+      }),
+    }),
+    // R2-4: the website's audit, a restricted view under the brand's `cms.audit` policy; `run` opens a run.
+    audit: router({
+      summary: query.input(SeoAuditSummary).query(({ input }): SeoAuditSummaryV1 => {
+        const d = destinationOf(input.brandId, input.destinationId);
+        const decision = readDecision(d.kind, 'cms.audit');
+        const runs = b.auditRuns.filter((r) => r.destinationId === d.id);
+        const last = [...runs].reverse().find((r) => r.outcome !== 'running') ?? null;
+        return {
+          brandId: d.brandId,
+          destinationId: d.id,
+          origin: d.externalId,
+          policy: { allowed: decision.allowed, reason: decision.reason, dataType: 'cms.audit' },
+          canRun: d.kind === 'cms_site' && d.status === 'active' && CONNECTORS.has(b.role()),
+          running: runs.some((r) => r.outcome === 'running'),
+          lastRun: decision.allowed ? last : null,
+          data: { kind: 'lab', note: SEO_AUDIT_DATA_NOTE },
+          fieldData: null,
+          computedAt: now(),
+        };
+      }),
+      runs: router({
+        list: query.input(SeoAuditRunsList).query(({ input }) => {
+          const d = destinationOf(input.brandId, input.destinationId);
+          const decision = readDecision(d.kind, 'cms.audit');
+          if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
+          return { items: [...b.auditRuns.filter((r) => r.destinationId === d.id)].reverse() };
+        }),
+      }),
+      pages: router({
+        list: query.input(SeoAuditPagesList).query(({ input }) => {
+          const d = destinationOf(input.brandId, input.destinationId);
+          const decision = readDecision(d.kind, 'cms.audit');
+          if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
+          const runId = input.runId ?? PD.auditRun;
+          const items = b.auditPages.filter(
+            (p) => p.runId === runId && (!input.severity || p.severity === input.severity),
+          );
+          return { items: items.slice(0, input.limit), nextCursor: null };
+        }),
+      }),
+      findings: query.input(SeoAuditFindings).query(({ input }) => {
+        const d = destinationOf(input.brandId, input.destinationId);
+        const decision = readDecision(d.kind, 'cms.audit');
+        if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
+        return { runId: PD.auditRun, items: d.id === PD.destinations.cms ? seededFindings() : [] };
+      }),
+      run: mutation.input(SeoAuditRun).mutation(({ input }): SeoAuditRunV1 => {
+        const d = destinationOf(input.brandId, input.destinationId);
+        if (!CONNECTORS.has(b.role())) throw new PolicyDeniedError('role_missing');
+        if (d.kind !== 'cms_site' || d.status !== 'active')
+          throw new ValidationFailedError([{ path: 'destinationId', issue: 'not_an_active_site' }]);
+        const decision = readDecision(d.kind, 'cms.audit');
+        if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
+        const running = b.auditRuns.find((r) => r.destinationId === d.id && r.outcome === 'running');
+        if (running) throw new ConflictError('SeoAuditRun', running.id, 0);
+        const row: SeoAuditRunV1 = {
+          id: `sar_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+          brandId: d.brandId,
+          destinationId: d.id,
+          origin: d.externalId,
+          trigger: 'on_demand',
+          startedAt: now(),
+          finishedAt: null,
+          outcome: 'running',
+          reason: null,
+          pagesCrawled: 0,
+          limitsHit: [],
+          summary: { critical: 0, major: 0, minor: 0, byCheck: {} },
+        };
+        b.auditRuns.push(row); // the mock worker never finishes it: the screen shows a run in progress
+        return row;
       }),
     }),
     sourceUse: router({

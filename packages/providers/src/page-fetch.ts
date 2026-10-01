@@ -1,5 +1,5 @@
 import type { ProviderIO } from './io';
-import { assertSafeUrl } from './ssrf';
+import { assertSafeUrl, type SafeDispatcherOptions } from './ssrf';
 
 /**
  * The one bounded fetch of a public page (D-16 rendered-page validation, R2-4 audit crawl): no credentials, https
@@ -19,7 +19,7 @@ export interface FetchedPage {
   contentType: string | null;
 }
 
-export interface FetchPageOptions {
+export interface FetchPageOptions extends SafeDispatcherOptions {
   /** The site's host (with port when present): a redirect elsewhere is refused, never followed. */
   host: string;
   maxBytes: number;
@@ -47,7 +47,7 @@ export async function fetchPageBounded(
 ): Promise<FetchedPage> {
   let current = url;
   for (let hop = 0; ; hop++) {
-    const target = assertSafeUrl(current);
+    const target = assertSafeUrl(current, opts);
     if (target.host !== opts.host)
       throw new RenderedPageError('other_host', `${target.host} is not the site's host`);
     const { res } = await io.request(

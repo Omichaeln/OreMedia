@@ -8,10 +8,13 @@ import {
   createCommentIngestionActivities,
   createDestinationReportActivities,
   createMetricCollectionActivities,
+  createSeoAuditActivities,
 } from '@oremedia/activities';
 import {
   DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
   DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
+  SEO_AUDIT_SWEEP_SCHEDULE_ID,
+  SEO_AUDIT_SWEEP_WORKFLOW_TYPE,
   createDestinationRuntime,
 } from '@oremedia/module-destinations';
 import {
@@ -58,6 +61,7 @@ export async function startIngestWorkers(
   const production = (env['NODE_ENV'] ?? 'development') === 'production';
   const connection = await NativeConnection.connect(await connectionOptions(cfg));
   const workflows = workflowsFor(production);
+  const destinationRuntime = createDestinationRuntime();
   const metrics = await Worker.create({
     connection,
     namespace: cfg.namespace,
@@ -65,7 +69,8 @@ export async function startIngestWorkers(
     ...workflows,
     activities: {
       ...createMetricCollectionActivities(createMetricCollectionRuntime()),
-      ...createDestinationReportActivities(createDestinationRuntime().reports),
+      ...createDestinationReportActivities(destinationRuntime.reports),
+      ...createSeoAuditActivities(destinationRuntime.audit),
     },
     maxConcurrentActivityTaskExecutions: Number(env['INGEST_METRICS_CONCURRENCY'] ?? 8),
   });
@@ -114,6 +119,34 @@ export async function ensureDestinationReportSweepScheduled(client: Client): Pro
       policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
     });
     logger().info({ status: DESTINATION_REPORT_SWEEP_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
+}
+
+/** Weekly, Mondays 05:00 UTC, after the report sweep (04:00) so the two never share the queue's capacity. */
+export const SEO_AUDIT_SWEEP_CALENDAR = { dayOfWeek: 'MONDAY', hour: 5, minute: 0 } as const;
+
+/**
+ * Ledger R2-4: seoAuditSweepWorkflowV1 once a week on `ingest-metrics` (one schedule per namespace, joined if it
+ * exists; as ensureDestinationReportSweepScheduled): every active website destination whose `cms.audit` policy
+ * allows reads gets one bounded crawl, overlap skipped.
+ */
+export async function ensureSeoAuditSweepScheduled(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: SEO_AUDIT_SWEEP_SCHEDULE_ID,
+      spec: { calendars: [{ ...SEO_AUDIT_SWEEP_CALENDAR }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: SEO_AUDIT_SWEEP_WORKFLOW_TYPE,
+        taskQueue: INGEST_METRICS_TASK_QUEUE,
+        args: [{}],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+    });
+    logger().info({ status: SEO_AUDIT_SWEEP_SCHEDULE_ID }, 'schedule created');
   } catch (err) {
     if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
     throw err;

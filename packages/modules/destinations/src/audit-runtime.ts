@@ -28,7 +28,6 @@ import {
   BlockedAddressError,
   ProviderTransportError,
   RenderedPageError,
-  assertSafeUrl,
   fetchPageBounded,
   type ProviderIO,
 } from '@oremedia/providers';
@@ -43,7 +42,7 @@ import {
   sitemapUrls,
   summarise,
 } from './audit-crawl';
-import { cmsIO } from './cms';
+import { cmsFetchOptions, cmsIO, cmsSafeUrl } from './cms';
 import {
   BrandDestinationRepository,
   SeoAuditPageRepository,
@@ -107,6 +106,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
   async function readControlFile(client: ProviderIO, url: string, host: string): Promise<string | null> {
     try {
       const page = await fetchPageBounded(client, url, {
+        ...cmsFetchOptions(),
         host,
         maxBytes: CONTROL_FILE_MAX_BYTES,
         maxHops: SEO_AUDIT_MAX_HOPS,
@@ -137,7 +137,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
       let origin: string;
       let host: string;
       try {
-        const u = assertSafeUrl(row.externalId);
+        const u = cmsSafeUrl(row.externalId);
         origin = u.origin;
         host = u.host;
       } catch {
@@ -185,7 +185,8 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
           new Date(at.getTime() - SCHEDULED_REPEAT_MS),
           new Date(at.getTime() + DAY_MS),
         );
-        if (recent.some((r) => r.id !== input.runId)) return { outcome: 'skipped', reason: 'already_ran' };
+        if (recent.some((r) => r.id !== input.runId && r.outcome !== 'failed'))
+          return { outcome: 'skipped', reason: 'already_ran' };
       }
       // The run row: the API created an on-demand one when the person asked; a scheduled run creates its own.
       let runId = input.runId ?? null;
@@ -269,7 +270,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
       const url = sameOriginUrl(input.url, run.origin, run.origin);
       if (!url) return { outcome: 'skipped', reason: 'unsafe' };
       try {
-        assertSafeUrl(url);
+        cmsSafeUrl(url);
       } catch {
         return { outcome: 'skipped', reason: 'unsafe' };
       }
@@ -279,6 +280,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
       let facts;
       try {
         const page = await fetchPageBounded(io(input.tenantId, hooks), url, {
+          ...cmsFetchOptions(),
           host,
           maxBytes: SEO_AUDIT_PAGE_MAX_BYTES,
           maxHops: SEO_AUDIT_MAX_HOPS,
