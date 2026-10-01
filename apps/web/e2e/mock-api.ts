@@ -104,6 +104,7 @@ import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
 import { DestinationsBackend, destinationsRouters } from './mock-destinations';
+import { overviewRouters } from './mock-overview';
 
 /**
  * A UI-only transport for the studio smoke test: the same procedure paths, input DTOs, error envelope and header
@@ -996,6 +997,18 @@ export function createMockRouter(backend: MockBackend) {
     { variants: p6.variants, channels: p6.channels },
   );
 
+  const destinations = destinationsRouters(backend.destinations, { router: t.router, query, mutation });
+  // R2-5: the overview composes the other routers' procedures through callers, as the API composes the modules.
+  const overview = overviewRouters(
+    { router: t.router, query },
+    {
+      measurement: t.createCallerFactory(p6.measurement),
+      publishing: t.createCallerFactory(p5.publishing),
+      content: t.createCallerFactory(p5.content),
+      destinations: t.createCallerFactory(destinations),
+    },
+  );
+
   return t.router({
     content: t.mergeRouters(p5.content, p6.content),
     publishing: p5.publishing,
@@ -1004,7 +1017,8 @@ export function createMockRouter(backend: MockBackend) {
     experiments: p6.experiments,
     measurement: p6.measurement,
     community: communityRouters(backend.community, { router: t.router, query, mutation }),
-    destinations: destinationsRouters(backend.destinations, { router: t.router, query, mutation }),
+    destinations,
+    overview,
     access: t.router({
       /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
       servicePrincipals: t.router({

@@ -598,6 +598,160 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 60_000);
 
+  it('overview (R2-5): one chip per source in its state with the reason, source-labelled figures with the comparison, the splits stated, drill-downs into Performance', async () => {
+    // A connected channel with nothing published in the window: the sixth state (no data) beside the seeded five.
+    backend.phase5.addChannel(
+      'cc_e2e_idle',
+      'linkedin',
+      'Acme LinkedIn page',
+      'active',
+      new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    );
+    try {
+      const page = await signedIn(1440);
+      await page.goto(`${origin}${home.replace('/home', '/overview')}?period=7`);
+      const sources = page.getByTestId('overview-sources');
+      await sources.getByTestId('overview-source-cc_x').waitFor({ timeout: 15_000 });
+      const stateOf = (id: string) =>
+        sources.getByTestId(`overview-source-${id}`).getAttribute('data-source-state');
+      // X: today's post is fresh but one post against none the week before cannot be compared (D-14).
+      expect(await stateOf('cc_x')).toBe('insufficient_sample');
+      expect(await sources.getByTestId('overview-source-cc_x').textContent()).toContain(
+        '1 and 1 posts of 5 needed to compare',
+      );
+      // LinkedIn: the post of three days ago was fetched 60 h ago at a 24 h latency.
+      expect(await stateOf('cc_linkedin')).toBe('stale');
+      expect(await sources.getByTestId('overview-source-cc_linkedin').textContent()).toContain(
+        '60 h old, beyond 24 h × 2',
+      );
+      expect(await stateOf('cc_instagram')).toBe('not_connected');
+      expect(await stateOf('cc_e2e_idle')).toBe('no_data');
+      expect(await sources.getByTestId('overview-source-cc_e2e_idle').textContent()).toContain(
+        'nothing published on this channel in the window',
+      );
+      expect(await stateOf('dst_e2e_ga4')).toBe('fresh');
+      const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      expect(await sources.getByTestId('overview-source-dst_e2e_ga4').textContent()).toContain(
+        `data to ${yesterday} · 6 of 7 days`,
+      );
+      expect(await stateOf('dst_e2e_gsc')).toBe('blocked');
+      expect(await stateOf('dst_e2e_cms')).toBe('fresh');
+      expect(await sources.getByTestId('overview-source-dst_e2e_cms').textContent()).toContain(
+        '42 pages crawled · 1 critical, 1 major, 1 minor',
+      );
+      // Every chip drills down into the Performance screen's own section for the same window.
+      expect(
+        await sources.getByTestId('overview-source-cc_linkedin').getByRole('link').getAttribute('href'),
+      ).toContain('/performance?period=7&channel=cc_linkedin');
+      expect(
+        await sources.getByTestId('overview-source-dst_e2e_ga4').getByRole('link').getAttribute('href'),
+      ).toContain('/performance?period=7#web-heading');
+      expect(
+        await sources.getByTestId('overview-source-dst_e2e_cms').getByRole('link').getAttribute('href'),
+      ).toContain('/performance?period=7#audit-heading');
+      // Social figures: the week's two posts (X 1,840 + LinkedIn 5,200) in one comparable group, the sample named.
+      const impressions = page.getByTestId('overview-figure-impressions');
+      expect(await impressions.textContent()).toContain((7040).toLocaleString('en-US'));
+      expect(await impressions.textContent()).toContain('insufficient sample (2 and 1 posts of 5)');
+      expect(await impressions.textContent()).toContain('Social channels · 2 of 2 posts');
+      expect(await impressions.textContent()).toContain('Stale');
+      expect(await page.getByTestId('overview-social-sample').textContent()).toContain(
+        '2 publications in the window, 1 before',
+      );
+      // Web: the GA4 tiles beside the previous week, labelled with the destination; the blocked site says so.
+      const ga4 = page.getByTestId('overview-web-dst_e2e_ga4');
+      const sessions = await ga4.getByTestId('overview-web-tile-sessions').textContent();
+      expect(sessions).toMatch(/6\d\d/);
+      expect(sessions).toContain('% vs previous');
+      expect(sessions).toContain('Acme web · 6 of 7 days');
+      expect(
+        await page.getByTestId('overview-web-dst_e2e_gsc').getByTestId('overview-web-blocked').textContent(),
+      ).toContain('no policy for gsc.reports');
+      // Audit: the last run's tiles and the lab-data note.
+      const audit = page.getByTestId('overview-audit-dst_e2e_cms');
+      expect(await audit.getByRole('group', { name: 'acme.example audit' }).textContent()).toContain('42');
+      expect(await audit.textContent()).toContain('lab data only; field data not connected');
+      // The splits: what is not connected is stated, never estimated.
+      expect(await page.getByTestId('overview-paid').textContent()).toContain('Organic2 publications');
+      expect(await page.getByTestId('overview-paid').textContent()).toContain(
+        'paid: not connected (ledger R3-4',
+      );
+      expect(await page.getByTestId('overview-native').textContent()).toContain('not observed');
+      await page.close();
+    } finally {
+      backend.phase5.channels.delete('cc_e2e_idle');
+    }
+  }, 60_000);
+
+  it('overview (R2-5): the window selector is Performance’s; a 30-day window turns the GA4 chip into insufficient sample and keeps the URL', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/overview')}?period=7`);
+    const ga4 = page.getByTestId('overview-sources').getByTestId('overview-source-dst_e2e_ga4');
+    await ga4.waitFor({ timeout: 15_000 });
+    expect(await ga4.getAttribute('data-source-state')).toBe('fresh');
+    await page.getByRole('group', { name: 'Period' }).getByRole('button', { name: '30 days' }).click();
+    await expect
+      .poll(() => ga4.getAttribute('data-source-state'), { timeout: 15_000 })
+      .toBe('insufficient_sample');
+    expect(await ga4.textContent()).toContain('20 and 0 days of 5 needed to compare');
+    expect(new URL(page.url()).searchParams.get('period')).toBe('30');
+    expect(await ga4.getByRole('link').getAttribute('href')).toContain('/performance?period=30#web-heading');
+    const sessions = await page
+      .getByTestId('overview-web-dst_e2e_ga4')
+      .getByTestId('overview-web-tile-sessions')
+      .textContent();
+    expect(sessions).toContain('insufficient sample (20 and 0 days of 5)');
+    expect(sessions).not.toContain('% vs previous');
+    // The 30-day window holds the older X post too: three posts, and the comparison still below the minimum.
+    expect(await page.getByTestId('overview-social-sample').textContent()).toContain(
+      '3 publications in the window, 0 before',
+    );
+    await page.close();
+  }, 45_000);
+
+  it('overview (R2-5): the Limits panel states the policy block, the uncertified source, lab data, the D-19 link, paid and native', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/overview')}?period=7`);
+    const limits = page.getByTestId('overview-limits');
+    await limits.waitFor({ timeout: 15_000 });
+    await limits.locator('[data-limit="policy_blocked"]').waitFor({ timeout: 15_000 });
+    expect(await limits.locator('[data-limit="policy_blocked"]').textContent()).toContain(
+      'Acme site: reads not allowed by the source-use policy (no policy for gsc.reports). Settings → Destinations sets the policy.',
+    );
+    expect(await limits.locator('[data-limit="source_uncertified"]').textContent()).toContain(
+      'Search Console site: the source adapter is not certified',
+    );
+    expect(await limits.locator('[data-limit="not_connected"]').textContent()).toContain(
+      'Acme Instagram: connection reconnect needed',
+    );
+    expect(await limits.locator('[data-limit="field_data_not_connected"]').textContent()).toContain(
+      'acme.example: lab data only; field data not connected',
+    );
+    const ai = limits.locator('[data-limit="ai_search_external"]').first().getByRole('link');
+    expect(await ai.getAttribute('href')).toBe('https://analytics.google.com/');
+    expect(await ai.getAttribute('target')).toBe('_blank');
+    expect(await ai.getAttribute('rel')).toContain('noopener');
+    expect(await limits.locator('[data-limit="paid_not_connected"]').textContent()).toContain('R3-4');
+    expect(await limits.locator('[data-limit="native_not_observed"]').textContent()).toContain(
+      'not observed',
+    );
+    expect(await limits.locator('[data-limit="stale"]').textContent()).toContain(
+      'Acme LinkedIn: oldest value 60 h old',
+    );
+    expect(await limits.locator('[data-limit="latest_fetch_comparison"]').count()).toBe(1);
+    // Denied: the screen renders the refusal as its neighbours do.
+    backend.denied.add('overview.summary');
+    try {
+      await page.reload();
+      const refusal = page.locator('[data-error-code="FORBIDDEN"]');
+      await refusal.waitFor({ timeout: 15_000 });
+      expect(await refusal.textContent()).toContain('The overview could not load');
+    } finally {
+      backend.denied.delete('overview.summary');
+    }
+    await page.close();
+  }, 60_000);
+
   it('settings destinations (R2-1): a source connect starts with Google’s URL as a new-tab link; only enabled sources are offered', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
