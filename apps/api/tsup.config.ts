@@ -12,6 +12,7 @@ export default defineConfig({
     migrate: 'src/migrate.ts',
     'seed-builtin-skills': 'src/seed-builtin-skills.ts',
     'bootstrap-owner': 'src/bootstrap-owner.ts',
+    'db-roles-apply': 'src/db-roles-apply.ts',
   },
   format: ['esm'],
   target: 'node22',

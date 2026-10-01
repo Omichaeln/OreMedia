@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareGrants, formatDiff, grantSetOf, parseGrant, userOf } from './compare';
+import { compareGrants, formatDiff, grantSetOf, parseGrant, userOf } from './roles-compare';
 
 const DB = 'oremedia';
 const expected = grantSetOf(
