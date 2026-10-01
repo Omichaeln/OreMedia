@@ -107,12 +107,20 @@ function BrandCounts({
   );
 }
 
+/** The zones the browser knows (IANA); UTC first so a brand without a home office has a plain choice. */
+const TIME_ZONES: readonly string[] = (() => {
+  const known = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : ['UTC'];
+  return ['UTC', ...known.filter((z) => z !== 'UTC')];
+})();
+
 function CreateBrand() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [name, setName] = useState('');
   const [classification, setClassification] = useState<BrandClassification>('client');
+  // R1-D: the brand keeps its own clock from the first day; the browser's zone is the likely one.
+  const [timezone, setTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const create = useMutation(
     trpc.brand.create.mutationOptions({
       ...mutationIntent(intent.key),
@@ -127,8 +135,7 @@ function CreateBrand() {
   );
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (name.trim())
-      create.mutate({ name: name.trim(), timezone: 'UTC', defaultLocale: 'en', classification });
+    if (name.trim()) create.mutate({ name: name.trim(), timezone, defaultLocale: 'en', classification });
   };
   return (
     <Section id="create-brand-heading" title="Create a brand">
@@ -156,6 +163,14 @@ function CreateBrand() {
               value: c,
               label: CLASSIFICATION_LABEL[c].label,
             }))}
+          />
+        </Field>
+        <Field label="Time zone" htmlFor="brand-timezone" className="min-w-56">
+          <Select
+            id="brand-timezone"
+            value={timezone}
+            onValueChange={setTimezone}
+            options={TIME_ZONES.map((z) => ({ value: z, label: z.replace(/_/g, ' ') }))}
           />
         </Field>
         <Button type="submit" variant="primary" disabled={create.isPending || !name.trim()}>

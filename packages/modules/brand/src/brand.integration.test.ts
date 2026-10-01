@@ -1460,4 +1460,56 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(audited[0]).toMatchObject({ decision: 'allowed' });
     });
   });
+  describe('brand setup (R1-D)', () => {
+    it('setup completes only once the standards are published; then the brand is active, audited, idempotent; foreign is NOT_FOUND', async () => {
+      const created = await run(tenantA, (tx) =>
+        brandService.create(A, { name: 'Setup brand', timezone: 'Europe/Berlin', defaultLocale: 'en' }, tx),
+      );
+      const id = created.brandId;
+      expect((await tdb.db.select().from(brands).where(eq(brands.id, id)))[0]!.status).toBe('setup');
+      await expect(
+        run(tenantA, (tx) => brandService.completeSetup(A, { brandId: id, expectedVersion: 0 }, tx)),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      const draft = await run(tenantA, (tx) => brandService.versions.createDraft(A, { brandId: id }, tx));
+      const submitted = await run(tenantA, (tx) =>
+        brandService.versions.submitForReview(
+          A,
+          { brandId: id, versionId: draft.versionId, expectedVersion: draft.version },
+          tx,
+        ),
+      );
+      await run(tenantA, (tx) =>
+        brandService.versions.publish(
+          A,
+          { brandId: id, versionId: draft.versionId, expectedVersion: submitted.version },
+          tx,
+        ),
+      );
+      const row = (await tdb.db.select().from(brands).where(eq(brands.id, id)))[0]!;
+      expect(row.publishedVersionId).toBe(draft.versionId);
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.completeSetup(A, { brandId: id, expectedVersion: row.version + 1 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ConflictError);
+      const done = await run(tenantA, (tx) =>
+        brandService.completeSetup(A, { brandId: id, expectedVersion: row.version }, tx),
+      );
+      expect(done).toEqual({ brandId: id, status: 'active', version: row.version + 1 });
+      expect((await tdb.db.select().from(brands).where(eq(brands.id, id)))[0]!.status).toBe('active');
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.action, 'brand.setup.complete'), eq(auditEvents.resourceId, id)));
+      expect(audited).toHaveLength(1);
+      // Already active: nothing changes, nothing is written.
+      const again = await run(tenantA, (tx) =>
+        brandService.completeSetup(A, { brandId: id, expectedVersion: 999 }, tx),
+      );
+      expect(again.status).toBe('active');
+      await expect(
+        run(tenantA, (tx) => brandService.completeSetup(A, { brandId: brandB, expectedVersion: 0 }, tx)),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
 });

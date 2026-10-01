@@ -251,6 +251,52 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('setup checklist (R1-D): a brand in setup lists the journey with each step read live; the standards gate Finish; done steps close it', async () => {
+    const brand = backend.brands.find((b) => b.id === E2E.brandId)!;
+    brand.status = 'setup';
+    backend.addBrand('brd_e2e_setup', 'Fresh brand');
+    const fresh = backend.brands.find((b) => b.id === 'brd_e2e_setup')!;
+    fresh.status = 'setup';
+    fresh.publishedVersionId = null;
+    try {
+      const page = await signedIn(1440);
+      const checklist = page.getByTestId('setup-checklist');
+      await checklist.waitFor({ timeout: 15_000 });
+      // The e2e brand has published standards, a channel, assets, packages and review requests: every step is done.
+      await expect
+        .poll(
+          () =>
+            checklist
+              .getByTestId('setup-step')
+              .evaluateAll((els) => els.map((el) => el.getAttribute('data-done'))),
+          {
+            timeout: 15_000,
+          },
+        )
+        .toEqual(['true', 'true', 'true', 'true', 'true']);
+      expect(await checklist.textContent()).toContain('5 of 5');
+      await checklist.getByRole('button', { name: 'Finish setup' }).click();
+      await expect.poll(() => page.getByTestId('setup-checklist').count(), { timeout: 15_000 }).toBe(0);
+      expect(brand.status).toBe('active');
+      // A brand without published standards: the gate is named, Finish is refused with the reason, a channel can be skipped.
+      await page.goto(`${origin}/c/${encodeURIComponent(E2E.tenantId)}/b/brd_e2e_setup/home`);
+      const freshList = page.getByTestId('setup-checklist');
+      await freshList.waitFor({ timeout: 15_000 });
+      const standards = freshList.locator('[data-testid="setup-step"][data-step="standards"]');
+      expect(await standards.textContent()).toContain('Needed');
+      expect(await standards.getByRole('link', { name: 'Open brand system' }).count()).toBe(1);
+      const finish = freshList.getByRole('button', { name: 'Finish setup' });
+      expect(await finish.isDisabled()).toBe(true);
+      await page.close();
+    } finally {
+      brand.status = undefined;
+      backend.brands.splice(
+        backend.brands.findIndex((b) => b.id === 'brd_e2e_setup'),
+        1,
+      );
+    }
+  }, 45_000);
+
   it('settings: channels and skills are tabs; a skill without a published version says so', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}`);

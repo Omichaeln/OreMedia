@@ -240,6 +240,8 @@ export const BrandCreate = z.object({
   defaultLocale: z.string().min(2).max(16),
   classification: BrandClassification.default('client'),
 });
+/** R1-D: a brand leaves `setup` once its first standards are published; the rest of the journey is optional. */
+export const BrandCompleteSetup = z.object({ brandId: z.string(), expectedVersion: z.number().int() });
 export const BrandClassify = z.object({
   brandId: z.string(),
   classification: BrandClassification,
