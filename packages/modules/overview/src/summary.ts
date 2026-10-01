@@ -1,5 +1,4 @@
 import type { z } from 'zod';
-import type { DestinationV1 } from '@oremedia/contracts/destinations';
 import { COMPARISON_MINIMUM_SAMPLE } from '@oremedia/contracts/measurement';
 import { OverviewSummary, type OverviewSourceV1, type OverviewSummaryV1 } from '@oremedia/contracts/overview';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
@@ -150,7 +149,7 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
             { brandId: parsed.brandId, destinationId: destination.id },
             tx,
           );
-          const composed = auditSourceOf(destination as DestinationV1, summary, at);
+          const composed = auditSourceOf(destination, summary, at);
           audits.push(composed.entry);
           sources.push(composed.source);
           continue;
@@ -167,7 +166,7 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
           tx,
         );
         if (summary.presentation === null) continue; // a kind without a registered report source
-        const composed = webSourceOf(destination as DestinationV1, summary, days.length);
+        const composed = webSourceOf(destination, summary, days.length);
         web.push(composed.entry);
         sources.push(composed.source);
       }
