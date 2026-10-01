@@ -100,19 +100,12 @@ export async function seedContentPackage(
     authorId: tenant.ownerUserId,
   });
   const channelVariantId = newId('channelVariant');
-  await db.insert(channelVariants).values({
-    id: channelVariantId,
-    tenantId,
-    brandId,
-    contentRevisionId,
-    channelConnectionId,
-    text: copy.master.text,
-    altTexts: [],
-    settings: {},
-    exportIds: [],
-    capabilityVersion: 1,
-    validation: { ok: true, issues: [] },
-  });
+  // sql``, not insert(channelVariants).values(): Drizzle would name destination_id (0018), which the roll-forward
+  // suites' earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${channelVariants} (id, tenant_id, brand_id, content_revision_id, channel_connection_id, text, alt_texts, settings, export_ids, capability_version, validation, created_at, updated_at) values (${channelVariantId}, ${tenantId}, ${brandId}, ${contentRevisionId}, ${channelConnectionId}, ${copy.master.text}, ${'[]'}, ${'{}'}, ${'[]'}, 1, ${JSON.stringify({ ok: true, issues: [] })}, ${at}, ${at})`,
+  );
   return { channelConnectionId, contentPackageId, contentRevisionId, channelVariantId };
 }
 

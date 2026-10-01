@@ -2859,6 +2859,116 @@
                       },
                       "rationale": {
                         "type": "string"
+                      },
+                      "article": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "article"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "excerpt": {
+                            "type": "string"
+                          },
+                          "blocks": {
+                            "type": "array",
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "paragraph"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "heading"
+                                    },
+                                    "level": {
+                                      "anyOf": [
+                                        {
+                                          "const": 2
+                                        },
+                                        {
+                                          "const": 3
+                                        },
+                                        {
+                                          "const": 4
+                                        }
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "level", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "list"
+                                    },
+                                    "ordered": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": ["type", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "faq"
+                                    },
+                                    "question": {
+                                      "type": "string"
+                                    },
+                                    "answer": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "question", "answer"]
+                                }
+                              ]
+                            }
+                          },
+                          "categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "featuredAssetId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "title", "slug", "blocks"]
                       }
                     },
                     "required": ["schemaVersion", "master"]
@@ -2991,6 +3101,116 @@
                       },
                       "rationale": {
                         "type": "string"
+                      },
+                      "article": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "article"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "excerpt": {
+                            "type": "string"
+                          },
+                          "blocks": {
+                            "type": "array",
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "paragraph"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "heading"
+                                    },
+                                    "level": {
+                                      "anyOf": [
+                                        {
+                                          "const": 2
+                                        },
+                                        {
+                                          "const": 3
+                                        },
+                                        {
+                                          "const": 4
+                                        }
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "level", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "list"
+                                    },
+                                    "ordered": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": ["type", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "faq"
+                                    },
+                                    "question": {
+                                      "type": "string"
+                                    },
+                                    "answer": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "question", "answer"]
+                                }
+                              ]
+                            }
+                          },
+                          "categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "featuredAssetId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "title", "slug", "blocks"]
                       }
                     },
                     "required": ["schemaVersion", "master"]
@@ -3213,9 +3433,15 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "destinationIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
-                "required": ["contentRevisionId", "channelConnectionIds"]
+                "required": ["contentRevisionId"]
               }
             }
           }
@@ -4635,6 +4861,27 @@
         }
       }
     },
+    "/trpc/destinations.articles.validate": {
+      "post": {
+        "operationId": "destinations.articles.validate",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "publicationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["publicationId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/destinations.connect.cancel": {
       "post": {
         "operationId": "destinations.connect.cancel",
@@ -4732,6 +4979,45 @@
                   }
                 },
                 "required": ["brandId", "kind"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.connect.withSecret": {
+      "post": {
+        "operationId": "destinations.connect.withSecret",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "cms_site"
+                  },
+                  "siteUrl": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "secret": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "allowPublish": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["brandId", "kind", "siteUrl", "username", "secret"]
               }
             }
           }
@@ -6914,6 +7200,30 @@
         }
       }
     },
+    "/trpc/publishing.publications.unpublishRemote": {
+      "post": {
+        "operationId": "publishing.publications.unpublishRemote",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "publicationId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": ["publicationId", "reason"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/review.approvals.get": {
       "get": {
         "operationId": "review.approvals.get",
@@ -8608,6 +8918,116 @@
                       },
                       "rationale": {
                         "type": "string"
+                      },
+                      "article": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "article"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "slug": {
+                            "type": "string"
+                          },
+                          "excerpt": {
+                            "type": "string"
+                          },
+                          "blocks": {
+                            "type": "array",
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "paragraph"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "heading"
+                                    },
+                                    "level": {
+                                      "anyOf": [
+                                        {
+                                          "const": 2
+                                        },
+                                        {
+                                          "const": 3
+                                        },
+                                        {
+                                          "const": 4
+                                        }
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "level", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "list"
+                                    },
+                                    "ordered": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": ["type", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "faq"
+                                    },
+                                    "question": {
+                                      "type": "string"
+                                    },
+                                    "answer": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "question", "answer"]
+                                }
+                              ]
+                            }
+                          },
+                          "categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "tags": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "featuredAssetId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "title", "slug", "blocks"]
                       }
                     },
                     "required": ["schemaVersion", "master"]
@@ -11639,6 +12059,116 @@
                 },
                 "rationale": {
                   "type": "string"
+                },
+                "article": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "article"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "excerpt": {
+                      "type": "string"
+                    },
+                    "blocks": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "paragraph"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "heading"
+                              },
+                              "level": {
+                                "anyOf": [
+                                  {
+                                    "const": 2
+                                  },
+                                  {
+                                    "const": 3
+                                  },
+                                  {
+                                    "const": 4
+                                  }
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "level", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "list"
+                              },
+                              "ordered": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["type", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "faq"
+                              },
+                              "question": {
+                                "type": "string"
+                              },
+                              "answer": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "question", "answer"]
+                          }
+                        ]
+                      }
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "featuredAssetId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "title", "slug", "blocks"]
                 }
               },
               "required": ["schemaVersion", "master"]
@@ -11735,6 +12265,116 @@
                 },
                 "rationale": {
                   "type": "string"
+                },
+                "article": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "article"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "excerpt": {
+                      "type": "string"
+                    },
+                    "blocks": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "paragraph"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "heading"
+                              },
+                              "level": {
+                                "anyOf": [
+                                  {
+                                    "const": 2
+                                  },
+                                  {
+                                    "const": 3
+                                  },
+                                  {
+                                    "const": 4
+                                  }
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "level", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "list"
+                              },
+                              "ordered": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["type", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "faq"
+                              },
+                              "question": {
+                                "type": "string"
+                              },
+                              "answer": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "question", "answer"]
+                          }
+                        ]
+                      }
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "featuredAssetId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "title", "slug", "blocks"]
                 }
               },
               "required": ["schemaVersion", "master"]
@@ -11894,9 +12534,15 @@
               "items": {
                 "type": "string"
               }
+            },
+            "destinationIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
-          "required": ["contentRevisionId", "channelConnectionIds"]
+          "required": ["contentRevisionId"]
         }
       },
       "content.variants.get": {
@@ -13134,6 +13780,18 @@
           "required": ["brandId", "page"]
         }
       },
+      "destinations.articles.validate": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "publicationId": {
+              "type": "string"
+            }
+          },
+          "required": ["publicationId"]
+        }
+      },
       "destinations.connect.cancel": {
         "type": "mutation",
         "input": {
@@ -13193,6 +13851,36 @@
             }
           },
           "required": ["brandId", "kind"]
+        }
+      },
+      "destinations.connect.withSecret": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cms_site"
+            },
+            "siteUrl": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            },
+            "secret": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "allowPublish": {
+              "type": "boolean"
+            }
+          },
+          "required": ["brandId", "kind", "siteUrl", "username", "secret"]
         }
       },
       "destinations.disconnect": {
@@ -14759,6 +15447,21 @@
             }
           },
           "required": ["channelVariantId", "scheduledFor", "authority"]
+        }
+      },
+      "publishing.publications.unpublishRemote": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "publicationId": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["publicationId", "reason"]
         }
       },
       "review.approvals.get": {

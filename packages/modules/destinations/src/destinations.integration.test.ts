@@ -28,11 +28,17 @@ import {
   credentialBroker,
   registerProviderClients,
 } from '@oremedia/module-publishing';
-import { SourceRegistry } from '@oremedia/providers';
+import { CmsRegistry, SourceRegistry, textFingerprint } from '@oremedia/providers';
+import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
+import type { ArticleDocumentV1 } from '@oremedia/contracts/content';
+import { renderArticleHtml } from '@oremedia/contracts/article';
+import { destinationArticles, effectivePublishMode } from './articles';
+import { configureDestinationCms } from './cms';
 import { configureSourceAvailability } from './hooks';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
+import { FixtureCmsAdapter } from './testing/fixture-cms';
 import { FixtureSourceAdapter, fixtureSourceCapability } from './testing/fixture-source';
 
 /**
@@ -1018,6 +1024,359 @@ describe('destinations module against MySQL 8', () => {
         withinHours: 24,
       });
       expect(due.some((d) => d.destinationId === connectedId)).toBe(false);
+    });
+  });
+  describe('website articles (ledger R2-3, D-16): a secret connect, its verification and the article publisher', () => {
+    const cms = new FixtureCmsAdapter();
+    const SITE = 'https://blog.acme.example';
+    const SECRET = 'abcd efgh ijkl mnop';
+    const VERIFY_ACTOR = { kind: 'user' as const, id: USER };
+    const article: ArticleDocumentV1 = {
+      kind: 'article',
+      title: 'Why ore and tar last',
+      slug: 'why-ore-and-tar-last',
+      excerpt: 'A short answer.',
+      blocks: [
+        { type: 'paragraph', text: 'Ore is heavy.' },
+        { type: 'faq', question: 'Is it safe?', answer: 'Yes, mostly.' },
+      ],
+      categories: ['Guides'],
+      tags: ['ore'],
+    };
+    const variant = (
+      destinationId: string,
+      over: Partial<ChannelVariantForPublishing> = {},
+    ): ChannelVariantForPublishing => ({
+      id: newId('channelVariant'),
+      tenantId: tenantA,
+      brandId: brandA,
+      contentPackageId: newId('contentPackage'),
+      contentRevisionId: newId('contentRevision'),
+      channelConnectionId: null,
+      destinationId,
+      text: 'A short answer.',
+      altTexts: [],
+      settings: { publishMode: 'draft' },
+      exportIds: [],
+      exportHashes: [],
+      article,
+      version: 0,
+      ...over,
+    });
+    let siteId = '';
+    const connect = (actor: ResolvedActor, over: Record<string, unknown> = {}) =>
+      run(tenantA, (tx) =>
+        destinationService.connect.withSecret(
+          actor,
+          {
+            brandId: brandA,
+            kind: 'cms_site',
+            siteUrl: SITE,
+            username: 'ore-editor',
+            secret: SECRET,
+            ...over,
+          },
+          tx,
+        ),
+      );
+    // A runtime per call: the per-destination verify lock (a minute, as the refresh's) would otherwise read `locked`.
+    const verify = (destinationId: string) =>
+      inTenant(tenantA, () =>
+        createDestinationRuntime().verify.verifyDestinationCredential({
+          tenantId: tenantA,
+          destinationId,
+          actor: VERIFY_ACTOR,
+          correlationId: 'corr_verify',
+        }),
+      );
+    const setArticlePolicy = (allowedUses: Array<'read' | 'write'>) =>
+      run(tenantA, async (tx) => {
+        const existing = (
+          await sourceUsePolicyService.list(owner(), { brandId: brandA, destinationKind: 'cms_site' }, tx)
+        ).items.find((p) => p.dataType === 'cms.articles');
+        return sourceUsePolicyService.set(
+          owner(),
+          {
+            brandId: brandA,
+            destinationKind: 'cms_site',
+            dataType: 'cms.articles',
+            allowedUses,
+            reviewDueAt: inDays(90),
+            ...(existing ? { expectedVersion: existing.version } : {}),
+          },
+          tx,
+        );
+      });
+
+    beforeAll(() => {
+      configureDestinationCms({ registry: new CmsRegistry().register(cms) });
+      configureSourceAvailability(() => true);
+    });
+
+    it('connect.withSecret seals the secret, registers the site with health unknown and asks for a verification; nothing returns the secret', async () => {
+      const registered = await connect(member(tenantA, 'publisher'));
+      siteId = registered.id;
+      expect(registered).toMatchObject({
+        kind: 'cms_site',
+        externalId: SITE,
+        displayName: 'blog.acme.example',
+        grantedScopes: ['articles:write'],
+        health: 'unknown',
+        healthCheckedAt: null,
+        status: 'active',
+      });
+      expect(JSON.stringify(registered)).not.toContain('abcd');
+      const row = (await tdb.db.select().from(brandDestinations).where(eq(brandDestinations.id, siteId)))[0]!;
+      expect(row.credentialRefId).toBeTruthy();
+      const credential = (
+        await tdb.db.select().from(credentialRefs).where(eq(credentialRefs.id, row.credentialRefId!))
+      )[0]!;
+      expect(credential.aad).toBe(`${tenantA}:${siteId}`);
+      expect(String(credential.ciphertext)).not.toContain('abcd');
+      const events = await tdb.db
+        .select()
+        .from(outboxEvents)
+        .where(and(eq(outboxEvents.tenantId, tenantA), eq(outboxEvents.aggregateId, siteId)));
+      expect(events.map((e) => [e.eventType, e.payload['verify']])).toEqual([
+        ['destination.registered', true],
+      ]);
+      expect(JSON.stringify(events)).not.toContain('abcd');
+    });
+
+    it("withSecret refuses a non-https or path address, the same site twice, a creator, an agent and another tenant's brand", async () => {
+      await expect(connect(owner(), { siteUrl: 'http://blog.acme.example' })).rejects.toMatchObject({
+        details: [{ path: 'siteUrl', issue: 'site_url_not_allowed' }],
+      });
+      await expect(connect(owner(), { siteUrl: 'https://blog.acme.example/wp-admin' })).rejects.toMatchObject(
+        {
+          details: [{ path: 'siteUrl', issue: 'site_url_not_an_origin' }],
+        },
+      );
+      await expect(connect(owner())).rejects.toBeInstanceOf(ConflictError);
+      await expect(connect(member(tenantA, 'creator'))).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(connect(agent(tenantA))).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(connect(owner(), { brandId: brandB })).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('the worker verifies the sealed secret against the site and records the health; a refused identity is unreachable', async () => {
+      cms.calls.length = 0;
+      expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
+      expect(cms.calls).toEqual([{ op: 'verify', secret: SECRET, username: 'ore-editor', siteUrl: SITE }]);
+      let dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      expect(dto.health).toBe('healthy');
+      expect(dto.healthCheckedAt).toBeTruthy();
+      cms.verifyBehaviour = { kind: 'unauthorised' };
+      expect(await verify(siteId)).toEqual({ ok: false, reason: 'reconnect_required' });
+      dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      expect(dto.health).toBe('unreachable');
+      cms.verifyBehaviour = { kind: 'transient' };
+      expect(await verify(siteId)).toEqual({ ok: false, reason: 'transient' });
+      expect(
+        (
+          await inTenant(tenantA, () =>
+            destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+          )
+        ).health,
+      ).toBe('degraded');
+      cms.verifyBehaviour = { kind: 'ok', canPublish: true };
+      expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
+      const audits = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'destination.verify')));
+      expect(audits.map((a) => a.decision)).toEqual(['allowed', 'denied', 'denied', 'allowed']);
+      await expect(verify(newId('destination'))).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('describe names the site as a writable target; a destination variant needs an article and a granted publish mode', async () => {
+      expect(await inTenant(tenantA, () => destinationService.describe(siteId))).toEqual({
+        brandId: brandA,
+        kind: 'cms_site',
+        capabilityVersion: 1,
+        writable: true,
+      });
+      expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+        id: siteId,
+        brandId: brandA,
+        kind: 'cms_site',
+        usable: true,
+        actions: { edit: true, delete: true, unpublish: true },
+      });
+      expect(await inTenant(tenantA, () => destinationArticles.validateVariant(variant(siteId)))).toEqual({
+        ok: true,
+        issues: [],
+      });
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.validateVariant(variant(siteId, { article: null })),
+        ),
+      ).toEqual({
+        ok: false,
+        issues: [{ path: 'article', issue: 'article_missing' }],
+      });
+      // Live publishing was not granted at connect time: asking for it is a finding, and the write stays a draft.
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.validateVariant(variant(siteId, { settings: { publishMode: 'publish' } })),
+        ),
+      ).toEqual({
+        ok: false,
+        issues: [{ path: 'settings.publishMode', issue: 'publish_not_granted' }],
+      });
+      expect(effectivePublishMode({ publishMode: 'publish' }, ['articles:write'])).toBe('draft');
+      expect(effectivePublishMode({ publishMode: 'publish' }, ['articles:write', 'articles:publish'])).toBe(
+        'publish',
+      );
+      expect(effectivePublishMode({}, ['articles:write', 'articles:publish'])).toBe('draft');
+      await expect(inTenant(tenantB, () => destinationArticles.describe(siteId))).resolves.toBeNull();
+    });
+
+    it('publish is refused without a source-use policy allowing write (default deny); with it the article lands as a draft, is read back and its page validated', async () => {
+      const input = {
+        tenantId: tenantA,
+        destinationId: siteId,
+        publicationId: newId('publication'),
+        attemptId: newId('publicationAttempt'),
+        idempotencyKey: 'idem_1',
+        variant: variant(siteId),
+      };
+      // The policy an earlier test recorded for cms.articles is narrowed to `read`: a write is then refused (D-17).
+      await setArticlePolicy(['read']);
+      expect(await inTenant(tenantA, () => destinationArticles.publish(input))).toMatchObject({
+        outcome: 'rejected',
+        code: 'source_use_denied',
+      });
+      await setArticlePolicy(['read', 'write']);
+      let sent = 0;
+      cms.calls.length = 0;
+      cms.pages.set(`${SITE}/?p=100`, {
+        status: 200,
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+      });
+      const result = await inTenant(tenantA, () =>
+        destinationArticles.publish(input, undefined, async () => void sent++),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted', remotePostId: '100', remoteUrl: `${SITE}/?p=100` });
+      expect(cms.calls.map((c) => c.op)).toEqual(['create', 'read']);
+      expect(cms.calls.every((c) => c.secret === SECRET)).toBe(true);
+      expect(cms.articles.get('100')).toMatchObject({
+        status: 'draft',
+        slug: 'why-ore-and-tar-last',
+        html: renderArticleHtml(article),
+      });
+      if (result.outcome !== 'accepted') return;
+      expect(result.readback).toMatchObject({
+        remoteId: '100',
+        status: 'draft',
+        contentHash: textFingerprint(renderArticleHtml(article)),
+      });
+      expect(result.validation).toMatchObject({ ok: true, status: 200, truncated: false, error: null });
+      expect(result.validation?.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
+        'status_ok:true',
+        'title_present:true',
+        'canonical_present:true',
+        'indexable:true', // a draft may carry noindex
+        'body_present:true',
+      ]);
+    });
+
+    it('an edit reads the remote first: with the read-back hash it writes; after the site moved it refuses as a conflict and overwrites nothing', async () => {
+      const current = cms.articles.get('100')!;
+      const edited = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: current.contentHash,
+          html: '<p>Ore is heavy and tar is sticky.</p><script>alert(1)</script>',
+          idempotencyKey: 'idem_edit_1',
+        }),
+      );
+      expect(edited).toMatchObject({
+        outcome: 'done',
+        readback: { remoteId: '100', contentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>') },
+      });
+      expect(cms.articles.get('100')?.html).toBe('<p>Ore is heavy and tar is sticky.</p>'); // sanitised at send
+      // Someone edited the article on the site since: the stored hash no longer matches.
+      cms.articles.set('100', {
+        ...cms.articles.get('100')!,
+        html: '<p>Changed on the site.</p>',
+        contentHash: textFingerprint('<p>Changed on the site.</p>'),
+      });
+      const conflict = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: edited.outcome === 'done' ? (edited.readback?.contentHash ?? null) : null,
+          html: '<p>Another edit.</p>',
+          idempotencyKey: 'idem_edit_2',
+        }),
+      );
+      expect(conflict).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+    });
+
+    it('unpublish sets the article back to a draft and reads it back; a rendered validation runs without the secret; a disconnected site is refused', async () => {
+      cms.articles.set('100', { ...cms.articles.get('100')!, status: 'publish' });
+      const reverted = await inTenant(tenantA, () =>
+        destinationArticles.unpublish({ tenantId: tenantA, destinationId: siteId, remoteId: '100' }),
+      );
+      expect(reverted).toMatchObject({ outcome: 'done', readback: { status: 'draft' } });
+      cms.calls.length = 0;
+      const validation = await inTenant(tenantA, () =>
+        destinationArticles.validateRendered({
+          tenantId: tenantA,
+          destinationId: siteId,
+          url: `${SITE}/missing`,
+          title: article.title,
+          firstParagraph: 'Ore is heavy.',
+          draft: false,
+        }),
+      );
+      expect(validation).toMatchObject({ ok: false, status: 404 });
+      expect(validation.checks.find((c) => c.key === 'status_ok')?.ok).toBe(false);
+      expect(cms.calls).toEqual([]); // no credential was opened for the public page
+      await setArticlePolicy(['read']);
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.unpublish({ tenantId: tenantA, destinationId: siteId, remoteId: '100' }),
+        ),
+      ).toMatchObject({
+        outcome: 'rejected',
+        code: 'source_use_denied',
+      });
+      await setArticlePolicy(['read', 'write']);
+      const dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      await run(tenantA, (tx) =>
+        destinationService.disconnect(
+          owner(),
+          { brandId: brandA, destinationId: siteId, expectedVersion: dto.version },
+          tx,
+        ),
+      );
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.publish({
+            tenantId: tenantA,
+            destinationId: siteId,
+            publicationId: newId('publication'),
+            attemptId: newId('publicationAttempt'),
+            idempotencyKey: 'idem_2',
+            variant: variant(siteId),
+          }),
+        ),
+      ).toMatchObject({
+        outcome: 'rejected',
+        code: 'destination_not_usable',
+      });
+      expect(await verify(siteId)).toEqual({ ok: false, reason: 'not_active' });
     });
   });
 });
