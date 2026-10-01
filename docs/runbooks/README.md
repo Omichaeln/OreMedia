@@ -17,6 +17,7 @@ Every runbook must be exercised once before pilot publication. Status is tracked
 | [Roll back a workflow version safely](rollback-workflow-version.md)                                | `packages/workflows/test/workflow-versions.test.ts` (7.13)                                              |
 | [Process a deletion request](process-deletion-request.md)                                          | `apps/worker-core/src/deletion.integration.test.ts` (7.16)                                              |
 | [Certify a channel](certify-a-channel.md)                                                          | No (needs each platform's app)                                                                          |
+| [UAT journeys](uat-journeys.md)                                                                    | The automated half runs in CI (14 browser suites); the staging half needs the staging credentials       |
 
 ## Platform on-call access (spec 5.7)
 
