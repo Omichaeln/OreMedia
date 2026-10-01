@@ -21,6 +21,7 @@ const AREA_BY_PREFIX: ReadonlyArray<[prefix: string, area: ApiScopeArea]> = [
   ['experiments.', 'experiments'],
   ['measurement.', 'measurement'],
   ['community.', 'community'],
+  ['destinations.', 'destinations'],
   ['operations.', 'operations'],
 ];
 

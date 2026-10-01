@@ -73,6 +73,10 @@ export const ID_PREFIXES = {
   remoteEvidence: 're',
   /** An edit or deletion of a published post on its platform, requested through the product. */
   publicationRemoteChange: 'prc',
+  /** A brand's non-social destination (analytics property, CMS, webhook; ledger R2-0). */
+  destination: 'dst',
+  /** A per-kind, per-data-type source-use policy row (D-17). */
+  sourceUsePolicy: 'sup',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',

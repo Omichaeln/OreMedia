@@ -6,6 +6,7 @@ import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { conversations, messages, responseDrafts } from '@oremedia/db/schema/community';
 import { channelConnections, credentialRefs } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
+import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
@@ -18,7 +19,7 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0011_remote_post_changes';
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
-const LATER_TABLES: MySqlTable[] = [passwordSetupTokens, planItems];
+const LATER_TABLES: MySqlTable[] = [passwordSetupTokens, planItems, brandDestinations, sourceUsePolicies];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));

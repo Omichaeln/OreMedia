@@ -14,6 +14,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`asset_versions` TO '__APP
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`assets` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`audit_events` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`auth_events` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_destinations` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_grants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_guideline_authors` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_objectives` TO '__APP_USER__'@'%';
@@ -92,6 +93,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`sessions` TO '__APP_USER_
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`skill_bindings` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`skill_versions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`skills` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`source_use_policies` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`spend_limits` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`subscriptions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`support_sessions` TO '__APP_USER__'@'%';

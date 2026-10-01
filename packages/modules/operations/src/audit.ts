@@ -37,6 +37,12 @@ const METADATA_ALLOWLIST = new Set([
   'ticketRef',
   'error', // a failure's truncated detail (never a payload or credential)
   'evidence', // a deletion/retention step's per-table counts (`table=n,...`), never row content
+  // Brand destinations (R2-0): a destination's kind, a source-use policy's key and the version it moved between
+  'kind',
+  'destinationKind',
+  'dataType',
+  'fromVersion',
+  'toVersion',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

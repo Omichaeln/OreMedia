@@ -8,6 +8,7 @@ import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
 import { ChannelSettings } from '../publishing/channel-settings';
+import { DestinationSettings } from '../destinations/destination-settings';
 import { AccountPassword } from '../session/account-password';
 import { useCompanies } from '../portfolio/use-companies';
 import { BrandType, KillSwitches, ModelRouting, ReleasePolicy } from './admin-controls';
@@ -19,6 +20,7 @@ import { useSkills, type SkillDto } from './use-settings';
 const TAB_PARAM = 'tab';
 const TABS = [
   ['channels', 'Channels', false],
+  ['destinations', 'Destinations', false],
   ['mandates', 'Mandates', false],
   ['policy', 'Policy', false],
   ['skills', 'Skills', false],
@@ -33,6 +35,8 @@ type SettingsTab = (typeof TABS)[number][0];
 const ADMIN_ROLES = new Set(['owner', 'admin']);
 /** Who may activate a release policy, and so change the brand type (brand.publish_version). */
 const POLICY_ROLES = new Set(['owner', 'admin', 'brand_manager']);
+/** Who may register and disconnect a destination (destination.connect / destination.manage, as channels). */
+const DESTINATION_ROLES = new Set(['owner', 'admin', 'publisher']);
 
 const SCOPE_LABEL: Record<SkillDto['scope'], string> = {
   platform: 'Built in',
@@ -159,6 +163,13 @@ export function SettingsScreen() {
         </TabList>
         <TabPanel value="channels">
           <ChannelSettings />
+        </TabPanel>
+        <TabPanel value="destinations">
+          <DestinationSettings
+            canManage={isAdmin}
+            canConnectDestinations={role !== null && DESTINATION_ROLES.has(role)}
+            canManageDestinations={role !== null && DESTINATION_ROLES.has(role)}
+          />
         </TabPanel>
         <TabPanel value="mandates">
           <Mandates canManage={isAdmin} />

@@ -103,6 +103,7 @@ import {
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
+import { DestinationsBackend, destinationsRouters } from './mock-destinations';
 
 /**
  * A UI-only transport for the studio smoke test: the same procedure paths, input DTOs, error envelope and header
@@ -432,6 +433,8 @@ export class MockBackend {
   readonly phase6: Phase6Backend;
   /** Comment inbox: conversations, threaded comments and replies (mock-community.ts). */
   readonly community: CommunityBackend;
+  /** Brand destinations and the source-use policy (mock-destinations.ts). */
+  readonly destinations: DestinationsBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
@@ -580,6 +583,7 @@ export class MockBackend {
       return doc ? { title: doc.title, currentRevisionId: doc.currentRevisionId } : null;
     };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
+    this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
@@ -995,6 +999,7 @@ export function createMockRouter(backend: MockBackend) {
     experiments: p6.experiments,
     measurement: p6.measurement,
     community: communityRouters(backend.community, { router: t.router, query, mutation }),
+    destinations: destinationsRouters(backend.destinations, { router: t.router, query, mutation }),
     access: t.router({
       /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
       servicePrincipals: t.router({

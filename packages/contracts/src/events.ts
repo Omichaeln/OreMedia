@@ -61,5 +61,8 @@ export const EVENT_TYPES = {
   'publication.edit_remote_requested': 1,
   // Comment inbox (appended; additive only): a person answered a comment; communityReplyWorkflowV1 posts it
   'community.reply_requested': 1,
+  // Brand destinations (R2-0; appended; additive only): a destination registered for a brand, and one disconnected
+  'destination.registered': 1,
+  'destination.disconnected': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

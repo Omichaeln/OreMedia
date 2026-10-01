@@ -16,6 +16,7 @@ const OWNERSHIP = {
   intelligence: ['intelligence'],
   experiments: ['experiments'],
   community: ['community'],
+  destinations: ['destinations'],
   billing: ['billing'],
   operations: ['operations'],
 };

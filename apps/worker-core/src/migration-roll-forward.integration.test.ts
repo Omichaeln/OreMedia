@@ -15,6 +15,7 @@ import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
 import { planItems } from '@oremedia/db/schema/content';
+import { brandDestinations, sourceUsePolicies } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
 import { creativeService } from '@oremedia/module-creative';
@@ -45,6 +46,8 @@ const LATER_TABLES: MySqlTable[] = [
   publicationRemoteChanges,
   passwordSetupTokens,
   planItems,
+  brandDestinations,
+  sourceUsePolicies,
 ];
 
 const TABLES = (Object.values(schema) as unknown[])

@@ -397,6 +397,98 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 60_000);
 
+  it('settings destinations (R2-0): seeded destinations with their health, registration adds one, a policy save moves its version on, a Business Profile row never offers Write', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
+    await page.getByTestId('destinations').waitFor({ timeout: 15_000 });
+    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    const ga4 = page.getByTestId('destination-dst_e2e_ga4');
+    await ga4.waitFor({ timeout: 15_000 });
+    expect(await ga4.textContent()).toContain('Acme web');
+    expect(await ga4.textContent()).toContain('properties/424242');
+    expect(await ga4.textContent()).toContain('Healthy');
+    expect(await ga4.getAttribute('data-destination-health')).toBe('healthy');
+    expect(await page.getByTestId('destination-dst_e2e_gbp').textContent()).toContain('Not checked');
+    // Register a Search Console site: it joins the list under its own kind, owned by the signed-in person.
+    await page.locator('#destination-kind').click();
+    await page.getByRole('option', { name: 'Search Console site' }).click();
+    await page.getByLabel('External id').fill('sc-domain:acme.example');
+    await page.getByLabel('Display name').fill('Acme search');
+    await page.getByRole('button', { name: 'Register destination' }).click();
+    const searchGroup = page.getByTestId('destinations-search_console_site');
+    await expect.poll(() => searchGroup.count(), { timeout: 15_000 }).toBe(1);
+    expect(await searchGroup.textContent()).toContain('Acme search');
+    expect(
+      backend.destinations.destinations.find((d) => d.externalId === 'sc-domain:acme.example'),
+    ).toMatchObject({ kind: 'search_console_site', status: 'active', health: 'unknown' });
+    // The policy table: the GA4 row offers Read and Retain; the Business Profile row only Read (D-17).
+    const ga4Policy = page.getByTestId('source-use-sup_e2e_ga4_reports');
+    await ga4Policy.waitFor({ timeout: 15_000 });
+    expect(await ga4Policy.getByRole('checkbox', { name: 'Retain' }).count()).toBe(1);
+    expect(await ga4Policy.getByRole('checkbox', { name: 'Write' }).count()).toBe(0);
+    const gbpPolicy = page.getByTestId('source-use-sup_e2e_gbp_reviews');
+    expect(await gbpPolicy.getByRole('checkbox', { name: 'Read' }).count()).toBe(1);
+    expect(await gbpPolicy.getByRole('checkbox', { name: 'Retain' }).count()).toBe(0);
+    expect(await gbpPolicy.getByRole('checkbox', { name: 'Write' }).count()).toBe(0);
+    expect(await gbpPolicy.getByTestId('policy-version').textContent()).toContain('Version 2');
+    // Retention is enabled only once Retain is ticked; a save records the next version.
+    expect(await ga4Policy.getByTestId('policy-version').textContent()).toContain('Version 1');
+    expect(await ga4Policy.getByLabel('Retention (days)').isDisabled()).toBe(true);
+    await ga4Policy.getByRole('checkbox', { name: 'Retain' }).check();
+    await ga4Policy.getByLabel('Retention (days)').fill('30');
+    await ga4Policy.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(() => ga4Policy.getByTestId('policy-version').textContent(), { timeout: 15_000 })
+      .toContain('Version 2');
+    expect(backend.destinations.policies.find((p) => p.id === 'sup_e2e_ga4_reports')).toMatchObject({
+      version: 2,
+      allowedUses: ['read', 'retain'],
+      retentionDays: 30,
+    });
+    // A validation detail lands on its field: Retain ticked on the Business Profile row cannot happen (no box),
+    // so on the GA4 row the retention period is cleared and the save is refused by the server with the reason.
+    await ga4Policy.getByLabel('Retention (days)').fill('');
+    await ga4Policy.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(() => ga4Policy.getByText('Needed when data is retained').count(), { timeout: 15_000 })
+      .toBe(1);
+    // Add a data type: a new (kind, data type) row starts at version 1.
+    const add = page.getByTestId('source-use-add');
+    await add.locator('#policy-new-kind').click();
+    await page.getByRole('option', { name: 'Website CMS' }).click();
+    await add.getByLabel('Data type').fill('cms.articles');
+    await add.getByRole('checkbox', { name: 'Write' }).check();
+    await add.getByRole('button', { name: 'Save policy' }).click();
+    const added = page.getByTestId('source-use').getByRole('listitem').filter({ hasText: 'cms.articles' });
+    await expect.poll(() => added.count(), { timeout: 15_000 }).toBe(1);
+    expect(await added.getByTestId('policy-version').textContent()).toContain('Version 1');
+    // Registering the GA4 property again is a conflict the form explains, not a second row.
+    await page.locator('#destination-kind').click();
+    await page.getByRole('option', { name: 'Google Analytics 4 property' }).click();
+    await page.getByLabel('External id').fill('properties/424242');
+    await page.getByLabel('Display name').fill('Acme web again');
+    await page.getByRole('button', { name: 'Register destination' }).click();
+    await page.getByTestId('destination-conflict').waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('destinations-ga4_property').getByRole('listitem').count()).toBe(1);
+    // Disconnect behind a confirmation: the row stays, marked disconnected, with no further action.
+    const gbp = page.getByTestId('destination-dst_e2e_gbp');
+    await gbp.getByRole('button', { name: 'Disconnect' }).click();
+    const dialog = page.getByRole('alertdialog', { name: /Disconnect Acme Harare/ });
+    await dialog.waitFor({ timeout: 15_000 });
+    await dialog.getByTestId('confirm-disconnect-destination').click();
+    await expect.poll(() => gbp.textContent(), { timeout: 15_000 }).toContain('Disconnected');
+    expect(await gbp.getByRole('button', { name: 'Disconnect' }).count()).toBe(0);
+    expect(backend.destinations.destinations.find((d) => d.id === 'dst_e2e_gbp')).toMatchObject({
+      status: 'disconnected',
+      version: 1,
+    });
+    Object.assign(backend.destinations.destinations.find((d) => d.id === 'dst_e2e_gbp') ?? {}, {
+      status: 'active',
+      version: 0,
+    });
+    await page.close();
+  }, 60_000);
+
   it('settings budgets: the month and day meters, the ledger by kind, and a day limit set by an admin (UX-16)', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings')}?tab=budgets`);
@@ -420,6 +512,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
       .toEqual([
         'Channels',
+        'Destinations',
         'Mandates',
         'Policy',
         'Skills',
@@ -559,6 +652,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.getByRole('tab', { name: 'Mandates' }).click();
     await expect.poll(() => page.getByTestId('mandate').count(), { timeout: 15_000 }).toBe(2);
     expect(await page.getByTestId('mandates').getByRole('button', { name: 'Pause' }).count()).toBe(0);
+    // Destinations: a brand manager reads the policy table and registers nothing.
+    await page.getByRole('tab', { name: 'Destinations' }).click();
+    await page.getByTestId('source-use-sup_e2e_gbp_reviews').waitFor({ timeout: 15_000 });
+    expect(await page.getByTestId('source-use').getByRole('button', { name: 'Save' }).count()).toBe(0);
+    expect(await page.getByTestId('register-destination').count()).toBe(0);
     backend.role = 'owner';
     await page.close();
   }, 45_000);
