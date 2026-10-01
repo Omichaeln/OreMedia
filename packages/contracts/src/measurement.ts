@@ -121,6 +121,17 @@ export const BrandPerformanceSummary = z.object({
 });
 /** D-14: a comparison with fewer publications than this on either side reads "insufficient sample". */
 export const COMPARISON_MINIMUM_SAMPLE = 5;
+/** Spec 15.2: a value is stale when older than the provider's reporting latency × this factor. */
+export const STALE_FACTOR = 2;
+/** The latency assumed for a provider whose capability is not registered in the process (never a certified one). */
+export const DEFAULT_LATENCY_HOURS = 24;
+/** D-15: why a group has no total, in the words of the dictionary (docs/contracts/metrics.md), by metric kind. */
+export const NOT_SUMMED: Readonly<Record<string, string>> = {
+  unique: 'unique people: never summed across posts',
+  snapshot: 'a level at a moment: never summed',
+  gauge: 'an intensity: never summed',
+  rate: 'pooled from its operands when both are here',
+};
 
 /** UX-12: what the creative did, per captured attribute value, as the pooled engagement rate of its posts. */
 export const CreativeAttributesAggregate = z.object({

@@ -12,6 +12,7 @@ import type { BrandDto } from '../../../../../features/brand/use-brand';
 
 const WORK: NavItem[] = [
   { segment: 'home', label: 'Home' },
+  { segment: 'overview', label: 'Overview' },
   { segment: 'review', label: 'Review' },
   { segment: 'calendar', label: 'Calendar' },
   { segment: 'campaigns', label: 'Campaigns' },

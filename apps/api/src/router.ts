@@ -14,6 +14,7 @@ import { experimentsRouter } from './routers/experiments';
 import { measurementRouter } from './routers/measurement';
 import { communityRouter } from './routers/community';
 import { destinationsRouter } from './routers/destinations';
+import { overviewRouter } from './routers/overview';
 
 /** Spec 7.5 router map. Routers are added per phase; the cross-tenant harness enumerates every procedure. */
 export const appRouter = router({
@@ -31,6 +32,7 @@ export const appRouter = router({
   measurement: measurementRouter,
   community: communityRouter,
   destinations: destinationsRouter,
+  overview: overviewRouter,
   operations: operationsRouter,
 });
 export type AppRouter = typeof appRouter;

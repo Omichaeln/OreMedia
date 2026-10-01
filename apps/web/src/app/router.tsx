@@ -19,6 +19,7 @@ import { ReviewInboxRoute } from './c/$company/b/$brand/review/route';
 import { AgentRunsRoute } from './c/$company/b/$brand/agents/route';
 import { IntelligenceRoute } from './c/$company/b/$brand/intelligence/route';
 import { PerformanceRoute } from './c/$company/b/$brand/performance/route';
+import { OverviewRoute } from './c/$company/b/$brand/overview/route';
 import { InboxRoute } from './c/$company/b/$brand/inbox/route';
 import { ExperimentsRoute } from './c/$company/b/$brand/experiments/route';
 import { CampaignsRoute } from './c/$company/b/$brand/campaigns/route';
@@ -122,6 +123,8 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                 ),
             },
             { path: 'review', Component: ReviewInboxRoute },
+            // The overview's one query is keyed by the window the screen computes from the brand zone: nothing to prefetch.
+            { path: 'overview', Component: OverviewRoute },
             {
               path: 'performance',
               Component: PerformanceRoute,

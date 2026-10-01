@@ -42,12 +42,13 @@ export const SourceUseDataType = z
  * (R2-4, `cms.audit`); a Discord webhook only writes (D-18: announcements, no inbound).
  */
 export const DESTINATION_KIND_CAPABILITIES: Readonly<
-  Record<DestinationKind, { label: string; uses: readonly SourceUse[] }>
+  Record<DestinationKind, { label: string; uses: readonly SourceUse[]; auditable?: true }>
 > = {
   ga4_property: { label: 'Google Analytics 4 property', uses: ['read', 'retain'] },
   search_console_site: { label: 'Search Console site', uses: ['read', 'retain'] },
   gbp_location: { label: 'Google Business Profile location', uses: ['read'] },
-  cms_site: { label: 'Website CMS', uses: ['read', 'retain', 'write'] },
+  // `auditable`: the kind the technical SEO audit (R2-4) crawls; the overview lists its last run (R2-5).
+  cms_site: { label: 'Website CMS', uses: ['read', 'retain', 'write'], auditable: true },
   discord_webhook: { label: 'Discord webhook', uses: ['write'] },
 };
 

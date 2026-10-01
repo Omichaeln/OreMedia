@@ -294,6 +294,20 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
       );
     return Number(rows[0]?.c ?? 0);
   }
+  /** The brand's publications scheduled inside [from, to], newest first, bounded (the calendar and the rollups). */
+  async listScheduledBetween(brandId: string, from: Date, to: Date, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(publications)
+      .where(
+        this.brandScope(
+          brandId,
+          and(gte(publications.scheduledFor, from), lte(publications.scheduledFor, to)) as SQL,
+        ),
+      )
+      .orderBy(desc(publications.scheduledFor), desc(publications.id))
+      .limit(limit);
+  }
   /** The scheduled publications of one brand, read only (UX-20: the preview of a brand change). */
   async listScheduledForBrandRead(brandId: string, tx?: Tx) {
     return this.conn(tx)

@@ -127,3 +127,21 @@ rate, and a single location has nothing to be compared with. Reviews, posts and 
 
 The audit's checks, limits and findings are catalogued in [seo-audit.md](./seo-audit.md). They are lab data the
 crawler measured, never field data; nothing in them is aggregated with the metrics above.
+
+## Overview (R2-5)
+
+`overview.summary` (`packages/modules/overview`, contract `OverviewSummaryV1`) composes the read models above for one
+brand and one window of UTC day bounds; it forms no new number. Composition: the social figures are the brand rollup
+(`measurement.metrics.brandSummary`: flows summed, rates pooled, unique counts / levels / gauges listed with the
+dictionary's words, the D-14 sample on both sides), the per-channel coverage and freshness come from
+`measurement.metrics.query` over the window's released publications grouped by channel, the web figures are each
+destination's `destinations.reports.summary` tiles (the adapter's presentation names them) and the audit is
+`destinations.audit.summary`. Labels: every figure carries its source (`Social channels`, or the destination with its
+kind), its coverage in the source's unit (posts, days, pages) and its freshness (stale beyond latency × 2; the audit's
+latency is the weekly sweep, 168 h). Source states, in one precedence: blocked by policy (D-17), not connected, no data,
+stale, insufficient sample (D-14), fresh, each with its reason as a sentence. Limits: the policy blocks with the
+Settings pointer, uncertified source adapters, the audit's lab-only data, AI search as a labelled external link and
+never a figure (D-19), paid as "not connected" (R3-4: no paid-media connector; definitions marked
+`separatesPaidOrganic` are named, nothing is split or estimated), native posts as "not observed" (ingestion collects
+per publication Oremedia released), insufficient samples, stale sources and, when no post age is asked for, that the
+social comparison is at each post's latest fetch rather than one post age (the Performance trend compares at one age).

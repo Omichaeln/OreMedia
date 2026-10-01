@@ -1,0 +1,25 @@
+{
+  "name": "@oremedia/module-overview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@oremedia/contracts": "workspace:*",
+    "@oremedia/db": "workspace:*",
+    "@oremedia/domain": "workspace:*",
+    "@oremedia/module-access": "workspace:*",
+    "@oremedia/module-brand": "workspace:*",
+    "@oremedia/module-content": "workspace:*",
+    "@oremedia/module-destinations": "workspace:*",
+    "@oremedia/module-measurement": "workspace:*",
+    "@oremedia/module-publishing": "workspace:*",
+    "@oremedia/providers": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}

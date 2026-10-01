@@ -61,6 +61,8 @@ import {
   RemoteEvidenceRepository,
 } from './repositories';
 
+/** A window's bound (UX-14): the calendar pages by day and the rollups cap their own subjects at 200. */
+const CALENDAR_RANGE_MAX = 1000;
 const publicationsRepo = new PublicationRepository();
 const attemptsRepo = new PublicationAttemptRepository();
 const evidenceRepo = new RemoteEvidenceRepository();
@@ -1165,20 +1167,21 @@ export const publicationService = {
       tx,
     ),
 
-  /** Content module calendar source (spec 7.5 content.calendar.range): publications of a brand in a window. */
+  /**
+   * Content module calendar source (spec 7.5 content.calendar.range): publications of a brand in a window, newest
+   * first, the window applied in the query so an old window is read as it was (never the newest rows filtered).
+   */
   async calendarRange(brandId: string, from: Date, to: Date, tx?: Tx) {
-    const page = await publicationsRepo.listForBrand(brandId, undefined, { limit: 200 }, tx);
-    return page.items
-      .filter((p) => p.scheduledFor >= from && p.scheduledFor <= to)
-      .map((p) => ({
-        publicationId: p.id,
-        contentPackageId: p.contentPackageId,
-        contentRevisionId: p.contentRevisionId,
-        channelVariantId: p.channelVariantId,
-        channelConnectionId: p.channelConnectionId,
-        destinationId: p.destinationId,
-        scheduledFor: p.scheduledFor.toISOString(),
-        state: p.state,
-      }));
+    const rows = await publicationsRepo.listScheduledBetween(brandId, from, to, CALENDAR_RANGE_MAX, tx);
+    return rows.map((p) => ({
+      publicationId: p.id,
+      contentPackageId: p.contentPackageId,
+      contentRevisionId: p.contentRevisionId,
+      channelVariantId: p.channelVariantId,
+      channelConnectionId: p.channelConnectionId,
+      destinationId: p.destinationId,
+      scheduledFor: p.scheduledFor.toISOString(),
+      state: p.state,
+    }));
   },
 };

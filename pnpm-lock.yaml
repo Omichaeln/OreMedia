@@ -122,6 +122,9 @@ importers:
       '@oremedia/module-operations':
         specifier: workspace:*
         version: link:../../packages/modules/operations
+      '@oremedia/module-overview':
+        specifier: workspace:*
+        version: link:../../packages/modules/overview
       '@oremedia/module-publishing':
         specifier: workspace:*
         version: link:../../packages/modules/publishing
@@ -273,6 +276,9 @@ importers:
       '@oremedia/api':
         specifier: workspace:*
         version: link:../api
+      '@oremedia/module-overview':
+        specifier: workspace:*
+        version: link:../../packages/modules/overview
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.0(@types/node@22.20.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
@@ -1155,6 +1161,42 @@ importers:
       ioredis:
         specifier: ^5.9.1
         version: 5.11.1
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  packages/modules/overview:
+    dependencies:
+      '@oremedia/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@oremedia/db':
+        specifier: workspace:*
+        version: link:../../db
+      '@oremedia/domain':
+        specifier: workspace:*
+        version: link:../../domain
+      '@oremedia/module-access':
+        specifier: workspace:*
+        version: link:../access
+      '@oremedia/module-brand':
+        specifier: workspace:*
+        version: link:../brand
+      '@oremedia/module-content':
+        specifier: workspace:*
+        version: link:../content
+      '@oremedia/module-destinations':
+        specifier: workspace:*
+        version: link:../destinations
+      '@oremedia/module-measurement':
+        specifier: workspace:*
+        version: link:../measurement
+      '@oremedia/module-publishing':
+        specifier: workspace:*
+        version: link:../publishing
+      '@oremedia/providers':
+        specifier: workspace:*
+        version: link:../../providers
       zod:
         specifier: ^3.25.76
         version: 3.25.76

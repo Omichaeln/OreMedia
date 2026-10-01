@@ -27,6 +27,7 @@
     "@oremedia/module-intelligence": "workspace:*",
     "@oremedia/module-measurement": "workspace:*",
     "@oremedia/module-operations": "workspace:*",
+    "@oremedia/module-overview": "workspace:*",
     "@oremedia/module-publishing": "workspace:*",
     "@oremedia/module-review": "workspace:*",
     "@oremedia/module-skills": "workspace:*",

@@ -135,6 +135,12 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         page.locator('[data-testid="run-detail"][data-run-state="completed"]').waitFor({ timeout: 15_000 }),
     },
     {
+      // R2-5: the sources strip, the social and web figures, the audit, the splits and the limits.
+      name: 'overview',
+      path: () => brandPath('overview?period=7'),
+      ready: (page) => testId(page, 'overview-limits'),
+    },
+    {
       name: 'intelligence',
       path: () => brandPath('intelligence'),
       ready: (page) => testId(page, 'anomaly'),
