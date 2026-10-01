@@ -15,6 +15,7 @@ import {
   type SeoAuditSeverity,
   type SeoAuditSummaryCountsV1,
 } from '@oremedia/contracts/seo-audit';
+import { sha256Hex } from '@oremedia/domain/hash';
 
 /**
  * The pure half of the technical SEO audit (ledger R2-4): what a URL must look like to be followed, the minimal
@@ -181,10 +182,12 @@ export interface FetchedPageFacts {
 
 export interface PageAudit {
   checks: SeoAuditCheckV1[];
-  title: string | null;
-  metaDescription: string | null;
+  /** sha-256 of the lower-cased title / description: what the duplicate checks compare; the text is never kept. */
+  titleHash: string | null;
+  metaDescriptionHash: string | null;
   links: string[];
 }
+const textHash = (text: string): string | null => (text === '' ? null : sha256Hex(text.toLowerCase()));
 
 const pass = (key: SeoAuditCheckKey): SeoAuditCheckV1 => ({ key, ok: true, severity: null, detail: null });
 const fail = (key: SeoAuditCheckKey, severity: SeoAuditSeverity, detail: string): SeoAuditCheckV1 => ({
@@ -205,7 +208,7 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
   else checks.push(pass('status'));
   checks.push(page.hops <= 1 ? pass('redirect_chain') : fail('redirect_chain', 'minor', `hops=${page.hops}`));
   if (page.status !== 200 || !isHtml(page.contentType))
-    return { checks, title: null, metaDescription: null, links: [] };
+    return { checks, titleHash: null, metaDescriptionHash: null, links: [] };
 
   const html = page.html;
   const head = withoutScripts(html);
@@ -291,8 +294,8 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
 
   return {
     checks,
-    title: title === '' ? null : title.slice(0, 300),
-    metaDescription: description === '' ? null : description.slice(0, 500),
+    titleHash: textHash(title),
+    metaDescriptionHash: textHash(description),
     links: extractLinks(html, page.url, page.origin),
   };
 }
@@ -302,8 +305,8 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
 export interface CrawledPageFacts {
   url: string;
   status: number | null;
-  title: string | null;
-  metaDescription: string | null;
+  titleHash: string | null;
+  metaDescriptionHash: string | null;
   links: readonly string[];
   checks: SeoAuditCheckV1[];
 }
@@ -320,7 +323,7 @@ export function pageSeverity(checks: readonly SeoAuditCheckV1[]): SeoAuditPageSe
 
 /**
  * Broken internal links (a same-origin link whose target the crawl fetched with status ≥ 400) and duplicate
- * titles and descriptions across the crawl; the per-page checks are kept and the three keys replaced.
+ * titles and descriptions across the crawl (by hash); the per-page checks are kept and the three keys replaced.
  */
 export function crossPageChecks(pages: readonly CrawledPageFacts[]): Map<string, SeoAuditCheckV1[]> {
   const statusOf = new Map(pages.map((p) => [p.url, p.status]));
@@ -332,14 +335,14 @@ export function crossPageChecks(pages: readonly CrawledPageFacts[]): Map<string,
     }
     return by;
   };
-  const titles = count((p) => p.title?.toLowerCase() ?? null);
-  const descriptions = count((p) => p.metaDescription?.toLowerCase() ?? null);
+  const titles = count((p) => p.titleHash);
+  const descriptions = count((p) => p.metaDescriptionHash);
   const out = new Map<string, SeoAuditCheckV1[]>();
   for (const p of pages) {
     if (p.status !== 200) continue; // an unreachable page is already its own finding
     const broken = p.links.filter((l) => (statusOf.get(l) ?? 0) >= 400).length;
-    const sameTitle = p.title ? (titles.get(p.title.toLowerCase()) ?? 0) : 0;
-    const sameDescription = p.metaDescription ? (descriptions.get(p.metaDescription.toLowerCase()) ?? 0) : 0;
+    const sameTitle = p.titleHash ? (titles.get(p.titleHash) ?? 0) : 0;
+    const sameDescription = p.metaDescriptionHash ? (descriptions.get(p.metaDescriptionHash) ?? 0) : 0;
     const added: SeoAuditCheckV1[] = [
       broken === 0 ? pass('broken_links') : fail('broken_links', 'major', `count=${broken}`),
       sameTitle > 1 ? fail('duplicate_title', 'minor', `count=${sameTitle}`) : pass('duplicate_title'),

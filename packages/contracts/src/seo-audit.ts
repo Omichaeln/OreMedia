@@ -24,8 +24,11 @@ export const SEO_AUDIT_FETCH_GAP_MS = 250;
 export const SEO_AUDIT_RUN_DEADLINE_MS = 20 * 60_000;
 /** Redirects followed per fetch, each hop re-checked against the SSRF policy and the origin. */
 export const SEO_AUDIT_MAX_HOPS = 3;
-/** Same-origin links kept per page (the frontier is carried by the workflow, so it stays small). */
-export const SEO_AUDIT_LINKS_PER_PAGE = 100;
+/**
+ * Same-origin links kept per page: the frontier is carried by the workflow, so this bounds its history (at most
+ * 200 pages × 50 links × 500 bytes ≈ 5 MB of activity results per run, well inside Temporal's limits).
+ */
+export const SEO_AUDIT_LINKS_PER_PAGE = 50;
 /** A longer URL is never followed or seeded (payloads stay bounded; such URLs are tracking artefacts). */
 export const SEO_AUDIT_URL_MAX = 500;
 /** The destination kind an audit runs against: the brand's own website (its origin is the authorised scope). */

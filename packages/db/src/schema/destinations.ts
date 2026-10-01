@@ -221,8 +221,9 @@ export const seoAuditRuns = mysqlTable(
 );
 
 /**
- * R2-4: one page a run fetched, with its lab checks as JSON and the facts the cross-page checks need (title,
- * description, the same-origin links it carried); the body is never stored. One row per (run, URL).
+ * R2-4: one page a run fetched, with its lab checks as JSON and the facts the cross-page checks need (the hashes
+ * of its title and description, the same-origin links it carried); neither the body nor any text of the page is
+ * stored. One row per (run, URL).
  */
 export const seoAuditPages = mysqlTable(
   'seo_audit_pages',
@@ -242,8 +243,9 @@ export const seoAuditPages = mysqlTable(
       .$type<Array<{ key: string; ok: boolean; severity: string | null; detail: string | null }>>()
       .notNull()
       .default([]),
-    title: varchar('title', { length: 300 }),
-    metaDescription: varchar('meta_description', { length: 500 }),
+    /** sha-256 of the lower-cased title / meta description (the duplicate checks compare them); null when absent. */
+    titleHash: hash('title_hash'),
+    metaDescriptionHash: hash('meta_description_hash'),
     links: json('links').$type<string[]>().notNull().default([]),
     fetchedAt: ts('fetched_at').notNull(),
     createdAt: createdAt(),

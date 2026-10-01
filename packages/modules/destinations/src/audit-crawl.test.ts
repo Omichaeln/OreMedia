@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SEO_AUDIT_LINKS_PER_PAGE, SEO_AUDIT_ROBOTS_RULES } from '@oremedia/contracts/seo-audit';
+import { sha256Hex } from '@oremedia/domain/hash';
 import {
   auditPage,
   crossPageChecks,
@@ -104,8 +105,10 @@ describe('per-page lab checks', () => {
   it('a well-formed page passes every check and yields its facts', () => {
     const audit = auditPage(page(GOOD));
     expect(audit.checks.every((c) => c.ok)).toBe(true);
-    expect(audit.title).toBe('About us');
-    expect(audit.metaDescription?.startsWith('What the company does')).toBe(true);
+    expect(audit.titleHash).toBe(sha256Hex('about us')); // the hash of the folded text, never the text
+    expect(audit.metaDescriptionHash).toBe(
+      sha256Hex('what the company does, who runs it and how to reach the team by phone or email.'),
+    );
     expect(audit.links).toEqual([`${ORIGIN}/contact`]);
     expect(pageSeverity(audit.checks)).toBe('ok');
   });
@@ -240,21 +243,28 @@ describe('cross-page checks, summary and findings', () => {
     {
       url: `${ORIGIN}/`,
       status: 200,
-      title: 'Home',
-      metaDescription: 'd1',
+      titleHash: sha256Hex('home'),
+      metaDescriptionHash: sha256Hex('d1'),
       links: [`${ORIGIN}/gone`, `${ORIGIN}/a`],
       checks: [],
     },
-    { url: `${ORIGIN}/a`, status: 200, title: 'home', metaDescription: 'd2', links: [], checks: [] },
+    {
+      url: `${ORIGIN}/a`,
+      status: 200,
+      titleHash: sha256Hex('home'),
+      metaDescriptionHash: sha256Hex('d2'),
+      links: [],
+      checks: [],
+    },
     {
       url: `${ORIGIN}/b`,
       status: 200,
-      title: 'B',
-      metaDescription: 'D1',
+      titleHash: sha256Hex('b'),
+      metaDescriptionHash: sha256Hex('d1'),
       links: [`${ORIGIN}/gone`],
       checks: [],
     },
-    { url: `${ORIGIN}/gone`, status: 404, title: null, metaDescription: null, links: [], checks: [] },
+    { url: `${ORIGIN}/gone`, status: 404, titleHash: null, metaDescriptionHash: null, links: [], checks: [] },
   ];
   it('finds broken internal links and case-insensitive duplicate titles and descriptions; skips non-200 pages', () => {
     const out = crossPageChecks(crawled);

@@ -17,7 +17,8 @@ const wholeTenant: GrantLoader = async () => ({ brandIds: 'all' });
  * the target listing is platform-level (the runtime declares the platform job itself); everything else runs in
  * its destination's tenant with domain errors translated into the workflows' failure types. Every effect lives in
  * the destinations module's audit runtime (createDestinationRuntime().audit). Payloads carry ids, URLs and counts
- * only (spec 14.7, R5): a page body never enters Temporal.
+ * only (spec 14.7, R5): a page body never enters Temporal. A NotFound (a foreign or deleted destination or run) is
+ * translated like PolicyDenied and ValidationFailed into a failure the workflow lists as non-retryable, on purpose.
  */
 export function createSeoAuditActivities(
   runtime: SeoAuditRuntimeV1,

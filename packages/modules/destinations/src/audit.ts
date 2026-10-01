@@ -236,7 +236,8 @@ export function createSeoAuditService(opts: SeoAuditQueryOptions = {}) {
       );
       const running = inProgress(await runsRepo.latest(row.brandId, row.id, 'running', tx), at);
       if (running) throw new ConflictError('SeoAuditRun', running.id, running.version);
-      const earlier = today.find((r) => r.outcome !== 'running');
+      // A run that completed today is today's run; a failed one (e.g. closed as `locked`) may be asked for again.
+      const earlier = today.find((r) => r.outcome === 'completed');
       if (earlier) return toRunDto(earlier);
       const id = newId('seoAuditRun');
       await runsRepo.create(

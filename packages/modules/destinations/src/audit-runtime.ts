@@ -14,6 +14,7 @@ import {
   type SeoAuditFinishInputV1,
   type SeoAuditInputV1,
   type SeoAuditLimit,
+  type SeoAuditOutcome,
   type SeoAuditPlanV1,
   type SeoAuditRuntimeV1,
   type SeoAuditSweepInputV1,
@@ -124,138 +125,174 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
     }
   }
 
+  const lockKey = (input: { tenantId: string; destinationId: string }) =>
+    `lock:${AUDIT_JOB}:${input.tenantId}:${input.destinationId}`;
+  const releaseLock = (input: { tenantId: string; destinationId: string }) => auditLock.reset(lockKey(input));
+
+  /** An on-demand row the API opened whose workflow will not crawl: closed as failed with the skip's reason. */
+  async function closeApiRun(runId: string, reason: string): Promise<void> {
+    await withTransaction(async (tx) => {
+      const locked = await runsRepo.lock(runId, tx);
+      if (locked.outcome !== 'running') return;
+      await runsRepo.update(locked.id, locked.version, { outcome: 'failed', reason, finishedAt: now() }, tx);
+    });
+  }
+
+  /** The plan proper; `takeLock` says whether this plan holds the destination's lock (false: another run does). */
+  async function plan(input: SeoAuditInputV1, takeLock: () => Promise<boolean>): Promise<SeoAuditPlanV1> {
+    const { tenantId, destinationId } = input;
+    void tenantId;
+    const at = new Date(input.now);
+    const row = await destinationsRepo.getById(destinationId); // a foreign id is NOT_FOUND
+    if (row.status !== 'active') return { outcome: 'skipped', reason: 'not_active' };
+    if (row.kind !== SEO_AUDIT_DESTINATION_KIND) return { outcome: 'skipped', reason: 'not_a_site' };
+    let origin: string;
+    let host: string;
+    try {
+      const u = cmsSafeUrl(row.externalId);
+      origin = u.origin;
+      host = u.host;
+    } catch {
+      await withTransaction((tx) => skippedAudit(row, 'origin_unsafe', tx));
+      return { outcome: 'skipped', reason: 'origin_unsafe' };
+    }
+    // D-17: no crawl without a current policy allowing it; the refusal is recorded, nothing is fetched.
+    const decision = sourceUseDecision(
+      await policiesRepo.findByKey(row.brandId, row.kind, CMS_AUDIT_DATA_TYPE),
+      'read',
+      at,
+    );
+    if (!decision.allowed) {
+      await withTransaction((tx) => skippedAudit(row, `${decision.reason}:${CMS_AUDIT_DATA_TYPE}`, tx));
+      return {
+        outcome: 'skipped',
+        reason: decision.reason as 'no_policy' | 'review_overdue' | 'not_allowed',
+      };
+    }
+    if (!(await takeLock())) return { outcome: 'skipped', reason: 'locked' };
+    // A run still open: in progress (skip) or abandoned by a dead worker (closed as failed, then on we go).
+    const open = await runsRepo.latest(row.brandId, row.id, 'running');
+    if (open && open.id !== input.runId) {
+      if (at.getTime() - open.startedAt.getTime() < SEO_AUDIT_RUN_STALE_MS)
+        return { outcome: 'skipped', reason: 'locked' };
+      await withTransaction(async (tx) => {
+        const locked = await runsRepo.lock(open.id, tx);
+        if (locked.outcome === 'running')
+          await runsRepo.update(
+            locked.id,
+            locked.version,
+            { outcome: 'failed', reason: 'abandoned', finishedAt: now() },
+            tx,
+          );
+      });
+    }
+    if (input.trigger === 'scheduled') {
+      const recent = await runsRepo.startedBetween(
+        row.brandId,
+        row.id,
+        new Date(at.getTime() - SCHEDULED_REPEAT_MS),
+        new Date(at.getTime() + DAY_MS),
+      );
+      if (recent.some((r) => r.id !== input.runId && r.outcome !== 'failed'))
+        return { outcome: 'skipped', reason: 'already_ran' };
+    }
+    // The run row: the API created an on-demand one when the person asked; a scheduled run creates its own.
+    let runId = input.runId ?? null;
+    if (runId) {
+      const existing = await runsRepo.getById(runId);
+      if (existing.destinationId !== row.id)
+        throw new ValidationFailedError([{ path: 'runId', issue: 'other_destination' }]);
+      if (existing.outcome !== 'running') return { outcome: 'skipped', reason: 'already_ran' };
+    } else {
+      runId = newId('seoAuditRun');
+      const id = runId;
+      await withTransaction((tx) =>
+        runsRepo.create(
+          {
+            id,
+            brandId: row.brandId,
+            destinationId: row.id,
+            origin,
+            trigger: input.trigger,
+            requestedById: null,
+            startedAt: at,
+            outcome: 'running',
+          },
+          tx,
+        ),
+      );
+    }
+    // The seeds: the origin itself, then what robots.txt allows of the sitemap (an index one level deep).
+    const client = io(tenantId);
+    const limitsHit: SeoAuditLimit[] = [];
+    const robotsText = await readControlFile(client, `${origin}/robots.txt`, host);
+    const robots = robotsText ? robotsDisallowFor(robotsText) : { disallow: [], truncated: false };
+    if (robots.truncated) limitsHit.push('robots_rules');
+    const seeds = new Set<string>([`${origin}/`]);
+    const sitemapText = await readControlFile(client, `${origin}/sitemap.xml`, host);
+    if (sitemapText) {
+      const listing = sitemapUrls(sitemapText);
+      const urls = [...listing.urls];
+      for (const nested of listing.sitemaps.slice(0, SITEMAP_INDEX_MAX)) {
+        const target = sameOriginUrl(nested, origin, origin);
+        if (!target) continue;
+        const text = await readControlFile(client, target, host);
+        if (text) urls.push(...sitemapUrls(text).urls);
+      }
+      for (const raw of urls) {
+        const url = sameOriginUrl(raw, origin, origin);
+        if (!url || !robotsAllows(robots.disallow, url)) continue;
+        if (seeds.size >= SEO_AUDIT_SITEMAP_SEEDS + 1) {
+          limitsHit.push('sitemap_seeds');
+          break;
+        }
+        seeds.add(url);
+      }
+    }
+    const id = runId;
+    await withTransaction(async (tx) => {
+      const locked = await runsRepo.lock(id, tx);
+      await runsRepo.update(locked.id, locked.version, { robotsDisallow: robots.disallow, limitsHit }, tx);
+      await audit.record(
+        workflowActor(),
+        'seo_audit.started',
+        { type: 'brand_destination', id: row.id },
+        'allowed',
+        tx,
+        { brandId: row.brandId, kind: row.kind, runId: id, count: seeds.size, reason: input.trigger },
+      );
+    });
+    log.info({ destinationId, count: seeds.size, scope: input.trigger }, 'seo audit planned');
+    return { outcome: 'planned', runId: id, origin, seeds: [...seeds], limitsHit };
+  }
+
   return {
     listSeoAuditTargets: ({ correlationId }: SeoAuditSweepInputV1) =>
       runAsPlatform(AUDIT_JOB, correlationId, () => targetsRepo.listTargets(SEO_AUDIT_DESTINATION_KIND)),
 
+    /**
+     * Every skip closes the API's on-demand row (when the plan names one), so a run never outlives its workflow,
+     * and releases the lock when this plan took it; a throw after the lock releases it too, so a retried plan
+     * after a transient failure never reads as locked.
+     */
     async planSeoAudit(input: SeoAuditInputV1): Promise<SeoAuditPlanV1> {
-      const { tenantId, destinationId } = input;
-      const at = new Date(input.now);
-      const row = await destinationsRepo.getById(destinationId); // a foreign id is NOT_FOUND
-      if (row.status !== 'active') return { outcome: 'skipped', reason: 'not_active' };
-      if (row.kind !== SEO_AUDIT_DESTINATION_KIND) return { outcome: 'skipped', reason: 'not_a_site' };
-      let origin: string;
-      let host: string;
+      const key = lockKey(input);
+      let held = false;
+      let result: SeoAuditPlanV1;
       try {
-        const u = cmsSafeUrl(row.externalId);
-        origin = u.origin;
-        host = u.host;
-      } catch {
-        await withTransaction((tx) => skippedAudit(row, 'origin_unsafe', tx));
-        return { outcome: 'skipped', reason: 'origin_unsafe' };
-      }
-      // D-17: no crawl without a current policy allowing it; the refusal is recorded, nothing is fetched.
-      const decision = sourceUseDecision(
-        await policiesRepo.findByKey(row.brandId, row.kind, CMS_AUDIT_DATA_TYPE),
-        'read',
-        at,
-      );
-      if (!decision.allowed) {
-        await withTransaction((tx) => skippedAudit(row, `${decision.reason}:${CMS_AUDIT_DATA_TYPE}`, tx));
-        return {
-          outcome: 'skipped',
-          reason: decision.reason as 'no_policy' | 'review_overdue' | 'not_allowed',
-        };
-      }
-      const lock = await auditLock.hit(
-        `lock:${AUDIT_JOB}:${tenantId}:${destinationId}`,
-        SEO_AUDIT_LOCK_SECONDS,
-      );
-      if (lock.count > 1) return { outcome: 'skipped', reason: 'locked' };
-      // A run still open: in progress (skip) or abandoned by a dead worker (closed as failed, then on we go).
-      const open = await runsRepo.latest(row.brandId, row.id, 'running');
-      if (open && open.id !== input.runId) {
-        if (at.getTime() - open.startedAt.getTime() < SEO_AUDIT_RUN_STALE_MS)
-          return { outcome: 'skipped', reason: 'locked' };
-        await withTransaction(async (tx) => {
-          const locked = await runsRepo.lock(open.id, tx);
-          if (locked.outcome === 'running')
-            await runsRepo.update(
-              locked.id,
-              locked.version,
-              { outcome: 'failed', reason: 'abandoned', finishedAt: now() },
-              tx,
-            );
+        result = await plan(input, async () => {
+          held = (await auditLock.hit(key, SEO_AUDIT_LOCK_SECONDS)).count === 1;
+          return held;
         });
+      } catch (err) {
+        if (held) await auditLock.reset(key);
+        throw err;
       }
-      if (input.trigger === 'scheduled') {
-        const recent = await runsRepo.startedBetween(
-          row.brandId,
-          row.id,
-          new Date(at.getTime() - SCHEDULED_REPEAT_MS),
-          new Date(at.getTime() + DAY_MS),
-        );
-        if (recent.some((r) => r.id !== input.runId && r.outcome !== 'failed'))
-          return { outcome: 'skipped', reason: 'already_ran' };
+      if (result.outcome === 'skipped') {
+        if (held) await auditLock.reset(key);
+        if (input.runId) await closeApiRun(input.runId, result.reason);
       }
-      // The run row: the API created an on-demand one when the person asked; a scheduled run creates its own.
-      let runId = input.runId ?? null;
-      if (runId) {
-        const existing = await runsRepo.getById(runId);
-        if (existing.destinationId !== row.id)
-          throw new ValidationFailedError([{ path: 'runId', issue: 'other_destination' }]);
-        if (existing.outcome !== 'running') return { outcome: 'skipped', reason: 'already_ran' };
-      } else {
-        runId = newId('seoAuditRun');
-        const id = runId;
-        await withTransaction((tx) =>
-          runsRepo.create(
-            {
-              id,
-              brandId: row.brandId,
-              destinationId: row.id,
-              origin,
-              trigger: input.trigger,
-              requestedById: null,
-              startedAt: at,
-              outcome: 'running',
-            },
-            tx,
-          ),
-        );
-      }
-      // The seeds: the origin itself, then what robots.txt allows of the sitemap (an index one level deep).
-      const client = io(tenantId);
-      const limitsHit: SeoAuditLimit[] = [];
-      const robotsText = await readControlFile(client, `${origin}/robots.txt`, host);
-      const robots = robotsText ? robotsDisallowFor(robotsText) : { disallow: [], truncated: false };
-      if (robots.truncated) limitsHit.push('robots_rules');
-      const seeds = new Set<string>([`${origin}/`]);
-      const sitemapText = await readControlFile(client, `${origin}/sitemap.xml`, host);
-      if (sitemapText) {
-        const listing = sitemapUrls(sitemapText);
-        const urls = [...listing.urls];
-        for (const nested of listing.sitemaps.slice(0, SITEMAP_INDEX_MAX)) {
-          const target = sameOriginUrl(nested, origin, origin);
-          if (!target) continue;
-          const text = await readControlFile(client, target, host);
-          if (text) urls.push(...sitemapUrls(text).urls);
-        }
-        for (const raw of urls) {
-          const url = sameOriginUrl(raw, origin, origin);
-          if (!url || !robotsAllows(robots.disallow, url)) continue;
-          if (seeds.size >= SEO_AUDIT_SITEMAP_SEEDS + 1) {
-            limitsHit.push('sitemap_seeds');
-            break;
-          }
-          seeds.add(url);
-        }
-      }
-      const id = runId;
-      await withTransaction(async (tx) => {
-        const locked = await runsRepo.lock(id, tx);
-        await runsRepo.update(locked.id, locked.version, { robotsDisallow: robots.disallow, limitsHit }, tx);
-        await audit.record(
-          workflowActor(),
-          'seo_audit.started',
-          { type: 'brand_destination', id: row.id },
-          'allowed',
-          tx,
-          { brandId: row.brandId, kind: row.kind, runId: id, count: seeds.size, reason: input.trigger },
-        );
-      });
-      log.info({ destinationId, count: seeds.size, scope: input.trigger }, 'seo audit planned');
-      return { outcome: 'planned', runId: id, origin, seeds: [...seeds], limitsHit };
+      return result;
     },
 
     async crawlSeoAuditPage(
@@ -265,7 +302,10 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
       const run = await runsRepo.getById(input.runId); // a foreign id is NOT_FOUND
       if (run.destinationId !== input.destinationId)
         throw new ValidationFailedError([{ path: 'runId', issue: 'other_destination' }]);
-      if (run.outcome !== 'running') return { outcome: 'skipped', reason: 'not_running' };
+      if (run.outcome !== 'running') {
+        await releaseLock(input);
+        return { outcome: 'skipped', reason: 'not_running' };
+      }
       // The URL is one the crawl found; it is checked here again, never trusted from the payload.
       const url = sameOriginUrl(input.url, run.origin, run.origin);
       if (!url) return { outcome: 'skipped', reason: 'unsafe' };
@@ -332,8 +372,8 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
             bytes: facts.bytes,
             severity: pageSeverity(result.checks),
             checks: result.checks,
-            title: result.title,
-            metaDescription: result.metaDescription,
+            titleHash: result.titleHash,
+            metaDescriptionHash: result.metaDescriptionHash,
             links,
             fetchedAt: now(),
           },
@@ -344,8 +384,9 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
     },
 
     /** The cross-page checks, the summary counts and the run's close, under the row lock. */
-    async finishSeoAudit({ runId, destinationId, limitsHit, failedPages }: SeoAuditFinishInputV1) {
-      return withTransaction(async (tx) => {
+    async finishSeoAudit(input: SeoAuditFinishInputV1) {
+      const { runId, destinationId, limitsHit, failedPages } = input;
+      const finished: { outcome: SeoAuditOutcome; pages: number } = await withTransaction(async (tx) => {
         const locked = await runsRepo.lock(runId, tx);
         if (locked.destinationId !== destinationId)
           throw new ValidationFailedError([{ path: 'runId', issue: 'other_destination' }]);
@@ -355,8 +396,8 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
           pages.map((p) => ({
             url: p.url,
             status: p.status,
-            title: p.title,
-            metaDescription: p.metaDescription,
+            titleHash: p.titleHash,
+            metaDescriptionHash: p.metaDescriptionHash,
             links: p.links,
             checks: p.checks as Parameters<typeof crossPageChecks>[0][number]['checks'],
           })),
@@ -409,6 +450,8 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
         );
         return { outcome, pages: pages.length };
       });
+      await releaseLock(input); // the run is closed either way: the next plan may take the destination
+      return finished;
     },
 
     /**

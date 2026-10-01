@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "45e522ca-8997-4866-850b-85f359028a32",
+  "id": "69c4df58-2e8b-4197-ac0b-b9a0b71d07d8",
   "prevId": "395cdb3a-a9db-422b-8af4-d4b47bdb6ddd",
   "tables": {
     "api_clients": {
@@ -12202,16 +12202,16 @@
           "autoincrement": false,
           "default": "('[]')"
         },
-        "title": {
-          "name": "title",
-          "type": "varchar(300)",
+        "title_hash": {
+          "name": "title_hash",
+          "type": "char(64)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "meta_description": {
-          "name": "meta_description",
-          "type": "varchar(500)",
+        "meta_description_hash": {
+          "name": "meta_description_hash",
+          "type": "char(64)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

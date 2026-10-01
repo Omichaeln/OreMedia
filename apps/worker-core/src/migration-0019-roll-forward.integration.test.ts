@@ -14,7 +14,8 @@ const sha256Hex = (value: string) => createHash('sha256').update(value).digest('
  * Ledger 1.g4 for migration 0019 (R2-4 technical SEO audit): on a database populated at the previous head (0018)
  * the migration only adds `seo_audit_runs` and `seo_audit_pages`; every existing row is unchanged and both tables
  * are empty. On the migrated data a run is recorded for a destination registered before the migration, a page of
- * it is stored once per URL (uq_seo_audit_page), a page of a run that does not exist is refused (fk_seo_audit_page_run)
+ * it is stored once per URL (uq_seo_audit_page; the title and description as hashes, never text), a page of a run
+ * that does not exist is refused (fk_seo_audit_page_run)
  * and the run's foreign key keeps it under its destination's brand.
  */
 const PREVIOUS_HEAD = '0018_cms_articles';
@@ -89,8 +90,8 @@ describe('migration 0019 rolls forward on a populated database (ledger 1.g4)', (
       bytes: 1200,
       severity: 'minor' as const,
       checks: [{ key: 'title', ok: false, severity: 'minor', detail: 'length=64' }],
-      title: 'A title',
-      metaDescription: null,
+      titleHash: sha256Hex('a title'),
+      metaDescriptionHash: null,
       links: ['https://site.example/a'],
       fetchedAt: at,
     };

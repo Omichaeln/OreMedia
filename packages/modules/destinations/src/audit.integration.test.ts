@@ -110,10 +110,10 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
   const brandB = newId('brand');
   const owner = () => member(tenantA, 'owner');
   let clock = new Date(NOW);
-  /** The per-destination lock outlives a test's run (25 min), so a later plan needs a runtime with a fresh store. */
-  const freshRuntime = () =>
-    createDestinationRuntime({ now: () => clock, auditLock: new MemoryRateLimiterStore() });
-  const runtime = freshRuntime();
+  /** One store for the whole suite: a finished run must release the lock, or every later plan reads as locked. */
+  const auditLock = new MemoryRateLimiterStore();
+  const runtime = createDestinationRuntime({ now: () => clock, auditLock });
+  const lockKey = () => `lock:seo-audit-sweep:${tenantA}:${siteId}`;
   let onDemandId = '';
   const service = createSeoAuditService({ now: () => clock });
   let siteId = '';
@@ -467,17 +467,17 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
     );
     expect(summary.running).toBe(true);
     expect(summary.lastRun?.id).toBe(runId); // the last finished one, not the open one
-    // The worker adopts the API's row: the plan names it (no second row) and reads the seeds for it.
-    const adopting = freshRuntime();
+    // The worker adopts the API's row on the same runtime (the finished run released the lock): the plan names
+    // it (no second row) and reads the seeds for it.
     const plan = await asPlatformJob(tenantA, () =>
-      adopting.audit.planSeoAudit({ ...base(), trigger: 'on_demand', runId: started.id }),
+      runtime.audit.planSeoAudit({ ...base(), trigger: 'on_demand', runId: started.id }),
     );
     expect(plan).toMatchObject({ outcome: 'planned', runId: started.id });
     expect(
       await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.destinationId, siteId)),
     ).toHaveLength(2);
     await asPlatformJob(tenantA, () =>
-      adopting.audit.finishSeoAudit({ ...base(), runId: started.id, limitsHit: [], failedPages: 0 }),
+      runtime.audit.finishSeoAudit({ ...base(), runId: started.id, limitsHit: [], failedPages: 0 }),
     );
     expect(
       (await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.id, started.id)))[0],
@@ -485,11 +485,60 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
       outcome: 'failed',
       reason: 'origin_unreachable', // nothing was crawled for it in this test
     });
-    // Same day again: the earlier run is returned, nothing new opens.
+    // Same day again: the run of the day failed (nothing crawled), so a person may ask again and a new row opens;
+    // a completed run would have been returned instead (idempotent per day).
     const again = await run(tenantA, (tx) =>
       service.run(owner(), { brandId: brandA, destinationId: siteId }, tx),
     );
-    expect(again.id).toBe(started.id);
+    expect(again.id).not.toBe(started.id);
+    expect(again.outcome).toBe('running');
+    await tdb.db.delete(seoAuditRuns).where(eq(seoAuditRuns.id, again.id)); // tidy for the cases below
+  });
+
+  it('an on-demand run asked for while the destination is locked is closed as failed, never stranded; only the lock’s owner releases it', async () => {
+    clock = new Date('2026-10-07T10:00:00.000Z');
+    await auditLock.hit(lockKey(), 25 * 60); // another worker's plan holds the destination
+    const asked = await run(tenantA, (tx) =>
+      service.run(owner(), { brandId: brandA, destinationId: siteId }, tx),
+    );
+    expect(asked.outcome).toBe('running');
+    const plan = await asPlatformJob(tenantA, () =>
+      runtime.audit.planSeoAudit({ ...base(), trigger: 'on_demand', runId: asked.id }),
+    );
+    expect(plan).toEqual({ outcome: 'skipped', reason: 'locked' });
+    expect((await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.id, asked.id)))[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'locked',
+    });
+    // The skipped plan did not release a lock it never held: the owner's window stands until it resets.
+    expect((await auditLock.hit(lockKey(), 25 * 60)).count).toBe(3);
+    await auditLock.reset(lockKey());
+    // A failed run is not "today's run": the next request opens a new one, and the free lock lets it plan.
+    const later = await run(tenantA, (tx) =>
+      service.run(owner(), { brandId: brandA, destinationId: siteId }, tx),
+    );
+    expect(later.id).not.toBe(asked.id);
+    const planned = await asPlatformJob(tenantA, () =>
+      runtime.audit.planSeoAudit({ ...base(), trigger: 'on_demand', runId: later.id }),
+    );
+    expect(planned.outcome).toBe('planned');
+    await asPlatformJob(tenantA, () =>
+      runtime.audit.finishSeoAudit({ ...base(), runId: later.id, limitsHit: [], failedPages: 0 }),
+    );
+    // Finishing released the lock: a plan on the same runtime proceeds (and is then closed for tidiness).
+    clock = new Date('2026-10-08T10:00:00.000Z');
+    const next = await asPlatformJob(tenantA, () => runtime.audit.planSeoAudit(base()));
+    expect(next.outcome).toBe('planned');
+    if (next.outcome === 'planned')
+      await asPlatformJob(tenantA, () =>
+        runtime.audit.finishSeoAudit({ ...base(), runId: next.runId, limitsHit: [], failedPages: 0 }),
+      );
+    // Tidy: the runs this case opened would otherwise count in the retention case below.
+    const extra = [asked.id, later.id, ...(next.outcome === 'planned' ? [next.runId] : [])];
+    for (const id of extra) {
+      await tdb.db.delete(seoAuditPages).where(eq(seoAuditPages.runId, id));
+      await tdb.db.delete(seoAuditRuns).where(eq(seoAuditRuns.id, id));
+    }
   });
 
   it('retention keeps the last runs without `retain`, and the policy’s days with it; an abandoned run is failed', async () => {
@@ -530,8 +579,7 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
       startedAt: new Date(clock.getTime() - 2 * 3_600_000),
       outcome: 'running',
     });
-    const later = freshRuntime();
-    const plan = await asPlatformJob(tenantA, () => later.audit.planSeoAudit(base()));
+    const plan = await asPlatformJob(tenantA, () => runtime.audit.planSeoAudit(base()));
     expect(plan.outcome).toBe('planned');
     expect((await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.id, staleId)))[0]).toMatchObject({
       outcome: 'failed',
@@ -539,7 +587,7 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
     });
     if (plan.outcome === 'planned')
       await asPlatformJob(tenantA, () =>
-        later.audit.finishSeoAudit({ ...base(), runId: plan.runId, limitsHit: [], failedPages: 0 }),
+        runtime.audit.finishSeoAudit({ ...base(), runId: plan.runId, limitsHit: [], failedPages: 0 }),
       );
   });
 });

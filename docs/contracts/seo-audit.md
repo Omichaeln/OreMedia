@@ -27,7 +27,9 @@ for a later connector. Nothing is fabricated to fill the slot.
 Scope: same-origin links only (`<a href>`), robots.txt `Disallow` rules for `User-agent: *` respected (`*` and
 `$` in a rule; `Allow` and other agents ignored), every URL through `assertSafeUrl` (https, no credentials, no
 blocked address; DNS pinned by the dispatcher), no credentials sent. A page body never enters Temporal or the
-database: the page row holds the checks, the title, the description and the links it carried.
+database: the stored data is URLs, status, check results and hashes (sha-256 of the lower-cased title and meta
+description, for the duplicate checks) plus the same-origin links a page carried (at most 50 per page, so a run's
+activity results stay under ~5 MB of Temporal history).
 
 ## Per-page checks (`seo_audit_pages.checks`)
 
@@ -71,6 +73,9 @@ brief. Nothing creates briefs or recommendations from an audit on its own.
 
 `outcome` is `running` until the finish activity closes it as `completed` (the origin answered and pages were
 recorded) or `failed` (`origin_unreachable`, or `abandoned` when a later plan found it open past 30 minutes);
-`reason` also carries `failed_pages=n` when activities failed after retries. `summary` holds the counts of pages
+`reason` also carries `failed_pages=n` when activities failed after retries, or the plan's skip reason (`locked`,
+`no_policy`, …) when an on-demand row's workflow did not crawl. The per-destination lock is released when the
+run closes or the plan skips. Activity failures `PolicyDenied`, `ValidationFailed` and `NotFound` are
+deliberately non-retryable in `seoAuditWorkflowV1`: a refused or unknown destination or run never retries. `summary` holds the counts of pages
 by worst severity and of failing pages by check. An on-demand run is idempotent per website per day (the run of
 the day is returned) and refused with CONFLICT while one is in progress.
