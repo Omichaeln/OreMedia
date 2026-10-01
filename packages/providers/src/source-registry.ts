@@ -1,6 +1,7 @@
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import type { SourceAdapter, SourceCapabilityV1 } from './source-contract';
 import { ga4PropertyAdapter } from './sources/ga4_property/adapter';
+import { gbpLocationAdapter } from './sources/gbp_location/adapter';
 import { searchConsoleSiteAdapter } from './sources/search_console_site/adapter';
 
 /**
@@ -48,9 +49,11 @@ export class SourceRegistry {
 }
 
 /**
- * The R2-1 sources. Both carry `certifiedAt: null`, so `get()` refuses them for tenants until the adapter is
- * certified against the deployment's own Google Cloud project (docs/platform-apps/google.md).
+ * The R2-1 sources and the R2-2 Business Profile location. All carry `certifiedAt: null`, so `get()` refuses them
+ * for tenants until the adapter is certified against the deployment's own Google Cloud project
+ * (docs/platform-apps/google.md); the Business Profile kind is besides offered only behind OREMEDIA_ENABLE_GBP.
  */
 export const sourceRegistry = new SourceRegistry()
   .register(ga4PropertyAdapter)
-  .register(searchConsoleSiteAdapter);
+  .register(searchConsoleSiteAdapter)
+  .register(gbpLocationAdapter);

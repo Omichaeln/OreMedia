@@ -54,6 +54,38 @@ describe('source availability and the configuration report (ledger R2-1)', () =>
   });
 });
 
+describe('a source behind an opt-in (ledger R2-2: gbp_location and OREMEDIA_ENABLE_GBP)', () => {
+  const GBP = {
+    PROVIDER_GBP_LOCATION_CLIENT_ID_REF: 'id',
+    PROVIDER_GBP_LOCATION_SECRET_REF: 'secret',
+  };
+
+  it('is off by default even with both app credentials set; OREMEDIA_ENABLE_GBP=1 beside them enables it', () => {
+    expect(sourceAvailabilityFromEnv(env(GBP))('gbp_location')).toBe(false);
+    expect(sourceAvailabilityFromEnv(env({ ...GBP, OREMEDIA_ENABLE_GBP: 'true' }))('gbp_location')).toBe(
+      false,
+    );
+    expect(sourceAvailabilityFromEnv(env({ ...GBP, OREMEDIA_ENABLE_GBP: '1' }))('gbp_location')).toBe(true);
+    expect(sourceAvailabilityFromEnv(env({ OREMEDIA_ENABLE_GBP: '1' }))('gbp_location')).toBe(false);
+    expect(
+      sourceAvailabilityFromEnv(
+        env({ ...GBP, OREMEDIA_ENABLE_GBP: '1', OREMEDIA_DISABLED_SOURCES: 'gbp_location' }),
+      )('gbp_location'),
+    ).toBe(false);
+  });
+
+  it('source:gbp_location is reported only once the deployment opted in, then names its missing pair', () => {
+    expect(sourceCapabilities(env({})).map((c) => c.capability)).not.toContain('source:gbp_location');
+    const checks = sourceCapabilities(env({ OREMEDIA_ENABLE_GBP: '1' }));
+    const gbp = checks.find((c) => c.capability === 'source:gbp_location')!;
+    expect(gbp.missing(env({}))).toEqual([
+      'PROVIDER_GBP_LOCATION_CLIENT_ID_REF',
+      'PROVIDER_GBP_LOCATION_SECRET_REF',
+    ]);
+    expect(gbp.missing(env(GBP))).toEqual([]);
+  });
+});
+
 describe('cms availability and the configuration report (ledger R2-3)', () => {
   it('a CMS kind needs no app credentials: available unless listed in OREMEDIA_DISABLED_SOURCES', () => {
     expect(sourceAvailabilityFromEnv(env({}))('cms_site')).toBe(true);

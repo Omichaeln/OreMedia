@@ -1,0 +1,274 @@
+{
+  "provider": "gbp_location",
+  "scenarios": {
+    "performance": {
+      "description": "Nine daily metrics over two days; bookings has no value on the second day, conversations none at all.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries",
+            "query": {
+              "dailyRange.start_date.year": "2026",
+              "dailyRange.start_date.month": "9",
+              "dailyRange.start_date.day": "27",
+              "dailyRange.end_date.year": "2026",
+              "dailyRange.end_date.month": "9",
+              "dailyRange.end_date.day": "28"
+            }
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "multiDailyMetricTimeSeries": [
+                {
+                  "dailyMetricTimeSeries": [
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "10" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "12" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "40" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "38" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "25" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "30" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "75" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "80" }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "dailyMetricTimeSeries": [
+                    {
+                      "dailyMetric": "WEBSITE_CLICKS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "6" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "9" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "CALL_CLICKS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "3" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "2" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_DIRECTION_REQUESTS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "4" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 }, "value": "5" }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_CONVERSATIONS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 } },
+                          { "date": { "year": 2026, "month": 9, "day": 28 } }
+                        ]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_BOOKINGS",
+                      "timeSeries": {
+                        "datedValues": [
+                          { "date": { "year": 2026, "month": 9, "day": 27 }, "value": "1" },
+                          { "date": { "year": 2026, "month": 9, "day": 28 } }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "surfaces": {
+      "description": "The four impression surfaces over one day; mobile maps has no value that day.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "multiDailyMetricTimeSeries": [
+                {
+                  "dailyMetricTimeSeries": [
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+                      "timeSeries": {
+                        "datedValues": [{ "date": { "year": 2026, "month": 9, "day": 27 }, "value": "10" }]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+                      "timeSeries": {
+                        "datedValues": [{ "date": { "year": 2026, "month": 9, "day": 27 }, "value": "40" }]
+                      }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+                      "timeSeries": { "datedValues": [{ "date": { "year": 2026, "month": 9, "day": 27 } }] }
+                    },
+                    {
+                      "dailyMetric": "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+                      "timeSeries": {
+                        "datedValues": [{ "date": { "year": 2026, "month": 9, "day": 27 }, "value": "75" }]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "empty": {
+      "description": "A location with no data yet: no series, no rows.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": { "status": 200, "json": {} }
+        }
+      ]
+    },
+    "quota": {
+      "description": "the project's Business Profile quota is exhausted: a 429 with Retry-After",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 429,
+            "headers": { "retry-after": "90" },
+            "json": {
+              "error": {
+                "code": 429,
+                "message": "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute'.",
+                "status": "RESOURCE_EXHAUSTED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "access_required": {
+      "description": "The Performance API is not enabled for the project (or access is not yet granted): a 403 that is no reconnect.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "error": {
+                "code": 403,
+                "message": "Business Profile Performance API has not been used in project 1234 before or it is disabled.",
+                "status": "PERMISSION_DENIED",
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "SERVICE_DISABLED",
+                    "domain": "googleapis.com"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "forbidden": {
+      "description": "The grant cannot read this location (removed from the account): a reconnect.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "error": {
+                "code": 403,
+                "message": "The caller does not have permission",
+                "status": "PERMISSION_DENIED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "unauthorised": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "businessprofileperformance.googleapis.com",
+            "path": "/v1/locations/777:fetchMultiDailyMetricsTimeSeries"
+          },
+          "response": {
+            "status": 401,
+            "json": {
+              "error": {
+                "code": 401,
+                "message": "Request had invalid authentication credentials.",
+                "status": "UNAUTHENTICATED"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

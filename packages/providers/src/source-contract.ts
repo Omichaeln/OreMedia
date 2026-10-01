@@ -34,8 +34,22 @@ export interface SourceCapabilityV1 {
   reports: SourceReportSpec[];
   /** The vendor console and the summary tiles the screen shows for this source (part B). */
   presentation?: DestinationReportPresentationV1;
+  /**
+   * An explicit deployment opt-in beside the app credentials (R2-2): the environment variable that must read `1`
+   * for the kind to be available at all, for a source whose platform API access is granted per project by the
+   * vendor. Absent, the credentials alone enable the kind.
+   */
+  optInSetting?: string;
   certifiedAt: string | null;
 }
+
+/**
+ * The `rejected` code a source adapter classifies a refusal with when the platform's API itself is not enabled or
+ * approved for the deployment's project (R2-2: a 403 with the service disabled). The grant is intact, so it is no
+ * reconnect; the report runtime degrades the destination with this reason and reads again the next day, never a
+ * tight retry.
+ */
+export const SOURCE_ACCESS_REQUIRED = 'access_required';
 
 /**
  * An opportunity rule a report declares (part B): subjects (dimension values) with at least `minVolume` of the
@@ -127,7 +141,8 @@ export interface SourceAdapter {
   ): Promise<SourceTarget[]>;
   /**
    * One page of one report for a target the grant can read (part B). A platform refusal is thrown as a
-   * SourceReadError carrying the adapter's classification (a 401 refresh, a 403 reconnect, a 429 rate limited); a
+   * SourceReadError carrying the adapter's classification (a 401 refresh, a 403 reconnect, a 429 rate limited, a
+   * platform API not enabled as `rejected` with code SOURCE_ACCESS_REQUIRED); a
    * transport failure propagates as ProviderTransportError. Rows are never invented: a day the platform did not
    * return is absent.
    */
