@@ -11,15 +11,19 @@ import {
   StatusBanner,
   Textarea,
 } from '@oremedia/ui';
+import { Drawer, DrawerContent } from '../../components/drawer';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { StartRunForm } from '../agents/start-run-form';
+import { dayKey } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { briefChip, briefGaps, isSuggested, packageChip } from './content-helpers';
 import { DocumentPicker } from './document-picker';
-import { useBrief, type PackagesQuery } from './use-content';
+import { PlanGrid } from './plan-grid';
+import { useBrief, usePlanItems, type BriefDto, type PackagesQuery } from './use-content';
 
 export interface BriefDetailProps {
   brandId: string;
@@ -29,6 +33,33 @@ export interface BriefDetailProps {
   packages: PackagesQuery;
   selectedPackageId: string | null;
   onSelectPackage: (contentPackageId: string) => void;
+  /** Where a run started from "Plan with agent" is followed (the brand's agents screen). */
+  brandName: string;
+  /** The brand's zone: the planning window is prefilled in brand-zone dates. */
+  timeZone: string;
+  agentRunHref: (runId: string) => string;
+}
+
+/** The campaign_planning brief prefilled from the brief being planned (UX-09); a person edits it before starting. */
+function planningValues(
+  b: BriefDto,
+  channels: ReadonlyMap<string, ChannelDto>,
+  timeZone: string,
+): Record<string, string> {
+  const today = new Date();
+  const end = new Date(today.getTime() + 28 * 86_400_000);
+  return {
+    briefId: b.id,
+    objective: b.message,
+    audience: b.audience,
+    offerFactIds: b.offerFactIds.join(', '),
+    startDate: dayKey(today, timeZone),
+    endDate: dayKey(end, timeZone),
+    channels: [...new Set(b.channelConnectionIds.map((id) => channels.get(id)?.providerKey ?? id))].join(
+      ', ',
+    ),
+    notes: b.constraints.join('\n'),
+  };
 }
 
 function CreatePackageForm({
@@ -127,10 +158,15 @@ export function BriefDetail({
   packages,
   selectedPackageId,
   onSelectPackage,
+  brandName,
+  timeZone,
+  agentRunHref,
 }: BriefDetailProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const brief = useBrief(briefId);
+  const plan = usePlanItems(briefId);
+  const [planning, setPlanning] = useState(false);
   const intent = useIntentKey();
   const accept = useMutation(
     trpc.content.briefs.accept.mutationOptions({
@@ -146,6 +182,7 @@ export function BriefDetail({
   const mine = packages.items.filter((p) => p.briefId === briefId);
   const chip = b ? briefChip(b.state) : null;
   const gaps = b ? briefGaps(b) : [];
+  const proposedCount = plan.data?.items.filter((i) => i.state === 'proposed').length ?? 0;
 
   return (
     <Panel title="Brief" data-testid="brief-detail">
@@ -210,7 +247,7 @@ export function BriefDetail({
             <StatusBanner
               tone="warning"
               title="Awaiting acceptance"
-              description={`${chip.detail ?? ''}${isSuggested(b) ? ' This plan was suggested, not written by a person.' : ''}`}
+              description={`${chip.detail ?? ''}${isSuggested(b) ? ' This plan was suggested, not written by a person.' : ''}${proposedCount > 0 ? ` Accepting creates ${proposedCount} draft package${proposedCount === 1 ? '' : 's'} from the plan below.` : ''}`}
               actions={
                 <Button
                   size="sm"
@@ -235,6 +272,28 @@ export function BriefDetail({
           {acceptUi && acceptUi.kind !== 'forbidden' && (
             <RequestError error={accept.error} title="The brief was not accepted" />
           )}
+          <PlanGrid
+            brief={b}
+            channels={channels}
+            onSelectPackage={onSelectPackage}
+            onPlanWithAgent={() => setPlanning(true)}
+          />
+          <Drawer open={planning} onOpenChange={setPlanning}>
+            <DrawerContent
+              title="Plan with agent"
+              side="right"
+              className="w-[min(92vw,34rem)] overflow-y-auto p-5"
+            >
+              {planning && (
+                <StartRunForm
+                  brandId={brandId}
+                  brandName={brandName}
+                  hrefFor={agentRunHref}
+                  initial={{ taskKind: 'campaign_planning', values: planningValues(b, channels, timeZone) }}
+                />
+              )}
+            </DrawerContent>
+          </Drawer>
           <section aria-labelledby="brief-packages" className="flex flex-col gap-2">
             <h3 id="brief-packages" className="text-sm font-semibold">
               Content packages

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  BudgetRead,
+  BudgetSetLimit,
   ModelRoutingPolicy,
   RoutingPolicySet,
   RunApproveProposal,
@@ -448,6 +450,43 @@ export const agentsService = {
         throw new PolicyDeniedError('tenant_mismatch', 'Routing policy is read in its own tenant only');
       const row = await routingPoliciesRepo.current();
       return row ? ModelRoutingPolicy.parse(row.document) : null;
+    },
+  },
+
+  /** UX-16: the spend position and limits a person with billing.manage reads and sets (spec 12.6 budgets). */
+  budgets: {
+    async read(actor: ResolvedActor, input: z.infer<typeof BudgetRead>, tx?: Tx) {
+      const parsed = BudgetRead.parse(input);
+      const { tenantId } = requireTenant();
+      await brandService.assertExist([parsed.brandId], tx); // NOT_FOUND for a foreign brand
+      await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
+      return { brandId: parsed.brandId, ...(await budgets.summary(parsed.brandId, tx)) };
+    },
+
+    async setLimit(actor: ResolvedActor, input: z.infer<typeof BudgetSetLimit>, tx: Tx) {
+      const parsed = BudgetSetLimit.parse(input);
+      const { tenantId } = requireTenant();
+      await brandService.assertExist([parsed.brandId], tx);
+      await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
+      // The month limit is the company's (one row, brandId ''); the day limit is the brand's own.
+      await budgets.setLimit(
+        parsed.period === 'month' ? null : parsed.brandId,
+        parsed.period,
+        parsed.limitMicros,
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'billing.spend_limit.set',
+        {
+          type: parsed.period === 'month' ? 'tenant' : 'brand',
+          id: parsed.period === 'month' ? tenantId : parsed.brandId,
+        },
+        'allowed',
+        tx,
+        { brandId: parsed.brandId, period: parsed.period, limitMicros: parsed.limitMicros },
+      );
+      return { brandId: parsed.brandId, period: parsed.period, limitMicros: parsed.limitMicros };
     },
   },
 };

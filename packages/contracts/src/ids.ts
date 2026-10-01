@@ -45,6 +45,7 @@ export const ID_PREFIXES = {
   previewExport: 'pvx',
   campaign: 'cmp',
   brief: 'brf',
+  planItem: 'pli',
   contentPackage: 'pkg',
   contentRevision: 'pr',
   channelVariant: 'cv',

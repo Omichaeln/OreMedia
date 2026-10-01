@@ -188,3 +188,43 @@ export const creativeAttributes = mysqlTable(
     }),
   ],
 );
+
+/**
+ * UX-09 plan items: the calendar a campaign_planning run proposes for a brief (or a person adds), one row per
+ * planned post. Accepting the brief materialises every item still proposed as a draft content package; a
+ * materialised item keeps the package id, so a retried acceptance never creates a second package for it.
+ */
+export const planItems = mysqlTable(
+  'plan_items',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    briefId: ref('brief_id').notNull(),
+    /** Calendar date in the brand's zone, `YYYY-MM-DD`. */
+    date: varchar('date', { length: 10 }).notNull(),
+    /** The channel key the planner named (a provider key); the connection is resolved when it is unambiguous. */
+    channelKey: varchar('channel_key', { length: 60 }).notNull(),
+    channelConnectionId: ref('channel_connection_id'),
+    theme: varchar('theme', { length: 300 }).notNull(),
+    formatKey: varchar('format_key', { length: 60 }).notNull(),
+    factIds: json('fact_ids').$type<string[]>().notNull(),
+    state: mysqlEnum('state', ['proposed', 'dropped', 'materialised']).notNull().default('proposed'),
+    contentPackageId: ref('content_package_id'),
+    createdByKind: mysqlEnum('created_by_kind', ['user', 'agent']).notNull(),
+    createdById: ref('created_by_id').notNull(),
+    agentRunId: ref('agent_run_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_plan_item_tbi').on(t.tenantId, t.brandId, t.id),
+    index('ix_plan_item_brief').on(t.tenantId, t.brandId, t.briefId, t.date),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_plan_item_brand',
+    }),
+  ],
+);

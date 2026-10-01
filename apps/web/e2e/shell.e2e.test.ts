@@ -264,6 +264,50 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await imported.textContent()).toContain('This brand');
     expect(await imported.textContent()).toContain('No published version');
     expect(await skills.filter({ hasText: 'brand-onboarding' }).textContent()).toContain('Built in');
+    // UX-17: the imported brand skill's draft is evaluated, then published, then bound to this brand.
+    await imported.getByRole('button', { name: /Open Acme voice/ }).click();
+    const sheet = page.getByRole('dialog', { name: 'Skill' });
+    await expect.poll(() => sheet.getByTestId('skill-version-1').count(), { timeout: 15_000 }).toBe(1);
+    const v1 = sheet.getByTestId('skill-version-1');
+    expect(await v1.textContent()).toContain('Draft');
+    await v1.getByRole('button', { name: 'Evaluate' }).click();
+    await expect.poll(() => v1.textContent(), { timeout: 15_000 }).toContain('passed');
+    await v1.getByRole('button', { name: 'Publish' }).click();
+    await expect.poll(() => v1.textContent(), { timeout: 15_000 }).toContain('Published');
+    await v1.getByRole('button', { name: 'Use for this brand' }).click();
+    await expect.poll(() => v1.textContent(), { timeout: 15_000 }).toContain('Bound to this brand');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => imported.textContent(), { timeout: 15_000 }).toContain('Published');
+    // Import a package: manifest.json names the skill; it appears as a new draft.
+    await page.getByRole('button', { name: 'Import a skill package' }).click();
+    await page.getByLabel('Skill package files').setInputFiles([
+      {
+        name: 'manifest.json',
+        mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify({ schemaVersion: 1, key: 'launch-hooks', title: 'Launch hooks' })),
+      },
+      { name: 'SKILL.md', mimeType: 'text/markdown', buffer: Buffer.from('# Launch hooks\n') },
+    ]);
+    await page.getByRole('button', { name: 'Import package' }).click();
+    await expect.poll(() => page.getByTestId('skill-imported').count(), { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => skills.count(), { timeout: 15_000 }).toBe(4);
+    expect(await skills.filter({ hasText: 'launch-hooks' }).textContent()).toContain('No published version');
+    await page.close();
+  }, 60_000);
+
+  it('settings budgets: the month and day meters, the ledger by kind, and a day limit set by an admin (UX-16)', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings')}?tab=budgets`);
+    const budgets = page.getByTestId('budgets');
+    await expect.poll(() => budgets.getByTestId('budget-ledger').count(), { timeout: 15_000 }).toBe(1);
+    const text = await budgets.textContent();
+    expect(text).toContain('$42.50 of $100.00');
+    expect(text).toContain('$3.10 of $20.00');
+    expect(text).toContain('Model tokens');
+    expect(text).toContain('$38.00');
+    await page.locator('#budget-limit-day').fill('50');
+    await page.locator('#budget-limit-day').press('Enter');
+    await expect.poll(() => budgets.textContent(), { timeout: 15_000 }).toContain('$3.10 of $50.00');
     await page.close();
   }, 45_000);
   it('settings admin: the release policy defaults, kill switches with the company-wide override, model routing', async () => {
@@ -272,7 +316,16 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const tabs = page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab');
     await expect
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
-      .toEqual(['Channels', 'Mandates', 'Policy', 'Skills', 'Members', 'Model routing', 'Account']);
+      .toEqual([
+        'Channels',
+        'Mandates',
+        'Policy',
+        'Skills',
+        'Members',
+        'Budgets',
+        'Model routing',
+        'Account',
+      ]);
     await page.getByRole('tab', { name: 'Policy' }).click();
     const policy = page.getByTestId('release-policy');
     await expect

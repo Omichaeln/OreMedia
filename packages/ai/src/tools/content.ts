@@ -156,3 +156,91 @@ export const contentDraftCopy: ToolDefinition<
     return { drafts: drafted.drafts, state: 'draft' as const };
   },
 };
+
+export const ProposePlanInput = z
+  .object({
+    briefId: z.string(),
+    items: z
+      .array(
+        z
+          .object({
+            date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            channelKey: z.string().min(1).max(60),
+            theme: z.string().min(1).max(300),
+            formatKey: z.string().min(1).max(60),
+            factIds: z.array(z.string()).max(20).default([]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100),
+  })
+  .strict();
+const ProposePlanOutput = z.object({
+  briefId: z.string(),
+  planItemIds: z.array(z.string()),
+  state: z.literal('draft'),
+});
+
+/**
+ * content.proposePlan: draft, content.plan (UX-09). The calendar the campaign_planning skill produces is recorded
+ * as plan items of the brief (one per planned post) for a person to edit, drop and accept; acceptance turns them
+ * into draft packages. Nothing is scheduled, reviewed or published.
+ */
+export const contentProposePlan: ToolDefinition<
+  z.infer<typeof ProposePlanInput>,
+  z.infer<typeof ProposePlanOutput>
+> = {
+  name: 'content.proposePlan',
+  description:
+    'Records the content calendar for a draft brief as plan items (date, channel key, theme, format key, cited approved fact ids). A person edits and accepts the brief; acceptance creates draft packages. Never schedules or publishes.',
+  input: ProposePlanInput,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      briefId: { type: 'string' },
+      items: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: 'object',
+          properties: {
+            date: { type: 'string', format: 'date' },
+            channelKey: { type: 'string', minLength: 1, maxLength: 60 },
+            theme: { type: 'string', minLength: 1, maxLength: 300 },
+            formatKey: { type: 'string', minLength: 1, maxLength: 60 },
+            factIds: { type: 'array', maxItems: 20, items: { type: 'string' } },
+          },
+          required: ['date', 'channelKey', 'theme', 'formatKey'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['briefId', 'items'],
+    additionalProperties: false,
+  },
+  output: ProposePlanOutput,
+  action: 'content.plan',
+  effect: 'draft',
+  resource: (input, run) => ({
+    type: 'brief',
+    tenantId: run.tenantId,
+    brandId: run.brandId,
+    id: input.briefId,
+  }),
+  availability,
+  async run(input, ctx) {
+    const proposed = await sourceOf(ctx).proposePlan(
+      ctx.actor,
+      {
+        brandId: ctx.run.brandId,
+        runId: ctx.run.runId,
+        autonomyMode: ctx.run.policy.autonomyMode,
+        ...input,
+      },
+      ctx.tx,
+    );
+    return { briefId: proposed.briefId, planItemIds: proposed.planItemIds, state: 'draft' as const };
+  },
+};

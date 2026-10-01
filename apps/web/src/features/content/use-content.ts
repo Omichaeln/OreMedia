@@ -85,3 +85,14 @@ export function usePackagesForDocument(documentId: string) {
   const trpc = useTRPC();
   return useQuery(trpc.content.packages.listForDocument.queryOptions({ documentId }));
 }
+
+export type PlanItemDto = inferOutput<Trpc['content']['planItems']['list']>['items'][number];
+
+/** UX-09: the plan behind a brief, read whole (≤ 100 items per proposal); refetched through the content path filter. */
+export function usePlanItems(briefId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.content.planItems.list.queryOptions({ briefId: briefId ?? '' }),
+    enabled: briefId !== null,
+  });
+}

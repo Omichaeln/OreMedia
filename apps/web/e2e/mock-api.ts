@@ -24,6 +24,8 @@ import {
   type OperationBatch,
 } from '@oremedia/contracts/creative';
 import {
+  BudgetRead,
+  BudgetSetLimit,
   RoutingPolicySet,
   RunGet,
   RunList,
@@ -69,12 +71,23 @@ import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } f
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
 import { PageRequest } from '@oremedia/contracts/pagination';
-import { SkillList } from '@oremedia/contracts/skills';
+import {
+  SkillBindingSet,
+  SkillExport,
+  SkillGet,
+  SkillImport,
+  SkillList,
+  SkillTaskKinds,
+  SkillVersionEvaluate,
+  SkillVersionPublish,
+  TaskKind,
+} from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import {
+  passwordPolicyIssue,
   PasswordSetup,
   PasswordSignIn,
-  passwordPolicyIssue,
+  ServicePrincipalList,
   type PasswordAuthResponse,
 } from '@oremedia/contracts/access';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
@@ -320,6 +333,36 @@ const assetVersionOf = (a: MockAsset) => ({
   createdAt: now(),
 });
 
+interface MockSkillVersion {
+  id: string;
+  skillId: string;
+  number: number;
+  state: 'draft' | 'sandbox_evaluation' | 'in_review' | 'published' | 'retired';
+  rolloutPercent: number;
+  packageHash: string;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+const mockSkillVersion = (
+  id: string,
+  skillId: string,
+  number: number,
+  state: MockSkillVersion['state'],
+): MockSkillVersion => ({
+  id,
+  skillId,
+  number,
+  state,
+  rolloutPercent: state === 'published' ? 100 : 0,
+  packageHash: hash(id),
+  publishedAt: state === 'published' ? '2026-09-01T09:00:00.000Z' : null,
+  createdAt: '2026-09-01T09:00:00.000Z',
+  updatedAt: '2026-09-01T09:00:00.000Z',
+  version: 0,
+});
+
 export class MockBackend {
   /**
    * The brand's font faces (assets.fonts.list): the fixture brand's type roles name `ast_font`. Uploads and Google
@@ -399,6 +442,31 @@ export class MockBackend {
     updatedAt: '2026-09-01T09:00:00.000Z',
     version: 1,
   }));
+  /**
+   * Skill versions by skill (skills.get): the imported brand skill has one draft; evaluate moves it to the sandbox
+   * and, as the worker would, straight on to in_review with a passed result; publish activates it. Bindings by
+   * `${brandId}:${skillId}` (skills.bindings.set).
+   */
+  readonly skillVersions = new Map<string, MockSkillVersion[]>([
+    ['sk_onboarding', [mockSkillVersion('skv_onboarding_1', 'sk_onboarding', 1, 'published')]],
+    ['sk_copy', [mockSkillVersion('skv_copy_3', 'sk_copy', 3, 'published')]],
+    ['sk_voice', [mockSkillVersion('skv_voice_1', 'sk_voice', 1, 'draft')]],
+  ]);
+  readonly skillEvaluations: Array<{
+    id: string;
+    suiteId: string;
+    skillVersionId: string;
+    modelVersion: string;
+    runs: number;
+    scores: Record<string, number>;
+    variance: Record<string, number>;
+    deterministicChecks: Record<string, boolean>;
+    passed: boolean;
+    createdAt: string;
+  }> = [];
+  readonly skillBindings = new Map<string, { id: string; skillVersionId: string; skillId: string }>();
+  /** Spend limits and the ledger (agents.budgets): the company's month row is brandId ''. */
+  readonly spendLimits = new Map<string, number>([['', 100_000_000]]);
   /** Kill switches by `${scope}:${brandId ?? ''}` (operations.killSwitch); '' is the company-wide row. */
   readonly killSwitches = new Map<string, { engaged: boolean; reason: string | null }>();
   /** The company's stored model-routing policy (agents.routingPolicy); null = none stored, the platform default. */
@@ -884,6 +952,31 @@ export function createMockRouter(backend: MockBackend) {
     measurement: p6.measurement,
     community: communityRouters(backend.community, { router: t.router, query, mutation }),
     access: t.router({
+      /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
+      servicePrincipals: t.router({
+        list: query.input(ServicePrincipalList).query(({ ctx, input }) => {
+          // agent.start_run: managers, creator and analyst (role-grants); a reviewer or publisher is refused.
+          if (ctx.member?.role === 'reviewer' || ctx.member?.role === 'publisher')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          return {
+            items: [
+              {
+                id: 'sp_e2e_agent',
+                name: 'E2E agent',
+                kind: 'agent' as const,
+                maxAutonomy: 'prepare_release' as const,
+                actions: ['brand.read', 'content.plan', 'creative.edit'],
+                createdAt: '2026-09-01T09:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          };
+        }),
+      }),
       members: t.router({
         list: query.query(({ ctx }) => {
           if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
@@ -1016,14 +1109,291 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     skills: t.router({
+      /** UX-08: copywriting is served by the brand copywriting skill; the other kinds have no published skill here. */
+      taskKinds: query.input(SkillTaskKinds).query(({ input }) => {
+        if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+        return {
+          items: TaskKind.options.map((taskKind) => ({
+            taskKind,
+            skills:
+              taskKind === 'copywriting'
+                ? [
+                    {
+                      skillVersionId: 'skv_copy_3',
+                      skillId: 'sk_copy',
+                      key: 'brand-copywriting',
+                      title: 'Brand copywriting',
+                      description: 'Drafts on-brand copy for the brief.',
+                      versionNumber: 3,
+                      inputSchema: {
+                        type: 'object',
+                        properties: {
+                          goal: {
+                            type: 'string',
+                            maxLength: 1000,
+                            description: 'What the copy must achieve.',
+                          },
+                          channels: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+                          tone: { type: 'string', enum: ['warm', 'direct'] },
+                        },
+                        required: ['goal'],
+                        additionalProperties: false,
+                      },
+                    },
+                  ]
+                : taskKind === 'campaign_planning'
+                  ? [
+                      {
+                        skillVersionId: 'skv_plan_1',
+                        skillId: 'sk_plan',
+                        key: 'campaign-planning',
+                        title: 'Campaign planning',
+                        description: 'Produces a brief and a content calendar; a person accepts the plan.',
+                        versionNumber: 1,
+                        inputSchema: {
+                          type: 'object',
+                          properties: {
+                            objective: { type: 'string', maxLength: 1000 },
+                            audience: { type: 'string', maxLength: 1000 },
+                            offerFactIds: { type: 'array', items: { type: 'string' }, maxItems: 20 },
+                            startDate: { type: 'string', format: 'date' },
+                            endDate: { type: 'string', format: 'date' },
+                            channels: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+                            notes: { type: 'string', maxLength: 4000 },
+                            briefId: { type: 'string' },
+                          },
+                          required: ['objective', 'audience', 'startDate', 'endDate', 'channels'],
+                          additionalProperties: false,
+                        },
+                      },
+                    ]
+                  : [],
+          })),
+        };
+      }),
       list: query.input(SkillList).query(({ input }) => ({
         items: backend.skills.filter(
           (k) => (!input.scope || k.scope === input.scope) && (!input.brandId || k.brandId === input.brandId),
         ),
         nextCursor: null,
       })),
+      /** UX-17: the skill with its versions, evaluations and bindings. */
+      get: query.input(SkillGet).query(({ input }) => {
+        const skill = backend.skills.find((k) => k.id === input.skillId);
+        if (!skill) throw new NotFoundError('Skill', input.skillId);
+        const versions = backend.skillVersions.get(skill.id) ?? [];
+        // The sandbox has reported by the time the client polls again: in_review, its result already recorded.
+        for (const v of versions)
+          if (v.state === 'sandbox_evaluation') {
+            v.state = 'in_review';
+            v.version += 1;
+          }
+        return {
+          ...skill,
+          versions,
+          bindings: [...backend.skillBindings.entries()]
+            .filter(([, b]) => b.skillId === skill.id)
+            .map(([key, b]) => ({
+              id: b.id,
+              scope: 'brand' as const,
+              brandId: key.split(':')[0] ?? null,
+              skillVersionId: b.skillVersionId,
+              taskKind: 'copywriting' as const,
+              priority: 0,
+              createdAt: now(),
+              version: 0,
+            })),
+          evaluations: backend.skillEvaluations.filter((r) =>
+            versions.some((v) => v.id === r.skillVersionId),
+          ),
+        };
+      }),
+      versions: t.router({
+        /** As the API plus the worker: the version goes to the sandbox and the suite reports a pass at once. */
+        evaluate: mutation.input(SkillVersionEvaluate).mutation(({ ctx, input }) => {
+          if (ctx.member?.role === 'creator' || ctx.member?.role === 'reviewer')
+            throw new PolicyDeniedError('skill.author');
+          const v = [...backend.skillVersions.values()].flat().find((x) => x.id === input.skillVersionId);
+          if (!v) throw new NotFoundError('SkillVersion', input.skillVersionId);
+          if (v.version !== input.expectedVersion)
+            throw new ConflictError('SkillVersion', v.id, input.expectedVersion);
+          // As the server: the version waits in the sandbox; the worker's report (here: the next read) moves it on.
+          v.state = 'sandbox_evaluation';
+          v.version += 1;
+          backend.skillEvaluations.push({
+            id: rid('ser'),
+            suiteId: rid('ses'),
+            skillVersionId: v.id,
+            modelVersion: 'mock-model',
+            runs: input.runs,
+            scores: { brand_fit: 0.92 },
+            variance: { brand_fit: 0.01 },
+            deterministicChecks: { schema: true },
+            passed: true,
+            createdAt: now(),
+          });
+          return {
+            skillVersionId: v.id,
+            suiteId: 'ses_mock',
+            state: 'sandbox_evaluation' as const,
+            version: v.version,
+          };
+        }),
+        publish: mutation.input(SkillVersionPublish).mutation(({ ctx, input }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('skill.publish');
+          const v = [...backend.skillVersions.values()].flat().find((x) => x.id === input.skillVersionId);
+          if (!v) throw new NotFoundError('SkillVersion', input.skillVersionId);
+          if (v.version !== input.expectedVersion)
+            throw new ConflictError('SkillVersion', v.id, input.expectedVersion);
+          if (v.state !== 'in_review')
+            throw new ValidationFailedError([{ path: 'skillVersionId', issue: `version_${v.state}` }]);
+          v.state = 'published';
+          v.rolloutPercent = input.rolloutPercent;
+          v.publishedAt = now();
+          v.version += 1;
+          const skill = backend.skills.find((k) => k.id === v.skillId);
+          if (skill) skill.activeVersionId = v.id;
+          return { skillVersionId: v.id, state: 'published' as const, version: v.version };
+        }),
+      }),
+      bindings: t.router({
+        set: mutation.input(SkillBindingSet).mutation(({ input }) => {
+          const key = `${input.brandId ?? ''}:${input.skillId}`;
+          if (input.skillVersionId === null) backend.skillBindings.delete(key);
+          else
+            backend.skillBindings.set(key, {
+              id: rid('skb'),
+              skillVersionId: input.skillVersionId,
+              skillId: input.skillId,
+            });
+          return { ok: true as const };
+        }),
+      }),
+      /** A package's manifest.json names the skill; it lands as the next draft version of that key. */
+      import: mutation.input(SkillImport).mutation(({ input }) => {
+        const manifestFile = input.files.find((f) => f.path === 'manifest.json');
+        if (!manifestFile)
+          throw new ValidationFailedError([{ path: 'files', issue: 'manifest.json is required' }]);
+        const manifest = JSON.parse(manifestFile.content) as {
+          key?: string;
+          title?: string;
+          scripts?: unknown;
+        };
+        if (manifest.scripts)
+          throw new ValidationFailedError([{ path: 'manifest.scripts', issue: 'declarative_only' }]);
+        if (!manifest.key) throw new ValidationFailedError([{ path: 'manifest.key', issue: 'required' }]);
+        let skill = backend.skills.find((k) => k.key === manifest.key);
+        if (!skill) {
+          skill = {
+            id: rid('sk'),
+            scope: input.scope,
+            brandId: input.scope === 'brand' ? (input.brandId ?? E2E.brandId) : null,
+            key: manifest.key,
+            title: manifest.title ?? manifest.key,
+            state: 'active' as const,
+            activeVersionId: null,
+            ownerUserId: null,
+            createdAt: now(),
+            updatedAt: now(),
+            version: 1,
+          };
+          backend.skills.push(skill);
+        }
+        const versions = backend.skillVersions.get(skill.id) ?? [];
+        const number = (versions.at(-1)?.number ?? 0) + 1;
+        const v = mockSkillVersion(rid('skv'), skill.id, number, 'draft');
+        backend.skillVersions.set(skill.id, [...versions, v]);
+        return {
+          skillVersionId: v.id,
+          skillId: skill.id,
+          key: skill.key,
+          number,
+          packageHash: v.packageHash,
+        };
+      }),
+      export: query.input(SkillExport).query(({ input }) => {
+        const v = [...backend.skillVersions.values()].flat().find((x) => x.id === input.skillVersionId);
+        if (!v) throw new NotFoundError('SkillVersion', input.skillVersionId);
+        const skill = backend.skills.find((k) => k.id === v.skillId);
+        return {
+          skillVersionId: v.id,
+          skillId: v.skillId,
+          key: skill?.key ?? 'unknown',
+          number: v.number,
+          packageHash: v.packageHash,
+          files: [
+            { path: 'manifest.json', content: JSON.stringify({ schemaVersion: 1, key: skill?.key }) },
+            { path: 'SKILL.md', content: '# Skill\n' },
+          ],
+        };
+      }),
     }),
     agents: t.router({
+      /** UX-16: the spend position and limits; owners and admins only (billing.manage), as the API. */
+      budgets: t.router({
+        read: query.input(BudgetRead).query(({ ctx, input }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('billing.manage');
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          const monthStored = backend.spendLimits.get('') ?? null;
+          const dayStored = backend.spendLimits.get(input.brandId) ?? null;
+          const entitlement = 250_000_000;
+          const monthLimit = monthStored === null ? entitlement : Math.min(monthStored, entitlement);
+          const dayLimit = dayStored ?? 20_000_000;
+          return {
+            brandId: input.brandId,
+            month: {
+              periodKey: '2026-09',
+              storedLimitMicros: monthStored,
+              entitlementMicros: entitlement,
+              limitMicros: monthLimit,
+              committedMicros: 42_500_000,
+              remainingMicros: Math.max(0, monthLimit - 42_500_000),
+            },
+            day: {
+              dayKey: '2026-09-30',
+              limitMicros: dayLimit,
+              storedLimitMicros: dayStored,
+              committedMicros: 3_100_000,
+              remainingMicros: Math.max(0, dayLimit - 3_100_000),
+            },
+            ledger: [
+              {
+                kind: 'model_tokens' as const,
+                unit: 'tokens',
+                quantity: 1_250_000,
+                costMicros: 38_000_000,
+                entries: 41,
+              },
+              {
+                kind: 'image_generation' as const,
+                unit: 'images',
+                quantity: 12,
+                costMicros: 4_500_000,
+                entries: 12,
+              },
+            ],
+            reservations: [
+              {
+                id: 'bres_1',
+                runId: 'run_done',
+                reservedMicros: 2_000_000,
+                consumedMicros: 990_000,
+                state: 'settled' as const,
+                dayKey: '2026-09-30',
+                createdAt: now(),
+              },
+            ],
+          };
+        }),
+        setLimit: mutation.input(BudgetSetLimit).mutation(({ ctx, input }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('billing.manage');
+          backend.spendLimits.set(input.period === 'month' ? '' : input.brandId, input.limitMicros);
+          return { brandId: input.brandId, period: input.period, limitMicros: input.limitMicros };
+        }),
+      }),
       routingPolicy: t.router({
         get: query.query(() => {
           if (backend.role !== 'owner' && backend.role !== 'admin')

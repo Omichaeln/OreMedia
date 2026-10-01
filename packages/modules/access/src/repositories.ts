@@ -1,4 +1,5 @@
-import { and, eq, gt, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or, type SQL } from 'drizzle-orm';
+import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import {
   PlatformRepository,
   TenantScopedRepository,
@@ -20,6 +21,7 @@ import {
   tenants,
   users,
 } from '@oremedia/db/schema/access';
+import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
 import { SESSION_IDLE_MS, SESSION_TOUCH_MS } from './authenticator';
 
 /** Global tables (users, tenants, sessions) are read through explicit, narrow finders; they are never tenant-scoped. */
@@ -424,6 +426,27 @@ export class ServicePrincipalRepository extends TenantScopedRepository<typeof se
   }
   async list(tx?: Tx) {
     return this.conn(tx).select().from(servicePrincipals).where(this.scope());
+  }
+  /** Spec 7.4 cursor page of the tenant's principals, newest first, optionally by status and kind. */
+  async listPage(
+    filter: { status?: 'active' | 'revoked'; kind?: 'agent' | 'api_client' | 'mcp_client' | 'integration' },
+    page: PageRequest,
+    tx?: Tx,
+  ): Promise<Page<typeof servicePrincipals.$inferSelect>> {
+    const clauses: SQL[] = [];
+    if (filter.status) clauses.push(eq(servicePrincipals.status, filter.status));
+    if (filter.kind) clauses.push(eq(servicePrincipals.kind, filter.kind));
+    const cursor = page.cursor ? decodeCursor(page.cursor) : null;
+    if (cursor) clauses.push(lte(servicePrincipals.id, cursor.id));
+    const rows = await this.conn(tx)
+      .select()
+      .from(servicePrincipals)
+      .where(this.scope(clauses.length ? (and(...clauses) as SQL) : undefined))
+      .orderBy(desc(servicePrincipals.id))
+      .limit(page.limit + 1);
+    const items = rows.slice(0, page.limit);
+    const next = rows.length > page.limit ? rows[page.limit] : undefined;
+    return { items, nextCursor: next ? encodeCursor({ id: next.id }) : null };
   }
   async create(values: Omit<typeof servicePrincipals.$inferInsert, 'tenantId'>, tx?: Tx) {
     await this.insertScoped(values, tx);

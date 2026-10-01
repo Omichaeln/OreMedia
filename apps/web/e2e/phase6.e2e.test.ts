@@ -389,6 +389,80 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await text('brief-incomplete')).toContain('Missing: audience, channels');
   }, 30_000);
 
+  it('plan items (UX-09): the planner’s calendar is edited and dropped; accepting the brief creates one package per kept item; "Plan with agent" prefills a campaign_planning run', async () => {
+    await open(`campaigns?brief=${P6.briefs.suggested}`);
+    await expect.poll(() => count('plan-grid'), { timeout: 15_000 }).toBe(1);
+    await expect.poll(() => count(`plan-item-${P6.planItems.first}`), { timeout: 15_000 }).toBe(1);
+    expect(await text(`plan-item-${P6.planItems.first}`)).toContain('proposed by an agent run');
+    expect(await text(`plan-item-${P6.planItems.second}`)).toContain('no connection assigned');
+    expect(await text('brief-awaiting')).toContain('Accepting creates 2 draft packages');
+    // Edit the first item's theme and save; the row shows the new value from the server.
+    const first = page.getByTestId(`plan-item-${P6.planItems.first}`);
+    await first.getByLabel('Theme').fill('Shipping, answered');
+    await first.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(() => backend.phase6.planItem(P6.planItems.first).theme, { timeout: 15_000 })
+      .toBe('Shipping, answered');
+    // Drop the second; the banner counts one; restore it and drop again to cover both moves.
+    const second = page.getByTestId(`plan-item-${P6.planItems.second}`);
+    await second.getByRole('button', { name: 'Drop' }).click();
+    await expect
+      .poll(() => text('brief-awaiting'), { timeout: 15_000 })
+      .toContain('Accepting creates 1 draft package ');
+    await second.getByRole('button', { name: 'Restore' }).click();
+    await expect
+      .poll(() => text('brief-awaiting'), { timeout: 15_000 })
+      .toContain('Accepting creates 2 draft packages');
+    await second.getByRole('button', { name: 'Drop' }).click();
+    await expect
+      .poll(() => text(`plan-item-${P6.planItems.second}`), { timeout: 15_000 })
+      .toContain('Dropped');
+    // A person adds an item by hand.
+    await page.getByLabel('Date').last().fill('2026-11-09');
+    await page.getByTestId('plan-grid').getByLabel('Theme').last().fill('Last call');
+    await page.getByRole('button', { name: 'Add item' }).click();
+    await expect
+      .poll(() => text('brief-awaiting'), { timeout: 15_000 })
+      .toContain('Accepting creates 2 draft packages');
+    // "Plan with agent" opens the run form on campaign_planning with the brief prefilled.
+    await page.getByRole('button', { name: 'Plan with agent' }).click();
+    await expect
+      .poll(() => page.getByRole('dialog', { name: 'Plan with agent' }).count(), { timeout: 15_000 })
+      .toBe(1);
+    const dialog = page.getByRole('dialog', { name: 'Plan with agent' });
+    expect(await dialog.locator('#run-task').textContent()).toContain('campaign planning');
+    expect(await dialog.locator('#run-brief-briefId').inputValue()).toBe(P6.briefs.suggested);
+    expect(await dialog.locator('#run-brief-objective').inputValue()).toBe('Answer the shipping question');
+    expect(await dialog.locator('#run-brief-channels').inputValue()).toContain('linkedin');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => page.getByRole('dialog').count(), { timeout: 15_000 }).toBe(0);
+    // Accept: the two proposed items become packages under the brief; the dropped one stays dropped.
+    const packagesBefore = [...backend.phase6.packages.values()].filter(
+      (p) => p.briefId === P6.briefs.suggested,
+    ).length;
+    await page.getByRole('button', { name: 'Accept brief' }).click();
+    await expect.poll(() => text('brief-state'), { timeout: 15_000 }).toContain('In progress');
+    const packagesAfter = [...backend.phase6.packages.values()].filter(
+      (p) => p.briefId === P6.briefs.suggested,
+    );
+    expect(packagesAfter.length - packagesBefore).toBe(2);
+    expect(packagesAfter.map((p) => p.title).sort()).toEqual([
+      '2026-11-02 · Shipping, answered',
+      '2026-11-09 · Last call',
+    ]);
+    expect(backend.phase6.planItem(P6.planItems.first).state).toBe('materialised');
+    expect(backend.phase6.planItem(P6.planItems.second).state).toBe('dropped');
+    await expect
+      .poll(() => text(`plan-item-${P6.planItems.first}`), { timeout: 15_000 })
+      .toContain('Package created');
+    await page
+      .getByTestId(`plan-item-${P6.planItems.first}`)
+      .getByRole('button', { name: 'Open package' })
+      .click();
+    await expect.poll(() => page.url(), { timeout: 15_000 }).toMatch(/package=pkg_/);
+    expect(await noHorizontalOverflow()).toBe(true);
+  }, 60_000);
+
   it('packages show revision states, superseded history and invalid variants with findings', async () => {
     await open(`campaigns?brief=${P6.briefs.accepted}&package=${P6.packages.review}`);
     await expect.poll(() => text('revision-state'), { timeout: 15_000 }).toContain('In review');

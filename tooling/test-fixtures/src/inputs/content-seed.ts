@@ -8,8 +8,10 @@ import {
   channelVariants,
   contentPackages,
   contentRevisions,
+  planItems,
 } from '@oremedia/db/schema/content';
 import { channelConnections, credentialRefs } from '@oremedia/db/schema/publishing';
+import { sql } from 'drizzle-orm';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { SeedExtension } from '../cross-tenant-inputs';
@@ -157,6 +159,31 @@ export const CONTENT_SEED: SeedExtension = async (db, { tenantId, brandIds, owne
     createdByKind: 'user',
     createdById: ownerUserId,
   });
+  // plan_items arrives with migration 0014: the roll-forward suites seed earlier heads, where the table does not
+  // exist yet, so the row is written only when it does (the harness fixtures that need it run at head).
+  const planItemId = newId('planItem');
+  const planItemsTable = await db.execute(
+    sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'plan_items'`,
+  );
+  const hasPlanItems = Array.isArray(planItemsTable[0]) && planItemsTable[0].length > 0;
+  if (hasPlanItems)
+    await db.insert(planItems).values({
+      id: planItemId,
+      tenantId,
+      brandId,
+      briefId,
+      date: '2026-03-01',
+      channelKey: 'fixture_provider',
+      channelConnectionId: null,
+      theme: 'Seeded plan item',
+      formatKey: 'post',
+      factIds: [],
+      state: 'proposed',
+      contentPackageId: null,
+      createdByKind: 'user',
+      createdById: ownerUserId,
+      agentRunId: null,
+    });
   const pkg = await seedContentPackage(
     db,
     {
@@ -168,5 +195,5 @@ export const CONTENT_SEED: SeedExtension = async (db, { tenantId, brandIds, owne
     },
     'content',
   );
-  return { contentPolicyVersionId, campaignId, briefId, ...pkg };
+  return { contentPolicyVersionId, campaignId, briefId, planItemId, ...pkg };
 };

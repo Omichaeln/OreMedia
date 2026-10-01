@@ -18,7 +18,12 @@ import {
   ContentPackageRevise,
   ContentRevisionGet,
   CopyDocumentV1,
+  PlanItemDrop,
+  PlanItemList,
+  PlanItemUpdate,
+  PlanItemsPropose,
   type CalendarPublication,
+  type PlanItemRestore,
   type ContentClass,
 } from '@oremedia/contracts/content';
 import {
@@ -56,6 +61,7 @@ import {
   ChannelVariantRepository,
   ContentPackageRepository,
   ContentRevisionRepository,
+  PlanItemRepository,
 } from './repositories';
 
 const campaignsRepo = new CampaignRepository();
@@ -63,6 +69,7 @@ const briefsRepo = new BriefRepository();
 const packagesRepo = new ContentPackageRepository();
 const revisionsRepo = new ContentRevisionRepository();
 const variantsRepo = new ChannelVariantRepository();
+const planItemsRepo = new PlanItemRepository();
 // Read-only views of other modules' rows through their public index (spec 4.2: never their tables).
 const creativeDocumentsRepo = new CreativeDocumentRepository();
 const creativeRevisionsRepo = new CreativeRevisionRepository();
@@ -72,6 +79,7 @@ const objectivesRepo = new BrandObjectiveRepository();
 
 type CampaignRow = Awaited<ReturnType<typeof campaignsRepo.getById>>;
 type BriefRow = Awaited<ReturnType<typeof briefsRepo.getById>>;
+type PlanItemRow = Awaited<ReturnType<typeof planItemsRepo.getById>>;
 type PackageRow = Awaited<ReturnType<typeof packagesRepo.getById>>;
 type RevisionRow = Awaited<ReturnType<typeof revisionsRepo.getById>>;
 type VariantRow = Awaited<ReturnType<typeof variantsRepo.getById>>;
@@ -443,6 +451,82 @@ const toBriefDto = (b: BriefRow) => ({
   updatedAt: b.updatedAt.toISOString(),
   version: b.version,
 });
+const toPlanItemDto = (i: PlanItemRow) => ({
+  id: i.id,
+  brandId: i.brandId,
+  briefId: i.briefId,
+  date: i.date,
+  channelKey: i.channelKey,
+  channelConnectionId: i.channelConnectionId,
+  theme: i.theme,
+  formatKey: i.formatKey,
+  factIds: i.factIds,
+  state: i.state,
+  contentPackageId: i.contentPackageId,
+  createdByKind: i.createdByKind,
+  agentRunId: i.agentRunId,
+  createdAt: i.createdAt.toISOString(),
+  updatedAt: i.updatedAt.toISOString(),
+  version: i.version,
+});
+export type PlanItemDto = ReturnType<typeof toPlanItemDto>;
+
+/**
+ * UX-09: the planner names a channel by its provider key. The item binds to a connection when the brief plans
+ * exactly one connection of that provider (or the key is one of the brief's connection ids); otherwise a person
+ * assigns one. A connection given explicitly must be the brand's (another brand's or tenant's is NOT_FOUND).
+ */
+async function resolvePlanChannel(
+  brief: BriefRow,
+  item: { channelKey: string; channelConnectionId?: string | null },
+  tx: Tx | undefined,
+): Promise<string | null> {
+  if (item.channelConnectionId) {
+    const channel = await channelResolver(item.channelConnectionId, tx);
+    if (!channel || channel.brandId !== brief.brandId)
+      throw new NotFoundError('ChannelConnection', item.channelConnectionId);
+    return item.channelConnectionId;
+  }
+  if (brief.channelConnectionIds.includes(item.channelKey)) return item.channelKey;
+  const matches: string[] = [];
+  for (const id of brief.channelConnectionIds) {
+    const channel = await channelResolver(id, tx);
+    if (channel && channel.brandId === brief.brandId && channel.providerKey === item.channelKey)
+      matches.push(id);
+  }
+  const [only] = matches;
+  return matches.length === 1 && only ? only : null;
+}
+
+/** Plan items move only while the brief is a draft: acceptance materialises them, and nothing runs it twice. */
+function assertBriefDraft(brief: BriefRow): void {
+  if (brief.state !== 'draft')
+    throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
+}
+
+/** Every fact a plan item cites must exist on the brand (as briefs.create checks its offer facts). */
+async function assertFactsInBrand(brandId: string, factIds: string[], path: string, tx?: Tx): Promise<void> {
+  for (const [i, factId] of factIds.entries()) {
+    const fact = await factsRepo.getById(factId, tx);
+    if (fact.brandId !== brandId)
+      throw new ValidationFailedError([{ path: `${path}.${i}`, issue: 'fact_not_in_brand' }]);
+  }
+}
+
+async function loadPlanItem(planItemId: string, tx?: Tx) {
+  const item = await planItemsRepo.getById(planItemId, tx);
+  const brief = await briefsRepo.getById(item.briefId, tx);
+  if (brief.brandId !== item.brandId) throw new NotFoundError('PlanItem', planItemId);
+  return { item, brief };
+}
+
+/** The copy a materialised plan item is born with: the theme as the working text, the item's facts cited. */
+const planItemCopy = (i: PlanItemRow): CopyDocumentV1 => ({
+  schemaVersion: 1,
+  master: { text: i.theme, factRefs: i.factIds },
+  rationale: `Planned for ${i.date} on ${i.channelKey} as ${i.formatKey}`,
+});
+
 const toPackageDto = (p: PackageRow) => ({
   id: p.id,
   brandId: p.brandId,
@@ -605,6 +689,34 @@ async function insertRevision(
   return { revisionId, contentHash };
 }
 
+/** UX-09 drop / restore: the two moves a person makes on a proposed item before accepting the brief. */
+async function movePlanItem(
+  actor: ResolvedActor,
+  input: z.infer<typeof PlanItemDrop>,
+  from: PlanItemRow['state'],
+  to: PlanItemRow['state'],
+  tx: Tx,
+) {
+  const parsed = PlanItemDrop.parse(input);
+  const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
+  await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+  assertBriefDraft(brief);
+  if (item.state !== from)
+    throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
+  await planItemsRepo.update(item.id, parsed.expectedVersion, { state: to }, tx);
+  await audit.record(
+    actorRef(actor),
+    `content.plan_item.${to === 'dropped' ? 'drop' : 'restore'}`,
+    { type: 'plan_item', id: item.id },
+    'allowed',
+    tx,
+    {
+      brandId: brief.brandId,
+    },
+  );
+  return toPlanItemDto(await planItemsRepo.getById(item.id, tx));
+}
+
 export const contentService = {
   campaigns: {
     async create(actor: ResolvedActor, input: z.infer<typeof CampaignCreate>, tx: Tx) {
@@ -729,7 +841,14 @@ export const contentService = {
       return toBriefDto(brief);
     },
 
-    /** Spec 21.2 campaign planner "accepted plan": draft → accepted, by briefMachine. */
+    /**
+     * Spec 21.2 campaign planner "accepted plan": draft → accepted, by briefMachine. UX-09: every plan item still
+     * proposed becomes a draft content package (revision 1 carries the theme and cites the item's facts) in the
+     * same transaction; the item records the package, so a retry never materialises it twice, and the first
+     * package moves the brief on to in_progress as any package under an accepted brief does. Materialising needs
+     * content.edit as creating a package does; an item whose facts are no longer effective fails the acceptance
+     * naming the item, so a person drops or corrects it first.
+     */
     async accept(actor: ResolvedActor, input: z.infer<typeof BriefAccept>, tx: Tx) {
       const parsed = BriefAccept.parse(input);
       const brief = await briefsRepo.getById(parsed.briefId, tx);
@@ -744,7 +863,155 @@ export const contentService = {
         tx,
         { brandId: brief.brandId, fromState: brief.state, toState, expectedVersion: parsed.expectedVersion },
       );
-      return { briefId: brief.id, state: toState, version: parsed.expectedVersion + 1 };
+      const materialised: Array<{ planItemId: string; contentPackageId: string }> = [];
+      const items = await planItemsRepo.listByBrief(brief.brandId, brief.id, tx);
+      for (const item of items) {
+        if (item.state !== 'proposed' || item.contentPackageId) continue;
+        let created;
+        try {
+          created = await contentService.packages.create(
+            actor,
+            {
+              brandId: brief.brandId,
+              briefId: brief.id,
+              title: `${item.date} · ${item.theme}`.slice(0, 200),
+              copy: planItemCopy(item),
+            },
+            tx,
+          );
+        } catch (err) {
+          if (err instanceof ValidationFailedError)
+            throw new ValidationFailedError(
+              (err.details ?? []).map((d) => ({ ...d, path: `planItems.${item.id}.${d.path ?? ''}` })),
+              `Plan item ${item.id} cannot be materialised: ${err.message}`,
+            );
+          throw err;
+        }
+        await planItemsRepo.update(
+          item.id,
+          item.version,
+          { state: 'materialised', contentPackageId: created.contentPackageId },
+          tx,
+        );
+        materialised.push({ planItemId: item.id, contentPackageId: created.contentPackageId });
+      }
+      const after = await briefsRepo.getById(brief.id, tx);
+      return { briefId: brief.id, state: after.state, version: after.version, materialised };
+    },
+  },
+
+  /**
+   * UX-09 plan items: the calendar a campaign_planning run proposes for its brief (content.proposePlan) or a
+   * person adds, edits and drops before accepting the brief. Every command is content.plan on the brand; an item
+   * of another brand or tenant is NOT_FOUND. A materialised item is read-only: its package is the record.
+   */
+  planItems: {
+    async propose(
+      actor: ResolvedActor,
+      input: z.input<typeof PlanItemsPropose>,
+      tx: Tx,
+      opts: ContentActorOptions = {},
+    ) {
+      const parsed = PlanItemsPropose.parse(input);
+      const brief = await briefsRepo.getById(parsed.briefId, tx);
+      await policy.assert(
+        actor,
+        'content.plan',
+        brandResource(brief.brandId),
+        { autonomyMode: opts.autonomyMode },
+        tx,
+      );
+      assertBriefDraft(brief);
+      const ids: string[] = [];
+      for (const [i, item] of parsed.items.entries()) {
+        await assertFactsInBrand(brief.brandId, item.factIds, `items.${i}.factIds`, tx);
+        const id = newId('planItem');
+        await planItemsRepo.create(
+          {
+            id,
+            brandId: brief.brandId,
+            briefId: brief.id,
+            date: item.date,
+            channelKey: item.channelKey,
+            channelConnectionId: await resolvePlanChannel(brief, item, tx),
+            theme: item.theme,
+            formatKey: item.formatKey,
+            factIds: item.factIds,
+            state: 'proposed',
+            contentPackageId: null,
+            createdByKind: authorKindOf(actor),
+            createdById: actor.id,
+            agentRunId: opts.agentRunId ?? null,
+          },
+          tx,
+        );
+        ids.push(id);
+      }
+      await audit.record(
+        actorRef(actor),
+        'content.plan_item.propose',
+        { type: 'brief', id: brief.id },
+        'allowed',
+        tx,
+        {
+          brandId: brief.brandId,
+          planItemIds: ids,
+        },
+      );
+      return { briefId: brief.id, planItemIds: ids };
+    },
+
+    async list(actor: ResolvedActor, input: z.infer<typeof PlanItemList>, tx?: Tx) {
+      const parsed = PlanItemList.parse(input);
+      const brief = await briefsRepo.getById(parsed.briefId, tx);
+      await policy.assert(actor, 'brand.read', brandResource(brief.brandId), {}, tx);
+      const items = await planItemsRepo.listByBrief(brief.brandId, brief.id, tx);
+      return { items: items.map(toPlanItemDto) };
+    },
+
+    async update(actor: ResolvedActor, input: z.infer<typeof PlanItemUpdate>, tx: Tx) {
+      const parsed = PlanItemUpdate.parse(input);
+      const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
+      await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+      assertBriefDraft(brief);
+      if (item.state === 'materialised')
+        throw new ValidationFailedError([{ path: 'planItemId', issue: 'plan_item_materialised' }]);
+      if (parsed.factIds !== undefined)
+        await assertFactsInBrand(brief.brandId, parsed.factIds, 'factIds', tx);
+      const values: Partial<PlanItemRow> = {};
+      if (parsed.date !== undefined) values.date = parsed.date;
+      if (parsed.theme !== undefined) values.theme = parsed.theme;
+      if (parsed.formatKey !== undefined) values.formatKey = parsed.formatKey;
+      if (parsed.factIds !== undefined) values.factIds = parsed.factIds;
+      if (parsed.channelConnectionId !== undefined)
+        values.channelConnectionId = parsed.channelConnectionId
+          ? await resolvePlanChannel(
+              brief,
+              { channelKey: item.channelKey, channelConnectionId: parsed.channelConnectionId },
+              tx,
+            )
+          : null;
+      await planItemsRepo.update(item.id, parsed.expectedVersion, values, tx);
+      await audit.record(
+        actorRef(actor),
+        'content.plan_item.update',
+        { type: 'plan_item', id: item.id },
+        'allowed',
+        tx,
+        {
+          brandId: brief.brandId,
+          fields: Object.keys(values),
+        },
+      );
+      return toPlanItemDto(await planItemsRepo.getById(item.id, tx));
+    },
+
+    async drop(actor: ResolvedActor, input: z.infer<typeof PlanItemDrop>, tx: Tx) {
+      return movePlanItem(actor, input, 'proposed', 'dropped', tx);
+    },
+
+    async restore(actor: ResolvedActor, input: z.infer<typeof PlanItemRestore>, tx: Tx) {
+      return movePlanItem(actor, input, 'dropped', 'proposed', tx);
     },
   },
 

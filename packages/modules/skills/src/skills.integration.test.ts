@@ -11,6 +11,7 @@ import {
   SkillVersionCreate,
   SkillVersionEvaluate,
   SkillVersionPublish,
+  TaskKind,
   TOOL_NAMES_RELEASE_1,
   type EvaluationCase,
   type ResolvedSkill,
@@ -1014,6 +1015,19 @@ describe('skills module (spec 10) against MySQL 8', () => {
       expect(versionOf(await resolve(brandA2), 'brand-copywriting')).toBe(1);
       expect(versionOf(await resolve(brandB, 'copywriting', tenantB), 'brand-copywriting')).toBe(2);
       expect((await skillRow(copywritingBuiltinId)).activeVersionId).toBe(copywritingBuiltinV2);
+    });
+
+    it('taskKinds lists, per kind, the skills a run would use with their input schemas (UX-08)', async () => {
+      const kinds = await runInTenant(ctx(tenantA), () => skillsService.taskKinds(A, { brandId: brandA1 }));
+      expect(kinds.items.map((k) => k.taskKind)).toEqual([...TaskKind.options]);
+      const copy = kinds.items.find((k) => k.taskKind === 'copywriting');
+      expect(copy?.skills.map((s) => s.key)).toEqual(['brand-copywriting', 'tenant-copy']);
+      expect(copy?.skills[0]).toMatchObject({ versionNumber: expect.any(Number), title: expect.any(String) });
+      expect(copy?.skills[0]?.inputSchema).toMatchObject({ type: 'object' });
+      expect(kinds.items.find((k) => k.taskKind === 'experiment_design')?.skills).toEqual([]);
+      await expect(
+        runInTenant(ctx(tenantA, new Set([brandA2])), () => skillsService.taskKinds(A, { brandId: brandA1 })),
+      ).rejects.toBeInstanceOf(NotFoundError);
     });
 
     it('resolveForRun never returns drafts or skills for other task kinds, and respects brand visibility', async () => {
