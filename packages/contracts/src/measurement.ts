@@ -46,6 +46,43 @@ import { CreativeAttributesV1 } from './content';
 export const MetricAggregation = z.enum(['sum', 'max', 'last', 'avg', 'series']);
 export type MetricAggregation = z.infer<typeof MetricAggregation>;
 
+/**
+ * D-15 metric dictionary (docs/contracts/metrics.md): what a number is, which decides what may be summed. A flow
+ * (impressions, clicks, likes) adds across posts; a unique count (reach, followers reached) never adds across
+ * posts, days or platforms; a snapshot (follower count) is a level at a moment; a gauge (watch time, retention)
+ * is averaged or kept as a series; a rate carries its denominator and is pooled, never averaged.
+ */
+export const MetricKind = z.enum(['flow', 'unique', 'snapshot', 'gauge', 'rate']);
+export type MetricKind = z.infer<typeof MetricKind>;
+
+const KIND_OF_GROUP: Readonly<Record<string, MetricKind>> = {
+  reach: 'unique',
+  followers: 'snapshot',
+  watch_time: 'gauge',
+  impressions: 'flow',
+  engagement: 'flow',
+  likes: 'flow',
+  comments: 'flow',
+  shares: 'flow',
+  saves: 'flow',
+  clicks: 'flow',
+  negative_feedback: 'flow',
+};
+/**
+ * The kind of a comparable group (D-15). Rates are the derived `rate:` groups; an unrecognised group is a flow
+ * only when its name says it counts something that happens, a unique count when it says unique, otherwise a gauge.
+ */
+export function kindFor(comparableGroup: string): MetricKind {
+  if (comparableGroup.startsWith('rate:')) return 'rate';
+  const known = KIND_OF_GROUP[comparableGroup];
+  if (known) return known;
+  const leaf = comparableGroup.replace(/^other:/, '');
+  if (/unique/i.test(leaf)) return 'unique';
+  if (/rate|pct|percent|ratio|avg|average/i.test(leaf)) return 'rate';
+  if (/count|total|clicks?|views?|plays?|sends?|taps?|opens?/i.test(leaf)) return 'flow';
+  return 'gauge';
+}
+
 export const MetricDefinitionList = z.object({
   /** Restrict to one provider's native definitions; omitted lists global and tenant definitions. */
   providerKey: z.string().max(40).optional(),
@@ -125,9 +162,15 @@ export interface MetricValueV1 {
   denominatorSnapshotId: string | null;
 }
 
-/** An aggregate over one comparable_group only (spec 15.2); nothing is summed across groups. */
+/**
+ * An aggregate over one comparable_group only (spec 15.2); nothing is summed across groups. `kind` (D-15) says what
+ * the value is: a flow is the sum across subjects, a rate the pooled ratio of its operands' sums, and a unique,
+ * snapshot or gauge group is not additive, so its value is null and only the per-subject values stand.
+ */
 export interface MetricAggregateV1 {
   comparableGroup: string;
+  kind: MetricKind;
+  additive: boolean;
   metricKeys: string[];
   value: number | null;
   snapshotIds: string[];

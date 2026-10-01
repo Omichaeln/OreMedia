@@ -28,9 +28,19 @@ const GROUPS: ReadonlyArray<[group: string, label: string]> = [
   ['shares', 'Shares'],
   ['saves', 'Saves'],
   ['clicks', 'Clicks'],
+  ['rate:engagement/impressions', 'Engagement rate'],
 ];
 const GROUP_LABEL = new Map(GROUPS);
 const ENGAGEMENT_RATE = 'rate:engagement/impressions';
+/** D-15: why a group has no total, in the words of the dictionary (docs/contracts/metrics.md). */
+const NOT_SUMMED: Record<string, string> = {
+  unique: 'unique people: never summed across posts',
+  snapshot: 'a level at a moment: never summed',
+  gauge: 'an intensity: never summed',
+  rate: 'pooled from its operands when both are here',
+};
+/** A value in the group's own unit: a rate as a percentage, everything else as a count. */
+const formatValue = (kind: string, v: number) => (kind === 'rate' ? `${(v * 100).toFixed(1)}%` : number(v));
 /** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
 const MAX_SUBJECTS = 200;
 const MAX_KEYS = 50;
@@ -129,6 +139,7 @@ export function PerformanceScreen() {
   };
   const byChannel = useMemo(() => {
     const totals = new Map<string, { value: number; publications: number }>();
+    if (selected && !selected.additive) return []; // D-15: no per-channel sum of a unique count, level or rate
     for (const r of rows) {
       if (r.value === null) continue;
       const t = totals.get(r.publication.channelConnectionId) ?? { value: 0, publications: 0 };
@@ -138,7 +149,7 @@ export function PerformanceScreen() {
       });
     }
     return [...totals.entries()].sort((a, b) => b[1].value - a[1].value);
-  }, [rows]);
+  }, [rows, selected]);
   const channelMax = Math.max(0, ...byChannel.map(([, t]) => t.value));
 
   const update = (next: Record<string, string | null>) => {
@@ -264,8 +275,9 @@ export function PerformanceScreen() {
                 {coverage.subjectsRequested === 1 ? 'publication has' : 'publications have'} numbers
                 {coverage.staleValues > 0 &&
                   ` · ${coverage.staleValues} stale ${coverage.staleValues === 1 ? 'value' : 'values'}`}
-                {' · '}totals add only numbers of the same kind across channels; a missing number is never
-                counted as zero
+                {' · '}totals add only flows of the same kind across channels; unique counts and levels are
+                never summed and rates are pooled from their operands; a missing number is never counted as
+                zero
                 {published.length > MAX_SUBJECTS &&
                   ` · the newest ${MAX_SUBJECTS} of ${published.length} publications`}
                 {allKeys.length > MAX_KEYS && ` · the first ${MAX_KEYS} of ${allKeys.length} metrics`}
@@ -302,7 +314,11 @@ export function PerformanceScreen() {
                           <PackageTitle contentPackageId={r.publication.contentPackageId} />
                         </Link>
                         <span className="tabular-nums">
-                          {r.value === null ? <Badge tone="neutral">Unavailable</Badge> : number(r.value)}
+                          {r.value === null ? (
+                            <Badge tone="neutral">Unavailable</Badge>
+                          ) : (
+                            formatValue(selected.kind, r.value)
+                          )}
                         </span>
                       </div>
                       <Bar value={r.value} max={max} />
@@ -338,7 +354,9 @@ export function PerformanceScreen() {
               <Section id="channels-heading" title="By channel">
                 {byChannel.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No channel returned {selected.label.toLowerCase()}.
+                    {selected.additive
+                      ? `No channel returned ${selected.label.toLowerCase()}.`
+                      : `${selected.label} is not summed per channel (${NOT_SUMMED[selected.kind] ?? 'not additive'}).`}
                   </p>
                 ) : (
                   <ul className="flex flex-col divide-y divide-border" data-testid="performance-channels">
@@ -346,7 +364,7 @@ export function PerformanceScreen() {
                       <li key={id} className="flex flex-col gap-1.5 py-3 text-sm">
                         <div className="flex items-baseline justify-between gap-3">
                           <span className="min-w-0 break-words">{channelName(id)}</span>
-                          <span className="tabular-nums">{number(t.value)}</span>
+                          <span className="tabular-nums">{formatValue(selected.kind, t.value)}</span>
                         </div>
                         <Bar value={t.value} max={channelMax} />
                         <p className="text-xs text-muted-foreground">
@@ -392,11 +410,16 @@ function MetricTile({
     >
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="text-2xl font-semibold tabular-nums">
-        {aggregate.value === null ? 'Unavailable' : number(aggregate.value)}
+        {aggregate.value !== null
+          ? formatValue(aggregate.kind, aggregate.value)
+          : aggregate.additive || aggregate.subjectsWithData === 0
+            ? 'Unavailable'
+            : 'Not summed'}
       </span>
       <span className="text-xs text-muted-foreground">
         {aggregate.subjectsWithData} of {requested} {requested === 1 ? 'post' : 'posts'}
         {aggregate.freshness && ` · oldest ${ageText(aggregate.freshness.ageHours)}`}
+        {!aggregate.additive && aggregate.subjectsWithData > 0 && ` · ${NOT_SUMMED[aggregate.kind] ?? ''}`}
       </span>
       {aggregate.stale && (
         <span>

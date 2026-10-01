@@ -54,7 +54,7 @@ import {
   type EvidenceStrength,
   type RecommendationAction,
 } from '@oremedia/contracts/intelligence';
-import { MetricDefinitionList, MetricsQueryV1 } from '@oremedia/contracts/measurement';
+import { MetricDefinitionList, MetricsQueryV1, kindFor } from '@oremedia/contracts/measurement';
 import {
   ChannelConnectCancel,
   ChannelConnectComplete,
@@ -2050,6 +2050,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           .map((d, i) => ({
             id: `md_${i}`,
             scope: 'global' as const,
+            kind: kindFor(d.comparableGroup),
             key: d.key,
             providerKey: d.providerKey,
             nativeName: d.key,
@@ -2128,10 +2129,17 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
                   (acc, v) => (!acc || v.freshness.fetchedAt < acc.freshness.fetchedAt ? v : acc),
                   null,
                 );
+                // D-15: a flow is summed; a unique count, snapshot or gauge is not additive; a rate is pooled below.
+                const kind = kindFor(g);
                 return {
                   comparableGroup: g,
+                  kind,
+                  additive: kind === 'flow',
                   metricKeys: [...new Set(inGroup.map((v) => v.metricKey))].sort(),
-                  value: data.length ? data.reduce((sum, v) => sum + (v.value as number), 0) : null,
+                  value:
+                    kind === 'flow' && data.length
+                      ? data.reduce((sum, v) => sum + (v.value as number), 0)
+                      : null,
                   snapshotIds: data.map((v) => v.snapshotId),
                   subjectsWithData: new Set(data.map((v) => v.subjectId)).size,
                   subjectsUnavailable: new Set(
@@ -2142,6 +2150,13 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
                 };
               })
             : [];
+        for (const agg of aggregates) {
+          if (agg.kind !== 'rate') continue;
+          const [numerator, denominator] = agg.comparableGroup.slice('rate:'.length).split('/');
+          const n = aggregates.find((a) => a.comparableGroup === numerator)?.value ?? null;
+          const d = aggregates.find((a) => a.comparableGroup === denominator)?.value ?? null;
+          agg.value = n !== null && d !== null && d > 0 ? n / d : null;
+        }
         return {
           grouping: input.grouping,
           values,

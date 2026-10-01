@@ -1,9 +1,10 @@
-import type {
-  Completeness,
-  MetricAggregateV1,
-  MetricCoverageV1,
-  MetricFreshness,
-  MetricValueV1,
+import {
+  kindFor,
+  type Completeness,
+  type MetricAggregateV1,
+  type MetricCoverageV1,
+  type MetricFreshness,
+  type MetricValueV1,
 } from '@oremedia/contracts/measurement';
 
 /**
@@ -32,6 +33,9 @@ const GROUP_RULES: ReadonlyArray<[group: string, pattern: RegExp]> = [
   ['followers', /follow|subscriber/i],
   ['watch_time', /watch|retention|duration/i],
 ];
+
+/** The D-15 kind rule lives with the contracts (the dictionary); re-exported for the module's callers. */
+export { kindFor };
 
 export function comparableGroupFor(nativeName: string): string {
   const leaf = nativeName.split('.').pop() ?? nativeName;
@@ -163,9 +167,11 @@ export function atAge<
 }
 
 /**
- * Sums values within one comparable_group across subjects. Series are never aggregated (they stay series on the
- * values), unavailable rows count as unavailable subjects, and the aggregate is stale if any input is stale. Groups
- * never mix: a caller asking for impressions and reach gets two aggregates.
+ * Aggregates within one comparable_group across subjects by the group's kind (D-15): a flow is summed; a rate is
+ * the pooled ratio of its operands' sums (never the mean of per-post rates); a unique count, a snapshot or a gauge
+ * is not additive, so the aggregate carries no value and the per-subject values stand. Series are never aggregated
+ * (they stay series on the values), unavailable rows count as unavailable subjects, and the aggregate is stale if
+ * any input is stale. Groups never mix: a caller asking for impressions and reach gets two aggregates.
  */
 export function aggregateByComparableGroup(values: MetricValueV1[]): MetricAggregateV1[] {
   const groups = new Map<string, MetricValueV1[]>();
@@ -175,7 +181,9 @@ export function aggregateByComparableGroup(values: MetricValueV1[]): MetricAggre
     groups.set(v.comparableGroup, list);
   }
   const out: MetricAggregateV1[] = [];
+  const sums = new Map<string, number>();
   for (const [comparableGroup, list] of groups) {
+    const kind = kindFor(comparableGroup);
     const scalar = list.filter((v) => v.series === null);
     const withData = scalar.filter((v) => v.value !== null && v.completeness !== 'unavailable');
     const unavailable = scalar.filter((v) => v.value === null || v.completeness === 'unavailable');
@@ -183,16 +191,28 @@ export function aggregateByComparableGroup(values: MetricValueV1[]): MetricAggre
       (acc, v) => (!acc || v.freshness.fetchedAt < acc.freshness.fetchedAt ? v : acc),
       null,
     );
+    const sum = withData.reduce((s, v) => s + (v.value as number), 0);
+    if (kind === 'flow' && withData.length > 0) sums.set(comparableGroup, sum);
     out.push({
       comparableGroup,
+      kind,
+      additive: kind === 'flow',
       metricKeys: [...new Set(list.map((v) => v.metricKey))].sort(),
-      value: withData.length === 0 ? null : withData.reduce((s, v) => s + (v.value as number), 0),
+      value: kind === 'flow' && withData.length > 0 ? sum : null,
       snapshotIds: withData.map((v) => v.snapshotId),
       subjectsWithData: new Set(withData.map((v) => v.subjectId)).size,
       subjectsUnavailable: new Set(unavailable.map((v) => v.subjectId)).size,
       freshness: oldest ? oldest.freshness : null,
       stale: withData.some((v) => v.freshness.stale),
     });
+  }
+  // A rate across posts is its numerator's sum over its denominator's sum (D-15), from the flows in this result.
+  for (const agg of out) {
+    if (agg.kind !== 'rate') continue;
+    const rate = DERIVED_RATES.find((r) => `rate:${r.numerator}/${r.denominator}` === agg.comparableGroup);
+    const n = rate ? sums.get(rate.numerator) : undefined;
+    const d = rate ? sums.get(rate.denominator) : undefined;
+    agg.value = n !== undefined && d !== undefined && d > 0 ? n / d : null;
   }
   return out.sort((a, b) => a.comparableGroup.localeCompare(b.comparableGroup));
 }
