@@ -267,7 +267,7 @@ export function composeModules(): void {
   registerBrandChangeImpactSource(async (brandId, tx) => {
     const scope = await reviewService.approvals.brandChangeScope(brandId, tx);
     const publications = await publicationService.scheduledForBrand(brandId, tx);
-    return { ...scope, publications };
+    return { ...scope, truncated: scope.truncated || publications.length >= 200, publications };
   });
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });

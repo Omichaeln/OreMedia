@@ -833,11 +833,21 @@ export const reviewService = {
      * brand.version_published / brand.fact_revoked consumer (brandChangeImpactWorkflowV1): every valid approval
      * and open request of the brand. Idempotent: a second run finds nothing valid or open and counts zero.
      */
+    async invalidateForBrandChange(brandId: string, tx: Tx) {
+      const approvals = await approvalsRepo.listValidForBrand(brandId, tx);
+      for (const apr of approvals) await invalidate(apr, 'brand_changed', tx);
+      const requests = await requestsRepo.listOpenForBrand(brandId, tx);
+      for (const r of requests) await markStale(r, 'brand_changed', tx);
+      return { approvalsInvalidated: approvals.length, requestsStaled: requests.length };
+    },
+
     /** UX-20: what invalidateForBrandChange would reach now, read without moving anything (the preview). */
     async brandChangeScope(brandId: string, tx?: Tx) {
       const approvals = await approvalsRepo.listValidForBrand(brandId, tx);
       const requests = await requestsRepo.listOpenForBrand(brandId, tx);
+      // Both reads stop at 200 rows (as the workflow's do): the preview says when it may be more.
       return {
+        truncated: approvals.length >= 200 || requests.length >= 200,
         approvals: approvals.length,
         requests: requests.map((r) => ({
           id: r.id,
@@ -846,14 +856,6 @@ export const reviewService = {
           assignees: r.assignees.length,
         })),
       };
-    },
-
-    async invalidateForBrandChange(brandId: string, tx: Tx) {
-      const approvals = await approvalsRepo.listValidForBrand(brandId, tx);
-      for (const apr of approvals) await invalidate(apr, 'brand_changed', tx);
-      const requests = await requestsRepo.listOpenForBrand(brandId, tx);
-      for (const r of requests) await markStale(r, 'brand_changed', tx);
-      return { approvalsInvalidated: approvals.length, requestsStaled: requests.length };
     },
   },
 

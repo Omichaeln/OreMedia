@@ -1747,9 +1747,10 @@ export function createMockRouter(backend: MockBackend) {
         // No policy version is activated until the screen creates and activates one (UX-20); until then the
         // defaults are in force, as the API answers NOT_FOUND.
         get: query.input(PolicyGet).query(({ input }) => {
+          const mine = backend.policyVersions.filter((p) => p.brandId === input.brandId);
           const found = input.policyVersionId
-            ? backend.policyVersions.find((p) => p.id === input.policyVersionId)
-            : backend.policyVersions.find((p) => p.state === 'active');
+            ? mine.find((p) => p.id === input.policyVersionId)
+            : mine.find((p) => p.state === 'active');
           if (!found) throw new NotFoundError('PolicyVersion', input.policyVersionId ?? 'active');
           return found;
         }),
@@ -1767,7 +1768,10 @@ export function createMockRouter(backend: MockBackend) {
             state: 'draft',
             document: PolicyDocumentV1.parse({
               ...input.document,
-              requireDistinctApprover: input.document.requireDistinctApprover ?? true,
+              // D-11 as the API: a client brand needs a distinct approver unless the document says otherwise.
+              requireDistinctApprover:
+                input.document.requireDistinctApprover ??
+                (backend.brands.find((b) => b.id === input.brandId)?.classification ?? 'client') === 'client',
             }),
             createdByUserId: 'usr_e2e',
             createdAt: now(),
@@ -1779,7 +1783,10 @@ export function createMockRouter(backend: MockBackend) {
         activate: mutation.input(PolicyVersionActivate).mutation(({ input }) => {
           const pv = backend.policyVersions.find((p) => p.id === input.policyVersionId);
           if (!pv) throw new NotFoundError('PolicyVersion', input.policyVersionId);
-          for (const other of backend.policyVersions) if (other.state === 'active') other.state = 'retired';
+          if (pv.version !== input.expectedVersion)
+            throw new ConflictError('PolicyVersion', input.policyVersionId, pv.version);
+          for (const other of backend.policyVersions)
+            if (other.brandId === pv.brandId && other.state === 'active') other.state = 'retired';
           pv.state = 'active';
           pv.version += 1;
           return { policyVersionId: pv.id, state: 'active' as const, version: pv.version };

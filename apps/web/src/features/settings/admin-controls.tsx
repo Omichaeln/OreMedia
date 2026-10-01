@@ -135,7 +135,7 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
   const policy = useReleasePolicy(brandId);
   const ui = policy.isError ? toUiError(policy.error) : null;
   // UX-20 (D-13): the one choice this screen writes, as a new policy version activated at once.
-  const [onPublished, setOnPublished] = useState<OnBrandVersionPublished>('invalidate_and_hold');
+  const [onPublished, setOnPublished] = useState<OnBrandVersionPublished | null>(null);
   const createIntent = useIntentKey();
   const activateIntent = useIntentKey();
   const activate = useMutation(
@@ -152,6 +152,8 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
       ...mutationIntent(createIntent.key),
       onSuccess: (created) => {
         createIntent.renew();
+        // The draft exists now whatever activation does; it is visible once the policy reads refresh.
+        void queryClient.invalidateQueries(trpc.brand.policy.pathFilter());
         activate.mutate({
           brandId,
           policyVersionId: created.policyVersionId,
@@ -166,6 +168,11 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
     (ui?.kind === 'not_found'
       ? { ...defaultPolicyDocument(), requireDistinctApprover: brand.classification === 'client' }
       : null);
+  // The stored choice until the person picks another (BrandType initialises from the brand the same way).
+  const chosen: OnBrandVersionPublished =
+    onPublished ?? doc?.onBrandVersionPublished ?? 'invalidate_and_hold';
+  // Activation can fail on its own (the brand row moved): the draft is kept and activation retried, never re-created.
+  const activateFailed = activate.isError && createVersion.data ? createVersion.data : null;
   return (
     <Section id="release-policy-heading" title="Release policy" testId="release-policy">
       {doc && (
@@ -198,7 +205,7 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
           data-testid="on-published-form"
           onSubmit={(e) => {
             e.preventDefault();
-            createVersion.mutate({ brandId, document: { ...doc, onBrandVersionPublished: onPublished } });
+            createVersion.mutate({ brandId, document: { ...doc, onBrandVersionPublished: chosen } });
           }}
         >
           <Field
@@ -209,7 +216,7 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
           >
             <Select
               id="on-published-select"
-              value={onPublished}
+              value={chosen}
               onValueChange={(v) => setOnPublished(OnBrandVersionPublished.parse(v))}
               options={OnBrandVersionPublished.options.map((o) => ({
                 value: o,
@@ -220,16 +227,26 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
           </Field>
           <Button
             type="submit"
-            disabled={
-              createVersion.isPending || activate.isPending || doc.onBrandVersionPublished === onPublished
-            }
+            disabled={createVersion.isPending || activate.isPending || doc.onBrandVersionPublished === chosen}
           >
             {createVersion.isPending || activate.isPending ? 'Saving…' : 'Save as a new policy version'}
           </Button>
         </form>
       )}
       {createVersion.isError && <RequestError error={createVersion.error} />}
-      {activate.isError && <RequestError error={activate.error} />}
+      {activateFailed && (
+        <RequestError
+          error={activate.error}
+          title="The policy version was created but not activated"
+          onRetry={() =>
+            activate.mutate({
+              brandId,
+              policyVersionId: activateFailed.policyVersionId,
+              expectedVersion: activateFailed.version,
+            })
+          }
+        />
+      )}
     </Section>
   );
 }

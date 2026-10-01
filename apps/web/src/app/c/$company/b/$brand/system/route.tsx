@@ -34,6 +34,7 @@ import {
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
 import { PublishImpact } from '../../../../../../features/brand/publish-impact';
+import { useBrandVersionImpact } from '../../../../../../features/brand/use-brand';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
 import {
   useBrandVersion,
@@ -447,8 +448,10 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
   const { toast } = useToast();
   const versions = useBrandVersions(brandId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // UX-20: the publish is confirmed over what it reaches.
+  // UX-20: the publish is confirmed over what it reaches; the confirmation waits for that read.
   const [publishing, setPublishing] = useState<BrandVersionSummary | null>(null);
+  const impact = useBrandVersionImpact(brandId, publishing !== null);
+  const impactKnown = impact.data?.available === true;
   const selected = useBrandVersion(brandId, selectedId);
   const { conflict, onError, clear } = useConflict();
   const invalidate = () => {
@@ -610,6 +613,7 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
           <Dialog open={publishing !== null} onOpenChange={(open) => !open && setPublishing(null)}>
             {publishing && (
               <DialogContent
+                role="alertdialog"
                 title={`Publish version ${publishing.number}?`}
                 description="What publishing this version reaches, before it happens."
               >
@@ -630,7 +634,8 @@ function Versions({ publishedVersionId }: { publishedVersionId: string | null })
                         expectedVersion: publishing.version,
                       })
                     }
-                    disabled={publish.isPending}
+                    disabled={publish.isPending || !impactKnown}
+                    disabledReason={impactKnown ? undefined : 'Wait for what the publish reaches to load'}
                   >
                     {publish.isPending ? 'Publishing…' : `Publish version ${publishing.number}`}
                   </Button>

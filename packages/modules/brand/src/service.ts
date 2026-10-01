@@ -140,9 +140,12 @@ export const resetOnboardingRunSource = (): void => {
  * UX-20 (D-13): what publishing a brand version reaches, read before the publish. Requests and approvals are the
  * review module's rows and scheduled publications the publishing module's, so the composition roots register the
  * source (as apps/worker-core composes the same modules for brandChangeImpactWorkflowV1). There is no harmless
- * default: until registered the preview says it is unavailable rather than "nothing is affected".
+ * default: until registered the preview reports `available: false` (the screen refuses to confirm a publish over
+ * it) rather than "nothing is affected".
  */
 export interface BrandChangeImpactScope {
+  /** The reads stop at 200 rows each (as the workflow's do); true when any of them hit that bound. */
+  truncated: boolean;
   requests: Array<{ id: string; contentRevisionId: string; dueAt: string | null; assignees: number }>;
   approvals: number;
   publications: Array<{
@@ -767,6 +770,7 @@ export const brandService = {
       return {
         brandId: brand.id,
         available: scope !== null,
+        truncated: scope?.truncated ?? false,
         policy: { configured, effective: 'invalidate_and_hold' as const },
         requests: scope?.requests ?? [],
         approvals: scope?.approvals ?? 0,

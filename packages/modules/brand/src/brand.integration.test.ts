@@ -846,6 +846,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       registerBrandChangeImpactSource(async (brandId) => {
         asked.push(brandId);
         return {
+          truncated: false,
           requests: [{ id: 'rr_1', contentRevisionId: 'cr_1', dueAt: null, assignees: 2 }],
           approvals: 3,
           publications: [

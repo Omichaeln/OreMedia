@@ -437,6 +437,11 @@ export const publicationService = {
    * with the failed checks as reasons (the machine's dependency_revoked), audited and announced as the tenant
    * context's actor. Idempotent: a held publication is no longer scheduled and is not visited again.
    */
+  async reevaluateScheduledForBrand(brandId: string, reason: string, tx: Tx) {
+    const rows = await publicationsRepo.listScheduledForBrand(brandId, tx);
+    return holdWhereReleaseFails(rows, reason, tx);
+  },
+
   /** UX-20: the scheduled publications reevaluateScheduledForBrand would re-check now, read without locking. */
   async scheduledForBrand(brandId: string, tx?: Tx) {
     return (await publicationsRepo.listScheduledForBrandRead(brandId, tx)).map((p) => ({
@@ -446,11 +451,6 @@ export const publicationService = {
       channelConnectionId: p.channelConnectionId,
       scheduledFor: p.scheduledFor.toISOString(),
     }));
-  },
-
-  async reevaluateScheduledForBrand(brandId: string, reason: string, tx: Tx) {
-    const rows = await publicationsRepo.listScheduledForBrand(brandId, tx);
-    return holdWhereReleaseFails(rows, reason, tx);
   },
 
   /**

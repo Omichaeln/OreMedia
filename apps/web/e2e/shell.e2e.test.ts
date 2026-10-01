@@ -494,11 +494,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await impact.getByTestId('publish-impact-policy').textContent()).toContain(
       'Policy: Invalidate approvals and hold scheduled posts',
     );
-    expect(await impact.getByTestId('publish-impact-policy').textContent()).toContain(
-      backend.policyVersions.some((p) => p.state === 'active')
-        ? 'Approvals of this brand are invalidated'
-        : '(no choice recorded; this is the default)',
-    );
+    const recorded = backend.policyVersions.some((p) => p.state === 'active');
+    const policyLine = (await impact.getByTestId('publish-impact-policy').textContent()) ?? '';
+    expect(policyLine.includes('(no choice recorded; this is the default)')).toBe(!recorded);
     await page.goto(`${origin}${home.replace('/home', '/system?section=voice')}`);
     await page.getByLabel('Draft copy').fill('A cheap and cheerful roast');
     const findings = page.getByTestId('draft-findings');

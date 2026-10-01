@@ -46,7 +46,10 @@ export function PublishImpact({ brandId, versionNumber }: { brandId: string; ver
             Policy: {ON_PUBLISHED_LABEL[data.policy.effective]}
             {data.policy.configured === null && ' (no choice recorded; this is the default)'}. Approvals of
             this brand are invalidated and open requests marked stale; every scheduled post is re-checked
-            against the release policy and held with the failed checks. Published work is never edited.
+            against the release policy and those that fail are held with the failed checks. Published work is
+            never edited.{' '}
+            {data.truncated &&
+              'The counts stop at the first 200 of each kind, so the publish may reach more than is listed.'}
           </p>
           {data.publications.length > 0 && (
             <ul className="flex flex-col divide-y divide-border" aria-label="Scheduled posts reached">
