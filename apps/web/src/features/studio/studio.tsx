@@ -16,7 +16,7 @@ import { FormatStrip } from './format-strip';
 import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
 import { PropertiesPanel } from './properties-panel';
-import { ProposalPanel } from './proposal-panel';
+import { AgentPanel } from './agent-panel';
 import { RenderPanel } from './render-panel';
 import { ReviewPanel } from './review-panel';
 import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
@@ -397,39 +397,17 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   <Tab value="history">History</Tab>
                 </TabList>
                 <TabPanel value="agent" className="flex flex-col gap-3 p-3">
-                  {state.proposal && proposalDiff ? (
-                    <section aria-labelledby="proposal-heading" className="flex flex-col gap-2">
-                      <h2 id="proposal-heading" className="text-sm font-semibold">
-                        Agent proposal
-                      </h2>
-                      <ProposalPanel
-                        proposal={state.proposal}
-                        diff={proposalDiff}
-                        headRevisionId={state.committed.revisionId}
-                        hasLocalWork={dirty}
-                        onAccept={studio.acceptProposal}
-                        onModify={studio.modifyProposal}
-                        onReject={studio.rejectProposal}
-                      />
-                    </section>
-                  ) : (
-                    <EmptyState
-                      title="No agent proposal"
-                      description="Targeted change requests go through the same operation contract as your edits. An agent's change arrives here as a proposal you accept, modify or reject."
-                      className="py-4"
-                      action={
-                        devTools() ? (
-                          <Button
-                            size="sm"
-                            onClick={() => void studio.simulateProposal()}
-                            data-testid="simulate-proposal"
-                          >
-                            Development only: simulate an agent proposal
-                          </Button>
-                        ) : undefined
-                      }
-                    />
-                  )}
+                  <AgentPanel
+                    brandId={brandId}
+                    documentId={documentId}
+                    page={page}
+                    state={state}
+                    studio={studio}
+                    proposalDiff={proposalDiff}
+                    hasLocalWork={dirty}
+                    readOnly={readOnly}
+                    simulate={devTools() ? () => void studio.simulateProposal() : undefined}
+                  />
                 </TabPanel>
                 <TabPanel value="comments" className="p-3" keepMounted>
                   <CommentsPanel

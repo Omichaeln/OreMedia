@@ -8,6 +8,7 @@ import {
   RunCancel,
   RunGet,
   RunList,
+  RunPendingProposals,
   RunStart,
   RunSteps,
   type AgentRunState,
@@ -88,6 +89,9 @@ function transition(from: AgentRunState, event: AgentRunEvent, path: string): Ag
     throw err;
   }
 }
+
+/** Parked runs read for a document's proposals: a brand rarely has more than a few awaiting a person. */
+const PARKED_RUNS_MAX = 50;
 
 const toRunDto = (r: RunRow) => ({
   id: r.id,
@@ -244,6 +248,37 @@ export const agentsService = {
       const brand = await brandService.get(actor, parsed.brandId, tx);
       const page = await runsRepo.listForBrand(brand.id, parsed.page, tx);
       return { items: page.items.map(toRunDto), nextCursor: page.nextCursor };
+    },
+
+    /**
+     * UX-07: the creative proposals awaiting a person on a document, so the studio shows the same proposal after a
+     * leave and return (it lives on the run, not in the browser). A parked run has one open proposal: its latest.
+     * brand.read on the brand (a foreign brand is NOT_FOUND); deciding still needs the tool's own permission.
+     */
+    async pendingProposals(actor: ResolvedActor, input: z.infer<typeof RunPendingProposals>, tx?: Tx) {
+      const parsed = RunPendingProposals.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx);
+      const parked = await runsRepo.listInState(brand.id, 'waiting_for_review', PARKED_RUNS_MAX, tx);
+      const proposals = await invocationsRepo.listProposalsForRuns(
+        parked.map((r) => r.id),
+        tx,
+      );
+      const items = [];
+      for (const run of parked) {
+        const latest = proposals.find((p) => p.runId === run.id);
+        if (!latest) continue;
+        const payload = CreativeProposalPayload.safeParse(latest.proposalPayload);
+        if (!payload.success || payload.data.documentId !== parsed.documentId) continue;
+        items.push({
+          runId: run.id,
+          stepId: latest.stepId,
+          taskKind: run.taskKind,
+          brief: run.brief,
+          createdAt: latest.createdAt.toISOString(),
+          proposal: payload.data,
+        });
+      }
+      return { items };
     },
 
     /** Spec 13.5: cancel moves the row (machine), releases the reservation and signals the workflow via the outbox. */

@@ -253,6 +253,8 @@ export const RunGet = z.object({ runId: z.string() });
 export const RunList = z.object({ brandId: z.string(), page: PageRequest });
 export const RunCancel = z.object({ runId: z.string(), reason: z.string().max(500).optional() });
 export const RunSteps = z.object({ runId: z.string(), page: PageRequest });
+/** UX-07: the proposals of runs parked in waiting_for_review that target a creative document of the brand. */
+export const RunPendingProposals = z.object({ brandId: z.string(), documentId: z.string() });
 export const RunApproveProposal = z.object({
   runId: z.string(),
   stepId: z.string(),

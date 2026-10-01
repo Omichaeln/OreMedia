@@ -61,12 +61,17 @@ export interface Conflict {
 }
 
 /** An agent proposal awaiting Accept / Modify / Reject (spec 11.4, 21.4). */
+/** What the studio needs of a proposal's evaluation: the server's dry run carries it, a run's payload reproduces it. */
+export type ProposalResult = Omit<ProposeResult, 'preview'> & { preview?: ProposeResult['preview'] };
+
 export interface Proposal {
   id: string;
   batch: IntentBatch;
   baseRevisionId: string;
-  result: ProposeResult;
+  result: ProposalResult;
   source: 'agent' | 'simulated';
+  /** UX-07: the run and step a server-side proposal came from; decided through agents.runs.approveProposal. */
+  run?: { runId: string; stepId: string };
 }
 
 export interface StudioState {

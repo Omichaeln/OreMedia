@@ -332,6 +332,65 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     await page.getByRole('tab', { name: /^Agent/ }).click();
   }, 45_000);
 
+  it('agent conversation (UX-07): a request starts a run, its proposal survives a reload, Accept lands it as the agent’s revision; a stale proposal cannot overwrite', async () => {
+    if (realApi) return; // the run is produced by the mock worker; against the real API it needs a model
+    const documentId = documentIdFromUrl();
+    const n = await headNumber(documentId);
+    await waitSaved();
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    await page.getByLabel('Ask the agent').fill('Tighten the headline');
+    await page.getByTestId('agent-send').click();
+    await expect.poll(() => page.getByTestId('agent-run').count(), { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 15_000 })
+      .toContain('Working');
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 30_000 })
+      .toContain('Proposal ready');
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('proposal').textContent()).toContain(
+      'Layout proposal: Tighten the headline',
+    );
+    expect(await page.getByTestId('proposal-overlay').count()).toBe(1);
+    // Leave and return: the proposal is the run's, not the browser's.
+    await page.reload();
+    await expect.poll(() => page.getByTestId('document-title').count(), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('agent-run').textContent()).toContain('Proposal ready');
+    await page.getByRole('button', { name: 'Accept' }).click();
+    await expect.poll(() => headNumber(documentId), { timeout: 15_000 }).toBe(n + 1);
+    expect(await headText(documentId, ids.headline)).toBe('Before undo — proposed — proposed by the agent');
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(0);
+    await expect
+      .poll(() => page.getByTestId('agent-run').textContent(), { timeout: 15_000 })
+      .toContain('Finished');
+    await expect
+      .poll(() => page.getByTestId('save-state').textContent(), { timeout: 15_000 })
+      .toContain(`revision ${n + 1}`);
+    await page.getByTestId('agent-run').getByRole('button', { name: 'Dismiss' }).click();
+    // A second request; the person edits meanwhile, so the proposal is stale and Accept is refused.
+    await page.getByLabel('Ask the agent').fill('Once more');
+    await page.getByTestId('agent-send').click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 30_000 }).toBe(1);
+    await page
+      .getByTestId('layers')
+      .getByRole('option', { name: /^Headline/ })
+      .click();
+    await headlineTextarea().fill('Edited while the agent worked');
+    await waitSaved();
+    expect(await headNumber(documentId)).toBe(n + 2);
+    await page.getByRole('tab', { name: /^Agent/ }).click();
+    const accept = page.getByRole('button', { name: 'Accept' });
+    expect(await accept.getAttribute('aria-disabled')).toBe('true');
+    expect(await accept.getAttribute('title')).toContain('proposed again');
+    await page.getByRole('button', { name: 'Reject' }).click();
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(0);
+    expect(await headNumber(documentId)).toBe(n + 2); // nothing of the stale proposal landed
+    expect(await headText(documentId, ids.headline)).toBe('Edited while the agent worked');
+    await page.getByTestId('agent-run').getByRole('button', { name: 'Dismiss' }).click();
+  }, 120_000);
+
   it('arrow keys nudge the selected element by 1px (10px with Shift) through the keyboard path', async () => {
     const documentId = documentIdFromUrl();
     await page.getByTestId('layers').getByRole('option', { name: /^Body/ }).click();

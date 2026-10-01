@@ -33,6 +33,20 @@ export class AgentRunRepository extends BrandScopedRepository<typeof agentRuns> 
     this.assertBrandAccess(row.brandId);
     return row;
   }
+  /** The brand's runs in one state, newest first and bounded (the parked runs a document's proposals come from). */
+  async listInState(
+    brandId: string,
+    state: (typeof agentRuns.$inferSelect)['state'],
+    limit: number,
+    tx?: Tx,
+  ) {
+    return this.conn(tx)
+      .select()
+      .from(agentRuns)
+      .where(this.brandScope(brandId, eq(agentRuns.state, state)))
+      .orderBy(desc(agentRuns.id))
+      .limit(limit);
+  }
   async listForBrand(
     brandId: string,
     page: PageRequest,
@@ -131,6 +145,17 @@ export class ToolInvocationRepository extends TenantScopedRepository<typeof tool
       .from(toolInvocations)
       .where(this.scope(and(eq(toolInvocations.runId, runId), inArray(toolInvocations.stepId, [...stepIds]))))
       .orderBy(asc(toolInvocations.id));
+  }
+  /** Every proposal of the given runs, newest first (a parked run's latest is the one awaiting a decision). */
+  async listProposalsForRuns(runIds: readonly string[], tx?: Tx) {
+    if (runIds.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(toolInvocations)
+      .where(
+        this.scope(and(inArray(toolInvocations.runId, [...runIds]), eq(toolInvocations.outcome, 'proposal'))),
+      )
+      .orderBy(desc(toolInvocations.id));
   }
   /** The proposal a step produced (outcome proposal); at most one per step. */
   async findProposal(runId: string, stepId: string, tx?: Tx) {

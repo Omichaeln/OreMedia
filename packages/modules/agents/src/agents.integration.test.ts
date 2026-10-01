@@ -732,6 +732,31 @@ describe('agents module (spec 12) against MySQL 8', () => {
         return next.stepId;
       });
       expect((await runRow(started.runId)).state).toBe('waiting_for_review');
+      // UX-07: the parked proposal is listed for its document (the studio reads it on return), not for another
+      // document, and never for a foreign brand.
+      const pending = await run(tenantA, () =>
+        agentsService.runs.pendingProposals(A, { brandId: brandA, documentId: docId }),
+      );
+      expect(pending.items).toHaveLength(1);
+      expect(pending.items[0]).toMatchObject({
+        runId: started.runId,
+        stepId: decisionStepId,
+        taskKind: 'layout',
+        proposal: { documentId: docId, baseRevisionId: revisionId, summary: 'sharpen headline' },
+      });
+      expect(pending.items[0]!.proposal.operations).toEqual(proposal.operations);
+      expect(
+        (
+          await run(tenantA, () =>
+            agentsService.runs.pendingProposals(A, { brandId: brandA, documentId: 'doc_x' }),
+          )
+        ).items,
+      ).toEqual([]);
+      await expect(
+        run(tenantB, () =>
+          agentsService.runs.pendingProposals(manager(tenantB), { brandId: brandA, documentId: docId }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
       const before = await tdb.db
         .select()
         .from(creativeRevisions)
@@ -783,6 +808,10 @@ describe('agents module (spec 12) against MySQL 8', () => {
       await runInTenant(spCtx(), async () => {
         await runtime.recordDecision({ ...input, decision: { stepId: decisionStepId, decision: 'accept' } });
         expect((await runRow(started.runId)).state).toBe('running');
+        // Decided: nothing is pending for the document any more.
+        expect(
+          (await agentsService.runs.pendingProposals(A, { brandId: brandA, documentId: docId })).items,
+        ).toEqual([]);
         const next = await runtime.planNextStep({ ...input, step: 1 });
         expect(next.kind).toBe('done');
         expect((await runtime.finishRun({ ...input, state: 'completed' })).state).toBe('completed');
