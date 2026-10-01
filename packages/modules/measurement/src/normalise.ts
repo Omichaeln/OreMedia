@@ -1,5 +1,6 @@
 import {
   kindFor,
+  STALE_FACTOR,
   type Completeness,
   type MetricAggregateV1,
   type MetricCoverageV1,
@@ -103,7 +104,8 @@ export function deriveRates(points: RateInput[]): DerivedRate[] {
 
 // ---- freshness (spec 15.2) ----
 
-export const STALE_FACTOR = 2;
+/** The dictionary's constant lives in the contracts; re-exported for the module's existing callers. */
+export { STALE_FACTOR };
 
 export function freshnessOf(fetchedAt: Date, latencyHours: number, now: Date): MetricFreshness {
   const ageHours = Math.max(0, (now.getTime() - fetchedAt.getTime()) / 3_600_000);

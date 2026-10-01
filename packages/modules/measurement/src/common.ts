@@ -1,4 +1,4 @@
-import type { CollectionPlanV1 } from '@oremedia/contracts/measurement';
+import { DEFAULT_LATENCY_HOURS, type CollectionPlanV1 } from '@oremedia/contracts/measurement';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { BrandRepository } from '@oremedia/module-brand';
@@ -24,7 +24,7 @@ export const sourceOf = (providerKey: string, capabilityVersion: number): string
 export const providerKeyOfSource = (source: string): string => source.split('@')[0] ?? source;
 
 /** Default when a capability is not registered in this process (never happens for a certified provider). */
-export const DEFAULT_LATENCY_HOURS = 24;
+export { DEFAULT_LATENCY_HOURS };
 
 export const latencyHoursFor = (providerKey: string): number =>
   providerRegistryInUse().capability(providerKey)?.analytics.latencyHours ?? DEFAULT_LATENCY_HOURS;

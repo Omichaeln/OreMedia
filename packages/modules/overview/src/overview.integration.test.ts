@@ -16,6 +16,7 @@ import {
   configureSourceAvailability,
   sourceUsePolicyService,
 } from '@oremedia/module-destinations';
+import { registerCalendarSource } from '@oremedia/module-content';
 import {
   definitionService,
   registerMeasurementBrandChecker,
@@ -234,6 +235,9 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     registerMeasurementPublicationSource((brandId, from, to, tx) =>
       publicationService.calendarRange(brandId, from, to, tx),
     );
+    registerCalendarSource((brandId, from, to, tx) =>
+      publicationService.calendarRange(brandId, from, to, tx),
+    );
     await definitionService.seedGlobal([fixture.capability]);
 
     freshChannel = (await connect('acct_fresh')).id;
@@ -411,7 +415,7 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     );
   });
 
-  it('a window with nothing in it: no social figure, the channel reads no data, the web source reads insufficient sample', async () => {
+  it('a window with nothing in it: no social figure, the channel and the web source read no data, the social sample is insufficient', async () => {
     const result = await inTenant(tenantA, () =>
       overview.summary(member(tenantA), {
         brandId: brandA,
@@ -424,6 +428,51 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     expect(result.sources.find((s) => s.id === freshChannel)).toMatchObject({ state: 'no_data' });
     expect(result.sources.find((s) => s.id === ga4Id)).toMatchObject({ state: 'no_data' });
     expect(result.limits.map((l) => l.code)).toContain('insufficient_sample');
+  });
+
+  it('an old window with more than 200 posts is counted as it was: the window is applied in the query, never to the newest rows', async () => {
+    // 210 posts published 60 days ago on the fresh channel (no numbers): more than any listing's page and older
+    // than everything seeded above, so a "newest 200, then filter" read would count none of them.
+    const at = new Date(NOW.getTime() - 60 * DAY);
+    await tdb.db.insert(publications).values(
+      Array.from({ length: 210 }, (_, i) => {
+        const id = newId('publication');
+        return {
+          id,
+          tenantId: tenantA,
+          brandId: brandA,
+          contentPackageId: newId('contentPackage'),
+          contentRevisionId: newId('contentRevision'),
+          channelVariantId: newId('channelVariant'),
+          channelConnectionId: freshChannel,
+          occurrenceKey: `test:${id}`,
+          authority: 'approval' as const,
+          approvalId: newId('releaseApproval'),
+          mandateId: null,
+          scheduledFor: new Date(at.getTime() + i * 60_000),
+          state: 'published' as const,
+          remotePostId: `post_${id.slice(-6)}`,
+          remoteUrl: 'https://fixture.example/p/1',
+          scheduledByKind: 'user' as const,
+          scheduledById: USER,
+        };
+      }),
+    );
+    const result = await inTenant(tenantA, () =>
+      overview.summary(member(tenantA), {
+        brandId: brandA,
+        windowStart: `${dayKey(-63)}T00:00:00.000Z`,
+        windowEnd: `${dayKey(-57)}T23:59:59.999Z`,
+      }),
+    );
+    expect(result.sources.find((s) => s.id === freshChannel)).toMatchObject({
+      state: 'no_data',
+      coverage: { requested: 210, withData: 0, unit: 'posts' },
+      sample: { current: 210, previous: 0, minimum: 5, sufficient: false },
+    });
+    expect(result.sources.find((s) => s.id === freshChannel)?.reason).toContain(
+      '210 posts published, no number returned yet',
+    );
   });
 
   it('cross-tenant: a foreign brand is NOT_FOUND, in either direction', async () => {

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
+import { NOT_SUMMED } from '@oremedia/contracts/measurement';
 import { Badge, Button, EmptyState, Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { AGES, DailyTrend } from './daily-trend';
@@ -41,13 +42,6 @@ const GROUPS: ReadonlyArray<[group: string, label: string]> = [
 ];
 const GROUP_LABEL = new Map(GROUPS);
 const ENGAGEMENT_RATE = 'rate:engagement/impressions';
-/** D-15: why a group has no total, in the words of the dictionary (docs/contracts/metrics.md). */
-const NOT_SUMMED: Record<string, string> = {
-  unique: 'unique people: never summed across posts',
-  snapshot: 'a level at a moment: never summed',
-  gauge: 'an intensity: never summed',
-  rate: 'pooled from its operands when both are here',
-};
 /** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
 const MAX_SUBJECTS = 200;
 const MAX_KEYS = 50;

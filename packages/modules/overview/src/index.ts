@@ -13,7 +13,6 @@ export {
   auditSourceOf,
   splitsOf,
   limitsOf,
-  NOT_SUMMED,
   type BrandSummaryResult,
   type ChannelRow,
   type ReleasedPublication,

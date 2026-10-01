@@ -369,8 +369,8 @@ export function OverviewScreen() {
             </ul>
           </Section>
           <p className="text-xs text-muted-foreground">
-            Computed {new Date(data.computedAt).toLocaleString()} · window {data.days.start} to{' '}
-            {data.days.end} (UTC days)
+            Computed {ageText((Date.now() - Date.parse(data.computedAt)) / 3_600_000)} · window{' '}
+            {data.days.start} to {data.days.end} (UTC days)
           </p>
         </>
       )}

@@ -1,6 +1,13 @@
 import type { DestinationReportSummaryV1, DestinationV1 } from '@oremedia/contracts/destinations';
 import { DESTINATION_KIND_CAPABILITIES, webMetricByName } from '@oremedia/contracts/destinations';
-import type { MetricAggregateV1, MetricFreshness, MetricValueV1 } from '@oremedia/contracts/measurement';
+import {
+  DEFAULT_LATENCY_HOURS,
+  NOT_SUMMED,
+  STALE_FACTOR,
+  type MetricAggregateV1,
+  type MetricFreshness,
+  type MetricValueV1,
+} from '@oremedia/contracts/measurement';
 import {
   OVERVIEW_AUDIT_LATENCY_HOURS,
   OVERVIEW_SOCIAL_GROUPS,
@@ -17,21 +24,13 @@ import {
   type OverviewWebSourceV1,
 } from '@oremedia/contracts/overview';
 import type { SeoAuditSummaryV1 } from '@oremedia/contracts/seo-audit';
-import { DEFAULT_LATENCY_HOURS, STALE_FACTOR } from '@oremedia/module-measurement';
 
 /**
  * The pure composition rules of the overview (R2-5): how each module's read model becomes a source state with
- * its reason, a figure with its source label and freshness, and a limit statement. No I/O here; summary.ts
- * composes the services and hands their results in.
+ * its reason, a figure with its source label and freshness, and a limit statement. No I/O and contracts only, so
+ * the web's mock transport composes with the same functions; summary.ts composes the services and hands their
+ * results in.
  */
-
-/** D-15: why a group has no total, in the words of the dictionary (docs/contracts/metrics.md). */
-export const NOT_SUMMED: Readonly<Record<string, string>> = {
-  unique: 'unique people: never summed across posts',
-  snapshot: 'a level at a moment: never summed',
-  gauge: 'an intensity: never summed',
-  rate: 'pooled from its operands when both are here',
-};
 
 /** The social roll-up the measurement module returns (measurement.metrics.brandSummary). */
 export interface BrandSummaryResult {
