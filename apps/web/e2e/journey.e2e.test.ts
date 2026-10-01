@@ -573,6 +573,8 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     // The brand name links into that brand's own performance screen.
     await rowA.getByRole('link', { name: E2E.brandName }).click();
     await expect.poll(() => page.url(), { timeout: 15_000 }).toContain(pathA('performance'));
+    // Leave the brand shell rendered (its Menu holds Sign out), so the next test's sign-out finds it.
+    await page.getByRole('heading', { name: 'Performance', level: 1 }).waitFor({ timeout: 15_000 });
   }, 60_000);
 
   it('a creator restricted to brand 1 sees only it; brand 2’s routes are NOT_FOUND', async () => {
