@@ -22,6 +22,7 @@
     "@oremedia/module-community": "workspace:*",
     "@oremedia/module-content": "workspace:*",
     "@oremedia/module-creative": "workspace:*",
+    "@oremedia/module-destinations": "workspace:*",
     "@oremedia/module-experiments": "workspace:*",
     "@oremedia/module-intelligence": "workspace:*",
     "@oremedia/module-measurement": "workspace:*",

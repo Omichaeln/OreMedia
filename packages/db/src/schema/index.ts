@@ -11,6 +11,7 @@ export * from './measurement';
 export * from './intelligence';
 export * from './experiments';
 export * from './community';
+export * from './destinations';
 export * from './billing';
 export * from './operations';
 export * from './platform';

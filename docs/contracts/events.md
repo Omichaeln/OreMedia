@@ -111,7 +111,7 @@ its tRPC procedure through the same middleware chain (tenant resolution, per-key
 
 ## API client key scopes (spec 7.6)
 
-`access:read`, `access:write`, `brands:read`, `brands:write`, `assets:read`, `assets:write`, `creative:read`, `creative:write`, `content:read`, `content:write`, `review:read`, `review:write`, `channels:read`, `channels:write`, `publications:read`, `publications:write`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `insights:read`, `insights:write`, `experiments:read`, `experiments:write`, `measurement:read`, `measurement:write`, `operations:read`, `operations:write`, `community:read`, `community:write`.
+`access:read`, `access:write`, `brands:read`, `brands:write`, `assets:read`, `assets:write`, `creative:read`, `creative:write`, `content:read`, `content:write`, `review:read`, `review:write`, `channels:read`, `channels:write`, `publications:read`, `publications:write`, `agents:read`, `agents:write`, `skills:read`, `skills:write`, `insights:read`, `insights:write`, `experiments:read`, `experiments:write`, `measurement:read`, `measurement:write`, `operations:read`, `operations:write`, `community:read`, `community:write`, `destinations:read`, `destinations:write`.
 
 A query needs `<area>:read`, a mutation `<area>:write` (tRPC and REST alike; the area follows the router map). A key
 with an empty scope list may read and not write. Scopes narrow a key; the service principal's grants and the policy

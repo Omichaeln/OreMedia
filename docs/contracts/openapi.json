@@ -167,7 +167,9 @@
                         "operations:read",
                         "operations:write",
                         "community:read",
-                        "community:write"
+                        "community:write",
+                        "destinations:read",
+                        "destinations:write"
                       ]
                     }
                   },
@@ -394,6 +396,9 @@
                             "publication.edit_remote",
                             "channel.connect",
                             "channel.manage",
+                            "destination.connect",
+                            "destination.manage",
+                            "source_use.manage",
                             "mandate.manage",
                             "agent.start_run",
                             "agent.cancel_run",
@@ -4624,6 +4629,284 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.disconnect": {
+      "post": {
+        "operationId": "destinations.disconnect",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "destinationId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.get": {
+      "get": {
+        "operationId": "destinations.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "destinationId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.list": {
+      "get": {
+        "operationId": "destinations.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.register": {
+      "post": {
+        "operationId": "destinations.register",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  },
+                  "externalId": {
+                    "type": "string"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  },
+                  "grantedScopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "capabilityVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "kind", "externalId", "displayName"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.setHealth": {
+      "post": {
+        "operationId": "destinations.setHealth",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "health": {
+                    "type": "string",
+                    "enum": ["unknown", "healthy", "degraded", "unreachable"]
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "destinationId", "health", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.sourceUse.check": {
+      "get": {
+        "operationId": "destinations.sourceUse.check",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationKind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  },
+                  "dataType": {
+                    "type": "string"
+                  },
+                  "use": {
+                    "type": "string",
+                    "enum": ["read", "retain", "write"]
+                  }
+                },
+                "required": ["brandId", "destinationKind", "dataType", "use"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.sourceUse.list": {
+      "get": {
+        "operationId": "destinations.sourceUse.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationKind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/destinations.sourceUse.set": {
+      "post": {
+        "operationId": "destinations.sourceUse.set",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationKind": {
+                    "type": "string",
+                    "enum": [
+                      "ga4_property",
+                      "search_console_site",
+                      "gbp_location",
+                      "cms_site",
+                      "discord_webhook"
+                    ]
+                  },
+                  "dataType": {
+                    "type": "string"
+                  },
+                  "allowedUses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["read", "retain", "write"]
+                    }
+                  },
+                  "retentionDays": {
+                    "type": "number"
+                  },
+                  "reviewDueAt": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "destinationKind", "dataType", "allowedUses", "reviewDueAt"]
               }
             }
           }
@@ -9104,7 +9387,9 @@
                   "operations:read",
                   "operations:write",
                   "community:read",
-                  "community:write"
+                  "community:write",
+                  "destinations:read",
+                  "destinations:write"
                 ]
               }
             },
@@ -9271,6 +9556,9 @@
                       "publication.edit_remote",
                       "channel.connect",
                       "channel.manage",
+                      "destination.connect",
+                      "destination.manage",
+                      "source_use.manage",
                       "mandate.manage",
                       "agent.start_run",
                       "agent.cancel_run",
@@ -12642,6 +12930,182 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "destinations.disconnect": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "destinationId", "expectedVersion"]
+        }
+      },
+      "destinations.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "destinationId"]
+        }
+      },
+      "destinations.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "destinations.register": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            },
+            "externalId": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "grantedScopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "capabilityVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "kind", "externalId", "displayName"]
+        }
+      },
+      "destinations.setHealth": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "health": {
+              "type": "string",
+              "enum": ["unknown", "healthy", "degraded", "unreachable"]
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "destinationId", "health", "expectedVersion"]
+        }
+      },
+      "destinations.sourceUse.check": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationKind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            },
+            "dataType": {
+              "type": "string"
+            },
+            "use": {
+              "type": "string",
+              "enum": ["read", "retain", "write"]
+            }
+          },
+          "required": ["brandId", "destinationKind", "dataType", "use"]
+        }
+      },
+      "destinations.sourceUse.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationKind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "destinations.sourceUse.set": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationKind": {
+              "type": "string",
+              "enum": ["ga4_property", "search_console_site", "gbp_location", "cms_site", "discord_webhook"]
+            },
+            "dataType": {
+              "type": "string"
+            },
+            "allowedUses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["read", "retain", "write"]
+              }
+            },
+            "retentionDays": {
+              "type": "number"
+            },
+            "reviewDueAt": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "destinationKind", "dataType", "allowedUses", "reviewDueAt"]
         }
       },
       "experiments.assign": {
