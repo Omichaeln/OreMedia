@@ -141,6 +141,102 @@ describe.skipIf(!enabled)('deployment brand packs (built app in Chromium, mock t
       expect((await fetch(`${origins[pack]}/legal/privacy`)).status).toBe(404);
   }, 45_000);
 
+  it('UX-19: a cold load of a nested brand route, a refresh, and a direct nested load keep the pack', async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const brand = `/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}`;
+    await page.goto(`${origins['ore-and-tar']}/sign-in?next=${encodeURIComponent(`${brand}/home`)}`);
+    await page.getByLabel('Session token').fill(E2E.token);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await page.waitForURL(`**${brand}/home*`, { timeout: 15_000 });
+    await page.getByTestId('needs-you').waitFor({ timeout: 15_000 });
+    await expect(page.title()).resolves.toBe('Ore & Tar');
+    await expect(token(page, '--primary')).resolves.toBe('oklch(0.25 0.05 260)');
+    await page.reload();
+    await page.getByTestId('needs-you').waitFor({ timeout: 15_000 });
+    await expect(page.title()).resolves.toBe('Ore & Tar');
+    await expect(token(page, '--primary')).resolves.toBe('oklch(0.25 0.05 260)');
+    // A deep link typed cold, on a nested route the web server must serve the app for.
+    await page.goto(`${origins['ore-and-tar']}${brand}/settings?tab=policy`);
+    await page.getByTestId('release-policy').waitFor({ timeout: 15_000 });
+    await expect(page.title()).resolves.toBe('Ore & Tar');
+    await expect(token(page, '--primary')).resolves.toBe('oklch(0.25 0.05 260)');
+    await context.close();
+  }, 60_000);
+
+  it('UX-19: a malformed brand.json, and one that never answers, fall back to the neutral brand within the budget and stay neutral afterwards', async () => {
+    const neutralPrimary = await (async () => {
+      const page = await open('oremedia', 'light');
+      const v = await token(page, '--primary');
+      await page.context().close();
+      return v;
+    })();
+    for (const mode of ['malformed', 'stalled'] as const) {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await context.route('**/deployment-brand/brand.json', (route) => {
+        if (mode === 'malformed')
+          void route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: '{"name": 42, "stylesheet": tru',
+          });
+        // stalled: never answered
+      });
+      const page = await context.newPage();
+      const started = Date.now();
+      await page.goto(`${origins['ore-and-tar']}/sign-in`);
+      await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 });
+      const elapsed = Date.now() - started;
+      expect(elapsed, `${mode}: first render waited ${elapsed} ms`).toBeLessThan(6_000);
+      await expect(page.title()).resolves.toBe('Oremedia');
+      await expect(token(page, '--primary')).resolves.toBe(neutralPrimary);
+      // A malformed or absent pack has nothing to apply late: the tokens are the same well past the budget.
+      await page.waitForTimeout(2_500);
+      await expect(token(page, '--primary')).resolves.toBe(neutralPrimary);
+      await expect(page.title()).resolves.toBe('Oremedia');
+      await context.close();
+    }
+  }, 60_000);
+
+  for (const theme of ['light', 'dark'] as const)
+    for (const width of [390, 768, 1024, 1440])
+      it(`UX-19: the Ore & Tar pack passes the audit at ${width} px (${theme}) on sign-in, the portfolio and the brand home`, async () => {
+        const context = await browser.newContext({
+          viewport: { width, height: width < 500 ? 844 : 900 },
+          colorScheme: theme,
+          reducedMotion: 'reduce',
+        });
+        await context.addInitScript((t) => {
+          try {
+            localStorage.setItem('oremedia.theme', t);
+          } catch {
+            // storage blocked: the colour scheme preference still applies
+          }
+        }, theme);
+        const page = await context.newPage();
+        const narrow = width <= 400;
+        await page.goto(`${origins['ore-and-tar']}/sign-in`);
+        await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 });
+        const signIn = await auditPage(page, { narrow });
+        expect(signIn, formatViolations(`sign-in (ore-and-tar, ${theme}, ${width}px)`, signIn)).toEqual([]);
+        await page.getByLabel('Session token').fill(E2E.token);
+        await page.getByRole('button', { name: 'Continue' }).click();
+        await page.waitForURL('**/portfolio*', { timeout: 15_000 });
+        await page.getByRole('list', { name: 'Companies' }).waitFor({ timeout: 15_000 });
+        const portfolio = await auditPage(page, { narrow });
+        expect(
+          portfolio,
+          formatViolations(`portfolio (ore-and-tar, ${theme}, ${width}px)`, portfolio),
+        ).toEqual([]);
+        await page.goto(
+          `${origins['ore-and-tar']}/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}/home`,
+        );
+        await page.getByTestId('needs-you').waitFor({ timeout: 15_000 });
+        const home = await auditPage(page, { narrow });
+        expect(home, formatViolations(`brand home (ore-and-tar, ${theme}, ${width}px)`, home)).toEqual([]);
+        await context.close();
+      }, 60_000);
+
   for (const theme of ['light', 'dark'] as const)
     it(`the Ore & Tar tokens pass the audit on sign-in and the portfolio (${theme})`, async () => {
       const page = await open('ore-and-tar', theme);
