@@ -628,8 +628,20 @@ describe('destinations module against MySQL 8', () => {
       configureSourceAvailability((kind) => kind === 'ga4_property');
       const { items } = await destinationService.sources.list();
       expect(items).toEqual([
-        { kind: 'ga4_property', label: 'Google Analytics 4 property', certified: true, enabled: true },
-        { kind: 'search_console_site', label: 'Search Console site', certified: false, enabled: false },
+        {
+          kind: 'ga4_property',
+          label: 'Google Analytics 4 property',
+          vendor: 'Fixture',
+          certified: true,
+          enabled: true,
+        },
+        {
+          kind: 'search_console_site',
+          label: 'Search Console site',
+          vendor: 'Fixture',
+          certified: false,
+          enabled: false,
+        },
       ]);
     });
 
@@ -745,6 +757,49 @@ describe('destinations module against MySQL 8', () => {
       // properties/1001 is brand A1's own registration: a conflict, exactly as register answers.
       await expect(select(publisher, pendingId, 'properties/1001')).rejects.toBeInstanceOf(ConflictError);
       expect(await pendingRows()).toHaveLength(1); // refused inside the transaction: the choice is still open
+      // properties/9001 held by another brand of the tenant: refused without naming it, the flow still open.
+      await run(tenantA, (tx) =>
+        destinationService.register(
+          owner(),
+          { brandId: brandA2, kind: 'ga4_property', externalId: 'properties/9001', displayName: 'A2 web' },
+          tx,
+        ),
+      );
+      const otherBrand = await select(publisher, pendingId, 'properties/9001').catch((e: unknown) => e);
+      expect(otherBrand).toBeInstanceOf(ValidationFailedError);
+      expect((otherBrand as ValidationFailedError).details).toEqual([
+        { path: 'externalId', issue: 'remote_identity_registered_to_another_brand' },
+      ]);
+      expect(JSON.stringify(otherBrand)).not.toContain('A2 web');
+      const [stillOpen] = await pendingRows();
+      expect(stillOpen).toMatchObject({ id: pendingId, actorId: USER });
+      expect(stillOpen!.ciphertext).not.toBe(''); // the sealed grant was not shredded
+      // A member of the tenant granted another brand only: the flow does not exist for them; nothing changes.
+      const restricted: ResolvedActor = {
+        kind: 'user',
+        id: 'usr_destinations_restricted',
+        tenantId: tenantA,
+        membershipId: 'mem_destinations_restricted',
+        membershipStatus: 'active',
+        role: 'publisher',
+        allBrands: false,
+        brandGrants: [{ brandId: brandA2, roles: ['publisher'] }],
+        mfaEnrolled: false,
+      };
+      const restrictedCtx: TenantContext = { ...ctx(tenantA), brandIds: new Set([brandA2]) };
+      const as = <T>(fn: (tx: Tx) => Promise<T>) => runInTenant(restrictedCtx, () => withTransaction(fn));
+      for (const attempt of [
+        () =>
+          as((tx) =>
+            destinationService.connect.select(restricted, { pendingId, externalId: 'properties/9002' }, tx),
+          ),
+        () => as((tx) => destinationService.connect.cancel(restricted, { pendingId }, tx)),
+      ])
+        await expect(attempt()).rejects.toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: [{ path: 'pendingId', issue: 'connect_choice_invalid_or_expired' }],
+        });
+      expect(await pendingRows()).toEqual([stillOpen]);
     });
 
     it('select registers the chosen target with the sealed grant: credential, scopes, expiry, healthy; one-shot', async () => {
@@ -780,7 +835,11 @@ describe('destinations module against MySQL 8', () => {
       expect(opened).toBe('at_fixture_src');
       expect(JSON.stringify(credential)).not.toContain('fixture_src');
       expect(await pendingRows()).toEqual([]);
+      // One audit row for the write, under the command that made it (register records destination.register).
       expect(await auditsOf('destination.connect.select')).toHaveLength(1);
+      expect((await auditsOf('destination.register')).filter((a) => a.resourceId === registered.id)).toEqual(
+        [],
+      );
       const events = await tdb.db
         .select()
         .from(outboxEvents)

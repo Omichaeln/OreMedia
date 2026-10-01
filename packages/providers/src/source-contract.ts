@@ -18,6 +18,8 @@ import type { ProviderIO } from './io';
 export interface SourceCapabilityV1 {
   key: DestinationKind;
   version: number;
+  /** The platform the person authorises at, as the settings screen names it ("Google"). */
+  vendor: string;
   /** The OAuth scopes the grant must carry for the source to be readable. */
   requiredScopes: string[];
   /** How long the platform takes to make a day's data final (reports and ingestion read behind this). */

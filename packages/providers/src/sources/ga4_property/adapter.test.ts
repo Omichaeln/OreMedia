@@ -67,7 +67,7 @@ describe('GA4 property source adapter (ledger R2-1, spec 14.5 / 14.6)', () => {
     ).rejects.toMatchObject({ name: 'ProviderAuthError', code: 'exchange_failed' });
   });
 
-  it('refresh: a new access token keeps the refresh token; invalid_grant means reconnect; a 5xx is transient', async () => {
+  it('refresh: a new access token keeps the refresh token; invalid_grant means reconnect; invalid_client, 429 and 5xx are transient', async () => {
     load('refresh_ok');
     const ok = await adapter.refresh(creds, client, io);
     expect(ok).toMatchObject({
@@ -77,6 +77,10 @@ describe('GA4 property source adapter (ledger R2-1, spec 14.5 / 14.6)', () => {
     if (ok.ok) expect(Date.parse(ok.tokenExpiresAt ?? '')).toBeGreaterThan(Date.now());
     load('refresh_revoked');
     expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'reconnect_required' });
+    load('refresh_invalid_client'); // a 401 for the deployment's own secret: the grant is not gone
+    expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'transient' });
+    load('refresh_throttled');
+    expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'transient' });
     load('refresh_outage');
     expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'transient' });
     expect(await adapter.refresh({ accessToken: 'only' }, client, io)).toEqual({

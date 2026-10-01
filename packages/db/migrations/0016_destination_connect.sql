@@ -21,6 +21,7 @@ CREATE TABLE `pending_destination_grants` (
 	CONSTRAINT `uq_pending_destination_grant_tbi` UNIQUE(`tenant_id`,`brand_id`,`id`)
 );
 --> statement-breakpoint
+-- Reconciles the version() schema helper from the R2-0 review; no behaviour change (the service writes 1).
 ALTER TABLE `source_use_policies` MODIFY COLUMN `version` int NOT NULL DEFAULT 0;--> statement-breakpoint
 ALTER TABLE `brand_destinations` ADD `token_expires_at` datetime(3);--> statement-breakpoint
 ALTER TABLE `pending_destination_grants` ADD CONSTRAINT `fk_pending_destination_grant_brand` FOREIGN KEY (`tenant_id`,`brand_id`) REFERENCES `brands`(`tenant_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint

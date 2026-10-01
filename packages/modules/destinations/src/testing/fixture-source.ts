@@ -26,6 +26,7 @@ export const fixtureSourceCapability = (
 ): SourceCapabilityV1 => ({
   key: kind,
   version: 1,
+  vendor: 'Fixture',
   requiredScopes: ['https://www.googleapis.com/auth/fixture.readonly'],
   latencyHours: 1,
   rateLimits: [],

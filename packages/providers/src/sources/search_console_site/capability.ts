@@ -8,6 +8,7 @@ import type { SourceCapabilityV1 } from '../../source-contract';
 export const searchConsoleSiteCapability: SourceCapabilityV1 = {
   key: 'search_console_site',
   version: 1,
+  vendor: 'Google',
   requiredScopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
   // Search analytics data is final about two to three days after the day it covers.
   latencyHours: 72,

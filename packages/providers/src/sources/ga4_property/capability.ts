@@ -8,6 +8,7 @@ import type { SourceCapabilityV1 } from '../../source-contract';
 export const ga4PropertyCapability: SourceCapabilityV1 = {
   key: 'ga4_property',
   version: 1,
+  vendor: 'Google',
   requiredScopes: ['https://www.googleapis.com/auth/analytics.readonly'],
   // GA4 standard properties finalise a day's data within 24 to 48 hours.
   latencyHours: 48,

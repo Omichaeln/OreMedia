@@ -16,10 +16,12 @@ labelled external link; no scraping, no fabricated scores).
 2. Enable the two APIs on the project: **Google Analytics Admin API** (`analyticsadmin.googleapis.com`, the account
    summaries the connect flow lists properties from) and **Google Search Console API** (`searchconsole.googleapis.com`,
    the site list). The Analytics Data API is enabled with part B (reports).
-3. Certify each adapter against a property and a site the Ore & Tar account can read
-   (`docs/runbooks/certify-a-channel.md`, steps 2 to 11 apply with `pnpm certify` reading the source fixtures). This
-   sets `certifiedAt` in `packages/providers/src/sources/<kind>/capability.ts`. Until then the kinds are refused for
-   tenants (`provider_not_certified:<kind>`) and the settings screen says so.
+3. Certify each adapter against a property and a site the Ore & Tar account can read. This is a manual step for now:
+   the certify harness (`pnpm certify`, `docs/runbooks/certify-a-channel.md`) knows channel adapters only, so the
+   operator walks the connect flow, the target listing and a refresh against the real APIs, records the exchanges
+   as fixtures and sets `certifiedAt` in `packages/providers/src/sources/<kind>/capability.ts` (teaching the harness
+   source adapters is a follow-up on the ledger's R2-1 row). Until then the kinds are refused for tenants
+   (`provider_not_certified:<kind>`) and the settings screen says so.
 4. Submit the OAuth consent screen for verification (sensitive scopes, below). While the app is in testing, only the
    test users listed on the consent screen can authorise it, and their refresh tokens expire after seven days.
 
@@ -77,7 +79,9 @@ Disconnect, after which the grant is destroyed at once.
 
 The grant (access token, refresh token, expiry) is sealed with a per-record data key bound to the destination
 (`${tenantId}:${destinationId}`) and stored in `credential_refs`; the destination row keeps the credential's id, the
-granted scopes and the token's expiry. A pending flow (authorised but no target chosen yet) holds the sealed grant
+granted scopes and the token's expiry. Because the authorisation request carries `include_granted_scopes`, the
+stored `grantedScopes` also list the sign-in scopes the same client was granted earlier (`openid`, `email`,
+`profile`); the adapter checks only its own required scope against them. A pending flow (authorised but no target chosen yet) holds the sealed grant
 for ten minutes, then it is shredded. The daily `destination-token-refresh` schedule renews tokens due within a day
 and rotates the credential row; a revoked grant leaves the destination `unreachable` until a person connects it
 again. Disconnecting destroys the credential. Tokens are never returned by the API, logged, or carried in events.

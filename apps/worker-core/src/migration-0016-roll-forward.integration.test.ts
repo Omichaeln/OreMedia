@@ -26,7 +26,8 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * the migration adds `pending_destination_grants` and `brand_destinations.token_expires_at`; every existing row is
  * unchanged (a destination registered before reads back with no expiry), the new table is empty, and on the
  * migrated data a person connects a source through the flow, chooses a target and the destination holds its
- * sealed grant.
+ * sealed grant. The migration's `source_use_policies.version` default change (1 → 0) only reconciles the schema
+ * helper the R2-0 review switched to; it changes no behaviour (the service writes 1 on the first record).
  */
 const PREVIOUS_HEAD = '0015_brand_destinations';
 const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];

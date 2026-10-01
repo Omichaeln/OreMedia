@@ -186,6 +186,8 @@ export interface DestinationConnectChoice {
 export interface DestinationSourceV1 {
   kind: DestinationKind;
   label: string;
+  /** The platform the person authorises at (from the adapter's capability), for the screen's copy. */
+  vendor: string;
   certified: boolean;
   /** App credentials configured and the kind not listed in OREMEDIA_DISABLED_SOURCES. */
   enabled: boolean;

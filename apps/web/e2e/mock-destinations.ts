@@ -38,7 +38,7 @@ import type { MockBuilders, t } from './mock-api';
 export const PD = {
   destinations: { ga4: 'dst_e2e_ga4', gbp: 'dst_e2e_gbp' },
   policies: { ga4Reports: 'sup_e2e_ga4_reports', gbpReviews: 'sup_e2e_gbp_reviews' },
-  /** What a completed Google grant can read (connect.complete offers both; the person confirms one). */
+  /** What a completed grant can read (connect.complete offers both; the person confirms one). */
   targets: [
     { externalId: 'properties/9001', displayName: 'Acme · Acme web (new)' },
     { externalId: 'properties/9002', displayName: 'Acme · Acme app' },
@@ -47,8 +47,20 @@ export const PD = {
 
 /** The deployment's sources: GA4 certified and enabled; Search Console registered but not enabled here. */
 const SOURCES: readonly DestinationSourceV1[] = [
-  { kind: 'ga4_property', label: 'Google Analytics 4 property', certified: true, enabled: true },
-  { kind: 'search_console_site', label: 'Search Console site', certified: false, enabled: false },
+  {
+    kind: 'ga4_property',
+    label: 'Google Analytics 4 property',
+    vendor: 'Google',
+    certified: true,
+    enabled: true,
+  },
+  {
+    kind: 'search_console_site',
+    label: 'Search Console site',
+    vendor: 'Google',
+    certified: false,
+    enabled: false,
+  },
 ];
 
 /** Spec 5.5 default grants of destination.connect / destination.manage and source_use.manage. */

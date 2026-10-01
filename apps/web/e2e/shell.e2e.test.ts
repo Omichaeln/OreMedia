@@ -502,6 +502,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => link.count(), { timeout: 15_000 }).toBe(1);
     expect(await link.getAttribute('target')).toBe('_blank');
     expect(await link.getAttribute('rel')).toContain('noopener');
+    expect(await link.textContent()).toContain('Open Google authorisation'); // the vendor from sources.list
     const href = (await link.getAttribute('href')) ?? '';
     const url = new URL(href);
     expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');

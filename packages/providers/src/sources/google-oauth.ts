@@ -92,9 +92,14 @@ export async function googleExchangeCode(
   };
 }
 
+/** The token-endpoint errors that mean the grant itself is gone (RFC 6749 §5.2): only these ask for a reconnect. */
+const GRANT_GONE = new Set(['invalid_grant', 'unauthorized_client']);
+
 /**
- * Refresh-token grant. Google answers a revoked or expired grant with 400 `invalid_grant` (reconnect); a 5xx or a
- * transport failure is transient. The refresh token itself is kept (Google rotates it only on a new consent).
+ * Refresh-token grant. Google answers a revoked or expired grant with 400 `invalid_grant` (reconnect); every other
+ * failure (a misconfigured secret's `invalid_client`, a quota 429, a 5xx, a transport failure) is transient, so a
+ * deployment mistake or a blip never flips every destination to unreachable. The refresh token itself is kept
+ * (Google rotates it only on a new consent).
  */
 export async function googleRefresh(
   credentials: DecryptedCredentials,
@@ -128,7 +133,8 @@ export async function googleRefresh(
       ...(expiresAt ? { tokenExpiresAt: expiresAt } : {}),
     };
   }
-  return { ok: false, reason: res.status >= 400 && res.status < 500 ? 'reconnect_required' : 'transient' };
+  const error = str(get(res.json, 'error'));
+  return { ok: false, reason: error && GRANT_GONE.has(error) ? 'reconnect_required' : 'transient' };
 }
 
 /** A read of a Google API with the bearer token; the caller maps the status through its own classifier. */

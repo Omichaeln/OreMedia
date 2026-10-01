@@ -93,6 +93,7 @@ const listSources = (): DestinationSourceV1[] =>
     .map((s) => ({
       kind: s.key,
       label: DESTINATION_KIND_CAPABILITIES[s.key].label,
+      vendor: s.capability.vendor,
       certified: s.certified,
       enabled: sourceAvailable(s.key),
     }));
@@ -148,10 +149,12 @@ interface Grant {
 /**
  * The one destination write (R2-0 register and R2-1 select): a remote identity this brand holds already is a
  * conflict; one another brand of the tenant holds is refused without naming it (uq_destination_remote, as channels
- * do for a remote account). Audited, with the event.
+ * do for a remote account). One audit row per write, under the action of the command that made it (as
+ * connectAccount records channel.connect or channel.reconnect), with the event.
  */
 async function registerDestination(
   actor: ResolvedActor,
+  action: 'destination.register' | 'destination.connect.select',
   values: {
     id: string;
     brandId: string;
@@ -185,14 +188,11 @@ async function registerDestination(
     tx,
   );
   const row = await destinationsRepo.getById(values.id, tx);
-  await audit.record(
-    actorRef(actor),
-    'destination.register',
-    { type: 'brand_destination', id: values.id },
-    'allowed',
-    tx,
-    { brandId: values.brandId, kind: values.kind, toState: 'active' },
-  );
+  await audit.record(actorRef(actor), action, { type: 'brand_destination', id: values.id }, 'allowed', tx, {
+    brandId: values.brandId,
+    kind: values.kind,
+    toState: 'active',
+  });
   await outbox.add(
     'destination.registered',
     { type: 'brand_destination', id: values.id, version: row.version },
@@ -293,6 +293,7 @@ export const destinationService = {
     await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
     return registerDestination(
       actor,
+      'destination.register',
       {
         id: newId('destination'),
         brandId: parsed.brandId,
@@ -448,8 +449,9 @@ export const destinationService = {
       const envelope: EnvelopeRow = { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad };
       await pendingRepo.deletePending(row.id, tx);
       const credentialRefId = await credentialBroker.createCredentialRef(envelope, tx);
-      const registered = await registerDestination(
+      return registerDestination(
         actor,
+        'destination.connect.select',
         {
           id: row.destinationId,
           brandId: row.brandId,
@@ -462,15 +464,6 @@ export const destinationService = {
         { credentialRefId, tokenExpiresAt: row.tokenExpiresAt },
         tx,
       );
-      await audit.record(
-        actorRef(actor),
-        'destination.connect.select',
-        { type: 'brand_destination', id: registered.id },
-        'allowed',
-        tx,
-        { brandId: row.brandId, kind },
-      );
-      return registered;
     },
 
     /** Discards a flow: the sealed grant it holds is deleted. Same actor, tenant and brand as `select`. */

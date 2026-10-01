@@ -162,7 +162,7 @@ function DestinationRow({
 }
 
 /**
- * R2-1 connect start (as the channel flow): the server returns Google's authorisation URL; it opens in a new tab
+ * R2-1 connect start (as the channel flow): the server returns the vendor's authorisation URL; it opens in a new tab
  * as a link (never an iframe, the consent screen must be top-level). An uncertified source is refused with its
  * reason; one not enabled on this deployment is not offered at all.
  */
@@ -184,7 +184,7 @@ function ConnectSourceButton({
       ...mutationIntent(intent.key),
       onSuccess: (data) => {
         intent.renew();
-        // Google returns to the shared callback; this is how it finds its way back to this brand's destinations.
+        // The vendor returns to the shared callback; this is how it finds its way back to this brand's destinations.
         rememberConnect(data.state, { companyId, brandId, expiresAt: data.expiresAt, flow: 'destination' });
       },
     }),
@@ -212,17 +212,17 @@ function ConnectSourceButton({
       {start.data && (
         <StatusBanner
           tone="info"
-          title="Continue at Google"
+          title={`Continue at ${source.vendor}`}
           description={
             <>
-              Authorise {deployment.name} in Google&apos;s own window, then return here to choose what it
-              reads. The link expires {new Date(start.data.expiresAt).toLocaleTimeString()}.
+              Authorise {deployment.name} in {source.vendor}&apos;s own window, then return here to choose
+              what it reads. The link expires {new Date(start.data.expiresAt).toLocaleTimeString()}.
             </>
           }
           actions={
             <Button size="sm" asChild>
               <a href={start.data.url} target="_blank" rel="noopener noreferrer" data-testid="authorise-link">
-                Open Google authorisation (new tab)
+                Open {source.vendor} authorisation (new tab)
               </a>
             </Button>
           }
@@ -372,7 +372,7 @@ function ChooseTarget({ choice, onDone }: { choice: DestinationConnectChoiceDto;
   );
 }
 
-/** R2-1 completion: Google sent the person back with `state` and `code`; exchanging them is explicit. */
+/** R2-1 completion: the vendor sent the person back with `state` and `code`; exchanging them is explicit. */
 function FinishDestinationConnect({
   state,
   code,
@@ -396,7 +396,7 @@ function FinishDestinationConnect({
       <StatusBanner
         tone="info"
         title="Finish connecting the source"
-        description="Google sent you back with an authorisation code. Finishing exchanges it once and lists what the grant can read; the code is never stored."
+        description="The provider sent you back with an authorisation code. Finishing exchanges it once and lists what the grant can read; the code is never stored."
         actions={
           <>
             <Button
@@ -428,9 +428,9 @@ function ConnectSources({ brandId }: { brandId: string }) {
   return (
     <Section id="destination-sources-heading" title="Connect a source" testId="destination-sources">
       <p className="text-xs text-muted-foreground">
-        Authorise a Google account, then choose which property or site this brand reads. Only sources
-        certified after their platform review can be connected; the server refuses the others and the reason
-        is shown here.
+        Authorise an account at the source&apos;s vendor, then choose which property or site this brand reads.
+        Only sources certified after their platform review can be connected; the server refuses the others and
+        the reason is shown here.
       </p>
       <ul className="divide-y divide-border" aria-label="Sources">
         {enabled.map((source) => (
@@ -872,8 +872,8 @@ function AddPolicy({ brandId }: { brandId: string }) {
  * Settings → Destinations (R2-0): the brand's non-social destinations grouped by kind with their health and
  * owner, registration for those who hold destination.connect, and the source-use policy table (D-17) an admin
  * edits: one row per kind and data type, uses limited to what the kind offers, retention only when data is
- * retained, a review date, each save the next version. R2-1: a Google source connected through the flow
- * (start, Google's consent, finish on return, confirm a target), for the kinds enabled on this deployment.
+ * retained, a review date, each save the next version. R2-1: a source connected through the flow (start, the
+ * vendor's consent, finish on return, confirm a target), for the kinds enabled on this deployment.
  */
 export function DestinationSettings({
   canManage,
@@ -893,7 +893,7 @@ export function DestinationSettings({
   const [params, setParams] = useSearchParams();
   const callback = callbackParams(params.toString());
   const providerError = callbackError(params.toString());
-  // Google's answer is read from the query; dismissing it keeps this tab open.
+  // The vendor's answer is read from the query; dismissing it keeps this tab open.
   const clearCallback = () => setParams({ tab: 'destinations' }, { replace: true });
   const listUi = destinations.isError ? toUiError(destinations.error) : null;
   const byKind = KINDS.map((kind) => ({
@@ -908,7 +908,7 @@ export function DestinationSettings({
       {providerError && (
         <StatusBanner
           tone="warning"
-          title="Google did not authorise the connection"
+          title="The provider did not authorise the connection"
           description={providerError}
           actions={
             <Button size="sm" onClick={clearCallback}>
