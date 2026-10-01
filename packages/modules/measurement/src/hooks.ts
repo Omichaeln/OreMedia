@@ -114,3 +114,33 @@ export const registerBrandChecker = (c: BrandChecker): void => {
 };
 export const assertBrandExists = (brandId: string, tx?: Tx): Promise<void> =>
   brandChecker.assertExist([brandId], tx);
+
+/**
+ * UX-11 / UX-12: the brand's publications in a window, as the publishing module reports them to the calendar
+ * (composition roots register publicationService.calendarRange). Measurement never reads the publications table
+ * for a listing; it only ever looks up the one publication a quality read names.
+ */
+export interface PublicationInWindow {
+  publicationId: string;
+  contentRevisionId: string;
+  channelConnectionId: string;
+  scheduledFor: string;
+  state: string;
+}
+export type PublicationSource = (
+  brandId: string,
+  from: Date,
+  to: Date,
+  tx?: Tx,
+) => Promise<PublicationInWindow[]>;
+let publicationSource: PublicationSource = async () => {
+  throw new Error('publication source not registered (composition root must call registerPublicationSource)');
+};
+export const registerPublicationSource = (fn: PublicationSource): void => {
+  publicationSource = fn;
+};
+/** Released publications of the brand in the window, newest first. */
+export const releasedPublications = async (brandId: string, from: Date, to: Date, tx?: Tx) =>
+  (await publicationSource(brandId, from, to, tx))
+    .filter((p) => p.state === 'published' || p.state === 'removed')
+    .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));

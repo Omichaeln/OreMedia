@@ -109,6 +109,26 @@ export const MetricsQueryV1 = MetricsQuery.extend({
 });
 export type MetricsQueryV1 = z.infer<typeof MetricsQueryV1>;
 
+/**
+ * UX-11: a brand's performance over a window with the previous window of equal length beside it (D-14: same post
+ * age on both sides, "insufficient sample" below the minimum), from the dictionary's rules (D-15).
+ */
+export const BrandPerformanceSummary = z.object({
+  brandId: z.string(),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  ageDays: MetricAgeDays.optional(),
+});
+/** D-14: a comparison with fewer publications than this on either side reads "insufficient sample". */
+export const COMPARISON_MINIMUM_SAMPLE = 5;
+
+/** UX-12: what the creative did, per captured attribute value, as the pooled engagement rate of its posts. */
+export const CreativeAttributesAggregate = z.object({
+  brandId: z.string(),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+});
+
 export const EngagementQualityGet = z.object({
   brandId: z.string(),
   publicationId: z.string(),
