@@ -137,3 +137,7 @@ scope by the mandate.
 after 1 step`: the real model path ran one step on the default 0.25 USD budget; re-run with a 2 USD cap pending.
   Platform note: `apps/api/src/auth/router.ts` already works around Railway's outbound proxy rewriting content types
   for Google; the same global-fetch path should move to the explicit undici fetch (follow-up).
+- 2 October 2026, 17:37 UTC: production smoke run 33 passed on 74b8703 (#38); every production service deployed SUCCESS.
+  Staging acceptance run 4 (2 USD model cap): still `MODEL_EVAL_FAIL … budget_exhausted`; worker-core shows `reserveBudget`
+  refused with `Budget exhausted (brand_day)`, so the fixture brand's day limit, not the run budget, is the gate; the job's
+  fixture setup is being changed to raise the brand's day and month limits before the evaluation run.
