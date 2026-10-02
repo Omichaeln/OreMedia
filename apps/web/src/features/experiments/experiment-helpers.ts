@@ -83,7 +83,7 @@ export interface DesignForm {
   mode: string;
   variants: VariantRow[];
   primaryMetricKey: string;
-  guardrailMetricKeys: string;
+  guardrailMetricKeys: string[];
   allocationMethod: string;
   unitType: string;
   minSamplePerArm: string;
@@ -100,7 +100,7 @@ export const EMPTY_DESIGN: DesignForm = {
     { label: 'B', contentRevisionId: '', allocationWeight: '1' },
   ],
   primaryMetricKey: '',
-  guardrailMetricKeys: '',
+  guardrailMetricKeys: [],
   allocationMethod: 'matched_slots',
   unitType: 'publication_slot',
   minSamplePerArm: '30',
@@ -131,10 +131,7 @@ export function parseDesign(form: DesignForm): DesignParse {
       allocationWeight: num(v.allocationWeight),
     })),
     primaryMetricKey: form.primaryMetricKey.trim(),
-    guardrailMetricKeys: form.guardrailMetricKeys
-      .split(',')
-      .map((k) => k.trim())
-      .filter(Boolean),
+    guardrailMetricKeys: form.guardrailMetricKeys.filter((k) => k !== form.primaryMetricKey.trim()),
     allocationMethod: form.allocationMethod,
     unitType: form.unitType,
     minSamplePerArm: num(form.minSamplePerArm),
@@ -144,10 +141,21 @@ export function parseDesign(form: DesignForm): DesignParse {
         ? { kind: 'sequential_msprt', alpha, tau: 1 }
         : { kind: 'fixed_horizon', alpha },
   };
+  // A pick left empty is a shaped string the contract accepts; it is refused here, beside its field (RA-07).
+  const unpicked: Array<{ path: string; issue: string }> = [];
+  if (candidate.primaryMetricKey === '')
+    unpicked.push({ path: 'primaryMetricKey', issue: 'Choose a metric.' });
+  candidate.variants.forEach((v, i) => {
+    if (v.contentRevisionId === '')
+      unpicked.push({ path: `variants.${i}.contentRevisionId`, issue: 'Choose a content package.' });
+  });
   const parsed = PreRegistrationV1.safeParse(candidate);
-  if (parsed.success) return { ok: true, design: parsed.data };
+  if (parsed.success && unpicked.length === 0) return { ok: true, design: parsed.data };
+  const issues = parsed.success
+    ? []
+    : parsed.error.issues.map((i) => ({ path: i.path.join('.'), issue: i.message }));
   return {
     ok: false,
-    issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), issue: i.message })),
+    issues: [...unpicked, ...issues.filter((i) => !unpicked.some((u) => u.path === i.path))],
   };
 }

@@ -112,6 +112,8 @@ export interface Channel {
   status: 'active' | 'refresh_needed' | 'reconnect_needed' | 'disabled';
   tokenExpiresAt: string | null;
   capabilityVersion: number;
+  /** RA-07: the capability's per-variant settings as a JSON Schema the editor renders; null = none. */
+  settingsSchema: Record<string, unknown> | null;
   usable: boolean;
   createdAt: string;
   updatedAt: string;
@@ -359,6 +361,29 @@ export const P5_ARTICLE: ArticleDocumentV1 = {
   ],
   categories: ['Guides'],
   tags: ['ore'],
+};
+
+/** What the capability register says a variant on each provider may carry (packages/providers capabilities). */
+const SETTINGS_SCHEMA: Record<string, Record<string, unknown>> = {
+  x: {
+    type: 'object',
+    properties: {
+      replySettings: {
+        type: 'string',
+        enum: ['following', 'mentionedUsers', 'subscribers'],
+        description: 'Who may reply; everyone when left empty.',
+      },
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
+  linkedin: {
+    type: 'object',
+    properties: {
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
 };
 
 export class Phase5Backend {
@@ -734,6 +759,7 @@ export class Phase5Backend {
       status,
       tokenExpiresAt,
       capabilityVersion: 1,
+      settingsSchema: SETTINGS_SCHEMA[providerKey] ?? null,
       usable: status === 'active',
       createdAt: now(),
       updatedAt: now(),

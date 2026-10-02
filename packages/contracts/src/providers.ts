@@ -42,6 +42,11 @@ export const ProviderCapabilityV1 = z.object({
   ),
   requiredScopes: z.array(z.string()),
   certifiedAt: z.string().datetime().nullable(), // null = not certified; cannot be enabled for tenants
+  /**
+   * RA-07: the per-variant provider settings a person may set (ChannelVariantInput.settings), as a JSON Schema
+   * object the UI renders as fields; absent when the channel takes none. The adapter reads exactly these keys.
+   */
+  settings: z.record(z.unknown()).optional(),
 });
 export type ProviderCapabilityV1 = z.infer<typeof ProviderCapabilityV1>;
 

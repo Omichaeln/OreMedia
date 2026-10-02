@@ -12,6 +12,7 @@ import {
   type AgentRunState,
   RunApproveProposal,
   RunCancel,
+  RunEffectiveLimits,
   RunGet,
   RunList,
   RunStart,
@@ -196,6 +197,26 @@ class Backend {
               outcome: 'proposal',
               outputRef: 'proposal:st_x',
               proposal: PROPOSAL,
+            }),
+          ],
+        }),
+      ]),
+      // A second parked proposal, for Modify (the first is consumed by Accept).
+      run('run_waiting_modify', 'waiting_for_review', 'copywriting', 8_000, [
+        step('tool_call', 'creative.proposeOperations', {
+          invocations: [
+            invocation('creative.proposeOperations', {
+              outcome: 'proposal',
+              outputRef: 'proposal:st_y',
+              proposal: {
+                ...PROPOSAL,
+                operations: [
+                  ...PROPOSAL.operations,
+                  { op: 'moveElement', pageId: 'page_1', elementId: 'el_headline', x: 40, y: 40 },
+                ],
+                summary: 'Sharpen and nudge the headline',
+                findings: [],
+              },
             }),
           ],
         }),
@@ -433,6 +454,62 @@ function createRouter(backend: Backend) {
     }),
     agents: t.router({
       runs: t.router({
+        /** RA-07: the limits a start would be bound by; gated as the start is. */
+        effectiveLimits: query.input(RunEffectiveLimits).query(({ ctx, input }) => {
+          if (ctx.role !== 'owner')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          if (input.servicePrincipalId !== E2E.principalId)
+            throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
+          const skill = input.taskKind === 'copywriting' || input.taskKind === 'campaign_planning';
+          return {
+            brandId: input.brandId,
+            taskKind: input.taskKind,
+            principal: { id: E2E.principalId, name: 'E2E agent', maxAutonomy: 'prepare_release' as const },
+            autonomy: {
+              requested: input.requestedAutonomy,
+              principalMax: 'prepare_release' as const,
+              tenantPolicyMax: 'prepare_release' as const,
+              entitlementMax: 'prepare_release' as const,
+              effective:
+                input.requestedAutonomy === 'managed_autopublish'
+                  ? 'prepare_release'
+                  : input.requestedAutonomy,
+            },
+            skills: skill ? [{ key: 'brand-copywriting', title: 'Brand copywriting', versionNumber: 3 }] : [],
+            budget: skill
+              ? {
+                  maxSteps: 8,
+                  maxTokens: 80_000,
+                  maxCostMicros: 1_250_000,
+                  maxVariants: 3,
+                  deadlineSeconds: 600,
+                }
+              : null,
+            reservedMicros: skill ? 1_250_000 : 0,
+            spend: {
+              month: { limitMicros: 250_000_000, remainingMicros: 207_500_000 },
+              day: { limitMicros: 20_000_000, remainingMicros: 16_900_000 },
+            },
+            tools: [
+              { name: 'brand.getSnapshot', action: 'brand.read', allowed: true },
+              { name: 'content.draftCopy', action: 'content.edit', allowed: false },
+              { name: 'creative.proposeOperations', action: 'creative.edit', allowed: true },
+            ],
+            deniedActions: ['content.edit'],
+            blockers: skill
+              ? []
+              : [
+                  {
+                    code: 'no_skill' as const,
+                    message: 'No published skill serves this task kind for the brand.',
+                  },
+                ],
+            canStart: skill,
+          };
+        }),
         start: mutation.input(RunStart).mutation(({ ctx, input }) => {
           if (ctx.role !== 'owner')
             throw new PolicyDeniedError(
@@ -558,7 +635,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await signIn(E2E.ownerToken);
     await page.goto(`${origin}${agentsPath()}`);
     await expect.poll(() => page.getByRole('heading', { level: 1 }).textContent()).toBe('Agent runs');
-    await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(6);
+    await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(7);
     await expect
       .poll(
         async () =>
@@ -566,7 +643,15 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
         { timeout: 15_000 },
       )
       .toEqual(
-        ['budget_exhausted', 'completed', 'failed', 'policy_denied', 'running', 'waiting_for_review'].sort(),
+        [
+          'budget_exhausted',
+          'completed',
+          'failed',
+          'policy_denied',
+          'running',
+          'waiting_for_review',
+          'waiting_for_review',
+        ].sort(),
       );
     const list = await page.getByRole('list', { name: 'Runs' }).textContent();
     for (const label of [
@@ -592,7 +677,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   }, 45_000);
 
   it('shows the step timeline with kinds, tokens, cost, duration and tool invocations with the redacted input', async () => {
-    await page.getByRole('link', { name: /Waiting for review/ }).click();
+    await page.locator('a[href$="run=run_waiting"]').click();
     await expect.poll(() => page.url()).toContain('run=run_waiting');
     await expect
       .poll(() => detail().getAttribute('data-run-state'), { timeout: 15_000 })
@@ -625,12 +710,12 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(await proposal.textContent()).toContain('doc_e2e');
     expect(await proposal.textContent()).toContain('Headline is close to the limit');
     expect(await page.getByTestId('needs-attention').textContent()).toContain('Waiting for your decision');
+    // RA-07: Modify reviews the operations as rows with the proposed text editable; nothing is typed as JSON.
     await page.getByRole('button', { name: 'Modify' }).click();
-    const editor = page.locator('#modify-batch');
-    expect(JSON.parse(await editor.inputValue())).toMatchObject({
-      documentId: 'doc_e2e',
-      baseRevisionId: 'rev_e2e_1',
-    });
+    await expect.poll(() => page.getByTestId('modify-operation').count()).toBe(1);
+    expect(await page.getByTestId('modify-operation').textContent()).toContain('Set the text');
+    expect(await page.locator('#modify-op-0-text').inputValue()).toBe('Sharper headline');
+    expect(await page.locator('textarea.font-mono, #modify-batch').count()).toBe(0);
     await page.getByRole('button', { name: 'Back' }).click();
     await page.getByRole('button', { name: 'Accept' }).click();
     await expect.poll(() => backend.decisions.length, { timeout: 15_000 }).toBe(1);
@@ -640,6 +725,33 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await expect.poll(() => detail().getAttribute('data-run-state'), { timeout: 15_000 }).toBe('running');
     await expect.poll(() => page.getByTestId('proposal').count()).toBe(0);
     expect(await page.getByTestId('timeline').textContent()).toContain('accept by user usr_e2e');
+  }, 45_000);
+
+  it('Modify applies the kept operations with the edited text as the person’s own batch (RA-07: no JSON)', async () => {
+    await page.goto(`${origin}${agentsPath()}?run=run_waiting_modify`);
+    await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('button', { name: 'Modify' }).click();
+    await expect.poll(() => page.getByTestId('modify-operation').count()).toBe(2);
+    await page.locator('#modify-op-0-text').fill('My own headline');
+    await page.getByRole('button', { name: 'Remove #2' }).click();
+    expect(await page.getByTestId('modify-operation').nth(1).getAttribute('data-kept')).toBe('false');
+    await page.locator('#modify-summary').fill('Kept the text change only');
+    const decided = backend.decisions.length;
+    await page.getByRole('button', { name: 'Apply 1 of 2 operations' }).click();
+    await expect.poll(() => backend.decisions.length, { timeout: 15_000 }).toBe(decided + 1);
+    expect(backend.decisions.at(-1)).toMatchObject({
+      runId: 'run_waiting_modify',
+      decision: 'modify',
+      batch: {
+        documentId: 'doc_e2e',
+        baseRevisionId: 'rev_e2e_1',
+        summary: 'Kept the text change only',
+        operations: [{ op: 'setText', pageId: 'page_1', elementId: 'el_headline', text: 'My own headline' }],
+      },
+    });
+    expect((backend.decisions.at(-1)?.batch as { operations: unknown[] }).operations).toHaveLength(1);
+    await expect.poll(() => detail().getAttribute('data-run-state'), { timeout: 15_000 }).toBe('running');
+    expect(await page.getByTestId('timeline').textContent()).toContain('modify by user usr_e2e');
   }, 45_000);
 
   it('budget_exhausted is a needs-attention item with the spend in currency', async () => {
@@ -701,6 +813,14 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await page.locator('#run-principal').click();
     await page.getByRole('option', { name: /E2E agent/ }).click();
     await expect.poll(() => page.getByLabel('Goal').count(), { timeout: 15_000 }).toBe(1);
+    // RA-07: the limits the server will hold the run to are shown before it starts, from the same sources.
+    await expect.poll(() => page.getByTestId('effective-limits').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('effective-autonomy').textContent()).toContain('create');
+    expect(await page.getByTestId('effective-budget').textContent()).toContain('$1.25');
+    expect(await page.getByTestId('effective-budget').textContent()).toContain('8 steps');
+    expect(await page.getByTestId('denied-actions').textContent()).toContain('content.edit');
+    expect(await page.getByTestId('denied-actions').textContent()).toContain('content.draftCopy');
+    expect(await page.getByTestId('effective-limits').textContent()).toContain('$16.90');
     // A required field left empty is refused before any request is sent.
     await page.getByRole('button', { name: 'Start run' }).click();
     await expect.poll(() => page.locator('#run-brief-goal-error').count(), { timeout: 15_000 }).toBe(1);
@@ -721,7 +841,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await expect
       .poll(() => page.getByTestId('run-state').textContent(), { timeout: 15_000 })
       .toContain('Queued');
-    expect(backend.runs.size).toBe(7);
+    expect(backend.runs.size).toBe(8);
   }, 45_000);
 
   it('a reviewer without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
@@ -734,13 +854,13 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await signIn(E2E.reviewerToken);
     await page.goto(`${origin}${agentsPath()}`);
     // The list comes from agents.runs.list (brand.read), not the audit log: no admin role is needed for history.
-    await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(7);
+    await expect.poll(() => runRows().count(), { timeout: 15_000 }).toBe(8);
     expect(await page.getByTestId('runs').textContent()).not.toContain('audit access');
     await page.getByRole('button', { name: 'New run' }).click();
     // The principal list is gated as the start is, so the denial shows before anything is chosen.
     await expect.poll(() => page.getByTestId('start-denied').count(), { timeout: 15_000 }).toBe(1);
     expect(await page.getByTestId('start-denied').textContent()).toContain('Permission denied');
     expect(await page.getByTestId('start-denied').textContent()).toContain('agent.start_run');
-    expect(backend.runs.size).toBe(7);
+    expect(backend.runs.size).toBe(8);
   }, 45_000);
 });

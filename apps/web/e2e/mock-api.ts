@@ -29,6 +29,7 @@ import {
   RoutingPolicySet,
   RunApproveProposal,
   RunCancel,
+  RunEffectiveLimits,
   RunGet,
   RunList,
   RunPendingProposals,
@@ -1032,19 +1033,7 @@ export function createMockRouter(backend: MockBackend) {
               'Your role does not include agent.start_run for this brand',
             );
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
-          return {
-            items: [
-              {
-                id: 'sp_e2e_agent',
-                name: 'E2E agent',
-                kind: 'agent' as const,
-                maxAutonomy: 'prepare_release' as const,
-                actions: ['brand.read', 'content.plan', 'creative.edit'],
-                createdAt: '2026-09-01T09:00:00.000Z',
-              },
-            ],
-            nextCursor: null,
-          };
+          return { items: E2E_PRINCIPALS, nextCursor: null };
         }),
       }),
       members: t.router({
@@ -1492,6 +1481,18 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       runs: t.router({
+        /** RA-07: the limits a run would be bound by, read before it starts; gated as the principal list is. */
+        effectiveLimits: query.input(RunEffectiveLimits).query(({ ctx, input }) => {
+          if (ctx.member?.role === 'reviewer' || ctx.member?.role === 'publisher')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          const principal = E2E_PRINCIPALS.find((p) => p.id === input.servicePrincipalId);
+          if (!principal) throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
+          return mockEffectiveLimits(input, principal);
+        }),
         /** UX-07: a layout run on a document; as the server it is accepted at once and works on its own. */
         start: mutation.input(RunStart).mutation(({ input }) => {
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
@@ -2437,6 +2438,118 @@ function companyHandler(backend: MockBackend) {
  * stores; requests without a tenant (listCompanies, the review portal) and unknown tenants go to the first company,
  * which answers them or refuses the tenant as apps/api does.
  */
+/** UX-08: the agent principals granted the E2E brand, each with the actions its grants cover there. */
+const E2E_PRINCIPALS = [
+  {
+    id: 'sp_e2e_agent',
+    name: 'E2E agent',
+    kind: 'agent' as const,
+    maxAutonomy: 'prepare_release' as const,
+    actions: ['brand.read', 'content.plan', 'creative.edit'],
+    createdAt: '2026-09-01T09:00:00.000Z',
+  },
+  {
+    id: 'sp_e2e_onboarding',
+    name: 'Onboarding agent',
+    kind: 'agent' as const,
+    maxAutonomy: 'create' as const,
+    actions: ['brand.edit_standards', 'brand.read'],
+    createdAt: '2026-09-02T09:00:00.000Z',
+  },
+  {
+    id: 'sp_e2e_analyst',
+    name: 'Brand analyst',
+    kind: 'agent' as const,
+    maxAutonomy: 'create' as const,
+    actions: ['brand.read', 'experiment.manage', 'insight.manage', 'insight.read'],
+    createdAt: '2026-09-03T09:00:00.000Z',
+  },
+];
+
+/** The tools each E2E task kind's skill names and the action each needs (the Release 1 registry's values). */
+const E2E_TASK_TOOLS: Record<string, Array<{ name: string; action: string }>> = {
+  copywriting: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'content.draftCopy', action: 'content.edit' },
+    { name: 'creative.proposeOperations', action: 'creative.edit' },
+  ],
+  campaign_planning: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'content.proposePlan', action: 'content.plan' },
+  ],
+  layout: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'creative.proposeOperations', action: 'creative.edit' },
+  ],
+  brand_onboarding: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'brand.proposeVoice', action: 'brand.edit_standards' },
+  ],
+  performance_review: [
+    { name: 'metrics.query', action: 'insight.read' },
+    { name: 'recommendations.create', action: 'insight.read' },
+    { name: 'experiments.proposeDesign', action: 'experiment.manage' },
+  ],
+};
+const AUTONOMY_RANK = ['assist', 'create', 'prepare_release', 'managed_autopublish'];
+
+/**
+ * RA-07 as agents.runs.effectiveLimits computes it: autonomy = min(requested, principal, tenant policy
+ * prepare_release, plan prepare_release); budget = the skill's; tools denied where the principal lacks the action.
+ */
+function mockEffectiveLimits(
+  input: { brandId: string; taskKind: string; requestedAutonomy: string },
+  principal: (typeof E2E_PRINCIPALS)[number],
+) {
+  const effective = [input.requestedAutonomy, principal.maxAutonomy, 'prepare_release'].reduce((min, m) =>
+    AUTONOMY_RANK.indexOf(m) < AUTONOMY_RANK.indexOf(min) ? m : min,
+  );
+  const tools = (E2E_TASK_TOOLS[input.taskKind] ?? []).map((t) => ({
+    ...t,
+    allowed: principal.actions.includes(t.action),
+  }));
+  const skill = input.taskKind in E2E_TASK_TOOLS;
+  return {
+    brandId: input.brandId,
+    taskKind: input.taskKind,
+    principal: { id: principal.id, name: principal.name, maxAutonomy: principal.maxAutonomy },
+    autonomy: {
+      requested: input.requestedAutonomy,
+      principalMax: principal.maxAutonomy,
+      tenantPolicyMax: 'prepare_release',
+      entitlementMax: 'prepare_release',
+      effective,
+    },
+    skills: skill
+      ? [
+          {
+            key: `e2e-${input.taskKind}`,
+            title: `E2E ${input.taskKind.replace(/_/g, ' ')}`,
+            versionNumber: 1,
+          },
+        ]
+      : [],
+    budget: {
+      maxSteps: 12,
+      maxTokens: 120_000,
+      maxCostMicros: 1_500_000,
+      maxVariants: 4,
+      deadlineSeconds: 900,
+    },
+    reservedMicros: 1_500_000,
+    spend: {
+      month: { limitMicros: 250_000_000, remainingMicros: 207_500_000 },
+      day: { limitMicros: 20_000_000, remainingMicros: 16_900_000 },
+    },
+    tools,
+    deniedActions: [...new Set(tools.filter((t) => !t.allowed).map((t) => t.action))].sort(),
+    blockers: skill
+      ? []
+      : [{ code: 'no_skill' as const, message: 'No published skill serves this task kind for the brand.' }],
+    canStart: skill,
+  };
+}
+
 export function createMockHandler(backend: MockBackend): RequestListener {
   const handlers = new Map<string, RequestListener>(
     [backend, ...backend.companies].map((company) => [company.tenantId, companyHandler(company)]),

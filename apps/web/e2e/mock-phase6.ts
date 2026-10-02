@@ -103,7 +103,7 @@ export const P6 = {
     breach: 'exp_breach',
     inconclusive: 'exp_inconclusive',
   },
-  recommendations: { brief: 'rec_brief', test: 'rec_test', playbook: 'rec_playbook' },
+  recommendations: { brief: 'rec_brief', test: 'rec_test', playbook: 'rec_playbook', test2: 'rec_test2' },
   playbook: { approved: 'pbe_approved', proposed: 'pbe_proposed' },
   insights: { change: 'ins_change', gap: 'ins_gap', association: 'ins_assoc', finding: 'ins_finding' },
   /** Provider keys the mock registry has certified; every other key is refused as uncertified (spec 14.6). */
@@ -301,7 +301,7 @@ export class Phase6Backend {
     guardrailMetricKeys: ['complaints'],
   };
   /** An analysis requested through analyst.run that has not written its insights yet. */
-  pendingAnalysis: { workflowId: string } | null = null;
+  pendingAnalysis: { workflowId: string; servicePrincipalId: string } | null = null;
   readonly clusters: Array<{
     id: string;
     brandId: string;
@@ -1043,6 +1043,15 @@ export class Phase6Backend {
       'low',
       'low',
     );
+    // A second test to prepare, so one can be accepted through the design fields and the other dismissed.
+    this.recommendation(
+      P6.recommendations.test2,
+      'prepare_test',
+      'Test a question hook on carousels',
+      4,
+      'medium',
+      'medium',
+    );
     this.playbook.set(P6.playbook.approved, {
       id: P6.playbook.approved,
       brandId: this.brandId,
@@ -1266,7 +1275,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         brandOf(input.brandId);
         const periodEnd = new Date();
         const workflowId = `brand-analyst:${input.brandId}:${iso(periodEnd).slice(0, 10)}`;
-        b.pendingAnalysis = { workflowId };
+        b.pendingAnalysis = { workflowId, servicePrincipalId: input.servicePrincipalId };
         return {
           brandId: input.brandId,
           workflowId,
@@ -2062,6 +2071,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       status: 'active',
       tokenExpiresAt: daysFromNow(60),
       capabilityVersion: 1,
+      settingsSchema: null,
       usable: true,
       createdAt: now(),
       updatedAt: now(),

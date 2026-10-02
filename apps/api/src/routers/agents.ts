@@ -4,6 +4,7 @@ import {
   RoutingPolicySet,
   RunApproveProposal,
   RunCancel,
+  RunEffectiveLimits,
   RunGet,
   RunList,
   RunPendingProposals,
@@ -42,6 +43,10 @@ export const agentsRouter = router({
     steps: tenantQuery
       .input(RunSteps)
       .query(({ ctx, input }) => agentsService.runs.steps(ctx.tenant.actor, input)),
+    /** RA-07: the autonomy, budget and tools a run would be bound by, read before it starts (agent.start_run). */
+    effectiveLimits: tenantQuery
+      .input(RunEffectiveLimits)
+      .query(({ ctx, input }) => agentsService.runs.effectiveLimits(ctx.tenant.actor, input)),
     approveProposal: tenantMutation
       .input(RunApproveProposal)
       .mutation(({ ctx, input }) =>

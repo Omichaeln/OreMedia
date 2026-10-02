@@ -87,6 +87,30 @@ export function toUiError(err: unknown): UiError {
   };
 }
 
+/**
+ * RA-07: why a start or a decision was refused, in words a person can act on, decided from the envelope `code`
+ * (budget, plan, policy); null for everything else, which the caller shows as a request error.
+ */
+export function denialOf(ui: UiError): { title: string; description: string } | null {
+  const reference = ui.correlationId ? ` Reference ${ui.correlationId}.` : '';
+  switch (ui.code) {
+    case 'BUDGET_EXHAUSTED':
+      return {
+        title: 'Budget exhausted',
+        description: `${ui.message}. The brand's spend today or the company's spend this month leaves no room for what this run would reserve; an owner or admin raises the limit under Settings → Budgets.${reference}`,
+      };
+    case 'ENTITLEMENT_EXCEEDED':
+      return {
+        title: 'Plan limit reached',
+        description: `${ui.message}.${reference}`,
+      };
+    case 'FORBIDDEN':
+      return { title: 'Permission denied', description: `${ui.message}.${reference}` };
+    default:
+      return null;
+  }
+}
+
 /** Where to send someone who is not signed in, keeping the page they wanted. */
 export function signInHref(next?: string): string {
   const target = next ?? `${window.location.pathname}${window.location.search}`;

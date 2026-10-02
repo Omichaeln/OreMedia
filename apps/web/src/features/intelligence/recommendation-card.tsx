@@ -2,12 +2,17 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RecommendationAction } from '@oremedia/contracts/intelligence';
-import { Badge, Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
+import { Badge, Button, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
-import { toUiError } from '../../lib/errors';
+import { Select } from '../../components/select';
+import { denialOf, toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { EffectiveLimits } from '../agents/effective-limits';
+import { useAgentPrincipals } from '../agents/use-agent-runs';
 import { brandPath } from '../brand/brand-context';
+import { DesignFields } from '../experiments/design-fields';
+import { EMPTY_DESIGN, parseDesign, type DesignForm } from '../experiments/experiment-helpers';
 import { localInputToIso, isoToLocalInput } from '../publishing/publication-state';
 import { ACTION_LABEL, defaultReviewAfter, levelChip } from './intelligence-helpers';
 import type { AcceptResultDto, RecommendationDto } from './use-intelligence';
@@ -42,30 +47,6 @@ export function downstreamHref(companyId: string, brandId: string, res: AcceptRe
   }
 }
 
-const DESIGN_SKELETON = JSON.stringify(
-  {
-    v: 1,
-    hypothesis: '',
-    mode: 'structured_comparison',
-    variants: [
-      { label: 'A', contentRevisionId: '', allocationWeight: 1 },
-      { label: 'B', contentRevisionId: '', allocationWeight: 1 },
-    ],
-    primaryMetricKey: '',
-    guardrailMetricKeys: [],
-    allocationMethod: 'matched_slots',
-    unitType: 'publication_slot',
-    minSamplePerArm: 30,
-    observationWindowHours: 168,
-    stoppingRule: { kind: 'fixed_horizon', alpha: 0.05 },
-  },
-  null,
-  2,
-);
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);
-
 /**
  * One recommendation with exactly the actions the server offers (spec 16.4): its proposed action and dismiss
  * (reason required). Accepting creates the downstream object and the card links to it.
@@ -84,9 +65,14 @@ export function RecommendationCard({
   const [open, setOpen] = useState<RecommendationAction | 'dismiss' | null>(null);
   const [audience, setAudience] = useState('');
   const [message, setMessage] = useState('');
+  const principals = useAgentPrincipals(brandId);
   const [principalId, setPrincipalId] = useState('');
-  const [design, setDesign] = useState(DESIGN_SKELETON);
-  const [designError, setDesignError] = useState<string | null>(null);
+  // The recommendation's own title is the hypothesis a test starts from; the person edits it like every field.
+  const [design, setDesign] = useState<DesignForm>({
+    ...EMPTY_DESIGN,
+    hypothesis: r.learning?.hypothesis ?? r.title,
+  });
+  const [designIssues, setDesignIssues] = useState<Array<{ path: string; issue: string }>>([]);
   const [practice, setPractice] = useState(r.title);
   const [reviewAfter, setReviewAfter] = useState(() => isoToLocalInput(defaultReviewAfter()));
   const [reason, setReason] = useState('');
@@ -124,22 +110,17 @@ export function RecommendationCard({
         accept.mutate({ ...base, brief: { audience: audience.trim(), message: message.trim() } });
         return;
       case 'generate_variants':
-        accept.mutate({ ...base, servicePrincipalId: principalId.trim() });
+        if (!principal) return;
+        accept.mutate({ ...base, servicePrincipalId: principal.id });
         return;
       case 'prepare_test': {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(design);
-        } catch (err) {
-          setDesignError(`Not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+        const parsed = parseDesign(design);
+        if (!parsed.ok) {
+          setDesignIssues(parsed.issues);
           return;
         }
-        if (!isRecord(parsed)) {
-          setDesignError('The design must be a JSON object.');
-          return;
-        }
-        setDesignError(null);
-        accept.mutate({ ...base, experimentDesign: parsed });
+        setDesignIssues([]);
+        accept.mutate({ ...base, experimentDesign: parsed.design });
         return;
       }
       case 'propose_playbook_update': {
@@ -158,7 +139,12 @@ export function RecommendationCard({
       dismiss.mutate({ recommendationId: r.id, expectedVersion: r.version, reason: reason.trim() });
   };
   const acceptUi = accept.isError ? toUiError(accept.error) : null;
+  const acceptDenial = acceptUi ? denialOf(acceptUi) : null;
   const fieldIssue = (path: string) => acceptUi?.details.find((d) => d.path === path)?.issue;
+  const designIssue = (path: string) =>
+    designIssues.find((i) => i.path === path)?.issue ?? fieldIssue(`experimentDesign.${path}`);
+  const principal = principals.items.find((p) => p.id === principalId) ?? null;
+  const principalsForbidden = principals.isError && toUiError(principals.error).kind === 'forbidden';
   const effort = levelChip(r.effort);
   const uncertainty = levelChip(r.uncertainty);
   const formId = `rec-${r.id}`;
@@ -290,36 +276,79 @@ export function RecommendationCard({
             </>
           )}
           {open === 'generate_variants' && (
-            <Field
-              label="Service principal"
-              htmlFor={`${formId}-principal`}
-              hint="sp_… of the agent principal the copywriting run acts as."
-              error={fieldIssue('servicePrincipalId')}
-            >
-              <Input
-                id={`${formId}-principal`}
-                value={principalId}
-                onChange={(e) => setPrincipalId(e.target.value)}
-                required
+            <>
+              {principals.isPending && <Skeleton label="Loading agent principals" lines={1} />}
+              {principalsForbidden && (
+                <StatusBanner
+                  tone="critical"
+                  title="Permission denied"
+                  description={`${toUiError(principals.error).message} Generating variants starts an agent run, which needs the agent.start_run permission for this brand.`}
+                  data-testid="recommendation-denied"
+                />
+              )}
+              {principals.isError && !principalsForbidden && (
+                <RequestError error={principals.error} onRetry={() => void principals.refetch()} />
+              )}
+              {principals.isSuccess && principals.items.length === 0 && (
+                <StatusBanner
+                  tone="warning"
+                  title="No agent principal is granted this brand"
+                  description="An owner or admin creates one under Settings → Members and mandates with grants for this brand; the copywriting run starts under a principal's grants and autonomy ceiling."
+                />
+              )}
+              {principals.isSuccess && principals.items.length > 0 && (
+                <Field
+                  label="Service principal"
+                  htmlFor={`${formId}-principal`}
+                  hint={
+                    principal
+                      ? `Ceiling ${principal.maxAutonomy.replace(/_/g, ' ')}; acts on this brand with ${principal.actions.join(', ')}.`
+                      : 'The agent identity the copywriting run acts as; its grants and autonomy ceiling bound the run.'
+                  }
+                  error={fieldIssue('servicePrincipalId')}
+                >
+                  <Select
+                    id={`${formId}-principal`}
+                    value={principalId}
+                    onValueChange={setPrincipalId}
+                    placeholder="Choose a principal"
+                    options={principals.items.map((p) => ({
+                      value: p.id,
+                      label: `${p.name} · up to ${p.maxAutonomy.replace(/_/g, ' ')}`,
+                    }))}
+                  />
+                </Field>
+              )}
+              <EffectiveLimits
+                brandId={brandId}
+                servicePrincipalId={principal?.id ?? null}
+                taskKind="copywriting"
+                requestedAutonomy="create"
               />
-            </Field>
+            </>
           )}
           {open === 'prepare_test' && (
-            <Field
-              label="Pre-registration draft (JSON)"
-              htmlFor={`${formId}-design`}
-              hint="Validated by the experiments module; the design is frozen when you pre-register it."
-              error={designError ?? fieldIssue('experimentDesign')}
-            >
-              <Textarea
-                id={`${formId}-design`}
-                value={design}
-                onChange={(e) => setDesign(e.target.value)}
-                rows={8}
-                spellCheck={false}
-                className="font-mono text-xs"
+            <>
+              <p className="text-xs text-muted-foreground">
+                The pre-registration draft; validated by the experiments module and frozen only when you
+                pre-register it from the experiment.
+              </p>
+              <DesignFields
+                brandId={brandId}
+                form={design}
+                onChange={setDesign}
+                issue={designIssue}
+                idPrefix={`${formId}-design`}
               />
-            </Field>
+              {designIssues.length > 0 && (
+                <StatusBanner
+                  tone="critical"
+                  title="The design is incomplete"
+                  description={designIssues.map((i) => `${i.path || 'design'}: ${i.issue}`).join('; ')}
+                  data-testid="design-issues"
+                />
+              )}
+            </>
           )}
           {open === 'propose_playbook_update' && (
             <>
@@ -352,19 +381,31 @@ export function RecommendationCard({
               Accepting records your decision and creates the downstream object with a back-reference.
             </p>
           )}
-          {acceptUi && acceptUi.kind === 'forbidden' && (
+          {acceptDenial && (
             <StatusBanner
               tone="critical"
-              title="Permission denied"
-              description={`${acceptUi.message} Deciding on a recommendation needs insight.manage for this brand.`}
+              title={acceptDenial.title}
+              description={
+                acceptUi?.code === 'FORBIDDEN'
+                  ? `${acceptDenial.description} Deciding on a recommendation needs insight.manage for this brand.`
+                  : acceptDenial.description
+              }
               data-testid="recommendation-denied"
             />
           )}
-          {acceptUi && acceptUi.kind !== 'forbidden' && (
+          {acceptUi && !acceptDenial && (
             <RequestError error={accept.error} title="The recommendation was not accepted" />
           )}
           <div className="flex gap-2">
-            <Button type="submit" variant="primary" size="sm" disabled={accept.isPending}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={accept.isPending || (open === 'generate_variants' && !principal)}
+              disabledReason={
+                open === 'generate_variants' && !principal ? 'Choose a service principal first' : undefined
+              }
+            >
               {accept.isPending ? 'Accepting…' : `Accept: ${ACTION_LABEL[open]}`}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(null)}>
