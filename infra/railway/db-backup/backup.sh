@@ -33,8 +33,15 @@ dump_one() {
   extra=""
   [ "$binlog" = "1" ] && extra="--source-data=2"
   # shellcheck disable=SC2086
+  # A space-separated list of databases (the Temporal pair "temporal temporal_visibility") is dumped with
+  # --databases, so the dump carries CREATE DATABASE and USE statements and restores with a plain mysql < dump.
+  case "$db" in
+    *" "*) dbs="--databases $db" ;;
+    *) dbs="$db" ;;
+  esac
+  # shellcheck disable=SC2086
   MYSQL_PWD="$pw" mysqldump -h "$host" -uroot --single-transaction --routines --triggers --events \
-    --set-gtid-purged=OFF $extra "$db" | gzip -6 > "$file"
+    --set-gtid-purged=OFF $extra $dbs | gzip -6 > "$file"
   size="$(stat -c %s "$file")"
   [ "$size" -gt 1024 ] || { echo "DB_BACKUP_FAIL $name dump too small ($size bytes)"; exit 1; }
   key="$BACKUP_PREFIX/$name/${name}-${STAMP}.sql.gz"
