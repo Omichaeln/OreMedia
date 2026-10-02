@@ -10,7 +10,7 @@ Legend: **[D]** driven by `oremedia-data.js` · **[H]** hard-coded · **[toast]*
 **build-R2/R3** · **capability** (show as unavailable with the reason) · **exclude** (deliberately not built) ·
 **exists** (already in the app). Dispositions are the Phase 0 proposal; the ledger tracks evidence.
 
-## Shell (all screens except Portfolio, Studio, Portal)
+## Shell (all screens except Portfolio, the document studio, Portal)
 
 | Element                                                                                                        | Prototype                               | Disposition                                    |
 | -------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------- |

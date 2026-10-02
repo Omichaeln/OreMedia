@@ -412,7 +412,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
       .getByRole('option', { name: /^Headline/ })
       .click();
     await headlineTextarea().fill('Unsaved edit');
-    await page.getByRole('link', { name: 'Home' }).click();
+    await page.getByRole('link', { name: 'Studio' }).click();
     await expect.poll(() => page.getByRole('alertdialog').count()).toBe(1);
     await page.getByRole('button', { name: 'Stay and save' }).click();
     await expect.poll(() => page.getByRole('alertdialog').count()).toBe(0);

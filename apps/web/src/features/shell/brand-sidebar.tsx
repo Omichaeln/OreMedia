@@ -16,7 +16,7 @@ export interface NavItem {
 
 /**
  * The brand shell's navigation (spec 11.1, 21.1): the work of the week first (home, review, calendar, campaigns,
- * performance and the agents), the brand's standing material after (brand system, assets, settings). A count is a
+ * the studio, performance and the agents), the brand's standing material after (brand system, assets, settings). A count is a
  * number of items that need a person, and it is also spoken, so it never relies on its colour.
  */
 export function BrandSidebar({

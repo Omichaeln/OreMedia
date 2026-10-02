@@ -49,6 +49,7 @@ const SCREENS: Screen[] = [
   { name: 'review', path: brandPath('review'), ready: h1 },
   { name: 'calendar', path: brandPath('calendar'), ready: h1 },
   { name: 'campaigns', path: brandPath('campaigns'), ready: h1 },
+  { name: 'studio documents', path: brandPath('studio'), ready: h1 },
   {
     name: 'performance',
     path: brandPath('performance'),

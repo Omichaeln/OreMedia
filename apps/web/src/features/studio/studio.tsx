@@ -133,9 +133,9 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-sm">
           <Link
-            to={brandPath(companyId, brandId, 'home')}
-            aria-label="Home"
-            title="Back to the brand home"
+            to={brandPath(companyId, brandId, 'studio')}
+            aria-label="Studio"
+            title="Back to the Studio documents"
             className="rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
             <span aria-hidden="true">←</span>
