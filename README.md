@@ -36,4 +36,4 @@ TEST_DATABASE_URL=mysql://root:pass@127.0.0.1:3306/mysql pnpm test:cross-tenant
 
 Variable names for every service are in [`.env.example`](.env.example). Open decisions are in
 [`docs/decisions/DECISIONS.md`](docs/decisions/DECISIONS.md); build progress is in
-[`docs/progress/progress.json`](docs/progress/progress.json).
+[`docs/progress/progress.json`](docs/progress/progress.json), rendered as [`docs/progress/build-ledger.md`](docs/progress/build-ledger.md).

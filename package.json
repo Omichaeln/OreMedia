@@ -27,7 +27,7 @@
     "db:roles:check": "tsx tooling/scripts/db-roles/check.ts",
     "db:generate": "pnpm --filter @oremedia/db db:generate",
     "db:migrate": "pnpm --filter @oremedia/db db:migrate",
-    "progress:build": "node docs/progress/build.mjs && prettier --write docs/progress/progress.json docs/progress/index.html",
+    "progress:build": "node docs/progress/build.mjs && prettier --write docs/progress/progress.json docs/progress/index.html docs/progress/build-ledger.md",
     "contracts:write": "tsx tooling/scripts/check-openapi-diff.ts --write && tsx tooling/scripts/generate-contract-docs.ts && prettier --write docs/contracts",
     "test:replay": "vitest run --project unit --passWithNoTests packages/workflows/src/replay",
     "test:time-skipping": "vitest run --project time-skipping"

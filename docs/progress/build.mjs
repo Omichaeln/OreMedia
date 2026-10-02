@@ -1,4 +1,5 @@
-// Renders docs/progress/progress.json into docs/progress/index.html (the published progress artefact).
+// Renders docs/progress/progress.json into docs/progress/index.html (the published progress artefact)
+// and docs/progress/build-ledger.md (the same ledger as a reviewable document).
 // Run: node docs/progress/build.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -229,4 +230,57 @@ footer{max-width:1240px;margin:32px auto 0;color:var(--muted);font-size:.82rem}
 </script>
 `;
 writeFileSync(path.join(here, 'index.html'), html);
-console.error(`rendered ${sections.length} sections, ${totalN} items → docs/progress/index.html`);
+
+const md = (s) =>
+  String(s ?? '')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
+const mdSummary = sections
+  .map((s) => {
+    const c = counts(s.items);
+    const pct = s.items.length ? Math.round((c.complete / s.items.length) * 100) : 0;
+    return `| ${md(s.id)} | ${md(s.title)} | ${s.items.length} | ${c.complete} | ${c.in_progress} | ${c.open} | ${c.blocked} | ${c.not_applicable} | ${pct}% |`;
+  })
+  .join('\n');
+const mdSection = (s, kind) => {
+  const c = counts(s.items);
+  const gateRows = s.gate.length
+    ? `\nAcceptance gate\n\n| ID | Criterion | Status | Evidence |\n| --- | --- | --- | --- |\n${s.gate
+        .map((g) => `| ${md(g.id)} | ${md(g.text)} | ${STATUS[g.status].label} | ${md(g.evidence)} |`)
+        .join('\n')}\n`
+    : '';
+  return `## ${kind === 'phase' ? 'Phase ' : ''}${md(s.id)}. ${md(s.title)}
+
+Spec §${md(s.spec)} · ${c.complete} of ${s.items.length} complete
+${gateRows}
+| ID | Work package | Tier | Spec | Status | Evidence |
+| --- | --- | --- | --- | --- | --- |
+${s.items.map((i) => `| ${md(i.id)} | ${md(i.title)} | ${TIER[i.tier] ?? md(i.tier)} | §${md(i.spec)} | ${STATUS[i.status].label} | ${md(i.evidence)} |`).join('\n')}
+`;
+};
+const markdown = `# Oremedia build ledger
+
+Generated from \`docs/progress/progress.json\` by \`pnpm progress:build\`; do not edit by hand. Updated ${updatedText}.
+Specification: ${md(data.specification)}. Repository: ${md(data.repository)}.
+
+${total.complete} of ${totalN} work packages complete · ${gateTotal.complete} of ${phases.flatMap((p) => p.gate).length} gate criteria verified
+(${total.in_progress} in progress, ${total.open} open, ${total.blocked} blocked, ${total.not_applicable} not applicable).
+
+| Status | Meaning |
+| --- | --- |
+${Object.entries(STATUS)
+  .map(([k, v]) => `| ${v.label} | ${md(data.statusLegend[k])} |`)
+  .join('\n')}
+
+## Summary
+
+| ID | Section | Items | Complete | In progress | Open | Blocked | N/A | Done |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${mdSummary}
+
+${phases.map((p) => mdSection(p, 'phase')).join('\n')}
+${cross.map((c) => mdSection(c, 'cross')).join('\n')}`;
+writeFileSync(path.join(here, 'build-ledger.md'), markdown);
+console.error(
+  `rendered ${sections.length} sections, ${totalN} items → docs/progress/index.html, docs/progress/build-ledger.md`,
+);
