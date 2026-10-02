@@ -8,6 +8,7 @@ export {
   resetChannelResolver,
   registerDestinationResolver,
   resetDestinationResolver,
+  resolveDestination,
   registerCalendarSource,
   registerRevisionChangeListener,
   registerLinkTracker,

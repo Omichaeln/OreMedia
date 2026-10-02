@@ -8,6 +8,7 @@ import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { classifyByStatus } from '../../base';
 import type { ProviderIO } from '../../io';
 import { ProviderAuthError, arr, get, num, sourceReadError, str, summarise } from '../../shared';
+import type { SourceReportQualityFlag, SourceTargetMetadataV1 } from '@oremedia/contracts/destinations';
 import type {
   SourceAdapter,
   SourceGrant,
@@ -97,8 +98,28 @@ export class Ga4PropertyAdapter implements SourceAdapter {
   }
 
   /**
+   * RA-10: the property's own reporting zone and currency from the Admin API's property resource (`timeZone`,
+   * `currencyCode`: the same metadata call pattern as the account summaries, one GET, read-only). The Data API
+   * keys every `date` by this zone, so the sweep plans and stores days in it.
+   */
+  async describeTarget(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+    externalId: string,
+  ): Promise<SourceTargetMetadataV1> {
+    const res = await googleGet(io, `${GA4_ADMIN_API}/${externalId}`, credentials.accessToken);
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
+    return {
+      reportingTimeZone: str(get(res.json, 'timeZone')) ?? null,
+      currencyCode: str(get(res.json, 'currencyCode')) ?? null,
+    };
+  }
+
+  /**
    * One page of a Data API report: `runReport` with the date dimension first, the spec's dimensions and metrics,
-   * paged by offset. A GA4 date comes back as YYYYMMDD and leaves here as an ISO date.
+   * paged by offset. A GA4 date comes back as YYYYMMDD (the property's local day) and leaves here as an ISO
+   * date, with the response metadata's zone, currency and quality (RA-10) beside the rows.
    */
   async fetchReport(
     credentials: DecryptedCredentials,
@@ -144,7 +165,14 @@ export class Ga4PropertyAdapter implements SourceAdapter {
     }
     const rowCount = num(get(res.json, 'rowCount')) ?? 0;
     const next = offset + rows.length;
-    return { rows, nextPageToken: rows.length > 0 && next < rowCount ? String(next) : null };
+    const metadata = get(res.json, 'metadata');
+    return {
+      rows,
+      nextPageToken: rows.length > 0 && next < rowCount ? String(next) : null,
+      reportingTimeZone: str(get(metadata, 'timeZone')) ?? null,
+      currencyCode: str(get(metadata, 'currencyCode')) ?? null,
+      quality: ga4Quality(metadata),
+    };
   }
 
   /** Read-only API: a 429 (quota) refused the read before any effect, so it is rate limited whatever the phase. */
@@ -158,6 +186,24 @@ export class Ga4PropertyAdapter implements SourceAdapter {
     return classifyByStatus(input);
   }
 }
+
+/**
+ * The quality the Data API states in `ResponseMetaData` (RA-10): `samplingMetadatas` with fewer samples read
+ * than the sampling space means a sampled answer, `subjectToThresholding` that rows were withheld, and
+ * `dataLossFromOtherRow` that rows were folded into "(other)". Nothing is inferred beyond what the answer says.
+ */
+const ga4Quality = (metadata: unknown): SourceReportQualityFlag[] => {
+  const flags: SourceReportQualityFlag[] = [];
+  const sampled = arr(get(metadata, 'samplingMetadatas')).some((m) => {
+    const read = num(get(m, 'samplesReadCount'));
+    const space = num(get(m, 'samplingSpaceSize'));
+    return read !== undefined && space !== undefined && read < space;
+  });
+  if (sampled) flags.push('sampled');
+  if (get(metadata, 'subjectToThresholding') === true) flags.push('thresholded');
+  if (get(metadata, 'dataLossFromOtherRow') === true) flags.push('data_loss');
+  return flags;
+};
 
 /** GA4's date dimension is `YYYYMMDD`; anything else is not a day. */
 const ga4Date = (value: string | undefined): string | undefined =>

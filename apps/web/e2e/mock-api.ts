@@ -990,8 +990,6 @@ export function createMockRouter(backend: MockBackend) {
     publishedByUserId: null,
   };
   const summaryOf = ({ document: _doc, ...rest }: typeof brandDraft) => rest;
-  const pngDataUrl =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC';
 
   const p6 = phase6Routers(backend.phase6, { router: t.router, query, mutation });
   const p5 = phase5Routers(
@@ -2225,7 +2223,12 @@ export function createMockRouter(backend: MockBackend) {
             };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
-          return { url: pngDataUrl, expiresAt: new Date(Date.now() + 300_000), mime: 'image/png' };
+          // A signed GET on the store (an https address in production): the renderer keeps http(s) sources only.
+          return {
+            url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
+            expiresAt: new Date(Date.now() + 300_000),
+            mime: 'image/png',
+          };
         }),
       }),
     }),

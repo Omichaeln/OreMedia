@@ -538,8 +538,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const ga4 = section.getByTestId('web-destination-dst_e2e_ga4');
     await ga4.getByTestId('web-tile-sessions').waitFor({ timeout: 15_000 });
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    expect(await ga4.getByTestId('web-coverage').textContent()).toContain(`data to ${yesterday}`);
+    // RA-10: the coverage reads as of the property's local day in its own zone, and says the latest day is still
+    // provisional (inside the 48 h latency), never a bare UTC date.
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain(
+      `as of ${yesterday}, Africa/Johannesburg`,
+    );
     expect(await ga4.getByTestId('web-coverage').textContent()).toContain('Fresh');
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain('Provisional');
     // The last 7 days include today, which no platform has reported yet: six days of ga4.engagement sessions
     // (100 + a 0..4 wobble) summed, never averaged, against the full week before.
     const sessions = await ga4.getByTestId('web-tile-sessions').textContent();
@@ -704,8 +709,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       expect(await stateOf('dst_e2e_ga4')).toBe('fresh');
       const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
       expect(await sources.getByTestId('overview-source-dst_e2e_ga4').textContent()).toContain(
-        `data to ${yesterday} · 6 of 7 days`,
+        `as of ${yesterday}, Africa/Johannesburg, provisional · 6 of 7 days`,
       );
+      expect(await sources.getByTestId('overview-source-dst_e2e_ga4').textContent()).toContain('Provisional');
       expect(await stateOf('dst_e2e_gsc')).toBe('blocked');
       expect(await stateOf('dst_e2e_cms')).toBe('fresh');
       expect(await sources.getByTestId('overview-source-dst_e2e_cms').textContent()).toContain(
@@ -1172,7 +1178,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await first.textContent()).toContain('Confirm 1 page should carry noindex');
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await first.getByRole('button', { name: 'Copy task for Pages excluded by robots meta' }).click();
-    await expect.poll(() => first.getByRole('button').textContent(), { timeout: 5_000 }).toBe('Task copied');
+    await expect
+      .poll(() => first.getByRole('button', { name: /Copy task|Task copied/ }).textContent(), {
+        timeout: 5_000,
+      })
+      .toBe('Task copied');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
       'Confirm 1 page should carry noindex',
     );
@@ -1183,6 +1193,52 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => pages.locator('tbody tr').count(), { timeout: 15_000 }).toBe(1);
     expect(await pages.locator('tbody tr').first().getAttribute('data-severity')).toBe('critical');
     expect(await pages.locator('tbody tr').first().textContent()).toContain('robots meta (noindex)');
+    await page.close();
+  }, 60_000);
+
+  it('audit (RA-11): "Create work" turns a finding into a tracked recommendation with a link back, once; the bulk button takes the rest; a creator cannot', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const site = page.getByTestId('seo-audit').getByTestId('seo-audit-dst_e2e_cms');
+    const findings = site.getByTestId('seo-audit-findings');
+    await findings.waitFor({ timeout: 15_000 });
+    const robots = findings.getByTestId('seo-audit-finding-robots_meta');
+    expect(await robots.getAttribute('data-finding-status')).toBe('open');
+    expect(await robots.textContent()).toContain('Open');
+    await robots.getByRole('button', { name: 'Create work for Pages excluded by robots meta' }).click();
+    await expect.poll(() => robots.getAttribute('data-finding-status'), { timeout: 15_000 }).toBe('tracked');
+    expect(await robots.textContent()).toContain('Tracked');
+    const work = robots.getByTestId('seo-audit-finding-work');
+    expect(await work.textContent()).toContain('Pages excluded by robots meta on https://acme.example');
+    expect(await work.textContent()).toContain('proposed');
+    expect(backend.destinations.findingWork).toHaveLength(1);
+    const link = await work.getByRole('link').getAttribute('href');
+    expect(link).toContain('/intelligence#rec-');
+    expect(link).toContain(backend.destinations.findingWork[0]!.workId);
+    // The single button is gone for a tracked finding; the bulk button names the two still open and takes them.
+    expect(await robots.getByRole('button', { name: /Create work for/ }).count()).toBe(0);
+    const bulk = site.getByTestId('seo-audit-create-work-all');
+    expect(await bulk.textContent()).toBe('Create work for 2 open findings');
+    await bulk.click();
+    await expect
+      .poll(() => findings.locator('[data-finding-status="tracked"]').count(), { timeout: 15_000 })
+      .toBe(3);
+    expect(backend.destinations.findingWork).toHaveLength(3);
+    expect(new Set(backend.destinations.findingWork.map((w) => w.check)).size).toBe(3);
+    await expect.poll(() => bulk.count(), { timeout: 15_000 }).toBe(0); // nothing open any more
+    // A creator holds no insight.manage: the buttons are disabled with the reason, nothing more is created.
+    backend.destinations.findingWork.splice(0);
+    backend.role = 'creator';
+    await page.reload();
+    await findings.waitFor({ timeout: 15_000 });
+    const single = findings
+      .getByTestId('seo-audit-finding-robots_meta')
+      .getByRole('button', { name: 'Create work for Pages excluded by robots meta' });
+    await single.waitFor({ timeout: 15_000 });
+    expect(await single.isDisabled()).toBe(true);
+    expect(await single.getAttribute('title')).toContain('managers and analysts');
+    expect(await site.getByTestId('seo-audit-create-work-all').isDisabled()).toBe(true);
+    backend.role = 'owner';
     await page.close();
   }, 60_000);
 
@@ -1345,6 +1401,117 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const badge = page.getByTestId('schedule-target-website');
     await badge.waitFor({ timeout: 15_000 });
     expect(await badge.textContent()).toContain('acme.example (website)');
+    await page.close();
+  }, 90_000);
+
+  it('campaigns (RA-08): an article takes a featured image and image, link, quote and rich FAQ blocks from the asset library, previews as it will publish, and sends the featured image on save', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/campaigns?brief=brf_accepted')}`);
+    await page.locator('#pkg-title').waitFor({ timeout: 15_000 });
+    await page.locator('#pkg-title').fill('How ore is weighed');
+    await page.locator('#pkg-kind').click();
+    await page.getByRole('option', { name: 'Website article' }).click();
+    await page.locator('#pkg-article-title').fill('How ore is weighed');
+    await page.locator('#pkg-article-excerpt').fill('Scales, tare and trust.');
+    // The featured image comes from the asset picker (the eligibility search), with the asset's alt text prefilled.
+    await page.getByTestId('pkg-article-featured-choose').click();
+    await page.getByTestId('asset-picker').waitFor({ timeout: 15_000 });
+    await page.getByTestId('asset-pick-av_photo').click();
+    await expect
+      .poll(() => page.locator('#pkg-article-featured-alt').inputValue(), { timeout: 15_000 })
+      .toBe('Sample photo');
+    await page.locator('#pkg-article-featured-alt').fill('A weighbridge at dawn');
+    await page.locator('#pkg-article-block-0-text').fill('Every load is weighed twice.');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Image (from the asset library)' }).click();
+    await page.getByTestId('pkg-article-block-1-choose').click();
+    await page.getByTestId('asset-pick-av_photo').click();
+    await page.locator('#pkg-article-block-1-caption').fill('The bridge at the north gate.');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Link' }).click();
+    await page.locator('#pkg-article-block-2-href').fill('https://acme.example/scales');
+    await page.locator('#pkg-article-block-2-text').fill('How our scales are certified');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Quote' }).click();
+    await page.locator('#pkg-article-block-3-text').fill('Weigh twice, invoice once.');
+    await page.locator('#pkg-article-block-3-cite').fill('Yard foreman');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'FAQ (question and answer)' }).click();
+    await page.locator('#pkg-article-block-4-question').fill('What is tare?');
+    await page.locator('#pkg-article-block-4-answer-add').click();
+    await page.getByRole('option', { name: 'List' }).click();
+    await page
+      .locator('#pkg-article-block-4-answer-0-items')
+      .fill('The empty weight.\nIt is subtracted from the gross.');
+    expect(await page.getByTestId('article-blocks').textContent()).toContain('2 of 20 images');
+    await page.getByRole('button', { name: 'Create package' }).click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('package') ?? '', { timeout: 15_000 })
+      .toMatch(/^pkg_/);
+    const packageId = new URL(page.url()).searchParams.get('package') ?? '';
+    const detail = page.getByTestId('package-detail');
+    const summary = detail.getByTestId('article-summary');
+    await summary.waitFor({ timeout: 15_000 });
+    expect(await summary.getByTestId('article-summary-featured').textContent()).toContain(
+      'A weighbridge at dawn',
+    );
+    expect(
+      await summary
+        .locator('[data-block-type]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute('data-block-type'))),
+    ).toEqual(['paragraph', 'image', 'link', 'quote', 'faq']);
+    // What was sent: a version-2 document with the featured image (never dropped) and the rich blocks.
+    const revision = [...backend.phase5.revisions.values()].find((r) => r.contentPackageId === packageId);
+    expect(revision?.copy.article).toMatchObject({
+      v: 2,
+      featuredImage: { assetVersionId: 'av_photo', alt: 'A weighbridge at dawn' },
+    });
+    expect(revision?.copy.article?.blocks[1]).toEqual({
+      type: 'image',
+      assetVersionId: 'av_photo',
+      alt: 'Sample photo',
+      caption: 'The bridge at the north gate.',
+    });
+    expect(revision?.copy.article?.blocks[4]).toMatchObject({
+      type: 'faq',
+      question: 'What is tare?',
+      answer: 'The empty weight.\nIt is subtracted from the gross.',
+      answerBlocks: [
+        { type: 'list', ordered: false, items: ['The empty weight.', 'It is subtracted from the gross.'] },
+      ],
+    });
+    // The preview is the one renderer's output: the signed image, the link, the quote and the FAQ list.
+    await detail.getByTestId('article-preview-toggle').locator('summary').click();
+    const preview = detail.getByTestId('article-preview');
+    await preview.waitFor({ timeout: 15_000 });
+    await expect
+      .poll(
+        () =>
+          preview
+            .getByTestId('article-preview-featured')
+            .locator('img[src$="/e2e-object/av_photo.png"]')
+            .count(),
+        {
+          timeout: 15_000,
+        },
+      )
+      .toBe(1);
+    const body = preview.getByTestId('article-preview-body');
+    await expect
+      .poll(() => body.locator('figure img[src$="/e2e-object/av_photo.png"]').count(), { timeout: 15_000 })
+      .toBe(1);
+    expect(await body.locator('figcaption').textContent()).toBe('The bridge at the north gate.');
+    expect(await body.locator('a[href="https://acme.example/scales"]').textContent()).toBe(
+      'How our scales are certified',
+    );
+    expect(await body.locator('blockquote').textContent()).toContain('Yard foreman');
+    expect(await body.locator('section.faq ul li').count()).toBe(2);
+    // The editor opens the revision with its featured image and blocks; the revision keeps them on revise.
+    const editor = detail.getByTestId('article-editor');
+    expect(await editor.locator(`#revise-${packageId}-featured-alt`).inputValue()).toBe(
+      'A weighbridge at dawn',
+    );
+    expect(await editor.locator('[data-testid="article-block"][data-block-type="image"]').count()).toBe(1);
     await page.close();
   }, 90_000);
 

@@ -65,6 +65,9 @@ export interface DestinationV1 {
   healthCheckedAt: string | null;
   capabilityVersion: number;
   status: DestinationStatus;
+  /** RA-10: the zone the source reports its days in and its currency, once the sweep has learnt them; else null. */
+  reportingTimeZone: string | null;
+  currencyCode: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -269,6 +272,38 @@ export interface SourceReportMetricV1 {
   denominator?: string;
   weight?: string;
 }
+
+/**
+ * RA-10: what a fetched report says about its own completeness, as the source adapter exposes it (never inferred):
+ * `sampled` (the platform answered from a sample), `thresholded` (rows withheld below a privacy threshold),
+ * `data_loss` (rows folded into an "other" row), `not_final` (the platform marks the data as not yet final); the
+ * sweep adds `partial_day` to a day that had not ended in the reporting zone when it was read.
+ */
+export const SourceReportQualityFlag = z.enum([
+  'sampled',
+  'thresholded',
+  'data_loss',
+  'not_final',
+  'partial_day',
+]);
+export type SourceReportQualityFlag = z.infer<typeof SourceReportQualityFlag>;
+/** The zone and currency of a report target, as its adapter reads them from the platform (null: not exposed). */
+export interface SourceTargetMetadataV1 {
+  reportingTimeZone: string | null;
+  currencyCode: string | null;
+}
+/**
+ * The quality of a report's stored window as the read model states it: the zone its days are keyed in (null for
+ * UTC days stored before the zone was known), the latest local day it reads "as of", whether that day may still
+ * move (inside the report's latency, flagged partial, or not final) and the flags the window carries.
+ */
+export interface DestinationReportQualityV1 {
+  timeZone: string | null;
+  asOfLocalDate: string | null;
+  provisional: boolean;
+  flags: SourceReportQualityFlag[];
+}
+
 /** A report's descriptor by name, among its fetched metrics and the rates derived from them. */
 export const webMetricByName = (
   metrics: readonly SourceReportMetricV1[],
@@ -402,6 +437,8 @@ export interface DestinationReportSummaryEntryV1 {
   /** Rates derived from the report's flows (reported in `metrics` values under their own name). */
   derived: SourceReportMetricV1[];
   freshness: DestinationReportFreshnessV1;
+  /** RA-10: the zone the days are keyed in and whether the latest day is still provisional. */
+  quality: DestinationReportQualityV1;
   current: DestinationReportWindowV1;
   previous: DestinationReportWindowV1;
   comparison: DestinationReportComparisonV1[];
@@ -543,6 +580,20 @@ export const CMS_SCOPE_PUBLISH = 'articles:publish';
 /** A destination variant's `settings.publishMode`: `draft` unless the person asks for `publish` and the grant allows it. */
 export const CmsPublishMode = z.enum(['draft', 'publish']);
 export type CmsPublishMode = z.infer<typeof CmsPublishMode>;
+/**
+ * The effective publish mode of a website variant: `publish` only when the variant asks for it and the destination
+ * was granted live publishing at connect time (D-16); otherwise a draft. Pure, so the publisher, the review
+ * manifest (RA-09) and the web app read the same answer from the same settings and grant.
+ */
+export function effectivePublishMode(
+  settings: Record<string, unknown>,
+  grantedScopes: readonly string[],
+): CmsPublishMode {
+  const asked = CmsPublishMode.safeParse(settings['publishMode']);
+  return asked.success && asked.data === 'publish' && grantedScopes.includes(CMS_SCOPE_PUBLISH)
+    ? 'publish'
+    : 'draft';
+}
 
 /**
  * `connect.withSecret`: a website connected with an integration identity and its secret (an application

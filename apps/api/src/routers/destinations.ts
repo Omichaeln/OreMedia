@@ -17,6 +17,7 @@ import {
   SourceUsePolicySet,
 } from '@oremedia/contracts/destinations';
 import {
+  SeoAuditCreateWork,
   SeoAuditFindings,
   SeoAuditPagesList,
   SeoAuditRun,
@@ -46,6 +47,8 @@ const mutationCtx = (ctx: MutationCtx) => ({
  * (summary, drill-down rows, opportunities), a restricted view under the brand's source-use policy (brand.read).
  * R2-4: the technical SEO audit of a website destination (summary, runs, pages, findings with suggested tasks under
  * the brand's `cms.audit` policy) and the on-demand `run` (seo_audit.run; once per destination per day).
+ * RA-11: `audit.createWork` turns one or many findings into tracked work (a recommendation with the finding's
+ * provenance; insight.manage; idempotent per finding), and the findings carry their status and work.
  */
 export const destinationsRouter = router({
   list: tenantQuery
@@ -136,6 +139,11 @@ export const destinationsRouter = router({
       .input(SeoAuditRun)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => seoAuditService.run(ctx.tenant.actor, input, tx)),
+      ),
+    createWork: tenantMutation
+      .input(SeoAuditCreateWork)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => seoAuditService.createWork(ctx.tenant.actor, input, tx)),
       ),
   }),
   sourceUse: router({

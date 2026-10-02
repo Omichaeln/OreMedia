@@ -5,6 +5,8 @@ import {
   type CmsAdapter,
   type CmsArticleInput,
   type CmsCapabilityV1,
+  type CmsMediaInput,
+  type CmsMediaResult,
   type CmsReadResult,
   type CmsRemoteArticle,
   type CmsRemoveResult,
@@ -47,6 +49,15 @@ export class FixtureCmsAdapter implements CmsAdapter {
   readonly capability: CmsCapabilityV1;
   /** The remote articles by id, as the site holds them. */
   readonly articles = new Map<string, CmsRemoteArticle>();
+  /** RA-08: the media library, by id: what was uploaded (the release URL it was fetched from, its alt text). */
+  readonly media = new Map<
+    string,
+    { url: string; sourceUrl: string; mime: string; alt: string; filename: string }
+  >();
+  /** What the next upload does: succeed, or fail as the platform would. */
+  uploadBehaviour: 'ok' | 'forbidden' = 'ok';
+  /** The featured media id each article was created with (RA-08). */
+  readonly featured = new Map<string, string>();
   /** Every call with the secret it was handed (a test proves the sealed secret was opened in the worker). */
   readonly calls: Array<{ op: string; secret: string; username: string; siteUrl: string }> = [];
   verifyBehaviour: VerifyBehaviour = { kind: 'ok', canPublish: true };
@@ -93,6 +104,27 @@ export class FixtureCmsAdapter implements CmsAdapter {
     return article ? { outcome: 'found', article: { ...article } } : { outcome: 'absent' };
   }
 
+  async uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    _io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult> {
+    this.record('upload', site, credentials);
+    if (this.uploadBehaviour === 'forbidden')
+      return { outcome: 'rejected', code: 'reconnect_required', message: 'HTTP 403' };
+    const remoteId = String(this.nextId++);
+    const url = `${site.siteUrl}/wp-content/uploads/${media.filename}`;
+    this.media.set(remoteId, {
+      url,
+      sourceUrl: media.url,
+      mime: media.mime,
+      alt: media.alt,
+      filename: media.filename,
+    });
+    return { outcome: 'done', media: { remoteId, url } };
+  }
+
   async createArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -105,6 +137,7 @@ export class FixtureCmsAdapter implements CmsAdapter {
     if (this.writeBehaviour === 'outage')
       return { outcome: 'unknown', code: 'http_502', message: 'HTTP 502' };
     const remoteId = String(this.nextId++);
+    if (input.featuredMedia) this.featured.set(remoteId, input.featuredMedia.remoteId);
     const fields = { title: input.title, slug: input.slug, status: input.status, html: input.html };
     const article: CmsRemoteArticle = {
       remoteId,

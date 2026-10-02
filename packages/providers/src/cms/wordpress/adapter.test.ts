@@ -55,6 +55,66 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
     expect(await adapter.verify(site, creds, refused)).toMatchObject({ ok: false, reason: 'transient' });
   });
 
+  it('uploadMedia (RA-08): the bytes come from the signed release URL through ProviderIO, land as an attachment with the file name and alt text; a refusal is a reconnect', async () => {
+    load('upload_media_ok');
+    const media = {
+      url: 'https://releases.example/releases/t/b/av_1/original/x.png',
+      mime: 'image/png',
+      contentHash: 'h'.repeat(64),
+      alt: 'The weighbridge',
+      filename: 'why-ore-and-tar-1.png',
+    };
+    expect(await adapter.uploadMedia(site, creds, io, media)).toEqual({
+      outcome: 'done',
+      media: { remoteId: '77', url: 'https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png' },
+    });
+    expect(io.calls).toEqual([
+      { method: 'GET', url: media.url, mutation: false },
+      { method: 'POST', url: 'https://site.example/wp-json/wp/v2/media', mutation: true },
+      { method: 'POST', url: 'https://site.example/wp-json/wp/v2/media/77', mutation: true },
+    ]);
+    const upload = server.requests[1]!;
+    expect(upload.headers['content-type']).toBe('image/png');
+    expect(upload.headers['content-disposition']).toBe('attachment; filename="why-ore-and-tar-1.png"');
+    expect(upload.headers['authorization']).toBe(expectedAuth);
+    load('upload_media_forbidden');
+    expect(await adapter.uploadMedia(site, creds, io, media)).toMatchObject({
+      outcome: 'rejected',
+      code: 'reconnect_required',
+    });
+    // The release must answer with an image: anything else is refused before the site is touched.
+    load('upload_media_not_image');
+    expect(await adapter.uploadMedia(site, creds, io, media)).toMatchObject({
+      outcome: 'rejected',
+      code: 'media_unexpected_type',
+    });
+    expect(io.calls.every((c) => !c.mutation)).toBe(true);
+  });
+
+  it("createArticle (RA-08): the uploaded media is the post's featured image and the body references the site's copy", async () => {
+    load('create_with_featured');
+    const html =
+      '<p>Ore is heavy.</p>\n<figure><img src="https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png" alt="The weighbridge"></figure>';
+    const result = await adapter.createArticle(
+      site,
+      creds,
+      io,
+      {
+        ...input,
+        html,
+        featuredMedia: {
+          remoteId: '77',
+          url: 'https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png',
+        },
+      },
+      'idem-feat',
+    );
+    expect(result).toMatchObject({ outcome: 'done', article: { remoteId: '43', status: 'draft', html } });
+    const post = JSON.parse(server.requests.at(-1)!.body) as Record<string, unknown>;
+    expect(post['featured_media']).toBe(77);
+    expect(post['content']).toBe(html);
+  });
+
   it('readArticle: the raw revision with its modified instant and content hash; 404 is absent; 403 a reconnect', async () => {
     load('read_found');
     const found = await adapter.readArticle(site, creds, io, '42');

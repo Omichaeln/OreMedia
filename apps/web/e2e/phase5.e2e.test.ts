@@ -213,7 +213,8 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   it('the inbox shows every attention flag as a text chip', async () => {
     await page.goto(`${origin}${brandPath('review')}`);
     const inbox = page.getByTestId('inbox');
-    await expect.poll(() => inbox.getByRole('button').count(), { timeout: 15_000 }).toBe(6);
+    // Six seeded channel requests plus the two article requests (RA-09: one open, one decided and live).
+    await expect.poll(() => inbox.getByRole('button').count(), { timeout: 15_000 }).toBe(8);
     const text = await inbox.textContent();
     for (const label of [
       'Awaiting decision',
@@ -237,6 +238,101 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       .poll(() => page.getByTestId('decisions').textContent(), { timeout: 15_000 })
       .toContain('Shorten the headline');
   }, 45_000);
+
+  it('RA-09: an article request shows the frozen preview rendered by the one renderer, says a draft will be saved on the site, and flags what changed after the freeze', async () => {
+    await page.goto(`${origin}${brandPath('review')}?request=${P5.requests.article}`);
+    const detail = page.getByTestId('request-detail');
+    await expect.poll(() => detail.getByTestId('manifest-hash').count(), { timeout: 15_000 }).toBe(1);
+    // What approving means, from the frozen manifest: a draft on the site at the article's path.
+    const intent = detail.getByTestId('website-intent');
+    expect(await intent.getAttribute('data-publish-mode')).toBe('draft');
+    expect(await intent.textContent()).toContain(
+      'Approving this will save a draft on acme.example (/how-ore-is-weighed)',
+    );
+    // The preview is rendered from the frozen document: title, featured image, image with the signed preview URL,
+    // the link, the quote and the FAQ answered in blocks (the same markup the website receives).
+    const preview = detail.getByTestId('article-preview');
+    await expect.poll(() => preview.count(), { timeout: 15_000 }).toBe(1);
+    expect(await preview.locator('h1').textContent()).toBe('How ore is weighed');
+    await expect
+      .poll(() => preview.getByTestId('article-preview-featured').locator('img').count(), { timeout: 15_000 })
+      .toBe(1);
+    const body = preview.getByTestId('article-preview-body');
+    await expect
+      .poll(() => body.locator('figure img[src$="/e2e-object/av_photo.png"]').count(), { timeout: 15_000 })
+      .toBe(1);
+    expect(await body.locator('figure img').getAttribute('alt')).toBe('The weighbridge');
+    expect(await body.locator('figcaption').textContent()).toBe('The bridge at the north gate.');
+    expect(await body.locator('a[href="https://acme.example/scales"]').textContent()).toBe(
+      'How our scales are certified',
+    );
+    expect(await body.locator('a').getAttribute('rel')).toBe('noopener');
+    expect(await body.locator('blockquote').textContent()).toContain('Weigh twice, invoice once.');
+    expect(await body.locator('section.faq h3').textContent()).toBe('What is tare?');
+    expect(await body.locator('section.faq ul li').textContent()).toBe('It is subtracted from the gross.');
+    expect(await detail.getByTestId('frozen-article').textContent()).toContain('rendered hash');
+    expect(await detail.getByTestId('changed-since-freeze').count()).toBe(0);
+    // The website variant's publish mode moves after the freeze: the request says so, and the statement still
+    // describes what was frozen (a draft), never the live package.
+    const variant = p5.variants.get('cv_article_rich');
+    if (variant) variant.settings = { publishMode: 'publish' };
+    await page.reload();
+    const changed = detail.getByTestId('changed-since-freeze');
+    await expect.poll(() => changed.count(), { timeout: 15_000 }).toBe(1);
+    expect(await changed.textContent()).toContain('Changed since this request was frozen');
+    expect(await changed.textContent()).toContain('a target’s settings (a website’s publish mode)');
+    expect(await changed.textContent()).toContain('a website target or its publish mode');
+    expect(await detail.getByTestId('website-intent').getAttribute('data-publish-mode')).toBe('draft');
+    if (variant) variant.settings = { publishMode: 'draft' };
+    // The decided request behind the live article: approval meant a live page at the frozen time.
+    await page.goto(`${origin}${brandPath('review')}?request=${P5.requests.articleLive}`);
+    const live = page.getByTestId('request-detail').getByTestId('website-intent');
+    await expect.poll(() => live.count(), { timeout: 15_000 }).toBe(1);
+    expect(await live.getAttribute('data-publish-mode')).toBe('publish');
+    expect(await live.textContent()).toMatch(
+      /Approving this will publish live at .+ on acme\.example \(\/why-ore-and-tar-last\)/,
+    );
+    await page.goto(`${origin}${brandPath('review')}`);
+  }, 60_000);
+
+  it('RA-09: an external reviewer sees the same frozen preview and statement through a request-bound link', async () => {
+    await page.goto(`${origin}${brandPath('review')}?request=${P5.requests.article}`);
+    await expect.poll(() => page.getByTestId('manifest-hash').count(), { timeout: 15_000 }).toBe(1);
+    await page.getByLabel('Reviewer email').fill('editor@example.com');
+    await page.getByRole('button', { name: 'Create link' }).click();
+    await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);
+    const link = await page.getByTestId('link-url').inputValue();
+    await openPortal(link);
+    await expect
+      .poll(() => page.getByTestId('portal-state').textContent(), { timeout: 15_000 })
+      .toContain('Open');
+    const intent = page.getByTestId('website-intent');
+    await expect.poll(() => intent.count(), { timeout: 15_000 }).toBe(1);
+    expect(await intent.textContent()).toContain('save a draft on acme.example (/how-ore-is-weighed)');
+    const preview = page.getByTestId('article-preview');
+    await expect
+      .poll(
+        () =>
+          preview
+            .getByTestId('article-preview-body')
+            .locator('figure img[src$="/e2e-object/av_photo.png"]')
+            .count(),
+        {
+          timeout: 15_000,
+        },
+      )
+      .toBe(1);
+    // The images came through review.requests.media with the rl_ bearer, never the assets endpoint.
+    const mediaCall = backend.requests.filter((r) => r.path === 'review.requests.media').at(-1);
+    expect(String(mediaCall?.headers['authorization'])).toMatch(/^Bearer rl_/);
+    expect(
+      backend.requests.some(
+        (r) =>
+          r.path === 'assets.media.signedUrl' && String(r.headers['authorization']).startsWith('Bearer rl_'),
+      ),
+    ).toBe(false);
+    await page.goto(`${origin}${brandPath('review')}`);
+  }, 60_000);
 
   let reviewLink = '';
 

@@ -45,6 +45,9 @@ const METADATA_ALLOWLIST = new Set([
   'toVersion',
   // Website articles (R2-3): the destination a publication, a verification or a remote change names
   'destinationId',
+  // The object a decision created downstream (a recommendation's brief, RA-11 a finding's work): type and id only
+  'downstreamType',
+  'downstreamId',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

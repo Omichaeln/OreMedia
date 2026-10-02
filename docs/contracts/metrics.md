@@ -97,7 +97,16 @@ equal length in days and read "insufficient sample" below 5 days with data on ei
 Reports and their dimensions (the date is always a dimension): `ga4.acquisition` (`sessionDefaultChannelGroup`),
 `ga4.landing_pages` (`landingPage`), `ga4.engagement` (none); `gsc.queries` (`query`), `gsc.pages` (`page`),
 `gsc.countries_devices` (`country`, `device`). Freshness: a report is stale when its latest day ended more than
-latency × 2 ago (GA4 48 h, Search Console 72 h). The opportunity queue (`destinations.reports.opportunities`) is
+latency × 2 ago (GA4 48 h, Search Console 72 h), the day ending in its reporting zone. Reporting zone and quality
+(RA-10): a source adapter that can read its target's own zone (`describeTarget`: a GA4 property's `timeZone` and
+`currencyCode` from the Admin API) has its days planned and stored in that zone (`destination_report_rows.time_zone`,
+remembered on `brand_destinations.reporting_time_zone`); "yesterday" is the zone's last complete day, never a UTC
+day still running there. Rows stored before the zone was known (`time_zone` null) are UTC days and read as before.
+Every window carries `quality` (`DestinationReportQualityV1`): the zone, the latest local day it reads "as of", and
+`provisional` while that day may still move (inside the report's latency, flagged `partial_day` by the sweep, or
+`not_final` by the platform), with the flags the platform exposed on its answer (`sampled`, `thresholded`,
+`data_loss`) passed through, never inferred. The screens read "as of <local day>, <zone>, provisional" with the
+flags as chips. The opportunity queue (`destinations.reports.opportunities`) is
 computed over the last 28 days: queries and pages with ≥ 100 impressions and a CTR below half the site's pooled CTR,
 landing pages with ≥ 50 sessions and an engagement rate below half the property's pooled rate. AI search (D-19):
 no figure; the screen links to the vendor's console.

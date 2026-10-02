@@ -9,7 +9,9 @@ import {
   type ArticleDocumentV1,
   type CopyDocumentV1,
 } from '@oremedia/contracts/content';
-import { RenderedCheckKey } from '@oremedia/contracts/article';
+import { RenderedCheckKey, renderArticleHtml } from '@oremedia/contracts/article';
+import { articleImages } from '@oremedia/contracts/content';
+import type { ManifestChange } from '@oremedia/contracts/review';
 import {
   ConflictError,
   NotFoundError,
@@ -87,12 +89,21 @@ export const P5 = {
     invalidated: 'rr_invalidated',
     revoked: 'rr_revoked',
     approved: 'rr_approved',
+    /** RA-09: an open request on a rich article (image, link, quote, rich FAQ) bound for the website as a draft. */
+    article: 'rr_article',
+    /** RA-09: the decided request behind the live article (approval meant "publish live"). */
+    articleLive: 'rr_article_live',
   },
   links: { revoked: 'rl_already_revoked', active: 'rl_active_link', expired: 'rl_expired_link' },
   approvalId: 'apr_seed',
 };
 
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+/** As the server's hashText (domain/hash): NFC, trailing whitespace trimmed. */
+const hashText = (text: string) =>
+  createHash('sha256').update(text.normalize('NFC').replace(/\s+$/u, '')).digest('hex');
+/** The destinations mock's cms site (mock-destinations.ts), as a frozen manifest names it (RA-09). */
+const CMS_SITE = { displayName: 'acme.example', siteUrl: 'https://acme.example', kind: 'cms_site' };
 const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 const todayAt = (hour: number) => {
@@ -338,7 +349,8 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
   timing: { kind: 'exact', at: todayAt(15) },
   brandVersionId: 'bv_e2e',
   policyVersionId: 'pv_e2e',
-  // R2-3: the article revision the reviewer approves, as the server freezes it.
+  // R2-3: the article revision the reviewer approves, as the server freezes it; RA-09 adds the rendered hash,
+  // the frozen document and what approving means for each website target.
   ...(revision.copy.article
     ? {
         article: {
@@ -346,10 +358,37 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
           slug: revision.copy.article.slug,
           articleHash: hash(revision.copy.article),
           blocks: revision.copy.article.blocks.length,
+          renderedHtmlHash: hashText(renderArticleHtml(revision.copy.article)),
+          images: articleImages(revision.copy.article).length,
+          document: revision.copy.article,
         },
       }
     : {}),
+  websites: variants
+    .filter((v) => v.destinationId)
+    .map((v) => ({
+      destinationId: v.destinationId as string,
+      ...CMS_SITE,
+      path: revision.copy.article ? `/${revision.copy.article.slug}` : '',
+      publishMode: v.settings['publishMode'] === 'publish' ? ('publish' as const) : ('draft' as const),
+    })),
 });
+/** RA-09: what differs between a frozen manifest and the live one, as the server's manifestChanges reports it. */
+const manifestChanges = (frozen: FrozenManifestV1, live: FrozenManifestV1): ManifestChange[] => {
+  const changes: ManifestChange[] = [];
+  if (frozen.article?.articleHash !== live.article?.articleHash) changes.push('article');
+  if (frozen.article?.renderedHtmlHash !== live.article?.renderedHtmlHash) changes.push('rendering');
+  const key = (c: { channelConnectionId?: string; destinationId?: string }) =>
+    c.destinationId ?? c.channelConnectionId ?? '';
+  for (const c of frozen.captions) {
+    const l = live.captions.find((x) => key(x) === key(c));
+    if (!l) continue;
+    if (l.text !== c.text && !changes.includes('captions')) changes.push('captions');
+    if (l.settingsHash !== c.settingsHash && !changes.includes('settings')) changes.push('settings');
+  }
+  if (hash(frozen.websites ?? null) !== hash(live.websites ?? null)) changes.push('websites');
+  return changes;
+};
 /** A variant's target as a binding names it (the server's variantTarget). */
 const targetOf = (v: Pick<Variant, 'channelConnectionId' | 'destinationId'>) =>
   v.destinationId ? { destinationId: v.destinationId } : { channelConnectionId: v.channelConnectionId ?? '' };
@@ -363,6 +402,38 @@ export const P5_ARTICLE: ArticleDocumentV1 = {
   blocks: [
     { type: 'paragraph', text: 'Ore is heavy.' },
     { type: 'faq', question: 'Is it safe?', answer: 'Yes, mostly.' },
+  ],
+  categories: ['Guides'],
+  tags: ['ore'],
+};
+
+/** RA-08: a rich article (featured image, image block, link, quote, FAQ answered in blocks) awaiting review. */
+export const P5_RICH_ARTICLE: ArticleDocumentV1 = {
+  kind: 'article',
+  v: 2,
+  title: 'How ore is weighed',
+  slug: 'how-ore-is-weighed',
+  excerpt: 'Scales, tare and trust.',
+  featuredImage: { assetVersionId: 'av_photo', alt: 'A weighbridge at dawn' },
+  blocks: [
+    { type: 'paragraph', text: 'Every load is weighed twice.' },
+    {
+      type: 'image',
+      assetVersionId: 'av_photo',
+      alt: 'The weighbridge',
+      caption: 'The bridge at the north gate.',
+    },
+    { type: 'link', href: 'https://acme.example/scales', text: 'How our scales are certified' },
+    { type: 'quote', text: 'Weigh twice, invoice once.', cite: 'Yard foreman' },
+    {
+      type: 'faq',
+      question: 'What is tare?',
+      answer: 'The empty weight.\nIt is subtracted from the gross.',
+      answerBlocks: [
+        { type: 'paragraph', text: 'The empty weight.' },
+        { type: 'list', ordered: false, items: ['It is subtracted from the gross.'] },
+      ],
+    },
   ],
   categories: ['Guides'],
   tags: ['ore'],
@@ -1180,6 +1251,36 @@ export class Phase5Backend {
         ],
       },
     );
+    // RA-09: the rich article awaiting review as a website draft, and the decided request behind the live one.
+    this.revision(
+      'cr_article_rich',
+      'pkg_article_rich',
+      'in_review',
+      'Scales, tare and trust.',
+      P5_RICH_ARTICLE,
+    );
+    this.variants.set('cv_article_rich', {
+      id: 'cv_article_rich',
+      tenantId: this.tenantId,
+      brandId: this.brandId,
+      contentPackageId: 'pkg_article_rich',
+      contentRevisionId: 'cr_article_rich',
+      channelConnectionId: null,
+      destinationId: P5.destination,
+      text: 'Scales, tare and trust.',
+      altTexts: [],
+      settings: { publishMode: 'draft' },
+      exportIds: [],
+      exportHashes: [],
+      article: P5_RICH_ARTICLE,
+      capabilityVersion: 1,
+      validation: { ok: true, issues: [] },
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+    });
+    this.requestRow(P5.requests.article, 'cr_article_rich', 'open');
+    this.requestRow(P5.requests.articleLive, P5.revisions.article, 'decided');
     this.requestRow(P5.requests.open, P5.revisions.one, 'open');
     this.requestRow(P5.requests.stale, P5.revisions.one, 'stale', 'variant_changed');
     this.requestRow(P5.requests.changes, P5.revisions.changes, 'decided');
@@ -1660,7 +1761,31 @@ export function phase5Routers(
             expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
           });
         }
-        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items };
+        // RA-09: the frozen article's images, signed per asset version; only the seeded photo exists.
+        const document = r.frozenManifest.article?.document;
+        const images = [
+          ...new Set((document ? articleImages(document) : []).map((i) => i.assetVersionId)),
+        ].map((assetVersionId) =>
+          assetVersionId === 'av_photo'
+            ? {
+                assetVersionId,
+                verified: true as const,
+                // The store's address for the version (the renderer keeps http(s) and relative sources only).
+                url: `/e2e-object/${assetVersionId}.png`,
+                expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+                mime: 'image/png',
+                contentHash: hash('photo'),
+              }
+            : {
+                assetVersionId,
+                verified: false as const,
+                url: null,
+                expiresAt: null,
+                mime: null,
+                contentHash: null,
+              },
+        );
+        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items, images };
       }),
       get: query.input(ReviewRequestGet).query(({ ctx, input }) => {
         const r = b.request(input.reviewRequestId);
@@ -1678,9 +1803,22 @@ export function phase5Routers(
             createdAt: r.createdAt,
           };
         }
+        // RA-09: the live manifest (the revision's variants as they are now) against the frozen one.
+        const revision = b.revisions.get(r.contentRevisionId);
+        const live = revision
+          ? {
+              ...manifestFor(
+                revision,
+                [...b.variants.values()].filter((v) => v.contentRevisionId === revision.id),
+              ),
+              timing: r.frozenManifest.timing,
+            }
+          : null;
         return {
           ...r,
           revisionState: revisionStateFor(b, r),
+          liveManifestHash: live ? hash(live) : null,
+          changedSinceFreeze: live ? manifestChanges(r.frozenManifest, live) : [],
           decisions: b.decisions.filter((d) => d.reviewRequestId === r.id),
           approvals: b.approvals.filter((a) => a.reviewRequestId === r.id),
           externalLinks: linksFor(b, r.id),

@@ -152,7 +152,8 @@ export function RecommendationCard({
 
   return (
     <li
-      className="flex flex-col gap-2 rounded-md border border-border p-3"
+      id={formId}
+      className="flex flex-col gap-2 rounded-md border border-border p-3 target:ring-2 target:ring-ring"
       data-testid="recommendation"
       data-recommendation-state={accept.data?.state ?? dismiss.data?.state ?? r.state}
     >

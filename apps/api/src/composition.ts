@@ -1,3 +1,4 @@
+import type { AssetKind } from '@oremedia/contracts/assets';
 import { registerBrandChecker, MembershipRepository } from '@oremedia/module-access';
 import {
   experimentsService,
@@ -43,6 +44,7 @@ import {
   configureSourceAvailability,
   destinationArticles,
   destinationService,
+  registerFindingWork,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
 } from '@oremedia/module-destinations';
@@ -76,6 +78,7 @@ import {
 import {
   registerAssetAuthoriser as registerReleaseAssetAuthoriser,
   registerReleaseCheckers,
+  registerReviewImageSigner,
   registerReviewMediaSigner,
   reviewService,
   reviewToolSource,
@@ -90,6 +93,7 @@ import {
   registerSkillResolver,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
+import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
 import type { CapabilityCheck } from '@oremedia/observability';
 import { webOriginCapability } from './web-origin';
 
@@ -136,6 +140,8 @@ export function composeModules(): void {
         brandId: ctx.brandId,
         channelConnectionIds: ctx.channelConnectionIds,
         scheduledFor: ctx.scheduledFor,
+        ...(ctx.kinds ? { kinds: ctx.kinds as AssetKind[] } : {}),
+        ...(ctx.mimes ? { mimes: ctx.mimes } : {}),
       },
       tx,
     );
@@ -196,6 +202,8 @@ export function composeModules(): void {
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   // Spec 13.3: the review inbox and portal show the frozen files; the assets module's storage signs the GETs.
   registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
+  // RA-09: a frozen article's images (asset versions) are shown the same way, request-bound for a reviewer.
+  registerReviewImageSigner((assetVersionId, tx) => assetService.signVersionPreview(assetVersionId, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Ledger R2-1: the sources this deployment connects (app credentials present, not disabled).
@@ -262,6 +270,26 @@ export function composeModules(): void {
   registerRecommendationResolver((recommendationId, brandId, tx) =>
     intelligenceService.recommendations.belongsToBrand(recommendationId, brandId, tx),
   );
+  // RA-11: an SEO finding becomes tracked work as a recommendation (spec 16.4) with the finding's provenance; the
+  // destinations module reads the work's title and state back the same way.
+  registerFindingWork({
+    create: async (actor, input, tx) => {
+      const created = await intelligenceService.recommendations.createFromFinding(actor, input, tx);
+      return {
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: created.recommendationId,
+        title: created.title,
+        state: created.state,
+      };
+    },
+    describe: async (brandId, workIds, tx) =>
+      (await intelligenceService.recommendations.describeForBrand(brandId, workIds, tx)).map((r) => ({
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: r.id,
+        title: r.title,
+        state: r.state,
+      })),
+  });
   registerExperimentListener((milestone, tx) =>
     intelligenceService.learning.onExperimentMilestone(milestone, tx),
   );

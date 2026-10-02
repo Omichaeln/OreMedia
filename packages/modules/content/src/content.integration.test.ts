@@ -17,6 +17,7 @@ import type { ResolvedActor, ResolvedActorServicePrincipal } from '@oremedia/con
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { tenants } from '@oremedia/db/schema/access';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import {
   briefs,
@@ -1340,7 +1341,15 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       });
       registerDestinationResolver(async (id) =>
         id === destinationId
-          ? { brandId: brandA, kind: 'cms_site', capabilityVersion: 1, writable: true }
+          ? {
+              brandId: brandA,
+              kind: 'cms_site',
+              capabilityVersion: 1,
+              writable: true,
+              displayName: 'blog.acme.example',
+              externalId: 'https://blog.acme.example',
+              grantedScopes: ['articles:write'],
+            }
           : null,
       );
     });
@@ -1370,6 +1379,167 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       ).rejects.toThrow(`body_too_long:${ARTICLE_BODY_MAX_CHARS + 1}>${ARTICLE_BODY_MAX_CHARS}`);
       expect(text.length).toBeGreaterThan(CHANNEL_VARIANT_TEXT_MAX_CHARS);
       expect(text.length).toBeLessThanOrEqual(ARTICLE_TEXT_MAX_CHARS);
+    });
+
+    it("RA-08: an article's images must be asset versions this brand may use; an unknown or ineligible one is refused by name, an eligible one is kept and sent with the variant", async () => {
+      const assetId = newId('asset');
+      const versionId = newId('assetVersion');
+      const seed = async (state: 'approved' | 'retired') => {
+        await tdb.db.insert(assets).values({
+          id: assetId,
+          tenantId: tenantA,
+          brandId: brandA,
+          kind: 'photo',
+          name: 'weighbridge',
+          currentVersionId: versionId,
+          state,
+          rightsState: 'recorded',
+        });
+        await tdb.db.insert(assetVersions).values({
+          id: versionId,
+          tenantId: tenantA,
+          brandId: brandA,
+          assetId,
+          number: 1,
+          storageKey: `assets/${tenantA}/${brandA}/${assetId}/${versionId}/original`,
+          contentHash: hashText('png'),
+          mime: 'image/png',
+          bytes: 3,
+          provenance: { kind: 'upload', uploadedByUserId: USER, originalFilename: 'w.png' },
+        });
+        await tdb.db.insert(usageRights).values({
+          id: newId('usageRights'),
+          tenantId: tenantA,
+          brandId: brandA,
+          assetId,
+          owner: 'owner',
+          permittedChannels: 'all',
+          territories: 'all',
+          expiresAt: null,
+          releases: [],
+          restrictions: [],
+        });
+      };
+      const rich = (assetVersionId: string): ArticleDocumentV1 => ({
+        kind: 'article',
+        v: 2,
+        title: 'How ore is weighed',
+        slug: 'how-ore-is-weighed',
+        excerpt: 'Scales.',
+        featuredImage: { assetVersionId, alt: 'A weighbridge' },
+        blocks: [
+          { type: 'paragraph', text: 'Every load is weighed twice.' },
+          { type: 'image', assetVersionId, alt: 'The weighbridge' },
+          {
+            type: 'faq',
+            question: 'What is tare?',
+            answer: 'The empty weight.',
+            answerBlocks: [{ type: 'paragraph', text: 'The empty weight.' }],
+          },
+        ],
+        categories: [],
+        tags: [],
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich('av_missing') } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_not_found' },
+          { path: 'copy.article.images.1', issue: 'asset_not_found' },
+        ],
+      });
+      await seed('retired');
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: expect.stringMatching(/^asset_ineligible:/) },
+          { path: 'copy.article.images.1', issue: expect.stringMatching(/^asset_ineligible:/) },
+        ],
+      });
+      await tdb.db.update(assets).set({ state: 'approved' }).where(eq(assets.id, assetId));
+      // Raster images of an image kind only: an SVG (stored-XSS surface on the site) or a video is refused.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:mime_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
+      await tdb.db.update(assets).set({ kind: 'video' }).where(eq(assets.id, assetId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:kind_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assets).set({ kind: 'photo' }).where(eq(assets.id, assetId));
+      const pkg = await run(tenantA, (tx) =>
+        contentService.packages.create(
+          A,
+          { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+          tx,
+        ),
+      );
+      const generated = await run(tenantA, (tx) =>
+        contentService.variants.generate(
+          A,
+          { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+          tx,
+        ),
+      );
+      const website = generated.variants[0]!;
+      expect(website.article).toEqual(rich(versionId));
+      expect(website.article?.featuredImage).toEqual({ assetVersionId: versionId, alt: 'A weighbridge' });
+      expect(website.text).toBe(articlePlainText(rich(versionId)));
+      // Revising keeps the check: the same document with a foreign version is refused.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.revise(
+            A,
+            {
+              contentPackageId: pkg.contentPackageId,
+              expectedVersion: pkg.version,
+              copy: { ...copy('Scales.'), article: rich('av_other') },
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'copy.article.images.0', issue: 'asset_not_found' }, expect.anything()],
+      });
     });
 
     it('the article at the cap is created, its website variant carries the whole text, survives a mode change and is persisted whole', async () => {

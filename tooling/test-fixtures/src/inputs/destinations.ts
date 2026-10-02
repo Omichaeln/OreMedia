@@ -91,6 +91,15 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
   'destinations.audit.run': {
     buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'] }),
   },
+  // RA-11: the brand is read first (NOT_FOUND), so no work is ever created from a foreign website's findings.
+  'destinations.audit.createWork': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      destinationId: f['destinationId'],
+      runId: f['seoAuditRunId'],
+      checks: ['title'],
+    }),
+  },
   'destinations.sourceUse.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'destinations.sourceUse.set': {
     buildInput: (f) => ({

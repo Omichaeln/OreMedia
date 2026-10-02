@@ -118,6 +118,12 @@ const FONT_FILE = fileURLToPath(
  * `corsOrigin` (a store on its own origin) it answers CORS as a bucket configured for the web origin does: the
  * preflight for PUT with a content-type, and Access-Control-Allow-Origin on every answer. False: not a store path.
  */
+/** A 2×2 PNG, the image the store answers for a `.png` object (what the mock's signed image URLs point at). */
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC',
+  'base64',
+);
+
 function serveObjectStore(
   req: IncomingMessage,
   res: ServerResponse,
@@ -148,6 +154,12 @@ function serveObjectStore(
   }
   if (req.method === 'GET' && url.pathname.startsWith('/e2e-object/')) {
     store?.gets.push(url.pathname);
+    // An image version (RA-08: article images and thumbnails) is a 2×2 PNG; anything else is the fixture font.
+    if (url.pathname.endsWith('.png')) {
+      res.setHeader('content-type', 'image/png');
+      res.end(PNG_BYTES);
+      return true;
+    }
     res.setHeader('content-type', 'font/ttf');
     createReadStream(FONT_FILE).pipe(res);
     return true;

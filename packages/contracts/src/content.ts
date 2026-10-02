@@ -26,7 +26,8 @@ export const ARTICLE_TERMS_MAX = 20;
 export const ARTICLE_LIST_ITEMS_MAX = 100;
 /**
  * The separators `articlePlainText` (article.ts) adds at most: a blank line between the title, the excerpt and
- * every block, and a line break between a list's items or a FAQ's question and its answer.
+ * every block, and a line break between a list's items, a FAQ's question and its answer, an image's alt text and
+ * its caption, or a quote and its source (RA-08: a rich FAQ answer's own line breaks count as body characters).
  */
 const ARTICLE_TEXT_SEPARATORS_MAX =
   2 * (ARTICLE_BLOCKS_MAX + 2) + ARTICLE_BLOCKS_MAX * (ARTICLE_LIST_ITEMS_MAX - 1);
@@ -40,24 +41,133 @@ export const ARTICLE_TEXT_MAX_CHARS =
 /** A channel (social) variant's caption cap; a destination variant carries the article's text (ARTICLE_TEXT_MAX_CHARS). */
 export const CHANNEL_VARIANT_TEXT_MAX_CHARS = 10_000;
 
+// RA-08: the rich blocks (links, images from the asset library, quotes, FAQ answers made of blocks) and the caps
+// that bound them. Every addition is optional or a new block type, so a document written before RA-08 parses,
+// hashes and renders exactly as it did.
+export const ARTICLE_IMAGES_MAX = 20;
+export const ARTICLE_IMAGE_ALT_MAX = 1000;
+export const ARTICLE_IMAGE_CAPTION_MAX = 500;
+export const ARTICLE_LINK_URL_MAX = 2000;
+export const ARTICLE_LINK_TEXT_MAX = 300;
+export const ARTICLE_QUOTE_MAX = 5000;
+export const ARTICLE_QUOTE_CITE_MAX = 300;
+export const ARTICLE_FAQ_ANSWER_BLOCKS_MAX = 10;
+/** A link an article may carry: an absolute http(s) URL without whitespace or markup characters. */
+export const ARTICLE_LINK_PATTERN = /^https?:\/\/[^\s<>"]+$/i;
+export const ArticleLinkUrl = z
+  .string()
+  .max(ARTICLE_LINK_URL_MAX)
+  .regex(ARTICLE_LINK_PATTERN, 'an absolute http(s) URL');
+/** The asset kinds and (raster) types an article image may be: never an SVG or a video on a website's page (RA-08). */
+export const ARTICLE_IMAGE_KINDS = ['photo', 'illustration', 'icon', 'logo'] as const;
+export const ARTICLE_IMAGE_MIMES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+] as const;
+/** An image from the asset library: the asset version (immutable bytes) and the alt text the page carries. */
+export const ArticleImageV1 = z.object({
+  assetVersionId: z.string().min(1),
+  alt: z.string().max(ARTICLE_IMAGE_ALT_MAX),
+});
+export type ArticleImageV1 = z.infer<typeof ArticleImageV1>;
+
+const ParagraphBlock = z.object({ type: z.literal('paragraph'), text: z.string().max(10_000) });
+const HeadingBlock = z.object({
+  type: z.literal('heading'),
+  level: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+  text: z.string().max(300),
+});
+const ListBlock = z.object({
+  type: z.literal('list'),
+  ordered: z.boolean().default(false),
+  items: z.array(z.string().max(2000)).min(1).max(ARTICLE_LIST_ITEMS_MAX),
+});
+/** A standalone link: its text (the URL itself when empty) pointing at an absolute http(s) address. */
+const LinkBlock = z.object({
+  type: z.literal('link'),
+  href: ArticleLinkUrl,
+  text: z.string().max(ARTICLE_LINK_TEXT_MAX),
+});
+const QuoteBlock = z.object({
+  type: z.literal('quote'),
+  text: z.string().max(ARTICLE_QUOTE_MAX),
+  cite: z.string().max(ARTICLE_QUOTE_CITE_MAX).optional(),
+});
+const ImageBlock = ArticleImageV1.extend({
+  type: z.literal('image'),
+  caption: z.string().max(ARTICLE_IMAGE_CAPTION_MAX).optional(),
+});
+/** What a FAQ answer may be made of: text blocks only (no images, headings or nested FAQs). */
+export const ArticleFaqAnswerBlockV1 = z.discriminatedUnion('type', [
+  ParagraphBlock,
+  ListBlock,
+  LinkBlock,
+  QuoteBlock,
+]);
+export type ArticleFaqAnswerBlockV1 = z.infer<typeof ArticleFaqAnswerBlockV1>;
+/**
+ * A FAQ entry. `answer` is the plain answer (R2-3); `answerBlocks` (RA-08), when present and not empty, is the rich
+ * answer that renders instead of it. A client that writes blocks keeps `answer` as their plain text, so a reader
+ * that knows only the plain shape still sees the answer.
+ */
+const FaqBlock = z.object({
+  type: z.literal('faq'),
+  question: z.string().max(500),
+  answer: z.string().max(5000),
+  answerBlocks: z.array(ArticleFaqAnswerBlockV1).max(ARTICLE_FAQ_ANSWER_BLOCKS_MAX).optional(),
+});
+
 /** The body is an ordered list of blocks; a FAQ block renders as a question with its answer. */
 export const ArticleBlockV1 = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('paragraph'), text: z.string().max(10_000) }),
-  z.object({
-    type: z.literal('heading'),
-    level: z.union([z.literal(2), z.literal(3), z.literal(4)]),
-    text: z.string().max(300),
-  }),
-  z.object({
-    type: z.literal('list'),
-    ordered: z.boolean().default(false),
-    items: z.array(z.string().max(2000)).min(1).max(ARTICLE_LIST_ITEMS_MAX),
-  }),
-  z.object({ type: z.literal('faq'), question: z.string().max(500), answer: z.string().max(5000) }),
+  ParagraphBlock,
+  HeadingBlock,
+  ListBlock,
+  FaqBlock,
+  LinkBlock,
+  QuoteBlock,
+  ImageBlock,
 ]);
 export type ArticleBlockV1 = z.infer<typeof ArticleBlockV1>;
 
-/** The characters the body carries over every block (headings, items, questions and answers included). */
+/** A FAQ's answer as text: the rich answer's blocks joined by line breaks, else the plain answer. */
+export const faqAnswerText = (block: {
+  answer: string;
+  answerBlocks?: readonly ArticleFaqAnswerBlockV1[];
+}) =>
+  block.answerBlocks && block.answerBlocks.length > 0
+    ? block.answerBlocks.map(articleBlockText).join('\n')
+    : block.answer;
+
+/**
+ * One block as plain text: a list's items and an image's alt text and caption on their own lines, a FAQ's question
+ * above its answer, a link's text (or its address). The lines `articlePlainText` (article.ts) joins.
+ */
+export function articleBlockText(b: ArticleBlockV1 | ArticleFaqAnswerBlockV1): string {
+  switch (b.type) {
+    case 'paragraph':
+    case 'heading':
+      return b.text;
+    case 'list':
+      return b.items.join('\n');
+    case 'faq':
+      return `${b.question}\n${faqAnswerText(b)}`;
+    case 'link':
+      return b.text.trim() === '' ? b.href : b.text;
+    case 'quote':
+      return b.cite ? `${b.text}\n${b.cite}` : b.text;
+    case 'image':
+      return [b.alt, b.caption ?? ''].filter((t) => t.trim() !== '').join('\n');
+  }
+}
+
+/**
+ * The characters the body carries over every block (headings, items, questions and answers, link texts, quotes,
+ * alt texts and captions included; never a link's address). A rich FAQ answer counts the line breaks between its
+ * blocks, so the separators `articlePlainText` adds stay bounded by ARTICLE_TEXT_SEPARATORS_MAX.
+ */
 export const articleBodyChars = (blocks: readonly ArticleBlockV1[]): number =>
   blocks.reduce((n, b) => {
     switch (b.type) {
@@ -67,14 +177,30 @@ export const articleBodyChars = (blocks: readonly ArticleBlockV1[]): number =>
       case 'list':
         return n + b.items.reduce((m, i) => m + i.length, 0);
       case 'faq':
-        return n + b.question.length + b.answer.length;
+        return n + b.question.length + faqAnswerText(b).length;
+      case 'link':
+        return n + b.text.length;
+      case 'quote':
+        return n + b.text.length + (b.cite?.length ?? 0);
+      case 'image':
+        return n + b.alt.length + (b.caption?.length ?? 0);
     }
   }, 0);
 
+/** The images an article publishes, in order: the featured image first, then every image block. */
+export const articleImages = (
+  article: Pick<ArticleDocumentV1, 'blocks' | 'featuredImage'>,
+): ArticleImageV1[] => [
+  ...(article.featuredImage ? [article.featuredImage] : []),
+  ...article.blocks.flatMap((b) =>
+    b.type === 'image' ? [{ assetVersionId: b.assetVersionId, alt: b.alt }] : [],
+  ),
+];
+
 /**
  * An article as the website receives it: title, slug, excerpt, the body as blocks, the terms it is filed under and
- * an optional featured asset. Rendered to HTML in one place (`article.ts`, allow-listed tags only). `kind` is the
- * discriminator for the document types to come.
+ * (RA-08) an optional featured image. Rendered to HTML in one place (`article.ts`, allow-listed tags only). `kind`
+ * is the discriminator for the document types to come.
  */
 export const ArticleDocumentV1 = z
   .object({
@@ -89,7 +215,15 @@ export const ArticleDocumentV1 = z
     blocks: z.array(ArticleBlockV1).max(ARTICLE_BLOCKS_MAX),
     categories: z.array(z.string().min(1).max(ARTICLE_TERM_MAX)).max(ARTICLE_TERMS_MAX).default([]),
     tags: z.array(z.string().min(1).max(ARTICLE_TERM_MAX)).max(ARTICLE_TERMS_MAX).default([]),
+    /** R2-3's field, never written by a client; kept so a stored document parses. `featuredImage` supersedes it. */
     featuredAssetId: z.string().optional(),
+    /**
+     * RA-08: the document's version. Absent, the article is a plain one (R2-3: paragraphs, headings, lists and plain
+     * FAQs); `2` says the editor that wrote it knew the rich blocks and the featured image.
+     */
+    v: z.literal(2).optional(),
+    /** RA-08: the page's featured image (an asset version with its alt text), sent with the article when it publishes. */
+    featuredImage: ArticleImageV1.optional(),
   })
   .superRefine((a, ctx) => {
     const chars = articleBodyChars(a.blocks);
@@ -98,6 +232,21 @@ export const ArticleDocumentV1 = z
         code: z.ZodIssueCode.custom,
         path: ['blocks'],
         message: `body_too_long:${chars}>${ARTICLE_BODY_MAX_CHARS}`,
+      });
+    // A rich FAQ answer's plain text is the blocks' text: a client cannot make the two say different things.
+    for (const [i, b] of a.blocks.entries())
+      if (b.type === 'faq' && b.answerBlocks && b.answerBlocks.length > 0 && b.answer !== faqAnswerText(b))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['blocks', i, 'answer'],
+          message: 'faq_answer_mismatch',
+        });
+    const images = articleImages(a).length;
+    if (images > ARTICLE_IMAGES_MAX)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['blocks'],
+        message: `too_many_images:${images}>${ARTICLE_IMAGES_MAX}`,
       });
   });
 export type ArticleDocumentV1 = z.infer<typeof ArticleDocumentV1>;

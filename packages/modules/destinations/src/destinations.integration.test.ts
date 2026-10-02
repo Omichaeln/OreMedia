@@ -13,6 +13,7 @@ import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import {
   brandDestinations,
@@ -21,7 +22,9 @@ import {
 } from '@oremedia/db/schema/destinations';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { credentialRefs } from '@oremedia/db/schema/publishing';
+import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { MemoryStorageProvider, configureStorage, storageKeys } from '@oremedia/module-assets';
 import {
   LocalKms,
   configureCredentialBroker,
@@ -1198,6 +1201,9 @@ describe('destinations module against MySQL 8', () => {
         kind: 'cms_site',
         capabilityVersion: 1,
         writable: true,
+        displayName: 'blog.acme.example',
+        externalId: SITE,
+        grantedScopes: ['articles:write'],
       });
       expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
         id: siteId,
@@ -1374,6 +1380,135 @@ describe('destinations module against MySQL 8', () => {
       } finally {
         configureDestinationCms({ registry: new CmsRegistry().register(cms) });
       }
+    });
+
+    it("publish (RA-08): every image is released through the assets module, uploaded by the adapter before the article, referenced by the site's address in the body, and the featured image travels with the post", async () => {
+      await setArticlePolicy(['read', 'write']);
+      const storage = new MemoryStorageProvider();
+      configureStorage(storage);
+      const assetId = newId('asset');
+      const versionId = newId('assetVersion');
+      const key = storageKeys.original(tenantA, brandA, assetId, versionId);
+      await tdb.db.insert(assets).values({
+        id: assetId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'photo',
+        name: 'weighbridge',
+        currentVersionId: versionId,
+        state: 'approved',
+        rightsState: 'recorded',
+      });
+      await tdb.db.insert(assetVersions).values({
+        id: versionId,
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        number: 1,
+        storageKey: key,
+        contentHash: sha256Hex('png'),
+        mime: 'image/png',
+        bytes: 3,
+        width: 64,
+        height: 48,
+        provenance: { kind: 'upload', uploadedByUserId: USER, originalFilename: 'w.png' },
+      });
+      await tdb.db.insert(usageRights).values({
+        id: newId('usageRights'),
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        owner: 'owner',
+        permittedChannels: 'all',
+        territories: 'all',
+        expiresAt: null,
+        releases: [],
+        restrictions: [],
+      });
+      await inTenant(tenantA, () => storage.putObject(key, Buffer.from('png'), { contentType: 'image/png' }));
+      const rich: ArticleDocumentV1 = {
+        ...article,
+        v: 2,
+        featuredImage: { assetVersionId: versionId, alt: 'A weighbridge at dawn' },
+        blocks: [
+          { type: 'paragraph', text: 'Ore is heavy.' },
+          { type: 'image', assetVersionId: versionId, alt: 'The weighbridge', caption: 'North gate' },
+          { type: 'link', href: 'https://acme.example/scales', text: 'Our scales' },
+        ],
+      };
+      cms.calls.length = 0;
+      const page = {
+        status: 200,
+        html: '<html><head><title>Why ore and tar last</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><figure><img src="x" alt="The weighbridge"><figcaption>North gate</figcaption></figure><p><a href="https://acme.example/scales">Our scales</a></p></body></html>',
+      };
+      for (const id of [102, 103, 104, 105, 106]) cms.pages.set(`${SITE}/?p=${id}`, page);
+      const result = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted' });
+      if (result.outcome !== 'accepted') return;
+      const remoteId = result.remotePostId;
+      // One upload for the one asset version (featured and in the body), before the create, then the read-back.
+      expect(cms.calls.map((c) => c.op)).toEqual(['upload', 'create', 'read']);
+      const uploaded = [...cms.media.values()][0]!;
+      expect(uploaded).toMatchObject({
+        mime: 'image/png',
+        alt: 'A weighbridge at dawn',
+        filename: 'why-ore-and-tar-last-1.png',
+      });
+      // The adapter fetched a signed release URL minted for the publishing window, never a storage key or bytes.
+      expect(uploaded.sourceUrl).toMatch(/^memory:\/\/download\/releases\//);
+      expect(
+        storage.keys().some((k) => k.startsWith(`releases/${tenantA}/${brandA}/${versionId}/original/`)),
+      ).toBe(true);
+      const remote = cms.articles.get(remoteId)!;
+      expect(remote.html).toBe(renderArticleHtml(rich, { imageUrl: () => uploaded.url }));
+      expect(remote.html).toContain(`<img src="${uploaded.url}" alt="The weighbridge">`);
+      expect(cms.featured.get(remoteId)).toBe([...cms.media.keys()][0]);
+      expect(result.readbackVerification).toMatchObject({ outcome: 'verified', mismatched: [] });
+      expect(result.validation?.ok).toBe(true);
+      // An upload the site refuses stops the publish before any article is written.
+      cms.uploadBehaviour = 'forbidden';
+      cms.calls.length = 0;
+      const refused = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_2',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(refused).toMatchObject({ outcome: 'rejected', code: 'reconnect_required' });
+      expect(cms.calls.map((c) => c.op)).toEqual(['upload']);
+      cms.uploadBehaviour = 'ok';
+      // A version that is not a raster image (an SVG) is refused before the adapter is asked anything.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      cms.calls.length = 0;
+      const svg = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_3',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(svg).toMatchObject({ outcome: 'rejected', code: 'article_image_not_raster' });
+      expect(cms.calls).toEqual([]);
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
     });
 
     it('an edit reads the remote first: with the read-back hash it writes; after the site moved it refuses as a conflict and overwrites nothing', async () => {

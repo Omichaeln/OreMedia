@@ -1,4 +1,5 @@
 import { ApprovalBindingV1, bindingTargetId } from '@oremedia/contracts/approval';
+import { renderArticleHtml } from '@oremedia/contracts/article';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq, ne } from 'drizzle-orm';
 import {
@@ -25,6 +26,7 @@ import {
   users,
 } from '@oremedia/db/schema/access';
 import { entitlements } from '@oremedia/db/schema/billing';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import { channelVariants, contentRevisions } from '@oremedia/db/schema/content';
 import { brandDestinations } from '@oremedia/db/schema/destinations';
@@ -33,7 +35,7 @@ import { auditEvents, featureFlags, outboxEvents } from '@oremedia/db/schema/ope
 import { renderedExports } from '@oremedia/db/schema/creative';
 import { releaseApprovals, reviewDecisions, reviewRequests } from '@oremedia/db/schema/review';
 import { bindingHash } from '@oremedia/domain/approval-binding';
-import { hashCanonical } from '@oremedia/domain/hash';
+import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
 import { authenticate, resolveTenantContext } from '@oremedia/module-access';
 import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
@@ -58,8 +60,21 @@ import {
   resetReleaseCheckers,
   type ReleaseCheckers,
 } from './evaluate-release';
-import { registerReviewMediaSigner, resetReviewMediaSigner, reviewService } from './service';
+import {
+  registerReviewImageSigner,
+  registerReviewMediaSigner,
+  resetReviewImageSigner,
+  resetReviewMediaSigner,
+  reviewService,
+} from './service';
 import { reviewToolSource } from './tools';
+
+/** The member view of a request (requests.get returns a reviewer's narrower view for an external link). */
+type RequestView = Awaited<ReturnType<typeof reviewService.requests.get>>;
+const memberView = (r: RequestView): Extract<RequestView, { decisions: unknown }> => {
+  if (!('decisions' in r)) throw new Error('member view expected');
+  return r;
+};
 
 const brandDocument = (): BrandSystemDocumentV1 => ({
   ...emptyBrandSystemDocument(),
@@ -190,7 +205,7 @@ describe('review module (spec 13) against MySQL 8', () => {
   // Foreign rows (tenant B) for the NOT_FOUND checks.
   let requestB = '';
   let approvalB = '';
-  const authorised = { assets: true };
+  const authorised = { assets: true, versions: new Map<string, { kind: string; mime: string }>() };
   const checks = { channelUsable: true, validateVariant: true, count: 0, publishedElsewhere: false };
 
   const ctx = (tenantId: string, actorId: string): TenantContext => ({
@@ -381,8 +396,14 @@ describe('review module (spec 13) against MySQL 8', () => {
     registerRevisionChangeHook((documentId, tx) =>
       reviewService.approvals.invalidateForCreativeRevisionChange(documentId, tx),
     );
-    registerAssetAuthoriser(async (assetVersionId) => {
+    registerAssetAuthoriser(async (assetVersionId, ctx) => {
       if (!authorised.assets) throw new RightsIneligibleError(assetVersionId, 'rights_expired');
+      // RA-08: the dispatch check names the kinds and types a website page accepts; the stub answers from a map.
+      const version = authorised.versions.get(assetVersionId);
+      if (version && ctx.kinds && !ctx.kinds.includes(version.kind))
+        throw new RightsIneligibleError(assetVersionId, 'kind_not_allowed');
+      if (version && ctx.mimes && !ctx.mimes.includes(version.mime))
+        throw new RightsIneligibleError(assetVersionId, 'mime_not_allowed');
     });
     const checkers: ReleaseCheckers = {
       channelUsable: async () => checks.channelUsable,
@@ -532,7 +553,15 @@ describe('review module (spec 13) against MySQL 8', () => {
       });
       registerDestinationResolver(async (id) =>
         id === destinationId
-          ? { brandId: brandA, kind: 'cms_site', capabilityVersion: 1, writable: true }
+          ? {
+              brandId: brandA,
+              kind: 'cms_site',
+              capabilityVersion: 1,
+              writable: true,
+              displayName: 'blog.acme.example',
+              externalId: 'https://blog.acme.example',
+              grantedScopes: ['articles:write'],
+            }
           : null,
       );
       const article = {
@@ -571,8 +600,8 @@ describe('review module (spec 13) against MySQL 8', () => {
       const res = await runA((tx) =>
         reviewService.requests.create(manager.actor, requestFor(pkg.contentRevisionId), tx),
       );
-      const full = await runA(() =>
-        reviewService.requests.get(manager.actor, { reviewRequestId: res.reviewRequestId }),
+      const full = memberView(
+        await runA(() => reviewService.requests.get(manager.actor, { reviewRequestId: res.reviewRequestId })),
       );
       expect(full.frozenManifest).toMatchObject({
         captions: [{ destinationId, text: website.text }],
@@ -581,9 +610,355 @@ describe('review module (spec 13) against MySQL 8', () => {
           slug: article.slug,
           articleHash: hashCanonical(article),
           blocks: 5,
+          // RA-09: the rendering's hash, the image count and the frozen document itself.
+          renderedHtmlHash: hashText(renderArticleHtml(article)),
+          images: 0,
+          document: article,
         },
+        // RA-09: what approving means for the website: a draft on the site at the article's path.
+        websites: [
+          {
+            destinationId,
+            kind: 'cms_site',
+            displayName: 'blog.acme.example',
+            siteUrl: 'https://blog.acme.example',
+            path: `/${article.slug}`,
+            publishMode: 'draft',
+          },
+        ],
       });
       expect(hashCanonical(full.frozenManifest)).toBe(res.manifestHash);
+      expect(full.liveManifestHash).toBe(res.manifestHash);
+      expect(full.changedSinceFreeze).toEqual([]);
+      // RA-09: a change to the website target after the freeze (the destination renamed, or its grant changed, so
+      // what approving means moved) is named on the request, and a decision on it is refused as stale: the
+      // approval is never granted against a manifest that no longer describes what would publish.
+      await tdb.db
+        .update(brandDestinations)
+        .set({ displayName: 'blog.acme.example (renamed)' })
+        .where(eq(brandDestinations.id, destinationId));
+      registerDestinationResolver(async (id) =>
+        id === destinationId
+          ? {
+              brandId: brandA,
+              kind: 'cms_site',
+              capabilityVersion: 1,
+              writable: true,
+              displayName: 'blog.acme.example (renamed)',
+              externalId: 'https://blog.acme.example',
+              grantedScopes: ['articles:write', 'articles:publish'],
+            }
+          : null,
+      );
+      const changed = memberView(
+        await runA(() => reviewService.requests.get(manager.actor, { reviewRequestId: res.reviewRequestId })),
+      );
+      expect(changed.changedSinceFreeze).toEqual(['websites']);
+      expect(changed.liveManifestHash).not.toBe(res.manifestHash);
+      expect(changed.state).toBe('open');
+      await expect(
+        runA((tx) =>
+          reviewService.decisions.submit(
+            reviewer.actor,
+            {
+              reviewRequestId: res.reviewRequestId,
+              decision: 'approve',
+              expectedManifestHash: res.manifestHash,
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ details: [{ issue: 'request_stale' }] });
+    });
+
+    it('RA-09 roll-forward: a request frozen before RA-09 (no rendered hash, document or websites) is still decided against the live package', async () => {
+      const pkg = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Old freeze',
+            copy: {
+              schemaVersion: 1,
+              master: { text: 'Old.', factRefs: [] },
+              article: {
+                kind: 'article',
+                title: 'Old freeze',
+                slug: 'old-freeze',
+                excerpt: '',
+                blocks: [{ type: 'paragraph', text: 'Frozen before RA-09.' }],
+                categories: [],
+                tags: [],
+              },
+            },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      const destinationId = (
+        await tdb.db
+          .select({ id: brandDestinations.id })
+          .from(brandDestinations)
+          .where(and(eq(brandDestinations.tenantId, tenantA), eq(brandDestinations.kind, 'cms_site')))
+      )[0]!.id;
+      await runA((tx) =>
+        contentService.variants.generate(
+          manager.actor,
+          { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+          tx,
+        ),
+      );
+      const res = await runA((tx) =>
+        reviewService.requests.create(manager.actor, requestFor(pkg.contentRevisionId), tx),
+      );
+      // Rewrite the stored manifest in its pre-RA-09 shape, with the hash it would have had then.
+      const stored = (
+        await tdb.db.select().from(reviewRequests).where(eq(reviewRequests.id, res.reviewRequestId))
+      )[0]!;
+      const { websites: _w, ...rest } = stored.frozenManifest;
+      const { renderedHtmlHash: _r, images: _i, document: _d, ...oldArticle } = rest.article!;
+      const old = { ...rest, article: oldArticle };
+      await tdb.db
+        .update(reviewRequests)
+        .set({ frozenManifest: old, manifestHash: hashCanonical(old) })
+        .where(eq(reviewRequests.id, res.reviewRequestId));
+      const read = memberView(
+        await runA(() => reviewService.requests.get(manager.actor, { reviewRequestId: res.reviewRequestId })),
+      );
+      expect(read.frozenManifest.article?.document).toBeUndefined();
+      expect(read.changedSinceFreeze).toEqual([]);
+      expect(read.liveManifestHash).toBe(hashCanonical(old));
+      const decided = await runA((tx) =>
+        reviewService.decisions.submit(
+          reviewer.actor,
+          {
+            reviewRequestId: res.reviewRequestId,
+            decision: 'approve',
+            expectedManifestHash: hashCanonical(old),
+          },
+          tx,
+        ),
+      );
+      expect(decided).toMatchObject({ decision: 'approve', requestState: 'decided' });
+    });
+
+    it("RA-09: media signs a frozen article's images per asset version, request-bound; a version that is gone is reported unverified", async () => {
+      const assetVersionId = newId('assetVersion');
+      const rich = {
+        kind: 'article' as const,
+        v: 2 as const,
+        title: 'Weighed',
+        slug: 'weighed',
+        excerpt: '',
+        featuredImage: { assetVersionId, alt: 'Featured' },
+        blocks: [
+          { type: 'paragraph' as const, text: 'Every load is weighed twice.' },
+          { type: 'image' as const, assetVersionId, alt: 'The weighbridge' },
+          { type: 'image' as const, assetVersionId: 'av_gone', alt: 'Gone' },
+        ],
+        categories: [],
+        tags: [],
+      };
+      const destinationId = (
+        await tdb.db
+          .select({ id: brandDestinations.id })
+          .from(brandDestinations)
+          .where(and(eq(brandDestinations.tenantId, tenantA), eq(brandDestinations.kind, 'cms_site')))
+      )[0]!.id;
+      // The content module authorises images at creation (RA-08); this test's subject is the review path.
+      const pkg = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Weighed',
+            copy: { schemaVersion: 1, master: { text: 'Weighed.', factRefs: [] }, article: rich },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      ).catch((err: unknown) => {
+        if (!(err instanceof ValidationFailedError)) throw err;
+        return null;
+      });
+      expect(pkg).toBeNull(); // no such asset versions in this tenant: refused by the content module
+      // Freeze the document regardless (as a request from before an asset was retired would hold it).
+      const plain = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Weighed',
+            copy: {
+              schemaVersion: 1,
+              master: { text: 'Weighed.', factRefs: [] },
+              article: { ...rich, featuredImage: undefined, blocks: [rich.blocks[0]!] },
+            },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      await runA((tx) =>
+        contentService.variants.generate(
+          manager.actor,
+          { contentRevisionId: plain.contentRevisionId, destinationIds: [destinationId] },
+          tx,
+        ),
+      );
+      const res = await runA((tx) =>
+        reviewService.requests.create(manager.actor, requestFor(plain.contentRevisionId), tx),
+      );
+      const stored = (
+        await tdb.db.select().from(reviewRequests).where(eq(reviewRequests.id, res.reviewRequestId))
+      )[0]!;
+      const frozen = {
+        ...stored.frozenManifest,
+        article: { ...stored.frozenManifest.article!, document: rich, images: 3 },
+      };
+      await tdb.db
+        .update(reviewRequests)
+        .set({ frozenManifest: frozen, manifestHash: hashCanonical(frozen) })
+        .where(eq(reviewRequests.id, res.reviewRequestId));
+      await expect(
+        runA(() => reviewService.requests.media(manager.actor, { reviewRequestId: res.reviewRequestId })),
+      ).rejects.toThrow(/review image signer not registered/);
+      registerReviewImageSigner(async (id) =>
+        id === assetVersionId
+          ? {
+              url: `https://signed.test/${id}`,
+              expiresAt: '2030-01-01T00:00:00.000Z',
+              mime: 'image/png',
+              contentHash: 'c'.repeat(64),
+            }
+          : null,
+      );
+      try {
+        const media = await runA(() =>
+          reviewService.requests.media(manager.actor, { reviewRequestId: res.reviewRequestId }),
+        );
+        expect(media.items).toEqual([]);
+        expect(media.images).toEqual([
+          {
+            assetVersionId,
+            verified: true,
+            url: `https://signed.test/${assetVersionId}`,
+            expiresAt: '2030-01-01T00:00:00.000Z',
+            mime: 'image/png',
+            contentHash: 'c'.repeat(64),
+          },
+          {
+            assetVersionId: 'av_gone',
+            verified: false,
+            url: null,
+            expiresAt: null,
+            mime: null,
+            contentHash: null,
+          },
+        ]);
+      } finally {
+        resetReviewImageSigner();
+      }
+    });
+
+    it('RA-08 at dispatch: a website article whose image is an SVG (or not an image kind) fails assets_rights_valid, a raster one passes', async () => {
+      const destinationId = (
+        await tdb.db
+          .select({ id: brandDestinations.id })
+          .from(brandDestinations)
+          .where(and(eq(brandDestinations.tenantId, tenantA), eq(brandDestinations.kind, 'cms_site')))
+      )[0]!.id;
+      const assetId = newId('asset');
+      const assetVersionId = newId('assetVersion');
+      await tdb.db.insert(assets).values({
+        id: assetId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'photo',
+        name: 'weighbridge',
+        currentVersionId: assetVersionId,
+        state: 'approved',
+        rightsState: 'recorded',
+      });
+      await tdb.db.insert(assetVersions).values({
+        id: assetVersionId,
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        number: 1,
+        storageKey: `assets/${tenantA}/${brandA}/${assetId}/${assetVersionId}/original`,
+        contentHash: hashText('png'),
+        mime: 'image/png',
+        bytes: 3,
+        provenance: { kind: 'upload', uploadedByUserId: manager.id, originalFilename: 'w.png' },
+      });
+      await tdb.db.insert(usageRights).values({
+        id: newId('usageRights'),
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        owner: 'owner',
+        permittedChannels: 'all',
+        territories: 'all',
+        expiresAt: null,
+        releases: [],
+        restrictions: [],
+      });
+      const pkg = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Weighed with a picture',
+            copy: {
+              schemaVersion: 1,
+              master: { text: 'Weighed.', factRefs: [] },
+              article: {
+                kind: 'article',
+                v: 2,
+                title: 'Weighed with a picture',
+                slug: 'weighed-with-a-picture',
+                excerpt: '',
+                featuredImage: { assetVersionId, alt: 'Featured' },
+                blocks: [{ type: 'paragraph', text: 'Every load is weighed twice.' }],
+                categories: [],
+                tags: [],
+              },
+            },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      const website = (
+        await runA((tx) =>
+          contentService.variants.generate(
+            manager.actor,
+            { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+            tx,
+          ),
+        )
+      ).variants[0]!;
+      const pub = pubFor({
+        contentPackageId: pkg.contentPackageId,
+        contentRevisionId: pkg.contentRevisionId,
+        channelVariantId: website.id,
+        channelConnectionId: null,
+        destinationId,
+      });
+      const reasonsOf = async () => {
+        const d = await runA(() => evaluateRelease(pub, at));
+        return d.allow ? [] : d.reasons;
+      };
+      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/png' });
+      expect(await reasonsOf()).not.toContain('assets_rights_valid');
+      // The version became an SVG on the site's way (an asset re-ingested, say): held before any upload.
+      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/svg+xml' });
+      expect(await reasonsOf()).toContain('assets_rights_valid');
+      authorised.versions.set(assetVersionId, { kind: 'video', mime: 'image/png' });
+      expect(await reasonsOf()).toContain('assets_rights_valid');
+      authorised.versions.delete(assetVersionId);
     });
 
     it('counts an open request past its due time as overdue, for its own brand and tenant only', async () => {
@@ -1204,7 +1579,7 @@ describe('review module (spec 13) against MySQL 8', () => {
       const none = await asExternal(external, () =>
         reviewService.requests.media(external, { reviewRequestId: requestId }),
       );
-      expect(none).toEqual({ reviewRequestId: requestId, manifestHash, items: [] });
+      expect(none).toEqual({ reviewRequestId: requestId, manifestHash, items: [], images: [] });
       // The earlier request in this brand froze the ready export at hash 'a…' (spec 13.3 manifest).
       const withFiles = (
         await tdb.db

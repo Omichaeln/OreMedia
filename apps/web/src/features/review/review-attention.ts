@@ -3,6 +3,7 @@ import type {
   ApprovalInvalidatedReason,
   FrozenManifestV1,
   InboxAttention,
+  ManifestChange,
   ReviewRequestState,
   StaleReason,
 } from '@oremedia/contracts/review';
@@ -115,6 +116,36 @@ export function manifestChannels(manifest: FrozenManifestV1): ManifestChannelSum
       exportHashes: exports.map((e) => e.contentHash),
     };
   });
+}
+
+/** RA-09: what differs between the frozen manifest and the package now, in words. */
+export const MANIFEST_CHANGE_TEXT: Record<ManifestChange, string> = {
+  article: 'the article document',
+  rendering: 'how the article renders',
+  captions: 'a caption or alt text',
+  settings: 'a target’s settings (a website’s publish mode)',
+  exports: 'the rendered files',
+  targets: 'the targets',
+  websites: 'a website target or its publish mode',
+  brand: 'the brand version or policy',
+};
+export const manifestChangeText = (changes: readonly ManifestChange[]): string =>
+  changes.map((c) => MANIFEST_CHANGE_TEXT[c] ?? c).join(', ');
+
+export type ManifestWebsite = NonNullable<FrozenManifestV1['websites']>[number];
+
+/**
+ * RA-09: what approving means for a website target, in one sentence: a draft saved on the site, or a live page
+ * at the frozen time (the window's start when the timing is a window).
+ */
+export function websiteStatement(site: ManifestWebsite, timing: FrozenManifestV1['timing']): string {
+  const fmt = (iso: string) => new Date(iso).toLocaleString();
+  const page = site.path ? ` (${site.path})` : '';
+  if (site.publishMode === 'publish')
+    return timing.kind === 'exact'
+      ? `Approving this will publish live at ${fmt(timing.at)} on ${site.displayName}${page}.`
+      : `Approving this will publish live between ${fmt(timing.from)} and ${fmt(timing.to)} on ${site.displayName}${page}.`;
+  return `Approving this will save a draft on ${site.displayName}${page}; nothing goes live until a live publish is chosen and reviewed.`;
 }
 
 export function timingText(timing: FrozenManifestV1['timing']): string {

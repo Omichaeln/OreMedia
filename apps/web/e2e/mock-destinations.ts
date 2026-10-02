@@ -47,6 +47,9 @@ import {
   type SeoAuditPageV1,
   type SeoAuditRunV1,
   type SeoAuditSummaryV1,
+  SeoAuditCreateWork,
+  seoFindingId,
+  type SeoFindingWorkV1,
 } from '@oremedia/contracts/seo-audit';
 import {
   CapabilityUnsupportedError,
@@ -127,6 +130,8 @@ const SOURCES: readonly DestinationSourceV1[] = [
 
 /** Spec 5.5 default grants of destination.connect / destination.manage and source_use.manage. */
 const CONNECTORS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin', 'publisher']);
+/** insight.manage (RA-11 create work): managers and analysts. */
+const WORK_CREATORS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin', 'brand_manager', 'analyst']);
 const POLICY_MANAGERS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin']);
 
 const now = () => new Date().toISOString();
@@ -452,6 +457,8 @@ export class DestinationsBackend {
   /** R2-4: the website's last audit (one finished run with its pages); `run` opens a second, left running. */
   readonly auditRuns: SeoAuditRunV1[] = [];
   readonly auditPages: SeoAuditPageV1[] = [];
+  /** RA-11: the work findings were turned into (one open row per check), as the API's link table holds it. */
+  readonly findingWork: SeoFindingWorkV1[] = [];
 
   constructor(
     readonly brandId: string,
@@ -473,6 +480,8 @@ export class DestinationsBackend {
         healthCheckedAt: '2026-09-30T06:00:00.000Z',
         capabilityVersion: 1,
         status: 'active',
+        reportingTimeZone: 'Africa/Johannesburg',
+        currencyCode: 'ZAR',
         version: 1,
         createdAt: at,
         updatedAt: at,
@@ -489,6 +498,8 @@ export class DestinationsBackend {
         healthCheckedAt: '2026-09-30T06:00:00.000Z',
         capabilityVersion: 1,
         status: 'active',
+        reportingTimeZone: null,
+        currencyCode: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -505,6 +516,8 @@ export class DestinationsBackend {
         healthCheckedAt: '2026-09-30T06:00:00.000Z',
         capabilityVersion: 1,
         status: 'active',
+        reportingTimeZone: null,
+        currencyCode: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -521,6 +534,8 @@ export class DestinationsBackend {
         healthCheckedAt: null,
         capabilityVersion: 1,
         status: 'active',
+        reportingTimeZone: null,
+        currencyCode: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -669,6 +684,9 @@ function seededAuditPages(runId: string): SeoAuditPageV1[] {
 /** The findings of the seeded run, as the audit module's rule table words them (one per failing check). */
 const seededFindings = (): SeoAuditFindingV1[] => [
   {
+    findingId: seoFindingId(PD.auditRun, 'robots_meta'),
+    status: 'open',
+    work: null,
     check: 'robots_meta',
     label: 'Pages excluded by robots meta',
     severity: 'critical',
@@ -678,6 +696,9 @@ const seededFindings = (): SeoAuditFindingV1[] => [
       'Confirm 1 page should carry noindex or nofollow; remove the directive where they should rank.',
   },
   {
+    findingId: seoFindingId(PD.auditRun, 'broken_links'),
+    status: 'open',
+    work: null,
     check: 'broken_links',
     label: 'Broken internal links',
     severity: 'major',
@@ -686,6 +707,9 @@ const seededFindings = (): SeoAuditFindingV1[] => [
     suggestedTask: 'Fix or remove the internal links on 2 pages that lead to pages answering with an error.',
   },
   {
+    findingId: seoFindingId(PD.auditRun, 'title'),
+    status: 'open',
+    work: null,
     check: 'title',
     label: 'Missing or long titles',
     severity: 'minor',
@@ -811,6 +835,8 @@ export function destinationsRouters(
         healthCheckedAt: null,
         capabilityVersion: input.capabilityVersion,
         status: 'active',
+        reportingTimeZone: null,
+        currencyCode: null,
         version: 0,
         createdAt: now(),
         updatedAt: now(),
@@ -900,6 +926,8 @@ export function destinationsRouters(
           healthCheckedAt: now(),
           capabilityVersion: 1,
           status: 'active',
+          reportingTimeZone: null,
+          currencyCode: null,
           version: 0,
           createdAt: now(),
           updatedAt: now(),
@@ -939,6 +967,8 @@ export function destinationsRouters(
           healthCheckedAt: null,
           capabilityVersion: 1,
           status: 'active',
+          reportingTimeZone: null,
+          currencyCode: null,
           version: 0,
           createdAt: now(),
           updatedAt: now(),
@@ -1007,6 +1037,14 @@ export function destinationsRouters(
                   ageHours,
                   latencyHours: spec.latencyHours,
                   stale: ageHours === null || ageHours > spec.latencyHours * 2,
+                },
+                // RA-10: the days are keyed in the destination's reporting zone once learnt (the GA4 property's);
+                // the latest day is provisional while it is inside the report's latency.
+                quality: {
+                  timeZone: d.reportingTimeZone,
+                  asOfLocalDate: latest,
+                  provisional: ageHours !== null && ageHours < spec.latencyHours,
+                  flags: [],
                 },
                 current,
                 previous,
@@ -1109,6 +1147,7 @@ export function destinationsRouters(
           origin: d.externalId,
           policy: { allowed: decision.allowed, reason: decision.reason, dataType: 'cms.audit' },
           canRun: d.kind === 'cms_site' && d.status === 'active' && CONNECTORS.has(b.role()),
+          canCreateWork: WORK_CREATORS.has(b.role()),
           running: runs.some((r) => r.outcome === 'running'),
           lastRun: decision.allowed ? last : null,
           data: { kind: 'lab', note: SEO_AUDIT_DATA_NOTE },
@@ -1140,7 +1179,56 @@ export function destinationsRouters(
         const d = destinationOf(input.brandId, input.destinationId);
         const decision = readDecision(d.kind, 'cms.audit');
         if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
-        return { runId: PD.auditRun, items: d.id === PD.destinations.cms ? seededFindings() : [] };
+        const items = d.id === PD.destinations.cms ? seededFindings() : [];
+        return {
+          runId: PD.auditRun,
+          items: items.map((f) => {
+            const work = b.findingWork.find((w) => w.destinationId === d.id && w.check === f.check) ?? null;
+            return { ...f, status: work ? ('tracked' as const) : ('open' as const), work };
+          }),
+        };
+      }),
+      // RA-11: findings become recommendations (one per finding; a second call returns the existing one).
+      createWork: mutation.input(SeoAuditCreateWork).mutation(({ input }) => {
+        const d = destinationOf(input.brandId, input.destinationId);
+        if (!WORK_CREATORS.has(b.role())) throw new PolicyDeniedError('role_missing');
+        const decision = readDecision(d.kind, 'cms.audit');
+        if (!decision.allowed) throw new PolicyDeniedError(`source_use_${decision.reason}`);
+        const reported = d.id === PD.destinations.cms ? seededFindings() : [];
+        const missing = input.checks.filter((c) => !reported.some((f) => f.check === c));
+        if (missing.length > 0)
+          throw new ValidationFailedError(
+            missing.map((c) => ({ path: 'checks', issue: `not_reported:${c}` })),
+            'the run does not report every check asked for',
+          );
+        const items = reported.flatMap((finding) => {
+          const check = finding.check;
+          if (!input.checks.includes(check)) return [];
+          const existing = b.findingWork.find((w) => w.destinationId === d.id && w.check === check);
+          if (existing) return [existing];
+          const row: SeoFindingWorkV1 = {
+            id: `sfw_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+            findingId: finding.findingId,
+            brandId: d.brandId,
+            destinationId: d.id,
+            runId: PD.auditRun,
+            check,
+            severity: finding.severity,
+            pageCount: finding.count,
+            examples: finding.examples,
+            workType: 'recommendation',
+            workId: `rec_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
+            title: `${finding.label} on ${d.externalId}`,
+            state: 'proposed',
+            createdById: 'usr_e2e',
+            createdAt: now(),
+            resolvedAt: null,
+            resolvedRunId: null,
+          };
+          b.findingWork.push(row);
+          return [row];
+        });
+        return { runId: PD.auditRun, items };
       }),
       run: mutation.input(SeoAuditRun).mutation(({ input }): SeoAuditRunV1 => {
         const d = destinationOf(input.brandId, input.destinationId);
