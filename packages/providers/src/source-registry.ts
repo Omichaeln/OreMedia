@@ -33,6 +33,11 @@ export class SourceRegistry {
     return this.adapters.get(kind);
   }
 
+  /** Any registered adapter, certified or not: for winding a connection down (RA-01 remote revoke), never a connect or a read. */
+  lookup(kind: string): SourceAdapter | undefined {
+    return this.adapters.get(kind);
+  }
+
   capability(kind: string): SourceCapabilityV1 | undefined {
     return this.adapters.get(kind)?.capability;
   }

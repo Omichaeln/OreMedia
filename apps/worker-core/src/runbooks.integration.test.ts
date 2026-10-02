@@ -54,6 +54,7 @@ import {
   createPublishingRuntime,
   credentialBroker,
   publicationService,
+  configureChannelActivation,
   registerProviderClients,
   registerWorkflowProbe,
   connectedChannel,
@@ -275,6 +276,7 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
     configurePublishingProviders({ registry, insecureAllowLoopback: true });
     configureCredentialBroker({ kms: new LocalKms('runbook-rehearsal-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     registerWorkflowProbe(null);
     configureStorage(mem);
     const draft = await run((tx) => brandService.versions.createDraft(owner, { brandId: brand }, tx));
@@ -739,7 +741,10 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
       ).error,
     ).toBeUndefined();
     expect((await callPath({ bearer: k.key }, 'brand.list', undefined)).error?.code).toBe('UNAUTHENTICATED');
-    // Social token: disconnect shreds the credential in the same transaction and holds the scheduled posts.
+    // Social token: disconnect disables the connection and holds the scheduled posts in the same transaction;
+    // RA-01: the fixture provider can revoke remotely, so the API leaves the credential to the worker, whose
+    // channelRevokeWorkflowV1 activity revokes it at the platform and shreds it (a provider without a remote
+    // revoke is shredded by the disconnect itself).
     // The kill-switch rehearsal's connection (the tenant's channel entitlement is finite): now compromised.
     const conn = killConn;
     const { ids } = await scheduled('Compromised', [conn]);
@@ -749,14 +754,29 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
       expectedVersion: c.version,
     });
     expect(res.error).toBeUndefined();
+    expect((res.data as { remoteRevoke: string }).remoteRevoke).toBe('requested');
+    expect(await pubRow(ids[0]!)).toMatchObject({ state: 'held' });
+    expect(
+      await inTenant(() =>
+        runtime.channelRevoke.revokeChannelAccess({ ...ctx(), channelConnectionId: conn }),
+      ),
+    ).toEqual({ outcome: 'revoked' });
+    expect(fixture.calls.at(-1)).toMatch(/^revokeAccess:/);
+    fixture.revokedTokens.clear(); // the fixture's grant is shared by every connection of these rehearsals
     const cred = (
       await tdb.db.select().from(credentialRefs).where(eq(credentialRefs.id, c.credentialRefId))
     )[0]!;
     expect(cred).toMatchObject({ ciphertext: '', wrappedDataKey: '' });
     expect(cred.destroyedAt).not.toBeNull();
     expect(await pubRow(ids[0]!)).toMatchObject({ state: 'held' });
+    // RA-01: a disconnected channel is refused before its credential is read; the revoke path finds it shredded.
     await expect(
       inTenant(() => credentialBroker.withCredentials(A.tenantId, conn, async () => 'x')),
+    ).rejects.toMatchObject({ reason: 'credential_owner_disconnected' });
+    await expect(
+      inTenant(() =>
+        credentialBroker.withCredentials(A.tenantId, conn, async () => 'x', undefined, { purpose: 'revoke' }),
+      ),
     ).rejects.toMatchObject({ reason: 'credential_destroyed' });
     // Session: a role change revokes the member's sessions (spec 18); the next request is refused.
     expect(

@@ -25,6 +25,8 @@ import {
   wasReleased,
   weekDays,
   zonedInputToIso,
+  CHANNEL_HEALTH_CHIP,
+  channelNeedsAction,
 } from './publication-state';
 
 describe('publicationChip', () => {
@@ -264,5 +266,26 @@ describe('remote changes of a published post', () => {
   it('counts characters the way the capability check does (NFC code points)', () => {
     expect(plainLength('e\u0301')).toBe(1);
     expect(plainLength('👍 ok')).toBe(4);
+  });
+});
+
+describe('channel health (RA-01): every value has a chip; a dead or unreachable grant needs a person', () => {
+  it('needs action by status or by health, never for a disconnected channel', () => {
+    for (const health of [
+      'unknown',
+      'ok',
+      'token_expiring',
+      'token_expired',
+      'revoked',
+      'unreachable',
+    ] as const)
+      expect(CHANNEL_HEALTH_CHIP[health].label).toBeTruthy();
+    expect(channelNeedsAction({ status: 'active', health: 'ok' })).toBe(false);
+    expect(channelNeedsAction({ status: 'active', health: 'token_expiring' })).toBe(false);
+    expect(channelNeedsAction({ status: 'active', health: 'token_expired' })).toBe(true);
+    expect(channelNeedsAction({ status: 'active', health: 'revoked' })).toBe(true);
+    expect(channelNeedsAction({ status: 'active', health: 'unreachable' })).toBe(true);
+    expect(channelNeedsAction({ status: 'reconnect_needed', health: 'ok' })).toBe(true);
+    expect(channelNeedsAction({ status: 'disabled', health: 'revoked' })).toBe(true); // by status
   });
 });

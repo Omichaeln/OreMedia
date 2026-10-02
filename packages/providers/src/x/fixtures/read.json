@@ -8,7 +8,9 @@
             "method": "GET",
             "host": "api.x.com",
             "path": "/2/tweets/1900000000000000001",
-            "query": { "tweet.fields": "public_metrics,non_public_metrics" }
+            "query": {
+              "tweet.fields": "public_metrics,non_public_metrics"
+            }
           },
           "response": {
             "status": 200,
@@ -23,7 +25,11 @@
                   "bookmark_count": 6,
                   "impression_count": 2100
                 },
-                "non_public_metrics": { "url_link_clicks": 17, "user_profile_clicks": 9, "engagements": 60 }
+                "non_public_metrics": {
+                  "url_link_clicks": 17,
+                  "user_profile_clicks": 9,
+                  "engagements": 60
+                }
               }
             }
           }
@@ -37,7 +43,9 @@
             "method": "GET",
             "host": "api.x.com",
             "path": "/2/tweets/1900000000000000001",
-            "query": { "tweet.fields": "public_metrics,non_public_metrics" }
+            "query": {
+              "tweet.fields": "public_metrics,non_public_metrics"
+            }
           },
           "response": {
             "status": 400,
@@ -52,7 +60,9 @@
             "method": "GET",
             "host": "api.x.com",
             "path": "/2/tweets/1900000000000000001",
-            "query": { "tweet.fields": "public_metrics" }
+            "query": {
+              "tweet.fields": "public_metrics"
+            }
           },
           "response": {
             "status": 200,
@@ -80,7 +90,9 @@
             "method": "GET",
             "host": "api.x.com",
             "path": "/2/users/u_42",
-            "query": { "user.fields": "public_metrics" }
+            "query": {
+              "user.fields": "public_metrics"
+            }
           },
           "response": {
             "status": 200,
@@ -108,7 +120,9 @@
             "method": "GET",
             "host": "api.x.com",
             "path": "/2/tweets/search/recent",
-            "query": { "query": "conversation_id:1900000000000000001" }
+            "query": {
+              "query": "conversation_id:1900000000000000001"
+            }
           },
           "response": {
             "status": 200,
@@ -119,23 +133,42 @@
                   "text": "@oremedia congrats",
                   "author_id": "u_7",
                   "created_at": "2026-09-24T01:00:00.000Z",
-                  "referenced_tweets": [{ "type": "replied_to", "id": "1900000000000000001" }]
+                  "referenced_tweets": [
+                    {
+                      "type": "replied_to",
+                      "id": "1900000000000000001"
+                    }
+                  ]
                 },
                 {
                   "id": "1900000000000000021",
                   "text": "thanks!",
                   "author_id": "u_42",
                   "created_at": "2026-09-24T01:05:00.000Z",
-                  "referenced_tweets": [{ "type": "replied_to", "id": "1900000000000000020" }]
+                  "referenced_tweets": [
+                    {
+                      "type": "replied_to",
+                      "id": "1900000000000000020"
+                    }
+                  ]
                 }
               ],
               "includes": {
                 "users": [
-                  { "id": "u_7", "username": "bea" },
-                  { "id": "u_42", "username": "oremedia" }
+                  {
+                    "id": "u_7",
+                    "username": "bea"
+                  },
+                  {
+                    "id": "u_42",
+                    "username": "oremedia"
+                  }
                 ]
               },
-              "meta": { "result_count": 2, "next_token": "nt_1" }
+              "meta": {
+                "result_count": 2,
+                "next_token": "nt_1"
+              }
             }
           }
         }
@@ -153,7 +186,14 @@
               "\"text\":\"Thank you Bea\""
             ]
           },
-          "response": { "status": 201, "json": { "data": { "id": "1900000000000000022" } } }
+          "response": {
+            "status": 201,
+            "json": {
+              "data": {
+                "id": "1900000000000000022"
+              }
+            }
+          }
         }
       ]
     },
@@ -176,6 +216,27 @@
               "data": {
                 "id": "1900000000000000023"
               }
+            }
+          }
+        }
+      ]
+    },
+    "comments_unauthorised": {
+      "description": "RA-01: a comment read refused for the token is raised with the adapter\u2019s classification (health token_expired).",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "api.x.com",
+            "path": "/2/tweets/search/recent"
+          },
+          "response": {
+            "status": 401,
+            "json": {
+              "title": "Unauthorized",
+              "type": "about:blank",
+              "status": 401,
+              "detail": "Unauthorized"
             }
           }
         }

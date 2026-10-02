@@ -1,8 +1,15 @@
 /**
- * Certification harness (docs/runbooks/certify-a-channel.md): drives an adapter against the real platform from a
+ * Certification harness (docs/runbooks/certify-a-provider.md): drives an adapter against the real platform from a
  * person's machine, with test accounts, through the same ProviderIO (SSRF guard, timeouts, rate limiter) production
- * uses. It reaches uncertified adapters through `providerRegistry.forCertification`, the registry's internal-tooling
- * path, and never touches the database, the API or any tenant: what the running app allows is unchanged.
+ * uses. It reaches uncertified adapters through the registries' `forCertification`, their internal-tooling path,
+ * and never touches the database, the API or any tenant: what the running app allows is unchanged.
+ *
+ * RA-01: one harness for the three provider kinds. The channel commands live here, the source commands in
+ * source.ts and the CMS commands in cms.ts; all share the session file, the recording IO and the evidence record
+ * below. Every command records its step's evidence (passed or failed, with what was seen and the recording file)
+ * in `.certify/<provider>/session.json`; `attest` writes `.certify/<provider>/certification.json` only when every
+ * step the kind requires has passed, and refuses otherwise, naming the missing steps. Setting `certifiedAt` in the
+ * adapter's capability stays a person's edit, made from that record.
  *
  * Every request and response is recorded, redacted, under `.certify/<provider>/recordings/` so the runbook's
  * fixtures can be captured from real traffic. Credentials of the test account live in `.certify/<provider>/session.json`
@@ -16,18 +23,54 @@ import type {
   ClientConfig,
   DecryptedCredentials,
   PendingState,
+  ProviderKind,
   PublishOutcome,
   RawMetricPoint,
 } from '@oremedia/contracts/providers';
 import {
   MemoryProviderRateLimiter,
+  cmsRegistry,
   createProviderIO,
   providerRegistry,
   redactBody,
+  sourceRegistry,
   textFingerprint,
+  type CmsAdapter,
+  type CmsSite,
   type ProviderAdapter,
   type ProviderIO,
+  type SourceAdapter,
+  type SourceGrant,
+  type SourceTarget,
 } from '@oremedia/providers';
+
+export type CertifyKind = ProviderKind;
+
+/**
+ * The evidence procedure per kind: connect, read, write where applicable with its read-back, revoke. A provider is
+ * attested only when every step of its kind has passed (status shows which are missing).
+ */
+export const REQUIRED_STEPS: Readonly<Record<CertifyKind, readonly string[]>> = {
+  channel: ['connect', 'publish', 'find', 'refresh', 'metrics', 'comments', 'revoke'],
+  source: ['connect', 'targets', 'read', 'refresh', 'revoke'],
+  cms: ['connect', 'write', 'update', 'unpublish', 'delete', 'revoke'],
+};
+
+/** What one step's run established: the time, whether it passed, what was seen and the recording it came from. */
+export interface EvidenceEntry {
+  at: string;
+  ok: boolean;
+  detail: string;
+  recordings?: string;
+}
+
+/** What `attest` writes: the record a person sets `certifiedAt` from (never written by the harness into code). */
+export interface CertificationRecord {
+  key: string;
+  kind: CertifyKind;
+  certifiedAt: string;
+  steps: Record<string, EvidenceEntry>;
+}
 
 /** What a certification session keeps between commands (one file per provider). */
 export interface CertifySession {
@@ -46,16 +89,106 @@ export interface CertifySession {
     pending?: PendingState;
     remotePostId?: string;
   };
+  /** A source's grant and the target chosen among those it can read (source.ts). */
+  source?: { grant: SourceGrant; target?: SourceTarget };
+  /** A CMS site with its integration identity's secret, and the article the write steps follow (cms.ts). */
+  cms?: {
+    site: CmsSite;
+    credentials: DecryptedCredentials;
+    article?: { remoteId: string; contentHash: string; modifiedAt: string | null; html: string };
+  };
+  /** When `revoke` was asked of a platform without a remote revoke: the next refused refresh or verify proves it. */
+  revokeRequestedAt?: string;
+  /** The evidence per step (REQUIRED_STEPS). */
+  evidence?: Record<string, EvidenceEntry>;
 }
 
-export interface CertifyDeps {
-  adapter: ProviderAdapter;
+/** What every kind's commands need: the session, the recording IO, the clock and the output. */
+export interface CertifyBaseDeps {
+  kind: CertifyKind;
+  key: string;
   io: ProviderIO;
   client: () => ClientConfig;
   load: () => CertifySession;
   save: (s: CertifySession) => void;
   now: () => Date;
   out: (line: string) => void;
+  /** The file this command's exchanges are recorded in (buildDeps sets it; tests may leave it out). */
+  recordingsFile?: string;
+}
+export interface CertifyDeps extends CertifyBaseDeps {
+  kind: 'channel';
+  adapter: ProviderAdapter;
+}
+export interface SourceDeps extends CertifyBaseDeps {
+  kind: 'source';
+  adapter: SourceAdapter;
+}
+export interface CmsDeps extends CertifyBaseDeps {
+  kind: 'cms';
+  adapter: CmsAdapter;
+}
+
+/** Records a step's evidence in the session and says so; a failed step replaces an earlier pass (the latest run counts). */
+export function recordEvidence(deps: CertifyBaseDeps, step: string, ok: boolean, detail: string): void {
+  const session = deps.load();
+  const entry: EvidenceEntry = {
+    at: deps.now().toISOString(),
+    ok,
+    detail,
+    ...(deps.recordingsFile ? { recordings: deps.recordingsFile } : {}),
+  };
+  deps.save({ ...session, evidence: { ...(session.evidence ?? {}), [step]: entry } });
+  deps.out(`Evidence: ${step} ${ok ? 'passed' : 'FAILED'} (${detail})`);
+}
+
+/** The steps the kind requires that have not passed yet. */
+export function missingSteps(kind: CertifyKind, session: CertifySession): string[] {
+  return REQUIRED_STEPS[kind].filter((step) => !session.evidence?.[step]?.ok);
+}
+
+/** `status`: every required step with what its last run established. */
+export function status(deps: CertifyBaseDeps): void {
+  const session = deps.load();
+  const lines = REQUIRED_STEPS[deps.kind].map((step) => {
+    const e = session.evidence?.[step];
+    return `${e ? (e.ok ? 'passed ' : 'FAILED ') : 'missing'}  ${step}${e ? `  ${e.at}  ${e.detail}` : ''}`;
+  });
+  const missing = missingSteps(deps.kind, session);
+  deps.out(
+    `Certification evidence for ${deps.key} (${deps.kind})\n${lines.join('\n')}\n${
+      missing.length ? `Not attestable: ${missing.join(', ')} still to pass.` : 'Every required step passed.'
+    }`,
+  );
+}
+
+/**
+ * `attest`: the certification record, written only when every required step passed; otherwise refused with the
+ * steps still missing. The record is what a person copies `certifiedAt` from into the adapter's capability (with
+ * the decision log entry); the harness never edits code.
+ */
+export function attest(
+  deps: CertifyBaseDeps,
+  write: (record: CertificationRecord) => void,
+): CertificationRecord {
+  const session = deps.load();
+  const missing = missingSteps(deps.kind, session);
+  if (missing.length)
+    throw new Error(
+      `${deps.key} cannot be attested: ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} not passed (run status)`,
+    );
+  const steps = Object.fromEntries(REQUIRED_STEPS[deps.kind].map((s) => [s, session.evidence![s]!]));
+  const record: CertificationRecord = {
+    key: deps.key,
+    kind: deps.kind,
+    certifiedAt: deps.now().toISOString(),
+    steps,
+  };
+  write(record);
+  deps.out(
+    `Attested ${deps.key} (${deps.kind}) at ${record.certifiedAt}: set certifiedAt to this value in the adapter's capability and record the run in docs/decisions/DECISIONS.md.`,
+  );
+  return record;
 }
 
 const SENSITIVE_QUERY = /([?&](?:access_token|client_secret|code|refresh_token|fb_exchange_token)=)[^&#]+/gi;
@@ -120,15 +253,22 @@ export async function exchange(deps: CertifyDeps, code: string, state?: string):
 function reportGrant(deps: CertifyDeps, grant: AccountGrant): void {
   const required = deps.adapter.capability.requiredScopes;
   const granted = new Set(grant.grantedScopes.map((s) => s.toLowerCase()));
+  const missing = required.filter((s) => !granted.has(s.toLowerCase()));
   print(deps, 'Connected account', {
     remoteAccountId: grant.remoteAccountId,
     displayName: grant.displayName,
     grantedScopes: grant.grantedScopes,
-    missingScopes: required.filter((s) => !granted.has(s.toLowerCase())),
+    missingScopes: missing,
     tokenExpiresAt: grant.tokenExpiresAt ?? null,
     credentials: describeCredentials(grant.credentials),
     alternatives: grant.alternatives ?? [],
   });
+  recordEvidence(
+    deps,
+    'connect',
+    missing.length === 0,
+    missing.length ? `missing scopes ${missing.join(',')}` : `account ${grant.remoteAccountId}`,
+  );
 }
 
 /** Runbook step 3: re-targets the grant at another page or organisation the same login can address. */
@@ -146,7 +286,10 @@ export async function selectAccount(deps: CertifyDeps, remoteAccountId: string):
   reportGrant(deps, next);
 }
 
-/** Runbook step 7: refresh; after revoking the app on the platform, the same command must report reconnect_required. */
+/**
+ * Runbook step 7: refresh; after `revoke` (or revoking the app on the platform by hand), the same command must
+ * report reconnect_required, which is the proof of the revoke step.
+ */
 export async function refresh(deps: CertifyDeps): Promise<void> {
   const session = deps.load();
   const grant = requireGrant(session);
@@ -164,7 +307,40 @@ export async function refresh(deps: CertifyDeps): Promise<void> {
       credentials: describeCredentials(result.credentials),
       tokenExpiresAt: result.tokenExpiresAt ?? null,
     });
-  } else print(deps, 'Refresh refused', result);
+    recordEvidence(deps, 'refresh', true, `token expires ${result.tokenExpiresAt ?? 'never'}`);
+    return;
+  }
+  print(deps, 'Refresh refused', result);
+  if (session.revokeRequestedAt && result.reason === 'reconnect_required')
+    recordEvidence(deps, 'revoke', true, `refresh refused with reconnect_required after revoke`);
+  else recordEvidence(deps, 'refresh', false, `refused: ${result.reason}`);
+}
+
+/**
+ * RA-01: asks the platform to revoke the test account's grant through the adapter's `revokeAccess` (what a
+ * disconnect does in production). An adapter without one is revoked by hand at the platform; either way the next
+ * `refresh` must report reconnect_required, which completes the step.
+ */
+export async function revoke(deps: CertifyDeps): Promise<void> {
+  const session = deps.load();
+  const grant = requireGrant(session);
+  deps.save({ ...session, revokeRequestedAt: deps.now().toISOString() });
+  if (!deps.adapter.revokeAccess) {
+    deps.out(
+      `${deps.adapter.key} has no remote revoke: remove the app from the test account at the platform, then run refresh (it must report reconnect_required).`,
+    );
+    return;
+  }
+  const result = await deps.adapter.revokeAccess(grant.credentials, deps.client(), deps.io);
+  print(deps, 'Revoke outcome', result);
+  if (result.outcome === 'revoked') deps.out('Now run refresh: it must report reconnect_required.');
+  else
+    recordEvidence(
+      deps,
+      'revoke',
+      false,
+      result.outcome === 'failed' ? `failed: ${result.reason}` : 'not supported by the adapter',
+    );
 }
 
 export interface PublishInput {
@@ -224,6 +400,9 @@ export async function publish(deps: CertifyDeps, input: PublishInput): Promise<v
     },
   });
   print(deps, 'Publish outcome', outcome);
+  if (outcome.outcome === 'accepted') recordEvidence(deps, 'publish', true, `post ${outcome.remotePostId}`);
+  else if (outcome.outcome !== 'pending')
+    recordEvidence(deps, 'publish', false, `${outcome.outcome}: ${outcome.code}`);
 }
 
 /** Runbook step 4: checkStatus / finalize on the last pending publish; after finalize, status must be completed. */
@@ -238,6 +417,9 @@ export async function pendingStep(deps: CertifyDeps, step: 'status' | 'finalize'
   if (result.status === 'completed')
     deps.save({ ...session, lastPublish: { ...last, remotePostId: result.remotePostId } });
   print(deps, step === 'status' ? 'Status' : 'Finalize', result);
+  if (result.status === 'completed') recordEvidence(deps, 'publish', true, `post ${result.remotePostId}`);
+  else if (result.status === 'failed')
+    recordEvidence(deps, 'publish', false, `${result.code}: ${result.message}`);
 }
 
 /**
@@ -260,6 +442,12 @@ export async function find(deps: CertifyDeps): Promise<void> {
     deps.io,
   );
   print(deps, 'Reconciliation', result);
+  recordEvidence(
+    deps,
+    'find',
+    result.status === 'found',
+    result.status === 'found' ? `found by ${result.matchedBy}` : result.status,
+  );
 }
 
 /** Runbook step 9: post metrics (default: the last published post) or account metrics over the last `hours`. */
@@ -291,7 +479,10 @@ export async function metrics(
     grant.credentials,
     deps.io,
   );
-  print(deps, 'Post metrics', reportMetrics(deps.adapter.capability.analytics.post, points));
+  const report = reportMetrics(deps.adapter.capability.analytics.post, points);
+  print(deps, 'Post metrics', report);
+  const returned = points.filter((p) => p.completeness !== 'unavailable').length;
+  recordEvidence(deps, 'metrics', returned > 0, `${returned} of ${points.length} points returned`);
 }
 
 /** Every metric the capability declares is either returned or listed as missing: never a silent zero. */
@@ -330,6 +521,7 @@ export async function comments(
     deps.io,
   );
   print(deps, 'Comments', page);
+  recordEvidence(deps, 'comments', true, `${page.items.length} comments read`);
 }
 
 // ---- wiring: session files, client credentials, recording IO ----
@@ -339,6 +531,7 @@ export const certifyRoot = (root: string) => path.join(root, '.certify');
 export function fileStore(root: string, providerKey: string) {
   const dir = path.join(certifyRoot(root), providerKey);
   const file = path.join(dir, 'session.json');
+  const certification = path.join(dir, 'certification.json');
   return {
     dir,
     load: (): CertifySession =>
@@ -349,6 +542,12 @@ export function fileStore(root: string, providerKey: string) {
       chmodSync(file, 0o600);
     },
     forget: (): void => rmSync(file, { force: true }),
+    /** The attested record (no credentials in it): kept beside the session, readable by its owner only. */
+    writeCertification: (record: CertificationRecord): void => {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(certification, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    },
+    certificationFile: certification,
   };
 }
 
@@ -400,15 +599,38 @@ export function recordingIO(inner: ProviderIO, record: (r: Recording) => void, n
   };
 }
 
+/** The registry a key belongs to, with its adapter: a channel, a source or a CMS (every kind certifies the same way). */
+export function resolveAdapter(
+  key: string,
+):
+  | { kind: 'channel'; adapter: ProviderAdapter }
+  | { kind: 'source'; adapter: SourceAdapter }
+  | { kind: 'cms'; adapter: CmsAdapter } {
+  const channel = providerRegistry.forCertification(key);
+  if (channel) return { kind: 'channel', adapter: channel };
+  const source = sourceRegistry.forCertification(key);
+  if (source) return { kind: 'source', adapter: source };
+  const cms = cmsRegistry.forCertification(key);
+  if (cms) return { kind: 'cms', adapter: cms };
+  throw new Error(`unknown provider ${key}`);
+}
+
+interface BuiltExtras {
+  forget: () => void;
+  recordingsFile: string;
+  writeCertification: (record: CertificationRecord) => void;
+  certificationFile: string;
+}
+export type BuiltDeps = (CertifyDeps & BuiltExtras) | (SourceDeps & BuiltExtras) | (CmsDeps & BuiltExtras);
+
 export function buildDeps(opts: {
   root: string;
   providerKey: string;
   command: string;
   out: (line: string) => void;
   env?: NodeJS.ProcessEnv;
-}): CertifyDeps & { forget: () => void; recordingsFile: string } {
-  const adapter = providerRegistry.forCertification(opts.providerKey);
-  if (!adapter) throw new Error(`unknown provider ${opts.providerKey}`);
+}): BuiltDeps {
+  const resolved = resolveAdapter(opts.providerKey);
   const store = fileStore(opts.root, opts.providerKey);
   const now = () => new Date();
   const recordingsDir = path.join(store.dir, 'recordings');
@@ -422,7 +644,11 @@ export function buildDeps(opts: {
       providerKey: opts.providerKey,
       tenantId: 'certification',
       timeoutMs: 30_000,
-      limiter: new MemoryProviderRateLimiter((key) => providerRegistry.capability(key), 30_000),
+      limiter: new MemoryProviderRateLimiter(
+        (key) =>
+          providerRegistry.capability(key) ?? sourceRegistry.capability(key) ?? cmsRegistry.capability(key),
+        30_000,
+      ),
     }),
     (r) => {
       recordings.push(r);
@@ -432,7 +658,8 @@ export function buildDeps(opts: {
     now,
   );
   return {
-    adapter,
+    ...resolved,
+    key: opts.providerKey,
     io,
     client: () => clientFromEnv(opts.providerKey, opts.env),
     load: store.load,
@@ -441,5 +668,7 @@ export function buildDeps(opts: {
     now,
     out: opts.out,
     recordingsFile,
-  };
+    writeCertification: store.writeCertification,
+    certificationFile: store.certificationFile,
+  } as BuiltDeps;
 }

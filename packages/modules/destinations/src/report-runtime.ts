@@ -26,7 +26,7 @@ import { requireTenant, runAsPlatform, withTransaction, type Tx } from '@oremedi
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
-import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
+import { providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
 import {
   ProviderTransportError,
@@ -44,7 +44,7 @@ import {
   DestinationReportTargetRepository,
   SourceUsePolicyRepository,
 } from './repositories';
-import { sourceUseDecision } from './service';
+import { openDestinationCredential, sourceUseDecision } from './service';
 import { registry, sourceAdapterFor, sourceIO } from './sources';
 
 const destinationsRepo = new BrandDestinationRepository();
@@ -247,6 +247,7 @@ export function createDestinationReportRuntime(
   async function reportingZone(
     row: {
       id: string;
+      status: 'active' | 'disconnected';
       externalId: string;
       credentialRefId: string;
       reportingTimeZone: string | null;
@@ -267,8 +268,9 @@ export function createDestinationReportRuntime(
       return remembered;
     let described: SourceTargetMetadataV1;
     try {
-      described = await credentialBroker.withCredentialRef(
-        { tenantId, credentialRefId: row.credentialRefId, aad: aadFor(tenantId, row.id) },
+      described = await openDestinationCredential(
+        tenantId,
+        { ...row, credentialRefId: row.credentialRefId },
         (creds) =>
           describe(creds, providerClientFor(adapter.key), sourceIO(adapter.key, tenantId), row.externalId),
       );
@@ -431,28 +433,25 @@ export function createDestinationReportRuntime(
         for (const f of page.quality ?? []) flags.add(f);
       };
       const read = (credentialRefId: string) =>
-        credentialBroker.withCredentialRef(
-          { tenantId, credentialRefId, aad: aadFor(tenantId, row.id) },
-          async (creds) => {
-            const rows: SourceReportRow[] = [];
-            let pageToken: string | undefined;
-            for (let page = 0; page < MAX_REPORT_PAGES; page++) {
-              hooks?.heartbeat(`report:${destinationId}:${reportKey}:${page}`);
-              const result = await adapter.fetchReport(creds, client, sourceIO(adapter.key, tenantId), {
-                externalId: row.externalId,
-                report: reportKey,
-                dateRange: { start, end },
-                ...(pageToken ? { pageToken } : {}),
-              });
-              rows.push(...result.rows);
-              answered(result);
-              if (!result.nextPageToken) return rows;
-              pageToken = result.nextPageToken;
-            }
-            log.warn({ destinationId, reportKey, pages: MAX_REPORT_PAGES }, 'report page cap reached');
-            throw new ReportPageCapError();
-          },
-        );
+        openDestinationCredential(tenantId, { ...row, credentialRefId }, async (creds) => {
+          const rows: SourceReportRow[] = [];
+          let pageToken: string | undefined;
+          for (let page = 0; page < MAX_REPORT_PAGES; page++) {
+            hooks?.heartbeat(`report:${destinationId}:${reportKey}:${page}`);
+            const result = await adapter.fetchReport(creds, client, sourceIO(adapter.key, tenantId), {
+              externalId: row.externalId,
+              report: reportKey,
+              dateRange: { start, end },
+              ...(pageToken ? { pageToken } : {}),
+            });
+            rows.push(...result.rows);
+            answered(result);
+            if (!result.nextPageToken) return rows;
+            pageToken = result.nextPageToken;
+          }
+          log.warn({ destinationId, reportKey, pages: MAX_REPORT_PAGES }, 'report page cap reached');
+          throw new ReportPageCapError();
+        });
       let fetched: SourceReportRow[];
       try {
         fetched = await read(row.credentialRefId);

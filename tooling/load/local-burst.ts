@@ -44,6 +44,7 @@ import {
   configureCredentialBroker,
   configurePublishingProviders,
   createPublishingRuntime,
+  configureChannelActivation,
   registerProviderClients,
   registerWorkflowProbe,
   connectedChannel,
@@ -121,6 +122,7 @@ export function configureBurstWorld(): FixtureProviderAdapter {
   configurePublishingProviders({ registry, insecureAllowLoopback: true });
   configureCredentialBroker({ kms: new LocalKms('local-burst-master-secret-0123456789abcdef') });
   registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+  configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
   registerWorkflowProbe(null);
   return fixture;
 }

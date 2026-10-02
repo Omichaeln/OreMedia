@@ -7,6 +7,7 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import { outcomeFromClass, redactBody, retryAfterMs, truncateForTemporal } from './base';
@@ -452,8 +453,10 @@ export class ProviderAuthError extends Error {
 }
 
 /**
- * Raised by a source adapter's fetchReport when the platform answered a read with a failure (R2-1 part B); the
- * classification is the adapter's own reading of the status, so the ingestion runtime never maps statuses itself.
+ * Raised by an adapter's read surface when the platform answered a read with a failure: a source adapter's
+ * fetchReport (R2-1 part B) for every refusal, a channel adapter's fetchComments for every refusal and its metric
+ * reads when the grant itself was refused (RA-01 channel health). The classification is the adapter's own reading
+ * of the status, so the ingestion runtimes never map statuses themselves.
  */
 export class SourceReadError extends Error {
   readonly providerKey: string;
@@ -481,6 +484,31 @@ export function sourceReadError(key: string, classify: Classifier, res: Provider
       : classification,
     summarise(res),
   );
+}
+
+/**
+ * RA-01: a metric read the platform refused for the token itself (a 401: expired, or revoked for good) is raised
+ * with its classification so the collection runtime can record the channel's health; any other failure, a 403 for
+ * one statistic's permission included, stays the caller's `unavailable` (never zero, never a throw).
+ */
+export function assertReadAccess(key: string, classify: Classifier, res: ProviderResponse): void {
+  if (res.status !== 401) return;
+  const cls = classify({ status: res.status, body: res.body, phase: 'after_send' });
+  if (cls.kind === 'refresh_token' || cls.kind === 'reconnect_required')
+    throw new SourceReadError(key, res.status, cls, summarise(res));
+}
+
+/** RA-01 revokeAccess: a platform answer or a transport failure as the outcome the disconnect records; never a throw. */
+export function revokeFromResponse(
+  res: ProviderResponse,
+  ok: (res: ProviderResponse) => boolean,
+): RevokeResult {
+  // The reason is the status alone: a response body could carry a token or a URL with secrets.
+  return ok(res) ? { outcome: 'revoked' } : { outcome: 'failed', reason: `http_${res.status}` };
+}
+export function revokeFromError(err: unknown): RevokeResult {
+  if (err instanceof ProviderTransportError) return { outcome: 'failed', reason: `transport_${err.phase}` };
+  throw err;
 }
 
 /** Encodes a multipart/form-data body as bytes (undici's fetch does not accept Node's global FormData). */

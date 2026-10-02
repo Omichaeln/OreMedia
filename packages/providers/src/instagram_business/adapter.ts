@@ -13,6 +13,7 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RefreshResult,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type { CommentRequest, ProviderAdapter, PublishRequest } from '../contract';
@@ -23,6 +24,8 @@ import {
   ProviderAuthError,
   altTextIssues,
   arr,
+  assertReadAccess,
+  sourceReadError,
   checkFailure,
   expiresAtFrom,
   finalizeFailure,
@@ -53,6 +56,7 @@ import {
   listPages,
   metaAuthorizationUrl,
   metaError,
+  metaRevokeLogin,
   metaExchangeCode,
   metaExtendToken,
   metaRefreshFailure,
@@ -173,6 +177,15 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
       if (err instanceof ProviderTransportError) return { ok: false, reason: 'transient' };
       throw err;
     }
+  }
+
+  /** RA-01: the Instagram grant is the Facebook user's login (its long-lived token); revoking it ends the access. */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    return metaRevokeLogin(io, credentials.accessToken);
   }
 
   validateVariant(variant: ChannelVariantInput): ValidationResult {
@@ -380,7 +393,10 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
     const res = await graphGet(io, `/${req.remotePostId}/insights`, creds.accessToken, {
       metric: names.join(','),
     });
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const byName = new Map(
       arr(get(res.json, 'data')).map((d) => [
         str(get(d, 'name')) ?? '',
@@ -414,6 +430,8 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
         until,
       }),
     ]);
+    for (const res of [series, total])
+      if (res.status !== 200) assertReadAccess(this.key, (i) => this.classifyError(i), res);
     return this.capability.analytics.account.map((n) => {
       const res = timeSeries.includes(n) ? series : total;
       if (res.status !== 200) return metricPoint(n, undefined, req.window);
@@ -441,7 +459,7 @@ export class InstagramBusinessAdapter implements ProviderAdapter {
       limit: '50',
       ...(req.cursor ? { after: req.cursor } : {}),
     });
-    if (res.status !== 200) throw new MetaGraphError('comments', res);
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
     const toItem = (c: unknown, parent?: string): CommentPage['items'][number] => ({
       remoteCommentId: str(get(c, 'id')) ?? '',
       authorHandle: str(get(c, 'username')) ?? '',

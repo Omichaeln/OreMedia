@@ -37,8 +37,10 @@ import type { ArticleDocumentV1 } from '@oremedia/contracts/content';
 import { renderArticleHtml } from '@oremedia/contracts/article';
 import { destinationArticles, effectivePublishMode } from './articles';
 import { configureDestinationCms } from './cms';
-import { configureSourceAvailability } from './hooks';
-import { createDestinationRuntime } from './runtime';
+import { providerService } from './providers';
+import { openDestinationCredential } from './service';
+import { configureSourceActivation, configureSourceAvailability } from './hooks';
+import { createDestinationRuntime, sweepDisconnectedDestinationCredentials } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
 import { FixtureCmsAdapter, fixtureArticleHash } from './testing/fixture-cms';
@@ -633,6 +635,42 @@ describe('destinations module against MySQL 8', () => {
       ];
     });
 
+    it('RA-01: providers.list names every registered provider of the three kinds with its activation state and the reason; owners and admins only', async () => {
+      configureSourceActivation((kind) =>
+        kind === 'ga4_property'
+          ? {
+              disabled: false,
+              credentialRefs: [{ name: 'PROVIDER_GA4_PROPERTY_CLIENT_ID_REF', present: true }],
+            }
+          : kind === 'cms_site'
+            ? { disabled: true, credentialRefs: [] }
+            : {
+                disabled: false,
+                credentialRefs: [{ name: 'PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF', present: false }],
+              },
+      );
+      const { items } = await inTenant(tenantA, () => providerService.list(owner()));
+      const byKey = Object.fromEntries(items.map((p) => [`${p.kind}:${p.key}`, p]));
+      expect(byKey['source:ga4_property']).toMatchObject({
+        vendor: 'Fixture',
+        state: 'ready',
+        reason: null,
+        disabled: false,
+      });
+      expect(byKey['source:search_console_site']).toMatchObject({
+        state: 'uncertified',
+        reason: 'provider_not_certified:search_console_site',
+      });
+      expect(byKey['cms:cms_site']).toMatchObject({ vendor: 'WordPress', state: 'uncertified' });
+      expect(items.some((p) => p.kind === 'channel')).toBe(true); // the channel registry's providers are listed too
+      // Facts are names and booleans only: never a credential value.
+      expect(JSON.stringify(items)).not.toMatch(/fixture-secret|fixture-client/);
+      configureSourceActivation(null);
+      await expect(
+        inTenant(tenantA, () => providerService.list(member(tenantA, 'publisher'))),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+    });
+
     it('sources.list names each registered kind with its certification and whether it is enabled here', async () => {
       configureSourceAvailability((kind) => kind === 'ga4_property');
       const { items } = await destinationService.sources.list();
@@ -988,21 +1026,94 @@ describe('destinations module against MySQL 8', () => {
       fixture.refreshBehaviour = { kind: 'refresh' };
     });
 
-    it('disconnect destroys the credential; the broker refuses it afterwards and the refresh skips it', async () => {
+    it('disconnect leaves the credential to the remote revoke, unusable at once; the worker revokes it at the vendor and destroys it; the refresh skips it', async () => {
       const row = await destinationRow(connectedId);
-      await run(tenantA, (tx) =>
+      const gone = await run(tenantA, (tx) =>
         destinationService.disconnect(
           owner(),
           { brandId: brandA, destinationId: connectedId, expectedVersion: row.version },
           tx,
         ),
       );
+      expect(gone.remoteRevoke).toBe('requested'); // the fixture source can revoke at the vendor
       const after = await destinationRow(connectedId);
       expect(after).toMatchObject({ status: 'disconnected', tokenExpiresAt: null });
+      expect((await credentialRow(row.credentialRefId!)).destroyedAt).toBeNull();
+      // RA-01: unusable from the disconnect on, for every opener but the revoke.
+      await expect(
+        inTenant(tenantA, () =>
+          openDestinationCredential(
+            tenantA,
+            { ...after, credentialRefId: row.credentialRefId! },
+            async () => 'x',
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'credential_owner_disconnected' });
+      expect((await auditsOf('destination.disconnect')).at(-1)?.metadata).toMatchObject({
+        remoteRevoke: 'requested',
+      });
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().revoke.revokeDestinationAccess({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_revoke',
+          }),
+        ),
+      ).toEqual({ outcome: 'revoked' });
+      expect(fixture.revokeCalls.at(-1)?.refreshToken).toBe('rt_fixture_src');
+      expect((await auditsOf('destination.remote_revoke')).at(-1)?.metadata).toMatchObject({
+        remoteRevoke: 'revoked',
+        kind: 'ga4_property',
+      });
+      // A repeat has nothing left to do.
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().revoke.revokeDestinationAccess({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_revoke',
+          }),
+        ),
+      ).toEqual({ outcome: 'already_destroyed' });
       const credential = await credentialRow(row.credentialRefId!);
       expect(credential.destroyedAt).toBeInstanceOf(Date);
       expect(credential.rotatedAt).toBeNull();
       expect(credential.wrappedDataKey).toBe('');
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull(); // nothing left to point at
+      // RA-01, the floor under the revoke: a credential still intact an hour after the disconnect is shredded by
+      // the publication sweeper's floor (the application role; registered by worker-core), audited, and the row
+      // stops pointing at it; within the hour it is left to the workflow.
+      const leftover = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_left',
+            refreshToken: 'rt_left',
+          }),
+          tx,
+        ),
+      );
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: leftover, updatedAt: new Date(Date.now() - 30 * 60_000) })
+        .where(eq(brandDestinations.id, connectedId));
+      const floor = () => new Date(Date.now() - 60 * 60_000);
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
+      expect((await credentialRow(leftover)).destroyedAt).toBeNull();
+      await tdb.db
+        .update(brandDestinations)
+        .set({ updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(eq(brandDestinations.id, connectedId));
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(1);
+      expect((await credentialRow(leftover)).destroyedAt).toBeInstanceOf(Date);
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull();
+      expect((await auditsOf('destination.credential_shredded')).at(-1)?.metadata).toMatchObject({
+        reason: 'disconnect_shred_floor',
+        kind: 'ga4_property',
+      });
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
       await expect(
         inTenant(tenantA, () =>
           credentialBroker.withCredentialRef(
@@ -1027,6 +1138,70 @@ describe('destinations module against MySQL 8', () => {
         withinHours: 24,
       });
       expect(due.some((d) => d.destinationId === connectedId)).toBe(false);
+    });
+
+    it('RA-01: a reconnect between the revoke’s read and its destroy keeps the new credential (status re-checked under the lock)', async () => {
+      // The row is disconnected with a credential the revoke has not reached yet (as a worker catching up).
+      const stale = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_old',
+            refreshToken: 'rt_old',
+          }),
+          tx,
+        ),
+      );
+      const fresh = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_new',
+            refreshToken: 'rt_new',
+          }),
+          tx,
+        ),
+      );
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: stale, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
+      const revokeAudits = (await auditsOf('destination.remote_revoke')).length;
+      // The vendor call takes long enough for a person to reconnect the destination with a new grant.
+      const behaviour = fixture.revokeBehaviour;
+      fixture.revokeBehaviour = null;
+      const revokeAccess = fixture.revokeAccess.bind(fixture);
+      fixture.revokeAccess = async (creds) => {
+        await tdb.db
+          .update(brandDestinations)
+          .set({ credentialRefId: fresh, status: 'active' })
+          .where(eq(brandDestinations.id, connectedId));
+        return revokeAccess(creds);
+      };
+      try {
+        expect(
+          await asPlatformJob(tenantA, () =>
+            createDestinationRuntime().revoke.revokeDestinationAccess({
+              tenantId: tenantA,
+              destinationId: connectedId,
+              actor: REFRESH_ACTOR,
+              correlationId: 'corr_revoke_race',
+            }),
+          ),
+        ).toEqual({ outcome: 'already_destroyed' });
+      } finally {
+        delete (fixture as { revokeAccess?: unknown }).revokeAccess;
+        fixture.revokeBehaviour = behaviour;
+      }
+      expect(fixture.revokeCalls.at(-1)?.refreshToken).toBe('rt_old');
+      const after = await destinationRow(connectedId);
+      expect(after).toMatchObject({ status: 'active', credentialRefId: fresh });
+      expect((await credentialRow(fresh)).destroyedAt).toBeNull();
+      expect((await credentialRow(stale)).destroyedAt).toBeNull(); // nothing of the row touched either
+      expect((await auditsOf('destination.remote_revoke')).length).toBe(revokeAudits); // nothing recorded either
+      // Put back as the later tests expect it: disconnected, nothing to point at.
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: null, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
     });
   });
   describe('website articles (ledger R2-3, D-16): a secret connect, its verification and the article publisher', () => {

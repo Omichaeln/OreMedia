@@ -73,5 +73,6 @@ export const facebookPageCapability: ProviderCapabilityV1 = {
     },
     additionalProperties: false,
   },
+  vendor: 'Meta',
   certifiedAt: null,
 };

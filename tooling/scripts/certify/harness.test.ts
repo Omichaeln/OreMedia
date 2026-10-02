@@ -5,15 +5,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderAdapter, ProviderIO } from '@oremedia/providers';
 import { facebookPageCapability } from '@oremedia/providers';
 import {
+  REQUIRED_STEPS,
+  attest,
   authUrl,
   exchange,
   fileStore,
   find,
   metrics,
+  missingSteps,
   pendingStep,
   publish,
   recordingIO,
   redactUrl,
+  refresh,
+  revoke,
+  status,
+  type CertificationRecord,
   type CertifyDeps,
   type CertifySession,
   type Recording,
@@ -41,7 +48,12 @@ function fakeAdapter(calls: string[]): ProviderAdapter {
       };
     },
     async refresh() {
+      calls.push('refresh');
       return { ok: false, reason: 'reconnect_required' };
+    },
+    async revokeAccess() {
+      calls.push('revokeAccess');
+      return { outcome: 'revoked' };
     },
     validateVariant: (v) =>
       v.text.length > 10 ? { ok: false, issues: [{ issue: 'too_long' }] } : { ok: true, issues: [] },
@@ -88,6 +100,8 @@ function harness() {
   const lines: string[] = [];
   let session: CertifySession = { providerKey: 'facebook_page' };
   const deps: CertifyDeps = {
+    kind: 'channel',
+    key: 'facebook_page',
     adapter: fakeAdapter(calls),
     io: {} as ProviderIO,
     client: () => ({ clientId: 'app', clientSecret: 'secret' }),
@@ -142,9 +156,69 @@ describe('certification harness commands', () => {
       'metrics:post_9',
     ]);
     // Declared metrics the platform did not return are listed, never reported as zero.
-    const last = h.lines.at(-1)!;
+    const last = h.lines.at(-2)!; // the evidence line follows the report
     expect(last).toContain('"notReturned"');
     expect(last).toContain('"unavailable": []');
+  });
+
+  it('every command records its step as evidence; attest refuses until every required step passed and never touches code', async () => {
+    const h = harness();
+    expect(missingSteps('channel', h.session())).toEqual([...REQUIRED_STEPS.channel]);
+    expect(() => attest(h.deps, () => undefined)).toThrow(/cannot be attested: connect, publish/);
+    await authUrl(h.deps, 'https://app.test/cb');
+    await exchange(h.deps, 'c', h.session().auth!.state);
+    // The fake grant misses read_insights: the connect step is recorded as failed, not skipped.
+    expect(h.session().evidence?.['connect']).toMatchObject({
+      ok: false,
+      detail: expect.stringMatching(/missing scopes/),
+    });
+    await publish(h.deps, { text: 'Hello', media: [] });
+    expect(h.session().evidence?.['publish']).toBeUndefined(); // pending: not proven yet
+    await pendingStep(h.deps, 'finalize');
+    expect(h.session().evidence?.['publish']).toMatchObject({ ok: true, detail: 'post post_9' });
+    await find(h.deps);
+    await metrics(h.deps, 'post', 24);
+    expect(h.session().evidence?.['find']).toMatchObject({ ok: true });
+    expect(h.session().evidence?.['metrics']).toMatchObject({
+      ok: true,
+      detail: expect.stringMatching(/^1 of/),
+    });
+    // Revoke through the adapter, proven by the refresh that follows.
+    await revoke(h.deps);
+    expect(h.calls.at(-1)).toBe('revokeAccess');
+    expect(h.session().evidence?.['revoke']).toBeUndefined();
+    await refresh(h.deps);
+    expect(h.session().evidence?.['revoke']).toMatchObject({
+      ok: true,
+      detail: expect.stringMatching(/after revoke/),
+    });
+    status(h.deps);
+    expect(h.lines.at(-1)).toContain('Not attestable: connect, refresh, comments still to pass.');
+    expect(() => attest(h.deps, () => undefined)).toThrow(/connect, refresh, comments have not passed/);
+    expect(h.lines.join('\n')).not.toContain(TOKEN);
+  });
+
+  it('attest writes the record with every step once all passed; the record carries no credential', async () => {
+    const h = harness();
+    for (const step of REQUIRED_STEPS.channel)
+      h.deps.save({
+        ...h.session(),
+        evidence: {
+          ...(h.session().evidence ?? {}),
+          [step]: { at: '2026-09-25T12:00:00.000Z', ok: true, detail: step },
+        },
+      });
+    const written: CertificationRecord[] = [];
+    const record = attest(h.deps, (r) => written.push(r));
+    expect(written).toEqual([record]);
+    expect(record).toMatchObject({
+      key: 'facebook_page',
+      kind: 'channel',
+      certifiedAt: '2026-09-25T12:00:00.000Z',
+    });
+    expect(Object.keys(record.steps)).toEqual([...REQUIRED_STEPS.channel]);
+    expect(JSON.stringify(record)).not.toContain(TOKEN);
+    expect(h.lines.at(-1)).toContain('set certifiedAt to this value');
   });
 
   it('commands that need an account or a publish say which step to run first', async () => {

@@ -14,6 +14,7 @@ import type {
   ReconcileResult,
   RefreshResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type {
@@ -30,6 +31,8 @@ import {
   ProviderAuthError,
   altTextIssues,
   arr,
+  assertReadAccess,
+  sourceReadError,
   checkFailure,
   expiresAtFrom,
   get,
@@ -59,6 +62,7 @@ import {
   isMetaObjectUnavailable,
   listPages,
   metaAuthorizationUrl,
+  metaRevokeLogin,
   metaExchangeCode,
   metaExtendToken,
   metaRefreshFailure,
@@ -175,6 +179,21 @@ export class FacebookPageAdapter implements ProviderAdapter {
       if (err instanceof ProviderTransportError) return { ok: false, reason: 'transient' };
       throw err;
     }
+  }
+
+  /**
+   * RA-01: revokes the user's login for the app (`DELETE /me/permissions` with the user token the Page token was
+   * derived from), which ends the Page access too. Without a user token (a grant sealed before one was kept) there
+   * is nothing to revoke with: not_supported, the credential is still destroyed locally.
+   */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    const userToken = credentials.extra?.['userAccessToken'];
+    if (!userToken) return { outcome: 'not_supported' };
+    return metaRevokeLogin(io, userToken);
   }
 
   validateVariant(variant: ChannelVariantInput): ValidationResult {
@@ -361,7 +380,10 @@ export class FacebookPageAdapter implements ProviderAdapter {
     const res = await graphGet(io, `/${req.remotePostId}/insights`, creds.accessToken, {
       metric: names.join(','),
     });
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const byName = new Map(
       arr(get(res.json, 'data')).map((d) => [
         str(get(d, 'name')) ?? '',
@@ -383,7 +405,10 @@ export class FacebookPageAdapter implements ProviderAdapter {
       since: String(unixSeconds(new Date(req.window.start))),
       until: String(unixSeconds(new Date(req.window.end))),
     });
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const data = arr(get(res.json, 'data'));
     return names.map((n) => {
       const d = data.find((x) => get(x, 'name') === n);
@@ -409,7 +434,7 @@ export class FacebookPageAdapter implements ProviderAdapter {
       ...(req.cursor ? { after: req.cursor } : {}),
       ...(req.since ? { since: String(unixSeconds(req.since)) } : {}),
     });
-    if (res.status !== 200) throw new MetaGraphError('comments', res);
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
     const items = arr(get(res.json, 'data'))
       .map((c) => ({
         remoteCommentId: str(get(c, 'id')) ?? '',

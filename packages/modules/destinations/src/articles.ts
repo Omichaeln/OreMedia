@@ -39,8 +39,6 @@ import type {
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { Tx } from '@oremedia/db';
 import {
-  aadFor,
-  credentialBroker,
   type DestinationEditInput,
   type DestinationMutationResult,
   type DestinationPublishInput,
@@ -66,7 +64,13 @@ import {
 } from '@oremedia/providers';
 import { cmsAdapterFor, cmsIO } from './cms';
 import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
-import { StoredKind, cmsWritable, enabledCmsAdapter, sourceUseDecision } from './service';
+import {
+  StoredKind,
+  cmsWritable,
+  enabledCmsAdapter,
+  openDestinationCredential,
+  sourceUseDecision,
+} from './service';
 
 const destinationsRepo = new BrandDestinationRepository();
 const policiesRepo = new SourceUsePolicyRepository();
@@ -308,8 +312,9 @@ async function withSite<T>(
   if (!row.credentialRefId) return onReconnect();
   const adapter = enabledCmsAdapter(StoredKind.parse(row.kind));
   try {
-    return await credentialBroker.withCredentialRef(
-      { tenantId, credentialRefId: row.credentialRefId, aad: aadFor(tenantId, row.id) },
+    return await openDestinationCredential(
+      tenantId,
+      { ...row, credentialRefId: row.credentialRefId },
       (creds) => fn(adapter, siteOf(row, creds), creds),
     );
   } catch (err) {

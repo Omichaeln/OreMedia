@@ -29,6 +29,7 @@ import {
   connectedChannel,
   configurePublishingProviders,
   fixtureCapability,
+  configureChannelActivation,
   registerProviderClients,
   registerPublishingBrandChecker,
 } from '@oremedia/module-publishing';
@@ -224,6 +225,7 @@ describe('community module (comment inbox) against MySQL 8', () => {
     configurePublishingProviders({ registry, insecureAllowLoopback: true });
     configureCredentialBroker({ kms: new LocalKms('community-test-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     registerPublishingBrandChecker({
       assertExist: async (brandIds: string[]) => {
         const known = requireTenant().tenantId === tenantA ? brandA : brandB;

@@ -623,14 +623,55 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('an uncertified provider is shown unavailable with the reason', async () => {
+    // RA-01: the providers list says so before any click (the server's refusal path is covered below, for a
+    // publisher who cannot read the list).
     const row = page.getByTestId('provider-facebook_page');
-    await row.getByRole('button', { name: 'Connect Facebook Page' }).click();
     await expect.poll(() => row.getByTestId('unavailable-reason').count(), { timeout: 15_000 }).toBe(1);
     expect(await row.textContent()).toContain('Unavailable');
     expect(await row.getByTestId('unavailable-reason').textContent()).toContain('Not certified');
     expect(
       await row.getByRole('button', { name: 'Connect Facebook Page' }).getAttribute('aria-disabled'),
     ).toBe('true');
+  }, 30_000);
+
+  it('RA-01: every channel provider is listed with its activation state and the reason it cannot be connected, credential references by name only', async () => {
+    const ready = page.getByTestId('provider-linkedin_page');
+    expect(await ready.getAttribute('data-provider-state')).toBe('ready');
+    expect(await ready.textContent()).toContain('Ready');
+    expect(await ready.getByTestId('credential-refs').textContent()).toContain(
+      'PROVIDER_LINKEDIN_PAGE_SECRET_REF (set)',
+    );
+    const disabled = page.getByTestId('provider-x');
+    expect(await disabled.getAttribute('data-provider-state')).toBe('disabled');
+    expect(await disabled.getByTestId('unavailable-reason').textContent()).toContain(
+      'Not enabled on this deployment',
+    );
+    expect(await disabled.getByRole('button', { name: 'Connect X' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    const missing = page.getByTestId('provider-instagram_business');
+    expect(await missing.getAttribute('data-provider-state')).toBe('credentials_missing');
+    expect(await missing.textContent()).toContain('Unavailable: credentials missing');
+    expect(await missing.getByTestId('unavailable-reason').textContent()).toContain(
+      'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF is not set',
+    );
+    expect(await missing.getByTestId('credential-refs').textContent()).toContain(
+      'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF (not set)',
+    );
+    // Never a value: the names of the references only.
+    expect(await page.getByTestId('providers').textContent()).not.toMatch(/secret-value|cid|csecret/);
+    expect(await noHorizontalOverflow()).toBe(true);
+  }, 30_000);
+
+  it('RA-01: a channel shows its health as text beside its status, with the time of the last check', async () => {
+    const ok = page.getByTestId(`channel-${P5.channels.ok}`);
+    expect(await ok.getAttribute('data-channel-health')).toBe('ok');
+    expect(await ok.textContent()).toContain('Healthy');
+    expect(await ok.textContent()).toContain('Checked ');
+    const expired = page.getByTestId(`channel-${P5.channels.expired}`);
+    expect(await expired.getAttribute('data-channel-health')).toBe('revoked');
+    expect(await expired.textContent()).toContain('Access revoked');
+    expect(await expired.getByRole('button', { name: 'Reconnect' }).count()).toBe(1);
   }, 30_000);
 
   it('connect start gives the authorisation URL as a new-tab link (never an iframe); completion connects', async () => {
@@ -742,6 +783,20 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => row.getAttribute('data-channel-status'), { timeout: 15_000 }).toBe('disabled');
     expect(await row.textContent()).toContain('Disconnected');
     expect(await row.getByRole('button', { name: 'Connect again' }).count()).toBe(1);
+    // RA-01: what happened on the remote side is said in words (X has no remote revoke in the mock).
+    expect(await row.getByTestId('remote-revoke').textContent()).toContain('no remote revoke');
+  }, 45_000);
+
+  it('RA-01: a publisher, who cannot read the providers list, still gets the Release 1 list and the server’s refusal', async () => {
+    backend.denied.add('operations.providers.list');
+    await open('settings');
+    const row = page.getByTestId('provider-facebook_page');
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    expect(await row.getAttribute('data-provider-state')).toBe('unknown');
+    await row.getByRole('button', { name: 'Connect Facebook Page' }).click();
+    await expect.poll(() => row.getByTestId('unavailable-reason').count(), { timeout: 15_000 }).toBe(1);
+    expect(await row.getByTestId('unavailable-reason').textContent()).toContain('Not certified');
+    backend.denied.delete('operations.providers.list');
   }, 45_000);
 
   it('permission denied: the list and a connect attempt say so', async () => {

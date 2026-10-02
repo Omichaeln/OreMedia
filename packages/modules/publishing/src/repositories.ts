@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import type { PublicationState } from '@oremedia/contracts/publishing';
@@ -732,7 +732,36 @@ export interface StuckPublicationRef {
  * The sweeper legitimately spans tenants (like the outbox dispatcher, spec 14.2) and runs as a declared platform
  * job. It reads references only; every write happens afterwards inside the row's own tenant context.
  */
+/** A disconnected connection whose credential row is still intact (RA-01 shred floor): references only. */
+export interface UnshreddedConnectionRef {
+  tenantId: string;
+  channelConnectionId: string;
+}
+
 export class PublicationSweepRepository extends PlatformRepository {
+  /** Connections disabled before `before` whose credential_refs row was never destroyed, oldest first. */
+  async findDisabledWithLiveCredential(before: Date, limit = 200): Promise<UnshreddedConnectionRef[]> {
+    return this.conn()
+      .select({ tenantId: channelConnections.tenantId, channelConnectionId: channelConnections.id })
+      .from(channelConnections)
+      .innerJoin(
+        credentialRefs,
+        and(
+          eq(credentialRefs.tenantId, channelConnections.tenantId),
+          eq(credentialRefs.id, channelConnections.credentialRefId),
+        ),
+      )
+      .where(
+        and(
+          eq(channelConnections.status, 'disabled'),
+          lt(channelConnections.updatedAt, before),
+          isNull(credentialRefs.destroyedAt),
+        ),
+      )
+      .orderBy(asc(channelConnections.updatedAt))
+      .limit(limit);
+  }
+
   async findStuck(
     now: Date,
     graceSeconds: number,

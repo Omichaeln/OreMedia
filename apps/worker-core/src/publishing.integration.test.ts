@@ -31,6 +31,7 @@ import {
   configurePublishingProviders,
   createPublishingRuntime,
   publicationService,
+  configureChannelActivation,
   registerProviderClients,
   registerPublishMediaSource,
   registerPublishingBrandChecker,
@@ -209,6 +210,7 @@ describe('publication workflow end to end (worker-core, fake Temporal host)', ()
     configurePublishingProviders({ registry, insecureAllowLoopback: true }); // the fixture's send is a loopback call
     configureCredentialBroker({ kms: new LocalKms('e2e-master-secret-0123456789abcdef') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     registerVariantSource(async (id) => {
       const v = variantsById.get(id);
       if (!v) throw new NotFoundError('ChannelVariant', id);

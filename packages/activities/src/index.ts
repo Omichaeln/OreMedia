@@ -33,9 +33,11 @@ export {
   createRemoteChangeSweepActivities,
 } from './remote-change';
 export { createTokenRefreshActivities } from './token-refresh';
+export { createChannelRevokeActivities, CHANNEL_REVOKE_ACTOR } from './channel-revoke';
 export { createRenderedValidationActivities } from './rendered-validation';
 export { createDestinationRefreshActivities, DESTINATION_REFRESH_ACTOR } from './destination-refresh';
 export { createDestinationVerifyActivities } from './destination-verify';
+export { createDestinationRevokeActivities, DESTINATION_REVOKE_ACTOR } from './destination-revoke';
 export { createDestinationReportActivities, DESTINATION_REPORTS_ACTOR } from './destination-reports';
 export { createSeoAuditActivities, SEO_AUDIT_ACTOR } from './seo-audit';
 export { createBrandChangeImpactActivities } from './brand-change-impact';

@@ -7301,6 +7301,12 @@
         }
       }
     },
+    "/trpc/operations.providers.list": {
+      "get": {
+        "operationId": "operations.providers.list",
+        "x-trpc-type": "query"
+      }
+    },
     "/trpc/overview.summary": {
       "get": {
         "operationId": "overview.summary",
@@ -16353,6 +16359,10 @@
           },
           "required": ["eventId"]
         }
+      },
+      "operations.providers.list": {
+        "type": "query",
+        "input": null
       },
       "overview.summary": {
         "type": "query",

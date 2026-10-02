@@ -34,6 +34,7 @@ import {
   connectedChannel,
   fixtureCapability,
   publicationService,
+  configureChannelActivation,
   registerProviderClients,
   registerPublishingBrandChecker,
 } from '@oremedia/module-publishing';
@@ -223,6 +224,7 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('overview-test-master-secret-0123456789abcdef') });
     registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     configureDestinationCms({ registry: new CmsRegistry() });
     configureSourceAvailability(() => true);
     // What brandService.assertExist does for the hooks: a brand of another tenant does not exist (spec 5.3).

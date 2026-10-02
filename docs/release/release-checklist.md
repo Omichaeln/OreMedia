@@ -18,7 +18,7 @@ ticked only with the evidence in hand; "it should work" is not a status. Owner d
 6. [ ] Restore rehearsal done on Railway: PITR into a separate instance, object retrieval, held-vs-reconciled
        behaviour, no duplicate publication; recorded in `r1-evidence.md` (R1-H).
 7. [ ] Channel certification: `certifiedAt` set for each pilot channel after the real-app runbook
-       (`docs/runbooks/certify-a-channel.md`), D-04 recorded (UX-10).
+       (`docs/runbooks/certify-a-provider.md`), D-04 recorded (UX-10).
 8. [ ] Residual risks reviewed with named owners (`docs/operations/residual-risks.md`); R1 (multi-channel approval
        consumption) and R16 (on-call) closed or accepted in writing.
 

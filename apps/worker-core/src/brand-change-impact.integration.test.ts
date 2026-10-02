@@ -27,6 +27,7 @@ import {
   configureCredentialBroker,
   configurePublishingProviders,
   publicationService,
+  configureChannelActivation,
   registerProviderClients,
   connectedChannel,
 } from '@oremedia/module-publishing';
@@ -276,6 +277,7 @@ describe('brand change impact end to end (worker-core composition, real activiti
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('e2e-brand-change-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     const started = await run((tx) =>
       channelService.connect.start(
         actor,

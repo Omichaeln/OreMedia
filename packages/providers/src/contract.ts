@@ -14,6 +14,7 @@ import type {
   ReconcileResult,
   RefreshResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
@@ -109,6 +110,18 @@ export interface ProviderAdapter {
     grantedScopes: string[],
   ): Promise<AccountGrant[]>;
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult>;
+  /**
+   * RA-01: asks the platform to revoke the grant (the token, and where the platform offers it the app's
+   * permissions), so a disconnect ends the access on the remote side too. Optional: an adapter whose platform
+   * documents a revocation endpoint implements it; the disconnect records `not_supported` for the others. A
+   * platform refusal or a transport failure is `failed` with its reason, never a throw: the local disconnect goes
+   * ahead whatever the answer. Idempotent: a token already revoked is `revoked`.
+   */
+  revokeAccess?(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult>;
 
   // Validation: pure, capability-driven, no network
   validateVariant(variant: ChannelVariantInput): ValidationResult;

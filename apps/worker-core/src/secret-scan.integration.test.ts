@@ -53,6 +53,7 @@ import {
   createPublishingRuntime,
   publicationService,
   registerApprovalConsumer,
+  configureChannelActivation,
   registerProviderClients,
   registerPublishMediaSource,
   registerReleaseEvaluator,
@@ -221,6 +222,7 @@ describe('secret scan across model, events, audit, logs and workflow history (wo
       return v;
     });
     registerProviderClients(() => ({ clientId: 'client_secret_scan', clientSecret: CLIENT_SECRET }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     registerReleaseEvaluator(async () => ({ allow: true }));
     registerApprovalConsumer(async () => undefined);
     registerPublishMediaSource({ describe: async () => [], release: async () => [] });

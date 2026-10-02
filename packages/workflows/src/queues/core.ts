@@ -15,10 +15,14 @@ export { renderedValidationWorkflowV1 } from '../rendered-validation.workflow.v1
 export { remoteChangeSweepWorkflowV1 } from '../remote-change-sweep.workflow.v1';
 export { connectChoicePurgeWorkflowV1 } from '../connect-choice-purge.workflow.v1';
 export { tokenRefreshWorkflowV1 } from '../token-refresh.workflow.v1';
+// RA-01: the remote revoke of a disconnected channel's grant.
+export { channelRevokeWorkflowV1 } from '../channel-revoke.workflow.v1';
 // Ledger R2-1: the daily refresh of brand destinations' source grants.
 export { destinationTokenRefreshWorkflowV1 } from '../destination-token-refresh.workflow.v1';
 // Ledger R2-3: the verification of a destination connected with a sealed secret.
 export { destinationVerifyWorkflowV1 } from '../destination-verify.workflow.v1';
+// RA-01: the remote revoke of a disconnected destination's grant.
+export { destinationRevokeWorkflowV1 } from '../destination-revoke.workflow.v1';
 export { brandChangeImpactWorkflowV1 } from '../brand-change-impact.workflow.v1';
 export { brandAnalystWorkflowV1, brandAnalystSweepWorkflowV1 } from '../brand-analyst.workflow.v1';
 export { baselineComparisonWorkflowV1 } from '../baseline-comparison.workflow.v1';
