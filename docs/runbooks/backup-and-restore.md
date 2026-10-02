@@ -14,7 +14,7 @@ The `db-backup` service in each Railway environment is built from `infra/railway
 
 Railway's managed MySQL has no point-in-time recovery, so the dump is the recovery point. A 15-minute cadence gives an RPO of at most 15 minutes plus the dump time; the actual dump time is in the deploy log of each run.
 
-Variables (all read from the environment; values are never printed): `SRC_HOST`, `SRC_DB`, `SRC_PW` (reference the MySQL service), `SRC2_HOST`, `SRC2_PW` (reference `temporal-db`) and `SRC2_DB` set to `temporal temporal_visibility` (the Temporal server's two databases; a space-separated list is dumped with `--databases`), `OBJECT_STORE_ENDPOINT`, `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`, `OBJECT_STORE_REGION` (reference the api service), `BACKUP_BUCKET` (the releases bucket), `BACKUP_PREFIX` (`db-backups/production` or `db-backups/staging`), `BACKUP_RETENTION_DAYS`.
+Variables (all read from the environment; values are never printed): `SRC_HOST`, `SRC_DB`, `SRC_PW` (reference the MySQL service), `SRC2_HOST`, `SRC2_PW` (reference `temporal-db`) and `SRC2_DB` set to `temporal temporal_visibility` (the Temporal server's two databases; a space-separated list is dumped with `--databases`), `OBJECT_STORE_ENDPOINT`, `OBJECT_STORE_ACCESS_KEY_ID`, `OBJECT_STORE_SECRET_ACCESS_KEY`, `OBJECT_STORE_REGION` and `BACKUP_BUCKET` (references to the environment's dedicated Railway bucket, `production-backups` or `staging-backups`; dumps never share the assets or releases buckets), `BACKUP_PREFIX` (`db-backups/production` or `db-backups/staging`), `BACKUP_RETENTION_DAYS`.
 
 ## Monitoring
 
@@ -25,7 +25,7 @@ Variables (all read from the environment; values are never printed): `SRC_HOST`,
 
 Never restore over production. Restore into a separate MySQL instance, verify, then import tenant rows (restore-single-tenant runbook) or switch the application to the restored instance.
 
-1. Create or reuse a separate MySQL service in the environment (`mysql-restore` in staging). Note its private host and root password; do not paste either into a ticket.
+1. Create or reuse a separate MySQL service in the environment (`mysql-restore` in staging) in the database's region. Note its private host and root password; do not paste either into a ticket.
 2. Run `restore.sh` as a one-off deployment of the `db-backup` image with: `DST_HOST`, `DST_PW`, the `OBJECT_STORE_*` and `BACKUP_BUCKET`/`BACKUP_PREFIX` variables above, `RESTORE_NAME` (`oremedia` or `temporal`), `RESTORE_DB` (the database to create; default `oremedia`) and optionally `RESTORE_KEY` (a specific object; default the newest dump under the prefix). Start command: `restore.sh`.
 3. Read the log: `RESTORE_STEP` lines give the time of each step (download, load, verify) and `RESTORE_PASS <key> <tables> tables, <n> migrations in <N>s` is the evidence. The script fails if the table count in the restored instance differs from the dump's `CREATE TABLE` count, or if `__drizzle_migrations` has no rows.
 4. Confirm the migration ledger: the last row of `__drizzle_migrations` in the restored instance must match the latest file in `packages/db/drizzle/`. A dump taken before the current release restores cleanly only when the migration set is roll-forward compatible (every migration is; `packages/db/src/migrations.integration.test.ts`).
