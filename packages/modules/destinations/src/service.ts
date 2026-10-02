@@ -284,6 +284,8 @@ const toDestinationDto = (d: DestinationRow): DestinationV1 => ({
   healthCheckedAt: d.healthCheckedAt ? d.healthCheckedAt.toISOString() : null,
   capabilityVersion: d.capabilityVersion,
   status: d.status,
+  reportingTimeZone: d.reportingTimeZone,
+  currencyCode: d.currencyCode,
   version: d.version,
   createdAt: d.createdAt.toISOString(),
   updatedAt: d.updatedAt.toISOString(),

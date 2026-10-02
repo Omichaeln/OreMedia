@@ -131,15 +131,55 @@ export interface SeoAuditPageV1 {
   fetchedAt: string;
 }
 
+/**
+ * RA-11: where a finding stands as work. `open`: reported by the run and tracked by nothing; `tracked`: turned
+ * into work that is still open; `resolved`: the work's finding was no longer reported by a later completed run.
+ */
+export const SeoFindingStatus = z.enum(['open', 'tracked', 'resolved']);
+export type SeoFindingStatus = z.infer<typeof SeoFindingStatus>;
+/** The product's trackable work object a finding becomes: a recommendation (spec 16.4), which a person accepts into a brief. */
+export const SEO_FINDING_WORK_TYPE = 'recommendation';
+/** The identity of a finding as provenance names it: the run it was read from and the rule it failed. */
+export const seoFindingId = (runId: string, check: SeoAuditCheckKey): string => `${runId}:${check}`;
+/** RA-11: the work a finding was turned into, with its provenance and the work's title and state as read now. */
+export interface SeoFindingWorkV1 {
+  id: string;
+  findingId: string;
+  brandId: string;
+  destinationId: string;
+  runId: string;
+  check: SeoAuditCheckKey;
+  severity: SeoAuditSeverity;
+  /** How many pages failed the check and the example URLs when the work was created. */
+  pageCount: number;
+  examples: string[];
+  workType: typeof SEO_FINDING_WORK_TYPE;
+  workId: string;
+  /** The work's current title and state (its own module's words); null when the work could not be read. */
+  title: string | null;
+  state: string | null;
+  createdById: string;
+  createdAt: string;
+  resolvedAt: string | null;
+  resolvedRunId: string | null;
+}
+
 /** A finding: one check across the run, with how many pages fail it, example URLs and the task it suggests. */
 export interface SeoAuditFindingV1 {
+  /** `<runId>:<check>` (seoFindingId): the provenance a work item names. */
+  findingId: string;
   check: SeoAuditCheckKey;
   label: string;
   severity: SeoAuditSeverity;
   count: number;
   examples: string[];
   suggestedTask: string;
+  /** RA-11: open, tracked (with the work) or resolved (the work whose check this run no longer reports). */
+  status: SeoFindingStatus;
+  work: SeoFindingWorkV1 | null;
 }
+/** What the crawl's rules report before the work links are read beside them (findingsOf). */
+export type SeoAuditReportedFindingV1 = Omit<SeoAuditFindingV1, 'findingId' | 'status' | 'work'>;
 export const SEO_AUDIT_FINDING_EXAMPLES = 5;
 
 /** Lab data only (what the crawler measured); field data is a slot a later connector fills, never fabricated. */
@@ -152,6 +192,8 @@ export interface SeoAuditSummaryV1 {
   policy: { allowed: boolean; reason: SourceUseCheckReason; dataType: string };
   /** Whether the actor may start a run (seo_audit.run); the command still asserts. */
   canRun: boolean;
+  /** RA-11: whether the actor may turn findings into work (insight.manage); the command still asserts. */
+  canCreateWork: boolean;
   /** A run is in progress (its `run` is refused until it finishes). */
   running: boolean;
   lastRun: SeoAuditRunV1 | null;
@@ -183,6 +225,17 @@ export const SeoAuditFindings = z.object({
   runId: z.string().optional(),
 });
 export const SeoAuditRun = z.object({ brandId: z.string(), destinationId: z.string() });
+/**
+ * RA-11 destinations.audit.createWork: one or many findings of a run (the last finished one by default) become
+ * work, idempotent per finding (a finding already tracked returns its work). A check the run does not report is
+ * refused (VALIDATION_FAILED).
+ */
+export const SeoAuditCreateWork = z.object({
+  brandId: z.string(),
+  destinationId: z.string(),
+  runId: z.string().optional(),
+  checks: z.array(SeoAuditCheckKey).min(1).max(SeoAuditCheckKey.options.length),
+});
 export type SeoAuditPagesPage = Page<SeoAuditPageV1>;
 
 // ---- seoAuditSweepWorkflowV1 / seoAuditWorkflowV1 (task queue `ingest-metrics`, worker-ingest) ----

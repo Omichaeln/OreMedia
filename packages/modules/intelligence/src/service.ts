@@ -79,6 +79,8 @@ export const configureRanking = (cfg: RankingConfig | null): void => {
 
 /** Evidence entries of the ranking comparison insight (spec 16.8) are recognisable by this kind. */
 export const BASELINE_COMPARISON_EVIDENCE = 'baseline_comparison';
+/** RA-11: example pages kept as evidence of a finding's insight (the audit's own example cap). */
+const SEO_FINDING_PAGE_EVIDENCE = 5;
 const STALE_AFTER_HOURS = 24 * 8; // a weekly analysis older than a week plus a day
 
 // ---- helpers ----
@@ -505,6 +507,90 @@ export const intelligenceService = {
         tx,
       );
       return { recommendationId };
+    },
+
+    /**
+     * RA-11: an SEO audit finding a person turns into tracked work (destinations.audit.createWork through the
+     * finding-work hook): a `create_brief` recommendation whose chain starts from an observed insight carrying
+     * the finding's provenance (the finding, its run, its rule, the website and the example pages) as evidence.
+     * insight.manage on the brand; a person decides, never an agent. The caller keeps it idempotent per finding.
+     */
+    async createFromFinding(
+      actor: ResolvedActor,
+      input: {
+        brandId: string;
+        title: string;
+        rationale: string;
+        provenance: {
+          findingId: string;
+          runId: string;
+          check: string;
+          severity: string;
+          destinationId: string;
+          origin: string;
+          pageCount: number;
+          pages: string[];
+        };
+      },
+      tx: Tx,
+    ) {
+      const brand = await brandService.get(actor, input.brandId, tx);
+      await policy.assert(actor, 'insight.manage', brandResource(brand.id), {}, tx);
+      if (actor.kind !== 'user')
+        throw new PolicyDeniedError('agent_never', 'A person decides which findings become work');
+      const objective = await activeObjective(actor, brand.id, tx);
+      const at = new Date();
+      const p = input.provenance;
+      const observed = await intelligenceService.insights.record(
+        actor,
+        {
+          brandId: brand.id,
+          // An observed association (as a run's hypothesis is), never a "what changed" movement of the period.
+          kind: 'association',
+          statement:
+            `SEO audit of ${p.origin}: ${input.title} (${p.pageCount} ${p.pageCount === 1 ? 'page' : 'pages'}, ${p.severity})`.slice(
+              0,
+              4000,
+            ),
+          evidence: [
+            { kind: 'seo_finding', ref: p.findingId.slice(0, 200) },
+            { kind: 'seo_audit_run', ref: p.runId },
+            { kind: 'seo_check', ref: p.check, note: p.severity },
+            { kind: 'brand_destination', ref: p.destinationId },
+            ...p.pages
+              .slice(0, SEO_FINDING_PAGE_EVIDENCE)
+              .map((url) => ({ kind: 'page', ref: url.slice(0, 200) })),
+          ],
+          strength: 'observed',
+          periodStart: at,
+          periodEnd: at,
+          agentRunId: null,
+        },
+        tx,
+      );
+      const recommendationId = await createRecommendationWithChain(
+        actor,
+        {
+          brandId: brand.id,
+          insightIds: [observed.insightId],
+          proposedAction: 'create_brief',
+          title: input.title,
+          rationale: input.rationale,
+          expectedBenefit: { metricKey: objective?.primaryMetricKey ?? 'unspecified', direction: 'up' },
+          effort: 'medium',
+          uncertainty: 'low', // lab data the crawler measured, not a hypothesis
+          agentRunId: null,
+          contextRef: `seo_finding:${p.findingId}`,
+        },
+        tx,
+      );
+      return { recommendationId, title: input.title.slice(0, 200), state: 'proposed' as const };
+    },
+
+    /** Module-internal (RA-11): the brand's recommendations among the ids, as title and state for another module's list. */
+    async describeForBrand(brandId: string, recommendationIds: readonly string[], tx?: Tx) {
+      const rows = await recommendationsRepo.listByIds(brandId, recommendationIds, tx);
+      return rows.map((r) => ({ id: r.id, title: r.title, state: r.state }));
     },
 
     /**

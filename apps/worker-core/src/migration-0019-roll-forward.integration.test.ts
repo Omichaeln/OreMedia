@@ -3,7 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
-import { brandDestinations, seoAuditPages, seoAuditRuns } from '@oremedia/db/schema/destinations';
+import {
+  brandDestinations,
+  seoAuditPages,
+  seoAuditRuns,
+  seoFindingWork,
+} from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
@@ -20,9 +25,11 @@ const sha256Hex = (value: string) => createHash('sha256').update(value).digest('
  */
 const PREVIOUS_HEAD = '0018_cms_articles';
 const NEW_TABLES: MySqlTable[] = [seoAuditRuns, seoAuditPages];
+/** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [seoFindingWork];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0019 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

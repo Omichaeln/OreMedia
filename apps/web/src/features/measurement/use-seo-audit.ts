@@ -7,6 +7,7 @@ export type SeoAuditSummaryDto = inferOutput<Trpc['destinations']['audit']['summ
 export type SeoAuditRunDto = inferOutput<Trpc['destinations']['audit']['runs']['list']>['items'][number];
 export type SeoAuditPageDto = inferOutput<Trpc['destinations']['audit']['pages']['list']>['items'][number];
 export type SeoAuditFindingDto = inferOutput<Trpc['destinations']['audit']['findings']>['items'][number];
+export type SeoFindingWorkDto = inferOutput<Trpc['destinations']['audit']['createWork']>['items'][number];
 
 /** A run in progress is polled until it closes; a closed summary is read once. */
 const RUNNING_POLL_MS = 10_000;
@@ -52,6 +53,22 @@ export function useRunSeoAudit() {
     trpc.destinations.audit.run.mutationOptions({
       onSuccess: () => {
         void queryClient.invalidateQueries(trpc.destinations.audit.pathFilter());
+      },
+    }),
+  );
+}
+
+/**
+ * RA-11 `destinations.audit.createWork`: one or many findings become tracked work (a recommendation with the
+ * finding's provenance; idempotent per finding); the findings refetch so each shows its status and work.
+ */
+export function useCreateSeoFindingWork() {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  return useMutation(
+    trpc.destinations.audit.createWork.mutationOptions({
+      onSuccess: () => {
+        void queryClient.invalidateQueries(trpc.destinations.audit.findings.pathFilter());
       },
     }),
   );

@@ -66,6 +66,10 @@ export interface OverviewFreshnessV1 {
   ageHours: number | null;
   latencyHours: number;
   stale: boolean;
+  /** RA-10: the zone a web source's days are keyed in (null: UTC days, or not a web source). */
+  timeZone: string | null;
+  /** RA-10: the latest day may still move (inside the latency, a partial day, or not final by the platform). */
+  provisional: boolean;
 }
 
 export interface OverviewSourceV1 extends OverviewSourceRefV1 {

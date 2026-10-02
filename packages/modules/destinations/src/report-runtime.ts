@@ -13,6 +13,8 @@ import {
   type DestinationReportsInputV1,
   type DestinationReportsRuntimeV1,
   type DestinationRefreshRuntimeV1,
+  type SourceReportQualityFlag,
+  type SourceTargetMetadataV1,
   type SourceUseCheckResult,
 } from '@oremedia/contracts/destinations';
 import {
@@ -30,6 +32,8 @@ import {
   ProviderTransportError,
   SOURCE_ACCESS_REQUIRED,
   SourceReadError,
+  type SourceAdapter,
+  type SourceReportPage,
   type SourceReportRow,
   type SourceReportSpec,
 } from '@oremedia/providers';
@@ -95,9 +99,58 @@ export async function reportUseDecision(
   return last;
 }
 
-export const dateKey = (d: Date): string => d.toISOString().slice(0, 10);
+/** The parts of an instant in an IANA zone (`en-CA` prints ISO order); an unknown zone throws RangeError. */
+const zoneParts = (d: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(d);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return {
+    date: `${String(get('year')).padStart(4, '0')}-${String(get('month')).padStart(2, '0')}-${String(get('day')).padStart(2, '0')}`,
+    utcOfParts: Date.UTC(
+      get('year'),
+      get('month') - 1,
+      get('day'),
+      get('hour'),
+      get('minute'),
+      get('second'),
+    ),
+  };
+};
+/** Whether a zone is one the runtime can key days by (a stored zone is validated on read, spec 6.1). */
+export const knownTimeZone = (timeZone: string | null | undefined): timeZone is string => {
+  if (!timeZone) return false;
+  try {
+    zoneParts(new Date(0), timeZone);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/**
+ * The calendar day of an instant: in the reporting zone when one is known (RA-10: a GA4 property's own zone, the
+ * one its `date` dimension is keyed by), else the UTC day (rows stored before the zone was known, and sources
+ * that report none).
+ */
+export const dateKey = (d: Date, timeZone: string | null = null): string =>
+  knownTimeZone(timeZone) ? zoneParts(d, timeZone).date : d.toISOString().slice(0, 10);
 export const addDays = (date: string, days: number): string =>
-  dateKey(new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS));
+  new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
+/** The instant a calendar day ends (23:59:59.999) in the zone, or in UTC without one. */
+export const dayEnd = (date: string, timeZone: string | null = null): Date => {
+  const utcEnd = Date.parse(`${date}T23:59:59.999Z`);
+  if (!knownTimeZone(timeZone)) return new Date(utcEnd);
+  const guess = new Date(utcEnd);
+  const offset = zoneParts(guess, timeZone).utcOfParts - Math.floor(utcEnd / 1000) * 1000;
+  return new Date(utcEnd - offset);
+};
 
 /**
  * A destination's report retention (D-17): the policy's retentionDays when `retain` is allowed, else the operational
@@ -128,8 +181,10 @@ export function reportRange(
   spec: { key: string; latencyHours: number; maxRangeDays: number },
   latestDate: string | null,
   now: Date,
+  timeZone: string | null = null,
 ): DestinationReportRangeV1 | null {
-  const end = addDays(dateKey(now), -1);
+  // Yesterday in the reporting zone: the platform's last complete day, never a day still running there.
+  const end = addDays(dateKey(now, timeZone), -1);
   const floor = addDays(end, -(spec.maxRangeDays - 1));
   let start = latestDate
     ? addDays(latestDate, -Math.ceil(spec.latencyHours / 24))
@@ -176,6 +231,54 @@ export function createDestinationReportRuntime(
       tx,
       { brandId: row.brandId, kind: row.kind, reason },
     );
+
+  /**
+   * RA-10: the reporting zone a destination's days are keyed by. The adapter's target metadata is read through
+   * the broker on every plan (one cheap read-only call) and remembered on the destination row; a refusal or a
+   * transport failure keeps what is remembered (the fetch itself handles a dead token), and a kind whose adapter
+   * exposes none keeps UTC days.
+   */
+  async function reportingZone(
+    row: { id: string; externalId: string; credentialRefId: string; reportingTimeZone: string | null },
+    tenantId: string,
+    adapter: SourceAdapter,
+  ): Promise<string | null> {
+    const describe = adapter.describeTarget?.bind(adapter);
+    if (!describe) return knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+    let described: SourceTargetMetadataV1;
+    try {
+      described = await credentialBroker.withCredentialRef(
+        { tenantId, credentialRefId: row.credentialRefId, aad: aadFor(tenantId, row.id) },
+        (creds) =>
+          describe(creds, providerClientFor(adapter.key), sourceIO(adapter.key, tenantId), row.externalId),
+      );
+    } catch (err) {
+      if (!(err instanceof SourceReadError) && !(err instanceof ProviderTransportError)) throw err;
+      log.warn({ destinationId: row.id, reason: err.message }, 'target metadata not read; zone kept');
+      return knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+    }
+    await rememberZone(row.id, described);
+    return knownTimeZone(described.reportingTimeZone)
+      ? described.reportingTimeZone
+      : knownTimeZone(row.reportingTimeZone)
+        ? row.reportingTimeZone
+        : null;
+  }
+
+  /** Stores a zone or currency the platform just stated, when it differs from the row (under the row lock). */
+  async function rememberZone(destinationId: string, described: SourceTargetMetadataV1): Promise<void> {
+    const zone = knownTimeZone(described.reportingTimeZone) ? described.reportingTimeZone : null;
+    const currency = described.currencyCode ? described.currencyCode.slice(0, 3).toUpperCase() : null;
+    if (!zone && !currency) return;
+    await withTransaction(async (tx) => {
+      const locked = await destinationsRepo.lock(destinationId, tx);
+      const values: { reportingTimeZone?: string; currencyCode?: string } = {};
+      if (zone && zone !== locked.reportingTimeZone) values.reportingTimeZone = zone;
+      if (currency && currency !== locked.currencyCode) values.currencyCode = currency;
+      if (Object.keys(values).length > 0)
+        await destinationsRepo.update(locked.id, locked.version, values, tx);
+    });
+  }
 
   /**
    * The fetch's failure as the workflow reads it (a returned result, never a thrown error: the activity retry
@@ -259,12 +362,18 @@ export function createDestinationReportRuntime(
         REPORT_LOCK_SECONDS,
       );
       if (lock.count > 1) return { outcome: 'skipped', reason: 'locked' };
+      const zone = await reportingZone(
+        { ...row, credentialRefId: row.credentialRefId },
+        tenantId,
+        sourceAdapterFor(row.kind),
+      );
       const planned: DestinationReportRangeV1[] = [];
       for (const spec of reports) {
         const range = reportRange(
           spec,
           await rowsRepo.latestDate(row.brandId, row.id, spec.key),
           new Date(at),
+          zone,
         );
         if (range) planned.push(range);
       }
@@ -288,6 +397,14 @@ export function createDestinationReportRuntime(
           `${row.kind} has no report ${reportKey}`,
         );
       const client = providerClientFor(adapter.key);
+      // RA-10: what the platform said beside the rows (the first page's zone and currency, every page's flags).
+      const stated: SourceTargetMetadataV1 = { reportingTimeZone: null, currencyCode: null };
+      const flags = new Set<SourceReportQualityFlag>();
+      const answered = (page: SourceReportPage) => {
+        stated.reportingTimeZone ??= page.reportingTimeZone ?? null;
+        stated.currencyCode ??= page.currencyCode ?? null;
+        for (const f of page.quality ?? []) flags.add(f);
+      };
       const read = (credentialRefId: string) =>
         credentialBroker.withCredentialRef(
           { tenantId, credentialRefId, aad: aadFor(tenantId, row.id) },
@@ -303,6 +420,7 @@ export function createDestinationReportRuntime(
                 ...(pageToken ? { pageToken } : {}),
               });
               rows.push(...result.rows);
+              answered(result);
               if (!result.nextPageToken) return rows;
               pageToken = result.nextPageToken;
             }
@@ -336,11 +454,22 @@ export function createDestinationReportRuntime(
           return failureOf(again);
         }
       }
+      // The zone the days are keyed by: what the answer stated, else what the destination remembers (both learnt
+      // from the platform, never assumed); a zone the answer states is remembered for the next plan.
+      if (stated.reportingTimeZone || stated.currencyCode) await rememberZone(row.id, stated);
+      const timeZone = knownTimeZone(stated.reportingTimeZone)
+        ? stated.reportingTimeZone
+        : knownTimeZone(row.reportingTimeZone)
+          ? row.reportingTimeZone
+          : null;
       // One row per (day, dimensions) inside the window; the platform's last word on a duplicate wins.
       const fetchedAt = now();
+      const today = dateKey(fetchedAt, timeZone);
       const byKey = new Map<string, ReportRowInsert>();
       for (const r of fetched) {
         if (r.date < start || r.date > end) continue;
+        // A day that has not ended in the reporting zone is partial: flagged, re-read by the next plan's latency.
+        const quality = r.date >= today ? [...flags, 'partial_day' as const] : [...flags];
         const dimensions = Object.fromEntries(
           Object.entries(r.dimensions).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
         );
@@ -356,6 +485,8 @@ export function createDestinationReportRuntime(
           metrics: r.metrics,
           fetchedAt,
           source: 'provider',
+          timeZone,
+          quality,
         });
       }
       const rows = [...byKey.values()];

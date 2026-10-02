@@ -70,7 +70,16 @@ export interface ReleasedPublication {
 const round = (n: number) => Math.round(n * 100) / 100;
 
 const fromMetricFreshness = (f: MetricFreshness | null): OverviewFreshnessV1 | null =>
-  f ? { asOf: f.fetchedAt, ageHours: round(f.ageHours), latencyHours: f.latencyHours, stale: f.stale } : null;
+  f
+    ? {
+        asOf: f.fetchedAt,
+        ageHours: round(f.ageHours),
+        latencyHours: f.latencyHours,
+        stale: f.stale,
+        timeZone: null,
+        provisional: false,
+      }
+    : null;
 
 const staleReason = (ageHours: number, latencyHours: number) =>
   `${Math.round(ageHours)} h old, beyond ${latencyHours} h × ${STALE_FACTOR}`;
@@ -176,7 +185,14 @@ export function channelSource(
   const base = {
     ...channelRef(channel),
     freshness: withData.length
-      ? { asOf: latest, ageHours: ageHours === null ? null : round(ageHours), latencyHours, stale }
+      ? {
+          asOf: latest,
+          ageHours: ageHours === null ? null : round(ageHours),
+          latencyHours,
+          stale,
+          timeZone: null,
+          provisional: false,
+        }
       : null,
     coverage: { requested: mine.length, withData: subjects, unit: 'posts' as const },
     sample: { current: mine.length, previous: before, minimum: minimumSample, sufficient },
@@ -223,8 +239,19 @@ const reportFreshness = (entries: DestinationReportSummaryV1['reports']): Overvi
     ageHours: latest.freshness.ageHours,
     latencyHours: latest.freshness.latencyHours,
     stale: read.some((e) => e.freshness.stale),
+    // RA-10: the zone the latest day is keyed in, and whether any read report's latest day may still move.
+    timeZone: latest.quality.timeZone,
+    provisional: read.some((e) => e.quality.provisional),
   };
 };
+
+/** RA-10: how a web source's coverage reads: "as of <local day>, <zone>, provisional" (each part only when known). */
+export const webAsOf = (freshness: OverviewFreshnessV1): string =>
+  [
+    `as of ${freshness.asOf?.slice(0, 10)}`,
+    ...(freshness.timeZone ? [freshness.timeZone] : ['UTC days']),
+    ...(freshness.provisional ? ['provisional'] : []),
+  ].join(', ');
 
 /** The tiles report of a web source (the adapter's presentation names it), or the first report. */
 const tilesEntry = (summary: DestinationReportSummaryV1) =>
@@ -306,7 +333,7 @@ export function webSourceOf(
     );
   return state(
     'fresh',
-    `data to ${freshness.asOf?.slice(0, 10)}${tiles ? ` · ${tiles.current.days} of ${windowDays} days` : ''}`,
+    `${webAsOf(freshness)}${tiles ? ` · ${tiles.current.days} of ${windowDays} days` : ''}`,
   );
 }
 
@@ -336,6 +363,8 @@ export function auditSourceOf(
           ageHours: ageHours === null ? null : round(ageHours),
           latencyHours: OVERVIEW_AUDIT_LATENCY_HOURS,
           stale,
+          timeZone: null,
+          provisional: false,
         }
       : null,
     coverage: run

@@ -4893,6 +4893,58 @@
         }
       }
     },
+    "/trpc/destinations.audit.createWork": {
+      "post": {
+        "operationId": "destinations.audit.createWork",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "runId": {
+                    "type": "string"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "status",
+                        "redirect_chain",
+                        "title",
+                        "meta_description",
+                        "h1",
+                        "canonical",
+                        "robots_meta",
+                        "viewport",
+                        "lang",
+                        "image_alt",
+                        "broken_links",
+                        "hreflang",
+                        "structured_data",
+                        "page_size",
+                        "mixed_content",
+                        "duplicate_title",
+                        "duplicate_description"
+                      ]
+                    }
+                  }
+                },
+                "required": ["brandId", "destinationId", "checks"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/destinations.audit.findings": {
       "get": {
         "operationId": "destinations.audit.findings",
@@ -14082,6 +14134,49 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "destinations.audit.createWork": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "runId": {
+              "type": "string"
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "status",
+                  "redirect_chain",
+                  "title",
+                  "meta_description",
+                  "h1",
+                  "canonical",
+                  "robots_meta",
+                  "viewport",
+                  "lang",
+                  "image_alt",
+                  "broken_links",
+                  "hreflang",
+                  "structured_data",
+                  "page_size",
+                  "mixed_content",
+                  "duplicate_title",
+                  "duplicate_description"
+                ]
+              }
+            }
+          },
+          "required": ["brandId", "destinationId", "checks"]
         }
       },
       "destinations.audit.findings": {

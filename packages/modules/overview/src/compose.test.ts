@@ -95,6 +95,8 @@ const destination = (over: Partial<DestinationV1>): DestinationV1 => ({
   healthCheckedAt: null,
   capabilityVersion: 1,
   status: 'active',
+  reportingTimeZone: null,
+  currencyCode: null,
   version: 1,
   createdAt: '2026-09-01T00:00:00.000Z',
   updatedAt: '2026-09-01T00:00:00.000Z',
@@ -137,6 +139,7 @@ const report = (over: Partial<DestinationReportSummaryV1> = {}): DestinationRepo
         latencyHours: 48,
         stale: false,
       },
+      quality: { timeZone: null, asOfLocalDate: '2026-09-28', provisional: false, flags: [] },
       current: {
         windowStart: '2026-09-22',
         windowEnd: '2026-09-28',
@@ -168,6 +171,7 @@ const audit = (over: Partial<SeoAuditSummaryV1> = {}): SeoAuditSummaryV1 => ({
   origin: 'https://acme.example',
   policy: { allowed: true, reason: 'allowed', dataType: 'cms.audit' },
   canRun: true,
+  canCreateWork: true,
   running: false,
   lastRun: {
     id: 'sar_1',
@@ -341,9 +345,39 @@ describe('web source (destinations.reports.summary) and its figures', () => {
     });
     expect(webSourceOf(destination({}), base, 7).source).toMatchObject({
       state: 'fresh',
-      reason: 'data to 2026-09-28 · 7 of 7 days',
+      reason: 'as of 2026-09-28, UTC days · 7 of 7 days',
       coverage: { requested: 7, withData: 7, unit: 'days' },
+      freshness: { timeZone: null, provisional: false },
     });
+  });
+  it('RA-10: the reporting zone and a provisional latest day are stated with the coverage, never hidden', () => {
+    const base = report();
+    const entry = base.reports[0]!;
+    const zoned = report({
+      reports: [
+        {
+          ...entry,
+          quality: {
+            timeZone: 'Africa/Johannesburg',
+            asOfLocalDate: '2026-09-28',
+            provisional: true,
+            flags: ['sampled', 'partial_day'],
+          },
+        },
+      ],
+    });
+    expect(webSourceOf(destination({}), zoned, 7).source).toMatchObject({
+      state: 'fresh',
+      reason: 'as of 2026-09-28, Africa/Johannesburg, provisional · 7 of 7 days',
+      freshness: {
+        asOf: '2026-09-28T23:59:59.999Z',
+        timeZone: 'Africa/Johannesburg',
+        provisional: true,
+      },
+    });
+    expect(
+      webFigures(zoned, { kind: 'web', id: 'dst_1', label: 'Acme web', platform: 'GA4' }, 7)[0],
+    ).toMatchObject({ freshness: { timeZone: 'Africa/Johannesburg', provisional: true } });
   });
 });
 

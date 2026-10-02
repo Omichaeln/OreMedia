@@ -38,6 +38,13 @@ export const brandDestinations = mysqlTable(
     healthCheckedAt: ts('health_checked_at'),
     capabilityVersion: int('capability_version').notNull(),
     status: mysqlEnum('status', ['active', 'disconnected']).notNull().default('active'),
+    /**
+     * RA-10: the IANA zone the source reports its days in (a GA4 property's own `timeZone`, read through the
+     * adapter's target metadata) and its currency; null until the first sweep learns them (a destination registered
+     * before migration 0021, or a kind whose adapter declares none: its days stay UTC days).
+     */
+    reportingTimeZone: varchar('reporting_time_zone', { length: 64 }),
+    currencyCode: varchar('currency_code', { length: 3 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -142,7 +149,10 @@ export const destinationReportRows = mysqlTable(
     brandId: brandId(),
     destinationId: ref('destination_id').notNull(),
     reportKey: varchar('report_key', { length: 60 }).notNull(),
-    /** The UTC day the row covers, as YYYY-MM-DD (the platforms report by calendar day). */
+    /**
+     * The day the row covers, as YYYY-MM-DD: the platform's reporting day in `timeZone` (RA-10), a UTC day when
+     * `timeZone` is null (rows stored before migration 0021, or a source that reports no zone).
+     */
     date: varchar('date', { length: 10 }).notNull(),
     dimensions: json('dimensions').$type<Record<string, string>>().notNull(),
     /** hashCanonical of the dimensions: the deterministic identity of a row within (destination, report, day). */
@@ -150,6 +160,14 @@ export const destinationReportRows = mysqlTable(
     metrics: json('metrics').$type<Record<string, number>>().notNull(),
     fetchedAt: ts('fetched_at').notNull(),
     source: varchar('source', { length: 40 }).notNull().default('provider'),
+    /** RA-10: the IANA zone `date` is keyed in; null for a UTC day (see `date`). */
+    timeZone: varchar('time_zone', { length: 64 }),
+    /**
+     * RA-10: the quality flags the fetch recorded for the row's report (SourceReportQualityFlag: `sampled`,
+     * `thresholded`, `data_loss`, `not_final` as the platform exposed them, `partial_day` when the day had not
+     * ended in `timeZone` when it was read); null for a row stored before the flags existed (read as none).
+     */
+    quality: json('quality').$type<string[]>(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -263,6 +281,59 @@ export const seoAuditPages = mysqlTable(
       columns: [t.tenantId, t.brandId, t.runId],
       foreignColumns: [seoAuditRuns.tenantId, seoAuditRuns.brandId, seoAuditRuns.id],
       name: 'fk_seo_audit_page_run',
+    }),
+  ],
+);
+
+/**
+ * RA-11: an SEO finding (one check of one audit run on a website destination) turned into tracked work: the
+ * recommendation the intelligence module holds for it (`workType` / `workId`), with its provenance (the run, the
+ * check, how many pages failed it and the example URLs at the time). One open row per (destination, check): a
+ * second "create work" for the same finding returns it. The audit finish resolves the rows whose check a later
+ * completed run no longer reports (`resolvedAt`, `resolvedRunId`); a check that comes back after that gets a new
+ * row. Retention follows the runs: a row outlives its run as the record of the work it created.
+ */
+export const seoFindingWork = mysqlTable(
+  'seo_finding_work',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    destinationId: ref('destination_id').notNull(),
+    /** The run the finding was read from when the work was created (provenance). */
+    runId: ref('run_id').notNull(),
+    check: varchar('check_key', { length: 40 }).notNull(),
+    severity: mysqlEnum('severity', ['critical', 'major', 'minor']).notNull(),
+    pageCount: int('page_count').notNull().default(0),
+    /** The example URLs the finding carried when the work was created (bounded, SEO_AUDIT_FINDING_EXAMPLES). */
+    examples: json('examples').$type<string[]>().notNull().default([]),
+    workType: varchar('work_type', { length: 40 }).notNull(),
+    workId: ref('work_id').notNull(),
+    createdById: ref('created_by_id').notNull(),
+    resolvedAt: ts('resolved_at'),
+    resolvedRunId: ref('resolved_run_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_seo_finding_work_tbi').on(t.tenantId, t.brandId, t.id),
+    uniqueIndex('uq_seo_finding_work_finding').on(t.tenantId, t.destinationId, t.runId, t.check),
+    index('ix_seo_finding_work_open').on(t.tenantId, t.brandId, t.destinationId, t.check, t.resolvedAt),
+    foreignKey({
+      columns: [t.tenantId, t.brandId],
+      foreignColumns: [brands.tenantId, brands.id],
+      name: 'fk_seo_finding_work_brand',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.destinationId],
+      foreignColumns: [brandDestinations.tenantId, brandDestinations.brandId, brandDestinations.id],
+      name: 'fk_seo_finding_work_destination',
+    }),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.runId],
+      foreignColumns: [seoAuditRuns.tenantId, seoAuditRuns.brandId, seoAuditRuns.id],
+      name: 'fk_seo_finding_work_run',
     }),
   ],
 );
