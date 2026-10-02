@@ -13,6 +13,7 @@ import {
   destinationReportRows,
   pendingDestinationGrants,
   seoAuditPages,
+  seoFindingWork,
   seoAuditRuns,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
@@ -43,6 +44,7 @@ const LATER_TABLES: MySqlTable[] = [
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,
+  seoFindingWork,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

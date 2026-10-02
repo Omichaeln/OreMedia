@@ -12,11 +12,13 @@ import {
   type DestinationReportComparisonV1,
   type DestinationReportFreshnessV1,
   type DestinationReportOpportunityV1,
+  type DestinationReportQualityV1,
   type DestinationReportRowV1,
   type DestinationReportSummaryEntryV1,
   type DestinationReportSummaryV1,
   type DestinationReportWindowV1,
   type SourceReportMetricV1,
+  type SourceReportQualityFlag,
 } from '@oremedia/contracts/destinations';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import { COMPARISON_MINIMUM_SAMPLE } from '@oremedia/contracts/measurement';
@@ -26,7 +28,7 @@ import type { Tx } from '@oremedia/db';
 import { policy } from '@oremedia/module-access';
 import { STALE_FACTOR } from '@oremedia/module-measurement';
 import type { SourceReportSpec } from '@oremedia/providers';
-import { addDays, dateKey, reportUseDecision } from './report-runtime';
+import { addDays, dateKey, dayEnd, reportUseDecision } from './report-runtime';
 import {
   BrandDestinationRepository,
   DestinationReportRowRepository,
@@ -57,21 +59,48 @@ const dayWindow = (windowStart: string, windowEnd: string) => {
   return { start, end, length: Math.max(1, length) };
 };
 
-/** Stale when the latest day's end is older than STALE_FACTOR × the report's latency (the dictionary's rule). */
+/**
+ * Stale when the latest day's end is older than STALE_FACTOR × the report's latency (the dictionary's rule). The
+ * day ends in the zone its rows are keyed in (RA-10); a UTC day without one.
+ */
 export function reportFreshness(
   latestDate: string | null,
   fetchedAt: Date | null,
   latencyHours: number,
   now: Date,
+  timeZone: string | null = null,
 ): DestinationReportFreshnessV1 {
   if (!latestDate) return { latestDate: null, fetchedAt: null, ageHours: null, latencyHours, stale: true };
-  const ageHours = Math.max(0, (now.getTime() - Date.parse(`${latestDate}T23:59:59.999Z`)) / 3_600_000);
+  const ageHours = Math.max(0, (now.getTime() - dayEnd(latestDate, timeZone).getTime()) / 3_600_000);
   return {
     latestDate,
     fetchedAt: fetchedAt ? fetchedAt.toISOString() : null,
     ageHours: Math.round(ageHours * 100) / 100,
     latencyHours,
     stale: ageHours > latencyHours * STALE_FACTOR,
+  };
+}
+
+/**
+ * RA-10: the quality of a report's window. Provisional while the latest day may still move: inside the report's
+ * latency after that day ended in its zone, flagged `partial_day` by the sweep (read before the day ended) or
+ * `not_final` by the platform. The other flags are passed through as the platform exposed them.
+ */
+export function reportQuality(
+  latestDate: string | null,
+  timeZone: string | null,
+  flags: readonly SourceReportQualityFlag[],
+  latencyHours: number,
+  now: Date,
+): DestinationReportQualityV1 {
+  const withinLatency =
+    latestDate !== null && now.getTime() - dayEnd(latestDate, timeZone).getTime() < latencyHours * 3_600_000;
+  return {
+    timeZone,
+    asOfLocalDate: latestDate,
+    provisional:
+      latestDate !== null && (withinLatency || flags.includes('partial_day') || flags.includes('not_final')),
+    flags: [...flags],
   };
 }
 
@@ -124,7 +153,14 @@ export function createDestinationReportService(opts: ReportQueryOptions = {}) {
     start: string,
     end: string,
     tx?: Tx,
-  ): Promise<DestinationReportWindowV1 & { latestDate: string | null; fetchedAt: Date | null }> {
+  ): Promise<
+    DestinationReportWindowV1 & {
+      latestDate: string | null;
+      fetchedAt: Date | null;
+      timeZone: string | null;
+      flags: SourceReportQualityFlag[];
+    }
+  > {
     const [coverage, sums] = await Promise.all([
       rowsRepo.coverage(brandId, destinationId, spec.key, start, end, tx),
       rowsRepo.totals(brandId, destinationId, spec.key, spec.metrics, start, end, tx),
@@ -137,6 +173,8 @@ export function createDestinationReportService(opts: ReportQueryOptions = {}) {
       metrics: webMetricValues(spec.metrics, spec.derived, sums),
       latestDate: coverage.latestDate,
       fetchedAt: coverage.fetchedAt,
+      timeZone: coverage.timeZone,
+      flags: coverage.flags,
     };
   }
 
@@ -171,17 +209,20 @@ export function createDestinationReportService(opts: ReportQueryOptions = {}) {
           );
           const sufficient =
             current.days >= COMPARISON_MINIMUM_SAMPLE && previous.days >= COMPARISON_MINIMUM_SAMPLE;
-          const { latestDate, fetchedAt, ...currentWindow } = current;
-          const { latestDate: _l, fetchedAt: _f, ...previousWindow } = previous;
+          const { latestDate, fetchedAt, timeZone, flags, ...currentWindow } = current;
+          const { latestDate: _l, fetchedAt: _f, timeZone: _z, flags: _q, ...previousWindow } = previous;
           void _l;
           void _f;
+          void _z;
+          void _q;
           entries.push({
             reportKey: spec.key,
             label: spec.label,
             dimensions: spec.dimensions.map((name) => ({ name, label: spec.dimensionLabels[name] ?? name })),
             metrics: spec.metrics,
             derived: spec.derived,
-            freshness: reportFreshness(latestDate, fetchedAt, spec.latencyHours, at),
+            freshness: reportFreshness(latestDate, fetchedAt, spec.latencyHours, at, timeZone),
+            quality: reportQuality(latestDate, timeZone, flags, spec.latencyHours, at),
             current: currentWindow,
             previous: previousWindow,
             comparison: reportComparison(

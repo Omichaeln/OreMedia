@@ -54,6 +54,16 @@ already knew, the email). Alternative: explicit accept — invitations show as p
 membership becomes active only when the person accepts (and can decline). Changing it touches the sign-in
 resolution in `packages/modules/access/src/service.ts` and adds an accept/decline procedure and portfolio state.
 
+### D-15 consequence: web days are the source's own days (RA-10)
+
+A GA4 property reports every `date` in its own time zone, so Oremedia keys a web source's days by the zone the
+adapter reads from the platform (`describeTarget`, the Admin API's `timeZone`; remembered per destination), plans
+"yesterday" in that zone and never asks for a day still running there. Rows stored before the zone was known stay
+UTC days (`time_zone` null) and read as before; nothing is re-bucketed after the fact. Completeness is stated, not
+inferred: a window is `provisional` while its latest day is inside the report's latency, was read as a partial day
+or is marked not final by the platform, and the platform's sampling, thresholding and data-loss flags pass through
+as chips ("as of <local day>, <zone>, provisional"). A source whose platform exposes no zone keeps UTC days.
+
 ### D-16 consequence: no compare-and-swap on WordPress core REST
 
 WordPress core REST (`POST /wp-json/wp/v2/posts/<id>`) accepts no precondition: there is no `If-Match`, no ETag

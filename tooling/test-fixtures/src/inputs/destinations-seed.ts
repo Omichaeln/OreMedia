@@ -30,22 +30,12 @@ export const DESTINATIONS_SEED: SeedExtension = async (db, { tenantId, brandIds,
   const atHead = Array.isArray(present[0]) && present[0].length > 0;
   if (!atHead) return ids;
   const now = new Date();
-  await db.insert(brandDestinations).values({
-    id: destinationId,
-    tenantId,
-    brandId,
-    kind: 'ga4_property',
-    externalId: `properties/${destinationId.slice(-8)}`,
-    displayName: 'Seeded property',
-    ownerUserId,
-    credentialRefId: null,
-    tokenExpiresAt: null,
-    grantedScopes: [],
-    health: 'unknown',
-    healthCheckedAt: null,
-    capabilityVersion: 1,
-    status: 'active',
-  });
+  // sql``, not insert(brandDestinations).values(): Drizzle would name reporting_time_zone and currency_code
+  // (0021), which the roll-forward suites' earlier heads do not have; the columns named here exist at every head
+  // the seed runs at (0017 on), later ones take their defaults (null: a UTC-day destination, RA-10).
+  await db.execute(
+    sql`insert into ${brandDestinations} (id, tenant_id, brand_id, kind, external_id, display_name, owner_user_id, credential_ref_id, token_expires_at, granted_scopes, health, health_checked_at, capability_version, status, created_at, updated_at) values (${destinationId}, ${tenantId}, ${brandId}, 'ga4_property', ${`properties/${destinationId.slice(-8)}`}, 'Seeded property', ${ownerUserId}, null, null, '[]', 'unknown', null, 1, 'active', ${now}, ${now})`,
+  );
   // R2-4 (migration 0019): one audit run of the destination, so a foreign crawl or finish names a real run id.
   const auditAtHead = await db.execute(
     sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'seo_audit_runs'`,
@@ -76,21 +66,12 @@ export const DESTINATIONS_SEED: SeedExtension = async (db, { tenantId, brandIds,
     reviewedById: ownerUserId,
   });
   // Two days of one report (R2-1 part B), so a foreign summary or drill-down would have rows to leak if it could.
-  await db.insert(destinationReportRows).values(
-    ['2026-09-27', '2026-09-28'].map((date) => ({
-      id: newId('destinationReportRow'),
-      tenantId,
-      brandId,
-      destinationId,
-      reportKey: 'ga4.acquisition',
-      date,
-      dimensions: { sessionDefaultChannelGroup: 'Organic Search' },
-      dimensionKey: hashCanonical({ sessionDefaultChannelGroup: 'Organic Search' }),
-      metrics: { sessions: 100, totalUsers: 80, engagedSessions: 60, keyEvents: 2 },
-      fetchedAt: now,
-      source: 'provider',
-    })),
-  );
+  // sql`` for the same reason: time_zone and quality (0021) are not there at the earlier heads; without them the
+  // rows are UTC days without flags, as rows stored before the migration read.
+  for (const date of ['2026-09-27', '2026-09-28'])
+    await db.execute(
+      sql`insert into ${destinationReportRows} (id, tenant_id, brand_id, destination_id, report_key, date, dimensions, dimension_key, metrics, fetched_at, source, created_at) values (${newId('destinationReportRow')}, ${tenantId}, ${brandId}, ${destinationId}, 'ga4.acquisition', ${date}, ${JSON.stringify({ sessionDefaultChannelGroup: 'Organic Search' })}, ${hashCanonical({ sessionDefaultChannelGroup: 'Organic Search' })}, ${JSON.stringify({ sessions: 100, totalUsers: 80, engagedSessions: 60, keyEvents: 2 })}, ${now}, 'provider', ${now})`,
+    );
   // A sealed grant stands in by its row shape only: the harness never opens it (a foreign actor is refused first).
   await db.insert(pendingDestinationGrants).values({
     id: pendingDestinationGrantId,

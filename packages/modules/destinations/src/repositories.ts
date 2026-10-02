@@ -1,6 +1,26 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
-import type { SourceReportMetricV1, WebMetricSums } from '@oremedia/contracts/destinations';
+import {
+  SourceReportQualityFlag,
+  type SourceReportMetricV1,
+  type WebMetricSums,
+} from '@oremedia/contracts/destinations';
 import {
   BrandScopedRepository,
   PlatformRepository,
@@ -14,6 +34,7 @@ import {
   pendingDestinationGrants,
   seoAuditPages,
   seoAuditRuns,
+  seoFindingWork,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
 import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
@@ -436,7 +457,11 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     );
   }
 
-  /** Days with rows, rows, the latest day and when it was fetched, inside the window. */
+  /**
+   * Days with rows, rows, the latest day and when it was fetched, inside the window; with (RA-10) the zone the
+   * days are keyed in (the latest row's; null for UTC days) and every quality flag any row of the window carries
+   * (a row without flags, stored before they existed, contributes none).
+   */
   async coverage(
     brandId: string,
     destinationId: string,
@@ -445,21 +470,33 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     end: string,
     tx?: Tx,
   ) {
+    const flagColumns = Object.fromEntries(
+      SourceReportQualityFlag.options.map((flag) => [
+        `f_${flag}`,
+        sql<number>`max(case when json_contains(${destinationReportRows.quality}, ${JSON.stringify(flag)}) then 1 else 0 end)`,
+      ]),
+    ) as Record<`f_${SourceReportQualityFlag}`, SQL<number>>;
     const rows = await this.conn(tx)
       .select({
         days: sql<number>`count(distinct ${destinationReportRows.date})`,
         rows: sql<number>`count(*)`,
         latestDate: sql<string | null>`max(${destinationReportRows.date})`,
         fetchedAt: sql<Date | null>`max(${destinationReportRows.fetchedAt})`,
+        timeZone: sql<
+          string | null
+        >`substring_index(max(concat(${destinationReportRows.date}, '|', coalesce(${destinationReportRows.timeZone}, ''))), '|', -1)`,
+        ...flagColumns,
       })
       .from(destinationReportRows)
       .where(this.windowScope(brandId, destinationId, reportKey, start, end));
-    const r = rows[0];
+    const r = rows[0] as (typeof rows)[number] | undefined;
     return {
       days: Number(r?.days ?? 0),
       rows: Number(r?.rows ?? 0),
       latestDate: r?.latestDate ?? null,
       fetchedAt: r?.fetchedAt ? new Date(r.fetchedAt) : null,
+      timeZone: r?.timeZone ? r.timeZone : null,
+      flags: SourceReportQualityFlag.options.filter((flag) => Number(r?.[`f_${flag}`] ?? 0) > 0),
     };
   }
 
@@ -776,6 +813,106 @@ export class SeoAuditPageRepository extends BrandScopedRepository<typeof seoAudi
       await tx
         .delete(seoAuditPages)
         .where(this.brandScope(brandId, inArray(seoAuditPages.runId, [...runIds]))),
+    );
+  }
+}
+
+type SeoFindingWorkRow = typeof seoFindingWork.$inferSelect;
+
+/**
+ * RA-11: the work an SEO finding became, one open row per (destination, check). The service creates rows and reads
+ * them beside the findings; the audit finish resolves the rows a later completed run no longer reports.
+ */
+export class SeoFindingWorkRepository extends BrandScopedRepository<typeof seoFindingWork> {
+  constructor() {
+    super(seoFindingWork);
+  }
+  async create(values: Omit<typeof seoFindingWork.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  private destinationScope(brandId: string, destinationId: string, extra?: SQL): SQL {
+    return this.brandScope(brandId, and(eq(seoFindingWork.destinationId, destinationId), extra) as SQL);
+  }
+  /**
+   * The open (unresolved) row for a check of the destination, whatever run created it: at most one exists, since
+   * the service creates under the destination's row lock (a lock on a row that is not there would hold nothing).
+   * Inside that write transaction the read is a locking one (`current`, not the transaction's earlier snapshot),
+   * so a caller that waited on the destination lock sees the row the first caller committed.
+   */
+  async findOpen(
+    brandId: string,
+    destinationId: string,
+    check: string,
+    tx: Tx | undefined,
+    current = false,
+  ): Promise<SeoFindingWorkRow | null> {
+    const query = this.conn(tx)
+      .select()
+      .from(seoFindingWork)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          and(eq(seoFindingWork.check, check), isNull(seoFindingWork.resolvedAt)) as SQL,
+        ),
+      )
+      .limit(1);
+    const rows = await (current && tx ? query.for('update') : query);
+    return rows[0] ?? null;
+  }
+  /**
+   * The rows the findings of one run are read beside: the destination's open rows, the rows created from that run
+   * (an earlier run's work stays visible on it after a later run resolved it) and the rows that run resolved.
+   */
+  async listForRun(
+    brandId: string,
+    destinationId: string,
+    runId: string,
+    tx?: Tx,
+  ): Promise<SeoFindingWorkRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoFindingWork)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          or(
+            isNull(seoFindingWork.resolvedAt),
+            eq(seoFindingWork.runId, runId),
+            eq(seoFindingWork.resolvedRunId, runId),
+          ) as SQL,
+        ),
+      )
+      .orderBy(asc(seoFindingWork.check), asc(seoFindingWork.id))
+      .limit(LIST_MAX);
+  }
+  /**
+   * Resolves every open row of the destination whose check a completed run no longer reports: the finding went
+   * away, so its work is marked resolved by that run (the work itself stays whatever its own module says).
+   */
+  async resolveMissing(
+    brandId: string,
+    destinationId: string,
+    runId: string,
+    reportedChecks: readonly string[],
+    now: Date,
+    tx: Tx,
+  ): Promise<number> {
+    return affectedRows(
+      await tx
+        .update(seoFindingWork)
+        .set({ resolvedAt: now, resolvedRunId: runId })
+        .where(
+          this.destinationScope(
+            brandId,
+            destinationId,
+            and(
+              isNull(seoFindingWork.resolvedAt),
+              reportedChecks.length ? notInArray(seoFindingWork.check, [...reportedChecks]) : undefined,
+            ) as SQL,
+          ),
+        ),
     );
   }
 }

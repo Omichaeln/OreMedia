@@ -153,6 +153,15 @@ export class RecommendationRepository extends BrandScopedRepository<typeof recom
       .limit(page.limit + 1);
     return pageOf(rows, page);
   }
+  /** The brand's recommendations among the ids (an id of another brand or tenant is left out), bounded. */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(recommendations)
+      .where(this.brandScope(brandId, inArray(recommendations.id, [...ids.slice(0, 200)])))
+      .orderBy(asc(recommendations.id));
+  }
   /** Proposed recommendations in rank order (rank 0 = unranked, listed last by id). */
   async listProposed(brandId: string, tx?: Tx) {
     return this.conn(tx)

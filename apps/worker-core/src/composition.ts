@@ -27,6 +27,7 @@ import {
   destinationArticles,
   destinationService,
   registerDestinationOutboxRoutes,
+  registerFindingWork,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
 } from '@oremedia/module-destinations';
@@ -102,6 +103,7 @@ import {
   reviewToolSource,
 } from '@oremedia/module-review';
 import { registerCommunityOutboxRoutes } from '@oremedia/module-community';
+import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
 import type { CapabilityCheck } from '@oremedia/observability';
 import {
   channelService,
@@ -312,6 +314,26 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerRecommendationResolver((recommendationId, brandId, tx) =>
     intelligenceService.recommendations.belongsToBrand(recommendationId, brandId, tx),
   );
+  // RA-11: an SEO finding becomes tracked work as a recommendation (spec 16.4) with the finding's provenance; the
+  // destinations module reads the work's title and state back the same way.
+  registerFindingWork({
+    create: async (actor, input, tx) => {
+      const created = await intelligenceService.recommendations.createFromFinding(actor, input, tx);
+      return {
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: created.recommendationId,
+        title: created.title,
+        state: created.state,
+      };
+    },
+    describe: async (brandId, workIds, tx) =>
+      (await intelligenceService.recommendations.describeForBrand(brandId, workIds, tx)).map((r) => ({
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: r.id,
+        title: r.title,
+        state: r.state,
+      })),
+  });
   registerExperimentListener((milestone, tx) =>
     intelligenceService.learning.onExperimentMilestone(milestone, tx),
   );

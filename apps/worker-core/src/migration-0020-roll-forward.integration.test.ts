@@ -5,7 +5,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
 import { ARTICLE_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import { channelVariants } from '@oremedia/db/schema/content';
-import { brandDestinations } from '@oremedia/db/schema/destinations';
+import { brandDestinations, seoFindingWork } from '@oremedia/db/schema/destinations';
 import { publicationRemoteChanges, publications } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -22,7 +22,11 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
  * a value outside either enum is refused.
  */
 const PREVIOUS_HEAD = '0019_seo_audit';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+/** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [seoFindingWork];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t));
 
 describe('migration 0020 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

@@ -1,4 +1,8 @@
-import type { DestinationKind } from '@oremedia/contracts/destinations';
+import type {
+  DestinationKind,
+  SourceReportQualityFlag,
+  SourceTargetMetadataV1,
+} from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
   DecryptedCredentials,
@@ -85,6 +89,15 @@ export class FixtureSourceAdapter implements SourceAdapter {
   readonly nextReportBehaviours: ReportBehaviour[] = [];
   /** Every fetchReport call with the request and the access token it was handed. */
   readonly reportCalls: Array<SourceReportRequest & { accessToken: string }> = [];
+  /**
+   * RA-10: what describeTarget answers (the target's reporting zone and currency), or a platform refusal; null
+   * leaves the method answering "not exposed" so the runtime keys UTC days as before.
+   */
+  targetMetadata: SourceTargetMetadataV1 | { kind: 'unauthorised' | 'forbidden' } | null = null;
+  readonly describeCalls: Array<{ externalId: string; accessToken: string }> = [];
+  /** RA-10: the zone and quality flags every report page carries (as a GA4 answer's metadata would). */
+  reportTimeZone: string | null = null;
+  reportQuality: SourceReportQualityFlag[] = [];
 
   constructor(kind: DestinationKind = 'ga4_property', capability?: SourceCapabilityV1) {
     this.key = kind;
@@ -135,6 +148,26 @@ export class FixtureSourceAdapter implements SourceAdapter {
     return this.targets.map((t) => ({ ...t }));
   }
 
+  async describeTarget(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    _io: ProviderIO,
+    externalId: string,
+  ): Promise<SourceTargetMetadataV1> {
+    this.describeCalls.push({ externalId, accessToken: credentials.accessToken });
+    const scripted = this.targetMetadata;
+    if (scripted && 'kind' in scripted) {
+      const status = scripted.kind === 'unauthorised' ? 401 : 403;
+      throw new SourceReadError(
+        this.key,
+        status,
+        this.classifyError({ status, phase: 'after_send' }),
+        `fixture ${status}`,
+      );
+    }
+    return scripted ? { ...scripted } : { reportingTimeZone: null, currencyCode: null };
+  }
+
   async fetchReport(
     credentials: DecryptedCredentials,
     _client: ClientConfig,
@@ -177,7 +210,13 @@ export class FixtureSourceAdapter implements SourceAdapter {
           metrics: { ...r.metrics },
         }));
         const next = from + rows.length;
-        return { rows, nextPageToken: next < all.length ? String(next) : null };
+        return {
+          rows,
+          nextPageToken: next < all.length ? String(next) : null,
+          reportingTimeZone: this.reportTimeZone,
+          currencyCode: null,
+          quality: [...this.reportQuality],
+        };
       }
     }
   }

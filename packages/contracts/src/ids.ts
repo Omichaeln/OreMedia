@@ -84,6 +84,8 @@ export const ID_PREFIXES = {
   /** One bounded crawl of a website destination and one page it fetched (R2-4 technical SEO audit). */
   seoAuditRun: 'sar',
   seoAuditPage: 'sap',
+  /** An SEO finding turned into tracked work, with its provenance (RA-11). */
+  seoFindingWork: 'sfw',
   providerCapability: 'pc',
   metricDefinition: 'md',
   metricSnapshot: 'ms',
