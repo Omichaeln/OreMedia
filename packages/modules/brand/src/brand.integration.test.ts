@@ -1062,7 +1062,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
     });
   });
 
-  describe('brand skill import (guidelines, separation of duties)', () => {
+  describe('brand skill import (guidelines, author record)', () => {
     const brandSkill = newId('brand');
     const importer = manager(tenantA);
     const approver: ResolvedActor = {
@@ -1137,7 +1137,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       ]);
     });
 
-    it('the importer publishes it themselves (2 October 2026), and agents then receive the guidelines', async () => {
+    it('the importer publishes it themselves (D-21), and agents then receive the guidelines', async () => {
       const expected = await toReview(imported);
       await publishAs(importer, imported, expected);
       const snapshot = await runInTenant(ctx(tenantA), () =>
