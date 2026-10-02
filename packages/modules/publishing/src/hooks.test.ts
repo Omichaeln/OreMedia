@@ -8,6 +8,8 @@ import {
   configureChannelActivation,
   providerClientSettings,
   providerClientsFromEnv,
+  registerDisconnectedCredentialSweep,
+  sweepDisconnectedCredentials,
 } from './hooks';
 
 describe('channel capabilities (startup configuration report)', () => {
@@ -93,5 +95,23 @@ describe('channel health from the provider error classification (RA-01, generic 
       healthFromReadFailure(new SourceReadError('x', 403, { kind: 'reconnect_required' }, 'no permission')),
     ).toBeNull();
     expect(healthFromReadFailure(new Error('platform 500'))).toBeNull();
+  });
+});
+
+describe('disconnected credential sweep (RA-01): the destinations floor the publication sweeper runs', () => {
+  afterEach(() => registerDisconnectedCredentialSweep(null));
+
+  it('sweeps nothing until a module registers one, then hands it the floor and the correlation id', async () => {
+    const before = new Date('2026-01-01T00:00:00Z');
+    expect(await sweepDisconnectedCredentials(before, 'corr')).toBe(0);
+    const calls: [Date, string][] = [];
+    registerDisconnectedCredentialSweep(async (at, correlationId) => {
+      calls.push([at, correlationId]);
+      return 3;
+    });
+    expect(await sweepDisconnectedCredentials(before, 'corr')).toBe(3);
+    expect(calls).toEqual([[before, 'corr']]);
+    registerDisconnectedCredentialSweep(null);
+    expect(await sweepDisconnectedCredentials(before, 'corr')).toBe(0);
   });
 });

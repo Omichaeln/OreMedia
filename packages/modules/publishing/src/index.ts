@@ -54,6 +54,7 @@ export {
   type ChannelActivation,
   type ChannelActivationSource,
   registerWorkflowProbe,
+  registerDisconnectedCredentialSweep,
   registerDestinationPublisher,
   resetDestinationPublisher,
   registerBrandChecker as registerPublishingBrandChecker,
@@ -68,6 +69,7 @@ export {
   type PublishMediaDescription,
   type ProviderClientSource,
   type WorkflowProbe,
+  type DisconnectedCredentialSweep,
   type DestinationPublisher,
   type DestinationTargetDescription,
   type DestinationPublishInput,
@@ -90,6 +92,7 @@ export {
   workflowIdOf,
   healthFromClass,
   healthFromReadFailure,
+  auditRevokeReason,
 } from './common';
 /** RA-01: the one writer of a channel's health from the ingest pulls (worker-ingest). */
 export { channelHealth, HEALTH_RESTAMP_MS } from './health';

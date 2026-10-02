@@ -134,8 +134,8 @@ the person, and no retry is attempted inside the day.
 `destinations.disconnect` makes the sealed grant unusable at once (the module refuses to open a disconnected
 destination's credential for anything but the remote revoke) and leaves it to `destinationRevokeWorkflowV1`
 (worker-core), which revokes the refresh token at Google's `/revoke` endpoint, records `destination.remote_revoke`
-(`revoked` / `failed` with `http_<status>`) and destroys the credential whatever Google answered; the retention sweep
-shreds any credential still intact an hour after the disconnect. A grant Google has already revoked answers
+(`revoked` / `failed` with `http_<status>`) and destroys the credential whatever Google answered; the publication sweeper
+shreds any credential still intact an hour after the disconnect (`destination.credential_shredded`). A grant Google has already revoked answers
 `invalid_token` and reads as revoked.
 
 ## What the product stores

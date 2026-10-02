@@ -30,6 +30,7 @@ import {
   registerFindingWork,
   sourceActivationFromEnv,
   sourceCapabilities,
+  sweepDisconnectedDestinationCredentials,
 } from '@oremedia/module-destinations';
 import { assetService, registerAssetOutboxRoutes, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
@@ -121,6 +122,7 @@ import {
   registerReleaseEvaluator,
   registerVariantSource,
   registerWorkflowProbe,
+  registerDisconnectedCredentialSweep,
   registerPublishingBrandChecker,
   registerDestinationPublisher,
   type WorkflowProbe,
@@ -227,6 +229,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.
   configureChannelActivation(channelActivationFromEnv());
   registerWorkflowProbe(opts.workflowProbe ?? null);
+  // RA-01: the publication sweeper's shred floor covers disconnected destinations too (destinations runtime).
+  registerDisconnectedCredentialSweep(sweepDisconnectedDestinationCredentials);
   // Spec 15: measurement.collection_due starts the collection on worker-ingest's queues; variant links and
   // creative attributes are captured here too because agents run content commands in this process.
   registerMeasurementOutboxRoutes();

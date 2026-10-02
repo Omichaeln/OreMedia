@@ -97,6 +97,14 @@ export function healthFromClass(cls: ProviderErrorClass): ChannelHealth | null {
  * the adapter raised with its classification is mapped above, but only when the token itself was refused (401): a
  * 403 may be one endpoint's permission, which is a scope gap, not a dead grant. Anything else is not a health fact.
  */
+/**
+ * RA-01: what a failed remote revoke's reason may say in the audit trail: a code shaped by the adapter helpers
+ * (`http_<status>`, `transport_<phase>`, an error name in snake case). Anything else (a message, a URL, a
+ * platform's own text) is replaced, since audit metadata is read by every tenant operator.
+ */
+export const auditRevokeReason = (reason: string): string =>
+  /^[a-z_]+(_\d+)?$/.test(reason) ? reason : 'provider_error';
+
 export function healthFromReadFailure(err: unknown): ChannelHealth | null {
   if (err instanceof ProviderTransportError) return 'unreachable';
   if (err instanceof SourceReadError) return err.status === 401 ? healthFromClass(err.classification) : null;

@@ -38,10 +38,9 @@ import { renderArticleHtml } from '@oremedia/contracts/article';
 import { destinationArticles, effectivePublishMode } from './articles';
 import { configureDestinationCms } from './cms';
 import { providerService } from './providers';
-import { destinationRetention } from './retention';
 import { openDestinationCredential } from './service';
 import { configureSourceActivation, configureSourceAvailability } from './hooks';
-import { createDestinationRuntime } from './runtime';
+import { createDestinationRuntime, sweepDisconnectedDestinationCredentials } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
 import { FixtureCmsAdapter, fixtureArticleHash } from './testing/fixture-cms';
@@ -1083,8 +1082,10 @@ describe('destinations module against MySQL 8', () => {
       expect(credential.destroyedAt).toBeInstanceOf(Date);
       expect(credential.rotatedAt).toBeNull();
       expect(credential.wrappedDataKey).toBe('');
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull(); // nothing left to point at
       // RA-01, the floor under the revoke: a credential still intact an hour after the disconnect is shredded by
-      // the retention sweep's handler, audited; a dry run only counts it.
+      // the publication sweeper's floor (the application role; registered by worker-core), audited, and the row
+      // stops pointing at it; within the hour it is left to the workflow.
       const leftover = await run(tenantA, async (tx) =>
         credentialBroker.createCredentialRef(
           await credentialBroker.seal(tenantA, connectedId, {
@@ -1096,22 +1097,23 @@ describe('destinations module against MySQL 8', () => {
       );
       await tdb.db
         .update(brandDestinations)
-        .set({ credentialRefId: leftover, updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .set({ credentialRefId: leftover, updatedAt: new Date(Date.now() - 30 * 60_000) })
         .where(eq(brandDestinations.id, connectedId));
-      expect(
-        await run(tenantA, (tx) => destinationRetention.shredDisconnectedCredentials(new Date(), true, tx)),
-      ).toBe(1);
+      const floor = () => new Date(Date.now() - 60 * 60_000);
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
       expect((await credentialRow(leftover)).destroyedAt).toBeNull();
-      expect(
-        await run(tenantA, (tx) => destinationRetention.shredDisconnectedCredentials(new Date(), false, tx)),
-      ).toBe(1);
+      await tdb.db
+        .update(brandDestinations)
+        .set({ updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(eq(brandDestinations.id, connectedId));
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(1);
       expect((await credentialRow(leftover)).destroyedAt).toBeInstanceOf(Date);
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull();
       expect((await auditsOf('destination.credential_shredded')).at(-1)?.metadata).toMatchObject({
         reason: 'disconnect_shred_floor',
+        kind: 'ga4_property',
       });
-      expect(
-        await run(tenantA, (tx) => destinationRetention.shredDisconnectedCredentials(new Date(), false, tx)),
-      ).toBe(0);
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
       await expect(
         inTenant(tenantA, () =>
           credentialBroker.withCredentialRef(
@@ -1136,6 +1138,70 @@ describe('destinations module against MySQL 8', () => {
         withinHours: 24,
       });
       expect(due.some((d) => d.destinationId === connectedId)).toBe(false);
+    });
+
+    it('RA-01: a reconnect between the revoke’s read and its destroy keeps the new credential (status re-checked under the lock)', async () => {
+      // The row is disconnected with a credential the revoke has not reached yet (as a worker catching up).
+      const stale = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_old',
+            refreshToken: 'rt_old',
+          }),
+          tx,
+        ),
+      );
+      const fresh = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_new',
+            refreshToken: 'rt_new',
+          }),
+          tx,
+        ),
+      );
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: stale, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
+      const revokeAudits = (await auditsOf('destination.remote_revoke')).length;
+      // The vendor call takes long enough for a person to reconnect the destination with a new grant.
+      const behaviour = fixture.revokeBehaviour;
+      fixture.revokeBehaviour = null;
+      const revokeAccess = fixture.revokeAccess.bind(fixture);
+      fixture.revokeAccess = async (creds) => {
+        await tdb.db
+          .update(brandDestinations)
+          .set({ credentialRefId: fresh, status: 'active' })
+          .where(eq(brandDestinations.id, connectedId));
+        return revokeAccess(creds);
+      };
+      try {
+        expect(
+          await asPlatformJob(tenantA, () =>
+            createDestinationRuntime().revoke.revokeDestinationAccess({
+              tenantId: tenantA,
+              destinationId: connectedId,
+              actor: REFRESH_ACTOR,
+              correlationId: 'corr_revoke_race',
+            }),
+          ),
+        ).toEqual({ outcome: 'already_destroyed' });
+      } finally {
+        delete (fixture as { revokeAccess?: unknown }).revokeAccess;
+        fixture.revokeBehaviour = behaviour;
+      }
+      expect(fixture.revokeCalls.at(-1)?.refreshToken).toBe('rt_old');
+      const after = await destinationRow(connectedId);
+      expect(after).toMatchObject({ status: 'active', credentialRefId: fresh });
+      expect((await credentialRow(fresh)).destroyedAt).toBeNull();
+      expect((await credentialRow(stale)).destroyedAt).toBeNull(); // nothing of the row touched either
+      expect((await auditsOf('destination.remote_revoke')).length).toBe(revokeAudits); // nothing recorded either
+      // Put back as the later tests expect it: disconnected, nothing to point at.
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: null, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
     });
   });
   describe('website articles (ledger R2-3, D-16): a secret connect, its verification and the article publisher', () => {

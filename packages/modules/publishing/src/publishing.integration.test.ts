@@ -2812,9 +2812,11 @@ describe('publishing module (spec 14) against MySQL 8', () => {
           .from(auditEvents)
           .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
       ).find((e) => e.resourceId === failing.id);
+      // The activity result carries the adapter's reason; the audit trail only a code (`http_<status>`, a
+      // transport phase), never a platform's text.
       expect(failedAudit).toMatchObject({
         decision: 'denied',
-        metadata: { remoteRevoke: 'failed', reason: 'http_500:platform down' },
+        metadata: { remoteRevoke: 'failed', reason: 'provider_error' },
       });
       await expect(
         inTenant(tenantA, () =>
@@ -2885,6 +2887,60 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         outcome: 'already_destroyed',
       });
       expect((await runtime.sweep.sweepPublications(sweepInput)).credentialsShredded).toBe(0);
+    });
+
+    it('RA-01: a reconnect between the revoke’s read and its destroy keeps the new credential (status re-checked under the lock)', async () => {
+      fixture.grant.remoteAccountId = 'acct_A_race';
+      const conn = await connect(tenantA, brandA);
+      const before = await connectionRow(conn.id);
+      await run(tenantA, (tx) =>
+        channelService.disconnect(A, { channelConnectionId: conn.id, expectedVersion: before.version }, tx),
+      );
+      const revokeAudits = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+      ).length;
+      // The platform call takes long enough for a person to reconnect the same account: the row is active again
+      // with a new credential (the old one rotated away) by the time the revoke's transaction opens.
+      const revokeAccess = fixture.revokeAccess;
+      fixture.revokeAccess = async (creds) => {
+        await connect(tenantA, brandA);
+        return revokeAccess!.call(fixture, creds);
+      };
+      try {
+        expect(
+          await inTenant(tenantA, () =>
+            runtime.channelRevoke.revokeChannelAccess({
+              tenantId: tenantA,
+              actor: { kind: 'user' as const, id: USER },
+              correlationId: 'c',
+              channelConnectionId: conn.id,
+            }),
+          ),
+        ).toEqual({ outcome: 'already_destroyed' });
+      } finally {
+        fixture.revokeAccess = revokeAccess;
+        fixture.grant.remoteAccountId = 'acct_A';
+        fixture.revokedTokens.clear();
+      }
+      const after = await connectionRow(conn.id);
+      expect(after.status).toBe('active');
+      expect(after.credentialRefId).not.toBe(before.credentialRefId);
+      expect((await credentialRow(after.credentialRefId)).destroyedAt).toBeNull();
+      expect((await credentialRow(before.credentialRefId)).rotatedAt).not.toBeNull(); // the reconnect rotated it
+      expect(
+        (
+          await tdb.db
+            .select()
+            .from(auditEvents)
+            .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+        ).length,
+      ).toBe(revokeAudits); // nothing recorded for a row that is no longer disconnected
+      expect(
+        await inTenant(tenantA, () => credentialBroker.withCredentials(tenantA, conn.id, async () => 'x')),
+      ).toBe('x');
     });
 
     it('RA-01: channel health is written only for an active or refresh_needed row, and never by a stamp older than the last check', async () => {

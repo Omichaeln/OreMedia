@@ -109,7 +109,12 @@ export {
   registry as sourceRegistryInUse,
   type DestinationSourceOptions,
 } from './sources';
-export { createDestinationRuntime, type DestinationRuntime, type DestinationRuntimeOptions } from './runtime';
+export {
+  createDestinationRuntime,
+  sweepDisconnectedDestinationCredentials,
+  type DestinationRuntime,
+  type DestinationRuntimeOptions,
+} from './runtime';
 /** Spec 14.7 pattern for the daily refresh: one Temporal schedule per namespace on task queue `core`. */
 export const DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE = 'destinationTokenRefreshWorkflowV1';
 export const DESTINATION_TOKEN_REFRESH_SCHEDULE_ID = 'destination-token-refresh';

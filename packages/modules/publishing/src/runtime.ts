@@ -87,6 +87,7 @@ import {
   forRelease,
   publicationResource,
   reconcileWorkflowId,
+  auditRevokeReason,
   targetIdOf,
   transition,
   workflowIdOf,
@@ -100,6 +101,7 @@ import {
   providerClientFor,
   publishMedia,
   review,
+  sweepDisconnectedCredentials,
   variants,
   workflowRunning,
   type DestinationMutationResult,
@@ -1209,6 +1211,9 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       }
       return withTransaction(async (tx) => {
         const locked = await connectionsRepo.lock(row.id, tx);
+        // Re-checked under the lock: a reconnect since the read above gave the row a new credential that must
+        // survive, whatever the platform answered about the old grant.
+        if (locked.status !== 'disabled') return { outcome: 'already_destroyed' };
         const current = await credentialsRepo.getById(locked.credentialRefId, tx);
         if (!current.destroyedAt)
           await credentialsRepo.destroy(current.id, current.version, 'disconnected', tx);
@@ -1229,7 +1234,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             brandId: locked.brandId,
             channelConnectionId: locked.id,
             remoteRevoke: result.outcome,
-            reason: result.outcome === 'failed' ? truncateForTemporal(result.reason, 300) : null,
+            reason: result.outcome === 'failed' ? auditRevokeReason(result.reason) : null,
           },
         );
         return result;
@@ -1283,6 +1288,13 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
               );
             }),
         );
+      // The destinations module's floor for its disconnected destinations, on the same clock and bound.
+      summary.credentialsShredded =
+        (summary.credentialsShredded ?? 0) +
+        (await sweepDisconnectedCredentials(
+          new Date(at.getTime() - DISCONNECT_SHRED_FLOOR_MS),
+          input.correlationId,
+        ));
       for (const ref of stuck) {
         const workflowId = workflowIdOf({ id: ref.publicationId, claimant: ref.claimant });
         if (await workflowRunning(workflowId)) continue;

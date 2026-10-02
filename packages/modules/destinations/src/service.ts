@@ -700,13 +700,23 @@ export const destinationService = {
       );
     if (row.version !== parsed.expectedVersion)
       throw new ConflictError('Destination', row.id, parsed.expectedVersion);
-    await destinationsRepo.update(row.id, row.version, { status: 'disconnected', tokenExpiresAt: null }, tx);
     // RA-01, as channels on disconnect: where the kind's adapter can revoke the grant remotely the credential is
     // left (unusable from here on: openDestinationCredential refuses it) to destinationRevokeWorkflowV1, which
-    // revokes it at the platform and destroys it; otherwise the row is destroyed here (data key discarded).
+    // revokes it at the platform and destroys it; otherwise the row is destroyed here (data key discarded) and
+    // the destination stops pointing at it (the sweeper's floor visits only a disconnected row with a credential).
     const adapter = cmsRegistryInUse().lookup(row.kind) ?? registry().lookup(row.kind);
     const remoteRevoke: RemoteRevokeOutcome =
       row.credentialRefId && adapter?.revokeAccess ? 'requested' : 'not_supported';
+    await destinationsRepo.update(
+      row.id,
+      row.version,
+      {
+        status: 'disconnected',
+        tokenExpiresAt: null,
+        ...(remoteRevoke === 'not_supported' ? { credentialRefId: null } : {}),
+      },
+      tx,
+    );
     if (row.credentialRefId && remoteRevoke === 'not_supported')
       await credentialBroker.destroyCredentialRef(row.credentialRefId, 'disconnected', tx);
     await audit.record(

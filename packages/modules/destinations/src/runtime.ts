@@ -15,19 +15,26 @@ import type {
 import type { SeoAuditRuntimeV1 } from '@oremedia/contracts/seo-audit';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { RevokeResult } from '@oremedia/contracts/providers';
-import { requireTenant, runAsPlatform, withTransaction } from '@oremedia/db';
+import { requireTenant, runAsPlatform, runInTenant, withTransaction } from '@oremedia/db';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
-import { credentialBroker, providerClientFor } from '@oremedia/module-publishing';
+import { auditRevokeReason, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
 import { cmsIO, cmsRegistryInUse } from './cms';
 import { createSeoAuditRuntime } from './audit-runtime';
 import { createDestinationReportRuntime } from './report-runtime';
-import { BrandDestinationRepository, DestinationRefreshDueRepository } from './repositories';
+import {
+  BrandDestinationRepository,
+  DestinationRefreshDueRepository,
+  DisconnectedDestinationRepository,
+} from './repositories';
 import { StoredKind, enabledCmsAdapter, openDestinationCredential } from './service';
 import { registry, sourceAdapterFor, sourceIO } from './sources';
 
 const destinationsRepo = new BrandDestinationRepository();
 const dueRepo = new DestinationRefreshDueRepository();
+const disconnectedRepo = new DisconnectedDestinationRepository();
+/** The platform job the shred floor runs under: the publication sweeper's (publishing runtime.ts). */
+const SWEEP_JOB = 'publication-sweeper';
 const REFRESH_LOCK_SECONDS = 60;
 /** The platform job the due listing declares (spec 5.3); references only leave it. */
 const REFRESH_JOB = 'destination-token-refresh';
@@ -283,8 +290,13 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       }
       return withTransaction(async (tx) => {
         const locked = await destinationsRepo.lock(row.id, tx);
-        if (locked.credentialRefId)
+        // Re-checked under the lock: a reconnect since the read above gave the row a new credential that must
+        // survive, whatever the platform answered about the old grant.
+        if (locked.status !== 'disconnected') return { outcome: 'already_destroyed' };
+        if (locked.credentialRefId) {
           await credentialBroker.destroyCredentialRef(locked.credentialRefId, 'disconnected', tx);
+          await destinationsRepo.update(locked.id, locked.version, { credentialRefId: null }, tx);
+        }
         await audit.record(
           workflowActor(),
           'destination.remote_revoke',
@@ -295,7 +307,7 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
             brandId: locked.brandId,
             kind: locked.kind,
             remoteRevoke: result.outcome,
-            reason: result.outcome === 'failed' ? result.reason.slice(0, 300) : null,
+            reason: result.outcome === 'failed' ? auditRevokeReason(result.reason) : null,
           },
         );
         return result;
@@ -313,4 +325,53 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
     verify,
     audit: createSeoAuditRuntime({ now, ...(opts.auditLock ? { auditLock: opts.auditLock } : {}) }),
   };
+}
+
+/**
+ * RA-01, the floor under destinationRevokeWorkflowV1, run by the publication sweeper (worker-core registers it
+ * through registerDisconnectedCredentialSweep, next to the channel floor): a disconnected destination whose
+ * credential is still intact at `before` (the worker was down, the event dead-lettered) has it crypto-shredded
+ * here, audited (`destination.credential_shredded`), and the row stops pointing at it; a row whose credential the
+ * revoke destroyed already is unlinked silently, a row reconnected meanwhile is left alone. Bounded to
+ * SHRED_FLOOR_BATCH rows per run, on the application role.
+ */
+export async function sweepDisconnectedDestinationCredentials(
+  before: Date,
+  correlationId: string,
+): Promise<number> {
+  const log = logger().child('destinations');
+  const refs = await runAsPlatform(SWEEP_JOB, correlationId, () => disconnectedRepo.listUnshredded(before));
+  let shredded = 0;
+  for (const ref of refs)
+    await runInTenant(
+      {
+        tenantId: ref.tenantId,
+        actor: { kind: 'service_principal', id: SWEEP_JOB },
+        brandIds: 'all',
+        correlationId,
+      },
+      () =>
+        withTransaction(async (tx) => {
+          const locked = await destinationsRepo.lock(ref.destinationId, tx);
+          if (locked.status !== 'disconnected' || !locked.credentialRefId) return;
+          const intact = await credentialBroker.credentialRefIntact(locked.credentialRefId, tx);
+          if (intact) await credentialBroker.destroyCredentialRef(locked.credentialRefId, 'disconnected', tx);
+          await destinationsRepo.update(locked.id, locked.version, { credentialRefId: null }, tx);
+          if (!intact) return;
+          shredded += 1;
+          await audit.record(
+            requireTenant().actor,
+            'destination.credential_shredded',
+            { type: 'brand_destination', id: locked.id },
+            'allowed',
+            tx,
+            { brandId: locked.brandId, kind: locked.kind, reason: 'disconnect_shred_floor' },
+          );
+          log.warn(
+            { tenantId: locked.tenantId, destinationId: locked.id },
+            'sweeper shredded the credential of a disconnected destination the remote revoke left behind',
+          );
+        }),
+    );
+  return shredded;
 }

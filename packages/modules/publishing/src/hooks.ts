@@ -282,6 +282,21 @@ export const registerWorkflowProbe = (probe: WorkflowProbe | null): void => {
 export const workflowRunning = (workflowId: string): Promise<boolean> => workflowProbe.isRunning(workflowId);
 
 /**
+ * RA-01: the floor under a destination's remote revoke runs on the publication sweeper's clock, next to the
+ * channel floor (runtime.ts sweepPublications), so one always-on platform job on the application role bounds
+ * both. The destinations module registers the sweep that shreds the credentials of its disconnected destinations
+ * still intact at `before` (bounded, audited) and answers how many it shredded; absent (a process without the
+ * destinations module, a test), nothing is swept.
+ */
+export type DisconnectedCredentialSweep = (before: Date, correlationId: string) => Promise<number>;
+let disconnectedCredentialSweep: DisconnectedCredentialSweep = async () => 0;
+export const registerDisconnectedCredentialSweep = (fn: DisconnectedCredentialSweep | null): void => {
+  disconnectedCredentialSweep = fn ?? (async () => 0);
+};
+export const sweepDisconnectedCredentials = (before: Date, correlationId: string): Promise<number> =>
+  disconnectedCredentialSweep(before, correlationId);
+
+/**
  * Ledger R2-3: a publication whose target is a write-capable brand destination (a website) is carried out by the
  * destinations module behind this hook, as a channel's is by its provider adapter: generic code here knows a
  * target kind and an outcome, never a CMS. The composition root registers `destinationArticles` from the

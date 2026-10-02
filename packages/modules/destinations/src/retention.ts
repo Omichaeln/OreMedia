@@ -1,7 +1,6 @@
 import { CMS_AUDIT_DATA_TYPE, SEO_AUDIT_DESTINATION_KIND } from '@oremedia/contracts/seo-audit';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { audit } from '@oremedia/module-operations';
-import { credentialBroker } from '@oremedia/module-publishing';
 import { seoAuditRunsToPrune } from './audit-runtime';
 import { reportRetention } from './report-runtime';
 import {
@@ -40,42 +39,7 @@ async function eachDestination(
  * clock, whether or not the destination is still connected, holds a credential, its kind is enabled or certified
  * for reads, or its last fetch succeeded: no provider is called to expire local rows. Dry run counts only.
  */
-/** RA-01: a disconnected destination's credential the remote revoke has not shredded within this long is shredded here. */
-export const DISCONNECT_SHRED_FLOOR_MS = 60 * 60_000;
-
 export const destinationRetention = {
-  /**
-   * RA-01, the floor under the remote revoke: the credential a disconnect left to destinationRevokeWorkflowV1
-   * that is still intact an hour later (the worker was down, the event dead-lettered) is shredded here, audited.
-   * Counts only in a dry run.
-   */
-  async shredDisconnectedCredentials(now: Date, dryRun: boolean, tx: Tx): Promise<number> {
-    const { actor } = requireTenant();
-    const before = new Date(now.getTime() - DISCONNECT_SHRED_FLOOR_MS);
-    let total = 0;
-    await eachDestination(tx, async (row) => {
-      if (
-        row.status !== 'disconnected' ||
-        !row.credentialRefId ||
-        row.updatedAt.getTime() >= before.getTime()
-      )
-        return;
-      if (!(await credentialBroker.credentialRefIntact(row.credentialRefId, tx))) return;
-      total += 1;
-      if (dryRun) return;
-      await credentialBroker.destroyCredentialRef(row.credentialRefId, 'disconnected', tx);
-      await audit.record(
-        actor,
-        'destination.credential_shredded',
-        { type: 'brand_destination', id: row.id },
-        'allowed',
-        tx,
-        { brandId: row.brandId, kind: row.kind, reason: 'disconnect_shred_floor' },
-      );
-    });
-    return total;
-  },
-
   /** Report rows of days before each destination's cut-off; returns the rows removed (or counted). */
   async pruneReports(now: Date, dryRun: boolean, tx: Tx): Promise<number> {
     const { actor } = requireTenant();
