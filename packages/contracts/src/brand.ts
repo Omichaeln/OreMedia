@@ -82,8 +82,8 @@ export const BrandSystemDocumentV1 = z.object({
   ),
   /**
    * The brand's written guidelines (an imported brand skill: SKILL.md and its references), carried with the version
-   * and given to agents with the brand constraints. Absent on versions that have none. Publishing a version whose
-   * guidelines differ from the published ones needs a person other than their last author.
+   * and given to agents with the brand constraints. Absent on versions that have none. The last author of the
+   * guidelines is recorded (brand_guideline_authors); any person with brand.publish_version publishes.
    */
   guidelines: BrandGuidelinesV1.optional(),
 });

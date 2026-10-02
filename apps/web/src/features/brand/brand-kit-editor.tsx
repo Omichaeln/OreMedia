@@ -206,7 +206,7 @@ function GuidelinesSection({
   return (
     <Section
       title="Brand guidelines"
-      hint="Imported from a brand skill. Agents receive this text with the brand constraints once the version is published; publishing new guidelines needs a second person."
+      hint="Imported from a brand skill. Agents receive this text with the brand constraints once the version is published."
     >
       <div className="flex flex-wrap items-start justify-between gap-2 text-sm">
         <div className="min-w-0">

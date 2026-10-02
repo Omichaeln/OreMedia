@@ -44,7 +44,7 @@ async function packageFiles(picked: File[]): Promise<Array<{ path: string; conte
  * Spec 8.2 brand skill import: pick the skill's folder (SKILL.md, references/, assets/), its files, or the `.skill`
  * package Claude exports. Text files are read in the browser and sent; other files are sent by name only so the
  * result can say they were skipped. The server creates a new draft carrying the guidelines and the palette its
- * tables state; a second person publishes.
+ * tables state; a person reviews and publishes.
  */
 export function BrandSkillImport() {
   const { brandId } = useBrandContext();
@@ -86,7 +86,7 @@ export function BrandSkillImport() {
         <p className="text-muted-foreground">
           A brand skill made in Claude or elsewhere (a <code>.skill</code> package, or a folder with SKILL.md
           and references) becomes a new draft: its text is kept as the brand guidelines agents follow, and the
-          colours in its tables are added to the palette. Someone other than you publishes it.
+          colours in its tables are added to the palette. Review it, then publish it.
         </p>
         <div className="flex flex-wrap gap-2">
           <label className="inline-flex cursor-pointer items-center rounded-md border border-border bg-secondary px-2.5 py-1.5 hover:bg-muted">
@@ -132,7 +132,7 @@ export function BrandSkillImport() {
                 {result.documents.length} guideline document{result.documents.length === 1 ? '' : 's'} kept,{' '}
                 {result.coloursAdded} colour{result.coloursAdded === 1 ? '' : 's'} added to the palette.
                 Review it below: an agent can extract its voice and vocabulary from the guidelines. Then
-                submit it for review; a different person publishes it.
+                submit it for review, then publish it.
                 {result.skipped.length > 0 && (
                   <span className="mt-1 block">
                     Not imported: {result.skipped.map((s) => s.path).join(', ')}. Upload logos and images in
