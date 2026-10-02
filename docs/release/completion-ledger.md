@@ -111,3 +111,13 @@ scope by the mandate.
   RA-01 (migration 0022 if needed) and RA-14 (a Railway-run staging acceptance job: fixtures, deployed browser acceptance,
   k6 load, bounded model evaluation, accessibility checklist). No alert destination exists in Railway (no webhooks);
   owner action: provide a Slack, Discord or email webhook destination for deploy and crash alerts.
+- 2 October 2026, 17:08 UTC: PR #37 (RA-10, RA-11; migration 0021) squash-merged as 8a9c0ec after a conformance review
+  (ordering, destination row lock for createWork, DST day end, zone recheck window). Production api pre-deploy logged
+  `migrations applied` and `configuration complete`. PR #36 (RA-14 acceptance job) and PR #38 (RA-08, RA-09) open as drafts;
+  RA-01 branch in its review fix round (rebase on 0021, credential made unusable at disconnect with a bounded shred, source
+  and CMS remote revoke, health monotonicity).
+- Staging acceptance job (service `acceptance`, branch claude/ra14-staging-acceptance): two runs. Fixtures for `acceptance-a`
+  and `acceptance-b` PASS (companies, members per role, published brand version, policy, agent principal), `smoke:health`
+  PASS; every other HTTP check fails because the job's responses carry no headers at all (`headers=[] set-cookie=absent`
+  on every response while the api logs 200 and the bodies arrive). Not reproducible locally with the same built bundle;
+  a three-client probe is being added to isolate the Railway-side cause before the deployed browser suites can run.
