@@ -48,23 +48,36 @@ async function readTree(base: string, dir: string): Promise<SkillFile[]> {
   return files;
 }
 
+/**
+ * One built-in package as it sits on disk: the files an import takes (SKILL.md, manifest.json, references/*) and
+ * its evaluation cases (cases/*.json). The seeder registers the package at platform scope; a company that wants
+ * its own copy imports the same files at tenant scope (skills.import), as the staging acceptance fixtures do.
+ */
+export async function loadBuiltinPackage(
+  key: BuiltinSkillKey,
+  dir = builtinSkillsDir(),
+): Promise<{ files: SkillFile[]; cases: EvaluationCase[] }> {
+  const base = path.join(dir, key);
+  if (!(await stat(base).catch(() => null))?.isDirectory())
+    throw new Error(`built-in skill ${key}: directory missing at ${base}`);
+  const all = await readTree(base, '');
+  const cases = all
+    .filter((f) => f.path.startsWith('cases/') && f.path.endsWith('.json'))
+    .flatMap((f) => {
+      const parsed: unknown = JSON.parse(f.content);
+      return EvaluationCase.array().parse(Array.isArray(parsed) ? parsed : [parsed]);
+    });
+  const files = all.filter((f) => !f.path.startsWith('cases/'));
+  if (!files.some((f) => f.path === INSTRUCTIONS_PATH) || !files.some((f) => f.path === MANIFEST_PATH))
+    throw new Error(`built-in skill ${key}: SKILL.md and manifest.json are required`);
+  return { files, cases };
+}
+
 /** Reads and validates every built-in package from disk (SKILL.md + manifest.json + references/* + cases/*.json). */
 export async function loadBuiltinSkills(dir = builtinSkillsDir()): Promise<BuiltinSkill[]> {
   const out: BuiltinSkill[] = [];
   for (const key of BUILTIN_SKILL_KEYS) {
-    const base = path.join(dir, key);
-    if (!(await stat(base).catch(() => null))?.isDirectory())
-      throw new Error(`built-in skill ${key}: directory missing at ${base}`);
-    const all = await readTree(base, '');
-    const cases = all
-      .filter((f) => f.path.startsWith('cases/') && f.path.endsWith('.json'))
-      .flatMap((f) => {
-        const parsed: unknown = JSON.parse(f.content);
-        return EvaluationCase.array().parse(Array.isArray(parsed) ? parsed : [parsed]);
-      });
-    const files = all.filter((f) => !f.path.startsWith('cases/'));
-    if (!files.some((f) => f.path === INSTRUCTIONS_PATH) || !files.some((f) => f.path === MANIFEST_PATH))
-      throw new Error(`built-in skill ${key}: SKILL.md and manifest.json are required`);
+    const { files, cases } = await loadBuiltinPackage(key, dir);
     const content = parsePackage(files);
     if (content.manifest.key !== key)
       throw new Error(`built-in skill ${key}: manifest.key is ${content.manifest.key}`);

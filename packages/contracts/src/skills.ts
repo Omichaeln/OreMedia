@@ -215,7 +215,7 @@ export const SkillImport = z.object({
 });
 export const SkillExport = z.object({ skillVersionId: z.string() });
 
-// ---- evaluation workflow contract (skillEvaluationWorkflowV1 on task queue `agents`, workflow id `skill-evaluation:<skillVersionId>:<suiteId>`) ----
+// ---- evaluation workflow contract (skillEvaluationWorkflowV1 on task queue `agents`, workflow id `skill-evaluation:<skillVersionId>:<suiteId>:<requestVersion>`) ----
 
 /**
  * Spec 10.2 / 19.6: versions.evaluate moves the version to sandbox_evaluation and emits skill.evaluation_requested;

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -35,6 +35,47 @@ describe('every module an app entry imports at run time is built', () => {
   });
 
   it.each(cases)('$app imports $target, which is a tsup entry', ({ app, target }) => {
+    const config = read(path.join(appsDir, app, 'tsup.config.ts')) ?? '';
+    const entry = config.match(/entry:\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(entry, `${app}/tsup.config.ts entry lacks ${target}`).toMatch(
+      new RegExp(`(['"]?)${target}\\1\\s*:\\s*['"]src/${target}\\.ts['"]`),
+    );
+  });
+});
+
+/**
+ * The same for the images: every `node apps/<app>/dist/<x>.js` (or `node dist/<x>.js`, the api image's layout) that
+ * an infra/railway Dockerfile or railway.json names must be a tsup entry of that app, or the container starts with
+ * ERR_MODULE_NOT_FOUND. Covers the acceptance job's entrypoint next to main, migrate and the operator entrypoints.
+ */
+describe('every dist entry an infra/railway image runs is built', () => {
+  const infraDir = path.resolve(process.cwd(), 'infra/railway');
+  const files = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const file = path.join(dir, name);
+      if (statSync(file).isDirectory()) return files(file);
+      return name === 'Dockerfile' || name.startsWith('Dockerfile.') || name === 'railway.json' ? [file] : [];
+    });
+  const cases = files(infraDir).flatMap((file) => {
+    const text = read(file) ?? '';
+    const appOf = (defaultApp: string) =>
+      text.match(/OREMEDIA_APP=(\w[\w-]*)/)?.[1] ??
+      text.match(/\/src\/apps\/([\w-]+)\/dist/)?.[1] ??
+      defaultApp;
+    return [...text.matchAll(/node["',\s]+(?:apps\/([\w-]+)\/)?dist\/([\w-]+)\.js/g)].map((m) => ({
+      file: path.relative(process.cwd(), file),
+      app: m[1] ?? appOf('api'),
+      target: m[2]!,
+    }));
+  });
+
+  it('finds the acceptance job entry', () => {
+    expect(cases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ app: 'api', target: 'acceptance-run' })]),
+    );
+  });
+
+  it.each(cases)('$file runs $app dist/$target, which is a tsup entry', ({ app, target }) => {
     const config = read(path.join(appsDir, app, 'tsup.config.ts')) ?? '';
     const entry = config.match(/entry:\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(entry, `${app}/tsup.config.ts entry lacks ${target}`).toMatch(

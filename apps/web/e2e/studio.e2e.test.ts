@@ -8,6 +8,7 @@ import superjson from 'superjson';
 import type { Operation } from '@oremedia/contracts/creative';
 import { fixtureDocument, ids } from '@oremedia/editor/fixtures';
 import type { AppRouter } from '@oremedia/api';
+import { deployedWebOrigin, signInWithPasswordForm } from './deployed';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
 
@@ -16,11 +17,15 @@ import { startStaticServer } from './static-server';
  * Runs the BUILT app (apps/web/dist) in headless Chromium against either:
  *  - the in-memory mock transport (default; `OREMEDIA_E2E=1`), or
  *  - the real API (`OREMEDIA_E2E_API_URL`, `OREMEDIA_E2E_TOKEN`, `OREMEDIA_E2E_TENANT`, `OREMEDIA_E2E_BRAND`);
- *    the outage and render-failure cases need the mock's hooks and are skipped there.
+ *    the outage and render-failure cases need the mock's hooks and are skipped there; or
+ *  - a deployed origin (`OREMEDIA_E2E_WEB_ORIGIN`, the staging acceptance job): the deployed web serves the app and
+ *    proxies the api, the person signs in with `OREMEDIA_E2E_EMAIL` and `OREMEDIA_E2E_PASSWORD` through the form,
+ *    and the out-of-band edits use `OREMEDIA_E2E_TOKEN` against that origin.
  * Never run on the unit project's plain `pnpm test`: it is opt-in because it needs the build and a browser.
  */
-const enabled = process.env['OREMEDIA_E2E'] === '1' || Boolean(process.env['OREMEDIA_E2E_API_URL']);
-const realApi = process.env['OREMEDIA_E2E_API_URL'];
+const webOrigin = deployedWebOrigin();
+const realApi = process.env['OREMEDIA_E2E_API_URL'] ?? webOrigin ?? undefined;
+const enabled = process.env['OREMEDIA_E2E'] === '1' || Boolean(realApi);
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
 // The full Chromium build of the pinned Playwright release (never the headless shell, which renders text differently);
 // an explicit path wins, otherwise Playwright's own installation of that build is used (CI installs it).
@@ -50,13 +55,17 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   let headText: (documentId: string, elementId: string) => Promise<string | null>;
 
   beforeAll(async () => {
-    if (!existsSync(`${dist}/index.html`))
-      throw new Error(`build first: pnpm --filter @oremedia/web build (missing ${dist}/index.html)`);
-    const served = await startStaticServer(
-      realApi ? { dist, apiOrigin: realApi } : { dist, trpcHandler: createMockHandler(backend) },
-    );
-    origin = served.origin;
-    close = served.close;
+    if (webOrigin) {
+      origin = webOrigin;
+    } else {
+      if (!existsSync(`${dist}/index.html`))
+        throw new Error(`build first: pnpm --filter @oremedia/web build (missing ${dist}/index.html)`);
+      const served = await startStaticServer(
+        realApi ? { dist, apiOrigin: realApi } : { dist, trpcHandler: createMockHandler(backend) },
+      );
+      origin = served.origin;
+      close = served.close;
+    }
     if (realApi) {
       const client = createTRPCClient<AppRouter>({
         links: [
@@ -108,12 +117,16 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
         return el && el.type === 'text' ? el.text : null;
       };
     }
-    console.error('[e2e] mode', realApi ? `real API ${realApi}` : 'mock transport', {
-      tenantId: session.tenantId,
-      brandId: session.brandId,
-      fontAssetVersionId: session.fontAssetVersionId,
-      photoAssetVersionId: session.photoAssetVersionId,
-    });
+    console.error(
+      '[e2e] mode',
+      webOrigin ? `deployed origin ${webOrigin}` : realApi ? `real API ${realApi}` : 'mock transport',
+      {
+        tenantId: session.tenantId,
+        brandId: session.brandId,
+        fontAssetVersionId: session.fontAssetVersionId,
+        photoAssetVersionId: session.photoAssetVersionId,
+      },
+    );
     browser = await chromium.launch(launchOptions);
     const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
     page = await context.newPage();
@@ -134,10 +147,17 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   const documentIdFromUrl = () => decodeURIComponent(page.url().split('/studio/')[1]?.split('?')[0] ?? '');
   const headlineTextarea = () => page.locator('#prop-text');
 
-  it('signs in with a session token, lists the portfolio and opens the brand home', async () => {
-    await page.goto(`${origin}/sign-in`);
-    await page.getByLabel('Session token').fill(session.token);
-    await page.getByRole('button', { name: 'Continue' }).click();
+  it('signs in with a session token (a deployed origin: email and password), lists the portfolio and opens the brand home', async () => {
+    if (webOrigin) {
+      await signInWithPasswordForm(page, origin, {
+        email: process.env['OREMEDIA_E2E_EMAIL'] ?? '',
+        password: process.env['OREMEDIA_E2E_PASSWORD'] ?? '',
+      });
+    } else {
+      await page.goto(`${origin}/sign-in`);
+      await page.getByLabel('Session token').fill(session.token);
+      await page.getByRole('button', { name: 'Continue' }).click();
+    }
     await expect.poll(() => page.url()).toContain('/portfolio');
     await expect.poll(() => page.getByRole('list', { name: 'Companies' }).count()).toBe(1);
     if (realApi) {

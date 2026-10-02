@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { crc32, deflateSync } from 'node:zlib';
+import { describeResponse } from '../acceptance/report';
 
 /**
  * Production smoke checks (docs/runbooks/deploy-railway.md, "Production smoke check"): what a deployed Oremedia must
@@ -112,12 +113,23 @@ async function jsonOf(res: Response): Promise<unknown> {
   }
 }
 
+/** A failure's view of the response: status, content type, header names, body length (never a header's value). */
+const seen = async (res: Response): Promise<string> =>
+  describeResponse(res, (await res.text().catch(() => '')).length);
+
 /** GET /health through the web origin (Caddy proxies it to the api): 200, ok, and no degraded capability. */
 export async function checkHealth(cfg: SmokeConfig, f: Fetch = fetch): Promise<CheckResult> {
   const res = await f(`${cfg.baseUrl}/health`);
-  const body = (await jsonOf(res)) as { ok?: unknown; degraded?: unknown } | null;
-  if (res.status !== 200 || body?.ok !== true)
-    return fail('health', `HTTP ${res.status}, ok=${String(body?.ok)}`);
+  const text = await res.text().catch(() => '');
+  type Health = { ok?: unknown; degraded?: unknown };
+  let body: Health | null = null;
+  try {
+    body = JSON.parse(text) as Health;
+  } catch {
+    body = null;
+  }
+  if (res.status !== 200 || !body || body.ok !== true)
+    return fail('health', `ok=${String(body?.ok)} (${describeResponse(res, text.length)})`);
   if (!Array.isArray(body.degraded))
     return fail('health', 'no degraded list: the api predates the configuration report');
   if (body.degraded.length)
@@ -133,7 +145,7 @@ export async function checkCsp(cfg: SmokeConfig, f: Fetch = fetch): Promise<Chec
   const res = await f(`${cfg.baseUrl}/`);
   const policy = res.headers.get('content-security-policy');
   if (res.status !== 200 || !policy)
-    return fail('csp', `HTTP ${res.status}, CSP ${policy ? 'present' : 'missing'}`);
+    return fail('csp', `CSP ${policy ? 'present' : 'missing'} (${await seen(res)})`);
   const csp = cspDirectives(policy);
   const extra = (d: string) =>
     (csp[d] ?? []).filter((s) => s.startsWith('https://') || s.startsWith('http://'));
@@ -169,14 +181,14 @@ export async function checkLegal(cfg: SmokeConfig, page: string, f: Fetch = fetc
   const type = res.headers.get('content-type') ?? '';
   return res.status === 200 && type.includes('text/html')
     ? pass(name, 'HTTP 200 text/html')
-    : fail(name, `HTTP ${res.status} ${type || '(no content type)'}`);
+    : fail(name, `${type || 'no content type'} (${await seen(res)})`);
 }
 
 /** /deployment-brand/brand.json is a pack the web app accepts (apps/web/src/lib/deployment-brand.tsx rules). */
 export async function checkBrandJson(cfg: SmokeConfig, f: Fetch = fetch): Promise<CheckResult> {
   const res = await f(`${cfg.baseUrl}/deployment-brand/brand.json`);
   if (res.status !== 200 || !(res.headers.get('content-type') ?? '').includes('json'))
-    return fail('brand.json', `HTTP ${res.status} ${res.headers.get('content-type') ?? ''}`.trim());
+    return fail('brand.json', `not JSON (${await seen(res)})`);
   const v = (await jsonOf(res)) as {
     name?: unknown;
     fonts?: unknown;
