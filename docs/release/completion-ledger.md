@@ -104,3 +104,10 @@ scope by the mandate.
 - 2 October 2026, 15:06 UTC: PR #34 (RA-07) squash-merged as d0c5566; production and staging api, workers and web deployed
   SUCCESS.
 - Staging `approval-monitor` still crashes on every run (sample Gmail credentials); unchanged by these merges.
+- 2 October 2026, 15:24 UTC: PR #35 (RA-02, RA-03, RA-04, RA-12; migration 0020) squash-merged as 7ac8c67. Production and
+  staging api pre-deploy logged `migrations applied` and `configuration complete`; every repo service deployed SUCCESS in both
+  environments. Production smoke run 30 (after #34) and run 31 (after #35) passed. Main CI run 103 green.
+- 2 October 2026, 15:30 UTC: remediation agents started from 7ac8c67 for RA-10/RA-11 (migration 0021), RA-08/RA-09,
+  RA-01 (migration 0022 if needed) and RA-14 (a Railway-run staging acceptance job: fixtures, deployed browser acceptance,
+  k6 load, bounded model evaluation, accessibility checklist). No alert destination exists in Railway (no webhooks);
+  owner action: provide a Slack, Discord or email webhook destination for deploy and crash alerts.
