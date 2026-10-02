@@ -35,6 +35,11 @@ CI runs the same files on every change (`.github/workflows/ci.yml`, job `integra
 (`docs/progress/progress.json` R.8), the job does not run. Setting the variable without the secrets fails the job
 with "SMOKE_BASE_URL is required", which is the intended signal.
 
+The deployed acceptance that needs no person-issued credential is the staging acceptance job
+(`staging-acceptance.md`): run inside the staging project, it provisions its own fixture companies, runs the smoke
+checks, the browser suites against the real origin (`apps/web/e2e/deployed.e2e.test.ts`: U1, the shell, U2,
+isolation) and the api journey, and prints one `ACCEPTANCE_*` line per check.
+
 ## Recording a UAT pass
 
 Each staging walk is recorded in `docs/release/r1-evidence.md` (section "UAT") with the date, the account used

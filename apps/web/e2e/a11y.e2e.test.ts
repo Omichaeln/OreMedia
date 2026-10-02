@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { auditPage, dialogFocusTrap, focusNotObscured, formatViolations, keyboardPath } from './a11y';
+import { deployedWebOrigin } from './deployed';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { P5 } from './mock-phase5';
 import { P6 } from './mock-phase6';
@@ -15,9 +16,12 @@ import { startStaticServer } from './static-server';
  * 390 px and 1280 px against the in-process mock transport, each in a state that shows its richest content (a
  * selected publication with per-channel outcomes, an open review request, a run, a package with findings, …). The
  * audit is apps/web/e2e/a11y.ts (axe-core is not installed in this workspace). Opt-in like the other smokes
- * (`OREMEDIA_E2E=1`).
+ * (`OREMEDIA_E2E=1`). With `OREMEDIA_E2E_WEB_ORIGIN` (the staging acceptance job) the same audit runs against the
+ * deployed origin on the screens that need no mock data: sign-in, its refusals and the set-password page; the
+ * signed-in screens and the dialog and toast checks stay with the mock, whose states they depend on.
  */
-const enabled = process.env['OREMEDIA_E2E'] === '1';
+const webOrigin = deployedWebOrigin();
+const enabled = process.env['OREMEDIA_E2E'] === '1' || Boolean(webOrigin);
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const chromiumPath = process.env['OREMEDIA_CHROMIUM_PATH'];
 const launchOptions = chromiumPath
@@ -33,6 +37,8 @@ interface Screen {
   path: () => string;
   /** The screen shows its content (not a skeleton). */
   ready: (page: Page) => Promise<unknown>;
+  /** Needs no session and no mock data: audited on a deployed origin too. */
+  public?: true;
 }
 
 describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock transport)', () => {
@@ -48,6 +54,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       name: 'sign in',
       path: () => '/sign-in?next=%2Fportfolio',
       ready: (page) => page.getByRole('link', { name: 'Continue with Google' }).waitFor({ timeout: 15_000 }),
+      public: true,
     },
     // D-03: every refusal the Google callback can pass back renders its own explanation.
     ...(
@@ -65,11 +72,13 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       path: () => `/sign-in?error=${code}`,
       ready: (page: Page) =>
         page.locator(`[data-testid="sign-in-refusal"][data-refusal="${code}"]`).waitFor({ timeout: 15_000 }),
+      public: true as const,
     })),
     {
       name: 'set password',
       path: () => '/set-password#token=pst_a11y_audit',
       ready: (page) => page.getByTestId('set-password').waitFor({ timeout: 15_000 }),
+      public: true,
     },
     {
       name: 'portfolio',
@@ -207,6 +216,11 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
     },
   ];
 
+  /** On a deployed origin only the public screens; with the mock, every screen. */
+  const AUDITED = webOrigin ? SCREENS.filter((s) => s.public) : SCREENS;
+  /** The dialog and toast checks depend on the mock's states: with the mock only. */
+  const mockOnly = describe.skipIf(Boolean(webOrigin));
+
   /** A fresh navigation (a fragment-only change would not reload), then the content and no pending skeleton. */
   const open = async (page: Page, screen: Screen) => {
     await page.goto('about:blank');
@@ -238,6 +252,8 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
     }, theme);
     const page = await context.newPage();
     page.on('pageerror', (err) => console.error('[page error]', err));
+    // The public screens need no session; on a deployed origin nobody signs in here.
+    if (webOrigin) return { context, page };
     await page.goto(`${origin}/sign-in`);
     await page.getByLabel('Session token').fill(E2E.token);
     await page.getByRole('button', { name: 'Continue' }).click();
@@ -246,12 +262,16 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
   };
 
   beforeAll(async () => {
-    if (!existsSync(`${dist}/index.html`))
-      throw new Error(`build first: pnpm --filter @oremedia/web build (missing ${dist}/index.html)`);
-    documentId = backend.createDocument('Accessibility poster').id;
-    const served = await startStaticServer({ dist, trpcHandler: createMockHandler(backend) });
-    origin = served.origin;
-    close = served.close;
+    if (webOrigin) {
+      origin = webOrigin;
+    } else {
+      if (!existsSync(`${dist}/index.html`))
+        throw new Error(`build first: pnpm --filter @oremedia/web build (missing ${dist}/index.html)`);
+      documentId = backend.createDocument('Accessibility poster').id;
+      const served = await startStaticServer({ dist, trpcHandler: createMockHandler(backend) });
+      origin = served.origin;
+      close = served.close;
+    }
     browser = await chromium.launch(launchOptions);
   }, 60_000);
 
@@ -328,7 +348,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
           await context?.close();
         });
 
-        it.each(SCREENS.map((s) => [s.name, s] as const))(
+        it.each(AUDITED.map((s) => [s.name, s] as const))(
           '%s: zero violations',
           async (name, screen) => {
             await open(page, screen);
@@ -353,7 +373,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         await context?.close();
       });
 
-      it.each(SCREENS.map((s) => [s.name, s] as const))(
+      it.each(AUDITED.map((s) => [s.name, s] as const))(
         '%s',
         async (name, screen) => {
           await open(page, screen);
@@ -372,7 +392,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       );
     });
 
-  describe('dialogs trap focus, are named and pass the audit', () => {
+  mockOnly('dialogs trap focus, are named and pass the audit', () => {
     let context: BrowserContext;
     let page: Page;
     beforeAll(async () => {
@@ -421,7 +441,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
    * the mutation aborted (a critical "Revoke failed" toast, which stays until dismissed) or answered (a 6 s "Link
    * revoked" toast). Neither reaches the shared mock backend, so the active link other screens use is untouched.
    */
-  describe('toasts never hide the focused control (2.4.11) and are keyboard operable', () => {
+  mockOnly('toasts never hide the focused control (2.4.11) and are keyboard operable', () => {
     const revokeName = 'Revoke link for approver@client.example';
     const reviewScreen: Screen = {
       name: 'review inbox (links)',

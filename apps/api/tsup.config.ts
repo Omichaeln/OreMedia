@@ -13,6 +13,7 @@ export default defineConfig({
     'seed-builtin-skills': 'src/seed-builtin-skills.ts',
     'bootstrap-owner': 'src/bootstrap-owner.ts',
     'db-roles-apply': 'src/db-roles-apply.ts',
+    'acceptance-run': 'src/acceptance-run.ts',
   },
   format: ['esm'],
   target: 'node22',
