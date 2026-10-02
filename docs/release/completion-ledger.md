@@ -159,3 +159,15 @@ applied` and `configuration complete`; every production service deployed SUCCESS
   audit trail and names the grading error when its own request fails. The same push marks the test fixture provider ready for
   the RA-01 activation gate, which the in-process acceptance test tripped after the merge (CI integration job red on 19de768).
   The staging event dispatches on its own once worker-core redeploys from main with the new id.
+- 2 October 2026, 19:20 UTC: PR #36 (RA-14) squash-merged as 726a92b after CI went green on 2c5f7c4. Every production and
+  staging service deployed SUCCESS from 726a92b (staging approval-monitor still crashes on its Gmail credentials, as before);
+  production smoke run 35 passed on 726a92b. The staging `acceptance` service now tracks main. Staging acceptance run 7
+  (726a92b, worker-core on the per-request workflow id): both stuck evaluation requests dispatched at once
+  (`skill-evaluation:…:3` and `…:5`), so the workflow-id defect is confirmed fixed in the deployed environment; both
+  gradings then failed within 90 ms with `The model provider rejected the request`, which the acceptance now names
+  (`MODEL_EVAL_FAIL … evaluation failed (version 1): …`) instead of timing out. The status behind that rejection is not
+  recorded anywhere an operator can see: PR #40 makes both model adapters carry the provider's status and message in the
+  error; the next staging run will name the cause (invalid key, unknown model id or malformed request are the candidates;
+  staging worker-core has OPENROUTER_API_KEY_REF and OREMEDIA_MODEL_ID set). RA-14 is otherwise complete: fixtures, sign-ins,
+  smoke, isolation, journey, a11y, deployed browser suites and the evaluation path proven on staging; the single failing
+  check remains `smoke:upload:csp` on the placeholder object store (owner action).
