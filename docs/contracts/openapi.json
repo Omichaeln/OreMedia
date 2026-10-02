@@ -729,6 +729,37 @@
         }
       }
     },
+    "/trpc/agents.runs.effectiveLimits": {
+      "get": {
+        "operationId": "agents.runs.effectiveLimits",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "servicePrincipalId": {
+                    "type": "string"
+                  },
+                  "taskKind": {
+                    "type": "string"
+                  },
+                  "requestedAutonomy": {
+                    "type": "string",
+                    "enum": ["assist", "create", "prepare_release", "managed_autopublish"]
+                  }
+                },
+                "required": ["brandId", "servicePrincipalId", "taskKind"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/agents.runs.get": {
       "get": {
         "operationId": "agents.runs.get",
@@ -10603,6 +10634,28 @@
             }
           },
           "required": ["runId"]
+        }
+      },
+      "agents.runs.effectiveLimits": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "servicePrincipalId": {
+              "type": "string"
+            },
+            "taskKind": {
+              "type": "string"
+            },
+            "requestedAutonomy": {
+              "type": "string",
+              "enum": ["assist", "create", "prepare_release", "managed_autopublish"]
+            }
+          },
+          "required": ["brandId", "servicePrincipalId", "taskKind"]
         }
       },
       "agents.runs.get": {

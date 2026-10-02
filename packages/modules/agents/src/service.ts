@@ -6,15 +6,23 @@ import {
   RoutingPolicySet,
   RunApproveProposal,
   RunCancel,
+  RunEffectiveLimits,
   RunGet,
   RunList,
   RunPendingProposals,
   RunStart,
   RunSteps,
   type AgentRunState,
+  type Budget,
+  type RunStartBlocker,
 } from '@oremedia/contracts/agents';
 import { OperationBatch } from '@oremedia/contracts/creative';
-import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
+import {
+  BudgetExhaustedError,
+  NotFoundError,
+  PolicyDeniedError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { TaskKind } from '@oremedia/contracts/skills';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
@@ -32,6 +40,8 @@ import {
   entitlementAutonomy,
   modelConfigFromEnv,
   modelRegion,
+  resolveBudget,
+  resolveSkills,
   tenantPolicyFor,
   type ModelConfig,
 } from '@oremedia/ai';
@@ -286,6 +296,121 @@ export const agentsService = {
         });
       }
       return { items };
+    },
+
+    /**
+     * RA-07: the limits a run would start under, read before it starts so a person never learns them from a
+     * refusal. Computed from the same sources as startRun and resolveContextSnapshot (principal ceiling, tenant
+     * policy, entitlement, pinned skills' budgets and allowlists, the brand's spend position, the kill switch);
+     * nothing is reserved or written. Gated as the principal list is (agent.start_run on the brand); a foreign
+     * brand or principal is NOT_FOUND.
+     */
+    async effectiveLimits(actor: ResolvedActor, input: z.input<typeof RunEffectiveLimits>, tx?: Tx) {
+      const parsed = RunEffectiveLimits.parse(input);
+      const taskKind = TaskKind.safeParse(parsed.taskKind);
+      if (!taskKind.success)
+        throw new ValidationFailedError([
+          { path: 'taskKind', issue: `unknown task kind ${parsed.taskKind}` },
+        ]);
+      const { tenantId, correlationId } = requireTenant();
+      await brandService.assertExist([parsed.brandId], tx); // NOT_FOUND for a foreign brand
+      await policy.assert(
+        actor,
+        'agent.start_run',
+        { type: 'brand', tenantId, brandId: parsed.brandId, id: parsed.brandId },
+        {},
+        tx,
+      );
+      const principal = await principalsRepo.getById(parsed.servicePrincipalId, tx); // NOT_FOUND for a foreign one
+      const blockers: Array<{ code: RunStartBlocker; message: string }> = [];
+      if (principal.status !== 'active')
+        blockers.push({
+          code: 'principal_revoked',
+          message: 'This principal was revoked; no run starts under it.',
+        });
+      if (await killSwitch.isOn('agent_starts', parsed.brandId, tx))
+        blockers.push({ code: 'kill_switch_engaged', message: 'Agent starts are paused for this brand.' });
+      const entitlement = await entitlements.check(tenantId, 'generation_budget_micros_month', tx);
+      if (!entitlement.allowed)
+        blockers.push({
+          code: 'entitlement_exhausted',
+          message: "The plan's generation budget for this month is used up.",
+        });
+      const ent = await entitlements.resolve(tenantId, tx);
+      const tenantPolicy = await tenantPolicyFor(tenantId, correlationId, tx);
+      const autonomy = {
+        requested: parsed.requestedAutonomy,
+        principalMax: principal.maxAutonomy,
+        tenantPolicyMax: tenantPolicy.maxAutonomy,
+        entitlementMax: entitlementAutonomy(ent),
+        effective: effectiveAutonomy(
+          parsed.requestedAutonomy,
+          principal.maxAutonomy,
+          tenantPolicy.maxAutonomy,
+          entitlementAutonomy(ent),
+        ),
+      };
+      const skills = await resolveSkills(
+        { tenantId, brandId: parsed.brandId, taskKind: taskKind.data, actor },
+        tx,
+      );
+      if (skills.length === 0)
+        blockers.push({
+          code: 'no_skill',
+          message: 'No published skill serves this task kind for the brand.',
+        });
+      let budget: Budget | null = null;
+      try {
+        budget = resolveBudget(skills, ent);
+      } catch (err) {
+        if (!(err instanceof BudgetExhaustedError)) throw err;
+        blockers.push({
+          code: 'budget_exhausted_month',
+          message: "The company's generation budget for this month is spent.",
+        });
+      }
+      const spend = await budgets.summary(parsed.brandId, tx);
+      const reservedMicros = budget?.maxCostMicros ?? 0;
+      if (budget && reservedMicros > spend.month.remainingMicros)
+        blockers.push({
+          code: 'budget_exhausted_month',
+          message: "The company's remaining budget this month is below what the run would reserve.",
+        });
+      if (budget && reservedMicros > spend.day.remainingMicros)
+        blockers.push({
+          code: 'budget_exhausted_day',
+          message: "The brand's remaining budget today is below what the run would reserve.",
+        });
+      // allowedTools as the context resolver computes it: the skills' allowlists the principal's grants cover.
+      const covers = (action: string) =>
+        principal.grants.some(
+          (g) => g.action === action && (g.brandIds === 'all' || g.brandIds.includes(parsed.brandId)),
+        );
+      const tools = [...new Set(skills.flatMap((s) => s.manifest.allowedTools))].sort().map((name) => {
+        const def = RELEASE_1_TOOLS.find((t) => t.name === name);
+        const action = def?.action ?? null;
+        return { name, action, allowed: action !== null && covers(action) };
+      });
+      const deniedActions = [
+        ...new Set(tools.flatMap((t) => (!t.allowed && t.action ? [t.action] : []))),
+      ].sort();
+      return {
+        brandId: parsed.brandId,
+        taskKind: taskKind.data,
+        principal: { id: principal.id, name: principal.name, maxAutonomy: principal.maxAutonomy },
+        autonomy,
+        skills: skills.map((s) => ({ key: s.key, title: s.manifest.title, versionNumber: s.versionNumber })),
+        budget,
+        reservedMicros,
+        spend: {
+          month: { limitMicros: spend.month.limitMicros, remainingMicros: spend.month.remainingMicros },
+          day: { limitMicros: spend.day.limitMicros, remainingMicros: spend.day.remainingMicros },
+        },
+        tools,
+        deniedActions,
+        blockers,
+        canStart: blockers.length === 0,
+      };
     },
 
     /** Spec 13.5: cancel moves the row (machine), releases the reservation and signals the workflow via the outbox. */

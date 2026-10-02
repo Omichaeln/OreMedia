@@ -1,22 +1,31 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Field, Input, StatusBanner } from '@oremedia/ui';
+import { Button, Field, Skeleton, StatusBanner } from '@oremedia/ui';
+import { RequestError } from '../../components/request-state';
+import { Select } from '../../components/select';
 import { brandPath, useBrandContext } from './brand-context';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
-import { toUiError } from '../../lib/errors';
+import { denialOf, toUiError } from '../../lib/errors';
+import { EffectiveLimits } from '../agents/effective-limits';
+import { useAgentPrincipals } from '../agents/use-agent-runs';
+
+/** The action the onboarding skill's brand.proposeVoice tool needs; a principal without it would be denied it. */
+const NEEDED_ACTION = 'brand.edit_standards';
 
 /**
  * Spec 8.2 onboarding: an agent reads the imported guidelines and proposes this draft's voice and vocabulary (tone,
  * audiences, preferred and avoided terms, prohibited phrases, examples). The proposal replaces the saved voice only
- * if nobody has changed it since the run started; people review, edit and publish.
+ * if nobody has changed it since the run started; people review, edit and publish. The principal is picked from
+ * those granted the brand (UX-08, as the run form), never typed as an id (RA-07).
  */
 export function VoiceExtraction({ versionId, unsaved }: { versionId: string; unsaved: boolean }) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
+  const principals = useAgentPrincipals(brandId);
   const [principalId, setPrincipalId] = useState('');
   const start = useMutation(
     trpc.brand.onboarding.start.mutationOptions({
@@ -27,12 +36,16 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
       },
     }),
   );
+  const principal = principals.items.find((p) => p.id === principalId) ?? null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    start.mutate({ brandId, versionId, servicePrincipalId: principalId.trim() });
+    if (!principal) return;
+    start.mutate({ brandId, versionId, servicePrincipalId: principal.id });
   };
   const ui = start.isError ? toUiError(start.error) : null;
+  const denial = ui ? denialOf(ui) : null;
   const fieldIssue = (path: string) => ui?.details.find((d) => d.path === path)?.issue;
+  const forbidden = principals.isError && toUiError(principals.error).kind === 'forbidden';
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 rounded-md border border-border p-2" noValidate>
       <div>
@@ -43,41 +56,85 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
           edit is kept and the proposal is dropped.
         </p>
       </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <Field
-          label="Agent principal"
-          htmlFor="voice-extraction-principal"
-          hint="sp_… of an active agent principal that may edit brand standards."
-          error={fieldIssue('servicePrincipalId')}
-        >
-          <Input
-            id="voice-extraction-principal"
-            value={principalId}
-            onChange={(e) => setPrincipalId(e.target.value)}
-            autoComplete="off"
-            required
-          />
-        </Field>
-        <Button
-          type="submit"
-          size="sm"
-          variant="primary"
-          disabled={start.isPending}
-          disabledReason={
-            unsaved
-              ? 'Save or discard your changes first'
-              : principalId.trim()
-                ? undefined
-                : 'Enter an agent principal id first'
-          }
-        >
-          {start.isPending ? 'Starting…' : 'Extract voice and vocabulary'}
-        </Button>
-      </div>
-      {ui && (
+      {principals.isPending && <Skeleton label="Loading agent principals" lines={1} />}
+      {forbidden && (
         <StatusBanner
           tone="critical"
-          title={ui.kind === 'forbidden' ? 'Not started' : 'Not started: check the request'}
+          title="Permission denied"
+          description={`${toUiError(principals.error).message} Starting the extraction needs the agent.start_run permission for this brand.`}
+          data-testid="voice-extraction-denied"
+        />
+      )}
+      {principals.isError && !forbidden && (
+        <RequestError error={principals.error} onRetry={() => void principals.refetch()} />
+      )}
+      {principals.isSuccess && principals.items.length === 0 && (
+        <StatusBanner
+          tone="warning"
+          title="No agent principal is granted this brand"
+          description="An owner or admin creates one under Settings → Members and mandates with grants for this brand, including brand.edit_standards so it may propose the voice."
+          data-testid="voice-extraction-no-principals"
+        />
+      )}
+      {principals.isSuccess && principals.items.length > 0 && (
+        <div className="flex flex-wrap items-end gap-2">
+          <Field
+            label="Agent principal"
+            htmlFor="voice-extraction-principal"
+            hint={
+              principal
+                ? `Ceiling ${principal.maxAutonomy.replace(/_/g, ' ')}; acts on this brand with ${principal.actions.join(', ')}.`
+                : 'The agent identity the run acts as; it must be granted brand.edit_standards to propose the voice.'
+            }
+            error={fieldIssue('servicePrincipalId')}
+            className="min-w-64 flex-1"
+          >
+            <Select
+              id="voice-extraction-principal"
+              value={principalId}
+              onValueChange={setPrincipalId}
+              placeholder="Choose a principal"
+              options={principals.items.map((p) => ({
+                value: p.id,
+                label: `${p.name} · up to ${p.maxAutonomy.replace(/_/g, ' ')}${p.actions.includes(NEEDED_ACTION) ? '' : ' · cannot edit brand standards'}`,
+                disabled: !p.actions.includes(NEEDED_ACTION),
+              }))}
+            />
+          </Field>
+          <Button
+            type="submit"
+            size="sm"
+            variant="primary"
+            disabled={start.isPending}
+            disabledReason={
+              unsaved
+                ? 'Save or discard your changes first'
+                : principal
+                  ? undefined
+                  : 'Choose an agent principal first'
+            }
+          >
+            {start.isPending ? 'Starting…' : 'Extract voice and vocabulary'}
+          </Button>
+        </div>
+      )}
+      <EffectiveLimits
+        brandId={brandId}
+        servicePrincipalId={principal?.id ?? null}
+        taskKind="brand_onboarding"
+        requestedAutonomy="create"
+      />
+      {ui && denial && (
+        <StatusBanner
+          tone="critical"
+          title={`Not started: ${denial.title.toLowerCase()}`}
+          description={denial.description}
+        />
+      )}
+      {ui && !denial && (
+        <StatusBanner
+          tone="critical"
+          title="Not started: check the request"
           description={[
             ui.message,
             ...ui.details.filter((d) => d.path !== 'servicePrincipalId').map((d) => d.issue),

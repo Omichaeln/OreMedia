@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, EmptyState, Field, Panel, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  Input,
+  Panel,
+  Skeleton,
+  StatusBanner,
+  Textarea,
+} from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
 import { useToast } from '../../components/toast';
@@ -21,8 +31,10 @@ import {
   modifyBatchOf,
   needsAttention,
   pendingProposal,
+  reviewedOperations,
   runStateChip,
   type PendingProposal,
+  type ReviewedOperation,
 } from './run-helpers';
 import { useAgentRun, useAgentRunSteps, type RunDto, type StepDto } from './use-agent-runs';
 
@@ -276,8 +288,9 @@ function CancelRun({ run }: { run: RunDto }) {
 
 /**
  * Spec 12.2 proposalDecision through agents.runs.approveProposal: Accept applies the batch as the run's principal,
- * Reject sends the model back, Modify applies the person's own batch (edited here as JSON; the studio shows the
- * document it targets).
+ * Reject sends the model back, Modify applies the person's own batch: the proposed operations reviewed one by one
+ * (RA-07), any of them removed, each proposed text edited in place, under the person's summary; the studio shows
+ * the document it targets. Nothing is typed as JSON; the creative module validates the batch as it would any edit.
  */
 function ProposalDecision({
   companyId,
@@ -295,8 +308,11 @@ function ProposalDecision({
   const { toast } = useToast();
   const intent = useIntentKey();
   const [modifying, setModifying] = useState(false);
-  const [batchText, setBatchText] = useState(() => modifyBatchOf(proposal.payload));
-  const [batchError, setBatchError] = useState<string | null>(null);
+  const [rows, setRows] = useState<ReviewedOperation[]>(() =>
+    reviewedOperations(proposal.payload.operations),
+  );
+  const [summary, setSummary] = useState(proposal.payload.summary);
+  const [modifyError, setModifyError] = useState<string | null>(null);
   const decide = useMutation(
     trpc.agents.runs.approveProposal.mutationOptions({
       trpc: intentContext(intent.key),
@@ -312,18 +328,29 @@ function ProposalDecision({
       },
     }),
   );
+  const kept = rows.filter((r) => r.kept);
+  const setRow = (index: number, patch: Partial<ReviewedOperation>) =>
+    setRows((rs) => rs.map((r) => (r.index === index ? { ...r, ...patch } : r)));
   const submitModify = () => {
-    let batch: unknown;
-    try {
-      batch = JSON.parse(batchText);
-    } catch (err) {
-      setBatchError(`Not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    if (kept.length === 0) {
+      setModifyError('Keep at least one operation, or reject the proposal instead.');
       return;
     }
-    setBatchError(null);
-    decide.mutate({ runId: run.id, stepId: proposal.stepId, decision: 'modify', batch });
+    if (!summary.trim()) {
+      setModifyError('Give the change a summary; it is recorded with the revision.');
+      return;
+    }
+    setModifyError(null);
+    decide.mutate({
+      runId: run.id,
+      stepId: proposal.stepId,
+      decision: 'modify',
+      batch: modifyBatchOf(proposal.payload, rows, summary.trim()),
+    });
   };
   const blocking = proposal.payload.findings.filter((f) => f.severity === 'blocking');
+  const decideUi = decide.isError ? toUiError(decide.error) : null;
+  const batchIssue = decideUi?.details.find((d) => d.path?.startsWith('batch'));
   return (
     <section aria-label="Proposal" data-testid="proposal" className="flex flex-col gap-3">
       <StatusBanner
@@ -362,15 +389,17 @@ function ProposalDecision({
           ))}
         </ul>
       )}
-      <details>
-        <summary className="cursor-pointer rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          Proposed operations
-        </summary>
-        <div className="mt-1">
-          <JsonTree value={proposal.payload.operations} label="Proposed operations" />
-        </div>
-      </details>
-      {decide.isError && <RequestError error={decide.error} title="Decision not recorded" />}
+      {!modifying && (
+        <details>
+          <summary className="cursor-pointer rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            Proposed operations
+          </summary>
+          <div className="mt-1">
+            <JsonTree value={proposal.payload.operations} label="Proposed operations" />
+          </div>
+        </details>
+      )}
+      {decide.isError && !batchIssue && <RequestError error={decide.error} title="Decision not recorded" />}
       {!modifying && (
         <div className="flex flex-wrap gap-2">
           <Button
@@ -401,31 +430,67 @@ function ProposalDecision({
       )}
       {modifying && (
         <form
-          className="flex flex-col gap-2"
+          className="flex flex-col gap-3"
           noValidate
+          data-testid="modify-proposal"
           onSubmit={(e) => {
             e.preventDefault();
             submitModify();
           }}
         >
+          <p className="text-xs text-muted-foreground">
+            Review each proposed change. Remove the ones you do not want and edit any text; what is left is
+            applied to the document as your own change, validated like any edit.
+          </p>
+          <ol className="flex flex-col gap-2" aria-label="Proposed operations to review">
+            {rows.map((r) => (
+              <li
+                key={r.index}
+                className={`flex flex-col gap-2 rounded-md border border-border p-2 text-sm${r.kept ? '' : ' opacity-60'}`}
+                data-testid="modify-operation"
+                data-kept={r.kept}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">#{r.index + 1}</span>
+                  <span className="font-medium">{r.label}</span>
+                  <span className="text-xs text-muted-foreground">{r.target}</span>
+                  {!r.kept && <Badge tone="neutral">removed</Badge>}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="ml-auto"
+                    onClick={() => setRow(r.index, { kept: !r.kept })}
+                  >
+                    {r.kept ? `Remove #${r.index + 1}` : `Restore #${r.index + 1}`}
+                  </Button>
+                </div>
+                {r.text !== null && r.kept && (
+                  <Field label="Text" htmlFor={`modify-op-${r.index}-text`}>
+                    <Textarea
+                      id={`modify-op-${r.index}-text`}
+                      value={r.text}
+                      onChange={(e) => setRow(r.index, { text: e.target.value })}
+                      rows={2}
+                    />
+                  </Field>
+                )}
+              </li>
+            ))}
+          </ol>
           <Field
-            label="Batch to apply instead (JSON)"
-            htmlFor="modify-batch"
-            hint="documentId must match the proposal; origin is set to you by the server. Validated by the creative module."
-            error={batchError ?? undefined}
+            label="Summary of your change"
+            htmlFor="modify-summary"
+            hint="Recorded with the revision, as the agent's summary would have been."
+            error={modifyError ?? batchIssue?.issue}
           >
-            <Textarea
-              id="modify-batch"
-              value={batchText}
-              onChange={(e) => setBatchText(e.target.value)}
-              rows={12}
-              spellCheck={false}
-              className="font-mono text-xs"
-            />
+            <Input id="modify-summary" value={summary} onChange={(e) => setSummary(e.target.value)} />
           </Field>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" variant="primary" size="sm" disabled={decide.isPending}>
-              {decide.isPending ? 'Applying…' : 'Apply modified batch'}
+              {decide.isPending
+                ? 'Applying…'
+                : `Apply ${kept.length} of ${rows.length} operation${rows.length === 1 ? '' : 's'}`}
             </Button>
             <Button type="button" size="sm" onClick={() => setModifying(false)}>
               Back
