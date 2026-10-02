@@ -141,3 +141,10 @@ after 1 step`: the real model path ran one step on the default 0.25 USD budget; 
   Staging acceptance run 4 (2 USD model cap): still `MODEL_EVAL_FAIL … budget_exhausted`; worker-core shows `reserveBudget`
   refused with `Budget exhausted (brand_day)`, so the fixture brand's day limit, not the run budget, is the gate; the job's
   fixture setup is being changed to raise the brand's day and month limits before the evaluation run.
+- 2 October 2026, 18:30 UTC: PR #39 (RA-01; migration 0022) squash-merged as 133cfb7 after two review rounds (rebase on 0021,
+  credential unusable at disconnect with a bounded shred on the publication sweeper for channels and destinations, revoke/reconnect
+  race, audit reason whitelist, health monotonicity, source and CMS remote revoke). Production api pre-deploy logged `migrations
+applied` and `configuration complete`; every production service deployed SUCCESS; production smoke run 34 passed on 133cfb7.
+  Thirteen of the fourteen RA items are now on main; RA-14's acceptance job (PR #36) remains open while its model-evaluation
+  step is completed on staging (`runs.start` now refuses `no_skill`, aligned with `effectiveLimits`; the job provisions the
+  built-in copywriting skill for the fixture company).
