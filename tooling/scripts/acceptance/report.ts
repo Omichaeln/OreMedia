@@ -35,6 +35,17 @@ export const safeDetail = (detail: string): string => {
   return clean.length > DETAIL_MAX ? `${clean.slice(0, DETAIL_MAX - 1)}…` : clean;
 };
 
+/**
+ * What a failed HTTP check may say about the response it got, without any value a header could carry: the status,
+ * the content type, the sorted header NAMES, the body length and whether a Set-Cookie header was present at all.
+ * A deployment whose headers never arrive (a proxy or a fetch that drops them) is then visible from the line.
+ */
+export const describeResponse = (res: Response, bodyLength: number): string => {
+  const names = [...res.headers.keys()].sort();
+  const setCookie = res.headers.getSetCookie().length > 0 || names.includes('set-cookie');
+  return `HTTP ${res.status} type=${res.headers.get('content-type') ?? '(none)'} headers=[${names.join(',')}] body=${bodyLength}B set-cookie=${setCookie ? 'present' : 'absent'}`;
+};
+
 export const pass = (name: string, detail = ''): AcceptanceResult => ({ name, outcome: 'pass', detail });
 export const fail = (name: string, detail: string): AcceptanceResult => ({ name, outcome: 'fail', detail });
 export const skip = (name: string, detail: string): AcceptanceResult => ({ name, outcome: 'skip', detail });

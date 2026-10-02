@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { describeResponse } from '../../../../tooling/scripts/acceptance/report';
 
 /**
  * The deployed api as the acceptance job reaches it: the same request shapes the smoke check and the k6 script
@@ -30,15 +31,25 @@ const trpcError = (body: unknown, status: number): string => {
 };
 
 async function answer<T>(res: Response): Promise<ApiAnswer<T>> {
+  const text = await res.text().catch(() => '');
   let body: unknown = null;
   try {
-    body = await res.json();
+    body = JSON.parse(text);
   } catch {
     body = null;
   }
-  if (res.status !== 200) return { status: res.status, data: null, error: trpcError(body, res.status) };
+  if (res.status !== 200)
+    return {
+      status: res.status,
+      data: null,
+      error: `${trpcError(body, res.status)} (${describeResponse(res, text.length)})`,
+    };
   const data = (body as { result?: { data?: { json?: T } } } | null)?.result?.data?.json ?? null;
-  return { status: res.status, data, error: '' };
+  return {
+    status: res.status,
+    data,
+    error: data === null ? `no data (${describeResponse(res, text.length)})` : '',
+  };
 }
 
 export const headersFor = (s: ApiSession): Record<string, string> => ({
@@ -85,13 +96,19 @@ export async function signInWithPassword(
     .map((c) => /^(?:__Host-)?oremedia_session=([^;]+)/.exec(c)?.[1])
     .find(Boolean);
   if (res.status === 200 && cookie) return { ok: true, token: decodeURIComponent(cookie) };
+  const text = await res.text().catch(() => '');
   let error = '';
   try {
-    error = String(((await res.json()) as { error?: unknown } | null)?.error ?? '');
+    error = String((JSON.parse(text) as { error?: unknown } | null)?.error ?? '');
   } catch {
     error = '';
   }
-  return { ok: false, status: res.status, error: `HTTP ${res.status}${error ? ` ${error}` : ''}` };
+  // No cookie value is ever reported: only whether the session cookie header arrived at all.
+  return {
+    ok: false,
+    status: res.status,
+    error: `${error || 'no session cookie'} (${describeResponse(res, text.length)})`,
+  };
 }
 
 /** POST /auth/sign-out for a session the job holds, so no fixture session outlives the run. */

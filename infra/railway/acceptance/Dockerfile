@@ -30,7 +30,7 @@ RUN pnpm install --frozen-lockfile --config.node-linker=hoisted
 RUN pnpm --filter @oremedia/api build
 
 FROM base AS runtime
-ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true OREMEDIA_SERVICE=oremedia-acceptance \
+ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true OREMEDIA_SERVICE=oremedia-api-acceptance \
   PLAYWRIGHT_BROWSERS_PATH=/ms-playwright ACCEPTANCE_REPO_DIR=/src
 RUN npm install -g pnpm@10.6.1 && npm cache clean --force \
   && groupadd -r oremedia && useradd -r -g oremedia -d /home/oremedia -m oremedia

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { acceptanceConfigFromEnv } from './config';
 
 const base = {
+  ACCEPTANCE_CONFIRM_STAGING: '1',
   DATABASE_URL: 'mysql://app:pw@db.internal:3306/oremedia',
   WEB_ORIGIN: 'https://staging.example.test',
 };
@@ -25,9 +26,36 @@ describe('acceptanceConfigFromEnv', () => {
     expect(cfg.expectStoreOrigin).toBeUndefined();
   });
 
+  it('refuses to run without the staging confirmation, in a production environment, or against a production origin', () => {
+    const { ACCEPTANCE_CONFIRM_STAGING: _confirm, ...unconfirmed } = base;
+    expect(() => acceptanceConfigFromEnv(unconfirmed, '/src')).toThrow(
+      /^ACCEPTANCE_CONFIRM_STAGING=1 is required/,
+    );
+    expect(() => acceptanceConfigFromEnv({ ...base, ACCEPTANCE_CONFIRM_STAGING: 'yes' }, '/src')).toThrow(
+      /^ACCEPTANCE_CONFIRM_STAGING/,
+    );
+    expect(() =>
+      acceptanceConfigFromEnv({ ...base, RAILWAY_ENVIRONMENT_NAME: 'Production' }, '/src'),
+    ).toThrow(/^RAILWAY_ENVIRONMENT_NAME/);
+    expect(() => acceptanceConfigFromEnv({ ...base, RAILWAY_ENVIRONMENT_NAME: 'prod-eu' }, '/src')).toThrow(
+      /^RAILWAY_ENVIRONMENT_NAME/,
+    );
+    expect(() =>
+      acceptanceConfigFromEnv({ ...base, WEB_ORIGIN: 'https://oremedia-production.up.railway.app' }, '/src'),
+    ).toThrow(/^WEB_ORIGIN is a production origin/);
+    expect(acceptanceConfigFromEnv({ ...base, RAILWAY_ENVIRONMENT_NAME: 'staging' }, '/src').webOrigin).toBe(
+      base.WEB_ORIGIN,
+    );
+  });
+
   it('names the missing or malformed variable, never a value', () => {
-    expect(() => acceptanceConfigFromEnv({ WEB_ORIGIN: base.WEB_ORIGIN }, '/src')).toThrow(/^DATABASE_URL/);
-    expect(() => acceptanceConfigFromEnv({ DATABASE_URL: base.DATABASE_URL }, '/src')).toThrow(/^WEB_ORIGIN/);
+    const confirmed = { ACCEPTANCE_CONFIRM_STAGING: '1' };
+    expect(() => acceptanceConfigFromEnv({ ...confirmed, WEB_ORIGIN: base.WEB_ORIGIN }, '/src')).toThrow(
+      /^DATABASE_URL/,
+    );
+    expect(() => acceptanceConfigFromEnv({ ...confirmed, DATABASE_URL: base.DATABASE_URL }, '/src')).toThrow(
+      /^WEB_ORIGIN/,
+    );
     expect(() => acceptanceConfigFromEnv({ ...base, WEB_ORIGIN: 'https://a.test/' }, '/src')).toThrow(
       'WEB_ORIGIN must be a bare origin such as https://a.test',
     );

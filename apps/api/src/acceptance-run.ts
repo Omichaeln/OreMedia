@@ -12,6 +12,7 @@ import { parseArgs } from 'node:util';
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { acceptanceConfigFromEnv } from '../../../tooling/scripts/acceptance/config';
+import { safeDetail } from '../../../tooling/scripts/acceptance/report';
 import { composeModules } from './composition';
 import { runAcceptance } from './acceptance/run';
 
@@ -22,12 +23,16 @@ try {
   config = acceptanceConfigFromEnv(process.env, process.cwd());
 } catch (err) {
   log.error(
-    { errorMessage: err instanceof Error ? err.message : String(err) },
+    { errorMessage: safeDetail(err instanceof Error ? err.message : String(err)) },
     'acceptance configuration invalid',
   );
   process.exit(2);
 }
 try {
+  // Which fetch the bundle runs with: a polyfilled or wrapped fetch would show here (and drop response headers).
+  process.stdout.write(
+    `ACCEPTANCE_INFO fetch=${globalThis.fetch?.name || 'none'} headers=${globalThis.Headers?.name || 'none'} node=${process.version}\n`,
+  );
   configureDatabase({ url: config.databaseUrl });
   composeModules();
   // The result lines go to stdout as plain text next to telemetry's JSON lines, so the deploy log can be grepped.
@@ -37,7 +42,10 @@ try {
   });
   process.exitCode = ok ? 0 : 1;
 } catch (err) {
-  log.error({ errorMessage: err instanceof Error ? err.message : String(err) }, 'acceptance run failed');
+  log.error(
+    { errorMessage: safeDetail(err instanceof Error ? err.message : String(err)) },
+    'acceptance run failed',
+  );
   process.exitCode = 1;
 } finally {
   await closeDatabase();

@@ -19,8 +19,8 @@ import { fail, pass, type AcceptanceResult } from '../../../../tooling/scripts/a
 /**
  * The staging acceptance fixtures (docs/runbooks/staging-acceptance.md): two throwaway companies, each with a
  * member per role the product has, one brand with published standards and an active release policy, and an agent
- * principal, provisioned through the application services (never a table write) so every row is one the product
- * itself would have made. Re-runnable: whatever exists is reused, and only what is missing is created. Each run
+ * principal, provisioned through the application services (no table write of its own; the teardown revokes
+ * sessions through the access repository) so every row is one the product itself would have made. Re-runnable: whatever exists is reused, and only what is missing is created. Each run
  * gives every synthetic member a fresh random password through the password setup path (an owner issues the link,
  * the person redeems it), held in this process's memory only; nothing is written to a log or a report.
  *
@@ -153,6 +153,11 @@ async function findTenant(spec: FixtureTenantSpec, operatorEmail: string, correl
     if (!operator)
       throw new Error(
         `company ${spec.slug} exists without its operator account: not provisioned by this job`,
+      );
+    const found = await directory.membershipFor(operator.id, tenant.id);
+    if (found?.membership.role !== 'owner' || found.membership.status !== 'active')
+      throw new Error(
+        `company ${spec.slug}: its operator account is not an active owner there (${found?.membership.role ?? 'no membership'}, ${found?.membership.status ?? '-'})`,
       );
     return { tenantId: tenant.id, operatorUserId: operator.id };
   });
@@ -299,15 +304,16 @@ async function ensureBrand(owner: ResolvedTenant) {
     );
     policyVersionId = created.policyVersionId;
   }
-  if (!brand.publishedVersionId) throw new Error('the brand has no published version after publishing');
+  const publishedVersionId = brand.publishedVersionId;
+  if (!publishedVersionId) throw new Error('the brand has no published version after publishing');
   // R1-D: with its standards published the brand leaves setup (the checklist's Finish); the home then shows work.
   // Read again: activating the policy bumped the brand's version.
-  brand = await read(owner, (a) => brandService.get(a, id));
-  if (brand.status === 'setup')
+  const current = await read(owner, (a) => brandService.get(a, id));
+  if (current.status === 'setup')
     await command(owner, (a, tx) =>
-      brandService.completeSetup(a, { brandId: id, expectedVersion: brand.version }, tx),
+      brandService.completeSetup(a, { brandId: id, expectedVersion: current.version }, tx),
     );
-  return { brandId: id, publishedVersionId: brand.publishedVersionId, policyVersionId };
+  return { brandId: id, publishedVersionId, policyVersionId };
 }
 
 /** The agent principal runs are started under (UX-08: picked by name), created when the brand lists none by that name. */

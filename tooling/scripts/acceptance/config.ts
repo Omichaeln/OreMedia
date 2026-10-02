@@ -60,10 +60,21 @@ export function acceptanceConfigFromEnv(
   env: Record<string, string | undefined>,
   cwd: string,
 ): AcceptanceConfig {
+  // The job creates companies and content and may schedule publications: it refuses to run anywhere that is not
+  // explicitly staging. The flag is a variable of the staging service; a production environment name or origin
+  // refuses even with it.
+  if (env['ACCEPTANCE_CONFIRM_STAGING']?.trim() !== '1')
+    throw new Error('ACCEPTANCE_CONFIRM_STAGING=1 is required: this job runs only in the staging project');
+  if (/prod/i.test(env['RAILWAY_ENVIRONMENT_NAME'] ?? ''))
+    throw new Error(
+      'RAILWAY_ENVIRONMENT_NAME names a production environment: the acceptance job never runs there',
+    );
   const databaseUrl = env['DATABASE_URL']?.trim();
   if (!databaseUrl)
     throw new Error('DATABASE_URL is required (the application database the fixtures live in)');
   const webOrigin = origin('WEB_ORIGIN', env['WEB_ORIGIN']);
+  if (/production/i.test(webOrigin))
+    throw new Error('WEB_ORIGIN is a production origin: the acceptance job never runs against production');
   const apiBaseUrl = env['ACCEPTANCE_API_BASE_URL']?.trim()
     ? origin('ACCEPTANCE_API_BASE_URL', env['ACCEPTANCE_API_BASE_URL'])
     : webOrigin;

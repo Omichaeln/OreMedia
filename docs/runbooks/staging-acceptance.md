@@ -38,27 +38,30 @@ brand by a person. The job never connects a channel itself.
 
 ## 2. Deploy the job as a Railway service (staging project only)
 
-1. Railway → the **staging** project → **New service** → from this repository, root directory `/`, config-as-code
-   path `infra/railway/acceptance/railway.json` (builder Dockerfile, `infra/railway/acceptance/Dockerfile`, restart
-   policy never). Name it `acceptance`. Turn **off** automatic deploys on push unless every push to the branch
-   should run the acceptance.
+1. Railway → the **staging** project → **New service** → from this repository, root directory `/`. In the service's
+   settings set the builder to Dockerfile with the path `infra/railway/acceptance/Dockerfile`, the restart policy to
+   **never**, and the region to **us-west2** (the database's region). Name it `acceptance`. Turn **off** automatic
+   deploys on push unless every push to the branch should run the acceptance. (`infra/railway/acceptance/railway.json`
+   records the same settings for reference only: Railway no longer reads config-as-code files; the
+   `backup-and-restore.md` services were set up by hand the same way.)
 2. Start command: leave the image's default, `node apps/api/dist/acceptance-run.js`. For the teardown (section 5)
    set the start command to `node apps/api/dist/acceptance-run.js --teardown` for one deployment and put it back.
 3. Variables, as **references** to the staging services' variables (names only; the values never leave Railway):
 
-   | Variable                     | Reference / value                                                                                                                                          |
-   | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | `DATABASE_URL`               | the `api` service's `DATABASE_URL` (the application role suffices: the fixtures are made through the services; the migrate role also works)                |
-   | `WEB_ORIGIN`                 | the `api` service's `WEB_ORIGIN` (the public staging web origin; sign-ins carry it as `Origin`)                                                            |
-   | `AUTH_ALLOWED_DOMAINS`       | the `api` service's, when set: the synthetic users take the first allowed domain                                                                           |
-   | `OREMEDIA_DISABLED_CHANNELS` | the `api` service's, when set                                                                                                                              |
-   | `SMOKE_EXPECT_STORE_ORIGIN`  | optional: the `web` service's `OBJECT_STORE_PUBLIC_ORIGIN` (pins the CSP check)                                                                            |
-   | `SMOKE_INGEST_TIMEOUT_MS`    | optional, default 120000                                                                                                                                   |
-   | `ACCEPTANCE_EMAIL_DOMAIN`    | optional: the synthetic users' mail domain (default: the first `AUTH_ALLOWED_DOMAINS` entry, else `acceptance.invalid`); must be an allowed domain         |
-   | `ACCEPTANCE_API_BASE_URL`    | optional: where the load test and the model evaluation call the api, e.g. the api's private URL `http://api.railway.internal:<PORT>`; default `WEB_ORIGIN` |
-   | `ACCEPTANCE_E2E`             | optional: `0` skips the browser suites                                                                                                                     |
-   | `LOAD_ENABLED`               | `1` runs the load test; `EXPECTED_PEAK` (50), `PEAK_MULTIPLIER` (2), `DISPATCH_WINDOW_S`, `LOAD_TARGET_AT`, `LOAD_VUS` tune it                             |
-   | `MODEL_EVAL_ENABLED`         | `1` runs the model evaluation; `MODEL_EVAL_TASK_KINDS`, `MODEL_EVAL_TIMEOUT_MS` (600000), `MODEL_EVAL_BUDGET_MICROS` (250000) tune it                      |
+   | Variable                     | Reference / value                                                                                                                                                                                                                                                                                                                                                                                                                |
+   | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `ACCEPTANCE_CONFIRM_STAGING` | `1`, set on the staging service only: without it the job refuses to run, and it refuses anyway when `RAILWAY_ENVIRONMENT_NAME` contains `prod` or `WEB_ORIGIN` contains `production`                                                                                                                                                                                                                                             |
+   | `DATABASE_URL`               | the `api` service's `DATABASE_URL` (the application role suffices: the fixtures are made through the services; the migrate role also works)                                                                                                                                                                                                                                                                                      |
+   | `WEB_ORIGIN`                 | the `api` service's `WEB_ORIGIN` (the public staging web origin; sign-ins carry it as `Origin`)                                                                                                                                                                                                                                                                                                                                  |
+   | `AUTH_ALLOWED_DOMAINS`       | the `api` service's, when set: the synthetic users take the first allowed domain                                                                                                                                                                                                                                                                                                                                                 |
+   | `OREMEDIA_DISABLED_CHANNELS` | the `api` service's, when set                                                                                                                                                                                                                                                                                                                                                                                                    |
+   | `SMOKE_EXPECT_STORE_ORIGIN`  | optional: the `web` service's `OBJECT_STORE_PUBLIC_ORIGIN` (pins the CSP check)                                                                                                                                                                                                                                                                                                                                                  |
+   | `SMOKE_INGEST_TIMEOUT_MS`    | optional, default 120000                                                                                                                                                                                                                                                                                                                                                                                                         |
+   | `ACCEPTANCE_EMAIL_DOMAIN`    | optional: the synthetic users' mail domain (default: the first `AUTH_ALLOWED_DOMAINS` entry, else `acceptance.invalid`); it must be an allowed domain exactly (the allowlist admits no subdomain), so with an allowlist the addresses `<company>-<role>@<domain>` sit on a real domain: there is no mailer today, and should one arrive, reserve those addresses or point staging's `AUTH_ALLOWED_DOMAINS` at a dedicated domain |
+   | `ACCEPTANCE_API_BASE_URL`    | optional: where the load test and the model evaluation call the api, e.g. the api's private URL `http://api.railway.internal:<PORT>`; default `WEB_ORIGIN`                                                                                                                                                                                                                                                                       |
+   | `ACCEPTANCE_E2E`             | optional: `0` skips the browser suites                                                                                                                                                                                                                                                                                                                                                                                           |
+   | `LOAD_ENABLED`               | `1` runs the load test; `EXPECTED_PEAK` (50), `PEAK_MULTIPLIER` (2), `DISPATCH_WINDOW_S`, `LOAD_TARGET_AT`, `LOAD_VUS` tune it                                                                                                                                                                                                                                                                                                   |
+   | `MODEL_EVAL_ENABLED`         | `1` runs the model evaluation; `MODEL_EVAL_TASK_KINDS`, `MODEL_EVAL_TIMEOUT_MS` (600000), `MODEL_EVAL_BUDGET_MICROS` (250000) tune it                                                                                                                                                                                                                                                                                            |
 
    No `OREMEDIA_E2E_*`, `SMOKE_EMAIL`, `SMOKE_PASSWORD` or token variable exists: the job makes those values itself
    and passes them to its child processes in their environment only.
@@ -90,6 +93,10 @@ ACCEPTANCE_DONE 41/42 (7 skipped)
 - `LOAD_PASS <metric> <threshold> <values>` / `LOAD_FAIL …`: one per k6 threshold (`tooling/load/top-of-hour.js`:
   schedule p95 < 400 ms and p99 < 1 s, error rate < 1 %, ≥ 99 % dispatched within the window).
 - `MODEL_EVAL_PASS <taskKind> <steps> <costMicros>` / `MODEL_EVAL_FAIL <taskKind> <reason>`.
+- The first line, `ACCEPTANCE_INFO fetch=<name> headers=<name> node=<version>`, names the fetch the bundle runs with
+  (Node's own `fetch` and `Headers`; anything else is a polyfill that may drop response headers). A failed HTTP check
+  says what it saw: `HTTP <status> type=<content type> headers=[<sorted header names>] body=<bytes>B
+set-cookie=present|absent`, never a header's value.
 - No line carries a session token, an API key, a reviewer or setup-link token, a password or a signed URL's query:
   every detail is filtered (`tooling/scripts/acceptance/report.ts`, `safeDetail`). The vitest and k6 output that
   streams between the lines is the suites' own; the suites print ids, never credentials.
@@ -104,7 +111,7 @@ line, never the fixture addresses' passwords (there are none to record).
 
 The entrypoint reads the same variables; against a local api and web (`docs/runbooks/deploy-railway.md` section 2
 for the api, `pnpm --filter @oremedia/web build` served by the web container or the e2e static server) run
-`pnpm --filter @oremedia/api build && DATABASE_URL=… WEB_ORIGIN=http://127.0.0.1:<port> node apps/api/dist/acceptance-run.js`.
+`pnpm --filter @oremedia/api build && ACCEPTANCE_CONFIRM_STAGING=1 DATABASE_URL=… WEB_ORIGIN=http://127.0.0.1:<port> node apps/api/dist/acceptance-run.js`.
 The in-process proof is `TEST_DATABASE_URL=… pnpm test:integration apps/api/src/acceptance.integration.test.ts`,
 which exercises every service path the job uses, the password endpoint and, with the test fixture provider, the
 whole journey to a scheduled and cancelled publication.

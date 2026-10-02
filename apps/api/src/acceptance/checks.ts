@@ -29,8 +29,8 @@ export async function signInFixtures(
 ): Promise<{ results: AcceptanceResult[]; sessions: Sessions }> {
   const results: AcceptanceResult[] = [];
   const sessions: Sessions = new Map();
-  // The password route is limited per address (20 a minute): the twelve sign-ins are paced so that the smoke
-  // check's own sign-in, which follows, never meets a full window.
+  // The password route is limited per address (20 attempts per 60 s window): the twelve sign-ins are paced so that
+  // the smoke check's own sign-in, which follows, never meets a full window.
   for (const tenant of tenants)
     for (const member of Object.values(tenant.members)) {
       const name = `sign-in:${tenant.slug}:${member.role}`;
