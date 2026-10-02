@@ -279,7 +279,9 @@ export async function ensureTaskKindSkill(
   });
   if (!listed.data) return { ok: false, reason: `skills.list: ${listed.error}` };
   let skillId = listed.data.items.find((s) => s.key === key)?.id;
+  let source: 'listed' | 'imported' = 'listed';
   if (!skillId) {
+    source = 'imported';
     const pkg = await loadBuiltinPackage(key);
     const imported = await mutate<{ skillId: string; skillVersionId: string; version: number }>(
       api,
@@ -293,16 +295,23 @@ export async function ensureTaskKindSkill(
     if (!imported.data) return { ok: false, reason: `skills.import: ${imported.error}` };
     skillId = imported.data.skillId;
   }
-  const versionsOf = async () => {
+  /** An id as a failure line prints it: prefix and length only (ids are not secrets, but tokens share the look). */
+  const shape = (id: string) => `${id.slice(0, id.indexOf('_') + 1)}… (${id.length} chars)`;
+  const versionsOf = async (): Promise<{ versions: SkillVersionSummary[] } | { error: string }> => {
     const got = await query<SkillSummary & { versions: SkillVersionSummary[] }>(api, 'skills.get', {
       skillId,
     });
-    return got.data ? got.data.versions : null;
+    return got.data
+      ? { versions: got.data.versions }
+      : {
+          error: `skills.get for the ${source} tenant-scope skill ${shape(skillId)}: ${got.error || 'HTTP 200 without a skill'}`,
+        };
   };
   const deadline = Date.now() + opts.timeoutMs;
   for (;;) {
-    const versions = await versionsOf();
-    if (!versions) return { ok: false, reason: 'skills.get answered nothing' };
+    const read = await versionsOf();
+    if ('error' in read) return { ok: false, reason: read.error };
+    const { versions } = read;
     const latest = [...versions].sort((a, b) => b.number - a.number)[0];
     if (!latest) return { ok: false, reason: 'the imported skill has no version' };
     const published = versions.find((v) => v.state === 'published') ?? null;

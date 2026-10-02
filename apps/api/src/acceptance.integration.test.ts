@@ -7,6 +7,7 @@ import { memberships, sessions, tenants, users } from '@oremedia/db/schema/acces
 import { runInTenant } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { registerSkillResolver, type ResolvedSkill } from '@oremedia/ai';
+import { seedBuiltinSkills } from '@oremedia/module-skills';
 import { budgets } from '@oremedia/module-billing';
 import {
   configureCredentialBroker,
@@ -57,6 +58,7 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     tdb = await createTestDatabase();
     configureRateLimiter();
     composeModules();
+    await seedBuiltinSkills(); // the platform built-ins exist on staging (seeded at deploy); the fixture imports its own copy
     http = createHttpServer();
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
@@ -296,6 +298,15 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     expect(first).toMatchObject({ ok: false, reason: expect.stringContaining('did not pass') });
     const [imported] = await tenantSkills();
     expect(imported).toBeDefined();
+    // The company's copy, not the platform built-in of the same key (which skills.list at tenant scope omits).
+    const platform = (
+      await query<{ items: Array<{ id: string; key: string; scope: string }> }>(owner, 'skills.list', {
+        scope: 'platform',
+        page: { limit: 100 },
+      })
+    ).data!.items.find((s) => s.key === 'brand-copywriting');
+    expect(platform).toBeDefined();
+    expect(imported!.id).not.toBe(platform!.id);
     const got = (await query<Skill>(owner, 'skills.get', { skillId: imported!.id })).data!;
     expect(got.versions).toEqual([expect.objectContaining({ number: 1, state: 'sandbox_evaluation' })]);
     // A second run finds the company's copy and imports nothing.
