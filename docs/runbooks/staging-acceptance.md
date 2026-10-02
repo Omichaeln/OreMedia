@@ -93,8 +93,14 @@ ACCEPTANCE_DONE 41/42 (7 skipped)
 - `LOAD_PASS <metric> <threshold> <values>` / `LOAD_FAIL …`: one per k6 threshold (`tooling/load/top-of-hour.js`:
   schedule p95 < 400 ms and p99 < 1 s, error rate < 1 %, ≥ 99 % dispatched within the window).
 - `MODEL_EVAL_PASS <taskKind> <steps> <costMicros>` / `MODEL_EVAL_FAIL <taskKind> <reason>`.
-- The first line, `ACCEPTANCE_INFO fetch=<name> headers=<name> node=<version>`, names the fetch the bundle runs with
-  (Node's own `fetch` and `Headers`; anything else is a polyfill that may drop response headers). A failed HTTP check
+- The first lines, `ACCEPTANCE_INFO fetch=<name> headers=<name> node=<version>`, name the fetch the bundle runs with
+  (Node's own `fetch` and `Headers`; anything else is a polyfill that may drop response headers), and the startup
+  probe follows: `/health` and `/deployment-brand/brand.json` fetched by the global fetch, the `undici` package's
+  fetch and node:http(s), each with the status and the sorted header names it saw (`ACCEPTANCE_INFO probe …`), the
+  process's `execArgv` and the names of its `NODE_*`/`OTEL_*`/`SENTRY_*` variables. When the global fetch sees no
+  header while node:http(s) does, the job's own requests switch to node:http(s) (`ACCEPTANCE_INFO http-client=node-https`;
+  `ACCEPTANCE_HTTP_CLIENT=fetch` or `node-https` forces one); when no client sees a header, the raw start of the
+  `/health` answer (status line and header block as text) is printed. A failed HTTP check
   says what it saw: `HTTP <status> type=<content type> headers=[<sorted header names>] body=<bytes>B
 set-cookie=present|absent`, never a header's value.
 - No line carries a session token, an API key, a reviewer or setup-link token, a password or a signed URL's query:

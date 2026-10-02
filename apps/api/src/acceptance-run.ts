@@ -12,7 +12,9 @@ import { parseArgs } from 'node:util';
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { acceptanceConfigFromEnv } from '../../../tooling/scripts/acceptance/config';
+import { chooseFetch, probeOrigin } from '../../../tooling/scripts/acceptance/probe';
 import { safeDetail } from '../../../tooling/scripts/acceptance/report';
+import { configureFetch } from './acceptance/client';
 import { composeModules } from './composition';
 import { runAcceptance } from './acceptance/run';
 
@@ -33,12 +35,20 @@ try {
   process.stdout.write(
     `ACCEPTANCE_INFO fetch=${globalThis.fetch?.name || 'none'} headers=${globalThis.Headers?.name || 'none'} node=${process.version}\n`,
   );
+  // The startup probe: the deployment's public paths through three clients, then the one the job uses
+  // (docs/runbooks/staging-acceptance.md, "Reading the log").
+  const probe = await probeOrigin(config.webOrigin);
+  for (const line of probe.lines) process.stdout.write(`${line}\n`);
+  const client = chooseFetch(probe, process.env['ACCEPTANCE_HTTP_CLIENT']);
+  process.stdout.write(`ACCEPTANCE_INFO http-client=${client.name}\n`);
+  configureFetch(client.fetch);
   configureDatabase({ url: config.databaseUrl });
   composeModules();
   // The result lines go to stdout as plain text next to telemetry's JSON lines, so the deploy log can be grepped.
   const ok = await runAcceptance(config, {
     teardown: values.teardown,
     print: (line) => process.stdout.write(`${line}\n`),
+    fetch: client.fetch,
   });
   process.exitCode = ok ? 0 : 1;
 } catch (err) {

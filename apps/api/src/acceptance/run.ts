@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
+import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
 import { runK6, runVitest } from '../../../../tooling/scripts/acceptance/processes';
 import {
   fail,
@@ -32,6 +33,8 @@ import { provisionFixtures, providerAvailability, teardownFixtures, type Fixture
 export interface RunOptions {
   teardown: boolean;
   print: (line: string) => void;
+  /** The HTTP client the smoke checks use (the api client is configured through client.ts `configureFetch`). */
+  fetch?: FetchLike;
 }
 
 const E2E_FILES = {
@@ -170,7 +173,7 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
   let loadOk = true;
   let evalOk = true;
   try {
-    await guard('smoke', () => smokeChecks(cfg, tenantA));
+    await guard('smoke', () => smokeChecks(cfg, tenantA, opts.fetch ?? fetch));
     await guard('isolation', () => isolationChecks(sessions, tenantA, tenantB));
     await guard('journey', () => journeyChecks(sessions, tenantA, describeProviders(cfg)));
     if (cfg.e2e.enabled) await guard('e2e', () => browserSuites(cfg, sessions, tenantA, tenantB));

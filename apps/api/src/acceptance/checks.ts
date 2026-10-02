@@ -8,6 +8,7 @@ import {
   type ModelEvalResult,
 } from '../../../../tooling/scripts/acceptance/report';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
+import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
 import { mutate, query, signInWithPassword, sleep, type ApiSession } from './client';
 import type { FixtureRole, FixtureTenant } from './fixtures';
 
@@ -58,19 +59,23 @@ export async function signInFixtures(
 export async function smokeChecks(
   cfg: AcceptanceConfig,
   tenantA: FixtureTenant,
+  f: FetchLike = fetch,
 ): Promise<AcceptanceResult[]> {
   const manager = tenantA.members.brand_manager;
-  const results = await runSmoke({
-    baseUrl: cfg.webOrigin,
-    ...(cfg.expectStoreOrigin ? { expectStoreOrigin: cfg.expectStoreOrigin } : {}),
-    upload: {
-      email: manager.email,
-      password: manager.password,
-      tenantId: tenantA.tenantId,
-      brandId: tenantA.brandId,
+  const results = await runSmoke(
+    {
+      baseUrl: cfg.webOrigin,
+      ...(cfg.expectStoreOrigin ? { expectStoreOrigin: cfg.expectStoreOrigin } : {}),
+      upload: {
+        email: manager.email,
+        password: manager.password,
+        tenantId: tenantA.tenantId,
+        brandId: tenantA.brandId,
+      },
+      ...(cfg.ingestTimeoutMs ? { ingestTimeoutMs: cfg.ingestTimeoutMs } : {}),
     },
-    ...(cfg.ingestTimeoutMs ? { ingestTimeoutMs: cfg.ingestTimeoutMs } : {}),
-  });
+    f,
+  );
   return fromSmoke(results);
 }
 

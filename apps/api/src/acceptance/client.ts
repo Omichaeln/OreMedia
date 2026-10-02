@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
 import { describeResponse } from '../../../../tooling/scripts/acceptance/report';
 
 /**
@@ -6,6 +7,12 @@ import { describeResponse } from '../../../../tooling/scripts/acceptance/report'
  * use (superjson envelope `{ json: input }`, bearer session, `X-Oremedia-Tenant`, an idempotency key per
  * mutation). Tokens live in the session object in memory and never appear in a returned detail.
  */
+/** The client every request here uses: the global fetch, unless the startup probe switched it (probe.ts). */
+let httpFetch: FetchLike = (...args) => globalThis.fetch(...args);
+export const configureFetch = (f: FetchLike): void => {
+  httpFetch = f;
+};
+
 export interface ApiSession {
   /** The origin requests go to (the web origin, or the api's private URL). */
   baseUrl: string;
@@ -59,7 +66,7 @@ export const headersFor = (s: ApiSession): Record<string, string> => ({
 });
 
 export async function mutate<T>(s: ApiSession, path: string, input: unknown): Promise<ApiAnswer<T>> {
-  const res = await fetch(`${s.baseUrl}/trpc/${path}`, {
+  const res = await httpFetch(`${s.baseUrl}/trpc/${path}`, {
     method: 'POST',
     headers: { ...headersFor(s), 'content-type': 'application/json', 'idempotency-key': randomUUID() },
     body: JSON.stringify({ json: input }),
@@ -69,7 +76,7 @@ export async function mutate<T>(s: ApiSession, path: string, input: unknown): Pr
 
 export async function query<T>(s: ApiSession, path: string, input?: unknown): Promise<ApiAnswer<T>> {
   const qs = input === undefined ? '' : `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`;
-  const res = await fetch(`${s.baseUrl}/trpc/${path}${qs}`, { headers: headersFor(s) });
+  const res = await httpFetch(`${s.baseUrl}/trpc/${path}${qs}`, { headers: headersFor(s) });
   return answer<T>(res);
 }
 
@@ -85,7 +92,7 @@ export async function signInWithPassword(
   email: string,
   password: string,
 ): Promise<SignInAnswer> {
-  const res = await fetch(`${webOrigin}/auth/password/sign-in`, {
+  const res = await httpFetch(`${webOrigin}/auth/password/sign-in`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: webOrigin },
     body: JSON.stringify({ email, password }),
@@ -113,7 +120,7 @@ export async function signInWithPassword(
 
 /** POST /auth/sign-out for a session the job holds, so no fixture session outlives the run. */
 export async function signOut(webOrigin: string, token: string): Promise<void> {
-  await fetch(`${webOrigin}/auth/sign-out`, {
+  await httpFetch(`${webOrigin}/auth/sign-out`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
   }).catch(() => undefined);
