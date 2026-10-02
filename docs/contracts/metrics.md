@@ -131,7 +131,12 @@ crawler measured, never field data; nothing in them is aggregated with the metri
 ## Overview (R2-5)
 
 `overview.summary` (`packages/modules/overview`, contract `OverviewSummaryV1`) composes the read models above for one
-brand and one window of UTC day bounds; it forms no new number. Composition: the social figures are the brand rollup
+brand and one window of UTC day bounds; it forms no new number. Population: `measurement.metrics.query` caps one
+call at 200 subjects, but every composed read model (`brandSummary`, the attribute aggregate, the overview) aggregates
+the window's whole population, reading the subjects in chunks of 200 server side; the result states it
+(`subjectsTotal`, `truncated: false`), and the Performance screen reads the per-publication values page by page
+(`measurement.metrics.publicationValues`, newest first, a cursor per page). Nothing is cut to a window's newest
+200 publications. Composition: the social figures are the brand rollup
 (`measurement.metrics.brandSummary`: flows summed, rates pooled, unique counts / levels / gauges listed with the
 dictionary's words, the D-14 sample on both sides), the per-channel coverage and freshness come from
 `measurement.metrics.query` over the window's released publications grouped by channel, the web figures are each

@@ -105,7 +105,14 @@ export interface OverviewSocialV1 {
   figures: OverviewFigureV1[];
   /** Released channel publications in the window and the one before it (the D-14 sample). */
   sample: { current: number; previous: number; minimum: number; sufficient: boolean };
-  coverage: { subjectsRequested: number; subjectsWithData: number; staleValues: number };
+  /** The whole population of the window: `subjectsRequested` is every released publication, never a newest slice. */
+  coverage: {
+    subjectsRequested: number;
+    subjectsWithData: number;
+    staleValues: number;
+    subjectsTotal: number;
+    truncated: boolean;
+  };
   freshness: MetricFreshness | null;
   ageDays: number | null;
 }

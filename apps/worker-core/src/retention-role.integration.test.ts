@@ -6,6 +6,7 @@ import { configureDatabase, configureRoleDatabase, type Db } from '@oremedia/db'
 import { tenants, users } from '@oremedia/db/schema/access';
 import { agentRuns, agentSteps } from '@oremedia/db/schema/agents';
 import { brands } from '@oremedia/db/schema/brand';
+import { brandDestinations, destinationReportRows, seoAuditRuns } from '@oremedia/db/schema/destinations';
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { createRoleUser, createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { createOperationsRuntime } from '@oremedia/module-operations';
@@ -16,9 +17,10 @@ import { operationsActivities } from './operations-worker';
 /**
  * Ledger 7.16 end to end: worker-core's database connection is the application role (roles/app-role.sql) and the
  * retention connection (DATABASE_URL_RETENTION) is the retention role (roles/retention-role.sql). The sweep's
- * activities as worker-core registers them (operationsActivities) remove agent transcripts past their TTL on the
- * retention connection and audit it; the same activities without the retention connection are refused by the
- * engine, so the separate role is what makes the TTL work while the application role keeps no DELETE on evidence.
+ * activities as worker-core registers them (operationsActivities) remove agent transcripts past their TTL, and
+ * (RA-05) a disconnected destination's expired report rows and audit runs, on the retention connection and audit
+ * it; the same activities without the retention connection are refused by the engine, so the separate role is
+ * what makes the TTL work while the application role keeps no DELETE on evidence.
  */
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
@@ -35,6 +37,10 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
   const newStep = newId('step');
   const old = new Date(Date.now() - 200 * 86_400_000); // past the 90-day agent transcript TTL
   const input = { correlationId: 'corr_retention_role', now: new Date().toISOString(), dryRun: false };
+  const property = newId('dst'); // disconnected, no credential: its rows still expire with the 7-day cache
+  const site = newId('dst'); // disconnected website: the last 4 audit runs are kept
+  const runIds = [1, 2, 3, 4, 5].map(() => newId('sar'));
+  const dayKey = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
   const stepIds = async () =>
     (
@@ -44,6 +50,15 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
         .where(eq(agentSteps.tenantId, tenantId))
         .orderBy(asc(agentSteps.id))
     ).map((r) => r.id);
+  const rowDays = async () =>
+    (
+      await appDb
+        .select({ date: destinationReportRows.date })
+        .from(destinationReportRows)
+        .where(eq(destinationReportRows.destinationId, property))
+    ).map((r) => r.date);
+  const runCount = async () =>
+    (await appDb.select().from(seoAuditRuns).where(eq(seoAuditRuns.destinationId, site))).length;
   const retentionAudits = async () =>
     (
       await appDb
@@ -87,6 +102,50 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
       { id: oldStep, tenantId, runId, index: 0, kind: 'model_call', summary: 'old', createdAt: old },
       { id: newStep, tenantId, runId, index: 1, kind: 'model_call', summary: 'new' },
     ]);
+    const destination = (id: string, kind: string) => ({
+      id,
+      tenantId,
+      brandId,
+      kind,
+      externalId: id,
+      displayName: id,
+      ownerUserId: ownerId,
+      credentialRefId: null,
+      grantedScopes: [],
+      capabilityVersion: 1,
+      status: 'disconnected' as const,
+    });
+    await tdb.db
+      .insert(brandDestinations)
+      .values([destination(property, 'ga4_property'), destination(site, 'cms_site')]);
+    await tdb.db.insert(destinationReportRows).values(
+      [12, 2].map((daysAgo) => ({
+        id: newId('drr'),
+        tenantId,
+        brandId,
+        destinationId: property,
+        reportKey: 'ga4.acquisition',
+        date: dayKey(daysAgo),
+        dimensions: { d: String(daysAgo) },
+        dimensionKey: `d${daysAgo}`,
+        metrics: { sessions: 1 },
+        fetchedAt: new Date(),
+        source: 'provider',
+      })),
+    );
+    await tdb.db.insert(seoAuditRuns).values(
+      runIds.map((id, i) => ({
+        id,
+        tenantId,
+        brandId,
+        destinationId: site,
+        origin: 'https://site.example',
+        trigger: 'scheduled' as const,
+        startedAt: new Date(Date.now() - (10 - i) * 86_400_000),
+        finishedAt: new Date(Date.now() - (10 - i) * 86_400_000),
+        outcome: 'completed' as const,
+      })),
+    );
     const app = await createRoleUser(tdb, 'app');
     const retention = await createRoleUser(tdb, 'retention');
     roles.push(app, retention);
@@ -104,6 +163,8 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
     const onAppRole = createRetentionActivities(createOperationsRuntime().retention);
     expect(await runRetentionSweep(onAppRole, input)).toMatchObject({ tenants: 0, failed: 1, rows: 0 });
     expect(await stepIds()).toEqual([oldStep, newStep].sort());
+    expect(await rowDays()).toHaveLength(2);
+    expect(await runCount()).toBe(5);
     expect(await retentionAudits()).toBe(0);
   });
 
@@ -112,9 +173,11 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
     expect(await runRetentionSweep(operationsActivities(), input)).toMatchObject({
       tenants: 1,
       failed: 0,
-      rows: 1,
+      rows: 3, // the old step, the 12-day-old report day, the fifth audit run
     });
     expect(await stepIds()).toEqual([newStep]);
-    expect(await retentionAudits()).toBe(1); // written through the retention role's INSERT on audit_events
+    expect(await rowDays()).toEqual([dayKey(2)]);
+    expect(await runCount()).toBe(4);
+    expect(await retentionAudits()).toBe(3); // written through the retention role's INSERT on audit_events
   });
 });

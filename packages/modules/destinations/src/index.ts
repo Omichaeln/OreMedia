@@ -38,6 +38,9 @@ export {
 // pages, findings with suggested tasks) and the on-demand `run` command (seo_audit.run, AGENT_NEVER).
 export { seoAuditService, createSeoAuditService } from './audit';
 export { createSeoAuditRuntime, type SeoAuditRuntimeOptions } from './audit-runtime';
+// Spec 17.5: the TTL handlers worker-core registers with the platform retention sweep (D-17 retention applied
+// on the sweep's own clock, independently of any fetch, connection or enabled kind).
+export { destinationRetention } from './retention';
 export {
   robotsDisallowFor,
   robotsAllows,

@@ -9,6 +9,7 @@ import {
   type DestinationReportPlanV1,
   type DestinationReportRangeV1,
   type DestinationReportSweepInputV1,
+  type DestinationReportTargetV1,
   type DestinationReportsInputV1,
   type DestinationReportsRuntimeV1,
   type DestinationRefreshRuntimeV1,
@@ -97,6 +98,26 @@ export async function reportUseDecision(
 export const dateKey = (d: Date): string => d.toISOString().slice(0, 10);
 export const addDays = (date: string, days: number): string =>
   dateKey(new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS));
+
+/**
+ * A destination's report retention (D-17): the policy's retentionDays when `retain` is allowed, else the operational
+ * cache (REPORT_CACHE_DAYS); days before the cut-off are deleted, every report of the destination. A kind the
+ * registry declares no reports for (unknown, or one that never had any) falls back to the cache: its rows are
+ * never kept longer. The same rule serves the sweep's prune and the platform retention sweep (retention.ts).
+ */
+export async function reportRetention(
+  row: { brandId: string; kind: string },
+  now: Date,
+  tx?: Tx,
+): Promise<{ days: number; cutoff: string; dataType: string }> {
+  const reports = registry().capability(row.kind)?.reports ?? [];
+  const cache = { days: REPORT_CACHE_DAYS, cutoff: addDays(dateKey(now), -REPORT_CACHE_DAYS) };
+  if (reports.length === 0) return { ...cache, dataType: `${row.kind}.reports` };
+  const { dataType, decision } = await reportUseDecision(row.brandId, row.kind, reports, 'retain', now, tx);
+  if (!decision.allowed || !decision.policy?.retentionDays) return { ...cache, dataType };
+  const days = decision.policy.retentionDays;
+  return { days, cutoff: addDays(dateKey(now), -days), dataType };
+}
 
 /**
  * The incremental range of one report (pure, unit-tested): from the last stored day minus the report's latency
@@ -190,7 +211,17 @@ export function createDestinationReportRuntime(
 
   return {
     listDestinationReportTargets: ({ correlationId }: DestinationReportSweepInputV1) =>
-      runAsPlatform(REPORT_JOB, correlationId, () => targetsRepo.listTargets(kindsWithReports())),
+      runAsPlatform(REPORT_JOB, correlationId, async () => {
+        // Paged to the end: a deployment past one batch is read whole, references only.
+        const kinds = kindsWithReports();
+        const targets: DestinationReportTargetV1[] = [];
+        for (let cursor: string | undefined; ;) {
+          const page = await targetsRepo.listTargets(kinds, { cursor });
+          targets.push(...page.items);
+          if (!page.nextCursor) return targets;
+          cursor = page.nextCursor;
+        }
+      }),
 
     async planDestinationReports({
       tenantId,
@@ -381,21 +412,7 @@ export function createDestinationReportRuntime(
      */
     async pruneDestinationReports({ destinationId, now: at }: DestinationReportsInputV1) {
       const row = await destinationsRepo.getById(destinationId);
-      const reports = registry().capability(row.kind)?.reports ?? [];
-      const cutoffFor = (days: number) => addDays(dateKey(new Date(at)), -days);
-      if (reports.length === 0) return { deleted: 0, cutoff: cutoffFor(REPORT_CACHE_DAYS) };
-      const { dataType, decision } = await reportUseDecision(
-        row.brandId,
-        row.kind,
-        reports,
-        'retain',
-        new Date(at),
-      );
-      const days =
-        decision.allowed && decision.policy?.retentionDays
-          ? decision.policy.retentionDays
-          : REPORT_CACHE_DAYS;
-      const cutoff = cutoffFor(days);
+      const { days, cutoff, dataType } = await reportRetention(row, new Date(at));
       const deleted = await withTransaction(async (tx) => {
         const n = await rowsRepo.deleteBefore(row.brandId, row.id, cutoff, tx);
         if (n > 0)

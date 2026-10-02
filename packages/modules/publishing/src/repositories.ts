@@ -295,14 +295,31 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
     return Number(rows[0]?.c ?? 0);
   }
   /** The brand's publications scheduled inside [from, to], newest first, bounded (the calendar and the rollups). */
-  async listScheduledBetween(brandId: string, from: Date, to: Date, limit: number, tx?: Tx) {
+  async listScheduledBetween(
+    brandId: string,
+    from: Date,
+    to: Date,
+    limit: number,
+    tx?: Tx,
+    /** The last row of the previous page (newest first): the page continues after its (scheduledFor, id). */
+    after?: { scheduledFor: Date; id: string },
+  ) {
     return this.conn(tx)
       .select()
       .from(publications)
       .where(
         this.brandScope(
           brandId,
-          and(gte(publications.scheduledFor, from), lte(publications.scheduledFor, to)) as SQL,
+          and(
+            gte(publications.scheduledFor, from),
+            lte(publications.scheduledFor, to),
+            after
+              ? or(
+                  lt(publications.scheduledFor, after.scheduledFor),
+                  and(eq(publications.scheduledFor, after.scheduledFor), lt(publications.id, after.id)),
+                )
+              : undefined,
+          ) as SQL,
         ),
       )
       .orderBy(desc(publications.scheduledFor), desc(publications.id))

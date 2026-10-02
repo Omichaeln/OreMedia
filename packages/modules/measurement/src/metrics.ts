@@ -4,7 +4,10 @@ import {
   BrandPerformanceSummary,
   COMPARISON_MINIMUM_SAMPLE,
   EngagementQualityGet,
+  MetricsPopulationQueryV1,
   MetricsQueryV1,
+  PublicationMetricsPage,
+  QUERY_SUBJECTS_MAX,
   type MetricAggregateV1,
   type MetricValueV1,
 } from '@oremedia/contracts/measurement';
@@ -12,6 +15,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { Tx } from '@oremedia/db';
 import { policy } from '@oremedia/module-access';
 import { BrandObjectiveRepository } from '@oremedia/module-brand';
+import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
 import { PublicationRepository } from '@oremedia/module-publishing';
 import { brandResource, latencyHoursFor, providerKeyOfSource } from './common';
 import { definitionService } from './definitions';
@@ -20,6 +24,7 @@ import {
   aggregateByComparableGroup,
   ageWindowSeconds,
   atAge,
+  chunked,
   comparableGroupFor,
   coverageOf,
   freshnessOf,
@@ -93,8 +98,47 @@ const groupBy = <T>(items: T[], key: (t: T) => string): Array<{ key: string; val
 };
 
 /** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
-const SUBJECTS_MAX = 200;
+const SUBJECTS_MAX = QUERY_SUBJECTS_MAX;
 const KEYS_MAX = 50;
+
+type SnapshotQuery = Parameters<MetricSnapshotRepository['listForQuery']>;
+
+/**
+ * The snapshots of any number of subjects, read one query-sized chunk of subjects at a time (sequentially): the
+ * repository's row bound applies per chunk, so a population past the public query's cap never drops a row.
+ */
+async function snapshotsFor(
+  brandId: SnapshotQuery[0],
+  subjectType: SnapshotQuery[1],
+  subjectIds: string[],
+  metricKeys: string[],
+  windowStart: Date,
+  windowEnd: Date,
+  tx?: Tx,
+  ageSeconds?: SnapshotQuery[7],
+): Promise<SnapshotRow[]> {
+  const rows: SnapshotRow[] = [];
+  for (const ids of chunked(subjectIds, SUBJECTS_MAX))
+    rows.push(
+      ...(await snapshotsRepo.listForQuery(
+        brandId,
+        subjectType,
+        ids,
+        metricKeys,
+        windowStart,
+        windowEnd,
+        tx,
+        ageSeconds,
+      )),
+    );
+  return rows;
+}
+
+/** Released publications newest first, ties by id, so a page cursor over them is stable. */
+const newestFirst = <T extends { publicationId: string; scheduledFor: string }>(list: T[]): T[] =>
+  [...list].sort(
+    (a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.publicationId.localeCompare(a.publicationId),
+  );
 
 export function createMetricService(opts: MetricsQueryOptions = {}) {
   const now = opts.now ?? (() => new Date());
@@ -115,12 +159,21 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
      * `ageDays` the post's total at that age (normalise.atAge).
      */
     async query(actor: ResolvedActor, input: z.infer<typeof MetricsQueryV1>, tx?: Tx) {
-      const parsed = MetricsQueryV1.parse(input);
+      return service.queryPopulation(actor, MetricsQueryV1.parse(input), tx);
+    },
+
+    /**
+     * The same query over a whole population (the brand rollup, the attribute aggregate, the overview compose
+     * with it; the router exposes only the capped `query`): the subjects are read in query-sized chunks, and the
+     * aggregates, groups and coverage span every one of them.
+     */
+    async queryPopulation(actor: ResolvedActor, input: z.infer<typeof MetricsPopulationQueryV1>, tx?: Tx) {
+      const parsed = MetricsPopulationQueryV1.parse(input);
       await assertBrandExists(parsed.brandId, tx);
       await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
       const windowStart = new Date(parsed.windowStart);
       const windowEnd = new Date(parsed.windowEnd);
-      const snapshots = await snapshotsRepo.listForQuery(
+      const snapshots = await snapshotsFor(
         parsed.brandId,
         parsed.subjectType,
         parsed.subjectIds,
@@ -163,6 +216,61 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
     },
 
     /**
+     * The per-publication values the Performance screen lists: the window's released publications (one channel's
+     * with `channelConnectionId`) newest first, one page of them per call with the cursor to the next, so a window
+     * past the query's cap is read whole page by page; `subjectsTotal` names the population on every page.
+     * insight.read on the brand; a foreign brand is NOT_FOUND.
+     */
+    async publicationValues(actor: ResolvedActor, input: z.infer<typeof PublicationMetricsPage>, tx?: Tx) {
+      const parsed = PublicationMetricsPage.parse(input);
+      await assertBrandExists(parsed.brandId, tx);
+      await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
+      const windowStart = new Date(parsed.windowStart);
+      const windowEnd = new Date(parsed.windowEnd);
+      const publications = newestFirst(
+        (await releasedPublications(parsed.brandId, windowStart, windowEnd, tx)).filter(
+          (p) => !parsed.channelConnectionId || p.channelConnectionId === parsed.channelConnectionId,
+        ),
+      );
+      // The cursor is the last publication of the previous page: the page starts after its (scheduledFor, id).
+      const cursor = parsed.page.cursor ? decodeCursor(parsed.page.cursor) : null;
+      const after = cursor && typeof cursor.sort === 'string' ? { at: cursor.sort, id: cursor.id } : null;
+      const start = after
+        ? publications.findIndex(
+            (p) => p.scheduledFor < after.at || (p.scheduledFor === after.at && p.publicationId < after.id),
+          )
+        : 0;
+      const page = start < 0 ? [] : publications.slice(start, start + parsed.page.limit);
+      const last = page[page.length - 1];
+      const result =
+        page.length > 0
+          ? await service.queryPopulation(
+              actor,
+              {
+                brandId: parsed.brandId,
+                subjectType: 'publication',
+                subjectIds: page.map((p) => p.publicationId),
+                metricKeys: parsed.metricKeys,
+                windowStart: parsed.windowStart,
+                windowEnd: parsed.windowEnd,
+                grouping: 'subject',
+                ...(parsed.ageDays ? { ageDays: parsed.ageDays } : {}),
+              },
+              tx,
+            )
+          : null;
+      return {
+        items: result?.values ?? [],
+        nextCursor:
+          last && start + page.length < publications.length
+            ? encodeCursor({ id: last.publicationId, sort: last.scheduledFor })
+            : null,
+        subjectsTotal: publications.length,
+        computedAt: now().toISOString(),
+      };
+    },
+
+    /**
      * Per publication, the engagement and impressions flows (summed within their groups, D-15) the attribute
      * aggregate pools; a publication with no impressions number is left out (never zero). insight.read is asserted
      * by the query it runs.
@@ -180,12 +288,12 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       if (publicationIds.length === 0 || keys.length === 0) return out;
       // A post with one operand only has no outcome (D-15: a missing number is never a zero).
       const seen = new Map<string, { engagement: number | null; impressions: number | null }>();
-      const result = await service.query(
+      const result = await service.queryPopulation(
         actor,
         {
           brandId,
           subjectType: 'publication',
-          subjectIds: publicationIds.slice(0, SUBJECTS_MAX),
+          subjectIds: publicationIds,
           metricKeys: keys,
           windowStart: windowStart.toISOString(),
           windowEnd: windowEnd.toISOString(),
@@ -211,7 +319,9 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
      * UX-11 (D-14, D-15): the brand's released publications in the window and the aggregates over them, with the
      * previous window of equal length for comparison at the same post age. Flows and pooled rates compare; unique
      * counts, levels and gauges are listed, never summed. Below the minimum sample on either side the comparison
-     * reads insufficient. insight.read on the brand; a foreign brand is NOT_FOUND.
+     * reads insufficient. Every released publication of each window counts (read in query-sized chunks): the
+     * totals, comparison and coverage are the whole population, never its newest rows. insight.read on the brand;
+     * a foreign brand is NOT_FOUND.
      */
     async brandSummary(actor: ResolvedActor, input: z.infer<typeof BrandPerformanceSummary>, tx?: Tx) {
       const parsed = BrandPerformanceSummary.parse(input);
@@ -222,9 +332,8 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
       const length = windowEnd.getTime() - windowStart.getTime();
       const keys = await scalarKeys(tx);
       const window = async (from: Date, to: Date) => {
-        const publications = (await releasedPublications(parsed.brandId, from, to, tx)).slice(
-          0,
-          SUBJECTS_MAX,
+        const publications = (await releasedPublications(parsed.brandId, from, to, tx)).filter(
+          (p) => !parsed.channelConnectionId || p.channelConnectionId === parsed.channelConnectionId,
         );
         if (publications.length === 0 || keys.length === 0)
           return {
@@ -234,7 +343,7 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
             aggregates: [] as MetricAggregateV1[],
             coverage: coverageOf([], { subjectIds: [], metricKeys: keys, windowStart: from, windowEnd: to }),
           };
-        const result = await service.query(
+        const result = await service.queryPopulation(
           actor,
           {
             brandId: parsed.brandId,
@@ -286,6 +395,9 @@ export function createMetricService(opts: MetricsQueryOptions = {}) {
         current,
         previous,
         comparison,
+        /** The window's whole population was aggregated: a screen may state it as such. */
+        subjectsTotal: current.publications,
+        truncated: false as const,
         sample: {
           current: current.publications,
           previous: previous.publications,

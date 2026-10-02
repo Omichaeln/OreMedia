@@ -202,9 +202,9 @@ export function composeModules(): void {
   configureSourceAvailability(sourceAvailabilityFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
-  // UX-11 / UX-12: the brand's publications in a window, as the calendar reads them.
+  // UX-11 / UX-12: every publication of a window (read to the end: the rollups aggregate the whole population).
   registerMeasurementPublicationSource((brandId, from, to, tx) =>
-    publicationService.calendarRange(brandId, from, to, tx),
+    publicationService.calendarRangeAll(brandId, from, to, tx),
   );
   configureLinkTracking(linkTrackingFromEnv());
   registerLinkTracker((input, tx) => linkService.trackVariantLinks(input, tx));

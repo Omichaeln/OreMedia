@@ -6621,9 +6621,76 @@
                         "const": 28
                       }
                     ]
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
                   }
                 },
                 "required": ["brandId", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/measurement.metrics.publicationValues": {
+      "get": {
+        "operationId": "measurement.metrics.publicationValues",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  },
+                  "metricKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "ageDays": {
+                    "anyOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "const": 3
+                      },
+                      {
+                        "const": 7
+                      },
+                      {
+                        "const": 28
+                      }
+                    ]
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "windowStart", "windowEnd", "metricKeys", "page"]
               }
             }
           }
@@ -15232,9 +15299,67 @@
                   "const": 28
                 }
               ]
+            },
+            "channelConnectionId": {
+              "type": "string"
             }
           },
           "required": ["brandId", "windowStart", "windowEnd"]
+        }
+      },
+      "measurement.metrics.publicationValues": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            },
+            "metricKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ageDays": {
+              "anyOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "const": 3
+                },
+                {
+                  "const": 7
+                },
+                {
+                  "const": 28
+                }
+              ]
+            },
+            "channelConnectionId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "windowStart", "windowEnd", "metricKeys", "page"]
         }
       },
       "measurement.metrics.query": {

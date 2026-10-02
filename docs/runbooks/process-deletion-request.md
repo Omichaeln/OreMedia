@@ -61,13 +61,18 @@ deletion_requests WHERE state <> 'completed'` (platform read-only session), and 
 ## Retention (the daily TTL sweep)
 
 `retentionSweepWorkflowV1` runs daily at 02:30 UTC from the Temporal schedule `retention-sweep` (created by
-worker-core at start). It is a **dry run** (counts only, `retention.apply` audit only on a real run) unless the
-schedule was created with `RETENTION_SWEEP_APPLY=true`. Classes and defaults (D-09 to confirm): agent transcripts
-90 days (`agent_steps`, `tool_invocations`; run summaries kept), metrics 25 months (`metric_snapshots`,
-`link_clicks`), raw customer-voice messages 12 months (`messages`; cluster sample refs cleared). A tenant's
-`retention_policies` row overrides the days; `retention_days = NULL` keeps the class indefinitely. To switch the
-schedule to apply mode: `temporal schedule update --schedule-id retention-sweep --workflow-type retentionSweepWorkflowV1
---task-queue core --input '{"dryRun":false}' …` (or delete it and restart worker-core with `RETENTION_SWEEP_APPLY=true`).
+worker-core at start). It is a **dry run** (counts only, `retention.apply` audit only on a real run) unless
+worker-core runs with `RETENTION_SWEEP_APPLY=true`: at every start the schedule's action args are brought in line
+with the variable, so switching the mode is a restart with it set (or unset). Classes and defaults (D-09 to
+confirm): agent transcripts 90 days (`agent_steps`, `tool_invocations`; run summaries kept), metrics 25 months
+(`metric_snapshots`, `link_clicks`), raw customer-voice messages 12 months (`messages`; cluster sample refs
+cleared). A tenant's `retention_policies` row overrides the days; `retention_days = NULL` keeps the class
+indefinitely. Destination report rows (`destination_report_rows`) and SEO audit runs (`seo_audit_runs`,
+`seo_audit_pages`) are expired per destination by the brand's source-use policy (D-17: `retention_days` with
+`retain`, else the 7-day report cache / last-runs keep rule), whether or not the destination is still connected,
+its kind enabled or certified, or its last fetch succeeded; the report and audit runs prune the same way after a
+planned run, so no fetch is needed for a copy to expire. A `temporal schedule update … --input '{"dryRun":false}'`
+by hand holds only until the next worker-core start.
 
 ## Database role
 

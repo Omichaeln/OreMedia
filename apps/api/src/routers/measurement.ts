@@ -8,6 +8,7 @@ import {
   MetricDefinitionGet,
   MetricDefinitionList,
   MetricsQueryV1,
+  PublicationMetricsPage,
   TrackedLinkList,
 } from '@oremedia/contracts/measurement';
 import {
@@ -47,6 +48,10 @@ export const measurementRouter = router({
     brandSummary: tenantQuery
       .input(BrandPerformanceSummary)
       .query(({ ctx, input }) => metricService.brandSummary(ctx.tenant.actor, input)),
+    /** The window's released publications with their values, one page at a time (the Performance screen's rows). */
+    publicationValues: tenantQuery
+      .input(PublicationMetricsPage)
+      .query(({ ctx, input }) => metricService.publicationValues(ctx.tenant.actor, input)),
   }),
   quality: router({
     get: tenantQuery

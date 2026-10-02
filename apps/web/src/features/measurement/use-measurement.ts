@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import type { MetricAgeDays } from '@oremedia/contracts/measurement';
+import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
 export type MetricDefinitionDto = inferOutput<Trpc['measurement']['definitions']['list']>[number];
@@ -14,32 +15,39 @@ export function useMetricDefinitions() {
   return useQuery(trpc.measurement.definitions.list.queryOptions({}));
 }
 
+/** Publications per page of the per-publication values (the query's own subject bound). */
+const VALUES_PAGE = 200;
+
 /**
- * Spec 15.2: the latest value per (publication, metric) in the window, with freshness on every value, sums only
- * inside a comparable group and a coverage statement; with `ageDays`, each post's total at that age instead (so
- * posts published on different days compare). Nothing is asked until there is something to ask about.
+ * Spec 15.2: the latest value per (publication, metric) for every released publication of the window (one
+ * channel's with `channelConnectionId`), with freshness on every value; with `ageDays`, each post's total at
+ * that age instead (so posts published on different days compare). The server pages the publications newest
+ * first and every page is read (spec 7.4), so a window past one page is never cut to its newest posts; `complete`
+ * says when the last page is in. Nothing is asked until there is something to ask about.
  */
-export function usePublicationMetrics(
+export function usePublicationValues(
   brandId: string,
-  publicationIds: string[],
   metricKeys: string[],
   windowStart: string,
   windowEnd: string,
-  ageDays?: MetricAgeDays,
+  opts: { ageDays?: MetricAgeDays; channelConnectionId?: string | null; enabled: boolean },
 ) {
   const trpc = useTRPC();
-  return useQuery({
-    ...trpc.measurement.metrics.query.queryOptions({
-      brandId,
-      subjectType: 'publication',
-      subjectIds: publicationIds,
-      metricKeys,
-      windowStart,
-      windowEnd,
-      grouping: 'comparable_group',
-      ...(ageDays ? { ageDays } : {}),
-    }),
-    enabled: publicationIds.length > 0 && metricKeys.length > 0,
+  const client = useTRPCClient();
+  const input = {
+    brandId,
+    metricKeys,
+    windowStart,
+    windowEnd,
+    ...(opts.ageDays ? { ageDays: opts.ageDays } : {}),
+    ...(opts.channelConnectionId ? { channelConnectionId: opts.channelConnectionId } : {}),
+  };
+  return useCursorPages({
+    queryKey: trpc.measurement.metrics.publicationValues.queryKey({ ...input, page: { limit: VALUES_PAGE } }),
+    fetchPage: (cursor) =>
+      client.measurement.metrics.publicationValues.query({ ...input, page: { limit: VALUES_PAGE, cursor } }),
+    enabled: opts.enabled && metricKeys.length > 0,
+    readAll: true,
   });
 }
 
@@ -48,12 +56,16 @@ export type AttributeAggregateDto = inferOutput<Trpc['measurement']['attributes'
 export type QualityDto = inferOutput<Trpc['measurement']['quality']['get']>;
 export type TrackedLinkDto = inferOutput<Trpc['measurement']['links']['list']>['items'][number];
 
-/** UX-11: one brand's window beside the previous one, by the dictionary's rules (D-14, D-15). */
+/**
+ * UX-11: one brand's window beside the previous one, by the dictionary's rules (D-14, D-15), over every released
+ * publication of the window (one channel's with `channelConnectionId`): the Performance totals read it.
+ */
 export function useBrandPerformance(
   brandId: string,
   windowStart: string,
   windowEnd: string,
   ageDays?: MetricAgeDays,
+  channelConnectionId?: string | null,
 ) {
   const trpc = useTRPC();
   return useQuery(
@@ -62,6 +74,7 @@ export function useBrandPerformance(
       windowStart,
       windowEnd,
       ...(ageDays ? { ageDays } : {}),
+      ...(channelConnectionId ? { channelConnectionId } : {}),
     }),
   );
 }
