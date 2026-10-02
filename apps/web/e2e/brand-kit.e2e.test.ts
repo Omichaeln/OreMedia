@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
+import { zip } from '../src/lib/unzip.test';
 
 /**
  * Brand kit: voice and vocabulary extraction (spec 8.2 onboarding), and typography (fonts uploaded or imported from
@@ -82,6 +83,35 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
     expect(await extract().getAttribute('title')).toBe('Save or discard your changes first');
     await page.getByRole('button', { name: 'Discard changes' }).click();
     await expect.poll(() => extract().getAttribute('aria-disabled'), { timeout: 15_000 }).toBeNull();
+  }, 45_000);
+
+  it('brand skill import: a .skill package (a zip) is unpacked in the browser and becomes a draft; a plain file that is not an archive is refused in text', async () => {
+    await page.goto(`${origin}${systemPath}`);
+    const input = page.locator('input[type="file"][accept^=".skill"]');
+    await input.waitFor({ state: 'attached', timeout: 15_000 });
+    // The package Claude exports: a zip of SKILL.md and references, some entries deflated, one non-text file.
+    await input.setInputFiles({
+      name: 'kinsley-test-brand.skill',
+      mimeType: '',
+      buffer: zip([
+        { path: 'references/', content: '' },
+        { path: 'SKILL.md', content: '---\nname: kinsley-test-brand\n---\n# Kinsley test\n', deflate: true },
+        { path: 'references/tokens.md', content: '| Primary | `#1f3a2e` |\n| Gold | `#c9a227` |\n' },
+        { path: 'templates/index.css', content: ':root{--x:1}', deflate: true },
+      ]),
+    });
+    await page.getByText('Draft version 3 created from kinsley-test-brand').waitFor({ timeout: 15_000 });
+    const banner = page.getByText('Draft version 3 created from kinsley-test-brand').locator('..');
+    expect(await banner.textContent()).toContain('2 guideline documents kept, 2 colours added');
+    expect(await banner.textContent()).toContain('Not imported: templates/index.css');
+    expect(backend.guidelineImports.at(-1)).toEqual({
+      brandId: E2E.brandId,
+      paths: ['SKILL.md', 'references/tokens.md', 'templates/index.css'],
+    });
+    // A file named .skill that is not a zip is refused before anything is sent.
+    await input.setInputFiles({ name: 'notes.skill', mimeType: '', buffer: Buffer.from('# just text\n') });
+    await page.getByText('notes.skill is not a zip archive', { exact: false }).waitFor({ timeout: 15_000 });
+    expect(backend.guidelineImports).toHaveLength(1);
   }, 45_000);
 
   it('typography: upload a font, import a Google Fonts family, assign it to a role and preview it', async () => {
