@@ -21,6 +21,7 @@ export {
   STALE_FACTOR,
   type RateInput,
   type DerivedRate,
+  chunked,
 } from './normalise';
 export {
   engagementQuality,

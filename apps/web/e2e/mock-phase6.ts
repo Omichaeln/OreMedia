@@ -60,6 +60,7 @@ import {
   EngagementQualityGet,
   MetricDefinitionList,
   MetricsQueryV1,
+  PublicationMetricsPage,
   TrackedLinkList,
   kindFor,
 } from '@oremedia/contracts/measurement';
@@ -2219,6 +2220,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
               // A website article (R2-3) has no post metrics (the server's releasedPublications skips it).
               return (
                 pub.channelConnectionId !== null &&
+                (!input.channelConnectionId || pub.channelConnectionId === input.channelConnectionId) &&
                 (pub.state === 'published' || pub.state === 'removed') &&
                 at >= from &&
                 at <= to
@@ -2279,7 +2281,48 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
                 change,
               };
             }),
+          subjectsTotal: current.publications,
+          truncated: false as const,
           sample: { current: current.publications, previous: previous.publications, minimum: 5, sufficient },
+          computedAt: now(),
+        };
+      }),
+      /** As the API: the window's released publications newest first, one page of values per call with a cursor. */
+      publicationValues: query.input(PublicationMetricsPage).query(({ input }) => {
+        brandOf(input.brandId);
+        const from = Date.parse(input.windowStart);
+        const to = Date.parse(input.windowEnd);
+        const publications = [...p5.publications.values()]
+          .filter((pub) => {
+            const at = Date.parse(pub.scheduledFor);
+            return (
+              pub.channelConnectionId !== null &&
+              (!input.channelConnectionId || pub.channelConnectionId === input.channelConnectionId) &&
+              (pub.state === 'published' || pub.state === 'removed') &&
+              at >= from &&
+              at <= to
+            );
+          })
+          .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.id.localeCompare(a.id));
+        const start = input.page.cursor ? Number(input.page.cursor) : 0;
+        const page = publications.slice(start, start + input.page.limit);
+        const result =
+          page.length === 0
+            ? null
+            : queryMetrics({
+                brandId: input.brandId,
+                subjectType: 'publication',
+                subjectIds: page.map((pub) => pub.id),
+                metricKeys: input.metricKeys,
+                windowStart: input.windowStart,
+                windowEnd: input.windowEnd,
+                grouping: 'subject',
+                ...(input.ageDays ? { ageDays: input.ageDays } : {}),
+              });
+        return {
+          items: result?.values ?? [],
+          nextCursor: start + page.length < publications.length ? String(start + page.length) : null,
+          subjectsTotal: publications.length,
           computedAt: now(),
         };
       }),

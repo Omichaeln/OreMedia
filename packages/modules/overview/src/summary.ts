@@ -27,8 +27,7 @@ import {
  * Performance screen would.
  */
 const DAY_MS = 86_400_000;
-/** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
-const SUBJECTS_MAX = 200;
+/** The query's own bound (MetricsQuery: metricKeys ≤ 50); the subjects are the window's whole population. */
 const KEYS_MAX = 50;
 
 export interface OverviewQueryOptions {
@@ -108,7 +107,8 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
           destinationService.sources.list(),
         ]);
 
-      // (a) social: the rollup's figures and, per channel, the window's released posts with their latest values.
+      // (a) social: the rollup's figures and, per channel, every released post of the window with its latest
+      // values (the population query reads them in chunks: no newest-200 cut).
       const social = socialOf(brandSummary);
       const current = released(currentCalendar.publications);
       const previous = released(previousCalendar.publications);
@@ -125,12 +125,12 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
       const values =
         current.length > 0 && keys.length > 0
           ? (
-              await metricService.query(
+              await metricService.queryPopulation(
                 actor,
                 {
                   brandId,
                   subjectType: 'publication',
-                  subjectIds: current.slice(0, SUBJECTS_MAX).map((p) => p.publicationId),
+                  subjectIds: current.map((p) => p.publicationId),
                   metricKeys: keys,
                   windowStart: parsed.windowStart,
                   windowEnd: parsed.windowEnd,

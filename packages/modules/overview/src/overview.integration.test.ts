@@ -18,7 +18,9 @@ import {
 } from '@oremedia/module-destinations';
 import { registerCalendarSource } from '@oremedia/module-content';
 import {
+  attributeService,
   definitionService,
+  metricService,
   registerMeasurementBrandChecker,
   registerMeasurementPublicationSource,
 } from '@oremedia/module-measurement';
@@ -430,49 +432,121 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     expect(result.limits.map((l) => l.code)).toContain('insufficient_sample');
   });
 
-  it('an old window with more than 200 posts is counted as it was: the window is applied in the query, never to the newest rows', async () => {
-    // 210 posts published 60 days ago on the fresh channel (no numbers): more than any listing's page and older
-    // than everything seeded above, so a "newest 200, then filter" read would count none of them.
-    const at = new Date(NOW.getTime() - 60 * DAY);
-    await tdb.db.insert(publications).values(
-      Array.from({ length: 210 }, (_, i) => {
+  it('an old window with more than 200 posts is counted whole (RA-06): totals, comparison and coverage span every post in the overview, the brand rollup and the attribute aggregate', async () => {
+    // 350 posts published 60 days ago on the fresh channel, 10 impressions each (fetched inside their own window),
+    // and 6 the week before with 80 each: more than the query's 200-subject cap and older than everything seeded
+    // above, so a "newest 200" read of either listing or query would miss most of them.
+    const seed = async (count: number, at: Date, impressions: number) => {
+      const rows = Array.from({ length: count }, (_, i) => {
         const id = newId('publication');
+        const scheduledFor = new Date(at.getTime() + i * 60_000);
+        const fetchedAt = new Date(scheduledFor.getTime() + 3_600_000);
         return {
-          id,
-          tenantId: tenantA,
-          brandId: brandA,
-          contentPackageId: newId('contentPackage'),
-          contentRevisionId: newId('contentRevision'),
-          channelVariantId: newId('channelVariant'),
-          channelConnectionId: freshChannel,
-          occurrenceKey: `test:${id}`,
-          authority: 'approval' as const,
-          approvalId: newId('releaseApproval'),
-          mandateId: null,
-          scheduledFor: new Date(at.getTime() + i * 60_000),
-          state: 'published' as const,
-          remotePostId: `post_${id.slice(-6)}`,
-          remoteUrl: 'https://fixture.example/p/1',
-          scheduledByKind: 'user' as const,
-          scheduledById: USER,
+          publication: {
+            id,
+            tenantId: tenantA,
+            brandId: brandA,
+            contentPackageId: newId('contentPackage'),
+            contentRevisionId: newId('contentRevision'),
+            channelVariantId: newId('channelVariant'),
+            channelConnectionId: freshChannel,
+            occurrenceKey: `test:${id}`,
+            authority: 'approval' as const,
+            approvalId: newId('releaseApproval'),
+            mandateId: null,
+            scheduledFor,
+            state: 'published' as const,
+            remotePostId: `post_${id.slice(-6)}`,
+            remoteUrl: 'https://fixture.example/p/1',
+            scheduledByKind: 'user' as const,
+            scheduledById: USER,
+          },
+          snapshot: {
+            id: newId('metricSnapshot'),
+            tenantId: tenantA,
+            brandId: brandA,
+            subjectType: 'publication' as const,
+            subjectId: id,
+            metricKey: 'impressionCount',
+            value: impressions,
+            series: null,
+            windowStart: scheduledFor,
+            windowEnd: fetchedAt,
+            fetchedAt,
+            source: `${FIXTURE_PROVIDER_KEY}@v1`,
+            completeness: 'complete' as const,
+            definitionVersion: 1,
+            numeratorSnapshotId: null,
+            denominatorSnapshotId: null,
+            brandTimezone: 'UTC',
+          },
         };
-      }),
-    );
-    const result = await inTenant(tenantA, () =>
-      overview.summary(member(tenantA), {
-        brandId: brandA,
-        windowStart: `${dayKey(-63)}T00:00:00.000Z`,
-        windowEnd: `${dayKey(-57)}T23:59:59.999Z`,
-      }),
-    );
-    expect(result.sources.find((s) => s.id === freshChannel)).toMatchObject({
-      state: 'no_data',
-      coverage: { requested: 210, withData: 0, unit: 'posts' },
-      sample: { current: 210, previous: 0, minimum: 5, sufficient: false },
+      });
+      for (let i = 0; i < rows.length; i += 100) {
+        const slice = rows.slice(i, i + 100);
+        await tdb.db.insert(publications).values(slice.map((r) => r.publication));
+        await tdb.db.insert(metricSnapshots).values(slice.map((r) => r.snapshot));
+      }
+    };
+    await seed(350, new Date(NOW.getTime() - 60 * DAY), 10);
+    await seed(6, new Date(NOW.getTime() - 67 * DAY), 80);
+    const window = {
+      brandId: brandA,
+      windowStart: `${dayKey(-63)}T00:00:00.000Z`,
+      windowEnd: `${dayKey(-57)}T23:59:59.999Z`,
+    };
+    const change = (3500 - 480) / 480;
+
+    const result = await inTenant(tenantA, () => overview.summary(member(tenantA), window));
+    expect(result.social.sample).toEqual({ current: 350, previous: 6, minimum: 5, sufficient: true });
+    expect(result.social.coverage).toEqual({
+      subjectsRequested: 350,
+      subjectsWithData: 350,
+      staleValues: 350,
+      subjectsTotal: 350,
+      truncated: false,
     });
-    expect(result.sources.find((s) => s.id === freshChannel)?.reason).toContain(
-      '210 posts published, no number returned yet',
+    expect(result.social.figures.find((f) => f.key === 'impressions')).toMatchObject({
+      value: 3500,
+      previous: 480,
+      change,
+      sufficient: true,
+      coverage: { requested: 350, withData: 350, unit: 'posts' },
+    });
+    // The channel's own coverage spans every post too (the values were read in chunks, never the newest 200).
+    expect(result.sources.find((s) => s.id === freshChannel)).toMatchObject({
+      state: 'stale',
+      coverage: { requested: 350, withData: 350, unit: 'posts' },
+      sample: { current: 350, previous: 6, minimum: 5, sufficient: true },
+    });
+
+    // The portfolio path (measurement.metrics.brandSummary) reads the same whole population.
+    const rollup = await inTenant(tenantA, () => metricService.brandSummary(member(tenantA), window));
+    expect(rollup).toMatchObject({ subjectsTotal: 350, truncated: false });
+    expect(rollup.current).toMatchObject({
+      publications: 350,
+      coverage: { subjectsRequested: 350, subjectsWithData: 350 },
+    });
+    expect(rollup.current.aggregates.find((a) => a.comparableGroup === 'impressions')).toMatchObject({
+      value: 3500,
+      subjectsWithData: 350,
+    });
+    expect(rollup.comparison.find((c) => c.comparableGroup === 'impressions')).toEqual({
+      comparableGroup: 'impressions',
+      kind: 'flow',
+      current: 3500,
+      previous: 480,
+      change,
+    });
+    // One channel's posts only: the idle channel published nothing in the window.
+    const idle = await inTenant(tenantA, () =>
+      metricService.brandSummary(member(tenantA), { ...window, channelConnectionId: idleChannel }),
     );
+    expect(idle.current).toMatchObject({ publications: 0, aggregates: [] });
+
+    // The attribute aggregate counts every publication of the window (none carries engagement here).
+    const attributes = await inTenant(tenantA, () => attributeService.aggregate(member(tenantA), window));
+    expect(attributes).toMatchObject({ publications: 350, withNumbers: 0 });
   });
 
   it('cross-tenant: a foreign brand is NOT_FOUND, in either direction', async () => {

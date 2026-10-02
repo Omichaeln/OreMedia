@@ -24,7 +24,12 @@ import { Section } from '../../components/section';
 import { ageText } from '../intelligence/intelligence-helpers';
 import { dayKey, trailingDayKeys, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, useChannels, type CalendarPublicationDto } from '../publishing/use-publishing';
-import { useMetricDefinitions, usePublicationMetrics, type MetricAggregateDto } from './use-measurement';
+import {
+  useBrandPerformance,
+  useMetricDefinitions,
+  usePublicationValues,
+  type MetricAggregateDto,
+} from './use-measurement';
 import { SeoAuditSection } from './seo-audit';
 import { WebPerformanceSection } from './web-performance';
 
@@ -42,8 +47,7 @@ const GROUPS: ReadonlyArray<[group: string, label: string]> = [
 ];
 const GROUP_LABEL = new Map(GROUPS);
 const ENGAGEMENT_RATE = 'rate:engagement/impressions';
-/** The query's own bounds (MetricsQuery: subjectIds ≤ 200, metricKeys ≤ 50). */
-const MAX_SUBJECTS = 200;
+/** The query's own bound (MetricsQuery: metricKeys ≤ 50); the publications are the period's whole population. */
 const MAX_KEYS = 50;
 
 interface Row {
@@ -57,7 +61,9 @@ interface Row {
 /**
  * Performance (the v3 prototype's screen on this app's design language): what the brand's published posts did in a
  * period, from the numbers measurement holds. Every figure is the latest fetch inside the period with its freshness;
- * totals stay inside one comparable group; what was asked and not returned is said, never shown as zero.
+ * totals stay inside one comparable group and span every published post of the period (the brand rollup aggregates
+ * the whole population server side; the per-post values are read page by page); what was asked and not returned is
+ * said, never shown as zero.
  */
 export function PerformanceScreen() {
   const { companyId, brandId, brand } = useBrandContext();
@@ -92,8 +98,6 @@ export function PerformanceScreen() {
         .sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor)),
     [calendar.data, channelFilter],
   );
-  const subjects = useMemo(() => published.slice(0, MAX_SUBJECTS), [published]);
-  const subjectIds = useMemo(() => subjects.map((p) => p.publicationId), [subjects]);
   // The register lists every provider's metrics; only the brand's own channels can have numbers here.
   const brandProviders = useMemo(
     () => new Set((channels.data ?? []).map((c) => c.providerKey)),
@@ -115,9 +119,15 @@ export function PerformanceScreen() {
     [definitions.data, brandProviders],
   );
   const metricKeys = allKeys.slice(0, MAX_KEYS);
-  const metrics = usePublicationMetrics(brandId, subjectIds, metricKeys, range.from, range.to);
-  // With no posts the query is disabled and holds nothing for this period or channel.
-  const current = subjectIds.length > 0 ? metrics.data : undefined;
+  // The totals: the brand rollup over every published post of the period (and channel), aggregated server side.
+  const summary = useBrandPerformance(brandId, range.from, range.to, undefined, channelFilter);
+  // The per-post values, every page of them (spec 7.4); nothing is asked with no posts.
+  const metrics = usePublicationValues(brandId, metricKeys, range.from, range.to, {
+    channelConnectionId: channelFilter,
+    enabled: published.length > 0,
+  });
+  // With no posts the rollup holds nothing for this period or channel; the panels wait for the last page of values.
+  const current = published.length > 0 && metrics.complete ? summary.data?.current : undefined;
 
   const aggregates = useMemo(
     () =>
@@ -133,19 +143,19 @@ export function PerformanceScreen() {
     null;
 
   const rows: Row[] = useMemo(() => {
-    const values = current?.values ?? [];
-    return subjects.map((p) => {
+    const values = metrics.items;
+    return published.map((p) => {
       const mine = values.filter((v) => v.subjectId === p.publicationId);
       const g = groupValue(mine.filter((v) => v.comparableGroup === selected?.comparableGroup));
       const rate = mine.find((v) => v.comparableGroup === ENGAGEMENT_RATE && v.value !== null)?.value ?? null;
       return { publication: p, value: g.value, rate, stale: g.stale, fetchedHoursAgo: g.age };
     });
-  }, [current, subjects, selected?.comparableGroup]);
+  }, [metrics.items, published, selected?.comparableGroup]);
   const sorted = [...rows].sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
   // UX-12: the slot grid pools engagement over impressions per post, whatever metric the tiles show.
   const slotPosts: SlotPost[] = useMemo(() => {
-    const values = current?.values ?? [];
-    return subjects.map((p) => {
+    const values = metrics.items;
+    return published.map((p) => {
       const mine = values.filter((v) => v.subjectId === p.publicationId);
       return {
         scheduledFor: p.scheduledFor,
@@ -153,8 +163,8 @@ export function PerformanceScreen() {
         impressions: groupValue(mine.filter((v) => v.comparableGroup === 'impressions')).value,
       };
     });
-  }, [current, subjects]);
-  const selectedPost = subjects.find((p) => p.publicationId === postParam) ?? null;
+  }, [metrics.items, published]);
+  const selectedPost = published.find((p) => p.publicationId === postParam) ?? null;
   const max = Math.max(0, ...rows.map((r) => r.value ?? 0));
 
   const channelName = (id: string) => {
@@ -187,9 +197,11 @@ export function PerformanceScreen() {
     }
     setParams(p, { replace: true });
   };
-  const queries = [calendar, channels, definitions];
+  const queries = [calendar, channels, definitions, summary];
   const failed = [...queries, metrics].find((q) => q.isError);
-  const loading = queries.some((q) => q.isPending) || (metrics.isPending && metrics.fetchStatus !== 'idle');
+  const loading =
+    queries.some((q) => q.isPending) ||
+    (published.length > 0 && metricKeys.length > 0 && !metrics.complete && !metrics.isError);
   const coverage = current?.coverage;
 
   return (
@@ -288,7 +300,7 @@ export function PerformanceScreen() {
                     key={a.comparableGroup}
                     aggregate={a}
                     label={a.label}
-                    requested={subjects.length}
+                    requested={current.publications}
                     pressed={selected?.comparableGroup === a.comparableGroup}
                     onSelect={() => update({ metric: a.comparableGroup })}
                   />
@@ -304,8 +316,6 @@ export function PerformanceScreen() {
                 {' · '}totals add only flows of the same kind across channels; unique counts and levels are
                 never summed and rates are pooled from their operands; a missing number is never counted as
                 zero
-                {published.length > MAX_SUBJECTS &&
-                  ` · the newest ${MAX_SUBJECTS} of ${published.length} publications`}
                 {allKeys.length > MAX_KEYS && ` · the first ${MAX_KEYS} of ${allKeys.length} metrics`}
               </p>
             )}
@@ -444,7 +454,7 @@ export function PerformanceScreen() {
               brandId={brandId}
               windowStart={range.from}
               windowEnd={range.to}
-              enabled={subjects.length > 0}
+              enabled={published.length > 0}
             />
           </div>
           <NextCyclePanel companyId={companyId} brandId={brandId} />

@@ -48,6 +48,9 @@ export interface BrandSummaryResult {
     change: number | null;
   }>;
   sample: { current: number; previous: number; minimum: number; sufficient: boolean };
+  /** The window's whole population was aggregated (every released publication, in chunks). */
+  subjectsTotal: number;
+  truncated: boolean;
 }
 
 /** A channel connection as the publishing module lists it (publishing.channels.list). */
@@ -124,7 +127,13 @@ export function socialOf(summary: BrandSummaryResult): OverviewSocialV1 {
   return {
     figures,
     sample: summary.sample,
-    coverage: summary.current.coverage,
+    coverage: {
+      subjectsRequested: summary.current.coverage.subjectsRequested,
+      subjectsWithData: summary.current.coverage.subjectsWithData,
+      staleValues: summary.current.coverage.staleValues,
+      subjectsTotal: summary.subjectsTotal,
+      truncated: summary.truncated,
+    },
     freshness: oldest
       ? {
           fetchedAt: oldest.asOf ?? '',

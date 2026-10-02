@@ -120,6 +120,13 @@ export function freshnessOf(fetchedAt: Date, latencyHours: number, now: Date): M
 // ---- selection and aggregation ----
 
 /** The latest fetch per (subject, metric) wins; older fetches of the same window are history, not the number. */
+/** Consecutive slices of at most `size` items, in order (a population read in query-sized chunks). */
+export function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 export function latestPerSubjectMetric<T extends { subjectId: string; metricKey: string; fetchedAt: Date }>(
   rows: T[],
 ): T[] {

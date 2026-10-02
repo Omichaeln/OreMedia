@@ -28,6 +28,15 @@ export const MEASUREMENT_INPUTS: Record<string, CrossTenantFixture> = {
       windowEnd: new Date().toISOString(),
     }),
   },
+  'measurement.metrics.publicationValues': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      metricKeys: ['impressionCount'],
+      windowStart: new Date(Date.now() - 30 * 24 * 3600_000).toISOString(),
+      windowEnd: new Date().toISOString(),
+      page: { limit: 50 },
+    }),
+  },
   'measurement.attributes.aggregate': {
     buildInput: (f) => ({
       brandId: f['brandId'],
