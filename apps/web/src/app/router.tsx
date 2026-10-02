@@ -13,6 +13,7 @@ import { BrandLayout } from './c/$company/b/$brand/layout';
 import { BrandHomeRoute } from './c/$company/b/$brand/home/route';
 import { BrandSystemRoute } from './c/$company/b/$brand/system/route';
 import { AssetLibraryRoute } from './c/$company/b/$brand/assets/route';
+import { StudioIndexRoute } from './c/$company/b/$brand/studio/route';
 import { StudioRoute } from './c/$company/b/$brand/studio/$doc/route';
 import { CalendarRoute } from './c/$company/b/$brand/calendar/route';
 import { ReviewInboxRoute } from './c/$company/b/$brand/review/route';
@@ -95,6 +96,7 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
             { path: 'home', Component: BrandHomeRoute },
             { path: 'system', Component: BrandSystemRoute },
             { path: 'assets', Component: AssetLibraryRoute },
+            { path: 'studio', Component: StudioIndexRoute },
             {
               path: 'studio/:doc',
               Component: StudioRoute,

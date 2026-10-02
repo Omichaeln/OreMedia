@@ -83,6 +83,28 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('Studio is a sidebar section: the documents index creates a document and opens it without the sidebar, and lists it on return', async () => {
+    const page = await signedIn(1440);
+    const nav = page.getByRole('navigation', { name: 'Brand sections' });
+    await nav.getByRole('link', { name: /^Studio/ }).click();
+    await page.waitForURL('**/studio', { timeout: 15_000 });
+    await expect
+      .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
+      .toBe('Studio');
+    expect(await nav.count()).toBe(1);
+    await page.getByLabel('New document title').fill('Studio index document');
+    await page.getByRole('button', { name: 'Create and open' }).click();
+    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+    await expect.poll(() => page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);
+    await page.goBack();
+    await page.waitForURL('**/studio', { timeout: 15_000 });
+    const documents = page.getByTestId('documents');
+    await documents.waitFor({ timeout: 15_000 });
+    expect(await documents.getByRole('link', { name: 'Studio index document' }).count()).toBe(1);
+    expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(1);
+    await page.close();
+  }, 45_000);
+
   it('the switcher names company and brand and lists the brands and the portfolio', async () => {
     const page = await signedIn(1440);
     const trigger = page.getByRole('button', { name: /Switch brand or company/ });

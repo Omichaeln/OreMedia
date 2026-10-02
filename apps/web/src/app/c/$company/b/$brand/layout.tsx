@@ -16,6 +16,7 @@ const WORK: NavItem[] = [
   { segment: 'review', label: 'Review' },
   { segment: 'calendar', label: 'Calendar' },
   { segment: 'campaigns', label: 'Campaigns' },
+  { segment: 'studio', label: 'Studio' },
   { segment: 'performance', label: 'Performance' },
   { segment: 'inbox', label: 'Inbox' },
   { segment: 'intelligence', label: 'Intelligence' },
@@ -31,13 +32,14 @@ const STANDING: NavItem[] = [
 /**
  * Spec 11.1: company and brand are always visible; every brand screen renders inside this shell. A sidebar beside
  * the screen from 1024 px; below that a top bar names company and brand and opens the same navigation as a drawer.
- * The studio is a full-screen workspace with its own breadcrumb, so it renders without the sidebar.
+ * A document's studio is a full-screen workspace with its own breadcrumb, so it renders without the sidebar; the
+ * Studio section (the documents index) is an ordinary screen inside it.
  */
 export function BrandLayout() {
   const { company = '', brand: brandId = '' } = useParams();
   const companies = useCompanies();
   const brand = useBrand(brandId);
-  const inStudio = useMatch('/c/:company/b/:brand/studio/*') !== null;
+  const inStudio = useMatch('/c/:company/b/:brand/studio/:doc') !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const companyName = companies.data?.find((c) => c.tenantId === company)?.name ?? null;
   const brandName = brand.data?.name ?? (brand.isPending ? 'Loading…' : brandId);
