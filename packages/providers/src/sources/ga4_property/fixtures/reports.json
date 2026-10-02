@@ -49,7 +49,13 @@
                 }
               ],
               "rowCount": 3,
-              "kind": "analyticsData#runReport"
+              "kind": "analyticsData#runReport",
+              "metadata": {
+                "currencyCode": "ZAR",
+                "timeZone": "Africa/Johannesburg",
+                "subjectToThresholding": true,
+                "samplingMetadatas": [{ "samplesReadCount": "9000", "samplingSpaceSize": "12000" }]
+              }
             }
           }
         }
@@ -129,7 +135,13 @@
                   ]
                 }
               ],
-              "rowCount": 2
+              "rowCount": 2,
+              "metadata": {
+                "currencyCode": "ZAR",
+                "timeZone": "Africa/Johannesburg",
+                "dataLossFromOtherRow": true,
+                "samplingMetadatas": [{ "samplesReadCount": "12000", "samplingSpaceSize": "12000" }]
+              }
             }
           }
         }
@@ -234,6 +246,49 @@
                 "code": 401,
                 "message": "Request had invalid authentication credentials.",
                 "status": "UNAUTHENTICATED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "property": {
+      "description": "RA-10: the Admin API property resource carries the reporting zone and currency",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "analyticsadmin.googleapis.com",
+            "path": "/v1beta/properties/424242"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "name": "properties/424242",
+              "displayName": "Acme web",
+              "timeZone": "Africa/Johannesburg",
+              "currencyCode": "ZAR",
+              "propertyType": "PROPERTY_TYPE_ORDINARY"
+            }
+          }
+        }
+      ]
+    },
+    "property_forbidden": {
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "analyticsadmin.googleapis.com",
+            "path": "/v1beta/properties/424242"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "error": {
+                "code": 403,
+                "message": "The caller does not have permission",
+                "status": "PERMISSION_DENIED"
               }
             }
           }

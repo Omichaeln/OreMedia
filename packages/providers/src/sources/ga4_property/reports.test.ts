@@ -44,6 +44,11 @@ describe('GA4 property reports (ledger R2-1 part B, Data API runReport)', () => 
       dateRange: range,
     });
     expect(page.nextPageToken).toBeNull();
+    // RA-10: the answer's metadata names the property's zone and currency and says the data is sampled and
+    // thresholded; the days are the property's local days, never re-bucketed here.
+    expect(page.reportingTimeZone).toBe('Africa/Johannesburg');
+    expect(page.currencyCode).toBe('ZAR');
+    expect(page.quality).toEqual(['sampled', 'thresholded']);
     expect(page.rows).toEqual([
       {
         date: '2026-09-27',
@@ -106,6 +111,40 @@ describe('GA4 property reports (ledger R2-1 part B, Data API runReport)', () => 
       },
     ]);
     expect('totalUsers' in (page.rows[0]?.metrics ?? {})).toBe(false);
+    // Every sample read: not sampled; data folded into "(other)" is a data-loss flag.
+    expect(page.quality).toEqual(['data_loss']);
+  });
+
+  it('landing pages: an answer without metadata carries no zone and no quality flag (nothing is inferred)', async () => {
+    load('landing_pages');
+    const page = await adapter.fetchReport(creds, client, io, {
+      externalId: target,
+      report: 'ga4.landing_pages',
+      dateRange: range,
+    });
+    expect(page.reportingTimeZone).toBeNull();
+    expect(page.currencyCode).toBeNull();
+    expect(page.quality).toEqual([]);
+  });
+
+  it('describeTarget (RA-10): the Admin API property resource gives the reporting zone and currency; a 403 is a classified read error', async () => {
+    load('property');
+    expect(await adapter.describeTarget(creds, client, io, target)).toEqual({
+      reportingTimeZone: 'Africa/Johannesburg',
+      currencyCode: 'ZAR',
+    });
+    expect(io.calls).toEqual([
+      {
+        method: 'GET',
+        url: 'https://analyticsadmin.googleapis.com/v1beta/properties/424242',
+        mutation: false,
+      },
+    ]);
+    expect(server.remaining()).toEqual([]);
+    load('property_forbidden');
+    const err = await adapter.describeTarget(creds, client, io, target).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SourceReadError);
+    expect((err as SourceReadError).classification).toEqual({ kind: 'reconnect_required' });
   });
 
   it('paging: a rowCount beyond the rows returned yields a token that is the next offset', async () => {

@@ -10,6 +10,7 @@ import {
   pendingDestinationGrants,
   seoAuditPages,
   seoAuditRuns,
+  seoFindingWork,
 } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
@@ -38,7 +39,7 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0015_brand_destinations';
 const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];
 /** Added by later migrations (0017). */
-const LATER_TABLES: MySqlTable[] = [destinationReportRows, seoAuditRuns, seoAuditPages];
+const LATER_TABLES: MySqlTable[] = [destinationReportRows, seoAuditRuns, seoAuditPages, seoFindingWork];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

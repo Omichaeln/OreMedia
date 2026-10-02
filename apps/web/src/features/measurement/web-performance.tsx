@@ -7,6 +7,7 @@ import {
   type DestinationKind,
   type DestinationReportOpportunityKind,
   type SourceReportMetricV1,
+  type SourceReportQualityFlag,
   type WebMetricKind,
 } from '@oremedia/contracts/destinations';
 import { RequestError } from '../../components/request-state';
@@ -29,7 +30,8 @@ import {
 
 /**
  * The Performance screen's "Web" section (R2-1 part B): each connected destination whose kind has a source
- * adapter, with its coverage and freshness, summary tiles by the dictionary's kinds beside the previous period
+ * adapter, with its coverage and freshness ("as of <local day>, <zone>", provisional while the latest day may still
+ * move, and the platform's sampling or thresholding flags; RA-10), summary tiles by the dictionary's kinds beside the previous period
  * (D-14, D-15), a tabbed drill-down over the stored reports and the computed opportunity queue. Everything the
  * screen names (reports, metrics, dimensions, tiles, the vendor console) comes from the summary, which carries
  * the source adapter's own descriptors: nothing here names a source. A destination whose source-use policy does
@@ -40,6 +42,15 @@ const OPPORTUNITY_LABEL: Record<DestinationReportOpportunityKind, string> = {
   low_ctr_query: 'Low CTR query',
   low_ctr_page: 'Low CTR page',
   low_engagement_page: 'Low engagement page',
+};
+
+/** RA-10: what the platform said about the window's answer, as the chip words it (partial / not final read "Provisional"). */
+const QUALITY_LABEL: Record<SourceReportQualityFlag, string> = {
+  sampled: 'Sampled',
+  thresholded: 'Thresholded',
+  data_loss: 'Rows folded into (other)',
+  not_final: 'Not final',
+  partial_day: 'Partial day',
 };
 
 /** A value in its metric's own unit (D-15): a rate as a percentage, a gauge to one decimal, a flow as a count. */
@@ -142,6 +153,20 @@ function WebDestinationCard({
   const stale = (summary.data?.reports ?? []).some(
     (r) => r.freshness.latestDate !== null && r.freshness.stale,
   );
+  // RA-10: the zone the latest day is keyed in (the adapter's; "UTC days" before it was learnt), whether any read
+  // report's latest day may still move, and the flags the platform exposed on the window.
+  const latestEntry = (summary.data?.reports ?? []).find((r) => r.freshness.latestDate === latest) ?? null;
+  const timeZone = latestEntry?.quality.timeZone ?? null;
+  const provisional = (summary.data?.reports ?? []).some(
+    (r) => r.freshness.latestDate !== null && r.quality.provisional,
+  );
+  const flags = [
+    ...new Set(
+      (summary.data?.reports ?? []).flatMap((r) =>
+        r.quality.flags.filter((f) => f !== 'partial_day' && f !== 'not_final'),
+      ),
+    ),
+  ];
   const vendorConsole = presentation?.console ?? null;
 
   return (
@@ -160,9 +185,25 @@ function WebDestinationCard({
         </h3>
         {summary.data?.policy.allowed && (
           <p className="text-xs text-muted-foreground" data-testid="web-coverage">
-            {latest ? `data to ${latest}` : 'no data read yet'}
+            {latest ? `as of ${latest}, ${timeZone ?? 'UTC days'}` : 'no data read yet'}
             {' · '}
             {latest ? stale ? <Badge tone="warning">Stale</Badge> : <Badge tone="good">Fresh</Badge> : null}
+            {latest && provisional && (
+              <>
+                {' '}
+                <Badge tone="info" glyph={false}>
+                  Provisional
+                </Badge>
+              </>
+            )}
+            {flags.map((flag) => (
+              <span key={flag}>
+                {' '}
+                <Badge tone="neutral" glyph={false}>
+                  {QUALITY_LABEL[flag]}
+                </Badge>
+              </span>
+            ))}
             {latest && ` · last ${days} days against the ${days} before`}
           </p>
         )}

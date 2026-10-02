@@ -538,8 +538,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const ga4 = section.getByTestId('web-destination-dst_e2e_ga4');
     await ga4.getByTestId('web-tile-sessions').waitFor({ timeout: 15_000 });
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    expect(await ga4.getByTestId('web-coverage').textContent()).toContain(`data to ${yesterday}`);
+    // RA-10: the coverage reads as of the property's local day in its own zone, and says the latest day is still
+    // provisional (inside the 48 h latency), never a bare UTC date.
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain(
+      `as of ${yesterday}, Africa/Johannesburg`,
+    );
     expect(await ga4.getByTestId('web-coverage').textContent()).toContain('Fresh');
+    expect(await ga4.getByTestId('web-coverage').textContent()).toContain('Provisional');
     // The last 7 days include today, which no platform has reported yet: six days of ga4.engagement sessions
     // (100 + a 0..4 wobble) summed, never averaged, against the full week before.
     const sessions = await ga4.getByTestId('web-tile-sessions').textContent();
@@ -704,8 +709,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       expect(await stateOf('dst_e2e_ga4')).toBe('fresh');
       const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
       expect(await sources.getByTestId('overview-source-dst_e2e_ga4').textContent()).toContain(
-        `data to ${yesterday} · 6 of 7 days`,
+        `as of ${yesterday}, Africa/Johannesburg, provisional · 6 of 7 days`,
       );
+      expect(await sources.getByTestId('overview-source-dst_e2e_ga4').textContent()).toContain('Provisional');
       expect(await stateOf('dst_e2e_gsc')).toBe('blocked');
       expect(await stateOf('dst_e2e_cms')).toBe('fresh');
       expect(await sources.getByTestId('overview-source-dst_e2e_cms').textContent()).toContain(
@@ -1172,7 +1178,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await first.textContent()).toContain('Confirm 1 page should carry noindex');
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await first.getByRole('button', { name: 'Copy task for Pages excluded by robots meta' }).click();
-    await expect.poll(() => first.getByRole('button').textContent(), { timeout: 5_000 }).toBe('Task copied');
+    await expect
+      .poll(() => first.getByRole('button', { name: /Copy task|Task copied/ }).textContent(), {
+        timeout: 5_000,
+      })
+      .toBe('Task copied');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
       'Confirm 1 page should carry noindex',
     );
@@ -1183,6 +1193,52 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => pages.locator('tbody tr').count(), { timeout: 15_000 }).toBe(1);
     expect(await pages.locator('tbody tr').first().getAttribute('data-severity')).toBe('critical');
     expect(await pages.locator('tbody tr').first().textContent()).toContain('robots meta (noindex)');
+    await page.close();
+  }, 60_000);
+
+  it('audit (RA-11): "Create work" turns a finding into a tracked recommendation with a link back, once; the bulk button takes the rest; a creator cannot', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/performance')}?period=7`);
+    const site = page.getByTestId('seo-audit').getByTestId('seo-audit-dst_e2e_cms');
+    const findings = site.getByTestId('seo-audit-findings');
+    await findings.waitFor({ timeout: 15_000 });
+    const robots = findings.getByTestId('seo-audit-finding-robots_meta');
+    expect(await robots.getAttribute('data-finding-status')).toBe('open');
+    expect(await robots.textContent()).toContain('Open');
+    await robots.getByRole('button', { name: 'Create work for Pages excluded by robots meta' }).click();
+    await expect.poll(() => robots.getAttribute('data-finding-status'), { timeout: 15_000 }).toBe('tracked');
+    expect(await robots.textContent()).toContain('Tracked');
+    const work = robots.getByTestId('seo-audit-finding-work');
+    expect(await work.textContent()).toContain('Pages excluded by robots meta on https://acme.example');
+    expect(await work.textContent()).toContain('proposed');
+    expect(backend.destinations.findingWork).toHaveLength(1);
+    const link = await work.getByRole('link').getAttribute('href');
+    expect(link).toContain('/intelligence#rec-');
+    expect(link).toContain(backend.destinations.findingWork[0]!.workId);
+    // The single button is gone for a tracked finding; the bulk button names the two still open and takes them.
+    expect(await robots.getByRole('button', { name: /Create work for/ }).count()).toBe(0);
+    const bulk = site.getByTestId('seo-audit-create-work-all');
+    expect(await bulk.textContent()).toBe('Create work for 2 open findings');
+    await bulk.click();
+    await expect
+      .poll(() => findings.locator('[data-finding-status="tracked"]').count(), { timeout: 15_000 })
+      .toBe(3);
+    expect(backend.destinations.findingWork).toHaveLength(3);
+    expect(new Set(backend.destinations.findingWork.map((w) => w.check)).size).toBe(3);
+    await expect.poll(() => bulk.count(), { timeout: 15_000 }).toBe(0); // nothing open any more
+    // A creator holds no insight.manage: the buttons are disabled with the reason, nothing more is created.
+    backend.destinations.findingWork.splice(0);
+    backend.role = 'creator';
+    await page.reload();
+    await findings.waitFor({ timeout: 15_000 });
+    const single = findings
+      .getByTestId('seo-audit-finding-robots_meta')
+      .getByRole('button', { name: 'Create work for Pages excluded by robots meta' });
+    await single.waitFor({ timeout: 15_000 });
+    expect(await single.isDisabled()).toBe(true);
+    expect(await single.getAttribute('title')).toContain('managers and analysts');
+    expect(await site.getByTestId('seo-audit-create-work-all').isDisabled()).toBe(true);
+    backend.role = 'owner';
     await page.close();
   }, 60_000);
 

@@ -10,7 +10,7 @@ import {
   SEO_TITLE_MAX,
   SeoAuditCheckKey,
   type SeoAuditCheckV1,
-  type SeoAuditFindingV1,
+  type SeoAuditReportedFindingV1,
   type SeoAuditPageSeverity,
   type SeoAuditSeverity,
   type SeoAuditSummaryCountsV1,
@@ -456,7 +456,7 @@ export const FINDING_RULES: Readonly<Record<SeoAuditCheckKey, FindingRule>> = {
 /** The run's findings: one per check with failing pages, worst severity first, with example URLs. */
 export function findingsOf(
   pages: ReadonlyArray<{ url: string; checks: readonly SeoAuditCheckV1[] }>,
-): SeoAuditFindingV1[] {
+): SeoAuditReportedFindingV1[] {
   const by = new Map<SeoAuditCheckKey, { severity: SeoAuditSeverity; count: number; examples: string[] }>();
   for (const p of pages)
     for (const c of p.checks) {

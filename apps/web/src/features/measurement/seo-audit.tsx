@@ -8,6 +8,7 @@ import {
   type SeoAuditLimit,
   type SeoAuditPageSeverity,
   type SeoAuditSeverity,
+  type SeoFindingStatus,
 } from '@oremedia/contracts/seo-audit';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
@@ -16,6 +17,7 @@ import { useDestinations, type DestinationDto } from '../destinations/use-destin
 import { ageText } from '../intelligence/intelligence-helpers';
 import { formatNumber } from './performance-helpers';
 import {
+  useCreateSeoFindingWork,
   useRunSeoAudit,
   useSeoAuditFindings,
   useSeoAuditPages,
@@ -28,10 +30,13 @@ import {
 /**
  * The Performance screen's "Audit" section (R2-4), beside "Web": each connected website with its last bounded
  * crawl (pages, critical / major / minor, the caps it hit, when it ran), the findings grouped by check with the
- * task each suggests (read-only: a person copies the task into a brief; nothing here creates work), the pages
- * drill-down filtered by severity, and the "Run audit" button (seo_audit.run; disabled while a run is in
- * progress). Everything is lab data the crawler measured; field data is not connected and the section says so.
- * A website whose source-use policy does not allow `cms.audit` reads says so and points at Settings → Destinations.
+ * task each suggests and (RA-11) its status: open, tracked with a link to the recommendation it became, or
+ * resolved once a later run no longer reports it; "Create work" (one finding or every open one) turns findings
+ * into recommendations with their provenance (insight.manage), and "Copy task" stays for a person who wants the
+ * words alone. Then the pages drill-down filtered by severity, and the "Run audit" button (seo_audit.run;
+ * disabled while a run is in progress). Everything is lab data the crawler measured; field data is not connected
+ * and the section says so. A website whose source-use policy does not allow `cms.audit` reads says so and points
+ * at Settings → Destinations.
  */
 const SEVERITY_TONE: Record<SeoAuditSeverity, Tone> = {
   critical: 'critical',
@@ -43,6 +48,11 @@ const SEVERITY_LABEL: Record<SeoAuditPageSeverity, string> = {
   critical: 'Critical',
   major: 'Major',
   minor: 'Minor',
+};
+const STATUS_CHIP: Record<SeoFindingStatus, { label: string; tone: Tone }> = {
+  open: { label: 'Open', tone: 'neutral' },
+  tracked: { label: 'Tracked', tone: 'info' },
+  resolved: { label: 'Resolved', tone: 'good' },
 };
 const LIMIT_LABEL: Record<SeoAuditLimit, string> = {
   max_pages: `${SEO_AUDIT_MAX_PAGES} pages`,
@@ -104,6 +114,9 @@ function SeoAuditCard({
   const findings = useSeoAuditFindings(brandId, destination.id, allowed && lastRun !== null);
   const pages = useSeoAuditPages(brandId, destination.id, severity, allowed && lastRun !== null);
   const run = useRunSeoAudit();
+  const createWork = useCreateSeoFindingWork();
+  const canCreateWork = summary.data?.canCreateWork === true;
+  const openChecks = (findings.data?.items ?? []).filter((f) => f.status === 'open').map((f) => f.check);
   // A started run holds the button from the click until the summary reports it (or a newer last run) or the start
   // failed: the mutation settles before the refetch lands, and without this the button re-enables for a frame.
   const [awaitingRun, setAwaitingRun] = useState<{ since: number; lastRunId: string | null } | null>(null);
@@ -235,7 +248,36 @@ function SeoAuditCard({
           </p>
 
           <div className="flex flex-col gap-1">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Findings</h4>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Findings
+              </h4>
+              {findings.data && openChecks.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-testid="seo-audit-create-work-all"
+                  disabled={!canCreateWork || createWork.isPending}
+                  disabledReason={
+                    !canCreateWork ? 'Only managers and analysts can turn findings into work' : undefined
+                  }
+                  onClick={() =>
+                    createWork.mutate({ brandId, destinationId: destination.id, checks: openChecks })
+                  }
+                >
+                  {createWork.isPending
+                    ? 'Creating work…'
+                    : `Create work for ${openChecks.length} open ${openChecks.length === 1 ? 'finding' : 'findings'}`}
+                </Button>
+              )}
+            </div>
+            {createWork.isError && (
+              <RequestError
+                error={createWork.error}
+                title="The work could not be created"
+                onRetry={() => createWork.reset()}
+              />
+            )}
             {findings.isError && (
               <RequestError
                 error={findings.error}
@@ -252,7 +294,17 @@ function SeoAuditCard({
             {findings.data && findings.data.items.length > 0 && (
               <ul className="flex flex-col divide-y divide-border" data-testid="seo-audit-findings">
                 {findings.data.items.map((f) => (
-                  <Finding key={f.check} finding={f} />
+                  <Finding
+                    key={f.findingId}
+                    finding={f}
+                    companyId={companyId}
+                    brandId={brandId}
+                    canCreateWork={canCreateWork}
+                    creating={createWork.isPending}
+                    onCreateWork={() =>
+                      createWork.mutate({ brandId, destinationId: destination.id, checks: [f.check] })
+                    }
+                  />
                 ))}
               </ul>
             )}
@@ -342,9 +394,30 @@ function Tile({ testId, label, value, tone }: { testId: string; label: string; v
   );
 }
 
-/** A finding with its suggested task; copying the task is how a person carries it into a brief. */
-function Finding({ finding }: { finding: SeoAuditFindingDto }) {
+/**
+ * A finding with its status and suggested task: "Create work" turns it into a recommendation (RA-11), a tracked
+ * or resolved one links to the recommendation it became, and copying the task carries the words alone.
+ */
+function Finding({
+  finding,
+  companyId,
+  brandId,
+  canCreateWork,
+  creating,
+  onCreateWork,
+}: {
+  finding: SeoAuditFindingDto;
+  companyId: string;
+  brandId: string;
+  canCreateWork: boolean;
+  creating: boolean;
+  onCreateWork: () => void;
+}) {
   const [copied, setCopied] = useState(false);
+  const status = STATUS_CHIP[finding.status];
+  const workHref = finding.work
+    ? `${brandPath(companyId, brandId, 'intelligence')}#rec-${finding.work.workId}`
+    : null;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(finding.suggestedTask);
@@ -354,18 +427,49 @@ function Finding({ finding }: { finding: SeoAuditFindingDto }) {
     }
   };
   return (
-    <li className="flex flex-col gap-1 py-2 text-sm" data-testid={`seo-audit-finding-${finding.check}`}>
+    <li
+      className="flex flex-col gap-1 py-2 text-sm"
+      data-testid={`seo-audit-finding-${finding.check}`}
+      data-finding-status={finding.status}
+    >
       <span className="flex flex-wrap items-baseline gap-2">
         <Badge tone={SEVERITY_TONE[finding.severity]} glyph={false}>
           {SEVERITY_LABEL[finding.severity]}
         </Badge>
         <span className="font-medium">{finding.label}</span>
         <span className="text-xs text-muted-foreground">
-          {finding.count} {finding.count === 1 ? 'page' : 'pages'}
+          {finding.status === 'resolved'
+            ? 'no longer reported'
+            : `${finding.count} ${finding.count === 1 ? 'page' : 'pages'}`}
         </span>
+        <Badge tone={status.tone}>{status.label}</Badge>
       </span>
       <span className="text-xs text-muted-foreground">{finding.suggestedTask}</span>
+      {finding.work && workHref && (
+        <span className="text-xs text-muted-foreground" data-testid="seo-audit-finding-work">
+          Work:{' '}
+          <Link to={workHref} className="underline underline-offset-2">
+            {finding.work.title ?? 'Open recommendation'}
+          </Link>
+          {finding.work.state && ` · ${finding.work.state}`}
+          {finding.work.resolvedAt && ' · finding no longer reported'}
+        </span>
+      )}
       <span className="flex flex-wrap items-center gap-2">
+        {finding.status === 'open' && (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!canCreateWork || creating}
+            disabledReason={
+              !canCreateWork ? 'Only managers and analysts can turn findings into work' : undefined
+            }
+            onClick={onCreateWork}
+            aria-label={`Create work for ${finding.label}`}
+          >
+            Create work
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"

@@ -10,6 +10,20 @@ when the brand's source-use policy allows `read` of `cms.audit` (D-17); with `re
 measurements) is not connected: `destinations.audit.summary` says so (`data.note`) and carries `fieldData: null`
 for a later connector. Nothing is fabricated to fill the slot.
 
+## Findings as tracked work (RA-11)
+
+A finding is one check across one run (`findingId` = `<runId>:<check>`). `destinations.audit.createWork` (one or
+many checks of a run, the last finished one by default; `insight.manage`: managers and analysts, never an agent)
+turns each into the product's trackable work object, a recommendation (`create_brief`, spec 16.4), whose chain
+starts from an observed insight carrying the provenance as evidence: the finding, the run, the rule, the website
+and the example pages. The link lives in `seo_finding_work` (tenant and brand scoped, one open row per
+destination and check): a second call for a tracked finding returns the existing item. The findings list carries
+each finding's `status` and `work`: `open` (nothing tracks it), `tracked` (its recommendation, with title and
+state read from the intelligence module, and a link back from the Performance screen), `resolved` (a later
+completed run no longer reported the check: the finish marks the row with that run; a failed run resolves
+nothing). A check that comes back after that is open again and may become new work. The audit record is
+`seo_audit.work_created` with the finding as scope and the recommendation as downstream.
+
 ## Limits (every one is a hard cap; a run records which it hit in `limitsHit`)
 
 | Cap                   | Value                                          | Where it is enforced                                  |

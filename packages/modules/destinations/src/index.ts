@@ -55,11 +55,16 @@ export {
   destinationReportService,
   createDestinationReportService,
   reportFreshness,
+  reportQuality,
   reportComparison,
 } from './reports';
 export {
   createDestinationReportRuntime,
   reportRange,
+  REPORTING_ZONE_RECHECK_DAYS,
+  dateKey,
+  dayEnd,
+  knownTimeZone,
   type DestinationReportRuntimeOptions,
 } from './report-runtime';
 export {
@@ -71,6 +76,7 @@ export {
   SeoAuditPageRepository,
   SeoAuditRunRepository,
   SeoAuditTargetRepository,
+  SeoFindingWorkRepository,
   SourceUsePolicyRepository,
 } from './repositories';
 export {
@@ -79,7 +85,12 @@ export {
   sourceAvailabilityFromEnv,
   sourceCapabilities,
   cmsCapabilities,
+  registerFindingWork,
+  resetFindingWork,
   type SourceAvailability,
+  type FindingWorkHooks,
+  type FindingWorkInput,
+  type FindingWorkRef,
 } from './hooks';
 export {
   configureDestinationSources,

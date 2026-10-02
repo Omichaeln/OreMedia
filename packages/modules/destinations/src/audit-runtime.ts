@@ -50,6 +50,7 @@ import {
   SeoAuditPageRepository,
   SeoAuditRunRepository,
   SeoAuditTargetRepository,
+  SeoFindingWorkRepository,
   SourceUsePolicyRepository,
 } from './repositories';
 import { sourceUseDecision } from './service';
@@ -59,6 +60,7 @@ const policiesRepo = new SourceUsePolicyRepository();
 const runsRepo = new SeoAuditRunRepository();
 const pagesRepo = new SeoAuditPageRepository();
 const targetsRepo = new SeoAuditTargetRepository();
+const workRepo = new SeoFindingWorkRepository();
 /** The platform job the target listing declares (spec 5.3); references only leave it. */
 const AUDIT_JOB = 'seo-audit-sweep';
 /** robots.txt and a sitemap are read against this cap (a bigger one is read truncated, never more). */
@@ -454,6 +456,17 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
         const summary = summarise(checked);
         const home = pages.find((p) => p.depth === 0 && p.status !== null);
         const outcome = pages.length === 0 || !home ? 'failed' : 'completed';
+        // RA-11: a completed run that no longer reports a tracked finding's check resolves its work link (a failed
+        // run proves nothing about the site and resolves nothing).
+        if (outcome === 'completed')
+          await workRepo.resolveMissing(
+            locked.brandId,
+            locked.destinationId,
+            locked.id,
+            Object.keys(summary.byCheck),
+            now(),
+            tx,
+          );
         const reason =
           outcome === 'failed'
             ? 'origin_unreachable'

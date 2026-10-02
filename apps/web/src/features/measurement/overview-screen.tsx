@@ -405,6 +405,11 @@ function SourceRow({
         {source.freshness?.asOf && source.freshness.ageHours !== null && (
           <span className="text-xs text-muted-foreground">· as of {ageText(source.freshness.ageHours)}</span>
         )}
+        {source.freshness?.provisional && (
+          <Badge tone="info" glyph={false}>
+            Provisional
+          </Badge>
+        )}
       </span>
       <Link
         to={drillDownHref(companyId, brandId, source, days)}
@@ -439,9 +444,14 @@ function FigureTile({ figure, testId }: { figure: OverviewFigureDto; testId: str
           figure.freshness?.ageHours !== undefined &&
           ` · ${ageText(figure.freshness.ageHours)}`}
       </span>
-      {figure.freshness?.stale && (
-        <span>
-          <Badge tone="warning">Stale</Badge>
+      {(figure.freshness?.stale || figure.freshness?.provisional) && (
+        <span className="flex flex-wrap gap-1">
+          {figure.freshness.stale && <Badge tone="warning">Stale</Badge>}
+          {figure.freshness.provisional && (
+            <Badge tone="info" glyph={false}>
+              Provisional
+            </Badge>
+          )}
         </span>
       )}
     </div>
