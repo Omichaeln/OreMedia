@@ -11,6 +11,7 @@ import { seedBuiltinSkills } from '@oremedia/module-skills';
 import { budgets } from '@oremedia/module-billing';
 import {
   configureCredentialBroker,
+  configureChannelActivation,
   configurePublishingProviders,
   FixtureProviderAdapter,
   LocalKms,
@@ -207,6 +208,9 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     });
     configureCredentialBroker({ kms: new LocalKms('acceptance-test-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+    // RA-01: the api composed its activation from the environment, where the fixture provider's app credentials
+    // are not named; the clients above stand in for them, so the provider counts as ready here.
+    configureChannelActivation(() => ({ disabled: false, credentialRefs: [] }));
     configureRateLimiter();
     const [a] = second as [FixtureTenant, FixtureTenant];
     let signedIn = await signInFixtures(config(), [a]);

@@ -307,7 +307,20 @@ export async function ensureTaskKindSkill(
           error: `skills.get for the ${source} tenant-scope skill ${shape(skillId)}: ${got.error || 'HTTP 200 without a skill'}`,
         };
   };
+  /** Why worker-core returned a version to draft: the failure audit row names the error (skill.version.evaluate). */
+  const failureOf = async (versionId: string, since: string): Promise<string | null> => {
+    const trail = await query<{ items: Array<{ action: string; metadata: Record<string, unknown> | null }> }>(
+      api,
+      'operations.audit.query',
+      { query: { resourceType: 'skill_version', resourceId: versionId, from: since }, page: { limit: 50 } },
+    );
+    const failed = trail.data?.items.find(
+      (a) => a.action === 'skill.version.evaluate' && a.metadata?.['reason'] === 'failed',
+    );
+    return failed ? String(failed.metadata?.['error'] ?? 'no error recorded') : null;
+  };
   const deadline = Date.now() + opts.timeoutMs;
+  let requestedAt: string | null = null;
   for (;;) {
     const read = await versionsOf();
     if ('error' in read) return { ok: false, reason: read.error };
@@ -316,6 +329,13 @@ export async function ensureTaskKindSkill(
     if (!latest) return { ok: false, reason: 'the imported skill has no version' };
     const published = versions.find((v) => v.state === 'published') ?? null;
     const version = published ?? latest;
+    if (version.state === 'draft' && requestedAt) {
+      // Our own request ran and worker-core returned the version to draft: the grading failed. Report why rather
+      // than requesting again (every run burns model budget) and timing out without a cause.
+      const error = await failureOf(version.id, requestedAt);
+      if (error !== null)
+        return { ok: false, reason: `the ${key} evaluation failed (version ${version.number}): ${error}` };
+    }
     if (version.state === 'in_review') {
       const done = await mutate(api, 'skills.versions.publish', {
         skillVersionId: version.id,
@@ -334,7 +354,8 @@ export async function ensureTaskKindSkill(
       return { ok: true, key, versionNumber: version.number, outcome: published ? 'existing' : 'published' };
     }
     if (version.state === 'draft') {
-      // Not yet evaluated (a fresh import), or the evaluation failed and moved it back: request one (again).
+      // Not yet evaluated (a fresh import), or an earlier evaluation failed and moved it back: request one.
+      requestedAt = new Date(Date.now() - 60_000).toISOString();
       const requested = await mutate(api, 'skills.versions.evaluate', {
         skillVersionId: version.id,
         expectedVersion: version.version,
