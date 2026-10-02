@@ -105,7 +105,7 @@ export function CalendarGrid({ view, anchorKey, todayKey, selectedKey, onSelect,
                 {items.length > 0 && (
                   <span className="flex flex-wrap items-center gap-0.5" aria-hidden="true">
                     {items.slice(0, view === 'month' ? 3 : 6).map((p) => {
-                      const chip = publicationChip(p.state);
+                      const chip = publicationChip(p.state, p.remoteStatus);
                       return (
                         <span
                           key={p.publicationId}

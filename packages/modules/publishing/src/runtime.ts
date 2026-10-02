@@ -1,6 +1,6 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
-import type { RenderedValidationV1 } from '@oremedia/contracts/article';
-import type { ArticleReadbackV1 } from '@oremedia/contracts/destinations';
+import { renderedValidationOk } from '@oremedia/contracts/article';
+import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
 import {
   NotFoundError,
   PolicyDeniedError,
@@ -15,6 +15,7 @@ import {
   type ReconcileResult,
   type RemoteMutationOutcome,
 } from '@oremedia/contracts/providers';
+import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
 import type {
   AttemptInputV1,
   AttemptResult,
@@ -30,6 +31,7 @@ import type {
   MarkPublishedInputV1,
   OutcomeUnknownInputV1,
   PublicationRemoteChangeInputV1,
+  PublicationRemoteVerification,
   PublicationSweepInputV1,
   RemoteChangeSweepInputV1,
   RemoteChangeSweepResultV1,
@@ -47,6 +49,9 @@ import type {
   RemoteChangeAttemptResultV1,
   RemoteChangeControlRuntimeV1,
   RemoteChangeProviderRuntimeV1,
+  RenderedValidationInputV1,
+  RenderedValidationResultV1,
+  RenderedValidationRuntimeV1,
   RetryResultV1,
   SweepResultV1,
   TokenRefreshRuntimeV1,
@@ -70,6 +75,8 @@ import {
   type PublishRequest,
 } from '@oremedia/providers';
 import { credentialBroker } from './broker';
+import { renderedValidationWorkflowId } from './outbox-routes';
+import { failedChecksReason, fetchRenderedValidation, recordRenderedValidation } from './publications';
 import {
   REMOTE_CHANGE_STALE_MS,
   STALE_CLOSURE_CODES,
@@ -91,6 +98,8 @@ import {
   review,
   variants,
   workflowRunning,
+  type DestinationMutationResult,
+  type DestinationPublishResult,
 } from './hooks';
 import { adapterFor, providerIO, registry } from './providers';
 import {
@@ -125,6 +134,8 @@ export interface PublishingRuntime {
   /** remoteChangeSweepWorkflowV1 (`core`, hourly schedule). */
   remoteChangeSweep: RemoteChangeSweepRuntimeV1;
   connectChoicePurge: ConnectChoicePurgeRuntimeV1;
+  /** renderedValidationWorkflowV1 (`core`, RA-04): the delayed re-validation of a live article's page. */
+  renderedValidation: RenderedValidationRuntimeV1;
 }
 
 const publicationsRepo = new PublicationRepository();
@@ -521,6 +532,9 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             tx,
             { brandId: row.brandId },
           );
+        // RA-04: a live article's page is checked again after the first delay (the workflow owns the later ones);
+        // a draft is not public, so there is nothing to re-validate.
+        if (row.destinationId && row.remoteStatus === 'live') await queueRenderedValidation(row, tx);
         count(METRIC.publicationOutcomes, 1, { outcome: 'published' });
         return result;
       }),
@@ -683,27 +697,80 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     });
   };
 
-  /** Insert-only evidence of what a destination write read back and what its rendered page showed (R2-3). */
+  /**
+   * RA-04: the verification a write earned. The read-back must have matched what was sent for the rendered page to
+   * count: `verified` needs both, a mismatch on either is `failed`, and a read-back that could not be compared (no
+   * read allowed, missing) or a page not checked yet leaves the write `unverified` whatever else was seen.
+   */
+  const verificationOf = (
+    readback: ArticleReadbackVerificationV1 | undefined,
+    validationOk: boolean | null,
+  ): PublicationRemoteVerification => {
+    if (!readback || readback.outcome === 'unverified') return 'unverified';
+    if (readback.outcome === 'mismatch') return 'failed';
+    // A matching read-back alone proves the article, not the page: without a page check nothing is verified.
+    return validationOk === null ? 'unverified' : validationOk ? 'verified' : 'failed';
+  };
+
+  /** A fresh `remote_readback` evidence row: the remote revision as last read, with what it proved (RA-04). */
+  async function recordReadback(
+    row: PublicationRow,
+    attemptId: string | null,
+    readback: ArticleReadbackV1,
+    extra: Record<string, unknown>,
+    at: Date,
+    tx: Tx,
+  ) {
+    const payload = { ...readback, ...extra };
+    await evidenceRepo.create(
+      {
+        id: newId('remoteEvidence'),
+        publicationId: row.id,
+        attemptId,
+        kind: 'remote_readback',
+        remotePostId: readback.remoteId,
+        remoteUrl: readback.remoteUrl,
+        payload,
+        payloadHash: hashCanonical(payload),
+        capturedAt: at,
+      },
+      tx,
+    );
+  }
+
+  /**
+   * Insert-only evidence of what a destination write read back, what the read-back proved and what its rendered
+   * page showed (R2-3, RA-04), then the publication's remote status and verification from them (RA-02): the
+   * status the read-back reports (`live` only for `publish`), never the publish mode asked for.
+   */
   async function recordArticleEvidence(
     row: PublicationRow,
     attemptId: string,
-    result: { readback?: ArticleReadbackV1; validation?: RenderedValidationV1 },
+    result: Pick<DestinationPublishResult, 'readback' | 'readbackVerification' | 'validation'>,
     tx: Tx,
   ) {
     const at = now();
     if (result.readback) {
-      const payload = { ...result.readback, attemptId };
-      await evidenceRepo.create(
+      await recordReadback(
+        row,
+        attemptId,
+        result.readback,
+        { attemptId, ...(result.readbackVerification ? { verification: result.readbackVerification } : {}) },
+        at,
+        tx,
+      );
+      const locked = await publicationsRepo.lock(row.id, tx);
+      const verification = verificationOf(
+        result.readbackVerification,
+        result.validation ? renderedValidationOk(result.validation.checks) : null,
+      );
+      await publicationsRepo.update(
+        locked.id,
+        locked.version,
         {
-          id: newId('remoteEvidence'),
-          publicationId: row.id,
-          attemptId,
-          kind: 'remote_readback',
-          remotePostId: result.readback.remoteId,
-          remoteUrl: result.readback.remoteUrl,
-          payload,
-          payloadHash: hashCanonical(payload),
-          capturedAt: at,
+          remoteStatus: result.readback.status === 'publish' ? 'live' : 'draft',
+          remoteVerification: verification,
+          remoteVerifiedAt: verification === 'verified' ? at : null,
         },
         tx,
       );
@@ -725,6 +792,31 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         tx,
       );
     }
+  }
+
+  /**
+   * RA-04: publication.rendered_validation_due with `availableAt` at the first delay, for the row as it will be
+   * after the caller's own update (version + 1): renderedValidationWorkflowV1 proves the live page at each delay.
+   */
+  async function queueRenderedValidation(row: PublicationRow, tx: Tx) {
+    const actor = workflowActor();
+    const publishedAt = now();
+    await outbox.add(
+      'publication.rendered_validation_due',
+      { type: 'publication', id: row.id, version: row.version + 1 },
+      {
+        publicationId: row.id,
+        publishedAt: publishedAt.toISOString(),
+        workflowId: renderedValidationWorkflowId(row.id, row.version + 1),
+        actorKind: actor.kind,
+        actorId: actor.id,
+      },
+      tx,
+      {
+        brandId: row.brandId,
+        availableAt: new Date(publishedAt.getTime() + RENDERED_VALIDATION_DELAYS_MS[0]),
+      },
+    );
   }
 
   const provider: PublishProviderRuntimeV1 = {
@@ -1176,8 +1268,11 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       const readback = await evidenceRepo.latestOfKind(row.id, 'remote_readback');
       const expectedHash =
         typeof readback?.payload['contentHash'] === 'string' ? readback.payload['contentHash'] : null;
+      // RA-12: the modified instant travels with the hash, so a remote touched to the same content is a conflict too.
+      const expectedModifiedAt =
+        typeof readback?.payload['modifiedAt'] === 'string' ? readback.payload['modifiedAt'] : null;
       const result = await destinations.edit(
-        { ...target, expectedHash, html: change.text ?? '', idempotencyKey: change.id },
+        { ...target, expectedHash, expectedModifiedAt, html: change.text ?? '', idempotencyKey: change.id },
         hooks,
       );
       if (result.outcome === 'rejected' && result.code === 'conflict')
@@ -1324,6 +1419,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             { brandId: row.brandId, publicationId: row.id, reason: change.errorCode },
           );
         }
+        const mutation = result as DestinationMutationResult;
         if (!succeeded) {
           const failure = result as Exclude<RemoteMutationOutcome, { outcome: 'done' | 'already_absent' }>;
           await changesRepo.recordOutcome(
@@ -1336,6 +1432,17 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             at,
             tx,
           );
+          // RA-12: a refusal as a conflict carries the current remote; stored, so the next edit compares against
+          // what the site holds now instead of failing again on the stale hash.
+          if (mutation.readback)
+            await recordReadback(
+              row,
+              null,
+              mutation.readback,
+              { changeId: change.id, refreshedAfter: failure.code },
+              at,
+              tx,
+            );
           await audit.record(
             workflowActor(),
             `publication.${change.kind}_remote_failed`,
@@ -1347,12 +1454,30 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           count(METRIC.publicationOutcomes, 1, { outcome: `remote_${change.kind}_failed` });
           return { state: 'failed', publicationState: row.state, changed: true };
         }
+        // RA-12: the write went through but replaced a change made on the site between the adapter's read and its
+        // write (a CMS without compare-and-swap): the change succeeded and says so, with what was lost as evidence.
+        const overwritten = mutation.overwritten;
         if (!late)
           await changesRepo.recordOutcome(
             change.id,
-            { state: 'succeeded', errorCode: null, errorDetail: null },
+            overwritten
+              ? {
+                  state: 'succeeded',
+                  errorCode: 'conflict_overwritten',
+                  errorDetail:
+                    `the text was written, but it replaced a change made on the site between the read and the write (the site's revision of ${overwritten.replaced.modifiedAt ?? 'an unknown time'} was overwritten; the revision read before the write is recorded as evidence)`.slice(
+                      0,
+                      2000,
+                    ),
+                }
+              : { state: 'succeeded', errorCode: null, errorDetail: null },
             at,
             tx,
+          );
+        if (overwritten)
+          log.warn(
+            { tenantId: row.tenantId, publicationId: row.id, changeId: change.id },
+            'remote edit replaced a change made on the site between the read and the write',
           );
         const kind =
           change.kind === 'delete'
@@ -1360,7 +1485,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             : change.kind === 'unpublish'
               ? 'remote_unpublish'
               : 'remote_edit';
-        const readback = (result as { readback?: Record<string, unknown> }).readback;
+        const readback = mutation.readback;
         const payload = {
           changeId: change.id,
           remotePostId: row.remotePostId,
@@ -1369,6 +1494,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           ...(late ? { confirmedAfterStale: true } : {}),
           // R2-3: the remote revision read back after the write, with its hash (what the next edit must match).
           ...(readback ? { readback } : {}),
+          ...(mutation.readbackVerification ? { verification: mutation.readbackVerification } : {}),
+          ...(overwritten ? { overwritten } : {}),
         };
         await evidenceRepo.create(
           {
@@ -1384,21 +1511,40 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           },
           tx,
         );
-        if (readback && change.kind === 'edit')
-          await evidenceRepo.create(
+        // A fresh read-back after an edit and after a revert (RA-02, RA-04): what the site holds now and what the
+        // read-back proved. A revert counts only when the read-back says the article is no longer live; an edit of
+        // a live article is unverified until the delayed page check (queued here) proves the page.
+        if (readback && (change.kind === 'edit' || change.kind === 'unpublish')) {
+          await recordReadback(
+            row,
+            null,
+            readback,
             {
-              id: newId('remoteEvidence'),
-              publicationId: row.id,
-              attemptId: null,
-              kind: 'remote_readback',
-              remotePostId: row.remotePostId,
-              remoteUrl: row.remoteUrl,
-              payload: { ...readback, changeId: change.id },
-              payloadHash: hashCanonical({ ...readback, changeId: change.id }),
-              capturedAt: at,
+              changeId: change.id,
+              ...(mutation.readbackVerification ? { verification: mutation.readbackVerification } : {}),
+            },
+            at,
+            tx,
+          );
+          const reverted = change.kind === 'unpublish' && readback.status !== 'publish';
+          const verification = verificationOf(mutation.readbackVerification, null);
+          if (change.kind === 'unpublish' && !reverted)
+            log.warn(
+              { tenantId: row.tenantId, publicationId: row.id, changeId: change.id },
+              'revert confirmed by the site but the article read back still live; status kept',
+            );
+          if (change.kind === 'edit' && row.remoteStatus === 'live') await queueRenderedValidation(row, tx);
+          await publicationsRepo.update(
+            row.id,
+            row.version,
+            {
+              ...(reverted ? { remoteStatus: 'reverted' as const } : {}),
+              remoteVerification: verification,
+              remoteVerifiedAt: verification === 'verified' ? at : null,
             },
             tx,
           );
+        }
         count(METRIC.publicationOutcomes, 1, { outcome: `remote_${change.kind}` });
         if (change.kind === 'delete' && row.state === 'published') {
           const moved = await move(
@@ -1421,6 +1567,44 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         );
         return { state: 'succeeded', publicationState: row.state, changed: true };
       }),
+  };
+
+  const renderedValidation: RenderedValidationRuntimeV1 = {
+    /**
+     * RA-04: the page of a live article fetched again at a delay after publish, outside any transaction (a public
+     * fetch, bounded), then recorded under the row lock as evidence with the verification it sets. A publication
+     * that is no longer a live article is skipped without a fetch; a repeat appends another result (idempotent in
+     * effect: the latest evidence and the verification say the same).
+     */
+    async validateRenderedPublication(input: RenderedValidationInputV1): Promise<RenderedValidationResultV1> {
+      const row = await publicationsRepo.getById(input.publicationId);
+      if (row.state !== 'published' || !row.destinationId || !row.remoteUrl)
+        return { outcome: 'skipped', reason: `not_a_published_article:${row.state}` };
+      if (row.remoteStatus !== 'live')
+        return { outcome: 'skipped', reason: `remote_${row.remoteStatus ?? 'unknown'}` };
+      const result = await fetchRenderedValidation(row);
+      return withTransaction(async (tx) => {
+        const locked = await publicationsRepo.lock(row.id, tx);
+        if (locked.state !== 'published' || locked.remoteStatus !== 'live')
+          return { outcome: 'skipped', reason: `moved_before_record:${locked.state}` };
+        await recordRenderedValidation(locked, result, tx);
+        const ok = renderedValidationOk(result.checks);
+        await audit.record(
+          workflowActor(),
+          'publication.validate_rendered',
+          { type: 'publication', id: row.id },
+          ok ? 'allowed' : 'denied',
+          tx,
+          {
+            brandId: row.brandId,
+            publicationId: row.id,
+            destinationId: row.destinationId,
+            reason: failedChecksReason(result),
+          },
+        );
+        return { outcome: 'validated', ok, verification: ok ? 'verified' : 'failed' };
+      });
+    },
   };
 
   const remoteChangeSweep: RemoteChangeSweepRuntimeV1 = {
@@ -1506,5 +1690,6 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     remoteChangeProvider,
     remoteChangeSweep,
     connectChoicePurge,
+    renderedValidation,
   };
 }

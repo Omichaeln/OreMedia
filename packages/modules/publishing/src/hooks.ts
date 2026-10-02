@@ -1,6 +1,6 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
 import type { RenderedValidationV1 } from '@oremedia/contracts/article';
-import type { ArticleReadbackV1 } from '@oremedia/contracts/destinations';
+import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
   PublishOutcome,
@@ -273,9 +273,13 @@ export interface DestinationPublishInput {
   idempotencyKey: string;
   variant: ChannelVariantForPublishing;
 }
-/** A publish outcome with, when the write went through, the read-back and the rendered validation as evidence. */
+/**
+ * A publish outcome with, when the write went through, the read-back, what it proved against what was sent (RA-04)
+ * and the rendered validation as evidence.
+ */
 export type DestinationPublishResult = PublishOutcome & {
   readback?: ArticleReadbackV1;
+  readbackVerification?: ArticleReadbackVerificationV1;
   validation?: RenderedValidationV1;
 };
 export interface DestinationEditInput {
@@ -284,16 +288,30 @@ export interface DestinationEditInput {
   remoteId: string;
   /** The remote hash the product last read back; a remote that moved since is a conflict, never overwritten. */
   expectedHash: string | null;
+  /** The modified instant of that read-back (RA-12): a remote touched since, even to the same content, is a conflict. */
+  expectedModifiedAt: string | null;
   html: string;
   idempotencyKey: string;
 }
-export type DestinationMutationResult = RemoteMutationOutcome & { readback?: ArticleReadbackV1 };
+/**
+ * `readback` is the remote revision after the call, or on a conflict the current remote (so the stored read-back is
+ * refreshed and a later edit does not keep failing against a stale hash). `overwritten` (RA-12) names the revision
+ * the write replaced when the site changed between the adapter's read and its write: `previous` is what was read,
+ * `replaced` what was actually lost.
+ */
+export type DestinationMutationResult = RemoteMutationOutcome & {
+  readback?: ArticleReadbackV1;
+  readbackVerification?: ArticleReadbackVerificationV1;
+  overwritten?: { previous: ArticleReadbackV1; replaced: ArticleReadbackV1 };
+};
 export interface DestinationValidateInput {
   tenantId: string;
   destinationId: string;
   url: string;
   title: string;
+  slug: string;
   firstParagraph: string;
+  lastParagraph: string;
   draft: boolean;
 }
 export interface DestinationPublisher {

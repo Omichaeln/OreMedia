@@ -1348,7 +1348,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 90_000);
 
-  it('calendar (R2-3): a published article shows its read-back and validation; validating again records the new result; it can be reverted to a draft', async () => {
+  it('calendar (R2-3, RA-02/RA-04): a live article shows Live and Verified with its read-back; validating again records the new result and the verification follows; it can be reverted to a draft and then shows Reverted', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/calendar?publication=pub_article')}`);
     const panel = page.getByTestId('article-panel');
@@ -1356,13 +1356,25 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await page.getByTestId('publication-target-website').textContent()).toContain(
       'acme.example (website)',
     );
-    expect(await panel.getByTestId('article-readback').textContent()).toContain('Read back: draft');
+    // RA-02: what the website holds, never a bare "Published"; RA-04: the write was proven.
+    expect(await page.getByTestId('publication-state').textContent()).toContain('Live');
+    expect(await page.getByTestId('publication-verification').textContent()).toContain('Verified');
+    expect(await panel.getByTestId('article-remote-status').textContent()).toContain('Live');
+    expect(await panel.getByTestId('article-readback').textContent()).toContain('Read back: publish');
+    expect(await panel.getByTestId('article-readback-verification').textContent()).toContain(
+      'matched what was sent',
+    );
     expect(await panel.getByTestId('article-validation').textContent()).toContain('Page validated');
+    const dayList = page.getByTestId('day-list');
+    expect(await dayList.textContent()).toContain('Live');
     await panel.getByTestId('validate-article').click();
     await expect
       .poll(() => panel.getByTestId('article-validation').textContent(), { timeout: 15_000 })
       .toContain('Page validation failed');
     expect(await panel.getByTestId('article-checks').locator('[data-ok="false"]').count()).toBeGreaterThan(0);
+    await expect
+      .poll(() => panel.getByTestId('article-verification').textContent(), { timeout: 15_000 })
+      .toContain('Verification failed');
     expect(
       backend.phase5.evidence.filter(
         (e) => e.publicationId === 'pub_article' && e.kind === 'rendered_validation',
@@ -1378,6 +1390,16 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     backend.phase5.settleRemoteChanges('pub_article', 'done');
     await page.reload();
     await expect.poll(() => page.getByTestId('article-unpublished').count(), { timeout: 15_000 }).toBe(1);
+    // RA-02: reverted is its own status, never counted as live, and cannot be reverted again.
+    expect(await page.getByTestId('publication-state').textContent()).toContain('Reverted');
+    expect(await page.getByTestId('article-remote-status').textContent()).toContain('Reverted');
+    expect(await page.getByTestId('revert-to-draft').count()).toBe(0);
+    expect(backend.phase5.publication('pub_article').remoteStatus).toBe('reverted');
+    expect(
+      backend.phase5.evidence.filter(
+        (e) => e.publicationId === 'pub_article' && e.kind === 'remote_readback',
+      ),
+    ).toHaveLength(2);
     await page.close();
   }, 60_000);
 

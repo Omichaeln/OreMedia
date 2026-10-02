@@ -116,6 +116,10 @@ export const toPublicationDto = (p: PublicationRow) => ({
   holdReasons: HoldReasons.parse(p.holdReasons ?? null) ?? [],
   remotePostId: p.remotePostId,
   remoteUrl: p.remoteUrl,
+  /** RA-02 / RA-04 (destination publications; null for a channel): what the website holds and whether it was proven. */
+  remoteStatus: p.remoteStatus,
+  remoteVerification: p.remoteVerification,
+  remoteVerifiedAt: p.remoteVerifiedAt ? p.remoteVerifiedAt.toISOString() : null,
   fencingToken: p.fencingToken,
   claimedAt: p.claimedAt ? p.claimedAt.toISOString() : null,
   scheduledByKind: p.scheduledByKind,

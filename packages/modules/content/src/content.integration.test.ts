@@ -25,6 +25,14 @@ import {
   contentRevisions,
   planItems,
 } from '@oremedia/db/schema/content';
+import { brandDestinations } from '@oremedia/db/schema/destinations';
+import {
+  ARTICLE_BODY_MAX_CHARS,
+  ARTICLE_TEXT_MAX_CHARS,
+  CHANNEL_VARIANT_TEXT_MAX_CHARS,
+  type ArticleDocumentV1,
+} from '@oremedia/contracts/content';
+import { articlePlainText } from '@oremedia/contracts/article';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
@@ -35,8 +43,10 @@ import {
   hashesForVariant,
   registerCalendarSource,
   registerChannelResolver,
+  registerDestinationResolver,
   registerRevisionChangeListener,
   registerVariantValidator,
+  resetDestinationResolver,
   resetVariantValidator,
   resetChannelResolver,
   type RevisionChange,
@@ -967,6 +977,8 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           destinationId: null,
           scheduledFor: '2026-06-01T09:00:00.000Z',
           state: `scheduled:${brandId}`,
+          remoteStatus: null,
+          remoteVerification: null,
         },
       ]);
       const filled = await run(tenantA, () => contentService.calendar.range(A, range));
@@ -1293,6 +1305,142 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ),
       ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
       expect((await auditOf(tenantA, 'content.plan_item.propose')).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('website article packages at the text cap (RA-03): one cap, create → generate → mode change → persistence', () => {
+    const destinationId = newId('destination');
+    /** A body exactly at ARTICLE_BODY_MAX_CHARS over its blocks, with the title and the excerpt at their caps. */
+    const maxArticle: ArticleDocumentV1 = {
+      kind: 'article',
+      title: 't'.repeat(200),
+      slug: 'why-ore-and-tar-last',
+      excerpt: 'e'.repeat(1000),
+      blocks: Array.from({ length: 5 }, (_, i) => ({
+        type: 'paragraph' as const,
+        text: `${i}`.padEnd(10_000, 'x'),
+      })),
+      categories: ['Guides'],
+      tags: ['ore'],
+    };
+    const text = articlePlainText(maxArticle);
+
+    beforeAll(async () => {
+      await tdb.db.insert(brandDestinations).values({
+        id: destinationId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'cms_site',
+        externalId: 'https://blog.acme.example',
+        displayName: 'blog.acme.example',
+        ownerUserId: USER,
+        grantedScopes: ['articles:write', 'articles:publish'],
+        health: 'healthy',
+        capabilityVersion: 1,
+      });
+      registerDestinationResolver(async (id) =>
+        id === destinationId
+          ? { brandId: brandA, kind: 'cms_site', capabilityVersion: 1, writable: true }
+          : null,
+      );
+    });
+    afterAll(() => {
+      resetDestinationResolver();
+    });
+
+    it('a body over the cap fails at the initial input; one exactly at it is accepted', async () => {
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            {
+              brandId: brandA,
+              title: 'Too long',
+              copy: {
+                ...copy('Caption'),
+                article: {
+                  ...maxArticle,
+                  blocks: [...maxArticle.blocks, { type: 'paragraph', text: 'x' }],
+                },
+              },
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toThrow(`body_too_long:${ARTICLE_BODY_MAX_CHARS + 1}>${ARTICLE_BODY_MAX_CHARS}`);
+      expect(text.length).toBeGreaterThan(CHANNEL_VARIANT_TEXT_MAX_CHARS);
+      expect(text.length).toBeLessThanOrEqual(ARTICLE_TEXT_MAX_CHARS);
+    });
+
+    it('the article at the cap is created, its website variant carries the whole text, survives a mode change and is persisted whole', async () => {
+      const pkg = await run(tenantA, (tx) =>
+        contentService.packages.create(
+          A,
+          { brandId: brandA, title: 'At the cap', copy: { ...copy('Caption'), article: maxArticle } },
+          tx,
+        ),
+      );
+      const generated = await run(tenantA, (tx) =>
+        contentService.variants.generate(
+          A,
+          {
+            contentRevisionId: pkg.contentRevisionId,
+            channelConnectionIds: [channelA],
+            destinationIds: [destinationId],
+          },
+          tx,
+        ),
+      );
+      const website = generated.variants.find((v) => v.destinationId === destinationId)!;
+      const channel = generated.variants.find((v) => v.channelConnectionId === channelA)!;
+      expect(website.text).toBe(text);
+      expect(website.article).toEqual(maxArticle);
+      expect(channel.text).toBe(maxArticle.excerpt); // the caption is the excerpt, under the social cap
+      // The website editor re-sends the variant's text when the publish mode changes: the article cap applies.
+      const switched = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: website.id,
+            expectedVersion: website.version,
+            text: website.text,
+            altTexts: [],
+            settings: { publishMode: 'publish' },
+            exportIds: [],
+          },
+          tx,
+        ),
+      );
+      expect(switched).toMatchObject({ settings: { publishMode: 'publish' }, version: website.version + 1 });
+      expect(switched.text).toBe(text);
+      // A channel caption stays under the social cap once the variant's target is known.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.variants.update(
+            A,
+            {
+              channelVariantId: channel.id,
+              expectedVersion: channel.version,
+              text,
+              altTexts: [],
+              settings: {},
+              exportIds: [],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'text', issue: `text_too_long:${text.length}>${CHANNEL_VARIANT_TEXT_MAX_CHARS}` }],
+      });
+      // Persisted whole (MEDIUMTEXT, migration 0020), as the variant reads back.
+      const stored = (
+        await tdb.db.select().from(channelVariants).where(eq(channelVariants.id, website.id))
+      )[0]!;
+      expect(stored.text).toHaveLength(text.length);
+      expect(stored.text).toBe(text);
+      const read = await run(tenantA, () => contentService.variants.get(A, { variantId: website.id }));
+      expect(read.text).toBe(text);
+      expect(read.settings).toEqual({ publishMode: 'publish' });
     });
   });
 

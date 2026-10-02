@@ -28,6 +28,7 @@ import {
   createRemoteChangeControlActivities,
   createRemoteChangeProviderActivities,
   createRemoteChangeSweepActivities,
+  createRenderedValidationActivities,
   createTokenRefreshActivities,
 } from '@oremedia/activities';
 import {
@@ -118,6 +119,8 @@ export async function startPublishingWorkers(
       // publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1 record their outcome here
       ...createRemoteChangeControlActivities(runtime.remoteChangeControl),
       ...createRemoteChangeSweepActivities(runtime.remoteChangeSweep),
+      // renderedValidationWorkflowV1 (RA-04): a live article's page checked again at the delays after publish
+      ...createRenderedValidationActivities(runtime.renderedValidation),
       ...createTokenRefreshActivities(runtime.tokenRefresh),
       ...createPublicationSweepActivities(runtime.sweep),
       ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),

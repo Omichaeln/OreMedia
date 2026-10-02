@@ -23,6 +23,22 @@ export const ARTICLE_BLOCKS_MAX = 500;
 export const ARTICLE_BODY_MAX_CHARS = 50_000;
 export const ARTICLE_TERM_MAX = 100;
 export const ARTICLE_TERMS_MAX = 20;
+export const ARTICLE_LIST_ITEMS_MAX = 100;
+/**
+ * The separators `articlePlainText` (article.ts) adds at most: a blank line between the title, the excerpt and
+ * every block, and a line break between a list's items or a FAQ's question and its answer.
+ */
+const ARTICLE_TEXT_SEPARATORS_MAX =
+  2 * (ARTICLE_BLOCKS_MAX + 2) + ARTICLE_BLOCKS_MAX * (ARTICLE_LIST_ITEMS_MAX - 1);
+/**
+ * RA-03: the one cap for an article's text everywhere it travels as a string (a destination variant's text, a
+ * remote edit of a live article): the body cap plus the title, the excerpt and the separators the plain text adds.
+ * The body itself stays bounded by ARTICLE_BODY_MAX_CHARS over its blocks.
+ */
+export const ARTICLE_TEXT_MAX_CHARS =
+  ARTICLE_BODY_MAX_CHARS + ARTICLE_TITLE_MAX + ARTICLE_EXCERPT_MAX + ARTICLE_TEXT_SEPARATORS_MAX;
+/** A channel (social) variant's caption cap; a destination variant carries the article's text (ARTICLE_TEXT_MAX_CHARS). */
+export const CHANNEL_VARIANT_TEXT_MAX_CHARS = 10_000;
 
 /** The body is an ordered list of blocks; a FAQ block renders as a question with its answer. */
 export const ArticleBlockV1 = z.discriminatedUnion('type', [
@@ -35,7 +51,7 @@ export const ArticleBlockV1 = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('list'),
     ordered: z.boolean().default(false),
-    items: z.array(z.string().max(2000)).min(1).max(100),
+    items: z.array(z.string().max(2000)).min(1).max(ARTICLE_LIST_ITEMS_MAX),
   }),
   z.object({ type: z.literal('faq'), question: z.string().max(500), answer: z.string().max(5000) }),
 ]);
@@ -125,10 +141,15 @@ export const CampaignCreate = z.object({
   endsAt: z.string().datetime(),
 });
 
+/**
+ * The text cap here is the article's (RA-03): a destination variant's text is the article as plain text, which the
+ * website editor re-sends when the publish mode changes. The content service holds a channel variant to
+ * CHANNEL_VARIANT_TEXT_MAX_CHARS once it knows the variant's target (the id alone does not say).
+ */
 export const ChannelVariantUpdate = z.object({
   channelVariantId: z.string(),
   expectedVersion: z.number().int(),
-  text: z.string().max(10000),
+  text: z.string().max(ARTICLE_TEXT_MAX_CHARS),
   altTexts: z.array(z.string().max(1000)).max(20),
   settings: z.record(z.unknown()),
   exportIds: z.array(z.string()).max(20),
@@ -272,6 +293,12 @@ export interface CalendarPublication {
   destinationId: string | null;
   scheduledFor: string;
   state: string;
+  /**
+   * RA-02 (destination publications only; null for a channel): what the website holds after the write (a draft, the
+   * live page, or reverted to a draft since) and whether the read-back and the rendered page proved it.
+   */
+  remoteStatus: string | null;
+  remoteVerification: string | null;
 }
 
 /** A content revision's brand-review class (spec 13.4 mandate_content_class, 8.1 requireReviewForContentClasses). */

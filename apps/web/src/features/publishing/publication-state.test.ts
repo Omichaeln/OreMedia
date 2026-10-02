@@ -17,6 +17,8 @@ import {
   publicationChip,
   rangeFor,
   remoteChangeStatus,
+  remoteStatusChip,
+  remoteVerificationChip,
   shiftAnchor,
   trailingRange,
   type RemoteChangeLike,
@@ -37,6 +39,21 @@ describe('publicationChip', () => {
   it('names an unknown state instead of guessing', () => {
     expect(publicationChip('exploded').label).toBe('Unknown state (exploded)');
     expect(publicationChip('exploded').tone).toBe('neutral');
+  });
+  it('a published article shows what the website holds (RA-02): a draft, live or reverted, never a bare Published', () => {
+    expect(publicationChip('published', 'draft').label).toBe('Draft saved');
+    expect(publicationChip('published', 'live').label).toBe('Live');
+    expect(publicationChip('published', 'reverted')).toMatchObject({ label: 'Reverted', tone: 'warning' });
+    expect(publicationChip('published', null).label).toBe('Published'); // a channel post
+    expect(publicationChip('scheduled', 'live').label).toBe('Scheduled'); // only once published
+    expect(publicationChip('published', 'odd').label).toBe('Published'); // unknown remote status: not guessed
+    expect(remoteStatusChip('live')?.tone).toBe('good');
+    expect(remoteVerificationChip('failed')).toMatchObject({
+      label: 'Verification failed',
+      tone: 'critical',
+    });
+    expect(remoteVerificationChip('unverified')?.tone).toBe('neutral');
+    expect(remoteVerificationChip(null)).toBeNull();
   });
   it('explains outcome_unknown and marks it as needing attention', () => {
     expect(PUBLICATION_CHIP.outcome_unknown.tone).toBe('warning');
@@ -197,6 +214,19 @@ describe('channelOutcomeSummary', () => {
       false,
       false,
     ]);
+  });
+  it('never counts an article the website holds as a draft, or reverted, as published (RA-02)', () => {
+    const s = channelOutcomeSummary([
+      { state: 'published', remoteStatus: 'live' },
+      { state: 'published', remoteStatus: 'draft' },
+      { state: 'published', remoteStatus: 'reverted' },
+      { state: 'published', remoteStatus: null },
+    ]);
+    expect(s).toMatchObject({ published: 2, drafts: 1, reverted: 1, partial: false });
+    expect(s.text).toBe(
+      '2 published, 1 saved as a draft on the website, 1 reverted to a draft of 4 channels.',
+    );
+    expect(channelOutcomeSummary([{ state: 'published', remoteStatus: 'draft' }]).published).toBe(0);
   });
   it('names a post deleted from its channel and does not count it as a failure', () => {
     const s = channelOutcomeSummary([{ state: 'published' }, { state: 'removed' }]);

@@ -258,6 +258,14 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.refreshDestinationCredential': {
       buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
     },
+    // renderedValidationWorkflowV1 (RA-04): a re-validation names one publication; a foreign one is NOT_FOUND
+    // before any page is fetched.
+    'core.validateRenderedPublication': {
+      buildInput: (ctx, f) => ({
+        ...publication(ctx, f),
+        publishedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    },
     'core.listRetentionTenants': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.applyRetention': {
       buildInput: null,

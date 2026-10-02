@@ -2,12 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DecryptedCredentials } from '@oremedia/contracts/providers';
 import { FixtureServer, fixtureIO, loadScenario, type FixtureIO } from '../../testing';
 import { textFingerprint } from '../../shared';
-import { RenderedPageError, wordpressCmsAdapter as adapter } from './adapter';
+import { RenderedPageError, remoteArticleFingerprint, wordpressCmsAdapter as adapter } from './adapter';
 
 const fx = (name: string) => loadScenario(new URL('./fixtures/articles.json', import.meta.url), name);
 const site = { siteUrl: 'https://site.example', username: 'ore-editor' };
 const creds: DecryptedCredentials = { accessToken: 'abcd efgh ijkl mnop', extra: { username: 'ore-editor' } };
 const expectedAuth = `Basic ${Buffer.from('ore-editor:abcd efgh ijkl mnop').toString('base64')}`;
+/** The hash of a revision of post 42 as the fixture serves it (no terms listed): RA-12 covers title, slug, status and content. */
+const hashOf = (status: string, html: string, title = 'Why ore & tar') =>
+  remoteArticleFingerprint({ title, slug: 'why-ore-and-tar', status, categories: [], tags: [], html });
 const input = {
   title: 'Why ore & tar',
   slug: 'why-ore-and-tar',
@@ -64,10 +67,25 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
         slug: 'why-ore-and-tar',
         status: 'draft',
         modifiedAt: '2026-09-30T10:00:00Z',
-        contentHash: textFingerprint('<p>Ore is heavy.</p>'),
+        contentHash: hashOf('draft', '<p>Ore is heavy.</p>'),
         html: '<p>Ore is heavy.</p>',
       },
     });
+    // RA-12: the hash moves with the title, the slug, the status or a term, not only the content.
+    const base = { title: 'T', slug: 's', status: 'publish', categories: [1], tags: [2], html: '<p>x</p>' };
+    for (const change of [
+      { title: 'U' },
+      { slug: 'other' },
+      { status: 'draft' },
+      { categories: [3] },
+      { tags: [] },
+      { html: '<p>y</p>' },
+    ])
+      expect(remoteArticleFingerprint({ ...base, ...change })).not.toBe(remoteArticleFingerprint(base));
+    expect(remoteArticleFingerprint({ ...base, categories: [2, 1], tags: [2] })).toBe(
+      remoteArticleFingerprint({ ...base, categories: [1, 2] }),
+    );
+    expect(remoteArticleFingerprint(base)).not.toBe(textFingerprint('<p>x</p>'));
     expect(io.calls.every((c) => !c.mutation)).toBe(true);
     load('read_absent');
     expect(await adapter.readArticle(site, creds, io, '404')).toEqual({ outcome: 'absent' });
@@ -135,16 +153,29 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
       io,
       '42',
       { html: '<p>Ore is heavy and tar is sticky.</p>' },
-      { expectedHash: textFingerprint('<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
     );
     expect(result).toMatchObject({
       outcome: 'conflict',
       current: { title: 'Why ore & tar (edited on the site)', modifiedAt: '2026-09-30T12:30:00Z' },
     });
     expect(io.calls.some((c) => c.mutation)).toBe(false);
+    // A remote whose content and identity still hash the same but was touched since (the timestamp moved) is a
+    // conflict too: both halves of the precondition hold.
+    load('update_ok');
+    const touched = await adapter.updateArticle(
+      site,
+      creds,
+      io,
+      '42',
+      { html: '<p>Ore is heavy and tar is sticky.</p>' },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T09:00:00Z' },
+    );
+    expect(touched).toMatchObject({ outcome: 'conflict' });
+    expect(io.calls.some((c) => c.mutation)).toBe(false);
   });
 
-  it('updateArticle: with the precondition met the post is written once and the new revision comes back', async () => {
+  it('updateArticle: with the precondition met the post is written once, the new revision comes back with the pre-write read, and the replaced revision is the one read', async () => {
     load('update_ok');
     const result = await adapter.updateArticle(
       site,
@@ -152,26 +183,71 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
       io,
       '42',
       { html: '<p>Ore is heavy and tar is sticky.</p>' },
-      { expectedHash: textFingerprint('<p>Ore is heavy.</p>') },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
     );
     expect(result).toMatchObject({
       outcome: 'done',
       article: {
         modifiedAt: '2026-09-30T13:00:00Z',
-        contentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>'),
+        contentHash: hashOf('publish', '<p>Ore is heavy and tar is sticky.</p>'),
       },
+      previous: { modifiedAt: '2026-09-30T10:00:00Z', html: '<p>Ore is heavy.</p>' },
     });
+    expect(result.outcome === 'done' && result.overwritten).toBeUndefined();
     expect(io.calls.filter((c) => c.mutation)).toHaveLength(1);
+    expect(io.calls.at(-1)).toMatchObject({
+      method: 'GET',
+      url: 'https://site.example/wp-json/wp/v2/posts/42/revisions?context=edit&per_page=2',
+      mutation: false,
+    });
     expect(server.remaining()).toEqual([]);
   });
 
-  it('unpublishArticle sets a live article back to a draft; deleteArticle reports one already gone', async () => {
+  it('updateArticle (RA-12): a site edit that slipped between the read and the write is detected after the write and returned as what was overwritten; an unreadable revision list claims nothing', async () => {
+    load('update_overwritten');
+    const result = await adapter.updateArticle(
+      site,
+      creds,
+      io,
+      '42',
+      { html: '<p>Ore is heavy and tar is sticky.</p>' },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
+    );
+    expect(result).toMatchObject({
+      outcome: 'done',
+      article: { modifiedAt: '2026-09-30T13:00:00Z' },
+      previous: { modifiedAt: '2026-09-30T10:00:00Z' },
+      overwritten: {
+        remoteId: '42',
+        remoteUrl: 'https://site.example/why-ore-and-tar/',
+        title: 'Why ore & tar (edited on the site)',
+        modifiedAt: '2026-09-30T12:30:00Z',
+        html: '<p>Someone changed this in the window.</p>',
+      },
+    });
+    expect(server.remaining()).toEqual([]);
+    load('update_revisions_unavailable');
+    const unknown = await adapter.updateArticle(
+      site,
+      creds,
+      io,
+      '42',
+      { html: '<p>Ore is heavy and tar is sticky.</p>' },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>') },
+    );
+    expect(unknown).toMatchObject({ outcome: 'done', previous: { modifiedAt: '2026-09-30T10:00:00Z' } });
+    expect(unknown.outcome === 'done' && unknown.overwritten).toBeUndefined();
+  });
+
+  it('unpublishArticle sets a live article back to a draft under the precondition it read; deleteArticle reports one already gone', async () => {
     load('unpublish');
     expect(await adapter.unpublishArticle(site, creds, io, '42')).toMatchObject({
       outcome: 'done',
       article: { status: 'draft' },
+      previous: { status: 'publish', modifiedAt: '2026-09-30T13:00:00Z' },
     });
     expect(server.remaining()).toEqual([]);
+    expect(server.unmatched).toEqual([]);
     load('delete_gone');
     expect(await adapter.deleteArticle(site, creds, io, '42')).toEqual({ outcome: 'already_absent' });
     load('delete_ok');

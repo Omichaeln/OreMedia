@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   articleFirstParagraph,
+  articleHtmlChars,
+  articleLastParagraph,
   articlePlainText,
+  canonicalMatches,
   pageText,
   renderArticleHtml,
   renderedValidationOk,
@@ -9,7 +12,18 @@ import {
   sanitizeArticleHtml,
   validateRenderedPage,
 } from './article';
-import { ARTICLE_BODY_MAX_CHARS, ArticleDocumentV1, CopyDocumentV1, copyDocumentKind } from './content';
+import {
+  ARTICLE_BODY_MAX_CHARS,
+  ARTICLE_EXCERPT_MAX,
+  ARTICLE_TEXT_MAX_CHARS,
+  ARTICLE_TITLE_MAX,
+  ArticleDocumentV1,
+  CHANNEL_VARIANT_TEXT_MAX_CHARS,
+  ChannelVariantUpdate,
+  CopyDocumentV1,
+  copyDocumentKind,
+} from './content';
+import { PublicationEditRemote } from './publishing';
 
 const article = ArticleDocumentV1.parse({
   kind: 'article',
@@ -80,9 +94,19 @@ describe('article document (ledger R2-3)', () => {
   });
 
   it('rendered-page checks: status, title in <title> or h1, canonical, noindex only for a draft, first paragraph', () => {
-    const page = (extra: string, body = '<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p>') =>
+    const page = (
+      extra: string,
+      body = '<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p><p>Yes, &quot;mostly&quot;.</p>',
+    ) =>
       `<html><head><title>Why ore &amp; tar | Site</title>${extra}</head><body><h1>Other</h1>${body}</body></html>`;
-    const live = { title: article.title, firstParagraph: articleFirstParagraph(article), draft: false };
+    const live = {
+      title: article.title,
+      firstParagraph: articleFirstParagraph(article),
+      lastParagraph: articleLastParagraph(article),
+      slug: article.slug,
+      remoteUrl: 'https://site.example/why-ore-and-tar/',
+      draft: false,
+    };
     const ok = validateRenderedPage({
       status: 200,
       html: page('<link rel="canonical" href="https://site.example/why-ore-and-tar/">'),
@@ -100,6 +124,8 @@ describe('article document (ledger R2-3)', () => {
       'canonical_present:false',
       'indexable:false',
       'body_present:false',
+      'canonical_matches:false',
+      'last_paragraph_present:false',
     ]);
     expect(renderedValidationOk(bad)).toBe(false);
     const draft = validateRenderedPage({
@@ -110,5 +136,83 @@ describe('article document (ledger R2-3)', () => {
     });
     expect(draft.find((c) => c.key === 'indexable')?.ok).toBe(true);
     expect(pageText('<p>A&nbsp;<b>B</b></p><script>x</script>')).toBe('a b');
+  });
+
+  it('rendered-page checks (RA-04): the canonical must name this page and the last paragraph must be present', () => {
+    const live = {
+      title: article.title,
+      firstParagraph: articleFirstParagraph(article),
+      lastParagraph: articleLastParagraph(article),
+      slug: article.slug,
+      remoteUrl: 'https://site.example/?p=42',
+      draft: false,
+    };
+    const page = (canonical: string, body: string) =>
+      `<html><head><title>Why ore &amp; tar</title><link rel="canonical" href="${canonical}"></head><body>${body}</body></html>`;
+    const full = renderArticleHtml(article);
+    const checksOf = (html: string) =>
+      Object.fromEntries(validateRenderedPage({ status: 200, html, ...live }).map((c) => [c.key, c.ok]));
+    expect(checksOf(page('https://site.example/why-ore-and-tar/', full))).toMatchObject({
+      canonical_present: true,
+      canonical_matches: true, // the slug's path on the site
+      body_present: true,
+      last_paragraph_present: true,
+    });
+    expect(checksOf(page('https://site.example/?p=42', full))).toMatchObject({ canonical_matches: true });
+    expect(checksOf(page('https://other.example/why-ore-and-tar/', full))).toMatchObject({
+      canonical_present: true,
+      canonical_matches: false, // another site
+    });
+    // A later paragraph changed on the page: the first paragraph still passes, the last does not.
+    const changed = full.replace('Yes, &quot;mostly&quot;.', 'No, never.');
+    expect(checksOf(page('https://site.example/why-ore-and-tar/', changed))).toMatchObject({
+      body_present: true,
+      last_paragraph_present: false,
+    });
+    expect(articleLastParagraph(article)).toBe('Yes, "mostly".');
+    expect(articleLastParagraph({ blocks: [{ type: 'list', ordered: false, items: ['a', 'b'] }] })).toBe('b');
+    expect(articleLastParagraph({ blocks: [] })).toBe('');
+    expect(canonicalMatches(null, 'https://site.example/x/', 'x')).toBe(false);
+    expect(canonicalMatches('https://SITE.example/x', 'https://site.example/x/', 'x')).toBe(true);
+    expect(canonicalMatches('not a url', 'https://site.example/x/', 'x')).toBe(false);
+  });
+
+  it('one article text cap everywhere (RA-03): the body measured as text, the variant and the remote edit at the article cap', () => {
+    expect(ARTICLE_TEXT_MAX_CHARS).toBeGreaterThan(
+      ARTICLE_BODY_MAX_CHARS + ARTICLE_TITLE_MAX + ARTICLE_EXCERPT_MAX,
+    );
+    // The plain text of a body at the cap fits the text cap with its title, excerpt and separators.
+    const atCap = ArticleDocumentV1.parse({
+      ...article,
+      title: 't'.repeat(ARTICLE_TITLE_MAX),
+      excerpt: 'e'.repeat(ARTICLE_EXCERPT_MAX),
+      blocks: Array.from({ length: 5 }, () => ({ type: 'paragraph', text: 'x'.repeat(10_000) })),
+    });
+    const text = articlePlainText(atCap);
+    expect(text.length).toBeGreaterThan(CHANNEL_VARIANT_TEXT_MAX_CHARS);
+    expect(text.length).toBeLessThanOrEqual(ARTICLE_TEXT_MAX_CHARS);
+    const update = {
+      channelVariantId: 'cv_1',
+      expectedVersion: 0,
+      altTexts: [],
+      settings: {},
+      exportIds: [],
+    };
+    expect(ChannelVariantUpdate.safeParse({ ...update, text }).success).toBe(true);
+    expect(
+      ChannelVariantUpdate.safeParse({ ...update, text: 'x'.repeat(ARTICLE_TEXT_MAX_CHARS + 1) }).success,
+    ).toBe(false);
+    expect(PublicationEditRemote.safeParse({ publicationId: 'pub_1', text }).success).toBe(true);
+    expect(
+      PublicationEditRemote.safeParse({
+        publicationId: 'pub_1',
+        text: 'x'.repeat(ARTICLE_TEXT_MAX_CHARS + 1),
+      }).success,
+    ).toBe(false);
+    // A body given as HTML is measured as the text it renders, never as its markup.
+    expect(articleHtmlChars('<p>Ore &amp; tar</p><ul><li>one</li></ul>')).toBe(
+      'Ore & tar'.length + 'one'.length,
+    );
+    expect(articleHtmlChars(`<p>${'x'.repeat(ARTICLE_BODY_MAX_CHARS)}</p>`)).toBe(ARTICLE_BODY_MAX_CHARS);
   });
 });

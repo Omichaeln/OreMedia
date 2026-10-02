@@ -3,6 +3,7 @@ import {
   PublicationRemoteChangeInputV1,
   PublicationSignalV1,
   PublicationWorkflowInputV1,
+  RenderedValidationInputV1,
   TokenRefreshWorkflowInputV1,
 } from '@oremedia/contracts/publishing';
 import { registerOutboxRoute } from '@oremedia/module-operations';
@@ -21,6 +22,10 @@ export const REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE = 'remoteChangeSweepWorkflowV1';
 export const REMOTE_CHANGE_SWEEP_SCHEDULE_ID = 'remote-change-sweep';
 /** One always-on sweeper per namespace. */
 export const PUBLICATION_SWEEPER_WORKFLOW_ID = 'publication-sweeper';
+/** RA-04: the delayed re-validation of a live article's page, one workflow per publication moment. */
+export const RENDERED_VALIDATION_WORKFLOW_TYPE = 'renderedValidationWorkflowV1';
+export const renderedValidationWorkflowId = (publicationId: string, version: number): string =>
+  `pub:${publicationId}:rendered-validation:${version}`;
 /** Spec 14.7: the periodic purge of expired account choices, one Temporal schedule per namespace. */
 export const CONNECT_CHOICE_PURGE_WORKFLOW_TYPE = 'connectChoicePurgeWorkflowV1';
 export const CONNECT_CHOICE_PURGE_SCHEDULE_ID = 'connect-choice-purge';
@@ -110,6 +115,24 @@ export function registerPublishingOutboxRoutes(): void {
     'publication.edit_remote_requested',
     remoteChange(PUBLICATION_REMOTE_EDIT_WORKFLOW_TYPE),
   );
+  // RA-04: publication.rendered_validation_due (emitted with `availableAt` at the first delay) → the re-validation
+  // workflow, which checks the page again at each delay after publishedAt.
+  registerOutboxRoute('publication.rendered_validation_due', (evt) => {
+    const p = evt.payload;
+    const input = RenderedValidationInputV1.parse({
+      tenantId: evt.tenantId,
+      actor: { kind: p['actorKind'], id: p['actorId'] },
+      correlationId: evt.correlationId,
+      publicationId: p['publicationId'],
+      publishedAt: p['publishedAt'],
+    });
+    return {
+      workflowType: RENDERED_VALIDATION_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      workflowId: String(p['workflowId']),
+      args: [input],
+    };
+  });
   registerOutboxRoute('channel.connected', (evt) => {
     const p = evt.payload;
     const input = TokenRefreshWorkflowInputV1.parse({

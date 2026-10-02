@@ -27,6 +27,8 @@ import {
 import { entitlements } from '@oremedia/db/schema/billing';
 import { brands } from '@oremedia/db/schema/brand';
 import { channelVariants, contentRevisions } from '@oremedia/db/schema/content';
+import { brandDestinations } from '@oremedia/db/schema/destinations';
+import { ARTICLE_BODY_MAX_CHARS, CHANNEL_VARIANT_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import { auditEvents, featureFlags, outboxEvents } from '@oremedia/db/schema/operations';
 import { renderedExports } from '@oremedia/db/schema/creative';
 import { releaseApprovals, reviewDecisions, reviewRequests } from '@oremedia/db/schema/review';
@@ -38,6 +40,7 @@ import { brandService, registerBrandAssetKindSource } from '@oremedia/module-bra
 import {
   contentService,
   registerChannelResolver,
+  registerDestinationResolver,
   registerRevisionChangeListener,
 } from '@oremedia/module-content';
 import {
@@ -511,6 +514,76 @@ describe('review module (spec 13) against MySQL 8', () => {
         expect.objectContaining({ reviewRequestId: requestId, manifestHash }),
       );
       expect((await auditOf(tenantA, 'review.request.create')).length).toBe(1);
+    });
+
+    it('freezes a website article at the body cap (RA-03): the destination caption carries the whole text and the article hash', async () => {
+      const destinationId = newId('destination');
+      await tdb.db.insert(brandDestinations).values({
+        id: destinationId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'cms_site',
+        externalId: 'https://blog.acme.example',
+        displayName: 'blog.acme.example',
+        ownerUserId: manager.id,
+        grantedScopes: ['articles:write'],
+        health: 'healthy',
+        capabilityVersion: 1,
+      });
+      registerDestinationResolver(async (id) =>
+        id === destinationId
+          ? { brandId: brandA, kind: 'cms_site', capabilityVersion: 1, writable: true }
+          : null,
+      );
+      const article = {
+        kind: 'article' as const,
+        title: 'Why ore and tar last',
+        slug: 'why-ore-and-tar-last',
+        excerpt: 'A short answer.',
+        blocks: Array.from({ length: 5 }, (_, i) => ({
+          type: 'paragraph' as const,
+          text: `${i}`.padEnd(ARTICLE_BODY_MAX_CHARS / 5, 'x'),
+        })),
+        categories: [],
+        tags: [],
+      };
+      const pkg = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Article at the cap',
+            copy: { schemaVersion: 1, master: { text: 'A short answer.', factRefs: [] }, article },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      const generated = await runA((tx) =>
+        contentService.variants.generate(
+          manager.actor,
+          { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+          tx,
+        ),
+      );
+      const website = generated.variants[0]!;
+      expect(website.text.length).toBeGreaterThan(CHANNEL_VARIANT_TEXT_MAX_CHARS);
+      const res = await runA((tx) =>
+        reviewService.requests.create(manager.actor, requestFor(pkg.contentRevisionId), tx),
+      );
+      const full = await runA(() =>
+        reviewService.requests.get(manager.actor, { reviewRequestId: res.reviewRequestId }),
+      );
+      expect(full.frozenManifest).toMatchObject({
+        captions: [{ destinationId, text: website.text }],
+        article: {
+          title: article.title,
+          slug: article.slug,
+          articleHash: hashCanonical(article),
+          blocks: 5,
+        },
+      });
+      expect(hashCanonical(full.frozenManifest)).toBe(res.manifestHash);
     });
 
     it('counts an open request past its due time as overdue, for its own brand and tenant only', async () => {

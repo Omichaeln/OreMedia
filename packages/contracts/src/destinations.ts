@@ -584,6 +584,29 @@ export interface ArticleReadbackV1 {
   slug: string;
   status: string;
   modifiedAt: string | null;
-  /** The adapter's hash of the remote content; an edit refuses when the current remote hash differs. */
+  /**
+   * The adapter's hash of the remote revision (RA-12: title, slug, status, terms and content); an edit refuses when
+   * the current remote hash differs.
+   */
   contentHash: string;
+}
+
+/**
+ * The fields a read-back is compared on (RA-04): the content, title, slug and status against what was sent, and
+ * the modified instant against the write's own response (RA-12: a remote touched again since the write differs).
+ */
+export const ArticleReadbackField = z.enum(['content', 'title', 'slug', 'status', 'modifiedAt']);
+export type ArticleReadbackField = z.infer<typeof ArticleReadbackField>;
+/**
+ * RA-04: what the read-back after a write proved. `verified` when every field matched what was sent, `mismatch`
+ * when at least one differed (named), `unverified` when nothing could be compared (the source-use policy allows no
+ * read, or the read-back was missing) with the reason; never silently the write's own response.
+ */
+export interface ArticleReadbackVerificationV1 {
+  outcome: 'verified' | 'mismatch' | 'unverified';
+  matched: ArticleReadbackField[];
+  mismatched: ArticleReadbackField[];
+  reason: string | null;
+  /** The fingerprint of the exact HTML sent (what `content` was compared on). */
+  sentHash: string;
 }
