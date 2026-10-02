@@ -56,6 +56,7 @@ export {
   resetCommentSinks,
   registerBrandChecker as registerMeasurementBrandChecker,
   registerPublicationSource as registerMeasurementPublicationSource,
+  releasedPublications,
   type BrandChecker as MeasurementBrandChecker,
   type PublicationSource as MeasurementPublicationSource,
   type PublicationInWindow,

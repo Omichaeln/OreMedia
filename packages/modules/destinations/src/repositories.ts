@@ -233,10 +233,14 @@ function sweepTargetPage(
   };
 }
 
-/** The keyset after a sweep target cursor over (createdAt, id); undefined for the first page or a bad cursor. */
-function sweepTargetAfter(cursor: string | undefined): SQL | undefined {
-  const c = cursor ? decodeCursor(cursor) : null;
-  if (!c || typeof c.sort !== 'number') return undefined;
+/**
+ * The keyset after a sweep target cursor over (createdAt, id): undefined for the first page, `null` for a cursor
+ * that does not decode (the listing ends there rather than starting over, so a page-to-end loop never repeats).
+ */
+function sweepTargetAfter(cursor: string | undefined): SQL | undefined | null {
+  if (!cursor) return undefined;
+  const c = decodeCursor(cursor);
+  if (!c || typeof c.sort !== 'number') return null;
   const at = new Date(c.sort);
   return or(
     gt(brandDestinations.createdAt, at),
@@ -256,7 +260,8 @@ export class DestinationReportTargetRepository extends PlatformRepository {
     tx?: Tx,
   ): Promise<SweepTargetPage> {
     const limit = page.limit ?? REPORT_SWEEP_BATCH;
-    if (kinds.length === 0) return { items: [], nextCursor: null };
+    const after = sweepTargetAfter(page.cursor);
+    if (kinds.length === 0 || after === null) return { items: [], nextCursor: null };
     const rows = await this.conn(tx)
       .select({
         tenantId: brandDestinations.tenantId,
@@ -269,7 +274,7 @@ export class DestinationReportTargetRepository extends PlatformRepository {
           eq(brandDestinations.status, 'active'),
           isNotNull(brandDestinations.credentialRefId),
           inArray(brandDestinations.kind, [...kinds]),
-          sweepTargetAfter(page.cursor),
+          after,
         ),
       )
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
@@ -557,6 +562,8 @@ export class SeoAuditTargetRepository extends PlatformRepository {
     tx?: Tx,
   ): Promise<SweepTargetPage> {
     const limit = page.limit ?? REPORT_SWEEP_BATCH;
+    const after = sweepTargetAfter(page.cursor);
+    if (after === null) return { items: [], nextCursor: null };
     const rows = await this.conn(tx)
       .select({
         tenantId: brandDestinations.tenantId,
@@ -564,13 +571,7 @@ export class SeoAuditTargetRepository extends PlatformRepository {
         createdAt: brandDestinations.createdAt,
       })
       .from(brandDestinations)
-      .where(
-        and(
-          eq(brandDestinations.status, 'active'),
-          eq(brandDestinations.kind, kind),
-          sweepTargetAfter(page.cursor),
-        ),
-      )
+      .where(and(eq(brandDestinations.status, 'active'), eq(brandDestinations.kind, kind), after))
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
       .limit(limit + 1);
     return sweepTargetPage(rows, limit);
@@ -644,6 +645,19 @@ export class SeoAuditRunRepository extends BrandScopedRepository<typeof seoAudit
       .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id))
       .limit(1);
     return rows[0] ?? null;
+  }
+  /** Every run started before the cut-off (the policy's retention): what the prune removes, running runs aside. */
+  async listStartedBefore(
+    brandId: string,
+    destinationId: string,
+    cutoff: Date,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(this.destinationScope(brandId, destinationId, lt(seoAuditRuns.startedAt, cutoff)))
+      .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id));
   }
   /** Runs started inside [from, to): the on-demand idempotency per day and the "already ran this week" check. */
   async startedBetween(

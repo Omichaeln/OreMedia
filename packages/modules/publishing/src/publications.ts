@@ -61,8 +61,8 @@ import {
   RemoteEvidenceRepository,
 } from './repositories';
 
-/** A window's bound (UX-14): the calendar pages by day and the rollups cap their own subjects at 200. */
-const CALENDAR_RANGE_MAX = 1000;
+/** A window's bound (UX-14): the calendar pages by day; the rollups read the window whole (calendarRangeAll). */
+export const CALENDAR_RANGE_MAX = 1000;
 const publicationsRepo = new PublicationRepository();
 const attemptsRepo = new PublicationAttemptRepository();
 const evidenceRepo = new RemoteEvidenceRepository();
@@ -1172,16 +1172,42 @@ export const publicationService = {
    * first, the window applied in the query so an old window is read as it was (never the newest rows filtered).
    */
   async calendarRange(brandId: string, from: Date, to: Date, tx?: Tx) {
-    const rows = await publicationsRepo.listScheduledBetween(brandId, from, to, CALENDAR_RANGE_MAX, tx);
-    return rows.map((p) => ({
-      publicationId: p.id,
-      contentPackageId: p.contentPackageId,
-      contentRevisionId: p.contentRevisionId,
-      channelVariantId: p.channelVariantId,
-      channelConnectionId: p.channelConnectionId,
-      destinationId: p.destinationId,
-      scheduledFor: p.scheduledFor.toISOString(),
-      state: p.state,
-    }));
+    return toCalendar(await publicationsRepo.listScheduledBetween(brandId, from, to, CALENDAR_RANGE_MAX, tx));
+  },
+
+  /**
+   * Every publication of the window, newest first, read page by page to the end (the measurement rollups and the
+   * overview aggregate a window's whole population, so the calendar's bound never cuts them).
+   */
+  async calendarRangeAll(brandId: string, from: Date, to: Date, tx?: Tx) {
+    const rows: Awaited<ReturnType<PublicationRepository['listScheduledBetween']>> = [];
+    for (let after: { scheduledFor: Date; id: string } | undefined; ;) {
+      const page = await publicationsRepo.listScheduledBetween(
+        brandId,
+        from,
+        to,
+        CALENDAR_RANGE_MAX,
+        tx,
+        after,
+      );
+      rows.push(...page);
+      const last = page[page.length - 1];
+      if (page.length < CALENDAR_RANGE_MAX || !last) return toCalendar(rows);
+      after = { scheduledFor: last.scheduledFor, id: last.id };
+    }
   },
 };
+
+/** What a calendar shows for a publication row (the content module's calendar source hook). */
+function toCalendar(rows: Awaited<ReturnType<PublicationRepository['listScheduledBetween']>>) {
+  return rows.map((p) => ({
+    publicationId: p.id,
+    contentPackageId: p.contentPackageId,
+    contentRevisionId: p.contentRevisionId,
+    channelVariantId: p.channelVariantId,
+    channelConnectionId: p.channelConnectionId,
+    destinationId: p.destinationId,
+    scheduledFor: p.scheduledFor.toISOString(),
+    state: p.state,
+  }));
+}

@@ -127,7 +127,8 @@ export function PerformanceScreen() {
     enabled: published.length > 0,
   });
   // With no posts the rollup holds nothing for this period or channel; the panels wait for the last page of values.
-  const current = published.length > 0 && metrics.complete ? summary.data?.current : undefined;
+  const current =
+    published.length > 0 && (metricKeys.length === 0 || metrics.complete) ? summary.data?.current : undefined;
 
   const aggregates = useMemo(
     () =>

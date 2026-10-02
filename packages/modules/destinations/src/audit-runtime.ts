@@ -85,13 +85,14 @@ export async function seoAuditRunsToPrune(
     now,
   );
   const days = decision.allowed && decision.policy?.retentionDays ? decision.policy.retentionDays : null;
-  const runs = (await runsRepo.listForDestination(row.brandId, row.id, 200, tx)).filter(
-    (r) => r.outcome !== 'running',
-  );
   const cutoff = days ? new Date(now.getTime() - days * DAY_MS) : null;
-  const doomed = cutoff
-    ? runs.filter((r) => r.startedAt.getTime() < cutoff.getTime())
-    : runs.slice(SEO_AUDIT_KEEP_RUNS);
+  // By the policy, every run started before the cut-off; by the keep rule, what lies past the newest kept runs.
+  const runs = (
+    cutoff
+      ? await runsRepo.listStartedBefore(row.brandId, row.id, cutoff, tx)
+      : await runsRepo.listForDestination(row.brandId, row.id, 200, tx)
+  ).filter((r) => r.outcome !== 'running');
+  const doomed = cutoff ? runs : runs.slice(SEO_AUDIT_KEEP_RUNS);
   return {
     ids: doomed.map((r) => r.id),
     reason: cutoff ? `cutoff=${cutoff.toISOString()},retentionDays=${days}` : `keep=${SEO_AUDIT_KEEP_RUNS}`,

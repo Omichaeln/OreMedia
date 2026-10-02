@@ -6,9 +6,8 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
-import { contentService } from '@oremedia/module-content';
 import { destinationReportService, destinationService, seoAuditService } from '@oremedia/module-destinations';
-import { definitionService, metricService } from '@oremedia/module-measurement';
+import { definitionService, metricService, releasedPublications } from '@oremedia/module-measurement';
 import { channelService } from '@oremedia/module-publishing';
 import {
   auditSourceOf,
@@ -47,15 +46,12 @@ const dayWindow = (windowStart: string, windowEnd: string) => {
   return { start, end, length: Math.max(1, length) };
 };
 
-/** Released channel publications of a calendar window (a website article has no post metrics, R2-3). */
-const released = (
-  publications: Array<{ publicationId: string; channelConnectionId: string | null; state: string }>,
-): ReleasedPublication[] =>
-  publications.flatMap((p) =>
-    p.channelConnectionId !== null && (p.state === 'published' || p.state === 'removed')
-      ? [{ publicationId: p.publicationId, channelConnectionId: p.channelConnectionId }]
-      : [],
-  );
+/** Released channel publications of a window, every one of them (the measurement source reads to the end). */
+const released = async (brandId: string, from: Date, to: Date, tx?: Tx): Promise<ReleasedPublication[]> =>
+  (await releasedPublications(brandId, from, to, tx)).map((p) => ({
+    publicationId: p.publicationId,
+    channelConnectionId: p.channelConnectionId,
+  }));
 
 export function createOverviewService(opts: OverviewQueryOptions = {}) {
   const now = opts.now ?? (() => new Date());
@@ -76,10 +72,9 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
       const brandId = parsed.brandId;
 
       // The independent reads at once: the brand rollup (UX-11, which counts the window's posts but not per
-      // channel), the channels, both calendar windows (content.calendar.range: brand.read, the window in the
-      // query), the dictionary, the destinations and the sources this deployment lists.
-      const calendar = contentService.calendar;
-      const [brandSummary, channels, currentCalendar, previousCalendar, definitions, destinations, sources] =
+      // channel), the channels, both windows' released publications (the measurement source, read whole), the
+      // dictionary, the destinations and the sources this deployment lists.
+      const [brandSummary, channels, current, previous, definitions, destinations, sources] =
         await Promise.all([
           metricService.brandSummary(
             actor,
@@ -92,14 +87,11 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
             tx,
           ),
           channelService.list(actor, { brandId }, tx),
-          calendar.range(actor, { brandId, from: parsed.windowStart, to: parsed.windowEnd }, tx),
-          calendar.range(
-            actor,
-            {
-              brandId,
-              from: new Date(windowStart.getTime() - length).toISOString(),
-              to: new Date(windowStart.getTime() - 1).toISOString(),
-            },
+          released(brandId, windowStart, windowEnd, tx),
+          released(
+            brandId,
+            new Date(windowStart.getTime() - length),
+            new Date(windowStart.getTime() - 1),
             tx,
           ),
           definitionService.list(actor, {}, tx),
@@ -110,8 +102,6 @@ export function createOverviewService(opts: OverviewQueryOptions = {}) {
       // (a) social: the rollup's figures and, per channel, every released post of the window with its latest
       // values (the population query reads them in chunks: no newest-200 cut).
       const social = socialOf(brandSummary);
-      const current = released(currentCalendar.publications);
-      const previous = released(previousCalendar.publications);
       const providers = new Set(channels.map((c) => c.providerKey));
       const keys = [
         ...new Set(

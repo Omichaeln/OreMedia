@@ -235,7 +235,7 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     registerPublishingBrandChecker(checker);
     registerMeasurementBrandChecker(checker);
     registerMeasurementPublicationSource((brandId, from, to, tx) =>
-      publicationService.calendarRange(brandId, from, to, tx),
+      publicationService.calendarRangeAll(brandId, from, to, tx),
     );
     registerCalendarSource((brandId, from, to, tx) =>
       publicationService.calendarRange(brandId, from, to, tx),
@@ -547,6 +547,44 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     // The attribute aggregate counts every publication of the window (none carries engagement here).
     const attributes = await inTenant(tenantA, () => attributeService.aggregate(member(tenantA), window));
     expect(attributes).toMatchObject({ publications: 350, withNumbers: 0 });
+
+    // Past the calendar's own 1000-row bound (CALENDAR_RANGE_MAX): the publication source pages to the end, so
+    // 1100 posts of one window are all counted, in the overview, the rollup and the per-publication pages.
+    await seed(1100, new Date(NOW.getTime() - 90 * DAY), 1);
+    const big = {
+      brandId: brandA,
+      windowStart: `${dayKey(-93)}T00:00:00.000Z`,
+      windowEnd: `${dayKey(-87)}T23:59:59.999Z`,
+    };
+    const bigResult = await inTenant(tenantA, () => overview.summary(member(tenantA), big));
+    expect(bigResult.social.coverage).toMatchObject({ subjectsRequested: 1100, subjectsWithData: 1100 });
+    expect(bigResult.social.figures.find((f) => f.key === 'impressions')).toMatchObject({ value: 1100 });
+    expect(bigResult.sources.find((s) => s.id === freshChannel)).toMatchObject({
+      coverage: { requested: 1100, withData: 1100, unit: 'posts' },
+    });
+    const bigRollup = await inTenant(tenantA, () => metricService.brandSummary(member(tenantA), big));
+    expect(bigRollup).toMatchObject({ subjectsTotal: 1100, truncated: false });
+    expect(bigRollup.current.aggregates.find((a) => a.comparableGroup === 'impressions')).toMatchObject({
+      value: 1100,
+      subjectsWithData: 1100,
+    });
+    let pages = 0;
+    let seen = 0;
+    for (let cursor: string | undefined; ;) {
+      const page = await inTenant(tenantA, () =>
+        metricService.publicationValues(member(tenantA), {
+          ...big,
+          metricKeys: ['impressionCount'],
+          page: { limit: 200, cursor },
+        }),
+      );
+      pages += 1;
+      seen += page.items.length;
+      expect(page.subjectsTotal).toBe(1100);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    expect({ pages, seen }).toEqual({ pages: 6, seen: 1100 });
   });
 
   it('cross-tenant: a foreign brand is NOT_FOUND, in either direction', async () => {
