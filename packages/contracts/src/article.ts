@@ -172,6 +172,17 @@ export function articleFirstParagraph(article: Pick<ArticleDocumentV1, 'blocks'>
       : first.text.trim();
 }
 
+/** The last block's text (a list's last item, a FAQ's answer): what a page must still show at its end. */
+export function articleLastParagraph(article: Pick<ArticleDocumentV1, 'blocks'>): string {
+  for (let i = article.blocks.length - 1; i >= 0; i--) {
+    const b = article.blocks[i] as ArticleBlockV1;
+    const text =
+      b.type === 'list' ? (b.items[b.items.length - 1] ?? '') : b.type === 'faq' ? b.answer : b.text;
+    if (text.trim() !== '') return text.trim();
+  }
+  return '';
+}
+
 /** The article's plain text (title, excerpt and body), for a caption or a length check. */
 export const articlePlainText = (article: ArticleDocumentV1): string =>
   [
@@ -184,14 +195,26 @@ export const articlePlainText = (article: ArticleDocumentV1): string =>
     .filter((t) => t.trim() !== '')
     .join('\n\n');
 
+/**
+ * RA-03: the characters a body given as HTML carries once rendered (tags removed, entities decoded): the measure
+ * ARTICLE_BODY_MAX_CHARS bounds, never the HTML's own length.
+ */
+export const articleHtmlChars = (html: string): number => decodeEntities(html.replace(/<[^>]+>/g, '')).length;
+
 // ---- rendered-page validation (R2-3): what a published page must show ----
 
+/**
+ * RA-04 (appended keys): the canonical names this page (the remote URL or the slug's path), and the last block's
+ * text is present too, so a page changed after its first paragraph fails.
+ */
 export const RenderedCheckKey = z.enum([
   'status_ok',
   'title_present',
   'canonical_present',
   'indexable',
   'body_present',
+  'canonical_matches',
+  'last_paragraph_present',
 ]);
 export type RenderedCheckKey = z.infer<typeof RenderedCheckKey>;
 export interface RenderedCheck {
@@ -236,14 +259,39 @@ const hasMeta = (html: string, name: string, content: RegExp): boolean =>
     const tag = m[0];
     return new RegExp(`name\\s*=\\s*["']?${name}["']?`, 'i').test(tag) && content.test(tag);
   });
-const hasCanonical = (html: string): boolean =>
-  [...html.matchAll(/<link\b[^>]*>/gi)].some(
-    (m) => /rel\s*=\s*["']?canonical["']?/i.test(m[0]) && /href\s*=\s*["'][^"']+["']/i.test(m[0]),
-  );
+/** The canonical link's href, or null when the page carries none. */
+const canonicalHref = (html: string): string | null => {
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/rel\s*=\s*["']?canonical["']?/i.test(m[0])) continue;
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(m[0]);
+    if (href) return decodeEntities(href[1] as string);
+  }
+  return null;
+};
+/** A URL as compared: lower-case origin, the path without its trailing slash, no query or fragment. */
+const foldUrl = (value: string): string | null => {
+  try {
+    const u = new URL(value);
+    return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+};
+/** RA-04: the canonical is the remote URL itself, or a path on the same site ending in the slug's segment. */
+export function canonicalMatches(canonical: string | null, remoteUrl: string, slug: string): boolean {
+  if (!canonical) return false;
+  const c = foldUrl(canonical);
+  const r = foldUrl(remoteUrl);
+  if (!c || !r) return false;
+  if (c === r) return true;
+  const sameSite = c.startsWith(`${new URL(r).origin.toLowerCase()}/`);
+  return sameSite && slug !== '' && c.endsWith(`/${slug.toLowerCase()}`);
+}
 
 /**
- * The checks over a fetched page: 200, the title in <title> or an <h1>, a canonical link, no `noindex` unless the
- * article is a draft (a draft is expected to be hidden), and the first paragraph in the page's text. Pure.
+ * The checks over a fetched page: 200, the title in <title> or an <h1>, a canonical link that names this page
+ * (RA-04: the remote URL or the slug's path), no `noindex` unless the article is a draft (a draft is expected to be
+ * hidden), and the first and the last paragraph in the page's text. Pure.
  */
 export function validateRenderedPage(input: {
   status: number | null;
@@ -251,18 +299,27 @@ export function validateRenderedPage(input: {
   title: string;
   firstParagraph: string;
   draft: boolean;
+  /** The page address the article was read back with and its slug; both empty when unknown (an old record). */
+  remoteUrl?: string;
+  slug?: string;
+  lastParagraph?: string;
 }): RenderedCheck[] {
   const html = input.html;
   const title = fold(input.title);
   const titles = [...tagText(html, 'title'), ...tagText(html, 'h1')];
   const noindex = hasMeta(html, 'robots', /noindex/i) || hasMeta(html, 'googlebot', /noindex/i);
   const paragraph = fold(input.firstParagraph);
+  const last = fold(input.lastParagraph ?? '');
+  const canonical = canonicalHref(html);
+  const text = pageText(html);
   return [
     { key: 'status_ok', ok: input.status === 200 },
     { key: 'title_present', ok: title !== '' && titles.some((t) => t.includes(title)) },
-    { key: 'canonical_present', ok: hasCanonical(html) },
+    { key: 'canonical_present', ok: canonical !== null },
     { key: 'indexable', ok: input.draft || !noindex },
-    { key: 'body_present', ok: paragraph !== '' && pageText(html).includes(paragraph) },
+    { key: 'body_present', ok: paragraph !== '' && text.includes(paragraph) },
+    { key: 'canonical_matches', ok: canonicalMatches(canonical, input.remoteUrl ?? '', input.slug ?? '') },
+    { key: 'last_paragraph_present', ok: last !== '' && text.includes(last) },
   ];
 }
 

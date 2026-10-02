@@ -141,6 +141,13 @@
       "when": 1790853423159,
       "tag": "0019_seo_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1790950193399,
+      "tag": "0020_article_remote_status",
+      "breakpoints": true
     }
   ]
 }

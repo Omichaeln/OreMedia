@@ -95,6 +95,8 @@ export {
   REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
   CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
   CONNECT_CHOICE_PURGE_SCHEDULE_ID,
+  RENDERED_VALIDATION_WORKFLOW_TYPE,
+  renderedValidationWorkflowId,
 } from './outbox-routes';
 export {
   ChannelConnectionRepository,

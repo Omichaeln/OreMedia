@@ -19,6 +19,7 @@ export { connectChoicePurgeWorkflowV1 } from './connect-choice-purge.workflow.v1
 export { tokenRefreshWorkflowV1 } from './token-refresh.workflow.v1';
 export { destinationTokenRefreshWorkflowV1 } from './destination-token-refresh.workflow.v1';
 export { destinationVerifyWorkflowV1 } from './destination-verify.workflow.v1';
+export { renderedValidationWorkflowV1 } from './rendered-validation.workflow.v1';
 export {
   destinationReportSweepWorkflowV1,
   destinationReportsWorkflowV1,

@@ -54,6 +54,20 @@ already knew, the email). Alternative: explicit accept — invitations show as p
 membership becomes active only when the person accepts (and can decline). Changing it touches the sign-in
 resolution in `packages/modules/access/src/service.ts` and adds an accept/decline procedure and portfolio state.
 
+### D-16 consequence: no compare-and-swap on WordPress core REST
+
+WordPress core REST (`POST /wp-json/wp/v2/posts/<id>`) accepts no precondition: there is no `If-Match`, no ETag
+and no `If-Unmodified-Since` on a post update, and a write always replaces the current revision. Oremedia therefore
+cannot _prevent_ a write from overwriting a change made on the site between its own read and its write; it can only
+narrow that window and detect what happened in it. The adapter reads the post immediately before the write and
+refuses (`conflict`, nothing written) when either the content hash (title, slug, status, terms and content) or the
+modified instant differs from the read-back the product stored; after the write it lists the post's revisions and,
+when the revision it replaced is not the one it read, returns that revision as `overwritten`. The publishing module
+records the change as succeeded with `conflict_overwritten`, the revision read before the write and the one lost as
+`remote_edit` evidence, and refreshes the stored read-back after any conflict so a later edit compares against what
+the site holds now (re-audit RA-12). A CMS that offers a conditional write closes the window behind the same
+`CmsAdapter` contract.
+
 ## How to record a decision
 
 Edit the row: set Status to **Decided (owner, date)**, replace the working assumption with the decision, and open a

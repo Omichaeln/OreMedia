@@ -38,7 +38,7 @@ import { configureSourceAvailability } from './hooks';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
-import { FixtureCmsAdapter } from './testing/fixture-cms';
+import { FixtureCmsAdapter, fixtureArticleHash } from './testing/fixture-cms';
 import { FixtureSourceAdapter, fixtureSourceCapability } from './testing/fixture-source';
 
 /**
@@ -1272,16 +1272,85 @@ describe('destinations module against MySQL 8', () => {
       expect(result.readback).toMatchObject({
         remoteId: '100',
         status: 'draft',
-        contentHash: textFingerprint(renderArticleHtml(article)),
+        contentHash: cms.articles.get('100')?.contentHash,
       });
-      expect(result.validation).toMatchObject({ ok: true, status: 200, truncated: false, error: null });
+      // RA-04: the read-back is compared with what was sent, field by field, and says so.
+      expect(result.readbackVerification).toEqual({
+        outcome: 'verified',
+        matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+        mismatched: [],
+        reason: null,
+        sentHash: textFingerprint(renderArticleHtml(article)),
+      });
+      expect(result.validation).toMatchObject({ ok: false, status: 200, truncated: false, error: null });
       expect(result.validation?.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
         'status_ok:true',
         'title_present:true',
         'canonical_present:true',
         'indexable:true', // a draft may carry noindex
         'body_present:true',
+        'canonical_matches:true', // the canonical names the slug's path on the site
+        'last_paragraph_present:false', // the page stops after the first paragraph: the FAQ's answer is missing
       ]);
+    });
+
+    it('publish (RA-04): with no read allowed the write is recorded as unverified with the reason, never as proof; a read-back that differs is a mismatch', async () => {
+      await setArticlePolicy(['write']);
+      const unverified = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_unverified',
+          variant: variant(siteId),
+        }),
+      );
+      expect(unverified).toMatchObject({
+        outcome: 'accepted',
+        readback: { status: 'draft' },
+        readbackVerification: {
+          outcome: 'unverified',
+          matched: [],
+          mismatched: [],
+          reason: 'read_not_allowed',
+        },
+      });
+      await setArticlePolicy(['read', 'write']);
+      // The site rewrote the title on save (a filter): the read-back names the field that did not match.
+      const titled = new FixtureCmsAdapter();
+      const original = titled.createArticle.bind(titled);
+      titled.createArticle = async (...args) => {
+        const created = await original(...args);
+        if (created.outcome === 'done') {
+          const stored = titled.articles.get(created.article.remoteId)!;
+          titled.articles.set(stored.remoteId, { ...stored, title: `${stored.title} (filtered)` });
+        }
+        return created;
+      };
+      configureDestinationCms({ registry: new CmsRegistry().register(titled) });
+      try {
+        const mismatch = await inTenant(tenantA, () =>
+          destinationArticles.publish({
+            tenantId: tenantA,
+            destinationId: siteId,
+            publicationId: newId('publication'),
+            attemptId: newId('publicationAttempt'),
+            idempotencyKey: 'idem_mismatch',
+            variant: variant(siteId),
+          }),
+        );
+        expect(mismatch).toMatchObject({
+          outcome: 'accepted',
+          readbackVerification: {
+            outcome: 'mismatch',
+            matched: ['content', 'slug', 'status', 'modifiedAt'],
+            mismatched: ['title'],
+          },
+        });
+      } finally {
+        configureDestinationCms({ registry: new CmsRegistry().register(cms) });
+      }
     });
 
     it('an edit reads the remote first: with the read-back hash it writes; after the site moved it refuses as a conflict and overwrites nothing', async () => {
@@ -1292,33 +1361,92 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           remoteId: '100',
           expectedHash: current.contentHash,
+          expectedModifiedAt: current.modifiedAt,
           html: '<p>Ore is heavy and tar is sticky.</p><script>alert(1)</script>',
           idempotencyKey: 'idem_edit_1',
         }),
       );
       expect(edited).toMatchObject({
         outcome: 'done',
-        readback: { remoteId: '100', contentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>') },
+        readback: { remoteId: '100', contentHash: cms.articles.get('100')?.contentHash },
+        // RA-04 / RA-12: the read-back after the write matches the HTML sent and the write's own modified instant.
+        readbackVerification: {
+          outcome: 'verified',
+          matched: ['content', 'modifiedAt'],
+          mismatched: [],
+          sentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>'),
+        },
       });
+      expect(edited.outcome === 'done' && edited.overwritten).toBeUndefined();
       expect(cms.articles.get('100')?.html).toBe('<p>Ore is heavy and tar is sticky.</p>'); // sanitised at send
-      // Someone edited the article on the site since: the stored hash no longer matches.
-      cms.articles.set('100', {
-        ...cms.articles.get('100')!,
-        html: '<p>Changed on the site.</p>',
-        contentHash: textFingerprint('<p>Changed on the site.</p>'),
-      });
+      // RA-12: the modified instant is a precondition of its own: the same content touched later is a conflict.
+      const touched = cms.articles.get('100')!;
+      cms.articles.set('100', { ...touched, modifiedAt: new Date(Date.now() + 60_000).toISOString() });
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.edit({
+            tenantId: tenantA,
+            destinationId: siteId,
+            remoteId: '100',
+            expectedHash: touched.contentHash,
+            expectedModifiedAt: touched.modifiedAt,
+            html: '<p>Another edit.</p>',
+            idempotencyKey: 'idem_edit_touched',
+          }),
+        ),
+      ).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      cms.articles.set('100', touched);
+      // Someone edited the article on the site since: the stored hash no longer matches; the refusal carries the
+      // current remote so the stored read-back is refreshed (RA-12).
+      const changed = { ...cms.articles.get('100')!, html: '<p>Changed on the site.</p>' };
+      cms.articles.set('100', { ...changed, contentHash: fixtureArticleHash(changed) });
       const conflict = await inTenant(tenantA, () =>
         destinationArticles.edit({
           tenantId: tenantA,
           destinationId: siteId,
           remoteId: '100',
           expectedHash: edited.outcome === 'done' ? (edited.readback?.contentHash ?? null) : null,
+          expectedModifiedAt: edited.outcome === 'done' ? (edited.readback?.modifiedAt ?? null) : null,
           html: '<p>Another edit.</p>',
           idempotencyKey: 'idem_edit_2',
         }),
       );
-      expect(conflict).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(conflict).toMatchObject({
+        outcome: 'rejected',
+        code: 'conflict',
+        readback: { remoteId: '100', contentHash: cms.articles.get('100')?.contentHash },
+      });
       expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+    });
+
+    it('an edit (RA-12): a site change that lands between the pre-write read and the write is replaced, detected after the write and returned as what was overwritten', async () => {
+      const current = cms.articles.get('100')!;
+      cms.editInWindow = () => ({ html: '<p>Edited on the site in the window.</p>' });
+      const edited = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: current.contentHash,
+          expectedModifiedAt: current.modifiedAt,
+          html: '<p>Written over the window.</p>',
+          idempotencyKey: 'idem_edit_window',
+        }),
+      );
+      expect(edited).toMatchObject({
+        outcome: 'done',
+        readback: { remoteId: '100' },
+        readbackVerification: { outcome: 'verified' },
+        overwritten: {
+          previous: { remoteId: '100', contentHash: current.contentHash, modifiedAt: current.modifiedAt },
+          replaced: {
+            remoteId: '100',
+            contentHash: fixtureArticleHash({ ...current, html: '<p>Edited on the site in the window.</p>' }),
+          },
+        },
+      });
+      expect(cms.editInWindow).toBeNull();
+      expect(cms.articles.get('100')?.html).toBe('<p>Written over the window.</p>');
     });
 
     it('an edit with no read-back to compare against is refused before any call: never an overwrite (D-16)', async () => {
@@ -1329,13 +1457,14 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           remoteId: '100',
           expectedHash: null,
+          expectedModifiedAt: null,
           html: '<p>Blind edit.</p>',
           idempotencyKey: 'idem_edit_3',
         }),
       );
       expect(refused).toMatchObject({ outcome: 'rejected', code: 'no_readback' });
       expect(cms.calls).toEqual([]);
-      expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+      expect(cms.articles.get('100')?.html).toBe('<p>Written over the window.</p>');
     });
 
     it('unpublish sets the article back to a draft and reads it back; a rendered validation runs without the secret; a disconnected site is refused', async () => {
@@ -1351,7 +1480,9 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           url: `${SITE}/missing`,
           title: article.title,
+          slug: article.slug,
           firstParagraph: 'Ore is heavy.',
+          lastParagraph: 'Yes, mostly.',
           draft: false,
         }),
       );

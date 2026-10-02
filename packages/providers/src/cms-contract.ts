@@ -67,9 +67,19 @@ export type CmsReadResult =
  * The classified result of a write. `conflict` is the refusal of an update whose precondition (the hash or the
  * modified timestamp the caller read back) no longer matches the remote: nothing was written, the current remote
  * revision is returned so the person can decide. The outcomes otherwise follow PublishOutcome (spec 14.5).
+ *
+ * RA-12: an update's `done` carries `previous`, the remote revision read immediately before the write (the
+ * precondition was checked against it), and `overwritten` when the adapter could prove that the revision the write
+ * replaced was not `previous` (the remote changed between the read and the write): that replaced revision, so the
+ * caller records what was lost. A CMS without compare-and-swap cannot close that window, only narrow and detect it.
  */
 export type CmsWriteResult =
-  | { outcome: 'done'; article: CmsRemoteArticle }
+  | {
+      outcome: 'done';
+      article: CmsRemoteArticle;
+      previous?: CmsRemoteArticle;
+      overwritten?: CmsRemoteArticle;
+    }
   | { outcome: 'conflict'; current: CmsRemoteArticle }
   | { outcome: 'rejected'; code: string; message: string }
   | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
@@ -91,7 +101,10 @@ export interface CmsRenderedPage {
   url: string;
 }
 
-/** What an update must match on the remote before it writes: the hash read back, and/or the modified timestamp. */
+/**
+ * What an update must match on the remote before it writes: the hash read back and the modified timestamp (both,
+ * when the caller has both: the hash covers the content and identity, the timestamp a change that kept them).
+ */
 export interface CmsUpdatePrecondition {
   expectedHash?: string;
   expectedModifiedAt?: string | null;

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError, type AnyTRPCProcedure } from '@trpc/server';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
 import {
+  ARTICLE_TEXT_MAX_CHARS,
   CalendarRange,
   ChannelVariantGet,
   ContentRevisionGet,
@@ -216,6 +217,10 @@ export interface Publication {
   holdReasons: string[];
   remotePostId: string | null;
   remoteUrl: string | null;
+  /** RA-02 / RA-04 (website articles; null for a channel): what the website holds and whether it was proven. */
+  remoteStatus: 'draft' | 'live' | 'reverted' | null;
+  remoteVerification: 'unverified' | 'verified' | 'failed' | null;
+  remoteVerifiedAt: string | null;
   fencingToken: number | null;
   claimedAt: string | null;
   scheduledByKind: 'user';
@@ -444,18 +449,42 @@ export class Phase5Backend {
         Object.assign(c, { state: 'succeeded', finishedAt: now() });
         if (c.kind === 'delete') this.transition(p.id, { state: 'removed', stateReason: 'remote_deleted' });
         else if (c.kind === 'unpublish') {
-          const payload = { changeId: c.id, remotePostId: p.remotePostId, outcome: 'done' };
-          this.evidence.push({
-            id: rid('ev'),
-            publicationId: p.id,
-            attemptId: null,
-            kind: 'remote_unpublish',
-            remotePostId: p.remotePostId,
+          // RA-02: the website confirmed the draft; a fresh read-back is recorded and the status says reverted.
+          const readback = {
+            remoteId: p.remotePostId,
             remoteUrl: p.remoteUrl,
-            payload,
-            payloadHash: hash(payload),
-            capturedAt: now(),
-          });
+            title: P5_ARTICLE.title,
+            slug: P5_ARTICLE.slug,
+            status: 'draft',
+            modifiedAt: now(),
+            contentHash: hash('<p>Ore is heavy.</p>'),
+          };
+          const payload = { changeId: c.id, remotePostId: p.remotePostId, outcome: 'done', readback };
+          this.evidence.push(
+            {
+              id: rid('ev'),
+              publicationId: p.id,
+              attemptId: null,
+              kind: 'remote_unpublish',
+              remotePostId: p.remotePostId,
+              remoteUrl: p.remoteUrl,
+              payload,
+              payloadHash: hash(payload),
+              capturedAt: now(),
+            },
+            {
+              id: rid('ev'),
+              publicationId: p.id,
+              attemptId: null,
+              kind: 'remote_readback',
+              remotePostId: p.remotePostId,
+              remoteUrl: p.remoteUrl,
+              payload: { ...readback, changeId: c.id },
+              payloadHash: hash({ ...readback, changeId: c.id }),
+              capturedAt: now(),
+            },
+          );
+          p.remoteStatus = 'reverted';
         } else p.currentText = c.text;
       } else
         Object.assign(c, {
@@ -480,7 +509,13 @@ export class Phase5Backend {
     const providerKey = this.channels.get(p.channelConnectionId ?? '')?.providerKey ?? '';
     // A website (R2-3) allows every live-article action; a channel what its capability says.
     const rules = p.destinationId
-      ? { edit: true, delete: true, unpublish: true, textMaxLength: 50_000, textWeighted: false }
+      ? {
+          edit: true,
+          delete: true,
+          unpublish: true,
+          textMaxLength: ARTICLE_TEXT_MAX_CHARS,
+          textWeighted: false,
+        }
       : {
           ...(LIVE_POST_RULES[providerKey] ?? {
             edit: false,
@@ -547,6 +582,10 @@ export class Phase5Backend {
       .find((e) => e.publicationId === p.id && e.kind === 'rendered_validation');
     const row = this.renderedValidation(p.id, previous ? previous.payload['ok'] !== true : true);
     this.evidence.push(row);
+    // RA-04: the verification follows the latest check.
+    const ok = row.payload['ok'] === true;
+    p.remoteVerification = ok ? 'verified' : 'failed';
+    p.remoteVerifiedAt = ok ? row.capturedAt : null;
     return row.payload;
   }
 
@@ -823,6 +862,9 @@ export class Phase5Backend {
       holdReasons: [],
       remotePostId: null,
       remoteUrl: null,
+      remoteStatus: null,
+      remoteVerification: null,
+      remoteVerifiedAt: null,
       fencingToken: null,
       claimedAt: null,
       scheduledByKind: 'user',
@@ -1005,7 +1047,8 @@ export class Phase5Backend {
       payloadHash: hash({ id: 'x_123' }),
       capturedAt: todayAt(11),
     });
-    // R2-3: a website article published as a draft (D-16) with its read-back and a rendered validation.
+    // R2-3: a website article published live (the grant allowed it) with its read-back, verified against what
+    // was sent (RA-04), and a rendered validation; the calendar shows it as Live, never as a bare Published (RA-02).
     this.revision(P5.revisions.article, 'pkg_article', 'approved', 'Why ore and tar last.', P5_ARTICLE);
     this.variants.set(P5.variants.article, {
       id: P5.variants.article,
@@ -1017,7 +1060,7 @@ export class Phase5Backend {
       destinationId: P5.destination,
       text: 'Why ore and tar last.',
       altTexts: [],
-      settings: { publishMode: 'draft' },
+      settings: { publishMode: 'publish' },
       exportIds: [],
       exportHashes: [],
       article: P5_ARTICLE,
@@ -1031,17 +1074,27 @@ export class Phase5Backend {
       channelVariantId: P5.variants.article,
       destinationId: P5.destination,
       remotePostId: '42',
-      remoteUrl: 'https://acme.example/?p=42',
+      remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
+      remoteStatus: 'live',
+      remoteVerification: 'verified',
+      remoteVerifiedAt: todayAt(8),
     });
     const readback = {
       remoteId: '42',
-      remoteUrl: 'https://acme.example/?p=42',
+      remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
       title: P5_ARTICLE.title,
       slug: P5_ARTICLE.slug,
-      status: 'draft',
+      status: 'publish',
       modifiedAt: todayAt(8),
       contentHash: hash('<p>Ore is heavy.</p>'),
       attemptId: 'att_article_1',
+      verification: {
+        outcome: 'verified',
+        matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+        mismatched: [],
+        reason: null,
+        sentHash: hash('<p>Ore is heavy.</p>'),
+      },
     };
     this.evidence.push(
       {
@@ -1050,7 +1103,7 @@ export class Phase5Backend {
         attemptId: 'att_article_1',
         kind: 'remote_readback',
         remotePostId: '42',
-        remoteUrl: 'https://acme.example/?p=42',
+        remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
         payload: readback,
         payloadHash: hash(readback),
         capturedAt: todayAt(8),
@@ -1254,6 +1307,8 @@ export function phase5Routers(
               destinationId: p.destinationId,
               scheduledFor: p.scheduledFor,
               state: p.state,
+              remoteStatus: p.remoteStatus,
+              remoteVerification: p.remoteVerification,
             })),
         };
       }),
@@ -1318,6 +1373,9 @@ export function phase5Routers(
           holdReasons: [],
           remotePostId: null,
           remoteUrl: null,
+          remoteStatus: null,
+          remoteVerification: null,
+          remoteVerifiedAt: null,
           fencingToken: null,
           claimedAt: null,
           scheduledByKind: 'user',
@@ -1431,6 +1489,12 @@ export function phase5Routers(
       /** R2-3 rollback: the article is set back to a draft on its website (publication.delete_remote). */
       unpublishRemote: mutation.input(PublicationUnpublishRemote).mutation(({ ctx, input }) => {
         assertMayChangeLivePost(ctx.member?.role, 'publication.delete_remote');
+        // RA-02: only a live article is reverted.
+        if (b.publication(input.publicationId).remoteStatus !== 'live')
+          throw new ValidationFailedError(
+            [{ path: 'publicationId', issue: 'not_live' }],
+            'Only a live article can be reverted to a draft',
+          );
         const change = b.requestRemoteChange(
           input.publicationId,
           'unpublish',

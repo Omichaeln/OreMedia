@@ -27,6 +27,10 @@ import {
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
+import { brandDestinations } from '@oremedia/db/schema/destinations';
+import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
+import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
+import type { RenderedValidationV1 } from '@oremedia/contracts/article';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { idempotent } from '@oremedia/module-operations';
@@ -38,6 +42,7 @@ import { publicationWorkflowId } from './common';
 import {
   registerBrandChecker,
   registerApprovalConsumer,
+  registerDestinationPublisher,
   registerProviderClients,
   registerPublishMediaSource,
   registerReleaseEvaluator,
@@ -45,9 +50,15 @@ import {
   registerVariantSource,
   registerWorkflowProbe,
   resetApprovalConsumer,
+  resetDestinationPublisher,
   resetReleaseEvaluator,
   resetRevisionVariantSource,
   resetVariantSource,
+  type DestinationEditInput,
+  type DestinationMutationResult,
+  type DestinationPublishResult,
+  type DestinationPublisher,
+  type DestinationValidateInput,
   type ReleaseEvaluator,
   type RevisionWithVariants,
 } from './hooks';
@@ -2079,6 +2090,528 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
       expect((await changesOf(pub.id)).every((c) => c.tenantId === tenantA)).toBe(true);
+    });
+  });
+
+  describe('website articles (RA-02, RA-04, RA-12): what the runtime records behind a destination publication', () => {
+    const destinationId = newId('destination');
+    const article: NonNullable<ChannelVariantForPublishing['article']> = {
+      kind: 'article',
+      title: 'Why ore and tar last',
+      slug: 'why-ore-and-tar-last',
+      excerpt: 'A short answer.',
+      blocks: [
+        { type: 'paragraph', text: 'Ore is heavy.' },
+        { type: 'faq', question: 'Is it safe?', answer: 'Yes, mostly.' },
+      ],
+      categories: [],
+      tags: [],
+    };
+    const readbackOf = (
+      status: 'draft' | 'publish',
+      over: Partial<ArticleReadbackV1> = {},
+    ): ArticleReadbackV1 => ({
+      remoteId: '42',
+      remoteUrl:
+        status === 'publish'
+          ? 'https://blog.acme.example/why-ore-and-tar-last/'
+          : 'https://blog.acme.example/?p=42',
+      title: article.title,
+      slug: article.slug,
+      status,
+      modifiedAt: '2026-10-02T10:00:00.000Z',
+      contentHash: 'a'.repeat(64),
+      ...over,
+    });
+    const verified: ArticleReadbackVerificationV1 = {
+      outcome: 'verified',
+      matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+      mismatched: [],
+      reason: null,
+      sentHash: 'b'.repeat(64),
+    };
+    const validationOf = (ok: boolean): RenderedValidationV1 => ({
+      url: 'https://blog.acme.example/why-ore-and-tar-last/',
+      fetchedAt: '2026-10-02T10:00:01.000Z',
+      status: 200,
+      bytes: 1024,
+      truncated: false,
+      ok,
+      checks: [
+        { key: 'status_ok', ok: true },
+        { key: 'title_present', ok: true },
+        { key: 'canonical_present', ok: true },
+        { key: 'indexable', ok },
+        { key: 'body_present', ok: true },
+        { key: 'canonical_matches', ok: true },
+        { key: 'last_paragraph_present', ok },
+      ],
+      error: null,
+    });
+    /** What the (stubbed) destinations module answers next; the runtime under test records it. */
+    let publishResult: DestinationPublishResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let editResult: DestinationMutationResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let unpublishResult: DestinationMutationResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let validateResult: RenderedValidationV1 = validationOf(true);
+    const editInputs: DestinationEditInput[] = [];
+    const validateInputs: DestinationValidateInput[] = [];
+    const stub: DestinationPublisher = {
+      describe: async (id) =>
+        id === destinationId
+          ? {
+              id,
+              brandId: brandA,
+              kind: 'cms_site',
+              displayName: 'blog.acme.example',
+              capabilityVersion: 1,
+              usable: true,
+              actions: { edit: true, delete: true, unpublish: true },
+            }
+          : null,
+      validateVariant: async () => ({ ok: true, issues: [] }),
+      useAllowed: async () => true,
+      publish: async (_input, _hooks, beforeSend) => {
+        await beforeSend?.();
+        return publishResult;
+      },
+      edit: async (input) => {
+        editInputs.push(input);
+        return editResult;
+      },
+      unpublish: async () => unpublishResult,
+      delete: async () => ({ outcome: 'done' }),
+      validateRendered: async (input) => {
+        validateInputs.push(input);
+        return validateResult;
+      },
+    };
+    const newArticleVariant = (settings: Record<string, unknown> = { publishMode: 'draft' }) => {
+      const v: ChannelVariantForPublishing = {
+        ...newVariant(tenantA, brandA, connA),
+        channelConnectionId: null,
+        destinationId,
+        text: 'Why ore and tar last',
+        settings,
+        article,
+      };
+      variantsById.set(v.id, v);
+      return v;
+    };
+    /** A destination publication taken through dispatch and publishOnce; markPublished when asked. */
+    const publishArticle = async (result: DestinationPublishResult, settings?: Record<string, unknown>) => {
+      publishResult = result;
+      const v = newArticleVariant(settings);
+      const pub = await schedule(tenantA, v.id);
+      const { attemptId } = await dispatch(pub.id);
+      const attempt = await inTenant(tenantA, () =>
+        runtime.provider.publishOnce({ ...wfInput(pub.id), attemptId, fencingToken: 1 }),
+      );
+      await inTenant(tenantA, () => runtime.control.markPublished({ ...wfInput(pub.id), attempt }));
+      return { pub, attemptId, attempt };
+    };
+    const changesOf = (publicationId: string) =>
+      tdb.db
+        .select()
+        .from(publicationRemoteChanges)
+        .where(eq(publicationRemoteChanges.publicationId, publicationId));
+    const changeInput = (publicationId: string, changeId: string) => ({
+      ...wfInput(publicationId),
+      changeId,
+      providerKey: 'cms_site',
+    });
+
+    beforeAll(async () => {
+      await tdb.db.insert(brandDestinations).values({
+        id: destinationId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'cms_site',
+        externalId: 'https://blog.acme.example',
+        displayName: 'blog.acme.example',
+        ownerUserId: USER,
+        grantedScopes: ['articles:write', 'articles:publish'],
+        health: 'healthy',
+        capabilityVersion: 1,
+      });
+      registerDestinationPublisher(stub);
+    });
+    afterAll(() => {
+      resetDestinationPublisher();
+    });
+    beforeEach(() => {
+      editInputs.length = 0;
+      validateInputs.length = 0;
+      validateResult = validationOf(true);
+    });
+
+    it('a draft write: the read-back and what it proved are evidence, the status is draft (never live), the page is not re-validated and the article cannot be reverted', async () => {
+      const { pub, attemptId } = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/?p=42',
+        readback: readbackOf('draft'),
+        readbackVerification: verified,
+        validation: validationOf(true),
+      });
+      const stored = await row(pub.id);
+      expect(stored).toMatchObject({
+        state: 'published',
+        remotePostId: '42',
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      expect(stored.remoteVerifiedAt).not.toBeNull();
+      const evidence = await evidenceOf(pub.id);
+      expect(evidence.map((e) => e.kind).sort()).toEqual([
+        'accepted_response',
+        'remote_readback',
+        'rendered_validation',
+      ]);
+      expect(evidence.find((e) => e.kind === 'remote_readback')?.payload).toMatchObject({
+        ...readbackOf('draft'),
+        attemptId,
+        verification: verified,
+      });
+      expect(await eventsOf(tenantA, 'publication.rendered_validation_due')).toEqual([]);
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto).toMatchObject({ remoteStatus: 'draft', remoteVerification: 'verified' });
+      expect(dto.remoteVerifiedAt).toBe(stored.remoteVerifiedAt?.toISOString());
+      const calendar = await inTenant(tenantA, () =>
+        publicationService.calendarRange(
+          brandA,
+          new Date(Date.now() - 86_400_000),
+          new Date(Date.now() + 86_400_000),
+        ),
+      );
+      expect(calendar.find((c) => c.publicationId === pub.id)).toMatchObject({
+        destinationId,
+        state: 'published',
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'publicationId', issue: 'not_live:draft' }] });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.renderedValidation.validateRenderedPublication({
+            ...wfInput(pub.id),
+            publishedAt: new Date().toISOString(),
+          }),
+        ),
+      ).toEqual({ outcome: 'skipped', reason: 'remote_draft' });
+    });
+
+    it('a publish mode whose read-back is not live is a draft; a read-back that could not be compared leaves the write unverified; a mismatch fails it', async () => {
+      const draftDespiteMode = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/?p=42',
+          readback: readbackOf('draft'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      expect(await row(draftDespiteMode.pub.id)).toMatchObject({
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      const unverified = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+        readback: readbackOf('publish'),
+        readbackVerification: {
+          outcome: 'unverified',
+          matched: [],
+          mismatched: [],
+          reason: 'read_not_allowed',
+          sentHash: 'b'.repeat(64),
+        },
+        validation: validationOf(true),
+      });
+      expect(await row(unverified.pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'unverified',
+        remoteVerifiedAt: null,
+      });
+      expect(
+        (await evidenceOf(unverified.pub.id)).find((e) => e.kind === 'remote_readback')?.payload,
+      ).toMatchObject({
+        verification: { outcome: 'unverified', reason: 'read_not_allowed' },
+      });
+      const mismatch = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+        readback: readbackOf('publish', { title: 'Why ore and tar last (filtered)' }),
+        readbackVerification: {
+          ...verified,
+          outcome: 'mismatch',
+          matched: ['content', 'slug', 'status', 'modifiedAt'],
+          mismatched: ['title'],
+        },
+        validation: validationOf(true),
+      });
+      expect(await row(mismatch.pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'failed',
+        remoteVerifiedAt: null,
+      });
+    });
+
+    it('a live write: verified when the page passes, the delayed re-validation is queued with availableAt and re-runs set the verification from each result', async () => {
+      const before = Date.now();
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      expect(await row(pub.id)).toMatchObject({ remoteStatus: 'live', remoteVerification: 'verified' });
+      const [due] = (await eventsOf(tenantA, 'publication.rendered_validation_due')).filter(
+        (e) => e.payload['publicationId'] === pub.id,
+      );
+      expect(due?.payload).toMatchObject({
+        publicationId: pub.id,
+        actorKind: 'user',
+        actorId: USER,
+        workflowId: `pub:${pub.id}:rendered-validation:${(await row(pub.id)).version}`,
+      });
+      expect(typeof due?.payload['publishedAt']).toBe('string');
+      expect(due!.availableAt.getTime()).toBeGreaterThanOrEqual(before + RENDERED_VALIDATION_DELAYS_MS[0]);
+      expect(due!.availableAt.getTime()).toBeLessThanOrEqual(Date.now() + RENDERED_VALIDATION_DELAYS_MS[0]);
+      // The re-validation: a page that changed after its first paragraph fails and the verification says so.
+      validateResult = validationOf(false);
+      const input = { ...wfInput(pub.id), publishedAt: String(due!.payload['publishedAt']) };
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({
+        outcome: 'validated',
+        ok: false,
+        verification: 'failed',
+      });
+      expect(validateInputs.at(-1)).toMatchObject({
+        destinationId,
+        url: 'https://blog.acme.example/why-ore-and-tar-last/',
+        title: article.title,
+        slug: article.slug,
+        firstParagraph: 'Ore is heavy.',
+        lastParagraph: 'Yes, mostly.',
+        draft: false, // a live article must be indexable
+      });
+      expect(await row(pub.id)).toMatchObject({ remoteVerification: 'failed', remoteVerifiedAt: null });
+      validateResult = validationOf(true);
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({
+        outcome: 'validated',
+        ok: true,
+        verification: 'verified',
+      });
+      expect((await row(pub.id)).remoteVerification).toBe('verified');
+      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(3);
+      // The on-demand validation records the same way.
+      validateResult = validationOf(false);
+      await run(tenantA, (tx) => publicationService.validateRendered(A, { publicationId: pub.id }, tx));
+      expect((await row(pub.id)).remoteVerification).toBe('failed');
+      // A foreign tenant's publication is NOT_FOUND before any page is fetched.
+      const fetches = validateInputs.length;
+      await expect(
+        inTenant(tenantB, () =>
+          runtime.renderedValidation.validateRenderedPublication({ ...input, tenantId: tenantB }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(validateInputs.length).toBe(fetches);
+    });
+
+    it('revert: the website confirms the draft, a fresh read-back is recorded, the status is reverted and a second revert is refused', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const revert = await run(tenantA, (tx) =>
+        publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'wrong launch date' }, tx),
+      );
+      unpublishResult = {
+        outcome: 'done',
+        readback: readbackOf('draft', { modifiedAt: '2026-10-02T11:00:00.000Z' }),
+      };
+      const input = changeInput(pub.id, revert.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A));
+      expect(result).toMatchObject({ outcome: 'done', readback: { status: 'draft' } });
+      if (result.outcome !== 'done') throw new Error('expected done');
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'published', changed: true });
+      expect(await row(pub.id)).toMatchObject({ state: 'published', remoteStatus: 'reverted' });
+      const readbacks = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback');
+      expect(readbacks).toHaveLength(2);
+      expect(readbacks.at(-1)?.payload).toMatchObject({
+        status: 'draft',
+        changeId: revert.changeId,
+        modifiedAt: '2026-10-02T11:00:00.000Z',
+      });
+      expect((await evidenceOf(pub.id)).find((e) => e.kind === 'remote_unpublish')?.payload).toMatchObject({
+        changeId: revert.changeId,
+        readback: { status: 'draft' },
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'again' }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'publicationId', issue: 'not_live:reverted' }] });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.renderedValidation.validateRenderedPublication({
+            ...wfInput(pub.id),
+            publishedAt: new Date().toISOString(),
+          }),
+        ),
+      ).toEqual({ outcome: 'skipped', reason: 'remote_reverted' });
+      const calendar = await inTenant(tenantA, () =>
+        publicationService.calendarRange(
+          brandA,
+          new Date(Date.now() - 86_400_000),
+          new Date(Date.now() + 86_400_000),
+        ),
+      );
+      expect(calendar.find((c) => c.publicationId === pub.id)?.remoteStatus).toBe('reverted');
+    });
+
+    it('edit (RA-12): the stored hash and modified instant are the precondition; a conflict refreshes the read-back; a write that replaced a site change is succeeded as conflict_overwritten with the lost revision as evidence', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      // 1. A conflict: nothing written; the current remote travels back and becomes the stored read-back.
+      const first = await run(tenantA, (tx) =>
+        publicationService.editRemote(
+          A,
+          { publicationId: pub.id, text: '<p>Ore is heavy and tar is sticky.</p>' },
+          tx,
+        ),
+      );
+      const current = readbackOf('publish', {
+        contentHash: 'c'.repeat(64),
+        modifiedAt: '2026-10-02T12:00:00.000Z',
+      });
+      editResult = {
+        outcome: 'rejected',
+        code: 'conflict',
+        message: 'the article changed on the site',
+        readback: current,
+      };
+      const conflictInput = changeInput(pub.id, first.changeId);
+      const conflict = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(conflictInput, A),
+      );
+      expect(conflict).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(editInputs.at(-1)).toMatchObject({
+        destinationId,
+        remoteId: '42',
+        expectedHash: 'a'.repeat(64),
+        expectedModifiedAt: '2026-10-02T10:00:00.000Z',
+        html: '<p>Ore is heavy and tar is sticky.</p>',
+      });
+      if (conflict.outcome === 'skipped') throw new Error('unexpected skip');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...conflictInput, result: conflict }),
+      );
+      expect((await changesOf(pub.id)).find((c) => c.id === first.changeId)).toMatchObject({
+        state: 'failed',
+        errorCode: 'conflict',
+      });
+      const refreshed = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(refreshed?.payload).toMatchObject({
+        ...current,
+        changeId: first.changeId,
+        refreshedAfter: 'conflict',
+      });
+      // 2. The next edit compares against what the site holds now, not the stale hash.
+      const second = await run(tenantA, (tx) =>
+        publicationService.editRemote(
+          A,
+          { publicationId: pub.id, text: '<p>Written over the window.</p>' },
+          tx,
+        ),
+      );
+      const previous = current;
+      const replaced = readbackOf('publish', {
+        contentHash: 'd'.repeat(64),
+        modifiedAt: '2026-10-02T12:30:00.000Z',
+      });
+      const after = readbackOf('publish', {
+        contentHash: 'e'.repeat(64),
+        modifiedAt: '2026-10-02T13:00:00.000Z',
+      });
+      editResult = {
+        outcome: 'done',
+        readback: after,
+        readbackVerification: { ...verified, matched: ['content', 'modifiedAt'] },
+        overwritten: { previous, replaced },
+      };
+      const writeInput = changeInput(pub.id, second.changeId);
+      const written = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(writeInput, A),
+      );
+      expect(editInputs.at(-1)).toMatchObject({
+        expectedHash: 'c'.repeat(64),
+        expectedModifiedAt: '2026-10-02T12:00:00.000Z',
+      });
+      if (written.outcome === 'skipped') throw new Error('unexpected skip');
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...writeInput, result: written }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'published', changed: true });
+      const change = (await changesOf(pub.id)).find((c) => c.id === second.changeId);
+      expect(change).toMatchObject({ state: 'succeeded', errorCode: 'conflict_overwritten' });
+      expect(change?.errorDetail).toContain('replaced a change made on the site');
+      expect((await evidenceOf(pub.id)).find((e) => e.kind === 'remote_edit')?.payload).toMatchObject({
+        changeId: second.changeId,
+        readback: after,
+        overwritten: { previous, replaced },
+      });
+      expect(
+        (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1)?.payload,
+      ).toMatchObject({
+        contentHash: 'e'.repeat(64),
+        changeId: second.changeId,
+      });
+      expect(await row(pub.id)).toMatchObject({ remoteStatus: 'live', remoteVerification: 'verified' });
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto.remote.changes[0]).toMatchObject({
+        id: second.changeId,
+        state: 'succeeded',
+        errorCode: 'conflict_overwritten',
+      });
+      expect(dto.remote.currentText).toBe('<p>Written over the window.</p>');
     });
   });
 

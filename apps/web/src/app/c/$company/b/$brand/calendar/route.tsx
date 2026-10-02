@@ -215,7 +215,7 @@ export function CalendarRoute() {
               data-testid="day-list"
             >
               {dayItems.map((p) => {
-                const chip = publicationChip(p.state);
+                const chip = publicationChip(p.state, p.remoteStatus);
                 const channel = p.channelConnectionId ? channelMap.get(p.channelConnectionId) : undefined;
                 const website = p.destinationId
                   ? destinationLabel(destinationMap.get(p.destinationId), p.destinationId)

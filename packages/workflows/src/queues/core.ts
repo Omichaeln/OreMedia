@@ -10,6 +10,8 @@ export {
   publicationRemoteEditWorkflowV1,
 } from '../publication-remote-change.workflow.v1';
 export { publicationSweeperWorkflowV1 } from '../publication-sweeper.workflow.v1';
+// RA-04: the delayed re-validation of a live article's rendered page.
+export { renderedValidationWorkflowV1 } from '../rendered-validation.workflow.v1';
 export { remoteChangeSweepWorkflowV1 } from '../remote-change-sweep.workflow.v1';
 export { connectChoicePurgeWorkflowV1 } from '../connect-choice-purge.workflow.v1';
 export { tokenRefreshWorkflowV1 } from '../token-refresh.workflow.v1';

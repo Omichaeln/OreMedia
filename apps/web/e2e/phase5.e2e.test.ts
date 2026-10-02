@@ -85,7 +85,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     const list = page.getByTestId('day-list');
     await expect.poll(() => list.getByRole('button').count(), { timeout: 15_000 }).toBe(6);
     const text = await list.textContent();
-    for (const label of ['Held', 'Outcome unknown', 'Dispatching', 'Published', 'Failed'])
+    for (const label of ['Held', 'Outcome unknown', 'Dispatching', 'Published', 'Failed', 'Live'])
       expect(text).toContain(label);
   }, 30_000);
 
