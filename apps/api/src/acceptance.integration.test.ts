@@ -2,9 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
-import { brandVersions, policyVersions } from '@oremedia/db/schema/brand';
+import { brands, brandVersions, policyVersions } from '@oremedia/db/schema/brand';
 import { memberships, sessions, tenants, users } from '@oremedia/db/schema/access';
+import { runInTenant } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
+import { registerSkillResolver, type ResolvedSkill } from '@oremedia/ai';
+import { budgets } from '@oremedia/module-billing';
 import {
   configureCredentialBroker,
   configurePublishingProviders,
@@ -15,8 +18,14 @@ import {
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
 import type { AcceptanceConfig } from '../../../tooling/scripts/acceptance/config';
-import { isolationChecks, journeyChecks, sessionKey, signInFixtures } from './acceptance/checks';
-import { mutate, signInWithPassword } from './acceptance/client';
+import {
+  isolationChecks,
+  journeyChecks,
+  prepareModelEvalBudget,
+  sessionKey,
+  signInFixtures,
+} from './acceptance/checks';
+import { mutate, query, signInWithPassword } from './acceptance/client';
 import {
   FIXTURE_ROLES,
   FIXTURE_TENANTS,
@@ -102,6 +111,8 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
       // The operator (owner, no password) plus one active member per role; every invitation was claimed.
       expect(rows).toHaveLength(FIXTURE_ROLES.length + 1);
       expect(rows.every((m) => m.status === 'active')).toBe(true);
+      const [brand] = await tdb.db.select().from(brands).where(eq(brands.id, t.brandId));
+      expect(brand).toMatchObject({ status: 'active', publishedVersionId: t.publishedVersionId });
       const [version] = await tdb.db
         .select()
         .from(brandVersions)
@@ -230,6 +241,90 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     ]);
     const everything = journey.map((r) => r.detail).join('\n');
     expect(everything).not.toMatch(/\b(rl|ses)_/);
+  }, 120_000);
+
+  /**
+   * The copywriting skill a run would resolve, as the agents module's own tests stand it in (a published, bound
+   * skill needs a graded evaluation, which worker-core runs with a model): its budget is what a run reserves.
+   */
+  const copywritingSkill: ResolvedSkill = {
+    skillVersionId: 'sv_01HACCEPTANCESKILL00000000',
+    skillId: 'skl_01HACCEPTANCESKILL0000000',
+    key: 'acceptance-copywriting',
+    versionNumber: 1,
+    manifest: {
+      schemaVersion: 1,
+      key: 'acceptance-copywriting',
+      title: 'Acceptance copywriting',
+      description: 'test',
+      taskKinds: ['copywriting'],
+      inputSchema: {},
+      outputSchema: { type: 'object' },
+      requiredContext: ['brand_snapshot'],
+      allowedTools: ['brand.getSnapshot', 'facts.list'],
+      budgets: {
+        maxSteps: 6,
+        maxTokens: 100_000,
+        maxCostMicros: 2_000_000,
+        maxVariants: 3,
+        deadlineSeconds: 900,
+      },
+      modelCompatibility: [],
+      instructionsPath: 'SKILL.md',
+    },
+    instructions: 'Write on-brand copy citing approved facts.',
+    references: [],
+  };
+
+  it('model evaluation: the budget preparation makes room for the run under a tight brand day limit', async () => {
+    configureRateLimiter();
+    registerSkillResolver(async () => [copywritingSkill]);
+    const [a] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [a]);
+    const owner = signedIn.get(sessionKey(a, 'owner'))!;
+    const limits = {
+      brandId: a.brandId,
+      servicePrincipalId: a.servicePrincipalId,
+      taskKind: 'copywriting',
+      requestedAutonomy: 'create' as const,
+    };
+    type Limits = { reservedMicros: number; canStart: boolean; blockers: Array<{ code: string }> };
+    // A day limit below what one run reserves: the api refuses the start, and the reservation itself.
+    expect(
+      (await mutate(owner, 'agents.budgets.setLimit', { brandId: a.brandId, period: 'day', limitMicros: 1 }))
+        .status,
+    ).toBe(200);
+    const tight = (await query<Limits>(owner, 'agents.runs.effectiveLimits', limits)).data!;
+    expect(tight.reservedMicros).toBeGreaterThan(0);
+    expect(tight.canStart).toBe(false);
+    expect(tight.blockers.map((b) => b.code)).toContain('budget_exhausted_day');
+    const ctx = {
+      tenantId: a.tenantId,
+      actor: { kind: 'user' as const, id: a.members.owner.userId },
+      brandIds: 'all' as const,
+      correlationId: 'acceptance-test',
+    };
+    const deadline = new Date(Date.now() + 60_000);
+    await expect(
+      runInTenant(ctx, () =>
+        budgets.reserveSpend(a.brandId, 'run_acceptance_tight', tight.reservedMicros, deadline),
+      ),
+    ).rejects.toMatchObject({ code: 'BUDGET_EXHAUSTED' });
+
+    const room = await prepareModelEvalBudget(owner, a, 'copywriting', 250_000);
+    expect(room, JSON.stringify(room)).toMatchObject({ ok: true, reservedMicros: tight.reservedMicros });
+    if (!room.ok) throw new Error(room.reason);
+    expect(room.dayLimitMicros).toBeGreaterThanOrEqual(tight.reservedMicros * 2);
+    const ready = (await query<Limits>(owner, 'agents.runs.effectiveLimits', limits)).data!;
+    expect(ready.canStart).toBe(true);
+    // The reservation a run makes now fits, and a second preparation accounts for what it still holds.
+    const held = await runInTenant(ctx, () =>
+      budgets.reserveSpend(a.brandId, 'run_acceptance_held', tight.reservedMicros, deadline),
+    );
+    expect(held.reservedMicros).toBe(tight.reservedMicros);
+    const again = await prepareModelEvalBudget(owner, a, 'copywriting', 250_000);
+    expect(again).toMatchObject({ ok: true });
+    expect((await query<Limits>(owner, 'agents.runs.effectiveLimits', limits)).data!.canStart).toBe(true);
   }, 120_000);
 
   it('teardown locks every fixture account: the passwords stop working and every session is revoked', async () => {

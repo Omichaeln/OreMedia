@@ -236,6 +236,71 @@ export async function journeyChecks(
   return out;
 }
 
+interface EffectiveLimits {
+  budget: { maxCostMicros: number } | null;
+  reservedMicros: number;
+  spend: {
+    month: { limitMicros: number; remainingMicros: number };
+    day: { limitMicros: number; remainingMicros: number };
+  };
+  blockers: Array<{ code: string; message: string }>;
+  canStart: boolean;
+}
+
+/**
+ * Room for one evaluation run: a run reserves its whole budget (`budget.maxCostMicros`, the skill's and the
+ * entitlement's, not the eval's) against the brand's day limit and the company's month limit, both net of what
+ * earlier runs still hold or have settled today (the fixture brand is reused across runs). The brand's day limit is
+ * set to the larger of the eval budget and twice the reservation plus today's committed spend; the company's month
+ * limit is raised the same way, up to the entitlement (which the api caps it at). Returns the api's own blockers
+ * when a start would still be refused, so the line names the reason instead of a budget_exhausted run.
+ */
+export async function prepareModelEvalBudget(
+  api: ApiSession,
+  tenant: FixtureTenant,
+  taskKind: string,
+  budgetMicros: number,
+): Promise<{ ok: true; reservedMicros: number; dayLimitMicros: number } | { ok: false; reason: string }> {
+  const input = {
+    brandId: tenant.brandId,
+    servicePrincipalId: tenant.servicePrincipalId,
+    taskKind,
+    requestedAutonomy: 'create' as const,
+  };
+  const before = await query<EffectiveLimits>(api, 'agents.runs.effectiveLimits', input);
+  if (!before.data) return { ok: false, reason: `effective limits: ${before.error}` };
+  const reserved = before.data.reservedMicros || before.data.budget?.maxCostMicros || 0;
+  const committedToday = Math.max(
+    0,
+    before.data.spend.day.limitMicros - before.data.spend.day.remainingMicros,
+  );
+  const committedMonth = Math.max(
+    0,
+    before.data.spend.month.limitMicros - before.data.spend.month.remainingMicros,
+  );
+  const dayLimitMicros = Math.max(budgetMicros, reserved * 2 + committedToday);
+  const monthLimitMicros = Math.max(before.data.spend.month.limitMicros, reserved * 2 + committedMonth);
+  for (const [period, limitMicros] of [
+    ['day', dayLimitMicros],
+    ['month', monthLimitMicros],
+  ] as const) {
+    const set = await mutate(api, 'agents.budgets.setLimit', {
+      brandId: tenant.brandId,
+      period,
+      limitMicros,
+    });
+    if (set.status !== 200) return { ok: false, reason: `${period} limit: ${set.error}` };
+  }
+  const after = await query<EffectiveLimits>(api, 'agents.runs.effectiveLimits', input);
+  if (!after.data) return { ok: false, reason: `effective limits: ${after.error}` };
+  if (!after.data.canStart)
+    return {
+      ok: false,
+      reason: `start refused: ${after.data.blockers.map((b) => `${b.code} (${b.message})`).join('; ')}`,
+    };
+  return { ok: true, reservedMicros: reserved, dayLimitMicros };
+}
+
 const FINISHED = new Set([
   'completed',
   'failed',
@@ -280,13 +345,9 @@ export async function modelEvalChecks(
       continue;
     }
     const api = { ...owner, baseUrl: cfg.apiBaseUrl };
-    const limit = await mutate(api, 'agents.budgets.setLimit', {
-      brandId: tenant.brandId,
-      period: 'day',
-      limitMicros: cfg.modelEval.budgetMicros,
-    });
-    if (limit.status !== 200) {
-      result.reason = `budget limit: ${limit.error}`;
+    const room = await prepareModelEvalBudget(api, tenant, taskKind, cfg.modelEval.budgetMicros);
+    if (!room.ok) {
+      result.reason = room.reason;
       continue;
     }
     const started = await mutate<{ runId: string; state: string }>(api, 'agents.runs.start', {
@@ -381,7 +442,14 @@ export async function ensureFontAssetVersion(
     weights: [400],
     styles: ['normal'],
   });
-  if (imported.status !== 200) return { assetVersionId: null, detail: `font import: ${imported.error}` };
+  if (imported.status !== 200)
+    return {
+      assetVersionId: null,
+      detail:
+        imported.status >= 500
+          ? `font import: ${imported.error}; the api downloads the family and writes it to the object store itself, so an unreachable or placeholder OBJECT_STORE_ENDPOINT answers INTERNAL here (see smoke:upload:put)`
+          : `font import: ${imported.error}`,
+    };
   const deadline = Date.now() + (cfg.ingestTimeoutMs ?? 120_000);
   for (;;) {
     const face = (await faces()).find((f) => f.state === 'approved' || f.state === 'pending_review');
