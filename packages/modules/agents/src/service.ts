@@ -241,6 +241,22 @@ export const agentsService = {
             issue: `${input.taskKind} runs start from their own command (brand.onboarding.start)`,
           },
         ]);
+      // RA-07: effectiveLimits names a missing skill as a blocker, so the start refuses the same condition rather
+      // than creating a run the workflow would resolve to no skill, no tools and the platform's default budget.
+      const parsed = RunStart.parse(input);
+      const taskKind = TaskKind.safeParse(parsed.taskKind);
+      if (taskKind.success) {
+        const { tenantId } = requireTenant();
+        const skills = await resolveSkills(
+          { tenantId, brandId: parsed.brandId, taskKind: taskKind.data, actor },
+          tx,
+        );
+        if (skills.length === 0)
+          throw new ValidationFailedError(
+            [{ path: 'taskKind', issue: 'no_skill' }],
+            'No published skill serves this task kind for the brand',
+          );
+      }
       return startRun(actor, input, tx, opts);
     },
 

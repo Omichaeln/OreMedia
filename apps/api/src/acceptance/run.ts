@@ -181,7 +181,7 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
     if (cfg.load.enabled) loadOk = await loadTest(cfg, sessions, tenants, print);
     else print('LOAD_SKIP LOAD_ENABLED is not 1');
     if (cfg.modelEval.enabled) {
-      const evals = await modelEvalChecks(cfg, sessions, tenantA);
+      const evals = await modelEvalChecks(cfg, sessions, tenantA, print);
       for (const r of evals) print(formatModelEval(r));
       evalOk = evals.every((r) => r.ok);
     } else print('MODEL_EVAL_SKIP MODEL_EVAL_ENABLED is not 1');

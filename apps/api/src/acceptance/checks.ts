@@ -9,6 +9,7 @@ import {
 } from '../../../../tooling/scripts/acceptance/report';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
+import { loadBuiltinPackage } from '@oremedia/module-skills';
 import { mutate, query, signInWithPassword, sleep, type ApiSession } from './client';
 import type { FixtureRole, FixtureTenant } from './fixtures';
 
@@ -236,6 +237,111 @@ export async function journeyChecks(
   return out;
 }
 
+/** The built-in skill each Release 1 task kind is evaluated with (packages/modules/skills/builtin). */
+const BUILTIN_SKILL_FOR_TASK_KIND: Record<string, 'brand-copywriting' | 'social-layout'> = {
+  copywriting: 'brand-copywriting',
+  layout: 'social-layout',
+};
+
+interface SkillVersionSummary {
+  id: string;
+  number: number;
+  state: string;
+  version: number;
+}
+interface SkillSummary {
+  id: string;
+  key: string;
+  state: string;
+  activeVersionId: string | null;
+}
+
+/**
+ * A published skill bound to the fixture company for the task kind, the way a person does it in Settings → Skills
+ * (UX-17): the built-in package is imported at tenant scope, its evaluation requested (worker-core grades it with
+ * the model, so this runs only with the model evaluation), then published and bound tenant-wide. Re-runs find the
+ * company's copy: published → bound again (idempotent); still being evaluated → waited for; failed → reported.
+ */
+export async function ensureTaskKindSkill(
+  api: ApiSession,
+  tenant: FixtureTenant,
+  taskKind: string,
+  opts: { timeoutMs: number; pollMs?: number },
+): Promise<
+  | { ok: true; key: string; versionNumber: number; outcome: 'existing' | 'published' }
+  | { ok: false; reason: string }
+> {
+  const key = BUILTIN_SKILL_FOR_TASK_KIND[taskKind];
+  if (!key) return { ok: false, reason: `no built-in skill is known for task kind ${taskKind}` };
+  const listed = await query<{ items: SkillSummary[] }>(api, 'skills.list', {
+    scope: 'tenant',
+    page: { limit: 100 },
+  });
+  if (!listed.data) return { ok: false, reason: `skills.list: ${listed.error}` };
+  let skillId = listed.data.items.find((s) => s.key === key)?.id;
+  if (!skillId) {
+    const pkg = await loadBuiltinPackage(key);
+    const imported = await mutate<{ skillId: string; skillVersionId: string; version: number }>(
+      api,
+      'skills.import',
+      {
+        files: pkg.files,
+        scope: 'tenant',
+        cases: pkg.cases,
+      },
+    );
+    if (!imported.data) return { ok: false, reason: `skills.import: ${imported.error}` };
+    skillId = imported.data.skillId;
+  }
+  const versionsOf = async () => {
+    const got = await query<SkillSummary & { versions: SkillVersionSummary[] }>(api, 'skills.get', {
+      skillId,
+    });
+    return got.data ? got.data.versions : null;
+  };
+  const deadline = Date.now() + opts.timeoutMs;
+  for (;;) {
+    const versions = await versionsOf();
+    if (!versions) return { ok: false, reason: 'skills.get answered nothing' };
+    const latest = [...versions].sort((a, b) => b.number - a.number)[0];
+    if (!latest) return { ok: false, reason: 'the imported skill has no version' };
+    const published = versions.find((v) => v.state === 'published') ?? null;
+    const version = published ?? latest;
+    if (version.state === 'in_review') {
+      const done = await mutate(api, 'skills.versions.publish', {
+        skillVersionId: version.id,
+        expectedVersion: version.version,
+      });
+      if (done.status !== 200) return { ok: false, reason: `skills.versions.publish: ${done.error}` };
+      continue;
+    }
+    if (version.state === 'published') {
+      const bound = await mutate(api, 'skills.bindings.set', {
+        scope: 'tenant',
+        skillId,
+        skillVersionId: version.id,
+      });
+      if (bound.status !== 200) return { ok: false, reason: `skills.bindings.set: ${bound.error}` };
+      return { ok: true, key, versionNumber: version.number, outcome: published ? 'existing' : 'published' };
+    }
+    if (version.state === 'draft') {
+      // Not yet evaluated (a fresh import), or the evaluation failed and moved it back: request one (again).
+      const requested = await mutate(api, 'skills.versions.evaluate', {
+        skillVersionId: version.id,
+        expectedVersion: version.version,
+      });
+      if (requested.status !== 200)
+        return { ok: false, reason: `skills.versions.evaluate: ${requested.error}` };
+    }
+    if (Date.now() >= deadline)
+      return {
+        ok: false,
+        reason: `the ${key} evaluation did not pass within ${opts.timeoutMs / 1000} s (version ${version.number} is ${version.state}; worker-core grades it with the model)`,
+      };
+    await sleep(opts.pollMs ?? 5000);
+  }
+}
+
 interface EffectiveLimits {
   budget: { maxCostMicros: number } | null;
   reservedMicros: number;
@@ -260,7 +366,10 @@ export async function prepareModelEvalBudget(
   tenant: FixtureTenant,
   taskKind: string,
   budgetMicros: number,
-): Promise<{ ok: true; reservedMicros: number; dayLimitMicros: number } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; reservedMicros: number; dayLimitMicros: number; monthLimitMicros: number }
+  | { ok: false; reason: string }
+> {
   const input = {
     brandId: tenant.brandId,
     servicePrincipalId: tenant.servicePrincipalId,
@@ -298,7 +407,12 @@ export async function prepareModelEvalBudget(
       ok: false,
       reason: `start refused: ${after.data.blockers.map((b) => `${b.code} (${b.message})`).join('; ')}`,
     };
-  return { ok: true, reservedMicros: reserved, dayLimitMicros };
+  return {
+    ok: true,
+    reservedMicros: reserved,
+    dayLimitMicros,
+    monthLimitMicros: after.data.spend.month.limitMicros,
+  };
 }
 
 const FINISHED = new Set([
@@ -334,6 +448,7 @@ export async function modelEvalChecks(
   cfg: AcceptanceConfig,
   sessions: Sessions,
   tenant: FixtureTenant,
+  print: (line: string) => void = () => undefined,
 ): Promise<ModelEvalResult[]> {
   const owner = sessions.get(sessionKey(tenant, 'owner'));
   const out: ModelEvalResult[] = [];
@@ -345,11 +460,20 @@ export async function modelEvalChecks(
       continue;
     }
     const api = { ...owner, baseUrl: cfg.apiBaseUrl };
+    const skill = await ensureTaskKindSkill(api, tenant, taskKind, { timeoutMs: cfg.modelEval.timeoutMs });
+    if (!skill.ok) {
+      result.reason = `skill: ${skill.reason}`;
+      continue;
+    }
+    print(`ACCEPTANCE_INFO model-eval skill=${skill.key} version=${skill.versionNumber} ${skill.outcome}`);
     const room = await prepareModelEvalBudget(api, tenant, taskKind, cfg.modelEval.budgetMicros);
     if (!room.ok) {
       result.reason = room.reason;
       continue;
     }
+    print(
+      `ACCEPTANCE_INFO model-eval budget day=${room.dayLimitMicros} month=${room.monthLimitMicros} reservation=${room.reservedMicros}`,
+    );
     const started = await mutate<{ runId: string; state: string }>(api, 'agents.runs.start', {
       brandId: tenant.brandId,
       servicePrincipalId: tenant.servicePrincipalId,

@@ -19,6 +19,7 @@ import {
 import { ProviderRegistry } from '@oremedia/providers';
 import type { AcceptanceConfig } from '../../../tooling/scripts/acceptance/config';
 import {
+  ensureTaskKindSkill,
   isolationChecks,
   journeyChecks,
   prepareModelEvalBudget,
@@ -275,6 +276,40 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     instructions: 'Write on-brand copy citing approved facts.',
     references: [],
   };
+
+  it('model evaluation: the built-in copywriting skill is imported for the company and its evaluation requested, once', async () => {
+    configureRateLimiter();
+    const [a] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [a]);
+    const owner = signedIn.get(sessionKey(a, 'owner'))!;
+    type Skill = { id: string; key: string; versions: Array<{ number: number; state: string }> };
+    const tenantSkills = async () =>
+      (
+        await query<{ items: Array<{ id: string; key: string }> }>(owner, 'skills.list', {
+          scope: 'tenant',
+          page: { limit: 100 },
+        })
+      ).data!.items.filter((s) => s.key === 'brand-copywriting');
+    expect(await tenantSkills()).toEqual([]);
+    // No worker grades the evaluation here: the helper imports, requests the evaluation and reports the wait.
+    const first = await ensureTaskKindSkill(owner, a, 'copywriting', { timeoutMs: 1, pollMs: 1 });
+    expect(first).toMatchObject({ ok: false, reason: expect.stringContaining('did not pass') });
+    const [imported] = await tenantSkills();
+    expect(imported).toBeDefined();
+    const got = (await query<Skill>(owner, 'skills.get', { skillId: imported!.id })).data!;
+    expect(got.versions).toEqual([expect.objectContaining({ number: 1, state: 'sandbox_evaluation' })]);
+    // A second run finds the company's copy and imports nothing.
+    const again = await ensureTaskKindSkill(owner, a, 'copywriting', { timeoutMs: 1, pollMs: 1 });
+    expect(again).toMatchObject({ ok: false, reason: expect.stringContaining('sandbox_evaluation') });
+    expect(await tenantSkills()).toHaveLength(1);
+    expect((await query<Skill>(owner, 'skills.get', { skillId: imported!.id })).data!.versions).toHaveLength(
+      1,
+    );
+    expect(await ensureTaskKindSkill(owner, a, 'brand_review', { timeoutMs: 1 })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('no built-in skill'),
+    });
+  }, 120_000);
 
   it('model evaluation: the budget preparation makes room for the run under a tight brand day limit', async () => {
     configureRateLimiter();

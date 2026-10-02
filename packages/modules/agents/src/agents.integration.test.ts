@@ -465,6 +465,27 @@ describe('agents module (spec 12) against MySQL 8', () => {
       }
     });
 
+    it('runs.start refuses a start without a published skill, the condition effectiveLimits names (RA-07)', async () => {
+      registerSkillResolver(async () => []);
+      try {
+        const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+        expect(limits.blockers.map((b) => b.code)).toEqual(['no_skill']);
+        await expect(
+          run(tenantA, (tx) => agentsService.runs.start(A, { ...input, brief: {} }, tx)),
+        ).rejects.toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: [{ path: 'taskKind', issue: 'no_skill' }],
+        });
+      } finally {
+        registerSkillResolver(async () => [
+          skill(['brand.getSnapshot', 'facts.list', 'creative.proposeOperations']),
+        ]);
+      }
+      // With a skill the same start is accepted (what the rest of this suite relies on).
+      const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+      expect(limits.canStart).toBe(true);
+    });
+
     it('names the model-routing policy as a blocker when it would stop the start (spec 12.7)', async () => {
       setTenantRoutingPolicy(tenantA, {
         schemaVersion: 1,
