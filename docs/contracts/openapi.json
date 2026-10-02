@@ -729,6 +729,37 @@
         }
       }
     },
+    "/trpc/agents.runs.effectiveLimits": {
+      "get": {
+        "operationId": "agents.runs.effectiveLimits",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "servicePrincipalId": {
+                    "type": "string"
+                  },
+                  "taskKind": {
+                    "type": "string"
+                  },
+                  "requestedAutonomy": {
+                    "type": "string",
+                    "enum": ["assist", "create", "prepare_release", "managed_autopublish"]
+                  }
+                },
+                "required": ["brandId", "servicePrincipalId", "taskKind"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/agents.runs.get": {
       "get": {
         "operationId": "agents.runs.get",
@@ -6621,9 +6652,76 @@
                         "const": 28
                       }
                     ]
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
                   }
                 },
                 "required": ["brandId", "windowStart", "windowEnd"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/measurement.metrics.publicationValues": {
+      "get": {
+        "operationId": "measurement.metrics.publicationValues",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "windowStart": {
+                    "type": "string"
+                  },
+                  "windowEnd": {
+                    "type": "string"
+                  },
+                  "metricKeys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "ageDays": {
+                    "anyOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "const": 3
+                      },
+                      {
+                        "const": 7
+                      },
+                      {
+                        "const": 28
+                      }
+                    ]
+                  },
+                  "channelConnectionId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "windowStart", "windowEnd", "metricKeys", "page"]
               }
             }
           }
@@ -10603,6 +10701,28 @@
             }
           },
           "required": ["runId"]
+        }
+      },
+      "agents.runs.effectiveLimits": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "servicePrincipalId": {
+              "type": "string"
+            },
+            "taskKind": {
+              "type": "string"
+            },
+            "requestedAutonomy": {
+              "type": "string",
+              "enum": ["assist", "create", "prepare_release", "managed_autopublish"]
+            }
+          },
+          "required": ["brandId", "servicePrincipalId", "taskKind"]
         }
       },
       "agents.runs.get": {
@@ -15232,9 +15352,67 @@
                   "const": 28
                 }
               ]
+            },
+            "channelConnectionId": {
+              "type": "string"
             }
           },
           "required": ["brandId", "windowStart", "windowEnd"]
+        }
+      },
+      "measurement.metrics.publicationValues": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "windowStart": {
+              "type": "string"
+            },
+            "windowEnd": {
+              "type": "string"
+            },
+            "metricKeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ageDays": {
+              "anyOf": [
+                {
+                  "const": 1
+                },
+                {
+                  "const": 3
+                },
+                {
+                  "const": 7
+                },
+                {
+                  "const": 28
+                }
+              ]
+            },
+            "channelConnectionId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "windowStart", "windowEnd", "metricKeys", "page"]
         }
       },
       "measurement.metrics.query": {

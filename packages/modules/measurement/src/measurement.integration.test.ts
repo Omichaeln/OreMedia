@@ -663,6 +663,45 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
       ).rejects.toBeInstanceOf(NotFoundError);
     });
 
+    it('the per-publication values page through every released publication newest first, the population named on each page', async () => {
+      now = new Date(T0.getTime() + 25 * HOUR);
+      const input = {
+        brandId: brandA,
+        metricKeys: ['impressionCount'],
+        windowStart: new Date(T0.getTime() - HOUR).toISOString(),
+        windowEnd: new Date(T0.getTime() + 24 * HOUR).toISOString(),
+      };
+      // Two released publications (pubA and the removed one), one per page: two pages, then the end.
+      const first = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 1 } }),
+      );
+      expect(first.subjectsTotal).toBe(2);
+      expect(first.nextCursor).not.toBeNull();
+      const second = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 1, cursor: first.nextCursor ?? undefined } }),
+      );
+      expect(second).toMatchObject({ subjectsTotal: 2, nextCursor: null });
+      // The removed post has no number: only pubA's value comes back, from whichever page holds it.
+      const values = [...first.items, ...second.items];
+      expect(values.map((v) => v.subjectId)).toEqual([pubA]);
+      expect(values[0]).toMatchObject({ metricKey: 'impressionCount', value: 1000 });
+      // One page holds both when the limit allows; a channel with nothing released holds none.
+      const whole = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 50 } }),
+      );
+      expect(whole).toMatchObject({ subjectsTotal: 2, nextCursor: null });
+      expect(whole.items.map((v) => v.subjectId)).toEqual([pubA]);
+      const none = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, channelConnectionId: 'cc_none', page: { limit: 50 } }),
+      );
+      expect(none).toMatchObject({ items: [], subjectsTotal: 0, nextCursor: null });
+      await expect(
+        inTenant(tenantA, () =>
+          metrics.publicationValues(A, { ...input, brandId: brandB, page: { limit: 50 } }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
     it('groups the window’s publications by their captured attributes with the pooled rate of each value beside the brand’s', async () => {
       now = new Date(T0.getTime() + 25 * HOUR);
       const [row] = await tdb.db.select().from(publications).where(eq(publications.id, pubA));

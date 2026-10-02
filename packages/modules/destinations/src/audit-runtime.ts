@@ -18,6 +18,7 @@ import {
   type SeoAuditPlanV1,
   type SeoAuditRuntimeV1,
   type SeoAuditSweepInputV1,
+  type SeoAuditTargetV1,
 } from '@oremedia/contracts/seo-audit';
 import { ValidationFailedError } from '@oremedia/contracts/errors';
 import { requireTenant, runAsPlatform, withTransaction, type Tx } from '@oremedia/db';
@@ -67,6 +68,36 @@ const SITEMAP_INDEX_MAX = 5;
 /** A scheduled run is skipped when any run started inside this window (an on-demand run this week suffices). */
 const SCHEDULED_REPEAT_MS = 24 * 3_600_000;
 const DAY_MS = 86_400_000;
+
+/**
+ * A destination's audit runs past their retention (D-17): the policy's retentionDays when `retain` is allowed
+ * (runs started before the cut-off go), else the last SEO_AUDIT_KEEP_RUNS runs per destination are kept. A
+ * running run stays either way. The same rule serves the run's prune and the platform retention sweep.
+ */
+export async function seoAuditRunsToPrune(
+  row: { id: string; brandId: string; kind: string },
+  now: Date,
+  tx?: Tx,
+): Promise<{ ids: string[]; reason: string }> {
+  const decision = sourceUseDecision(
+    await policiesRepo.findByKey(row.brandId, row.kind, CMS_AUDIT_DATA_TYPE, tx),
+    'retain',
+    now,
+  );
+  const days = decision.allowed && decision.policy?.retentionDays ? decision.policy.retentionDays : null;
+  const cutoff = days ? new Date(now.getTime() - days * DAY_MS) : null;
+  // By the policy, every run started before the cut-off; by the keep rule, what lies past the newest kept runs.
+  const runs = (
+    cutoff
+      ? await runsRepo.listStartedBefore(row.brandId, row.id, cutoff, tx)
+      : await runsRepo.listForDestination(row.brandId, row.id, 200, tx)
+  ).filter((r) => r.outcome !== 'running');
+  const doomed = cutoff ? runs : runs.slice(SEO_AUDIT_KEEP_RUNS);
+  return {
+    ids: doomed.map((r) => r.id),
+    reason: cutoff ? `cutoff=${cutoff.toISOString()},retentionDays=${days}` : `keep=${SEO_AUDIT_KEEP_RUNS}`,
+  };
+}
 
 export interface SeoAuditRuntimeOptions {
   now?: () => Date;
@@ -268,7 +299,16 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
 
   return {
     listSeoAuditTargets: ({ correlationId }: SeoAuditSweepInputV1) =>
-      runAsPlatform(AUDIT_JOB, correlationId, () => targetsRepo.listTargets(SEO_AUDIT_DESTINATION_KIND)),
+      runAsPlatform(AUDIT_JOB, correlationId, async () => {
+        // Paged to the end: a deployment past one batch is read whole, references only.
+        const targets: SeoAuditTargetV1[] = [];
+        for (let cursor: string | undefined; ;) {
+          const page = await targetsRepo.listTargets(SEO_AUDIT_DESTINATION_KIND, { cursor });
+          targets.push(...page.items);
+          if (!page.nextCursor) return targets;
+          cursor = page.nextCursor;
+        }
+      }),
 
     /**
      * Every skip closes the API's on-demand row (when the plan names one), so a run never outlives its workflow,
@@ -460,20 +500,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
      */
     async pruneSeoAudits({ destinationId, now: at }: SeoAuditInputV1) {
       const row = await destinationsRepo.getById(destinationId);
-      const decision = sourceUseDecision(
-        await policiesRepo.findByKey(row.brandId, row.kind, CMS_AUDIT_DATA_TYPE),
-        'retain',
-        new Date(at),
-      );
-      const days = decision.allowed && decision.policy?.retentionDays ? decision.policy.retentionDays : null;
-      const runs = (await runsRepo.listForDestination(row.brandId, row.id, 200)).filter(
-        (r) => r.outcome !== 'running',
-      );
-      const cutoff = days ? new Date(Date.parse(at) - days * DAY_MS) : null;
-      const doomed = cutoff
-        ? runs.filter((r) => r.startedAt.getTime() < cutoff.getTime())
-        : runs.slice(SEO_AUDIT_KEEP_RUNS);
-      const ids = doomed.map((r) => r.id);
+      const { ids, reason } = await seoAuditRunsToPrune(row, new Date(at));
       const deleted = await withTransaction(async (tx) => {
         await pagesRepo.deleteForRuns(row.brandId, ids, tx);
         const n = await runsRepo.deleteRuns(row.brandId, ids, tx);
@@ -489,9 +516,7 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
               kind: row.kind,
               count: n,
               scope: CMS_AUDIT_DATA_TYPE,
-              reason: cutoff
-                ? `cutoff=${cutoff.toISOString()},retentionDays=${days}`
-                : `keep=${SEO_AUDIT_KEEP_RUNS}`,
+              reason,
             },
           );
         return n;

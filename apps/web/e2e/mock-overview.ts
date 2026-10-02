@@ -6,6 +6,7 @@ import {
 } from '@oremedia/contracts/destinations';
 import {
   COMPARISON_MINIMUM_SAMPLE,
+  QUERY_SUBJECTS_MAX,
   type MetricAggregateV1,
   type MetricValueV1,
 } from '@oremedia/contracts/measurement';
@@ -58,6 +59,8 @@ interface BrandSummaryOut {
     change: number | null;
   }>;
   sample: { current: number; previous: number; minimum: number; sufficient: boolean };
+  subjectsTotal: number;
+  truncated: boolean;
 }
 /** The procedures the overview composes, as createCallerFactory hands them for one context. */
 export interface OverviewCallers {
@@ -170,19 +173,21 @@ export function overviewRouters({ router, query }: OverviewBuilders, callers: Ov
             .map((d) => d.key),
         ),
       ].slice(0, 50);
-      const values =
-        current.length > 0 && keys.length > 0
-          ? (
-              await measurement.metrics.query({
-                brandId: input.brandId,
-                subjectType: 'publication',
-                subjectIds: current.slice(0, 200).map((p) => p.publicationId),
-                metricKeys: keys,
-                ...window,
-                grouping: 'subject',
-              })
-            ).values
-          : [];
+      // As the server's population query: every released post, read in query-sized chunks (no newest-200 cut).
+      const values: MetricValueV1[] = [];
+      for (let i = 0; keys.length > 0 && i < current.length; i += QUERY_SUBJECTS_MAX)
+        values.push(
+          ...(
+            await measurement.metrics.query({
+              brandId: input.brandId,
+              subjectType: 'publication',
+              subjectIds: current.slice(i, i + QUERY_SUBJECTS_MAX).map((p) => p.publicationId),
+              metricKeys: keys,
+              ...window,
+              grouping: 'subject',
+            })
+          ).values,
+        );
       const sources: OverviewSourceV1[] = channels.map((c) =>
         channelSource(c, current, previous, values, COMPARISON_MINIMUM_SAMPLE),
       );

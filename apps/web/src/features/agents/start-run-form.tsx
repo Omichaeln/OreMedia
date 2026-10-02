@@ -6,11 +6,12 @@ import { TaskKind } from '@oremedia/contracts/skills';
 import { Button, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
-import { toUiError } from '../../lib/errors';
+import { denialOf, toUiError } from '../../lib/errors';
 import { intentContext, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { EffectiveLimits } from './effective-limits';
 import { SchemaFields, briefFromValues, type BriefValues, type ObjectSchema } from './schema-fields';
-import { useAgentPrincipals, useTaskKinds } from './use-agent-runs';
+import { useAgentPrincipals, useEffectiveLimits, useTaskKinds } from './use-agent-runs';
 
 export interface StartRunFormProps {
   brandId: string;
@@ -27,7 +28,9 @@ const COMMAND_ONLY: ReadonlySet<string> = new Set(['brand_onboarding']);
  * Spec 12.5 through the skill, not the API (UX-08): the principal is picked from those granted this brand, the task
  * kind from those a published skill serves here, and the brief is the skill's input schema as fields. The mode
  * actually granted is min(requested, principal, tenant policy, entitlement); the server decides and the form only
- * requests, showing the principal's ceiling. One idempotency key per submission intent, renewed after success.
+ * requests, showing the principal's ceiling and, once a principal is chosen, the limits the server will hold the
+ * run to (RA-07: autonomy, budget, denied actions, blockers). One idempotency key per submission intent, renewed
+ * after success.
  */
 export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunFormProps) {
   const trpc = useTRPC();
@@ -52,6 +55,13 @@ export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunF
     }),
   );
   const principal = principals.items.find((p) => p.id === principalId) ?? null;
+  const requested = AutonomyMode.safeParse(autonomy);
+  const limits = useEffectiveLimits(
+    brandId,
+    principal?.id ?? null,
+    taskKind,
+    requested.success ? requested.data : 'create',
+  );
   const kinds = taskKinds.data?.items ?? [];
   const kind = kinds.find((k) => k.taskKind === taskKind) ?? null;
   // The first resolved skill is the one a run would use first (spec 12.3 precedence); its schema shapes the form.
@@ -75,11 +85,14 @@ export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunF
   };
   const ui = start.isError ? toUiError(start.error) : null;
   const fieldIssue = (path: string) => ui?.details.find((d) => d.path === path)?.issue;
+  const denial = ui ? denialOf(ui) : null;
   const blocked = !principal
     ? 'Choose a service principal'
     : !skill
       ? 'No published skill serves this task kind for the brand'
-      : undefined;
+      : limits.data && !limits.data.canStart
+        ? limits.data.blockers[0]?.message
+        : undefined;
   return (
     <section aria-labelledby="start-run-title" id="start-run" className="flex flex-col gap-4">
       <h2 id="start-run-title" className="text-lg font-semibold">
@@ -187,6 +200,12 @@ export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunF
             />
           </Field>
         </div>
+        <EffectiveLimits
+          brandId={brandId}
+          servicePrincipalId={principal?.id ?? null}
+          taskKind={taskKind}
+          requestedAutonomy={requested.success ? requested.data : 'create'}
+        />
         <fieldset className="flex flex-col gap-3" data-testid="run-brief">
           <legend className="text-xs font-medium text-muted-foreground">
             Brief{skill ? ` for ${skill.title}` : ''}
@@ -208,15 +227,19 @@ export function StartRunForm({ brandId, brandName, hrefFor, initial }: StartRunF
             </p>
           )}
         </fieldset>
-        {ui && ui.kind === 'forbidden' && (
+        {denial && (
           <StatusBanner
             tone="critical"
-            title="Permission denied"
-            description={`${ui.message} Starting a run needs the agent.start_run permission for this brand and remaining generation budget on the plan.${ui.correlationId ? ` Reference ${ui.correlationId}.` : ''}`}
+            title={denial.title}
+            description={
+              ui?.code === 'FORBIDDEN'
+                ? `${denial.description} Starting a run needs the agent.start_run permission for this brand.`
+                : denial.description
+            }
             data-testid="start-denied"
           />
         )}
-        {ui && ui.kind !== 'forbidden' && ui.kind !== 'validation' && (
+        {ui && !denial && ui.kind !== 'validation' && (
           <RequestError error={start.error} title="The run did not start" />
         )}
         {ui && ui.kind === 'validation' && !ui.details.length && (

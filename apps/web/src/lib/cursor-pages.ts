@@ -1,5 +1,5 @@
 import { useInfiniteQuery, type QueryKey } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 
 interface CursorPage<T> {
   items: T[];
@@ -14,6 +14,11 @@ export interface CursorPagesOptions<T> {
   enabled?: boolean;
   /** A fixed interval, or one decided from the rows fetched so far (a list that polls only while something is live). */
   refetchInterval?: number | false | ((items: T[]) => number | false);
+  /**
+   * Read every page in turn until the end, without a "load more": for a figure that must span the whole list (a
+   * window's every publication), never for a list the person scrolls. `complete` says when the last page is in.
+   */
+  readAll?: boolean;
 }
 
 const flatten = <T>(pages: Array<CursorPage<T>> | undefined): T[] => pages?.flatMap((p) => p.items) ?? [];
@@ -35,5 +40,10 @@ export function useCursorPages<T>(opts: CursorPagesOptions<T>) {
       typeof interval === 'function' ? (q) => interval(flatten(q.state.data?.pages)) : (interval ?? false),
   });
   const items = useMemo(() => flatten(query.data?.pages), [query.data]);
-  return { ...query, items };
+  const { hasNextPage, isFetchingNextPage, isError, fetchNextPage } = query;
+  useEffect(() => {
+    if (opts.readAll && hasNextPage && !isFetchingNextPage && !isError) void fetchNextPage();
+  }, [opts.readAll, hasNextPage, isFetchingNextPage, isError, fetchNextPage]);
+  const complete = query.isSuccess && !hasNextPage;
+  return { ...query, items, complete };
 }

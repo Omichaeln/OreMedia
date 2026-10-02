@@ -105,10 +105,18 @@ export interface RetentionSweepInputV1 {
   dryRun: boolean;
 }
 
+/**
+ * The class a TTL handler runs under: one of the tenant's retention_policies classes, or `source_use_policy` for
+ * rows whose retention each brand's per-destination source-use policy sets (D-17: the policy's retentionDays with
+ * `retain`, else the operational cache or keep rule); such a handler reads its own cut-offs from `now`.
+ */
+export type RetentionHandlerClass = z.infer<typeof RetentionDataClass> | 'source_use_policy';
+
 export interface RetentionClassResultV1 {
-  dataClass: z.infer<typeof RetentionDataClass>;
+  dataClass: RetentionHandlerClass;
   handler: string;
-  retentionDays: number;
+  /** The days the cut-off was taken from; null for a `source_use_policy` handler (one cut-off per destination). */
+  retentionDays: number | null;
   cutoff: string;
   /** Rows removed, or rows that would be removed in a dry run. */
   rows: number;

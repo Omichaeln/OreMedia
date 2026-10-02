@@ -6,6 +6,7 @@ import {
   isTerminalState,
   modifyBatchOf,
   needsAttention,
+  reviewedOperations,
   pendingProposal,
   proposalPayloadOf,
   recordedException,
@@ -201,8 +202,32 @@ describe('proposals', () => {
   it('the modify batch is what the server validates (origin is added by the server)', () => {
     const p = proposalPayloadOf(payload);
     expect(p).not.toBeNull();
-    const batch = JSON.parse(modifyBatchOf(p!)) as Record<string, unknown>;
+    const rows = reviewedOperations(p!.operations);
+    const batch = modifyBatchOf(p!, rows, 'Edited by me');
     expect(Object.keys(batch).sort()).toEqual(['baseRevisionId', 'documentId', 'operations', 'summary']);
-    expect(batch['documentId']).toBe('doc_1');
+    expect(batch.documentId).toBe('doc_1');
+    expect(batch.summary).toBe('Edited by me');
+  });
+
+  it('Modify reviews the operations as rows: a removed one is left out, an edited text replaces the proposed one', () => {
+    const operations = [
+      { op: 'setText', pageId: 'page_1', elementId: 'el_h', text: 'Proposed' },
+      { op: 'moveElement', pageId: 'page_1', elementId: 'el_h', x: 1, y: 2 },
+      { op: 'addPage', page: { id: 'page_2' } },
+    ];
+    const rows = reviewedOperations(operations);
+    expect(rows.map((r) => [r.label, r.target, r.text])).toEqual([
+      ['Set the text', 'element el_h on page page_1', 'Proposed'],
+      ['Move an element', 'element el_h on page page_1', null],
+      ['Add a page', 'the document', null],
+    ]);
+    const p = { documentId: 'doc_1', baseRevisionId: 'rev_1', operations, summary: 's', findings: [] };
+    const edited = rows.map((r) =>
+      r.index === 0 ? { ...r, text: 'Mine' } : r.index === 1 ? { ...r, kept: false } : r,
+    );
+    expect(modifyBatchOf(p, edited, 'Mine').operations).toEqual([
+      { op: 'setText', pageId: 'page_1', elementId: 'el_h', text: 'Mine' },
+      { op: 'addPage', page: { id: 'page_2' } },
+    ]);
   });
 });

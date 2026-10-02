@@ -9,8 +9,9 @@ import { zip } from './zip-writer';
 /**
  * Brand kit: voice and vocabulary extraction (spec 8.2 onboarding), and typography (fonts uploaded or imported from
  * Google Fonts, assigned to type roles with a live preview in the chosen font). The BUILT app at phone width against the
- * in-process mock transport: a draft carrying imported guidelines offers "Extract voice and vocabulary"; a known
- * agent principal starts a run and the page links to it; an unknown principal is refused in text; unsaved edits
+ * in-process mock transport: a draft carrying imported guidelines offers "Extract voice and vocabulary"; the
+ * principal is picked by name (RA-07: never typed as an id), one that may not edit brand standards is offered
+ * disabled with the reason, the onboarding agent starts a run and the page links to it; unsaved edits
  * must be saved or discarded first. Opt-in like the other smokes (`OREMEDIA_E2E=1`).
  */
 const enabled = process.env['OREMEDIA_E2E'] === '1';
@@ -55,16 +56,26 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
     await close();
   });
 
-  it('an unknown principal is refused in text; a known one starts the run and links to it', async () => {
+  const pickPrincipal = async () => {
+    await page.locator('#voice-extraction-principal').click();
+    await page.getByRole('option', { name: /Onboarding agent/ }).click();
+  };
+
+  it('the principal is picked by name; one that cannot edit brand standards is disabled with the reason; the onboarding agent starts the run and links to it', async () => {
     await openEditor();
+    await expect.poll(() => page.locator('#voice-extraction-principal').count(), { timeout: 15_000 }).toBe(1);
     expect(await extract().getAttribute('aria-disabled')).toBe('true'); // no principal yet
-    await page.getByLabel('Agent principal').fill('sp_unknown');
-    await extract().click();
-    await expect
-      .poll(() => page.getByText('ServicePrincipal').count(), { timeout: 15_000 })
-      .toBeGreaterThan(0);
-    expect(await page.getByText('Not started', { exact: false }).count()).toBeGreaterThan(0);
-    await page.getByLabel('Agent principal').fill('sp_e2e_onboarding');
+    expect(await page.getByText('sp_', { exact: false }).count()).toBe(0); // RA-07: no ids on the screen
+    await page.locator('#voice-extraction-principal').click();
+    const agent = page.getByRole('option', { name: /E2E agent/ });
+    expect(await agent.textContent()).toContain('cannot edit brand standards');
+    expect(await agent.getAttribute('data-disabled')).not.toBeNull();
+    await page.getByRole('option', { name: /Onboarding agent/ }).click();
+    // RA-07: the limits the server holds the onboarding run to, before it starts.
+    await expect.poll(() => page.getByTestId('effective-limits').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('effective-autonomy').textContent()).toContain('create');
+    expect(await page.getByTestId('effective-budget').textContent()).toContain('$1.50');
+    expect(await page.getByTestId('denied-actions').textContent()).toContain('None');
     await extract().click();
     const follow = page.getByRole('link', { name: 'Follow the run' });
     await follow.waitFor({ timeout: 15_000 });
@@ -76,7 +87,8 @@ describe.skipIf(!enabled)('brand kit: voice and vocabulary extraction (built app
 
   it('with unsaved edits the extraction waits until they are saved or discarded', async () => {
     await openEditor();
-    await page.getByLabel('Agent principal').fill('sp_e2e_onboarding');
+    await expect.poll(() => page.locator('#voice-extraction-principal').count(), { timeout: 15_000 }).toBe(1);
+    await pickPrincipal();
     expect(await extract().getAttribute('aria-disabled')).toBeNull();
     await page.getByLabel('Summary', { exact: true }).fill('Edited but not saved.');
     expect(await extract().getAttribute('aria-disabled')).toBe('true');

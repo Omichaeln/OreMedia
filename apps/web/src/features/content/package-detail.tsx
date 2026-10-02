@@ -136,6 +136,7 @@ function VariantRow({
           key={variant.version}
           variant={variant}
           documents={documents}
+          settingsSchema={channel?.settingsSchema ?? null}
           onDone={() => setEditing(false)}
         />
       ) : variant.destinationId ? (

@@ -5,10 +5,13 @@ import { BarSeries, Badge, Button, EmptyState, Field, Input, Skeleton, StatusBan
 import { Drawer, DrawerContent, DrawerTrigger } from '../../components/drawer';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
+import { Select } from '../../components/select';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
-import { toUiError } from '../../lib/errors';
+import { denialOf, toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { EffectiveLimits } from '../agents/effective-limits';
+import { useAgentPrincipals } from '../agents/use-agent-runs';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useCompanies } from '../portfolio/use-companies';
 import { FreshnessLine } from './freshness-line';
@@ -186,7 +189,10 @@ interface Analysis {
   asOfBefore: string | null;
 }
 
-/** Spec 16.3 on demand: the person names the analyst principal; the workflow writes insights when it completes. */
+/**
+ * Spec 16.3 on demand: the person picks the analyst principal from those granted the brand (UX-08, as the run
+ * form; never an id, RA-07) and sees what the run is held to; the workflow writes insights when it completes.
+ */
 function AnalyseNowForm({
   brandId,
   onStarted,
@@ -196,6 +202,7 @@ function AnalyseNowForm({
 }) {
   const trpc = useTRPC();
   const intent = useIntentKey();
+  const principals = useAgentPrincipals(brandId);
   const [principalId, setPrincipalId] = useState('');
   const [periodDays, setPeriodDays] = useState('7');
   const run = useMutation(
@@ -207,30 +214,62 @@ function AnalyseNowForm({
       },
     }),
   );
+  const principal = principals.items.find((p) => p.id === principalId) ?? null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const days = Number(periodDays);
-    if (!principalId.trim() || !Number.isInteger(days) || days < 1) return;
-    run.mutate({ brandId, servicePrincipalId: principalId.trim(), periodDays: days });
+    if (!principal || !Number.isInteger(days) || days < 1) return;
+    run.mutate({ brandId, servicePrincipalId: principal.id, periodDays: days });
   };
   const ui = run.isError ? toUiError(run.error) : null;
+  const denial = ui ? denialOf(ui) : null;
+  const forbidden = principals.isError && toUiError(principals.error).kind === 'forbidden';
   return (
     <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+      {principals.isPending && <Skeleton label="Loading agent principals" lines={1} />}
+      {forbidden && (
+        <StatusBanner
+          tone="critical"
+          title="Permission denied"
+          description={`${toUiError(principals.error).message} Running the analyst needs the agent.start_run permission for this brand.`}
+          data-testid="analyse-denied"
+        />
+      )}
+      {principals.isError && !forbidden && (
+        <RequestError error={principals.error} onRetry={() => void principals.refetch()} />
+      )}
+      {principals.isSuccess && principals.items.length === 0 && (
+        <StatusBanner
+          tone="warning"
+          title="No agent principal is granted this brand"
+          description="An owner or admin creates one under Settings → Members and mandates with grants for this brand; the analyst runs under a principal's grants and autonomy ceiling."
+          data-testid="analyse-no-principals"
+        />
+      )}
       <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <Field
-          label="Analyst principal"
-          htmlFor="analyse-principal"
-          hint="sp_… of the performance-review agent principal."
-          error={ui?.details.find((d) => d.path === 'servicePrincipalId')?.issue}
-        >
-          <Input
-            id="analyse-principal"
-            value={principalId}
-            onChange={(e) => setPrincipalId(e.target.value)}
-            autoComplete="off"
-            required
-          />
-        </Field>
+        {principals.isSuccess && principals.items.length > 0 && (
+          <Field
+            label="Analyst principal"
+            htmlFor="analyse-principal"
+            hint={
+              principal
+                ? `Ceiling ${principal.maxAutonomy.replace(/_/g, ' ')}; acts on this brand with ${principal.actions.join(', ')}.`
+                : 'The agent identity the analysis runs as; its grants and autonomy ceiling bound the run.'
+            }
+            error={ui?.details.find((d) => d.path === 'servicePrincipalId')?.issue}
+          >
+            <Select
+              id="analyse-principal"
+              value={principalId}
+              onValueChange={setPrincipalId}
+              placeholder="Choose a principal"
+              options={principals.items.map((p) => ({
+                value: p.id,
+                label: `${p.name} · up to ${p.maxAutonomy.replace(/_/g, ' ')}`,
+              }))}
+            />
+          </Field>
+        )}
         <Field label="Period (days)" htmlFor="analyse-days">
           <Input
             id="analyse-days"
@@ -243,21 +282,31 @@ function AnalyseNowForm({
           />
         </Field>
       </div>
-      {ui && ui.kind === 'forbidden' && (
+      <EffectiveLimits
+        brandId={brandId}
+        servicePrincipalId={principal?.id ?? null}
+        taskKind="performance_review"
+        requestedAutonomy="create"
+      />
+      {denial && (
         <StatusBanner
           tone="critical"
-          title="Permission denied"
-          description={`${ui.message} Running the analyst needs insight.manage for this brand and the brand analyst enabled for the company.`}
+          title={denial.title}
+          description={
+            ui?.code === 'FORBIDDEN'
+              ? `${denial.description} Running the analyst needs insight.manage for this brand and the brand analyst enabled for the company.`
+              : denial.description
+          }
           data-testid="analyse-denied"
         />
       )}
-      {ui && ui.kind !== 'forbidden' && <RequestError error={run.error} title="The analysis did not start" />}
+      {ui && !denial && <RequestError error={run.error} title="The analysis did not start" />}
       <div>
         <Button
           type="submit"
           variant="primary"
-          disabled={run.isPending || !principalId.trim()}
-          disabledReason={principalId.trim() ? undefined : 'Enter the analyst principal id first'}
+          disabled={run.isPending || !principal}
+          disabledReason={principal ? undefined : 'Choose the analyst principal first'}
         >
           {run.isPending ? 'Starting…' : 'Analyse now'}
         </Button>

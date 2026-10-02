@@ -262,6 +262,29 @@ export const RunApproveProposal = z.object({
   /** `modify` only: the batch the person applies in place of the proposal (validated by the creative module). */
   batch: z.unknown().optional(),
 });
+/**
+ * RA-07: what a run of `taskKind` under `servicePrincipalId` would be bound by if it started now, as runs.start and
+ * the context resolver compute it (autonomy = min(requested, principal, tenant policy, entitlement); budget =
+ * min(skill manifests, platform default, month remainder); tools = the skills' allowlists the principal's grants
+ * cover). A read for a person who may start runs on the brand (agent.start_run); the server still decides at start.
+ */
+export const RunEffectiveLimits = z.object({
+  brandId: z.string(),
+  servicePrincipalId: z.string(),
+  taskKind: z.string(),
+  requestedAutonomy: AutonomyMode.default('create'),
+});
+/** Why a start would be refused right now, in the server's own vocabulary (runs.start raises the same conditions). */
+export const RunStartBlocker = z.enum([
+  'principal_revoked',
+  'kill_switch_engaged',
+  'model_routing_denied',
+  'entitlement_exhausted',
+  'no_skill',
+  'budget_exhausted_month',
+  'budget_exhausted_day',
+]);
+export type RunStartBlocker = z.infer<typeof RunStartBlocker>;
 
 // ---- tenant model-routing policy (spec 12.7) ----
 

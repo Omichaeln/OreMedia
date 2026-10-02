@@ -21,6 +21,7 @@ export {
   STALE_FACTOR,
   type RateInput,
   type DerivedRate,
+  chunked,
 } from './normalise';
 export {
   engagementQuality,
@@ -55,6 +56,7 @@ export {
   resetCommentSinks,
   registerBrandChecker as registerMeasurementBrandChecker,
   registerPublicationSource as registerMeasurementPublicationSource,
+  releasedPublications,
   type BrandChecker as MeasurementBrandChecker,
   type PublicationSource as MeasurementPublicationSource,
   type PublicationInWindow,

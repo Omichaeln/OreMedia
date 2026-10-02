@@ -388,6 +388,128 @@ describe('agents module (spec 12) against MySQL 8', () => {
     });
   });
 
+  describe('runs.effectiveLimits (RA-07)', () => {
+    const input = {
+      brandId: brandA,
+      servicePrincipalId: spA,
+      taskKind: 'copywriting',
+      requestedAutonomy: 'managed_autopublish' as const,
+    };
+
+    it('reports the autonomy, budget, tools and blockers a start would be bound by, from the sources start uses', async () => {
+      // content.createBrief needs content.plan, which agent A is not granted: a denied action, never a widened one.
+      registerSkillResolver(async () => [
+        skill(['brand.getSnapshot', 'facts.list', 'creative.proposeOperations', 'content.createBrief']),
+      ]);
+      try {
+        const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+        expect(limits.principal).toEqual({ id: spA, name: 'agent A', maxAutonomy: 'managed_autopublish' });
+        // min(requested managed_autopublish, principal managed_autopublish, tenant prepare_release, entitlement)
+        expect(limits.autonomy).toEqual({
+          requested: 'managed_autopublish',
+          principalMax: 'managed_autopublish',
+          tenantPolicyMax: 'prepare_release',
+          entitlementMax: 'prepare_release',
+          effective: 'prepare_release',
+        });
+        expect(limits.skills).toEqual([{ key: 'test-copywriting', title: 'Test', versionNumber: 1 }]);
+        expect(limits.budget).toEqual({
+          maxSteps: 6,
+          maxTokens: 100_000,
+          maxCostMicros: 2_000_000,
+          maxVariants: 3,
+          deadlineSeconds: 900,
+        });
+        expect(limits.reservedMicros).toBe(2_000_000);
+        expect(limits.spend.day.limitMicros).toBeGreaterThanOrEqual(limits.reservedMicros);
+        expect(limits.tools).toEqual([
+          { name: 'brand.getSnapshot', action: 'brand.read', allowed: true },
+          { name: 'content.createBrief', action: 'content.plan', allowed: false },
+          { name: 'creative.proposeOperations', action: 'creative.edit', allowed: true },
+          { name: 'facts.list', action: 'brand.read', allowed: true },
+        ]);
+        expect(limits.deniedActions).toEqual(['content.plan']);
+        expect(limits.blockers).toEqual([]);
+        expect(limits.canStart).toBe(true);
+        // Nothing is reserved or written by a read.
+        const held = await tdb.db
+          .select()
+          .from(budgetReservations)
+          .where(eq(budgetReservations.tenantId, tenantA));
+        expect(held.filter((r) => r.state === 'held')).toEqual([]);
+      } finally {
+        registerSkillResolver(async () => [
+          skill(['brand.getSnapshot', 'facts.list', 'creative.proposeOperations']),
+        ]);
+      }
+    });
+
+    it('names the kill switch and a missing skill as blockers, with canStart false, as start would refuse', async () => {
+      await run(tenantA, (tx) =>
+        killSwitch.set('agent_starts', brandA, true, 'incident', { kind: 'user', id: USER }, tx),
+      );
+      registerSkillResolver(async () => []);
+      try {
+        const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+        expect(limits.blockers.map((b) => b.code)).toEqual(['kill_switch_engaged', 'no_skill']);
+        expect(limits.canStart).toBe(false);
+        expect(limits.tools).toEqual([]);
+        expect(limits.budget).not.toBeNull(); // the platform default when no skill narrows it
+      } finally {
+        registerSkillResolver(async () => [
+          skill(['brand.getSnapshot', 'facts.list', 'creative.proposeOperations']),
+        ]);
+        await run(tenantA, (tx) =>
+          killSwitch.set('agent_starts', brandA, false, null, { kind: 'user', id: USER }, tx),
+        );
+      }
+    });
+
+    it('names the model-routing policy as a blocker when it would stop the start (spec 12.7)', async () => {
+      setTenantRoutingPolicy(tenantA, {
+        schemaVersion: 1,
+        defaultModel: 'fake-model',
+        permittedVendors: ['fake', 'anthropic'],
+        permittedRegions: [],
+        deniedModels: ['fake-model'],
+      });
+      try {
+        const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+        expect(limits.blockers.map((b) => b.code)).toEqual(['model_routing_denied']);
+        expect(limits.blockers[0]?.message).toContain('fake-model');
+        expect(limits.canStart).toBe(false);
+        // The same policy refuses the start itself.
+        await expect(
+          run(tenantA, (tx) => agentsService.runs.start(A, { ...input, brief: {} }, tx)),
+        ).rejects.toMatchObject({ reason: 'model_routing_denied' });
+      } finally {
+        setTenantRoutingPolicy(tenantA, {
+          schemaVersion: 1,
+          defaultModel: 'fake-model',
+          permittedVendors: ['fake', 'anthropic'],
+          permittedRegions: [],
+          deniedModels: [],
+        });
+      }
+    });
+
+    it('is gated like start (agent.start_run) and tenant-scoped: a foreign brand or principal is NOT_FOUND', async () => {
+      const reviewer: ResolvedActor = { ...A, role: 'reviewer' };
+      await expect(
+        run(tenantA, () => agentsService.runs.effectiveLimits(reviewer, input)),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantA, () => agentsService.runs.effectiveLimits(A, { ...input, brandId: brandB })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        run(tenantA, () => agentsService.runs.effectiveLimits(A, { ...input, servicePrincipalId: spB })),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        run(tenantA, () => agentsService.runs.effectiveLimits(A, { ...input, taskKind: 'take_over' })),
+      ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    });
+  });
+
   describe('runs.start', () => {
     it('writes a planned row, audits, and an agent.run_requested outbox event whose route starts run:<id> on queue agents', async () => {
       const started = await run(tenantA, (tx) =>

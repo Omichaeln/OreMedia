@@ -118,7 +118,32 @@ export const BrandPerformanceSummary = z.object({
   windowStart: z.string().datetime(),
   windowEnd: z.string().datetime(),
   ageDays: MetricAgeDays.optional(),
+  /** One channel's released publications only (the Performance screen's channel filter); omitted, every channel. */
+  channelConnectionId: z.string().optional(),
 });
+/**
+ * The per-call bound of `MetricsQuery.subjectIds`. A window's whole population is aggregated server side in chunks
+ * of this (brandSummary, the attribute aggregate, the overview), never cut to its newest rows; the result says so
+ * with `subjectsTotal` and `truncated: false`.
+ */
+export const QUERY_SUBJECTS_MAX = 200;
+/** The internal query over a whole population (the composed read models); the public query keeps the per-call cap. */
+export const MetricsPopulationQueryV1 = MetricsQueryV1.extend({ subjectIds: z.array(z.string()).min(1) });
+export type MetricsPopulationQueryV1 = z.infer<typeof MetricsPopulationQueryV1>;
+/**
+ * The per-publication values of a window's released publications, newest first, one page of publications per call
+ * (the Performance screen reads every page): the latest fetch per (publication, metric), or the total at `ageDays`.
+ */
+export const PublicationMetricsPage = z.object({
+  brandId: z.string(),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  metricKeys: z.array(z.string()).min(1).max(50),
+  ageDays: MetricAgeDays.optional(),
+  channelConnectionId: z.string().optional(),
+  page: PageRequest,
+});
+export type PublicationMetricsPage = z.infer<typeof PublicationMetricsPage>;
 /** D-14: a comparison with fewer publications than this on either side reads "insufficient sample". */
 export const COMPARISON_MINIMUM_SAMPLE = 5;
 /** Spec 15.2: a value is stale when older than the provider's reporting latency × this factor. */

@@ -6,6 +6,7 @@ import {
   kindFor,
   aggregationFor,
   atAge,
+  chunked,
   comparableGroupFor,
   coverageOf,
   deriveRates,
@@ -271,5 +272,17 @@ describe('normalisation rules (spec 15.2)', () => {
       metricsUnavailable: ['likeCount', 'shareCount'],
       staleValues: 0,
     });
+  });
+});
+
+describe('chunked (a population read in query-sized chunks)', () => {
+  it('slices in order, the last chunk short, nothing for an empty list', () => {
+    expect(chunked([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunked([1, 2], 2)).toEqual([[1, 2]]);
+    expect(chunked([], 200)).toEqual([]);
+    const ids = Array.from({ length: 350 }, (_, i) => `pub_${i}`);
+    const chunks = chunked(ids, 200);
+    expect(chunks.map((c) => c.length)).toEqual([200, 150]);
+    expect(chunks.flat()).toEqual(ids);
   });
 });

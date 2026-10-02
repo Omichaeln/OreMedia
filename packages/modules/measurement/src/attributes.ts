@@ -119,9 +119,6 @@ export const toAttributesDto = (a: Awaited<ReturnType<CreativeAttributeRepositor
   version: a.version,
 });
 
-/** The query's subject bound (MetricsQuery: subjectIds ≤ 200). */
-const AGGREGATE_SUBJECTS_MAX = 200;
-
 export interface AttributeFeatureAggregate {
   feature: string;
   value: string;
@@ -185,7 +182,8 @@ export const attributeService = {
    * UX-12 "what the creative did": for the brand's released publications in the window, the pooled engagement
    * rate (Σ engagement ÷ Σ impressions, D-15) of the posts sharing each captured attribute value, beside the
    * brand's own pooled rate; a value below the minimum sample is listed but marked insufficient. Attributes are
-   * the captured ones (spec 16.2), never reconstructed. insight.read on the brand; a foreign brand is NOT_FOUND.
+   * the captured ones (spec 16.2), never reconstructed, and every released publication of the window counts (the
+   * outcomes are read in query-sized chunks). insight.read on the brand; a foreign brand is NOT_FOUND.
    */
   async aggregate(actor: ResolvedActor, input: z.infer<typeof CreativeAttributesAggregate>, tx?: Tx) {
     const parsed = CreativeAttributesAggregate.parse(input);
@@ -193,10 +191,7 @@ export const attributeService = {
     await policy.assert(actor, 'insight.read', brandResource(parsed.brandId), {}, tx);
     const windowStart = new Date(parsed.windowStart);
     const windowEnd = new Date(parsed.windowEnd);
-    const publications = (await releasedPublications(parsed.brandId, windowStart, windowEnd, tx)).slice(
-      0,
-      AGGREGATE_SUBJECTS_MAX,
-    );
+    const publications = await releasedPublications(parsed.brandId, windowStart, windowEnd, tx);
     const empty = {
       brandId: parsed.brandId,
       windowStart: parsed.windowStart,

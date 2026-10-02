@@ -264,7 +264,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await trend.getByText('Show as a table').click();
     const rows = trend.getByTestId('trend-table').locator('tbody tr');
     expect(await rows.count()).toBe(2);
-    expect(await rows.last().textContent()).toMatch(/1—100$/); // today: 1 post, no number, not measured yet
+    expect(await rows.last().textContent()).toMatch(/1—10$/); // today: 1 post, no number, not measured yet
     // At seven days neither post of this week is old enough, and nothing stands in for their numbers.
     await trend.getByRole('group', { name: 'Measured at' }).getByRole('button', { name: '7 days' }).click();
     await expect

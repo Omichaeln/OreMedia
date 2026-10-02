@@ -3,7 +3,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
-import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
+import { runAsPlatform, runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
@@ -16,6 +16,7 @@ import { SourceRegistry, type SourceReportRow } from '@oremedia/providers';
 import { configureSourceAvailability } from './hooks';
 import { createDestinationReportService } from './reports';
 import { MAX_REPORT_PAGES } from './report-runtime';
+import { DestinationReportTargetRepository } from './repositories';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
@@ -190,6 +191,26 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
       ]),
     );
     expect(Object.keys(targets[0] ?? {})).toEqual(['tenantId', 'destinationId']);
+  });
+
+  it('the target listing pages past its batch with a cursor, so a deployment beyond one batch is read whole', async () => {
+    const repo = new DestinationReportTargetRepository();
+    const kinds = ['search_console_site', 'ga4_property'];
+    const seen: string[] = [];
+    let pages = 0;
+    await runAsPlatform('destination-report-sweep', 'c', async () => {
+      for (let cursor: string | undefined; ;) {
+        const page = await repo.listTargets(kinds, { limit: 1, cursor });
+        pages += 1;
+        seen.push(...page.items.map((t) => t.destinationId));
+        expect(page.items.length).toBeLessThanOrEqual(1);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      expect(await repo.listTargets([], { limit: 1 })).toEqual({ items: [], nextCursor: null });
+    });
+    expect(pages).toBe(2);
+    expect(seen.sort()).toEqual([siteId, propertyId].sort());
   });
 
   it('without a policy allowing reads the plan is skipped with an audit and nothing is read (D-17)', async () => {

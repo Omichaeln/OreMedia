@@ -57,6 +57,8 @@ const brandSummary = (over: Partial<BrandSummaryResult> = {}): BrandSummaryResul
     { comparableGroup: 'rate:engagement/impressions', current: 0.05, previous: null, change: null },
   ],
   sample: { current: 6, previous: 5, minimum: 5, sufficient: true },
+  subjectsTotal: 6,
+  truncated: false,
   ...over,
 });
 const value = (over: Partial<MetricValueV1>): MetricValueV1 => ({

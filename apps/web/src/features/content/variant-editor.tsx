@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, Field, StatusBanner, Textarea } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { SchemaFields, briefFromValues, type BriefValues, type ObjectSchema } from '../agents/schema-fields';
 import { sameIdSet } from './content-helpers';
 import type { PackageDocumentDto, PackageVariantDto } from './use-content';
 
@@ -13,19 +14,17 @@ export interface VariantEditorProps {
   variant: PackageVariantDto;
   /** The revision's pinned documents with their ready exports: the only media a variant may select. */
   documents: readonly PackageDocumentDto[];
+  /** The channel capability's settings schema (RA-07), rendered as fields; null when the channel takes none. */
+  settingsSchema: Record<string, unknown> | null;
   onDone: () => void;
 }
 
-/** Provider settings are a JSON object per channel capability; anything else is refused before it is sent. */
-export function parseSettings(text: string): { ok: true; value: Record<string, unknown> } | { ok: false } {
-  if (text.trim() === '') return { ok: true, value: {} };
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false };
-    return { ok: true, value: parsed as Record<string, unknown> };
-  } catch {
-    return { ok: false };
-  }
+/** The channel's stored settings as the schema form edits them: scalars as text, missing keys left empty. */
+export function settingsValues(settings: Record<string, unknown>): BriefValues {
+  const values: BriefValues = {};
+  for (const [key, v] of Object.entries(settings))
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') values[key] = String(v);
+  return values;
 }
 
 const PUBLISH_MODE_OPTIONS = [
@@ -34,26 +33,26 @@ const PUBLISH_MODE_OPTIONS = [
 ];
 
 /**
- * Spec 14.1 channel variant editing: caption, alt texts (one per line, in media order), provider settings and the
- * media selection from the pinned revisions' ready exports. The server re-runs the channel capability check on
+ * Spec 14.1 channel variant editing: caption, alt texts (one per line, in media order), the channel's settings as
+ * the fields its capability describes (RA-07: never JSON) and the media selection from the pinned revisions' ready
+ * exports. The server re-runs the channel capability check on
  * every save and stores the findings, so the "Valid" badge is never stale after an edit. A website variant (R2-3)
  * carries the revision's article instead: the only setting is whether it lands as a draft or a live page (D-16:
  * draft by default), and it has no media or alt texts.
  */
-export function VariantEditor({ variant, documents, onDone }: VariantEditorProps) {
+export function VariantEditor({ variant, documents, settingsSchema, onDone }: VariantEditorProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [text, setText] = useState(variant.text);
   const [altTexts, setAltTexts] = useState(variant.altTexts.join('\n'));
-  const [settings, setSettings] = useState(
-    Object.keys(variant.settings).length ? JSON.stringify(variant.settings, null, 2) : '',
-  );
+  const schema = (settingsSchema ?? {}) as ObjectSchema;
+  const [settings, setSettings] = useState<BriefValues>(() => settingsValues(variant.settings));
+  const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({});
   const [exportIds, setExportIds] = useState<string[]>(variant.exportIds);
   const [publishMode, setPublishMode] = useState(
     variant.settings['publishMode'] === 'publish' ? 'publish' : 'draft',
   );
-  const [error, setError] = useState<string | null>(null);
   const website = variant.destinationId !== null;
   const update = useMutation(
     trpc.content.variants.update.mutationOptions({
@@ -68,7 +67,7 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
   const options = documents.flatMap((d) => d.exports.map((e) => ({ document: d, export: e })));
   const toggle = (id: string) =>
     setExportIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
-  const parsedSettings = parseSettings(settings);
+  const built = briefFromValues(schema, settings);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (website) {
@@ -82,12 +81,8 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
       });
       return;
     }
-    const parsed = parsedSettings;
-    if (!parsed.ok) {
-      setError('Provider settings must be a JSON object, for example {"firstComment": "…"}.');
-      return;
-    }
-    setError(null);
+    setSettingsErrors(built.errors);
+    if (Object.keys(built.errors).length > 0) return;
     update.mutate({
       channelVariantId: variant.id,
       expectedVersion: variant.version,
@@ -96,7 +91,7 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
         .split('\n')
         .map((t) => t.trim())
         .filter((t) => t !== ''),
-      settings: parsed.value,
+      settings: built.brief,
       exportIds,
     });
   };
@@ -106,8 +101,7 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
     : text === variant.text &&
       altTexts === variant.altTexts.join('\n') &&
       sameIdSet(exportIds, variant.exportIds) &&
-      parsedSettings.ok &&
-      JSON.stringify(parsedSettings.value) === JSON.stringify(variant.settings);
+      JSON.stringify(built.brief) === JSON.stringify(variant.settings);
   if (website)
     return (
       <form
@@ -206,19 +200,20 @@ export function VariantEditor({ variant, documents, onDone }: VariantEditorProps
           rows={2}
         />
       </Field>
-      <Field
-        label="Provider settings (JSON)"
-        htmlFor={`variant-${variant.id}-settings`}
-        hint="Channel-specific options the capability check understands; leave empty for none."
-        error={error ?? undefined}
-      >
-        <Input
-          id={`variant-${variant.id}-settings`}
-          value={settings}
-          onChange={(e) => setSettings(e.target.value)}
-          placeholder='{"firstComment": "Shop now"}'
-        />
-      </Field>
+      <fieldset className="flex flex-col gap-2" data-testid="variant-settings">
+        <legend className="text-xs font-medium text-muted-foreground">Channel settings</legend>
+        {settingsSchema ? (
+          <SchemaFields
+            schema={schema}
+            values={settings}
+            errors={settingsErrors}
+            onChange={(key, value) => setSettings((v) => ({ ...v, [key]: value }))}
+            idPrefix={`variant-${variant.id}-settings`}
+          />
+        ) : (
+          <p className="text-xs text-muted-foreground">No settings for this channel.</p>
+        )}
+      </fieldset>
       {ui && ui.kind === 'forbidden' && (
         <StatusBanner
           tone="critical"
