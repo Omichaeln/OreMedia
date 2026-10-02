@@ -62,6 +62,8 @@ const REPORT_LOCK_SECONDS = 15 * 60;
  */
 export const MAX_REPORT_PAGES = 50;
 const DAY_MS = 86_400_000;
+/** A remembered reporting zone is read again from the platform after this long (a property's zone rarely moves). */
+export const REPORTING_ZONE_RECHECK_DAYS = 7;
 type ReportRowInsert = Parameters<DestinationReportRowRepository['replaceWindow']>[5][number];
 
 /** Raised inside the broker call when a report exceeds the page cap; mapped to a `transient` result, never stored. */
@@ -147,9 +149,12 @@ export const addDays = (date: string, days: number): string =>
 export const dayEnd = (date: string, timeZone: string | null = null): Date => {
   const utcEnd = Date.parse(`${date}T23:59:59.999Z`);
   if (!knownTimeZone(timeZone)) return new Date(utcEnd);
-  const guess = new Date(utcEnd);
-  const offset = zoneParts(guess, timeZone).utcOfParts - Math.floor(utcEnd / 1000) * 1000;
-  return new Date(utcEnd - offset);
+  // The zone's offset at the UTC instant is a first guess; across a DST change (the UTC instant is already the
+  // next local day east of UTC) the offset is read again at the instant that guess gives, which is on the day.
+  const offsetAt = (instant: number) =>
+    zoneParts(new Date(instant), timeZone).utcOfParts - Math.floor(instant / 1000) * 1000;
+  const first = utcEnd - offsetAt(utcEnd);
+  return new Date(utcEnd - offsetAt(first));
 };
 
 /**
@@ -234,17 +239,32 @@ export function createDestinationReportRuntime(
 
   /**
    * RA-10: the reporting zone a destination's days are keyed by. The adapter's target metadata is read through
-   * the broker on every plan (one cheap read-only call) and remembered on the destination row; a refusal or a
-   * transport failure keeps what is remembered (the fetch itself handles a dead token), and a kind whose adapter
-   * exposes none keeps UTC days.
+   * the broker (one cheap read-only call) when nothing is remembered or the remembered zone is older than
+   * REPORTING_ZONE_RECHECK_DAYS, and remembered on the destination row; a refusal or a transport failure keeps
+   * what is remembered (the fetch itself handles a dead token), and a kind whose adapter exposes none keeps UTC
+   * days.
    */
   async function reportingZone(
-    row: { id: string; externalId: string; credentialRefId: string; reportingTimeZone: string | null },
+    row: {
+      id: string;
+      externalId: string;
+      credentialRefId: string;
+      reportingTimeZone: string | null;
+      reportingZoneCheckedAt: Date | null;
+    },
     tenantId: string,
     adapter: SourceAdapter,
+    at: Date,
   ): Promise<string | null> {
     const describe = adapter.describeTarget?.bind(adapter);
-    if (!describe) return knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+    const remembered = knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+    if (!describe) return remembered;
+    if (
+      remembered &&
+      row.reportingZoneCheckedAt &&
+      at.getTime() - row.reportingZoneCheckedAt.getTime() < REPORTING_ZONE_RECHECK_DAYS * DAY_MS
+    )
+      return remembered;
     let described: SourceTargetMetadataV1;
     try {
       described = await credentialBroker.withCredentialRef(
@@ -255,26 +275,30 @@ export function createDestinationReportRuntime(
     } catch (err) {
       if (!(err instanceof SourceReadError) && !(err instanceof ProviderTransportError)) throw err;
       log.warn({ destinationId: row.id, reason: err.message }, 'target metadata not read; zone kept');
-      return knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+      return remembered;
     }
-    await rememberZone(row.id, described);
-    return knownTimeZone(described.reportingTimeZone)
-      ? described.reportingTimeZone
-      : knownTimeZone(row.reportingTimeZone)
-        ? row.reportingTimeZone
-        : null;
+    await rememberZone(row.id, described, at);
+    return knownTimeZone(described.reportingTimeZone) ? described.reportingTimeZone : remembered;
   }
 
-  /** Stores a zone or currency the platform just stated, when it differs from the row (under the row lock). */
-  async function rememberZone(destinationId: string, described: SourceTargetMetadataV1): Promise<void> {
+  /**
+   * Stores a zone or currency the platform just stated, when it differs from the row (under the row lock); a
+   * metadata read (`checkedAt`) also records when, so the next plans skip the call for a while.
+   */
+  async function rememberZone(
+    destinationId: string,
+    described: SourceTargetMetadataV1,
+    checkedAt?: Date,
+  ): Promise<void> {
     const zone = knownTimeZone(described.reportingTimeZone) ? described.reportingTimeZone : null;
     const currency = described.currencyCode ? described.currencyCode.slice(0, 3).toUpperCase() : null;
-    if (!zone && !currency) return;
+    if (!zone && !currency && !checkedAt) return;
     await withTransaction(async (tx) => {
       const locked = await destinationsRepo.lock(destinationId, tx);
-      const values: { reportingTimeZone?: string; currencyCode?: string } = {};
+      const values: { reportingTimeZone?: string; currencyCode?: string; reportingZoneCheckedAt?: Date } = {};
       if (zone && zone !== locked.reportingTimeZone) values.reportingTimeZone = zone;
       if (currency && currency !== locked.currencyCode) values.currencyCode = currency;
+      if (checkedAt) values.reportingZoneCheckedAt = checkedAt;
       if (Object.keys(values).length > 0)
         await destinationsRepo.update(locked.id, locked.version, values, tx);
     });
@@ -366,6 +390,7 @@ export function createDestinationReportRuntime(
         { ...row, credentialRefId: row.credentialRefId },
         tenantId,
         sourceAdapterFor(row.kind),
+        new Date(at),
       );
       const planned: DestinationReportRangeV1[] = [];
       for (const spec of reports) {

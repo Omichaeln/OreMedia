@@ -833,21 +833,31 @@ export class SeoFindingWorkRepository extends BrandScopedRepository<typeof seoFi
   private destinationScope(brandId: string, destinationId: string, extra?: SQL): SQL {
     return this.brandScope(brandId, and(eq(seoFindingWork.destinationId, destinationId), extra) as SQL);
   }
-  /** The open (unresolved) row of one finding, locked when `tx` is a write (two "create work" calls serialise). */
+  /**
+   * The open (unresolved) row for a check of the destination, whatever run created it: at most one exists, since
+   * the service creates under the destination's row lock (a lock on a row that is not there would hold nothing).
+   * Inside that write transaction the read is a locking one (`current`, not the transaction's earlier snapshot),
+   * so a caller that waited on the destination lock sees the row the first caller committed.
+   */
   async findOpen(
     brandId: string,
     destinationId: string,
     check: string,
     tx: Tx | undefined,
-    lock = false,
+    current = false,
   ): Promise<SeoFindingWorkRow | null> {
-    const where = this.destinationScope(
-      brandId,
-      destinationId,
-      and(eq(seoFindingWork.check, check), isNull(seoFindingWork.resolvedAt)) as SQL,
-    );
-    const query = this.conn(tx).select().from(seoFindingWork).where(where).limit(1);
-    const rows = await (lock && tx ? query.for('update') : query);
+    const query = this.conn(tx)
+      .select()
+      .from(seoFindingWork)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          and(eq(seoFindingWork.check, check), isNull(seoFindingWork.resolvedAt)) as SQL,
+        ),
+      )
+      .limit(1);
+    const rows = await (current && tx ? query.for('update') : query);
     return rows[0] ?? null;
   }
   /**

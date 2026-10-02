@@ -22,103 +22,29 @@
           "response": {
             "status": 200,
             "json": {
-              "dimensionHeaders": [
-                {
-                  "name": "date"
-                },
-                {
-                  "name": "sessionDefaultChannelGroup"
-                }
-              ],
+              "dimensionHeaders": [{ "name": "date" }, { "name": "sessionDefaultChannelGroup" }],
               "metricHeaders": [
-                {
-                  "name": "sessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "totalUsers",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "engagedSessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "keyEvents",
-                  "type": "TYPE_FLOAT"
-                }
+                { "name": "sessions", "type": "TYPE_INTEGER" },
+                { "name": "totalUsers", "type": "TYPE_INTEGER" },
+                { "name": "engagedSessions", "type": "TYPE_INTEGER" },
+                { "name": "keyEvents", "type": "TYPE_FLOAT" }
               ],
               "rows": [
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "Organic Search"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "120"
-                    },
-                    {
-                      "value": "98"
-                    },
-                    {
-                      "value": "80"
-                    },
-                    {
-                      "value": "3"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "Organic Search" }],
+                  "metricValues": [{ "value": "120" }, { "value": "98" }, { "value": "80" }, { "value": "3" }]
                 },
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "Direct"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "40"
-                    },
-                    {
-                      "value": "35"
-                    },
-                    {
-                      "value": "20"
-                    },
-                    {
-                      "value": "0"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "Direct" }],
+                  "metricValues": [{ "value": "40" }, { "value": "35" }, { "value": "20" }, { "value": "0" }]
                 },
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260928"
-                    },
-                    {
-                      "value": "Organic Search"
-                    }
-                  ],
+                  "dimensionValues": [{ "value": "20260928" }, { "value": "Organic Search" }],
                   "metricValues": [
-                    {
-                      "value": "130"
-                    },
-                    {
-                      "value": "101"
-                    },
-                    {
-                      "value": "90"
-                    },
-                    {
-                      "value": "5"
-                    }
+                    { "value": "130" },
+                    { "value": "101" },
+                    { "value": "90" },
+                    { "value": "5" }
                   ]
                 }
               ],
@@ -128,12 +54,7 @@
                 "currencyCode": "ZAR",
                 "timeZone": "Africa/Johannesburg",
                 "subjectToThresholding": true,
-                "samplingMetadatas": [
-                  {
-                    "samplesReadCount": "9000",
-                    "samplingSpaceSize": "12000"
-                  }
-                ]
+                "samplingMetadatas": [{ "samplesReadCount": "9000", "samplingSpaceSize": "12000" }]
               }
             }
           }
@@ -152,70 +73,20 @@
           "response": {
             "status": 200,
             "json": {
-              "dimensionHeaders": [
-                {
-                  "name": "date"
-                },
-                {
-                  "name": "landingPage"
-                }
-              ],
+              "dimensionHeaders": [{ "name": "date" }, { "name": "landingPage" }],
               "metricHeaders": [
-                {
-                  "name": "sessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "engagedSessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "keyEvents",
-                  "type": "TYPE_FLOAT"
-                }
+                { "name": "sessions", "type": "TYPE_INTEGER" },
+                { "name": "engagedSessions", "type": "TYPE_INTEGER" },
+                { "name": "keyEvents", "type": "TYPE_FLOAT" }
               ],
               "rows": [
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "/"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "90"
-                    },
-                    {
-                      "value": "50"
-                    },
-                    {
-                      "value": "2"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "/" }],
+                  "metricValues": [{ "value": "90" }, { "value": "50" }, { "value": "2" }]
                 },
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "/pricing"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "30"
-                    },
-                    {
-                      "value": "9"
-                    },
-                    {
-                      "value": "1"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "/pricing" }],
+                  "metricValues": [{ "value": "30" }, { "value": "9" }, { "value": "1" }]
                 }
               ],
               "rowCount": 2
@@ -237,70 +108,30 @@
           "response": {
             "status": 200,
             "json": {
-              "dimensionHeaders": [
-                {
-                  "name": "date"
-                }
-              ],
+              "dimensionHeaders": [{ "name": "date" }],
               "metricHeaders": [
-                {
-                  "name": "sessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "engagedSessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "averageSessionDuration",
-                  "type": "TYPE_SECONDS"
-                },
-                {
-                  "name": "keyEvents",
-                  "type": "TYPE_FLOAT"
-                }
+                { "name": "sessions", "type": "TYPE_INTEGER" },
+                { "name": "engagedSessions", "type": "TYPE_INTEGER" },
+                { "name": "averageSessionDuration", "type": "TYPE_SECONDS" },
+                { "name": "keyEvents", "type": "TYPE_FLOAT" }
               ],
               "rows": [
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    }
-                  ],
+                  "dimensionValues": [{ "value": "20260927" }],
                   "metricValues": [
-                    {
-                      "value": "160"
-                    },
-                    {
-                      "value": "100"
-                    },
-                    {
-                      "value": "73.5"
-                    },
-                    {
-                      "value": "3"
-                    }
+                    { "value": "160" },
+                    { "value": "100" },
+                    { "value": "73.5" },
+                    { "value": "3" }
                   ]
                 },
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260928"
-                    }
-                  ],
+                  "dimensionValues": [{ "value": "20260928" }],
                   "metricValues": [
-                    {
-                      "value": "130"
-                    },
-                    {
-                      "value": "90"
-                    },
-                    {
-                      "value": "61.25"
-                    },
-                    {
-                      "value": "5"
-                    }
+                    { "value": "130" },
+                    { "value": "90" },
+                    { "value": "61.25" },
+                    { "value": "5" }
                   ]
                 }
               ],
@@ -309,12 +140,7 @@
                 "currencyCode": "ZAR",
                 "timeZone": "Africa/Johannesburg",
                 "dataLossFromOtherRow": true,
-                "samplingMetadatas": [
-                  {
-                    "samplesReadCount": "12000",
-                    "samplingSpaceSize": "12000"
-                  }
-                ]
+                "samplingMetadatas": [{ "samplesReadCount": "12000", "samplingSpaceSize": "12000" }]
               }
             }
           }
@@ -334,70 +160,20 @@
           "response": {
             "status": 200,
             "json": {
-              "dimensionHeaders": [
-                {
-                  "name": "date"
-                },
-                {
-                  "name": "landingPage"
-                }
-              ],
+              "dimensionHeaders": [{ "name": "date" }, { "name": "landingPage" }],
               "metricHeaders": [
-                {
-                  "name": "sessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "engagedSessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "keyEvents",
-                  "type": "TYPE_FLOAT"
-                }
+                { "name": "sessions", "type": "TYPE_INTEGER" },
+                { "name": "engagedSessions", "type": "TYPE_INTEGER" },
+                { "name": "keyEvents", "type": "TYPE_FLOAT" }
               ],
               "rows": [
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "/"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "90"
-                    },
-                    {
-                      "value": "50"
-                    },
-                    {
-                      "value": "2"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "/" }],
+                  "metricValues": [{ "value": "90" }, { "value": "50" }, { "value": "2" }]
                 },
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260927"
-                    },
-                    {
-                      "value": "/pricing"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "30"
-                    },
-                    {
-                      "value": "9"
-                    },
-                    {
-                      "value": "1"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260927" }, { "value": "/pricing" }],
+                  "metricValues": [{ "value": "30" }, { "value": "9" }, { "value": "1" }]
                 }
               ],
               "rowCount": 3
@@ -414,49 +190,16 @@
           "response": {
             "status": 200,
             "json": {
-              "dimensionHeaders": [
-                {
-                  "name": "date"
-                },
-                {
-                  "name": "landingPage"
-                }
-              ],
+              "dimensionHeaders": [{ "name": "date" }, { "name": "landingPage" }],
               "metricHeaders": [
-                {
-                  "name": "sessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "engagedSessions",
-                  "type": "TYPE_INTEGER"
-                },
-                {
-                  "name": "keyEvents",
-                  "type": "TYPE_FLOAT"
-                }
+                { "name": "sessions", "type": "TYPE_INTEGER" },
+                { "name": "engagedSessions", "type": "TYPE_INTEGER" },
+                { "name": "keyEvents", "type": "TYPE_FLOAT" }
               ],
               "rows": [
                 {
-                  "dimensionValues": [
-                    {
-                      "value": "20260928"
-                    },
-                    {
-                      "value": "/"
-                    }
-                  ],
-                  "metricValues": [
-                    {
-                      "value": "70"
-                    },
-                    {
-                      "value": "40"
-                    },
-                    {
-                      "value": "0"
-                    }
-                  ]
+                  "dimensionValues": [{ "value": "20260928" }, { "value": "/" }],
+                  "metricValues": [{ "value": "70" }, { "value": "40" }, { "value": "0" }]
                 }
               ],
               "rowCount": 3
@@ -476,9 +219,7 @@
           },
           "response": {
             "status": 429,
-            "headers": {
-              "retry-after": "120"
-            },
+            "headers": { "retry-after": "120" },
             "json": {
               "error": {
                 "code": 429,

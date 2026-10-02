@@ -252,7 +252,12 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'failure_detail',
   ], // 0012
   users: ['password_origin'], // 0013
-  brand_destinations: ['token_expires_at', 'reporting_time_zone', 'currency_code'], // 0016, 0021
+  brand_destinations: [
+    'token_expires_at',
+    'reporting_time_zone',
+    'currency_code',
+    'reporting_zone_checked_at',
+  ], // 0016, 0021
   channel_variants: ['destination_id'], // 0018
   publications: ['destination_id', 'remote_status', 'remote_verification', 'remote_verified_at'], // 0018, 0020
   destination_report_rows: ['time_zone', 'quality'], // 0021

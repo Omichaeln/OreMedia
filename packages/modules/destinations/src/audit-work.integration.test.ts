@@ -457,4 +457,32 @@ describe('SEO findings become tracked work (RA-11) against MySQL 8', () => {
     expect(renewed.items[0]?.workId).not.toBe(rows[1]?.workId);
     expect(await links()).toHaveLength(3);
   });
+
+  it('two concurrent createWork calls for one finding yield one row and the same work (the destination row lock serialises them)', async () => {
+    const run5 = newId('seoAuditRun');
+    clock = new Date('2026-10-09T05:00:00.000Z');
+    await seedRun(run5, clock, 'completed', [
+      [
+        '/',
+        [
+          fail('title', 'minor', 'length=74'),
+          fail('h1', 'major', 'count=2'),
+          fail('canonical', 'major', 'missing'),
+        ],
+      ],
+    ]);
+    const before = created.length;
+    const [a, b] = await Promise.all([
+      run(tenantA, (tx) =>
+        service.createWork(owner(), { brandId: brandA, destinationId: siteId, checks: ['canonical'] }, tx),
+      ),
+      run(tenantA, (tx) =>
+        service.createWork(owner(), { brandId: brandA, destinationId: siteId, checks: ['canonical'] }, tx),
+      ),
+    ]);
+    expect(a.items[0]?.workId).toBe(b.items[0]?.workId);
+    expect(a.items[0]?.id).toBe(b.items[0]?.id);
+    expect(created.length - before).toBe(1); // the work module was asked once
+    expect((await links()).filter((l) => l.check === 'canonical')).toHaveLength(1);
+  });
 });

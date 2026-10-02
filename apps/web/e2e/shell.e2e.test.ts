@@ -1178,7 +1178,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await first.textContent()).toContain('Confirm 1 page should carry noindex');
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await first.getByRole('button', { name: 'Copy task for Pages excluded by robots meta' }).click();
-    await expect.poll(() => first.getByRole('button').textContent(), { timeout: 5_000 }).toBe('Task copied');
+    await expect
+      .poll(() => first.getByRole('button', { name: /Copy task|Task copied/ }).textContent(), {
+        timeout: 5_000,
+      })
+      .toBe('Task copied');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
       'Confirm 1 page should carry noindex',
     );

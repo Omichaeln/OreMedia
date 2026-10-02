@@ -16,7 +16,7 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
 
 /**
  * Ledger 1.g4 for migration 0021 (RA-10 report quality, RA-11 findings as tracked work): on a database populated
- * at the previous head (0020) the migration adds `reporting_time_zone` and `currency_code` to brand_destinations
+ * at the previous head (0020) the migration adds `reporting_time_zone`, `currency_code` and `reporting_zone_checked_at` to brand_destinations
  * and `time_zone` and `quality` to destination_report_rows, null on every existing row (a row stored before the
  * zone was known stays a UTC day and reads without flags), and adds `seo_finding_work`, empty. Every existing row
  * is unchanged. On the migrated data a destination remembers its zone, a report row carries its zone and flags
@@ -39,7 +39,7 @@ describe('migration 0021 rolls forward on a populated database (ledger 1.g4)', (
     for (const table of TABLES) {
       const columns = getTableColumns(table) as Record<string, MySqlColumn>;
       const order = Object.values(columns).find((c) => c.name === 'id') ?? Object.values(columns)[0]!;
-      // reporting_time_zone, currency_code, time_zone and quality are in LATER_COLUMNS (seed.ts).
+      // reporting_time_zone, currency_code, reporting_zone_checked_at, time_zone and quality are in LATER_COLUMNS.
       out[getTableName(table)] = await tdb.db.select(snapshotColumns(table)).from(table).orderBy(asc(order));
     }
     return JSON.stringify(out);
@@ -62,17 +62,22 @@ describe('migration 0021 rolls forward on a populated database (ledger 1.g4)', (
     expect(await tdb.db.select().from(seoFindingWork)).toEqual([]);
     const destinations = await tdb.db.select().from(brandDestinations);
     expect(destinations.length).toBeGreaterThan(0);
-    expect(destinations.every((d) => d.reportingTimeZone === null && d.currencyCode === null)).toBe(true);
+    expect(
+      destinations.every(
+        (d) => d.reportingTimeZone === null && d.currencyCode === null && d.reportingZoneCheckedAt === null,
+      ),
+    ).toBe(true);
     const rows = await tdb.db.select().from(destinationReportRows);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.timeZone === null && r.quality === null)).toBe(true);
     const nullable = await tdb.db.execute(
-      sql`select table_name as t, column_name as c, is_nullable as n from information_schema.columns where table_schema = database() and ((table_name = 'brand_destinations' and column_name in ('reporting_time_zone', 'currency_code')) or (table_name = 'destination_report_rows' and column_name in ('time_zone', 'quality')))`,
+      sql`select table_name as t, column_name as c, is_nullable as n from information_schema.columns where table_schema = database() and ((table_name = 'brand_destinations' and column_name in ('reporting_time_zone', 'currency_code', 'reporting_zone_checked_at')) or (table_name = 'destination_report_rows' and column_name in ('time_zone', 'quality')))`,
     );
     const cols = (nullable as unknown as [Array<{ t: string; c: string; n: string }>])[0];
     expect(cols.map((r) => `${r.t}.${r.c}:${r.n}`).sort()).toEqual([
       'brand_destinations.currency_code:YES',
       'brand_destinations.reporting_time_zone:YES',
+      'brand_destinations.reporting_zone_checked_at:YES',
       'destination_report_rows.quality:YES',
       'destination_report_rows.time_zone:YES',
     ]);

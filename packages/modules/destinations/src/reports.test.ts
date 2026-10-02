@@ -66,6 +66,9 @@ describe('reportRange (incremental, latency-aware, bounded)', () => {
     expect(dayEnd('2026-09-28', 'Africa/Johannesburg').toISOString()).toBe('2026-09-28T21:59:59.999Z');
     expect(dayEnd('2026-09-28', 'America/Los_Angeles').toISOString()).toBe('2026-09-29T06:59:59.999Z');
     expect(dateKey(new Date('2026-09-29T04:00:00.000Z'), 'America/Los_Angeles')).toBe('2026-09-28');
+    // Auckland the day before a DST change either way: the offset of the day itself, not of the day after.
+    expect(dayEnd('2026-09-26', 'Pacific/Auckland').toISOString()).toBe('2026-09-26T11:59:59.999Z');
+    expect(dayEnd('2026-04-04', 'Pacific/Auckland').toISOString()).toBe('2026-04-04T10:59:59.999Z');
   });
 });
 

@@ -61,6 +61,7 @@ export {
 export {
   createDestinationReportRuntime,
   reportRange,
+  REPORTING_ZONE_RECHECK_DAYS,
   dateKey,
   dayEnd,
   knownTimeZone,

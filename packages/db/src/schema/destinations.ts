@@ -45,6 +45,8 @@ export const brandDestinations = mysqlTable(
      */
     reportingTimeZone: varchar('reporting_time_zone', { length: 64 }),
     currencyCode: varchar('currency_code', { length: 3 }),
+    /** When the zone was last read from the platform; the sweep asks again after REPORTING_ZONE_RECHECK_DAYS. */
+    reportingZoneCheckedAt: ts('reporting_zone_checked_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

@@ -1,5 +1,6 @@
 import type { DestinationReportSummaryV1, DestinationV1 } from '@oremedia/contracts/destinations';
 import { DESTINATION_KIND_CAPABILITIES, webMetricByName } from '@oremedia/contracts/destinations';
+import { dayEnd } from '@oremedia/module-destinations';
 import {
   DEFAULT_LATENCY_HOURS,
   NOT_SUMMED,
@@ -235,7 +236,7 @@ const reportFreshness = (entries: DestinationReportSummaryV1['reports']): Overvi
     .at(-1);
   if (!latest) return null;
   return {
-    asOf: `${latest.freshness.latestDate}T23:59:59.999Z`,
+    asOf: dayEnd(latest.freshness.latestDate ?? '', latest.quality.timeZone).toISOString(),
     ageHours: latest.freshness.ageHours,
     latencyHours: latest.freshness.latencyHours,
     stale: read.some((e) => e.freshness.stale),

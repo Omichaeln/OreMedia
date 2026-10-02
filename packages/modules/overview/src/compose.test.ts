@@ -370,7 +370,7 @@ describe('web source (destinations.reports.summary) and its figures', () => {
       state: 'fresh',
       reason: 'as of 2026-09-28, Africa/Johannesburg, provisional · 7 of 7 days',
       freshness: {
-        asOf: '2026-09-28T23:59:59.999Z',
+        asOf: '2026-09-28T21:59:59.999Z', // the day ends in Johannesburg, two hours before UTC does
         timeZone: 'Africa/Johannesburg',
         provisional: true,
       },

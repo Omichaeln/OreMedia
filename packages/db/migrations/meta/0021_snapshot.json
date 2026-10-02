@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "fad72e51-a69e-4092-94b1-145db4c9493e",
+  "id": "91cacfc5-df90-43d3-a983-06a5b9cb1e27",
   "prevId": "c3946120-8c3e-4c37-8952-2636043c1681",
   "tables": {
     "api_clients": {
@@ -11752,6 +11752,13 @@
         "currency_code": {
           "name": "currency_code",
           "type": "varchar(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reporting_zone_checked_at": {
+          "name": "reporting_zone_checked_at",
+          "type": "datetime(3)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

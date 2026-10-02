@@ -15,7 +15,7 @@ import { LocalKms, configureCredentialBroker, registerProviderClients } from '@o
 import { SourceRegistry, type SourceReportRow } from '@oremedia/providers';
 import { configureSourceAvailability } from './hooks';
 import { createDestinationReportService } from './reports';
-import { MAX_REPORT_PAGES } from './report-runtime';
+import { MAX_REPORT_PAGES, REPORTING_ZONE_RECHECK_DAYS } from './report-runtime';
 import { DestinationReportTargetRepository } from './repositories';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
@@ -628,6 +628,10 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
       destinationService.get(owner(), { brandId: brandA, destinationId: propertyId }),
     );
     expect(remembered).toMatchObject({ reportingTimeZone: 'America/Los_Angeles', currencyCode: 'USD' });
+    expect(
+      (await tdb.db.select().from(brandDestinations).where(eq(brandDestinations.id, propertyId)))[0]
+        ?.reportingZoneCheckedAt,
+    ).toEqual(new Date(NOW));
     // The rows stored before the zone was known are UTC days (time zone null) and still read as before; a row
     // from before migration 0021 carries no quality at all (null), one the sweep stored without a zone, none ([]).
     const legacy = await storedRows(propertyId, 'ga4.landing_pages');
@@ -719,11 +723,25 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
     expect(acquisition.current).toMatchObject({ days: 1, rows: 1, metrics: { sessions: 10 } });
     expect(acquisition.freshness).toMatchObject({ latestDate: '2026-09-27', ageHours: 28.0, stale: false });
 
-    // A refused metadata read keeps the remembered zone: the plan still ends on the zone's yesterday.
+    // A remembered zone read within the last REPORTING_ZONE_RECHECK_DAYS is not asked for again.
+    ga4.describeCalls.length = 0;
+    await asPlatformJob(tenantA, () =>
+      runtime.reports.planDestinationReports({ ...ctx(tenantA), destinationId: propertyId, now: NOW }),
+    );
+    expect(ga4.describeCalls).toEqual([]);
+    await lock.reset(`lock:destination-report-sweep:${tenantA}:${propertyId}`);
+    // Past the window, a refused metadata read keeps the remembered zone: the plan still ends on its yesterday.
+    await tdb.db
+      .update(brandDestinations)
+      .set({
+        reportingZoneCheckedAt: new Date(Date.parse(NOW) - (REPORTING_ZONE_RECHECK_DAYS + 1) * 86_400_000),
+      })
+      .where(eq(brandDestinations.id, propertyId));
     ga4.targetMetadata = { kind: 'forbidden' };
     const again = await asPlatformJob(tenantA, () =>
       runtime.reports.planDestinationReports({ ...ctx(tenantA), destinationId: propertyId, now: NOW }),
     );
+    expect(ga4.describeCalls).toHaveLength(1);
     expect(again).toMatchObject({
       outcome: 'planned',
       reports: expect.arrayContaining([

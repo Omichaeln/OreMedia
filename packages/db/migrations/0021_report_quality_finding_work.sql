@@ -23,6 +23,7 @@ CREATE TABLE `seo_finding_work` (
 --> statement-breakpoint
 ALTER TABLE `brand_destinations` ADD `reporting_time_zone` varchar(64);--> statement-breakpoint
 ALTER TABLE `brand_destinations` ADD `currency_code` varchar(3);--> statement-breakpoint
+ALTER TABLE `brand_destinations` ADD `reporting_zone_checked_at` datetime(3);--> statement-breakpoint
 ALTER TABLE `destination_report_rows` ADD `time_zone` varchar(64);--> statement-breakpoint
 ALTER TABLE `destination_report_rows` ADD `quality` json;--> statement-breakpoint
 ALTER TABLE `seo_finding_work` ADD CONSTRAINT `fk_seo_finding_work_brand` FOREIGN KEY (`tenant_id`,`brand_id`) REFERENCES `brands`(`tenant_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint

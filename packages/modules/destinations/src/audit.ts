@@ -311,8 +311,12 @@ export function createSeoAuditService(opts: SeoAuditQueryOptions = {}) {
           missing.map((c) => ({ path: 'checks', issue: `not_reported:${c}` })),
           'the run does not report every check asked for',
         );
+      // The destination row lock serialises concurrent "create work" calls (two people, or a retry): the second
+      // waits and then finds the first one's open row instead of creating a second recommendation.
+      await destinationsRepo.lock(row.id, tx);
       const items: SeoFindingWorkV1[] = [];
-      for (const finding of reported.filter((f) => checks.includes(f.check))) {
+      // In the order asked for, so a caller matches results to checks.
+      for (const finding of checks.flatMap((c) => reported.find((f) => f.check === c) ?? [])) {
         const check = finding.check;
         const existing = await workRepo.findOpen(row.brandId, row.id, check, tx, true);
         if (existing) {
