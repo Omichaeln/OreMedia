@@ -1,3 +1,4 @@
+import type { AssetKind } from '@oremedia/contracts/assets';
 import { registerBrandChecker, MembershipRepository } from '@oremedia/module-access';
 import {
   experimentsService,
@@ -77,6 +78,7 @@ import {
 import {
   registerAssetAuthoriser as registerReleaseAssetAuthoriser,
   registerReleaseCheckers,
+  registerReviewImageSigner,
   registerReviewMediaSigner,
   reviewService,
   reviewToolSource,
@@ -138,6 +140,8 @@ export function composeModules(): void {
         brandId: ctx.brandId,
         channelConnectionIds: ctx.channelConnectionIds,
         scheduledFor: ctx.scheduledFor,
+        ...(ctx.kinds ? { kinds: ctx.kinds as AssetKind[] } : {}),
+        ...(ctx.mimes ? { mimes: ctx.mimes } : {}),
       },
       tx,
     );
@@ -198,6 +202,8 @@ export function composeModules(): void {
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   // Spec 13.3: the review inbox and portal show the frozen files; the assets module's storage signs the GETs.
   registerReviewMediaSigner((storageKey) => assetService.signStorageKey(storageKey));
+  // RA-09: a frozen article's images (asset versions) are shown the same way, request-bound for a reviewer.
+  registerReviewImageSigner((assetVersionId, tx) => assetService.signVersionPreview(assetVersionId, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Ledger R2-1: the sources this deployment connects (app credentials present, not disabled).

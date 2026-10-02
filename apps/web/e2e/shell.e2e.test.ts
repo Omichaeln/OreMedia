@@ -1404,6 +1404,117 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 90_000);
 
+  it('campaigns (RA-08): an article takes a featured image and image, link, quote and rich FAQ blocks from the asset library, previews as it will publish, and sends the featured image on save', async () => {
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/campaigns?brief=brf_accepted')}`);
+    await page.locator('#pkg-title').waitFor({ timeout: 15_000 });
+    await page.locator('#pkg-title').fill('How ore is weighed');
+    await page.locator('#pkg-kind').click();
+    await page.getByRole('option', { name: 'Website article' }).click();
+    await page.locator('#pkg-article-title').fill('How ore is weighed');
+    await page.locator('#pkg-article-excerpt').fill('Scales, tare and trust.');
+    // The featured image comes from the asset picker (the eligibility search), with the asset's alt text prefilled.
+    await page.getByTestId('pkg-article-featured-choose').click();
+    await page.getByTestId('asset-picker').waitFor({ timeout: 15_000 });
+    await page.getByTestId('asset-pick-av_photo').click();
+    await expect
+      .poll(() => page.locator('#pkg-article-featured-alt').inputValue(), { timeout: 15_000 })
+      .toBe('Sample photo');
+    await page.locator('#pkg-article-featured-alt').fill('A weighbridge at dawn');
+    await page.locator('#pkg-article-block-0-text').fill('Every load is weighed twice.');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Image (from the asset library)' }).click();
+    await page.getByTestId('pkg-article-block-1-choose').click();
+    await page.getByTestId('asset-pick-av_photo').click();
+    await page.locator('#pkg-article-block-1-caption').fill('The bridge at the north gate.');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Link' }).click();
+    await page.locator('#pkg-article-block-2-href').fill('https://acme.example/scales');
+    await page.locator('#pkg-article-block-2-text').fill('How our scales are certified');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'Quote' }).click();
+    await page.locator('#pkg-article-block-3-text').fill('Weigh twice, invoice once.');
+    await page.locator('#pkg-article-block-3-cite').fill('Yard foreman');
+    await page.locator('#pkg-article-add').click();
+    await page.getByRole('option', { name: 'FAQ (question and answer)' }).click();
+    await page.locator('#pkg-article-block-4-question').fill('What is tare?');
+    await page.locator('#pkg-article-block-4-answer-add').click();
+    await page.getByRole('option', { name: 'List' }).click();
+    await page
+      .locator('#pkg-article-block-4-answer-0-items')
+      .fill('The empty weight.\nIt is subtracted from the gross.');
+    expect(await page.getByTestId('article-blocks').textContent()).toContain('2 of 20 images');
+    await page.getByRole('button', { name: 'Create package' }).click();
+    await expect
+      .poll(() => new URL(page.url()).searchParams.get('package') ?? '', { timeout: 15_000 })
+      .toMatch(/^pkg_/);
+    const packageId = new URL(page.url()).searchParams.get('package') ?? '';
+    const detail = page.getByTestId('package-detail');
+    const summary = detail.getByTestId('article-summary');
+    await summary.waitFor({ timeout: 15_000 });
+    expect(await summary.getByTestId('article-summary-featured').textContent()).toContain(
+      'A weighbridge at dawn',
+    );
+    expect(
+      await summary
+        .locator('[data-block-type]')
+        .evaluateAll((els) => els.map((e) => e.getAttribute('data-block-type'))),
+    ).toEqual(['paragraph', 'image', 'link', 'quote', 'faq']);
+    // What was sent: a version-2 document with the featured image (never dropped) and the rich blocks.
+    const revision = [...backend.phase5.revisions.values()].find((r) => r.contentPackageId === packageId);
+    expect(revision?.copy.article).toMatchObject({
+      v: 2,
+      featuredImage: { assetVersionId: 'av_photo', alt: 'A weighbridge at dawn' },
+    });
+    expect(revision?.copy.article?.blocks[1]).toEqual({
+      type: 'image',
+      assetVersionId: 'av_photo',
+      alt: 'Sample photo',
+      caption: 'The bridge at the north gate.',
+    });
+    expect(revision?.copy.article?.blocks[4]).toMatchObject({
+      type: 'faq',
+      question: 'What is tare?',
+      answer: 'The empty weight.\nIt is subtracted from the gross.',
+      answerBlocks: [
+        { type: 'list', ordered: false, items: ['The empty weight.', 'It is subtracted from the gross.'] },
+      ],
+    });
+    // The preview is the one renderer's output: the signed image, the link, the quote and the FAQ list.
+    await detail.getByTestId('article-preview-toggle').locator('summary').click();
+    const preview = detail.getByTestId('article-preview');
+    await preview.waitFor({ timeout: 15_000 });
+    await expect
+      .poll(
+        () =>
+          preview
+            .getByTestId('article-preview-featured')
+            .locator('img[src$="/e2e-object/av_photo.png"]')
+            .count(),
+        {
+          timeout: 15_000,
+        },
+      )
+      .toBe(1);
+    const body = preview.getByTestId('article-preview-body');
+    await expect
+      .poll(() => body.locator('figure img[src$="/e2e-object/av_photo.png"]').count(), { timeout: 15_000 })
+      .toBe(1);
+    expect(await body.locator('figcaption').textContent()).toBe('The bridge at the north gate.');
+    expect(await body.locator('a[href="https://acme.example/scales"]').textContent()).toBe(
+      'How our scales are certified',
+    );
+    expect(await body.locator('blockquote').textContent()).toContain('Yard foreman');
+    expect(await body.locator('section.faq ul li').count()).toBe(2);
+    // The editor opens the revision with its featured image and blocks; the revision keeps them on revise.
+    const editor = detail.getByTestId('article-editor');
+    expect(await editor.locator(`#revise-${packageId}-featured-alt`).inputValue()).toBe(
+      'A weighbridge at dawn',
+    );
+    expect(await editor.locator('[data-testid="article-block"][data-block-type="image"]').count()).toBe(1);
+    await page.close();
+  }, 90_000);
+
   it('calendar (R2-3, RA-02/RA-04): a live article shows Live and Verified with its read-back; validating again records the new result and the verification follows; it can be reverted to a draft and then shows Reverted', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/calendar?publication=pub_article')}`);

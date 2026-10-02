@@ -158,7 +158,13 @@ function CreatePackageForm({
         </Field>
       </div>
       {kind === 'article' ? (
-        <ArticleEditor draft={draft} onChange={setDraft} idPrefix="pkg-article" issues={issues} />
+        <ArticleEditor
+          brandId={brandId}
+          draft={draft}
+          onChange={setDraft}
+          idPrefix="pkg-article"
+          issues={issues}
+        />
       ) : (
         <Field label="Master copy" htmlFor="pkg-copy">
           <Textarea id="pkg-copy" value={text} onChange={(e) => setText(e.target.value)} rows={3} />

@@ -216,3 +216,199 @@ describe('article document (ledger R2-3)', () => {
     expect(articleHtmlChars(`<p>${'x'.repeat(ARTICLE_BODY_MAX_CHARS)}</p>`)).toBe(ARTICLE_BODY_MAX_CHARS);
   });
 });
+
+// ---- RA-08: rich blocks, images and the featured image ----
+import {
+  ARTICLE_IMAGES_MAX,
+  ArticleBlockV1,
+  articleBlockText,
+  articleBodyChars,
+  articleImages,
+  faqAnswerText,
+} from './content';
+import { renderArticleBlock } from './article';
+
+const rich = ArticleDocumentV1.parse({
+  kind: 'article',
+  v: 2,
+  title: 'How ore is weighed',
+  slug: 'how-ore-is-weighed',
+  excerpt: 'Scales.',
+  featuredImage: { assetVersionId: 'av_feat', alt: 'A weighbridge' },
+  blocks: [
+    { type: 'paragraph', text: 'Every load is weighed twice.' },
+    { type: 'image', assetVersionId: 'av_1', alt: 'The <bridge>', caption: 'North gate' },
+    { type: 'link', href: 'https://acme.example/scales?a=1&b=2', text: '' },
+    { type: 'link', href: 'https://acme.example/certified', text: 'Certified "scales"' },
+    { type: 'quote', text: 'Weigh twice.', cite: 'Foreman' },
+    {
+      type: 'faq',
+      question: 'What is tare?',
+      answer: 'The empty weight.\nSubtracted from the gross.',
+      answerBlocks: [
+        { type: 'paragraph', text: 'The empty weight.' },
+        { type: 'list', items: ['Subtracted from the gross.'] },
+      ],
+    },
+    { type: 'image', assetVersionId: 'av_2', alt: 'Last image, no caption' },
+  ],
+});
+
+describe('rich article documents (RA-08)', () => {
+  it('a plain article still parses, hashes and renders exactly as before: no new key appears', () => {
+    const plain = ArticleDocumentV1.parse({
+      kind: 'article',
+      title: 'T',
+      slug: 't',
+      blocks: [{ type: 'faq', question: 'Q?', answer: 'A.' }],
+    });
+    expect(Object.keys(plain).sort()).toEqual([
+      'blocks',
+      'categories',
+      'excerpt',
+      'kind',
+      'slug',
+      'tags',
+      'title',
+    ]);
+    expect(Object.keys(plain.blocks[0] as object)).toEqual(['type', 'question', 'answer']);
+    expect(renderArticleHtml(plain)).toBe('<section class="faq"><h3>Q?</h3><p>A.</p></section>');
+    expect(articleLastParagraph(plain)).toBe('A.');
+    expect(articlePlainText(plain)).toBe('T\n\nQ?\nA.');
+    expect(articleBodyChars(plain.blocks)).toBe(4);
+  });
+
+  it('renders links, quotes, images and rich FAQ answers deterministically, with and without image addresses', () => {
+    const noUrls = renderArticleHtml(rich);
+    expect(noUrls).toBe(
+      [
+        '<p>Every load is weighed twice.</p>',
+        '<figure><img alt="The &lt;bridge&gt;"><figcaption>North gate</figcaption></figure>',
+        '<p><a href="https://acme.example/scales?a=1&amp;b=2" rel="noopener">https://acme.example/scales?a=1&amp;b=2</a></p>',
+        '<p><a href="https://acme.example/certified" rel="noopener">Certified &quot;scales&quot;</a></p>',
+        '<blockquote><p>Weigh twice.</p><p><em>Foreman</em></p></blockquote>',
+        '<section class="faq"><h3>What is tare?</h3><p>The empty weight.</p><ul><li>Subtracted from the gross.</li></ul></section>',
+        '<figure><img alt="Last image, no caption"></figure>',
+      ].join('\n'),
+    );
+    expect(renderArticleHtml(rich)).toBe(noUrls); // same input, same bytes
+    const urls = new Map([
+      ['av_1', 'https://site.example/wp-content/uploads/how-ore-is-weighed-2.png'],
+      ['av_2', 'https://site.example/wp-content/uploads/how-ore-is-weighed-3.png'],
+    ]);
+    const withUrls = renderArticleHtml(rich, { imageUrl: (i) => urls.get(i.assetVersionId) ?? null });
+    expect(withUrls).toContain(
+      '<figure><img src="https://site.example/wp-content/uploads/how-ore-is-weighed-2.png" alt="The &lt;bridge&gt;"><figcaption>North gate</figcaption></figure>',
+    );
+    // Only the image addresses differ between the two renderings (what a review manifest's hash leaves out).
+    expect(withUrls.replace(/ src="[^"]*"/g, '')).toBe(noUrls);
+    // A resolver that hands back an unsafe address loses it to the sanitiser, never to the page.
+    expect(renderArticleHtml(rich, { imageUrl: () => 'javascript:alert(1)' })).toBe(noUrls);
+    expect(renderArticleBlock({ type: 'quote', text: 'q' })).toBe('<blockquote><p>q</p></blockquote>');
+  });
+
+  it('plain text, first and last paragraph cover the new blocks (alt text is never page text)', () => {
+    expect(articlePlainText(rich)).toBe(
+      [
+        'How ore is weighed',
+        'Scales.',
+        'Every load is weighed twice.',
+        'The <bridge>\nNorth gate',
+        'https://acme.example/scales?a=1&b=2',
+        'Certified "scales"',
+        'Weigh twice.\nForeman',
+        'What is tare?\nThe empty weight.\nSubtracted from the gross.',
+        'Last image, no caption',
+      ].join('\n\n'),
+    );
+    expect(articleFirstParagraph(rich)).toBe('Every load is weighed twice.');
+    // The last block is an image without a caption: the page's last text is the FAQ answer's last line.
+    expect(articleLastParagraph(rich)).toBe('Subtracted from the gross.');
+    expect(articleLastParagraph({ blocks: [rich.blocks[1] as ArticleBlockV1] })).toBe('North gate');
+    // A quote ends with its source when it names one (the page shows the cite last).
+    expect(articleLastParagraph({ blocks: [rich.blocks[4] as ArticleBlockV1] })).toBe('Foreman');
+    expect(articleLastParagraph({ blocks: [{ type: 'quote', text: 'q' }] })).toBe('q');
+    expect(articleFirstParagraph({ blocks: [rich.blocks[6] as ArticleBlockV1] })).toBe('');
+    expect(articleFirstParagraph({ blocks: [rich.blocks[2] as ArticleBlockV1] })).toBe(
+      'https://acme.example/scales?a=1&b=2',
+    );
+    expect(faqAnswerText(rich.blocks[5] as Extract<ArticleBlockV1, { type: 'faq' }>)).toBe(
+      'The empty weight.\nSubtracted from the gross.',
+    );
+    expect(articleBlockText({ type: 'faq', question: 'Q', answer: 'A', answerBlocks: [] })).toBe('Q\nA');
+    expect(articleImages(rich).map((i) => i.assetVersionId)).toEqual(['av_feat', 'av_1', 'av_2']);
+    // Body characters count text, alt and caption, link text (never the address) and the rich answer's lines.
+    expect(articleBodyChars(rich.blocks)).toBe(
+      'Every load is weighed twice.'.length +
+        'The <bridge>'.length +
+        'North gate'.length +
+        0 +
+        'Certified "scales"'.length +
+        'Weigh twice.'.length +
+        'Foreman'.length +
+        'What is tare?'.length +
+        'The empty weight.\nSubtracted from the gross.'.length +
+        'Last image, no caption'.length,
+    );
+  });
+
+  it('caps: images bounded, links must be absolute http(s), FAQ answer blocks bounded, no nested FAQs or images', () => {
+    const base = { kind: 'article', title: 't', slug: 't', blocks: [] as unknown[] };
+    const image = (n: number) => ({ type: 'image', assetVersionId: `av_${n}`, alt: '' });
+    expect(
+      ArticleDocumentV1.safeParse({
+        ...base,
+        blocks: Array.from({ length: ARTICLE_IMAGES_MAX }, (_, i) => image(i)),
+      }).success,
+    ).toBe(true);
+    const over = ArticleDocumentV1.safeParse({
+      ...base,
+      featuredImage: { assetVersionId: 'f', alt: '' },
+      blocks: Array.from({ length: ARTICLE_IMAGES_MAX }, (_, i) => image(i)),
+    });
+    expect(over.success).toBe(false);
+    if (!over.success)
+      expect(over.error.issues[0]?.message).toBe(
+        `too_many_images:${ARTICLE_IMAGES_MAX + 1}>${ARTICLE_IMAGES_MAX}`,
+      );
+    for (const href of ['javascript:alert(1)', '/relative', 'ftp://x.example/f', 'https://a.example/<x>', ''])
+      expect(ArticleBlockV1.safeParse({ type: 'link', href, text: 'x' }).success).toBe(false);
+    expect(
+      ArticleBlockV1.safeParse({ type: 'link', href: 'HTTP://A.example/p?q=1#f', text: '' }).success,
+    ).toBe(true);
+    expect(
+      ArticleBlockV1.safeParse({
+        type: 'faq',
+        question: 'q',
+        answer: 'a',
+        answerBlocks: [{ type: 'image', assetVersionId: 'x', alt: '' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      ArticleBlockV1.safeParse({
+        type: 'faq',
+        question: 'q',
+        answer: 'a',
+        answerBlocks: Array.from({ length: 11 }, () => ({ type: 'paragraph', text: 'p' })),
+      }).success,
+    ).toBe(false);
+    // A rich FAQ answer's plain text must be the blocks' text (an API client cannot make them diverge).
+    const faq = (answer: string) =>
+      ArticleDocumentV1.safeParse({
+        ...base,
+        blocks: [
+          { type: 'faq', question: 'q', answer, answerBlocks: [{ type: 'paragraph', text: 'The answer.' }] },
+        ],
+      });
+    expect(faq('The answer.').success).toBe(true);
+    const diverged = faq('Something else.');
+    expect(diverged.success).toBe(false);
+    if (!diverged.success)
+      expect(diverged.error.issues[0]).toMatchObject({
+        path: ['blocks', 0, 'answer'],
+        message: 'faq_answer_mismatch',
+      });
+    expect(ArticleDocumentV1.safeParse({ ...base, v: 1 }).success).toBe(false);
+    expect(ArticleDocumentV1.safeParse({ ...base, v: 2 }).success).toBe(true);
+  });
+});

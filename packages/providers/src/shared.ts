@@ -108,21 +108,75 @@ export type Classifier = (input: {
   error?: unknown;
 }) => ProviderErrorClass;
 
+/** Why a media fetch was refused: the status, a body over the caller's cap, or a type the caller did not expect. */
+export type MediaFetchReason = 'status' | 'too_large' | 'unexpected_type';
+
 /** Thrown when a signed media URL (spec 9.3) cannot be read; always before the effect boundary. */
 export class MediaFetchError extends Error {
   readonly status: number;
-  constructor(url: string, status: number) {
-    super(`media fetch failed with HTTP ${status}: ${new URL(url).pathname}`);
+  readonly reason: MediaFetchReason;
+  constructor(url: string, status: number, reason: MediaFetchReason = 'status') {
+    super(
+      reason === 'status'
+        ? `media fetch failed with HTTP ${status}: ${new URL(url).pathname}`
+        : `media fetch refused (${reason}): ${new URL(url).pathname}`,
+    );
     this.name = 'MediaFetchError';
     this.status = status;
+    this.reason = reason;
   }
 }
 
-/** Fetches media bytes through ProviderIO so the SSRF policy, timeout and logging apply to release URLs too. */
-export async function fetchBytes(io: ProviderIO, url: string): Promise<Uint8Array> {
+export interface FetchBytesOptions {
+  /** The most bytes the caller accepts: checked against Content-Length first, then as the body streams in. */
+  maxBytes?: number;
+  /** A Content-Type prefix the answer must carry (e.g. `image/`); anything else is refused unread. */
+  expectType?: string;
+}
+
+/**
+ * Fetches media bytes through ProviderIO so the SSRF policy, timeout and logging apply to release URLs too. With
+ * `maxBytes` the body is bounded (RA-08: an image for a website is never read past the cap, whatever the header
+ * said); with `expectType` the answer's Content-Type is checked before a byte is read. Without options the
+ * behaviour is as before (the channel adapters fetch what the release described).
+ */
+export async function fetchBytes(
+  io: ProviderIO,
+  url: string,
+  opts: FetchBytesOptions = {},
+): Promise<Uint8Array> {
   const { res } = await io.request(url, { method: 'GET' }, { mutation: false });
   if (res.status !== 200) throw new MediaFetchError(url, res.status);
-  return new Uint8Array(await res.arrayBuffer());
+  if (opts.expectType !== undefined) {
+    const type = (res.headers.get('content-type') ?? '').toLowerCase();
+    if (!type.startsWith(opts.expectType.toLowerCase()))
+      throw new MediaFetchError(url, res.status, 'unexpected_type');
+  }
+  if (opts.maxBytes === undefined) return new Uint8Array(await res.arrayBuffer());
+  const declared = Number(res.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > opts.maxBytes)
+    throw new MediaFetchError(url, res.status, 'too_large');
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > opts.maxBytes) {
+      await reader.cancel();
+      throw new MediaFetchError(url, res.status, 'too_large');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
 }
 
 export function outcomeFromTransportError(

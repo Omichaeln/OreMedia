@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ArticleDocumentV1 } from './content';
+import { CmsPublishMode } from './destinations';
 
 export const ContentRevisionState = z.enum([
   'draft',
@@ -47,9 +49,38 @@ export const FrozenManifestV1 = z.object({
         message: 'exactly one of channelConnectionId or destinationId',
       }),
   ),
-  /** R2-3: the article revision the reviewer approves (its hash is what the destination variant publishes). */
+  /**
+   * R2-3: the article revision the reviewer approves (its hash is what the destination variant publishes). RA-09
+   * adds, for requests frozen since: the hash of the body as it will publish (`renderArticleHtml`, hashed as text)
+   * beside the structured document's hash, and the frozen document itself, so the review screen renders the
+   * preview from exactly what was frozen. A manifest frozen before carries neither and is compared without them.
+   */
   article: z
-    .object({ title: z.string(), slug: z.string(), articleHash: z.string(), blocks: z.number().int() })
+    .object({
+      title: z.string(),
+      slug: z.string(),
+      articleHash: z.string(),
+      blocks: z.number().int(),
+      renderedHtmlHash: z.string().optional(),
+      images: z.number().int().optional(),
+      document: ArticleDocumentV1.optional(),
+    })
+    .optional(),
+  /**
+   * RA-09: what approving means for every website target: the site, the page's path (its slug), and whether the
+   * article lands as a draft or a live page (the effective mode: asked for and granted). The time is `timing`.
+   */
+  websites: z
+    .array(
+      z.object({
+        destinationId: z.string(),
+        kind: z.string(),
+        displayName: z.string(),
+        siteUrl: z.string(),
+        path: z.string(),
+        publishMode: CmsPublishMode,
+      }),
+    )
     .optional(),
   timing: z.union([
     z.object({ kind: z.literal('exact'), at: z.string().datetime() }),
@@ -131,6 +162,23 @@ export const ApprovalInvalidatedReason = z.enum([
 ]);
 export type ApprovalInvalidatedReason = z.infer<typeof ApprovalInvalidatedReason>;
 
+/**
+ * RA-09: what differs between a request's frozen manifest and the package as it is now (the live manifest, frozen
+ * again and compared part by part): the article document, its rendering, a caption, a target's settings (a
+ * website's publish mode), the rendered files, the targets themselves, a website's identity or the brand version.
+ */
+export const ManifestChange = z.enum([
+  'article',
+  'rendering',
+  'captions',
+  'settings',
+  'exports',
+  'targets',
+  'websites',
+  'brand',
+]);
+export type ManifestChange = z.infer<typeof ManifestChange>;
+
 /** The attention an inbox item needs (spec 21.2 review inbox required states). */
 export const InboxAttention = z.enum([
   'awaiting_decision',
@@ -168,5 +216,7 @@ export const RELEASE_CHECK_KEYS = [
   'assets_rights_valid',
   'facts_valid',
   'capability_valid',
+  // RA-09: a website article still renders to the HTML the approved request froze (the renderer did not move)
+  'article_rendering_matches',
 ] as const;
 export type ReleaseCheckKey = (typeof RELEASE_CHECK_KEYS)[number];

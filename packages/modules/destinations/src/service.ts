@@ -605,7 +605,8 @@ export const destinationService = {
 
   /**
    * R2-3: a description for the content module's destination resolver (spec 4.2: never the row); null for a
-   * foreign or unknown id. `writable` says whether the kind can be published to on this deployment.
+   * foreign or unknown id. `writable` says whether the kind can be published to on this deployment; the name, the
+   * remote identity (a website's origin) and the granted scopes are what a frozen manifest shows (RA-09).
    */
   async describe(destinationId: string, tx?: Tx) {
     const row = await destinationsRepo.findById(destinationId, tx);
@@ -617,6 +618,10 @@ export const destinationService = {
       writable:
         DESTINATION_KIND_CAPABILITIES[StoredKind.parse(row.kind)].uses.includes('write') &&
         cmsWritable(row.kind),
+      // RA-09: what a review manifest names for a website target and the grant its publish mode depends on.
+      displayName: row.displayName,
+      externalId: row.externalId,
+      grantedScopes: [...row.grantedScopes],
     };
   },
 

@@ -2977,9 +2977,124 @@
                                     },
                                     "answer": {
                                       "type": "string"
+                                    },
+                                    "answerBlocks": {
+                                      "type": "array",
+                                      "items": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "paragraph"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "list"
+                                              },
+                                              "ordered": {
+                                                "type": "boolean"
+                                              },
+                                              "items": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": ["type", "items"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "link"
+                                              },
+                                              "href": {
+                                                "type": "string"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "href", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "quote"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              },
+                                              "cite": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          }
+                                        ]
+                                      }
                                     }
                                   },
                                   "required": ["type", "question", "answer"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "link"
+                                    },
+                                    "href": {
+                                      "type": "string"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "href", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "quote"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "cite": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "alt": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "image"
+                                    },
+                                    "caption": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["assetVersionId", "alt", "type"]
                                 }
                               ]
                             }
@@ -2998,6 +3113,21 @@
                           },
                           "featuredAssetId": {
                             "type": "string"
+                          },
+                          "v": {
+                            "const": 2
+                          },
+                          "featuredImage": {
+                            "type": "object",
+                            "properties": {
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["assetVersionId", "alt"]
                           }
                         },
                         "required": ["kind", "title", "slug", "blocks"]
@@ -3219,9 +3349,124 @@
                                     },
                                     "answer": {
                                       "type": "string"
+                                    },
+                                    "answerBlocks": {
+                                      "type": "array",
+                                      "items": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "paragraph"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "list"
+                                              },
+                                              "ordered": {
+                                                "type": "boolean"
+                                              },
+                                              "items": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": ["type", "items"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "link"
+                                              },
+                                              "href": {
+                                                "type": "string"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "href", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "quote"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              },
+                                              "cite": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          }
+                                        ]
+                                      }
                                     }
                                   },
                                   "required": ["type", "question", "answer"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "link"
+                                    },
+                                    "href": {
+                                      "type": "string"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "href", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "quote"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "cite": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "alt": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "image"
+                                    },
+                                    "caption": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["assetVersionId", "alt", "type"]
                                 }
                               ]
                             }
@@ -3240,6 +3485,21 @@
                           },
                           "featuredAssetId": {
                             "type": "string"
+                          },
+                          "v": {
+                            "const": 2
+                          },
+                          "featuredImage": {
+                            "type": "object",
+                            "properties": {
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["assetVersionId", "alt"]
                           }
                         },
                         "required": ["kind", "title", "slug", "blocks"]
@@ -9337,9 +9597,124 @@
                                     },
                                     "answer": {
                                       "type": "string"
+                                    },
+                                    "answerBlocks": {
+                                      "type": "array",
+                                      "items": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "paragraph"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "list"
+                                              },
+                                              "ordered": {
+                                                "type": "boolean"
+                                              },
+                                              "items": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              }
+                                            },
+                                            "required": ["type", "items"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "link"
+                                              },
+                                              "href": {
+                                                "type": "string"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "href", "text"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "type": {
+                                                "const": "quote"
+                                              },
+                                              "text": {
+                                                "type": "string"
+                                              },
+                                              "cite": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": ["type", "text"]
+                                          }
+                                        ]
+                                      }
                                     }
                                   },
                                   "required": ["type", "question", "answer"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "link"
+                                    },
+                                    "href": {
+                                      "type": "string"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "href", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "const": "quote"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "cite": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "text"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "alt": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "image"
+                                    },
+                                    "caption": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["assetVersionId", "alt", "type"]
                                 }
                               ]
                             }
@@ -9358,6 +9733,21 @@
                           },
                           "featuredAssetId": {
                             "type": "string"
+                          },
+                          "v": {
+                            "const": 2
+                          },
+                          "featuredImage": {
+                            "type": "object",
+                            "properties": {
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["assetVersionId", "alt"]
                           }
                         },
                         "required": ["kind", "title", "slug", "blocks"]
@@ -12501,9 +12891,124 @@
                               },
                               "answer": {
                                 "type": "string"
+                              },
+                              "answerBlocks": {
+                                "type": "array",
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "paragraph"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "text"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "list"
+                                        },
+                                        "ordered": {
+                                          "type": "boolean"
+                                        },
+                                        "items": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["type", "items"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "link"
+                                        },
+                                        "href": {
+                                          "type": "string"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "href", "text"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "quote"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        },
+                                        "cite": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "text"]
+                                    }
+                                  ]
+                                }
                               }
                             },
                             "required": ["type", "question", "answer"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "link"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "href", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "quote"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "cite": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "image"
+                              },
+                              "caption": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["assetVersionId", "alt", "type"]
                           }
                         ]
                       }
@@ -12522,6 +13027,21 @@
                     },
                     "featuredAssetId": {
                       "type": "string"
+                    },
+                    "v": {
+                      "const": 2
+                    },
+                    "featuredImage": {
+                      "type": "object",
+                      "properties": {
+                        "assetVersionId": {
+                          "type": "string"
+                        },
+                        "alt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["assetVersionId", "alt"]
                     }
                   },
                   "required": ["kind", "title", "slug", "blocks"]
@@ -12707,9 +13227,124 @@
                               },
                               "answer": {
                                 "type": "string"
+                              },
+                              "answerBlocks": {
+                                "type": "array",
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "paragraph"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "text"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "list"
+                                        },
+                                        "ordered": {
+                                          "type": "boolean"
+                                        },
+                                        "items": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": ["type", "items"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "link"
+                                        },
+                                        "href": {
+                                          "type": "string"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "href", "text"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "type": {
+                                          "const": "quote"
+                                        },
+                                        "text": {
+                                          "type": "string"
+                                        },
+                                        "cite": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["type", "text"]
+                                    }
+                                  ]
+                                }
                               }
                             },
                             "required": ["type", "question", "answer"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "link"
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "href", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "quote"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "cite": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["type", "text"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "alt": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "image"
+                              },
+                              "caption": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["assetVersionId", "alt", "type"]
                           }
                         ]
                       }
@@ -12728,6 +13363,21 @@
                     },
                     "featuredAssetId": {
                       "type": "string"
+                    },
+                    "v": {
+                      "const": 2
+                    },
+                    "featuredImage": {
+                      "type": "object",
+                      "properties": {
+                        "assetVersionId": {
+                          "type": "string"
+                        },
+                        "alt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["assetVersionId", "alt"]
                     }
                   },
                   "required": ["kind", "title", "slug", "blocks"]

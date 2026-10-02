@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { FrozenManifestV1, ReviewDecisionKind } from '@oremedia/contracts/review';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
@@ -9,15 +9,18 @@ import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
+import { ArticlePreview } from '../content/article-preview';
 import {
   ATTENTION_CHIP,
   REQUEST_STATE_CHIP,
   invalidatedReasonText,
+  manifestChangeText,
   manifestChannels,
   reviewLinkUrl,
   shortHash,
   staleReasonText,
   timingText,
+  websiteStatement,
 } from './review-attention';
 import {
   isMemberView,
@@ -105,6 +108,74 @@ function ManifestMedia({
   );
 }
 
+/**
+ * RA-09: the article preview rendered from the frozen document (never the live revision), with the frozen
+ * images signed through the request-bound media endpoint, and what approving means for each website target.
+ */
+function FrozenArticle({
+  reviewRequestId,
+  manifest,
+}: {
+  reviewRequestId: string | undefined;
+  manifest: FrozenManifestV1;
+}) {
+  const media = useManifestMedia(reviewRequestId ?? null);
+  const document = manifest.article?.document;
+  const images = media.data?.images;
+  const urls = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const image of images ?? [])
+      if (image.verified && image.url) map.set(image.assetVersionId, image.url);
+    return map;
+  }, [images]);
+
+  const unverified = (media.data?.images ?? []).filter((i) => !i.verified).length;
+  return (
+    <div className="flex flex-col gap-2" data-testid="frozen-article">
+      {(manifest.websites ?? []).map((site) => (
+        <StatusBanner
+          key={site.destinationId}
+          tone={site.publishMode === 'publish' ? 'warning' : 'info'}
+          title={site.publishMode === 'publish' ? 'Approval publishes live' : 'Approval saves a draft'}
+          description={websiteStatement(site, manifest.timing)}
+          data-testid="website-intent"
+          data-publish-mode={site.publishMode}
+        />
+      ))}
+      {document ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Rendered from the frozen document by the same renderer the website receives
+            {manifest.article?.renderedHtmlHash
+              ? `; rendered hash ${shortHash(manifest.article.renderedHtmlHash)}`
+              : ''}
+            .
+          </p>
+          {unverified > 0 && (
+            <Badge tone="critical" data-testid="article-image-unverified">
+              {unverified} image{unverified === 1 ? '' : 's'} could not be verified against the manifest
+            </Badge>
+          )}
+          <ArticlePreview
+            article={document}
+            imageUrls={urls}
+            featuredUrl={
+              document.featuredImage ? (urls.get(document.featuredImage.assetVersionId) ?? null) : null
+            }
+            label="Frozen article preview"
+          />
+        </>
+      ) : (
+        manifest.article && (
+          <p className="text-xs text-muted-foreground">
+            This request was frozen before previews were kept; the article hash above is what was approved.
+          </p>
+        )
+      )}
+    </div>
+  );
+}
+
 /** Spec 13.3: exactly what the reviewer sees. Shared by the inbox detail and the external portal. */
 export function ManifestSummary({
   manifest,
@@ -187,6 +258,9 @@ export function ManifestSummary({
           <li className="text-xs text-muted-foreground">No channel variants were frozen.</li>
         )}
       </ul>
+      {(manifest.article || manifest.websites) && (
+        <FrozenArticle reviewRequestId={reviewRequestId} manifest={manifest} />
+      )}
       {reviewRequestId && <ManifestMedia reviewRequestId={reviewRequestId} manifest={manifest} name={name} />}
     </div>
   );
@@ -274,6 +348,18 @@ function MemberDetail({
           tone="warning"
           title="Stale: the package changed after this request was frozen"
           description={`What changed: ${staleReasonText(r.staleReason)}. Reviewers are told the same. Ask for a new review request on the current package; this one cannot be decided.`}
+        />
+      )}
+      {r.changedSinceFreeze.length > 0 && (
+        <StatusBanner
+          tone="warning"
+          title={validApproval ? 'Changed since approval' : 'Changed since this request was frozen'}
+          description={`What changed: ${manifestChangeText(r.changedSinceFreeze)}. ${
+            validApproval
+              ? 'The approval no longer matches what would publish; dispatch holds the publication and a new review is needed.'
+              : 'A decision on this request will be refused; ask for a new review on the current package.'
+          }`}
+          data-testid="changed-since-freeze"
         />
       )}
       {r.state === 'decided' && r.revisionState === 'changes_requested' && (

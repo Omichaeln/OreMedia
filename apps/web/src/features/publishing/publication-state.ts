@@ -150,6 +150,8 @@ export const HOLD_REASON_TEXT: Record<string, string> = {
   assets_rights_valid: 'An asset in the package lost its usage rights.',
   facts_valid: 'A fact the copy relies on is no longer valid (an expired offer, for example).',
   capability_valid: 'The variant no longer passes the channel capability check.',
+  article_rendering_matches:
+    'The article no longer renders to the HTML the approved review request froze; ask for a new review.',
   // Spec 17.6 restore rule (publishing.publications.holdRestored), not a release check: it was never sent.
   restored_from_backup:
     'The data was restored from a backup while this was waiting to be sent; it was never sent. Release it again or cancel it.',

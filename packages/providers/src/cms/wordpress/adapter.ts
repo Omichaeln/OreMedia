@@ -1,21 +1,26 @@
 import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
 import { classifyByStatus, retryAfterMs, truncateForTemporal } from '../../base';
-import type {
-  CmsAdapter,
-  CmsArticleInput,
-  CmsReadResult,
-  CmsRemoteArticle,
-  CmsRemoveResult,
-  CmsRenderedPage,
-  CmsSite,
-  CmsUpdatePrecondition,
-  CmsVerifyResult,
-  CmsWriteResult,
+import {
+  CMS_MEDIA_MAX_BYTES,
+  type CmsAdapter,
+  type CmsArticleInput,
+  type CmsMediaInput,
+  type CmsMediaResult,
+  type CmsReadResult,
+  type CmsRemoteArticle,
+  type CmsRemoveResult,
+  type CmsRenderedPage,
+  type CmsSite,
+  type CmsUpdatePrecondition,
+  type CmsVerifyResult,
+  type CmsWriteResult,
 } from '../../cms-contract';
 import { ProviderTransportError, type ProviderIO } from '../../io';
 import {
   EffectBoundary,
+  MediaFetchError,
   arr,
+  fetchBytes,
   get,
   num,
   readResponse,
@@ -190,6 +195,72 @@ export class WordPressCmsAdapter implements CmsAdapter {
     return { outcome: 'found', article };
   }
 
+  /**
+   * RA-08: the media endpoint takes the file as the request body with its type and a Content-Disposition file
+   * name (`POST /media`); the alt text is a field of the created attachment, set with a second call. The bytes are
+   * read from the signed release URL through ProviderIO (spec 9.3), never from storage directly.
+   */
+  async uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult> {
+    const boundary = new EffectBoundary();
+    try {
+      // The release is read bounded and must be an image: the site never receives what the release did not describe.
+      const bytes = await fetchBytes(io, media.url, { maxBytes: CMS_MEDIA_MAX_BYTES, expectType: 'image/' });
+      boundary.cross();
+      const { res } = await io.request(
+        api(site, '/media'),
+        {
+          method: 'POST',
+          headers: {
+            ...basic(site, credentials),
+            accept: 'application/json',
+            'content-type': media.mime,
+            'content-disposition': `attachment; filename="${media.filename.replace(/["\\\r\n]/g, '')}"`,
+          },
+          body: bytes,
+        },
+        { mutation: true },
+      );
+      const created = await readResponse(res);
+      if (created.status !== 201 && created.status !== 200) return mediaFailure(created, boundary);
+      const id = num(get(created.json, 'id'));
+      const url = str(get(created.json, 'source_url'));
+      if (id === undefined || !url)
+        return { outcome: 'unknown', code: 'malformed_response', message: summarise(created, 300) };
+      if (media.alt.trim() !== '') {
+        const named = await request(
+          io,
+          api(site, `/media/${encodeURIComponent(String(id))}`),
+          {
+            method: 'POST',
+            headers: {
+              ...basic(site, credentials),
+              accept: 'application/json',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ alt_text: media.alt }),
+          },
+          true,
+        );
+        if (named.status !== 200) return mediaFailure(named, boundary);
+      }
+      return { outcome: 'done', media: { remoteId: String(id), url } };
+    } catch (err) {
+      if (err instanceof MediaFetchError)
+        return err.reason === 'status'
+          ? { outcome: 'retryable_error', code: 'media_fetch_failed', message: err.message }
+          : { outcome: 'rejected', code: `media_${err.reason}`, message: err.message };
+      const failed = writeTransportFailure(err, boundary);
+      return failed.outcome === 'done' || failed.outcome === 'conflict'
+        ? { outcome: 'unknown', code: 'transport_after_send', message: 'unreachable' }
+        : failed;
+    }
+  }
+
   async createArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -221,6 +292,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
             status: input.status,
             categories,
             tags,
+            ...featuredMediaField(input.featuredMedia),
           }),
         },
         true,
@@ -270,6 +342,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
       if (input.excerpt !== undefined) body['excerpt'] = input.excerpt;
       if (input.html !== undefined) body['content'] = input.html;
       if (input.status !== undefined) body['status'] = input.status;
+      Object.assign(body, featuredMediaField(input.featuredMedia));
       if (input.categories)
         body['categories'] = await this.resolveTerms(site, credentials, io, 'categories', input.categories);
       if (input.tags) body['tags'] = await this.resolveTerms(site, credentials, io, 'tags', input.tags);
@@ -485,6 +558,18 @@ export class WordPressCmsAdapter implements CmsAdapter {
     }
     return ids;
   }
+}
+
+/** The post field naming the featured attachment (its numeric id as the media endpoint returned it). */
+const featuredMediaField = (media: CmsArticleInput['featuredMedia']): Record<string, number> =>
+  media && /^\d+$/.test(media.remoteId) ? { featured_media: Number(media.remoteId) } : {};
+
+/** A refused media upload, classified as a write: the upload is the effect, so a failure after it is ambiguous. */
+function mediaFailure(res: ProviderResponse, boundary: EffectBoundary): CmsMediaResult {
+  const failed = writeFailure(classifyByStatus, res, boundary);
+  return failed.outcome === 'done' || failed.outcome === 'conflict'
+    ? { outcome: 'unknown', code: `http_${res.status}`, message: summarise(res, 300) }
+    : failed;
 }
 
 /** A term listing or creation the site refused: carries the response so the write maps it like its own failure. */
