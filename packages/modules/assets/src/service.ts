@@ -160,6 +160,9 @@ const versionView = (v: AssetVersionRow) => ({
 export interface AuthoriseUseOptions {
   /** The brand the asset is being used for (its own brand, or a grantee brand). */
   brandId: string;
+  /** RA-08: the asset kinds and types the use accepts (a website page takes raster images only); any when absent. */
+  kinds?: readonly AssetKind[];
+  mimes?: readonly string[];
   channelConnectionIds?: readonly string[];
   territory?: string;
   scheduledFor?: Date;
@@ -594,6 +597,10 @@ export const assetService = {
     if (!asset) throw new NotFoundError('Asset', version.assetId);
     if (asset.currentVersionId !== version.id)
       throw new RightsIneligibleError(version.id, 'version_not_current');
+    if (opts.kinds && !opts.kinds.includes(asset.kind))
+      throw new RightsIneligibleError(version.id, 'kind_not_allowed');
+    if (opts.mimes && !opts.mimes.includes(version.mime.toLowerCase()))
+      throw new RightsIneligibleError(version.id, 'mime_not_allowed');
     const now = opts.now ?? new Date();
     const grant =
       asset.brandId === opts.brandId

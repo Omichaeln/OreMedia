@@ -1,18 +1,19 @@
 import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
 import { classifyByStatus, retryAfterMs, truncateForTemporal } from '../../base';
-import type {
-  CmsAdapter,
-  CmsArticleInput,
-  CmsMediaInput,
-  CmsMediaResult,
-  CmsReadResult,
-  CmsRemoteArticle,
-  CmsRemoveResult,
-  CmsRenderedPage,
-  CmsSite,
-  CmsUpdatePrecondition,
-  CmsVerifyResult,
-  CmsWriteResult,
+import {
+  CMS_MEDIA_MAX_BYTES,
+  type CmsAdapter,
+  type CmsArticleInput,
+  type CmsMediaInput,
+  type CmsMediaResult,
+  type CmsReadResult,
+  type CmsRemoteArticle,
+  type CmsRemoveResult,
+  type CmsRenderedPage,
+  type CmsSite,
+  type CmsUpdatePrecondition,
+  type CmsVerifyResult,
+  type CmsWriteResult,
 } from '../../cms-contract';
 import { ProviderTransportError, type ProviderIO } from '../../io';
 import {
@@ -207,7 +208,8 @@ export class WordPressCmsAdapter implements CmsAdapter {
   ): Promise<CmsMediaResult> {
     const boundary = new EffectBoundary();
     try {
-      const bytes = await fetchBytes(io, media.url);
+      // The release is read bounded and must be an image: the site never receives what the release did not describe.
+      const bytes = await fetchBytes(io, media.url, { maxBytes: CMS_MEDIA_MAX_BYTES, expectType: 'image/' });
       boundary.cross();
       const { res } = await io.request(
         api(site, '/media'),
@@ -249,7 +251,9 @@ export class WordPressCmsAdapter implements CmsAdapter {
       return { outcome: 'done', media: { remoteId: String(id), url } };
     } catch (err) {
       if (err instanceof MediaFetchError)
-        return { outcome: 'retryable_error', code: 'media_fetch_failed', message: err.message };
+        return err.reason === 'status'
+          ? { outcome: 'retryable_error', code: 'media_fetch_failed', message: err.message }
+          : { outcome: 'rejected', code: `media_${err.reason}`, message: err.message };
       const failed = writeTransportFailure(err, boundary);
       return failed.outcome === 'done' || failed.outcome === 'conflict'
         ? { outcome: 'unknown', code: 'transport_after_send', message: 'unreachable' }

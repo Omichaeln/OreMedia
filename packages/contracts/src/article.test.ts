@@ -244,7 +244,7 @@ const rich = ArticleDocumentV1.parse({
     {
       type: 'faq',
       question: 'What is tare?',
-      answer: 'ignored when blocks are present',
+      answer: 'The empty weight.\nSubtracted from the gross.',
       answerBlocks: [
         { type: 'paragraph', text: 'The empty weight.' },
         { type: 'list', items: ['Subtracted from the gross.'] },
@@ -325,6 +325,9 @@ describe('rich article documents (RA-08)', () => {
     // The last block is an image without a caption: the page's last text is the FAQ answer's last line.
     expect(articleLastParagraph(rich)).toBe('Subtracted from the gross.');
     expect(articleLastParagraph({ blocks: [rich.blocks[1] as ArticleBlockV1] })).toBe('North gate');
+    // A quote ends with its source when it names one (the page shows the cite last).
+    expect(articleLastParagraph({ blocks: [rich.blocks[4] as ArticleBlockV1] })).toBe('Foreman');
+    expect(articleLastParagraph({ blocks: [{ type: 'quote', text: 'q' }] })).toBe('q');
     expect(articleFirstParagraph({ blocks: [rich.blocks[6] as ArticleBlockV1] })).toBe('');
     expect(articleFirstParagraph({ blocks: [rich.blocks[2] as ArticleBlockV1] })).toBe(
       'https://acme.example/scales?a=1&b=2',
@@ -389,6 +392,22 @@ describe('rich article documents (RA-08)', () => {
         answerBlocks: Array.from({ length: 11 }, () => ({ type: 'paragraph', text: 'p' })),
       }).success,
     ).toBe(false);
+    // A rich FAQ answer's plain text must be the blocks' text (an API client cannot make them diverge).
+    const faq = (answer: string) =>
+      ArticleDocumentV1.safeParse({
+        ...base,
+        blocks: [
+          { type: 'faq', question: 'q', answer, answerBlocks: [{ type: 'paragraph', text: 'The answer.' }] },
+        ],
+      });
+    expect(faq('The answer.').success).toBe(true);
+    const diverged = faq('Something else.');
+    expect(diverged.success).toBe(false);
+    if (!diverged.success)
+      expect(diverged.error.issues[0]).toMatchObject({
+        path: ['blocks', 0, 'answer'],
+        message: 'faq_answer_mismatch',
+      });
     expect(ArticleDocumentV1.safeParse({ ...base, v: 1 }).success).toBe(false);
     expect(ArticleDocumentV1.safeParse({ ...base, v: 2 }).success).toBe(true);
   });

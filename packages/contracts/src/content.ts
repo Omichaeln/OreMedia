@@ -58,6 +58,15 @@ export const ArticleLinkUrl = z
   .string()
   .max(ARTICLE_LINK_URL_MAX)
   .regex(ARTICLE_LINK_PATTERN, 'an absolute http(s) URL');
+/** The asset kinds and (raster) types an article image may be: never an SVG or a video on a website's page (RA-08). */
+export const ARTICLE_IMAGE_KINDS = ['photo', 'illustration', 'icon', 'logo'] as const;
+export const ARTICLE_IMAGE_MIMES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+] as const;
 /** An image from the asset library: the asset version (immutable bytes) and the alt text the page carries. */
 export const ArticleImageV1 = z.object({
   assetVersionId: z.string().min(1),
@@ -224,6 +233,14 @@ export const ArticleDocumentV1 = z
         path: ['blocks'],
         message: `body_too_long:${chars}>${ARTICLE_BODY_MAX_CHARS}`,
       });
+    // A rich FAQ answer's plain text is the blocks' text: a client cannot make the two say different things.
+    for (const [i, b] of a.blocks.entries())
+      if (b.type === 'faq' && b.answerBlocks && b.answerBlocks.length > 0 && b.answer !== faqAnswerText(b))
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['blocks', i, 'answer'],
+          message: 'faq_answer_mismatch',
+        });
     const images = articleImages(a).length;
     if (images > ARTICLE_IMAGES_MAX)
       ctx.addIssue({

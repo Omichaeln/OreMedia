@@ -26,6 +26,8 @@ import {
   type CalendarPublication,
   type PlanItemRestore,
   type ContentClass,
+  ARTICLE_IMAGE_KINDS,
+  ARTICLE_IMAGE_MIMES,
   articleImages,
 } from '@oremedia/contracts/content';
 import {
@@ -349,7 +351,12 @@ async function assertArticleAssetsUsable(copy: CopyDocumentV1, brandId: string, 
   for (const [i, image] of articleImages(copy.article).entries()) {
     const path = `copy.article.images.${i}`;
     try {
-      await assetService.authoriseUse(image.assetVersionId, 'creative', { brandId }, tx);
+      await assetService.authoriseUse(
+        image.assetVersionId,
+        'creative',
+        { brandId, kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_MIMES },
+        tx,
+      );
     } catch (err) {
       if (err instanceof NotFoundError) details.push({ path, issue: 'asset_not_found' });
       else if (err instanceof RightsIneligibleError)

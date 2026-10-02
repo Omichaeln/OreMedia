@@ -230,7 +230,7 @@ const blockTailText = (b: ArticleBlockV1 | ArticleFaqAnswerBlockV1): string => {
     case 'image':
       return b.caption ?? '';
     case 'quote':
-      return b.text;
+      return b.cite ?? b.text;
     default:
       return articleBlockText(b);
   }

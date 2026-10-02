@@ -1,6 +1,11 @@
 import { renderArticleHtml } from '@oremedia/contracts/article';
 import { PolicyDocumentV1, defaultPolicyDocument } from '@oremedia/contracts/brand';
-import { articleImages, type ContentClass } from '@oremedia/contracts/content';
+import {
+  ARTICLE_IMAGE_KINDS,
+  ARTICLE_IMAGE_MIMES,
+  articleImages,
+  type ContentClass,
+} from '@oremedia/contracts/content';
 import { CreativeDocumentV1, OperationBatch, RenderValidationResult } from '@oremedia/contracts/creative';
 import { OremediaError, PolicyDeniedError, NotFoundError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
@@ -120,6 +125,9 @@ export type ReleaseAssetAuthoriser = (
     purpose: ReleaseAssetPurpose;
     channelConnectionIds: readonly string[];
     scheduledFor: Date;
+    /** RA-08: the kinds and types the use accepts (a website page takes raster images only); any when absent. */
+    kinds?: readonly string[];
+    mimes?: readonly string[];
   },
   tx?: Tx,
 ) => Promise<void>;
@@ -371,7 +379,11 @@ async function assetsUsable(
     // RA-08: a website article's images (the featured image and the image blocks) are asset versions too.
     if (variant.article)
       for (const image of articleImages(variant.article))
-        await assetAuthoriser(image.assetVersionId, { ...ctx, purpose: 'creative' }, tx);
+        await assetAuthoriser(
+          image.assetVersionId,
+          { ...ctx, purpose: 'creative', kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_MIMES },
+          tx,
+        );
     return true;
   } catch (err) {
     if (err instanceof OremediaError) return false; // RIGHTS_INELIGIBLE, NOT_FOUND: never a silent publish

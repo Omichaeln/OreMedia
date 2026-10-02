@@ -1470,6 +1470,42 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ],
       });
       await tdb.db.update(assets).set({ state: 'approved' }).where(eq(assets.id, assetId));
+      // Raster images of an image kind only: an SVG (stored-XSS surface on the site) or a video is refused.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:mime_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
+      await tdb.db.update(assets).set({ kind: 'video' }).where(eq(assets.id, assetId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:kind_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assets).set({ kind: 'photo' }).where(eq(assets.id, assetId));
       const pkg = await run(tenantA, (tx) =>
         contentService.packages.create(
           A,

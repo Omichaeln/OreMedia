@@ -1,3 +1,4 @@
+import type { AssetKind } from '@oremedia/contracts/assets';
 import { registerBrandChecker, MembershipRepository } from '@oremedia/module-access';
 import {
   experimentsService,
@@ -137,6 +138,8 @@ export function composeModules(): void {
         brandId: ctx.brandId,
         channelConnectionIds: ctx.channelConnectionIds,
         scheduledFor: ctx.scheduledFor,
+        ...(ctx.kinds ? { kinds: ctx.kinds as AssetKind[] } : {}),
+        ...(ctx.mimes ? { mimes: ctx.mimes } : {}),
       },
       tx,
     );

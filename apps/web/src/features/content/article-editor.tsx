@@ -82,7 +82,7 @@ const storedBlock = (b: ArticleBlockV1): ArticleBlockV1 => {
     const { answerBlocks: _dropped, ...plain } = b;
     return plain;
   }
-  return { ...b, answerBlocks, answer: faqAnswerText({ answer: b.answer, answerBlocks }).slice(0, 5000) };
+  return { ...b, answerBlocks, answer: faqAnswerText({ answer: b.answer, answerBlocks }) };
 };
 
 /**

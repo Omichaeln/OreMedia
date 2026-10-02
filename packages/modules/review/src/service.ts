@@ -326,7 +326,8 @@ async function freezeManifest(
   const article = revision.copy.article;
   // RA-09: what approving means for each website: the site, the page's path and the effective publish mode
   // (asked for on the variant and granted at connect time). A destination that no longer resolves is named by
-  // its id so the manifest still says where the article would go.
+  // its id so the manifest still says where the article would go. Always written (empty for channel-only
+  // packages), so only a manifest frozen before RA-09 takes the lenient comparison (comparableManifest).
   const websites = [];
   for (const v of variants) {
     if (!v.destinationId) continue;
@@ -377,7 +378,7 @@ async function freezeManifest(
           },
         }
       : {}),
-    ...(websites.length ? { websites } : {}),
+    websites,
   });
 }
 

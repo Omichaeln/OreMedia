@@ -364,18 +364,14 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
         },
       }
     : {}),
-  ...(variants.some((v) => v.destinationId)
-    ? {
-        websites: variants
-          .filter((v) => v.destinationId)
-          .map((v) => ({
-            destinationId: v.destinationId as string,
-            ...CMS_SITE,
-            path: revision.copy.article ? `/${revision.copy.article.slug}` : '',
-            publishMode: v.settings['publishMode'] === 'publish' ? ('publish' as const) : ('draft' as const),
-          })),
-      }
-    : {}),
+  websites: variants
+    .filter((v) => v.destinationId)
+    .map((v) => ({
+      destinationId: v.destinationId as string,
+      ...CMS_SITE,
+      path: revision.copy.article ? `/${revision.copy.article.slug}` : '',
+      publishMode: v.settings['publishMode'] === 'publish' ? ('publish' as const) : ('draft' as const),
+    })),
 });
 /** RA-09: what differs between a frozen manifest and the live one, as the server's manifestChanges reports it. */
 const manifestChanges = (frozen: FrozenManifestV1, live: FrozenManifestV1): ManifestChange[] => {

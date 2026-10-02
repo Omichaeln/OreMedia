@@ -62,6 +62,8 @@ export interface CmsMediaInput {
   alt: string;
   filename: string;
 }
+/** RA-08: the most bytes an article image may weigh on its way to the site (the ingest cap for a web image). */
+export const CMS_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 /** A media item as the site holds it: its remote id and the public address the article's markup references. */
 export interface CmsMediaRef {
   remoteId: string;

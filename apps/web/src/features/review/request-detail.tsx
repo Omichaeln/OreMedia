@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { FrozenManifestV1, ReviewDecisionKind } from '@oremedia/contracts/review';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
@@ -121,9 +121,14 @@ function FrozenArticle({
 }) {
   const media = useManifestMedia(reviewRequestId ?? null);
   const document = manifest.article?.document;
-  const urls = new Map<string, string>();
-  for (const image of media.data?.images ?? [])
-    if (image.verified && image.url) urls.set(image.assetVersionId, image.url);
+  const images = media.data?.images;
+  const urls = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const image of images ?? [])
+      if (image.verified && image.url) map.set(image.assetVersionId, image.url);
+    return map;
+  }, [images]);
+
   const unverified = (media.data?.images ?? []).filter((i) => !i.verified).length;
   return (
     <div className="flex flex-col gap-2" data-testid="frozen-article">

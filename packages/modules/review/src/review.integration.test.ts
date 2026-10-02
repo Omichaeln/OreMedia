@@ -26,6 +26,7 @@ import {
   users,
 } from '@oremedia/db/schema/access';
 import { entitlements } from '@oremedia/db/schema/billing';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import { channelVariants, contentRevisions } from '@oremedia/db/schema/content';
 import { brandDestinations } from '@oremedia/db/schema/destinations';
@@ -204,7 +205,7 @@ describe('review module (spec 13) against MySQL 8', () => {
   // Foreign rows (tenant B) for the NOT_FOUND checks.
   let requestB = '';
   let approvalB = '';
-  const authorised = { assets: true };
+  const authorised = { assets: true, versions: new Map<string, { kind: string; mime: string }>() };
   const checks = { channelUsable: true, validateVariant: true, count: 0, publishedElsewhere: false };
 
   const ctx = (tenantId: string, actorId: string): TenantContext => ({
@@ -395,8 +396,14 @@ describe('review module (spec 13) against MySQL 8', () => {
     registerRevisionChangeHook((documentId, tx) =>
       reviewService.approvals.invalidateForCreativeRevisionChange(documentId, tx),
     );
-    registerAssetAuthoriser(async (assetVersionId) => {
+    registerAssetAuthoriser(async (assetVersionId, ctx) => {
       if (!authorised.assets) throw new RightsIneligibleError(assetVersionId, 'rights_expired');
+      // RA-08: the dispatch check names the kinds and types a website page accepts; the stub answers from a map.
+      const version = authorised.versions.get(assetVersionId);
+      if (version && ctx.kinds && !ctx.kinds.includes(version.kind))
+        throw new RightsIneligibleError(assetVersionId, 'kind_not_allowed');
+      if (version && ctx.mimes && !ctx.mimes.includes(version.mime))
+        throw new RightsIneligibleError(assetVersionId, 'mime_not_allowed');
     });
     const checkers: ReleaseCheckers = {
       channelUsable: async () => checks.channelUsable,
@@ -853,6 +860,105 @@ describe('review module (spec 13) against MySQL 8', () => {
       } finally {
         resetReviewImageSigner();
       }
+    });
+
+    it('RA-08 at dispatch: a website article whose image is an SVG (or not an image kind) fails assets_rights_valid, a raster one passes', async () => {
+      const destinationId = (
+        await tdb.db
+          .select({ id: brandDestinations.id })
+          .from(brandDestinations)
+          .where(and(eq(brandDestinations.tenantId, tenantA), eq(brandDestinations.kind, 'cms_site')))
+      )[0]!.id;
+      const assetId = newId('asset');
+      const assetVersionId = newId('assetVersion');
+      await tdb.db.insert(assets).values({
+        id: assetId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'photo',
+        name: 'weighbridge',
+        currentVersionId: assetVersionId,
+        state: 'approved',
+        rightsState: 'recorded',
+      });
+      await tdb.db.insert(assetVersions).values({
+        id: assetVersionId,
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        number: 1,
+        storageKey: `assets/${tenantA}/${brandA}/${assetId}/${assetVersionId}/original`,
+        contentHash: hashText('png'),
+        mime: 'image/png',
+        bytes: 3,
+        provenance: { kind: 'upload', uploadedByUserId: manager.id, originalFilename: 'w.png' },
+      });
+      await tdb.db.insert(usageRights).values({
+        id: newId('usageRights'),
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        owner: 'owner',
+        permittedChannels: 'all',
+        territories: 'all',
+        expiresAt: null,
+        releases: [],
+        restrictions: [],
+      });
+      const pkg = await runA((tx) =>
+        contentService.packages.create(
+          manager.actor,
+          {
+            brandId: brandA,
+            title: 'Weighed with a picture',
+            copy: {
+              schemaVersion: 1,
+              master: { text: 'Weighed.', factRefs: [] },
+              article: {
+                kind: 'article',
+                v: 2,
+                title: 'Weighed with a picture',
+                slug: 'weighed-with-a-picture',
+                excerpt: '',
+                featuredImage: { assetVersionId, alt: 'Featured' },
+                blocks: [{ type: 'paragraph', text: 'Every load is weighed twice.' }],
+                categories: [],
+                tags: [],
+              },
+            },
+            creativeDocumentIds: [],
+          },
+          tx,
+        ),
+      );
+      const website = (
+        await runA((tx) =>
+          contentService.variants.generate(
+            manager.actor,
+            { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+            tx,
+          ),
+        )
+      ).variants[0]!;
+      const pub = pubFor({
+        contentPackageId: pkg.contentPackageId,
+        contentRevisionId: pkg.contentRevisionId,
+        channelVariantId: website.id,
+        channelConnectionId: null,
+        destinationId,
+      });
+      const reasonsOf = async () => {
+        const d = await runA(() => evaluateRelease(pub, at));
+        return d.allow ? [] : d.reasons;
+      };
+      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/png' });
+      expect(await reasonsOf()).not.toContain('assets_rights_valid');
+      // The version became an SVG on the site's way (an asset re-ingested, say): held before any upload.
+      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/svg+xml' });
+      expect(await reasonsOf()).toContain('assets_rights_valid');
+      authorised.versions.set(assetVersionId, { kind: 'video', mime: 'image/png' });
+      expect(await reasonsOf()).toContain('assets_rights_valid');
+      authorised.versions.delete(assetVersionId);
     });
 
     it('counts an open request past its due time as overdue, for its own brand and tenant only', async () => {

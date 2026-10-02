@@ -82,6 +82,13 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
       outcome: 'rejected',
       code: 'reconnect_required',
     });
+    // The release must answer with an image: anything else is refused before the site is touched.
+    load('upload_media_not_image');
+    expect(await adapter.uploadMedia(site, creds, io, media)).toMatchObject({
+      outcome: 'rejected',
+      code: 'media_unexpected_type',
+    });
+    expect(io.calls.every((c) => !c.mutation)).toBe(true);
   });
 
   it("createArticle (RA-08): the uploaded media is the post's featured image and the body references the site's copy", async () => {

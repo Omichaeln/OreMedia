@@ -1490,6 +1490,25 @@ describe('destinations module against MySQL 8', () => {
       expect(refused).toMatchObject({ outcome: 'rejected', code: 'reconnect_required' });
       expect(cms.calls.map((c) => c.op)).toEqual(['upload']);
       cms.uploadBehaviour = 'ok';
+      // A version that is not a raster image (an SVG) is refused before the adapter is asked anything.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      cms.calls.length = 0;
+      const svg = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_3',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(svg).toMatchObject({ outcome: 'rejected', code: 'article_image_not_raster' });
+      expect(cms.calls).toEqual([]);
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
     });
 
     it('an edit reads the remote first: with the read-back hash it writes; after the site moved it refuses as a conflict and overwrites nothing', async () => {

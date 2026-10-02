@@ -25,6 +25,7 @@ import {
 } from '@oremedia/contracts/destinations';
 import {
   ARTICLE_BODY_MAX_CHARS,
+  ARTICLE_IMAGE_MIMES,
   articleImages,
   type ArticleDocumentV1,
   type ArticleImageV1,
@@ -102,7 +103,6 @@ const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
   'image/gif': 'gif',
   'image/webp': 'webp',
   'image/avif': 'avif',
-  'image/svg+xml': 'svg',
 };
 const mediaFilename = (slug: string, index: number, mime: string): string =>
   `${slug}-${index + 1}.${EXTENSION_BY_MIME[mime.toLowerCase()] ?? 'bin'}`;
@@ -139,6 +139,15 @@ async function uploadArticleMedia(
         },
       };
     }
+    // Raster images only (contracts ARTICLE_IMAGE_MIMES): an SVG or a video never lands on a website's page.
+    if (!(ARTICLE_IMAGE_MIMES as readonly string[]).includes(release.mime.toLowerCase()))
+      return {
+        failed: {
+          outcome: 'rejected',
+          code: 'article_image_not_raster',
+          message: `the image ${image.assetVersionId} is ${release.mime}, not a raster image`,
+        },
+      };
     const uploaded = await adapter.uploadMedia(site, creds, io, {
       url: release.url,
       mime: release.mime,

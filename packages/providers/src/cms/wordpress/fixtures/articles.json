@@ -1000,6 +1000,25 @@
           }
         }
       ]
+    },
+    "upload_media_not_image": {
+      "description": "RA-08: a release that answers with something other than an image is refused unread, before any effect on the site.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "releases.example",
+            "path": "/releases/t/b/av_1/original/x.png"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "content-type": "text/html"
+            },
+            "body": "<html>not an image</html>"
+          }
+        }
+      ]
     }
   }
 }
