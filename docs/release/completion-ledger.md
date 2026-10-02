@@ -1,0 +1,73 @@
+# Completion ledger (end-to-end build completion, verification and Railway release)
+
+Working ledger for the 2 October 2026 completion mandate. One row per requirement or finding; the evidence
+column names the level with the vocabulary of `r1-evidence.md` (SI source inspection, FU fixture tests, DB real
+database or workflow tests, SB deployed browser acceptance, RP real provider, PO production observation). A row
+moves only on evidence; documentation claims are leads to verify.
+
+## 1. Starting state (discovery, 2 October 2026, 09:50 UTC)
+
+### Repository
+
+- `main` at `da4c90d` (#30, guidelines single publisher). CI on main: see the run recorded in section 4.
+- Open pull request: #31 (Brand Kit Agent inventory and architecture note, docs only, awaiting the entry-point
+  decision). No other open branches with unmerged work; stale worktrees removed.
+- Toolchain: Node 22.22.2 and pnpm 10.6.1 in `package.json` (`engines`, `packageManager`), CI and both
+  Dockerfiles. Consistent; no change needed.
+- Tests run from the root: `test` (unit), `test:integration` (MySQL 8), `test:cross-tenant`, `test:replay`,
+  `test:time-skipping`, e2e under `apps/web/e2e` (opt-in `OREMEDIA_E2E=1` against the built app and the mock
+  transport), `smoke:prod` (deployed smoke).
+
+### Railway
+
+| Environment | Project                                                                                               | Web origin                                   | Services                                                                                                                                                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| production  | `OreMedia Social` `ae355f37-5289-4eee-a691-d12c18d83890`, env `aa208223-4d41-45a9-a747-3a3f66e51a9e`  | `https://oremedia-production.up.railway.app` | api `successful-fulfillment`, worker-core `sparkling-strength`, worker-render `keen-charisma`, `worker-ingest`, web `OreMedia` (Caddy), `redirector`, approval monitor `dynamic-intuition` (cron \*/5), `db-roles`, `db-backup` (cron 03:00 UTC, mysqldump to a 50 GB volume, 14-day retention), `temporal`, `temporal-db`, `MySQL` (mysql:9), `Redis`, `clamav` |
+| staging     | `OreMedia Staging` `181fda48-853c-4597-ac4d-f260e55b0b13`, env `cb1bdc0b-69ac-49e1-ba1d-fbfa3166021b` | `https://web-staging-6326.up.railway.app`    | api, worker-core, worker-render, worker-ingest, web, redirector, approval-monitor (cron \*/5), db-roles, temporal, MySQL, `MySQL-zSdm`, Redis, clamav, plus the rehearsal leftovers `mysql-restore` and `restore-rehearsal`                                                                                                                                      |
+
+- Deployed identity, both environments: every repo-sourced service on `main` at `da4c90d` (deploys of
+  09:40 UTC, all SUCCESS); production smoke run 28 passed on that commit.
+- Migration level: 0019 (`seo_audit`), 108 tables; `db-roles` PASS on both environments at the last run.
+- Configuration reports at the last start: production api "configuration complete" (6 capabilities),
+  worker-core complete (6), worker-ingest complete (5), worker-render complete (1); staging api complete (5).
+- Recovery: nightly logical dump only; Railway MySQL has no point-in-time recovery (`r1-evidence.md` §8).
+  Staging restore rehearsal passed (1 October). The 15-minute RPO is not met today: RA-13.
+
+### Connection inventory (capability level; variable names and states only, no values)
+
+| Capability                                                                                | Production                                                | Staging                                                      | State                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google sign-in (`AUTH_*`)                                                                 | set                                                       | set                                                          | usable and verified (sign-in works; smoke user signs in with password)                                                                                                    |
+| Object store R2 (`OBJECT_STORE_*`)                                                        | set on api, worker-core, worker-render                    | set                                                          | usable and verified (smoke upload through ingest and ClamAV)                                                                                                              |
+| Model provider (`OPENROUTER_API_KEY_REF`, `OREMEDIA_MODEL_ID`, `OREMEDIA_IMAGE_MODEL_ID`) | set on worker-core and worker-ingest (sealed)             | set                                                          | configured; bounded real-model evaluation pending (RA-14)                                                                                                                 |
+| Meta `facebook_page`, `instagram_business` app credentials                                | set on api and workers                                    | set (samples per handover)                                   | configured but uncertified: Meta app `1111601258212850` unpublished, App Review and Business Verification pending (platform access pending); adapters `certifiedAt: null` |
+| LinkedIn `linkedin_page` app credentials                                                  | set                                                       | set (sample)                                                 | configured but uncertified: Community Management API review in progress (platform access pending)                                                                         |
+| X `x`                                                                                     | disabled via `OREMEDIA_DISABLED_CHANNELS`                 | disabled                                                     | deliberately disabled (D-04 open; no app)                                                                                                                                 |
+| GA4 `ga4_property`, Search Console `search_console_site`                                  | refs absent; kinds in `OREMEDIA_DISABLED_SOURCES`         | refs set on api and worker-core (sample or real: unverified) | production: absent by decision (credentials last); staging: configured, unverified; adapters uncertified; Google sensitive-scope verification pending                     |
+| Business Profile `gbp_location`                                                           | absent, flag off                                          | absent                                                       | platform access pending (API access application), D-17 read-only                                                                                                          |
+| WordPress `cms_site`                                                                      | per brand (no variable)                                   | per brand                                                    | no pilot site connected; adapter uncertified (D-16)                                                                                                                       |
+| Discord `discord_webhook`                                                                 | kind exists                                               |                                                              | deliberately deferred (D-18)                                                                                                                                              |
+| Review-mail monitor (Gmail)                                                               | approval monitor runs on production (`dynamic-intuition`) | approval-monitor present                                     | production configuration: to verify in the monitor's logs                                                                                                                 |
+| Staging smoke (`STAGING_SMOKE_*`, `STAGING_SMOKE_ENABLED`)                                |                                                           | job skipped on run 28                                        | not enabled: the staging smoke user and secrets do not exist yet (engineering: create with `bootstrap-owner`)                                                             |
+
+Tenant-level channel connections and destinations (OAuth grants per brand) are read through the authenticated
+API in section 5; none can exist for the social channels while the adapters are uncertified (the connect start
+returns `provider_not_certified`).
+
+## 2. Requirement and finding rows
+
+Columns: ID · user outcome · current state · dependency · implementation · acceptance · tested commit ·
+environment · evidence level · remaining blocker · owner.
+
+(filled as each finding is revalidated; see sections below)
+
+## 3. Decisions in force that bound the scope
+
+D-04 (X as a fourth channel: open), D-11 (distinct approver for publications on client brands), D-12 (neutral
+product brand), D-13 (approver binding instant), D-16 (WordPress REST), D-17 (Business Profile read-only),
+D-18 (Discord deferred, webhook only), D-21 (one person may publish guidelines). Custom CRM integration is out of
+scope by the mandate.
+
+## 4. Evidence log
+
+(appended per increment: commit, command, environment, counts, failures, skips)
