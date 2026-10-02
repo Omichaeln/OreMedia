@@ -148,3 +148,14 @@ applied` and `configuration complete`; every production service deployed SUCCESS
   Thirteen of the fourteen RA items are now on main; RA-14's acceptance job (PR #36) remains open while its model-evaluation
   step is completed on staging (`runs.start` now refuses `no_skill`, aligned with `effectiveLimits`; the job provisions the
   built-in copywriting skill for the fixture company).
+- 2 October 2026, 18:58 UTC: staging acceptance runs 5 and 6 (19de768, main merged into RA-14) again `ACCEPTANCE_DONE 85/86
+(13 skipped)`; the model evaluation timed out at 600 s with the skill version in `sandbox_evaluation`. Root cause (worker-core
+  log, correlation `acceptance-0cd073ef…`, nine retries of `Workflow execution already started`): the first grading on staging
+  failed at 18:11 UTC and returned the version to draft; the re-request reused the same Temporal workflow id
+  (`skill-evaluation:<version>:<suite>`), and the worker's ALLOW_DUPLICATE_FAILED_ONLY reuse policy refuses an id whose earlier
+  run completed, so the outbox event could never dispatch. This is a product defect, not a fixture problem: a person pressing
+  Evaluate again after a failed grading would see the same hang. Fix pushed to PR #36 as 2c5f7c4: the workflow id carries the
+  request's row version (the outbox event's aggregate version, the destination-verify pattern); the acceptance check reads the
+  audit trail and names the grading error when its own request fails. The same push marks the test fixture provider ready for
+  the RA-01 activation gate, which the in-process acceptance test tripped after the merge (CI integration job red on 19de768).
+  The staging event dispatches on its own once worker-core redeploys from main with the new id.
