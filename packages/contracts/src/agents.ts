@@ -278,6 +278,7 @@ export const RunEffectiveLimits = z.object({
 export const RunStartBlocker = z.enum([
   'principal_revoked',
   'kill_switch_engaged',
+  'model_routing_denied',
   'entitlement_exhausted',
   'no_skill',
   'budget_exhausted_month',

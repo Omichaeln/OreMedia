@@ -587,8 +587,19 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await editor.getByLabel('Caption').fill('Workshop dates for October.');
     await editor.getByLabel(/Launch poster · square_1080/).check();
     await editor.getByLabel('Alt texts').fill('Launch poster');
+    // RA-07: the channel's settings are the fields its capability describes, never a JSON box.
+    expect(await editor.locator('input[placeholder^="{"]').count()).toBe(0);
+    expect(await editor.getByTestId('variant-settings').textContent()).toContain('Channel settings');
+    await editor.getByLabel('Reply Settings (optional)').click();
+    await page.getByRole('option', { name: 'following' }).click();
+    await editor.getByLabel('Require Alt Text (optional)').click();
+    await page.getByRole('option', { name: 'Yes' }).click();
     await editor.getByRole('button', { name: 'Save variant' }).click();
     await expect.poll(() => requestsTo('content.variants.update').length, { timeout: 15_000 }).toBe(1);
+    const saved = [...backend.phase5.variants.values()].find(
+      (v) => v.channelConnectionId !== null && v.version > 1,
+    );
+    expect(saved?.settings).toEqual({ replySettings: 'following', requireAltText: true });
     await expect
       .poll(() => detail.locator('[data-testid="variant"][data-variant-valid="true"]').count(), {
         timeout: 15_000,

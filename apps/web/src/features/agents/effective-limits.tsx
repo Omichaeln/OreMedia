@@ -105,7 +105,7 @@ export function EffectiveLimits({
               <span>
                 : tools needing these are refused during the run (
                 {l.tools
-                  .filter((t) => !t.allowed)
+                  .filter((t) => !t.allowed && t.action !== null)
                   .map((t) => t.name)
                   .join(', ')}
                 ).
@@ -114,6 +114,16 @@ export function EffectiveLimits({
           )}
         </dd>
       </dl>
+      {l.tools.some((t) => t.action === null) && (
+        <p className="text-xs text-muted-foreground">
+          Not in the tool registry, so never called:{' '}
+          {l.tools
+            .filter((t) => t.action === null)
+            .map((t) => t.name)
+            .join(', ')}
+          .
+        </p>
+      )}
       {l.blockers.map((b) => (
         <StatusBanner
           key={b.code}

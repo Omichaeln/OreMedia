@@ -186,7 +186,12 @@ export function SchemaFields({ schema, values, errors, onChange, idPrefix, path 
           const rowSchema = p.items as ObjectSchema;
           const atMost = p.maxItems !== undefined && rows.length >= p.maxItems;
           return (
-            <fieldset key={key} className="flex flex-col gap-3 rounded-md border border-border p-3">
+            <fieldset
+              key={key}
+              className="flex flex-col gap-3 rounded-md border border-border p-3"
+              aria-describedby={error ? `${id}-error` : undefined}
+              aria-invalid={error ? true : undefined}
+            >
               <legend className="px-1 text-xs font-medium text-muted-foreground">{name}</legend>
               {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
               {rows.length === 0 && <p className="text-xs text-muted-foreground">None yet; add one below.</p>}

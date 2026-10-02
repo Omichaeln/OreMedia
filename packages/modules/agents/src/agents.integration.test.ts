@@ -465,6 +465,34 @@ describe('agents module (spec 12) against MySQL 8', () => {
       }
     });
 
+    it('names the model-routing policy as a blocker when it would stop the start (spec 12.7)', async () => {
+      setTenantRoutingPolicy(tenantA, {
+        schemaVersion: 1,
+        defaultModel: 'fake-model',
+        permittedVendors: ['fake', 'anthropic'],
+        permittedRegions: [],
+        deniedModels: ['fake-model'],
+      });
+      try {
+        const limits = await run(tenantA, () => agentsService.runs.effectiveLimits(A, input));
+        expect(limits.blockers.map((b) => b.code)).toEqual(['model_routing_denied']);
+        expect(limits.blockers[0]?.message).toContain('fake-model');
+        expect(limits.canStart).toBe(false);
+        // The same policy refuses the start itself.
+        await expect(
+          run(tenantA, (tx) => agentsService.runs.start(A, { ...input, brief: {} }, tx)),
+        ).rejects.toMatchObject({ reason: 'model_routing_denied' });
+      } finally {
+        setTenantRoutingPolicy(tenantA, {
+          schemaVersion: 1,
+          defaultModel: 'fake-model',
+          permittedVendors: ['fake', 'anthropic'],
+          permittedRegions: [],
+          deniedModels: [],
+        });
+      }
+    });
+
     it('is gated like start (agent.start_run) and tenant-scoped: a foreign brand or principal is NOT_FOUND', async () => {
       const reviewer: ResolvedActor = { ...A, role: 'reviewer' };
       await expect(

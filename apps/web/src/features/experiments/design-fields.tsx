@@ -107,7 +107,11 @@ export function DesignFields({ brandId, form, onChange, issue, idPrefix }: Desig
           title="The metric dictionary did not load"
         />
       )}
-      <fieldset className="flex flex-col gap-2">
+      <fieldset
+        className="flex flex-col gap-2"
+        aria-describedby={issue('guardrailMetricKeys') ? `${idPrefix}-guardrails-error` : undefined}
+        aria-invalid={issue('guardrailMetricKeys') ? true : undefined}
+      >
         <legend className="text-xs font-medium text-muted-foreground">
           Guardrail metrics (optional; a primary win with a guardrail breach is not supported)
         </legend>
@@ -134,7 +138,7 @@ export function DesignFields({ brandId, form, onChange, issue, idPrefix }: Desig
           </ul>
         )}
         {issue('guardrailMetricKeys') && (
-          <p role="alert" className="text-xs text-status-critical">
+          <p id={`${idPrefix}-guardrails-error`} role="alert" className="text-xs text-status-critical">
             {issue('guardrailMetricKeys')}
           </p>
         )}

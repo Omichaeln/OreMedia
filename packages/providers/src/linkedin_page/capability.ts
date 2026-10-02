@@ -70,5 +70,12 @@ export const linkedInPageCapability: ProviderCapabilityV1 = {
     'r_organization_social',
     'rw_organization_admin',
   ],
+  settings: {
+    type: 'object',
+    properties: {
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
   certifiedAt: null,
 };

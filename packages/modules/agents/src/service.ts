@@ -303,7 +303,8 @@ export const agentsService = {
      * refusal. Computed from the same sources as startRun and resolveContextSnapshot (principal ceiling, tenant
      * policy, entitlement, pinned skills' budgets and allowlists, the brand's spend position, the kill switch);
      * nothing is reserved or written. Gated as the principal list is (agent.start_run on the brand); a foreign
-     * brand or principal is NOT_FOUND.
+     * brand or principal is NOT_FOUND. Every task kind is accepted, including the command-only brand_onboarding
+     * that runs.start refuses: the onboarding path (brand.onboarding.start, voice extraction) reads its limits here.
      */
     async effectiveLimits(actor: ResolvedActor, input: z.input<typeof RunEffectiveLimits>, tx?: Tx) {
       const parsed = RunEffectiveLimits.parse(input);
@@ -330,6 +331,17 @@ export const agentsService = {
         });
       if (await killSwitch.isOn('agent_starts', parsed.brandId, tx))
         blockers.push({ code: 'kill_switch_engaged', message: 'Agent starts are paused for this brand.' });
+      // The model-routing gate startRun applies (spec 12.7): the deployment's model against the tenant's policy.
+      try {
+        const cfg = currentModelConfig();
+        await assertRoutingAllowed(tenantId, cfg.provider, cfg.model);
+      } catch (err) {
+        if (!(err instanceof PolicyDeniedError)) throw err;
+        blockers.push({
+          code: 'model_routing_denied',
+          message: `${err.message}; an owner or admin changes the model routing policy under Settings.`,
+        });
+      }
       const entitlement = await entitlements.check(tenantId, 'generation_budget_micros_month', tx);
       if (!entitlement.allowed)
         blockers.push({

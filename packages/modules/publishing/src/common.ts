@@ -87,6 +87,8 @@ export const toConnectionDto = (c: ConnectionRow) => ({
   status: c.status,
   tokenExpiresAt: c.tokenExpiresAt ? c.tokenExpiresAt.toISOString() : null,
   capabilityVersion: c.capabilityVersion,
+  /** RA-07: the settings a variant on this channel may carry, as fields; null when the channel takes none. */
+  settingsSchema: registry().capability(c.providerKey)?.settings ?? null,
   usable: connectionUsable(c),
   createdAt: c.createdAt.toISOString(),
   updatedAt: c.updatedAt.toISOString(),

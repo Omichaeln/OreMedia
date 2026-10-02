@@ -2070,6 +2070,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       status: 'active',
       tokenExpiresAt: daysFromNow(60),
       capabilityVersion: 1,
+      settingsSchema: null,
       usable: true,
       createdAt: now(),
       updatedAt: now(),

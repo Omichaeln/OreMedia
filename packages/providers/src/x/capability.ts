@@ -56,5 +56,17 @@ export const xCapability: ProviderCapabilityV1 = {
     { scope: 'app', limit: 10_000, windowSec: 86_400 },
   ],
   requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access', 'media.write'],
+  settings: {
+    type: 'object',
+    properties: {
+      replySettings: {
+        type: 'string',
+        enum: ['following', 'mentionedUsers', 'subscribers'],
+        description: 'Who may reply; everyone when left empty.',
+      },
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
   certifiedAt: null,
 };
