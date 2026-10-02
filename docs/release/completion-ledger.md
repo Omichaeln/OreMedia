@@ -121,3 +121,19 @@ scope by the mandate.
   PASS; every other HTTP check fails because the job's responses carry no headers at all (`headers=[] set-cookie=absent`
   on every response while the api logs 200 and the bodies arrive). Not reproducible locally with the same built bundle;
   a three-client probe is being added to isolate the Railway-side cause before the deployed browser suites can run.
+- 2 October 2026, 17:27 UTC: PR #38 (RA-08, RA-09) squash-merged as 74b8703 after review fixes (bounded image fetch,
+  raster-only article images, consistent FAQ answers, `websites` always frozen).
+- 2 October 2026, 17:28 UTC, staging acceptance run 3 (commit 8449a65): `ACCEPTANCE_DONE 85/86 (13 skipped)`.
+  Root cause of runs 1 and 2: on Railway, Node 22's built-in global `fetch` returns a Response whose Headers are empty
+  (probe: `fetch /health headers=[]`, while the hoisted `undici` fetch and `node:https` see the full header set; env shows
+  only NODE_VERSION, no NODE_OPTIONS). The job now probes at start and switches to a node:http(s) client
+  (`http-client=node-https`). Passed: fixtures for two companies, twelve password sign-ins through the deployed endpoint,
+  smoke health, CSP, legal pages, brand pack, upload intent; api isolation (foreign brand 404, foreign tenant header 403,
+  brand list); package create; a11y audits of every public screen in both themes and widths; deployed browser journeys
+  (sign-in → portfolio → brand home, shell navigation, published brand version, cross-company isolation, sign-out).
+  Failed: `smoke:upload:csp` (staging object store is the placeholder endpoint; owner action). Skipped: channel-dependent
+  journey steps and load (no certified provider), studio font import (api answered 500 on `assets.fonts.importGoogle`,
+  to diagnose; likely the same placeholder store), mock-only a11y cases. `MODEL_EVAL_FAIL copywriting … budget_exhausted
+after 1 step`: the real model path ran one step on the default 0.25 USD budget; re-run with a 2 USD cap pending.
+  Platform note: `apps/api/src/auth/router.ts` already works around Railway's outbound proxy rewriting content types
+  for Google; the same global-fetch path should move to the explicit undici fetch (follow-up).
