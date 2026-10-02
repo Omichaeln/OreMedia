@@ -543,6 +543,20 @@ export const CMS_SCOPE_PUBLISH = 'articles:publish';
 /** A destination variant's `settings.publishMode`: `draft` unless the person asks for `publish` and the grant allows it. */
 export const CmsPublishMode = z.enum(['draft', 'publish']);
 export type CmsPublishMode = z.infer<typeof CmsPublishMode>;
+/**
+ * The effective publish mode of a website variant: `publish` only when the variant asks for it and the destination
+ * was granted live publishing at connect time (D-16); otherwise a draft. Pure, so the publisher, the review
+ * manifest (RA-09) and the web app read the same answer from the same settings and grant.
+ */
+export function effectivePublishMode(
+  settings: Record<string, unknown>,
+  grantedScopes: readonly string[],
+): CmsPublishMode {
+  const asked = CmsPublishMode.safeParse(settings['publishMode']);
+  return asked.success && asked.data === 'publish' && grantedScopes.includes(CMS_SCOPE_PUBLISH)
+    ? 'publish'
+    : 'draft';
+}
 
 /**
  * `connect.withSecret`: a website connected with an integration identity and its secret (an application

@@ -18,12 +18,18 @@ import {
   CMS_SCOPE_PUBLISH,
   CmsPublishMode,
   DESTINATION_KIND_CAPABILITIES,
+  effectivePublishMode,
   type ArticleReadbackField,
   type ArticleReadbackV1,
   type ArticleReadbackVerificationV1,
 } from '@oremedia/contracts/destinations';
-import { ARTICLE_BODY_MAX_CHARS } from '@oremedia/contracts/content';
-import { CapabilityUnsupportedError, PolicyDeniedError } from '@oremedia/contracts/errors';
+import {
+  ARTICLE_BODY_MAX_CHARS,
+  articleImages,
+  type ArticleDocumentV1,
+  type ArticleImageV1,
+} from '@oremedia/contracts/content';
+import { CapabilityUnsupportedError, OremediaError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type {
   DecryptedCredentials,
   RemoteMutationOutcome,
@@ -42,6 +48,7 @@ import {
   type DestinationTargetDescription,
   type DestinationValidateInput,
 } from '@oremedia/module-publishing';
+import { assetService } from '@oremedia/module-assets';
 import { logger } from '@oremedia/observability';
 import {
   BlockedAddressError,
@@ -51,6 +58,7 @@ import {
   truncateForTemporal,
   type CmsAdapter,
   type CmsArticleInput,
+  type CmsMediaRef,
   type CmsReadResult,
   type CmsRemoteArticle,
   type CmsSite,
@@ -78,15 +86,76 @@ const usable = (row: DestinationRow): boolean =>
   row.health !== 'unreachable' &&
   cmsWritable(row.kind);
 
-/** The effective publish mode: `publish` only when asked for and granted at connect time; otherwise a draft. */
-export function effectivePublishMode(
-  settings: Record<string, unknown>,
-  grantedScopes: readonly string[],
-): 'draft' | 'publish' {
-  const asked = CmsPublishMode.safeParse(settings['publishMode']);
-  return asked.success && asked.data === 'publish' && grantedScopes.includes(CMS_SCOPE_PUBLISH)
-    ? 'publish'
-    : 'draft';
+/** The effective publish mode (contracts/destinations): `publish` only when asked for and granted; else a draft. */
+export { effectivePublishMode };
+
+/**
+ * RA-08: how long the signed release URL of an article's image must stay readable: the site fetches the bytes as
+ * the adapter uploads them, one image at a time, before the article is written.
+ */
+export const ARTICLE_MEDIA_RELEASE_WINDOW_SEC = 15 * 60;
+
+/** The file name the site keeps for an image: the article's slug, the image's position and the type's extension. */
+const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+  'image/svg+xml': 'svg',
+};
+const mediaFilename = (slug: string, index: number, mime: string): string =>
+  `${slug}-${index + 1}.${EXTENSION_BY_MIME[mime.toLowerCase()] ?? 'bin'}`;
+
+/**
+ * RA-08: every image the article carries, released and uploaded before the article is written. Each asset version
+ * is released once (a signed URL for the publishing window, minted by the assets module: spec 9.3, never raw
+ * bytes), handed to the adapter, and the site's own address for it is what the rendered markup references. The
+ * first failure stops the publish with the adapter's classification; nothing was written as an article yet.
+ */
+async function uploadArticleMedia(
+  adapter: CmsAdapter,
+  site: CmsSite,
+  creds: DecryptedCredentials,
+  io: ReturnType<typeof cmsIO>,
+  article: ArticleDocumentV1,
+): Promise<{ media: Map<string, CmsMediaRef> } | { failed: DestinationPublishResult }> {
+  const media = new Map<string, CmsMediaRef>();
+  const images: ArticleImageV1[] = [];
+  for (const image of articleImages(article))
+    if (!images.some((i) => i.assetVersionId === image.assetVersionId)) images.push(image);
+  for (const [index, image] of images.entries()) {
+    let release: Awaited<ReturnType<typeof assetService.releaseDerivative>>;
+    try {
+      release = await assetService.releaseDerivative(image.assetVersionId, ARTICLE_MEDIA_RELEASE_WINDOW_SEC);
+    } catch (err) {
+      // A version gone since the revision was written (the release check holds this earlier; never a throw here).
+      if (!(err instanceof OremediaError)) throw err;
+      return {
+        failed: {
+          outcome: 'rejected',
+          code: 'article_image_unavailable',
+          message: `the image ${image.assetVersionId} cannot be released: ${err.code}`,
+        },
+      };
+    }
+    const uploaded = await adapter.uploadMedia(site, creds, io, {
+      url: release.url,
+      mime: release.mime,
+      contentHash: release.contentHash,
+      alt: image.alt,
+      filename: mediaFilename(article.slug, index, release.mime),
+    });
+    if (uploaded.outcome !== 'done')
+      return {
+        failed:
+          uploaded.outcome === 'unknown'
+            ? { outcome: 'retryable_error', code: uploaded.code, message: uploaded.message }
+            : uploaded,
+      };
+    media.set(image.assetVersionId, uploaded.media);
+  }
+  return { media };
 }
 
 const toReadback = (a: CmsRemoteArticle): ArticleReadbackV1 => ({
@@ -336,14 +405,24 @@ export const destinationArticles: DestinationPublisher = {
           ...(hooks ? { hooks } : {}),
           ...(beforeSend ? { beforeSend } : {}),
         });
+        // RA-08: the images go up first (released through the assets module, uploaded by the adapter); the body
+        // then references the site's copies, and the featured image is the site's media item for it.
+        const uploaded = await uploadArticleMedia(adapter, site, creds, io, article);
+        if ('failed' in uploaded) return uploaded.failed;
+        const featured = article.featuredImage
+          ? uploaded.media.get(article.featuredImage.assetVersionId)
+          : undefined;
         const sent: CmsArticleInput = {
           title: article.title,
           slug: article.slug,
           excerpt: article.excerpt,
-          html: renderArticleHtml(article),
+          html: renderArticleHtml(article, {
+            imageUrl: (image) => uploaded.media.get(image.assetVersionId)?.url ?? null,
+          }),
           categories: article.categories,
           tags: article.tags,
           status,
+          ...(featured ? { featuredMedia: featured } : {}),
         };
         const written = await adapter.createArticle(site, creds, io, sent, input.idempotencyKey);
         if (written.outcome === 'conflict')

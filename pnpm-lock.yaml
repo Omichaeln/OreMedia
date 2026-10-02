@@ -987,6 +987,9 @@ importers:
       '@oremedia/module-access':
         specifier: workspace:*
         version: link:../access
+      '@oremedia/module-assets':
+        specifier: workspace:*
+        version: link:../assets
       '@oremedia/module-brand':
         specifier: workspace:*
         version: link:../brand

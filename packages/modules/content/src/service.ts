@@ -26,10 +26,12 @@ import {
   type CalendarPublication,
   type PlanItemRestore,
   type ContentClass,
+  articleImages,
 } from '@oremedia/contracts/content';
 import {
   CapabilityUnsupportedError,
   NotFoundError,
+  RightsIneligibleError,
   ValidationFailedError,
   type ErrorDetail,
 } from '@oremedia/contracts/errors';
@@ -49,6 +51,7 @@ import {
 } from '@oremedia/domain/state-machines/content-revision';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
 import { policy } from '@oremedia/module-access';
+import { assetService } from '@oremedia/module-assets';
 import { ApprovedFactRepository, BrandObjectiveRepository, brandService } from '@oremedia/module-brand';
 import {
   CreativeDocumentRepository,
@@ -116,6 +119,10 @@ export interface DestinationDescription {
   kind: string;
   capabilityVersion: number;
   writable: boolean;
+  /** RA-09: how a frozen manifest names the target and the grant its publish mode depends on. */
+  displayName: string;
+  externalId: string;
+  grantedScopes: readonly string[];
 }
 export type DestinationResolver = (destinationId: string, tx?: Tx) => Promise<DestinationDescription | null>;
 const unregisteredDestinationResolver: DestinationResolver = async () => {
@@ -130,6 +137,9 @@ export const registerDestinationResolver = (fn: DestinationResolver): void => {
 export const resetDestinationResolver = (): void => {
   destinationResolver = unregisteredDestinationResolver;
 };
+/** The registered description of a destination, for a module that names a variant's target (the review manifest, RA-09). */
+export const resolveDestination = (destinationId: string, tx?: Tx): Promise<DestinationDescription | null> =>
+  destinationResolver(destinationId, tx);
 
 /**
  * Spec 13.4: a variant's `validation` is the channel capability check on what it will publish (text, alt texts,
@@ -325,6 +335,30 @@ function assertFactsEffective(
     .filter(({ id }) => !effective.has(id))
     .map(({ i }) => ({ path: `copy.master.factRefs.${i}`, issue: 'fact_not_effective' }));
   if (details.length) throw new ValidationFailedError(details, 'The copy cites facts that are not approved');
+}
+
+/**
+ * RA-08: every image an article carries (the featured image and the image blocks) is an asset version this brand
+ * may use for creative work now (spec 9.2 authoriseUse: the current version of an approved asset with rights, or
+ * a grant). A version that is unknown, another brand's or ineligible is a validation failure naming the image,
+ * never a revision that publishes a broken or unlicensed picture.
+ */
+async function assertArticleAssetsUsable(copy: CopyDocumentV1, brandId: string, tx: Tx): Promise<void> {
+  if (!copy.article) return;
+  const details: ErrorDetail[] = [];
+  for (const [i, image] of articleImages(copy.article).entries()) {
+    const path = `copy.article.images.${i}`;
+    try {
+      await assetService.authoriseUse(image.assetVersionId, 'creative', { brandId }, tx);
+    } catch (err) {
+      if (err instanceof NotFoundError) details.push({ path, issue: 'asset_not_found' });
+      else if (err instanceof RightsIneligibleError)
+        details.push({ path, issue: `asset_ineligible:${err.details?.[0]?.issue ?? 'ineligible'}` });
+      else throw err;
+    }
+  }
+  if (details.length)
+    throw new ValidationFailedError(details, 'The article uses images that cannot be published');
 }
 
 /**
@@ -1082,6 +1116,7 @@ export const contentService = {
       const brief = parsed.briefId ? await loadBrief(brand.id, parsed.briefId, tx) : null;
       const snapshot = await resolveSnapshot(actor, brand.id, tx);
       assertFactsEffective(parsed.copy, snapshot);
+      await assertArticleAssetsUsable(parsed.copy, brand.id, tx);
       const creativeRevisionIds = await pinCreativeRevisions(actor, brand.id, parsed.creativeDocumentIds, tx);
       const packageId = newId('contentPackage');
       await packagesRepo.create(
@@ -1150,6 +1185,7 @@ export const contentService = {
       const current = await loadCurrentRevision(pkg, tx);
       const snapshot = await resolveSnapshot(actor, pkg.brandId, tx);
       assertFactsEffective(parsed.copy, snapshot);
+      await assertArticleAssetsUsable(parsed.copy, pkg.brandId, tx);
       // Omitted: keep the documents the current revision publishes with (contract ContentPackageRevise).
       const documentIds =
         parsed.creativeDocumentIds ?? (await creativeDocumentsOf(current, tx)).map((d) => d.documentId);

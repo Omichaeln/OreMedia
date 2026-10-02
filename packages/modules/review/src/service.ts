@@ -1,6 +1,9 @@
 import type { z } from 'zod';
 import { ApprovalBindingV1, bindingTargetId } from '@oremedia/contracts/approval';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
+import { renderArticleHtml } from '@oremedia/contracts/article';
+import { articleImages } from '@oremedia/contracts/content';
+import { effectivePublishMode } from '@oremedia/contracts/destinations';
 import { ConflictError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
@@ -23,7 +26,7 @@ import {
   type StaleReason,
 } from '@oremedia/contracts/review';
 import { requireTenant, type Tx } from '@oremedia/db';
-import { hashCanonical } from '@oremedia/domain/hash';
+import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { approvalMachine } from '@oremedia/domain/state-machines/approval';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
@@ -37,7 +40,12 @@ import {
   policy,
 } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
-import { contentService, hashesForVariant, type RevisionChange } from '@oremedia/module-content';
+import {
+  contentService,
+  hashesForVariant,
+  resolveDestination,
+  type RevisionChange,
+} from '@oremedia/module-content';
 import { creativeService } from '@oremedia/module-creative';
 import { audit, featureFlag, outbox } from '@oremedia/module-operations';
 import {
@@ -51,6 +59,7 @@ import {
   type MandateRow,
   factRevocationScope,
 } from './evaluate-release';
+import { comparableManifest, manifestChanges } from './manifest';
 import {
   PublishingMandateRepository,
   ReleaseApprovalRepository,
@@ -108,6 +117,26 @@ export const registerReviewMediaSigner = (fn: ReviewMediaSigner): void => {
 /** Test seam: back to the loud default. */
 export const resetReviewMediaSigner = (): void => {
   mediaSigner = unregisteredSigner;
+};
+/**
+ * RA-09: a frozen article's images are asset versions (immutable bytes); the assets module signs a preview of
+ * each for the same five minutes. Null when the version is gone: the item is reported unverified, never a 404.
+ */
+export type ReviewImageSigner = (
+  assetVersionId: string,
+  tx?: Tx,
+) => Promise<{ url: string; expiresAt: string; mime: string; contentHash: string } | null>;
+const unregisteredImageSigner: ReviewImageSigner = async () => {
+  throw new Error(
+    'review image signer not registered (composition root must call registerReviewImageSigner)',
+  );
+};
+let imageSigner: ReviewImageSigner = unregisteredImageSigner;
+export const registerReviewImageSigner = (fn: ReviewImageSigner): void => {
+  imageSigner = fn;
+};
+export const resetReviewImageSigner = (): void => {
+  imageSigner = unregisteredImageSigner;
 };
 
 const requestResource = (r: RequestRow, extra: { state?: string; authorPrincipalId?: string } = {}) => ({
@@ -286,7 +315,7 @@ const toMandateDto = (m: MandateRow) => ({
 async function freezeManifest(
   revision: Awaited<ReturnType<typeof contentService.revisions.read>>,
   timing: FrozenManifestV1['timing'],
-  tx: Tx,
+  tx?: Tx,
 ): Promise<FrozenManifestV1> {
   const variants = await contentService.variants.listForRevision(revision.id, tx);
   if (variants.length === 0)
@@ -294,6 +323,23 @@ async function freezeManifest(
       [{ path: 'contentRevisionId', issue: 'no_channel_variants' }],
       'Generate at least one channel variant before requesting review',
     );
+  const article = revision.copy.article;
+  // RA-09: what approving means for each website: the site, the page's path and the effective publish mode
+  // (asked for on the variant and granted at connect time). A destination that no longer resolves is named by
+  // its id so the manifest still says where the article would go.
+  const websites = [];
+  for (const v of variants) {
+    if (!v.destinationId) continue;
+    const d = await resolveDestination(v.destinationId, tx);
+    websites.push({
+      destinationId: v.destinationId,
+      kind: d?.kind ?? '',
+      displayName: d?.displayName ?? v.destinationId,
+      siteUrl: d?.externalId ?? '',
+      path: article ? `/${article.slug}` : '',
+      publishMode: effectivePublishMode(v.settings, d?.grantedScopes ?? []),
+    });
+  }
   return FrozenManifestV1.parse({
     v: 1,
     contentRevisionId: revision.id,
@@ -316,16 +362,22 @@ async function freezeManifest(
     brandVersionId: revision.brandVersionId,
     policyVersionId: revision.policyVersionId,
     // R2-3: the article revision the reviewer sees and approves (the destination variant publishes exactly it).
-    ...(revision.copy.article
+    // RA-09: with the hash of its rendering (the one renderer, without image addresses: those are the site's)
+    // and the document itself, so the preview is rendered from what was frozen, not from the live revision.
+    ...(article
       ? {
           article: {
-            title: revision.copy.article.title,
-            slug: revision.copy.article.slug,
-            articleHash: hashCanonical(revision.copy.article),
-            blocks: revision.copy.article.blocks.length,
+            title: article.title,
+            slug: article.slug,
+            articleHash: hashCanonical(article),
+            blocks: article.blocks.length,
+            renderedHtmlHash: hashText(renderArticleHtml(article)),
+            images: articleImages(article).length,
+            document: article,
           },
         }
       : {}),
+    ...(websites.length ? { websites } : {}),
   });
 }
 
@@ -459,9 +511,20 @@ export const reviewService = {
         await approvalsRepo.listForRevision(request.brandId, request.contentRevisionId, tx)
       ).filter((a) => a.reviewRequestId === request.id);
       const links = await linksRepo.listForRequest(request.id, tx);
+      // RA-09: what moved since the freeze (the live manifest in the frozen shape), so the screen can say it
+      // before a decision is refused or a dispatch held; a revision without variants any more has no live manifest.
+      const frozen = FrozenManifestV1.parse(request.frozenManifest);
+      let live: FrozenManifestV1 | null = null;
+      try {
+        live = comparableManifest(await freezeManifest(revision, frozen.timing, tx), frozen);
+      } catch (err) {
+        if (!(err instanceof ValidationFailedError)) throw err;
+      }
       return {
         ...toRequestDto(request),
         revisionState: revision.state,
+        liveManifestHash: live ? hashCanonical(live) : null,
+        changedSinceFreeze: live ? manifestChanges(frozen, live) : [],
         decisions: decisions.map(toDecisionDto),
         approvals: approvals.map(toApprovalDto),
         externalLinks: links.map((l) => ({
@@ -524,7 +587,35 @@ export const reviewService = {
         const signed = await mediaSigner(e.storageKey);
         items.push({ ...base, verified: true as const, url: signed.url, expiresAt: signed.expiresAt });
       }
-      return { reviewRequestId: request.id, manifestHash: request.manifestHash, items };
+      // RA-09: the frozen article's images, one per asset version (immutable bytes), signed the same way.
+      const images = [];
+      const document = manifest.article?.document;
+      const seenVersions = new Set<string>();
+      for (const image of document ? articleImages(document) : []) {
+        if (seenVersions.has(image.assetVersionId)) continue;
+        seenVersions.add(image.assetVersionId);
+        const signed = await imageSigner(image.assetVersionId, tx);
+        images.push(
+          signed
+            ? {
+                assetVersionId: image.assetVersionId,
+                verified: true as const,
+                url: signed.url,
+                expiresAt: signed.expiresAt,
+                mime: signed.mime,
+                contentHash: signed.contentHash,
+              }
+            : {
+                assetVersionId: image.assetVersionId,
+                verified: false as const,
+                url: null,
+                expiresAt: null,
+                mime: null,
+                contentHash: null,
+              },
+        );
+      }
+      return { reviewRequestId: request.id, manifestHash: request.manifestHash, items, images };
     },
   },
 
@@ -568,7 +659,7 @@ export const reviewService = {
       const link = await touchLink(actor, tx);
       const manifest = FrozenManifestV1.parse(request.frozenManifest);
       const live = await bindingForRevision(revision, manifest.timing, tx);
-      const liveManifest = await freezeManifest(revision, manifest.timing, tx);
+      const liveManifest = comparableManifest(await freezeManifest(revision, manifest.timing, tx), manifest);
       if (hashCanonical(liveManifest) !== request.manifestHash) {
         await markStale(request, 'variant_changed', tx);
         throw new ValidationFailedError(

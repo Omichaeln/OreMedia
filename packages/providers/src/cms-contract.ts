@@ -46,7 +46,32 @@ export interface CmsArticleInput {
   tags: string[];
   /** `draft` unless the publication's effective publish mode is `publish` (D-16). */
   status: 'draft' | 'publish';
+  /** RA-08: the media item the site uploaded (`uploadMedia`) to feature on the page; absent leaves it unset. */
+  featuredMedia?: CmsMediaRef;
 }
+
+/**
+ * RA-08: an image the article carries, as the publisher hands it to the adapter: a signed release URL the assets
+ * module minted for the publishing window (spec 9.3; the adapter fetches it through ProviderIO, never raw bytes
+ * from storage), its type and hash, the alt text the page carries and the file name the site should keep.
+ */
+export interface CmsMediaInput {
+  url: string;
+  mime: string;
+  contentHash: string;
+  alt: string;
+  filename: string;
+}
+/** A media item as the site holds it: its remote id and the public address the article's markup references. */
+export interface CmsMediaRef {
+  remoteId: string;
+  url: string;
+}
+export type CmsMediaResult =
+  | { outcome: 'done'; media: CmsMediaRef }
+  | { outcome: 'rejected'; code: string; message: string }
+  | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
+  | { outcome: 'unknown'; code: string; message: string };
 
 /** The remote article as the adapter reads it: identity, state, content hash; the body for a diff, never stored. */
 export interface CmsRemoteArticle extends ArticleReadbackV1 {
@@ -123,6 +148,17 @@ export interface CmsAdapter {
     io: ProviderIO,
     remoteId: string,
   ): Promise<CmsReadResult>;
+  /**
+   * RA-08: uploads one image to the site's media library from its signed release URL, so the article's markup can
+   * reference the site's own copy and the page can feature it. Runs before the article write; a failure is
+   * classified like a write's (the upload is itself an effect on the site).
+   */
+  uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult>;
   /** Creates the article (a draft unless `status` is `publish`); the returned article is read back after the write. */
   createArticle(
     site: CmsSite,

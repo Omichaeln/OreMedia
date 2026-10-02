@@ -53,4 +53,77 @@
   [data-theme='dark'] .deployment-logo-dark {
     display: block;
   }
+  /* RA-09: an article as it will publish, in the deployment brand's tokens (the same scope every screen uses). */
+  .article-preview {
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    max-width: 65ch;
+  }
+  .article-preview h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+  }
+  .article-preview h2,
+  .article-preview h3,
+  .article-preview h4 {
+    font-weight: 600;
+    margin: 1.25rem 0 0.5rem;
+  }
+  .article-preview h2 {
+    font-size: 1.25rem;
+  }
+  .article-preview h3 {
+    font-size: 1.1rem;
+  }
+  .article-preview h4 {
+    font-size: 1rem;
+  }
+  .article-preview p {
+    margin: 0 0 0.75rem;
+  }
+  .article-preview .article-preview-excerpt {
+    color: var(--muted-foreground);
+  }
+  .article-preview ul,
+  .article-preview ol {
+    margin: 0 0 0.75rem;
+    padding-left: 1.5rem;
+  }
+  .article-preview ul {
+    list-style: disc;
+  }
+  .article-preview ol {
+    list-style: decimal;
+  }
+  .article-preview a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .article-preview blockquote {
+    border-left: 3px solid var(--border);
+    color: var(--muted-foreground);
+    margin: 0 0 0.75rem;
+    padding: 0.25rem 0 0.25rem 1rem;
+  }
+  .article-preview figure {
+    margin: 0 0 1rem;
+  }
+  .article-preview img {
+    display: block;
+    height: auto;
+    max-width: 100%;
+    border-radius: var(--radius);
+    background: var(--muted);
+  }
+  .article-preview figcaption {
+    color: var(--muted-foreground);
+    font-size: 0.8125rem;
+    margin-top: 0.25rem;
+  }
+  .article-preview section.faq {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
 }

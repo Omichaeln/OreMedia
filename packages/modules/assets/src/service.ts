@@ -785,6 +785,28 @@ export const assetService = {
     return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
   },
 
+  /**
+   * RA-09: a 5-minute signed GET of an asset version's preview (the original when none was derived) for a caller
+   * that authorised the read itself (the review module shows a frozen article's images to whoever may see the
+   * request, an external reviewer included); null for a version this tenant does not hold. Versions are immutable,
+   * so the bytes are the ones the article was frozen with.
+   */
+  async signVersionPreview(assetVersionId: string, tx?: Tx) {
+    const v = await versionsRepo.findInTenant(assetVersionId, tx);
+    if (!v) return null;
+    const preview = await derivativesRepo.find(v.id, 'preview', tx);
+    const source = preview ?? v;
+    const signed = await storage().signDownloadUrl(source.storageKey, { expiresInSec: SIGNED_URL_TTL_SEC });
+    return {
+      url: signed.url,
+      expiresAt: signed.expiresAt.toISOString(),
+      mime: source.mime,
+      contentHash: v.contentHash,
+      width: source.width,
+      height: source.height,
+    };
+  },
+
   /** Spec 9.3: the media endpoint re-checks authorisation and returns a 5-minute signed GET. */
   async signedUrl(actor: ResolvedActor, input: z.infer<typeof MediaSignedUrlRequest>, tx?: Tx) {
     const parsed = MediaSignedUrlRequest.parse(input);

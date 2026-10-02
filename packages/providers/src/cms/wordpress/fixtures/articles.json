@@ -838,6 +838,168 @@
           }
         }
       ]
+    },
+    "upload_media_ok": {
+      "description": "RA-08: the image bytes are read from the signed release URL, posted to /media with its type and file name, then named with its alt text.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "releases.example",
+            "path": "/releases/t/b/av_1/original/x.png"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "content-type": "image/png"
+            },
+            "body": "PNGBYTES"
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/media",
+            "bodyIncludes": ["PNGBYTES"]
+          },
+          "response": {
+            "status": 201,
+            "json": {
+              "id": 77,
+              "source_url": "https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/media/77",
+            "bodyIncludes": ["\"alt_text\":\"The weighbridge\""]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "id": 77,
+              "alt_text": "The weighbridge"
+            }
+          }
+        }
+      ]
+    },
+    "upload_media_forbidden": {
+      "description": "RA-08: a site that refuses media uploads (the identity may edit posts but not upload) is a reconnect, before any effect.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "releases.example",
+            "path": "/releases/t/b/av_1/original/x.png"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "content-type": "image/png"
+            },
+            "body": "PNGBYTES"
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/media"
+          },
+          "response": {
+            "status": 403,
+            "json": {
+              "code": "rest_cannot_create",
+              "message": "Sorry, you are not allowed to upload media."
+            }
+          }
+        }
+      ]
+    },
+    "create_with_featured": {
+      "description": "RA-08: the post names the uploaded media as its featured image and its body carries the site's address for it.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/categories",
+            "query": {
+              "search": "Guides",
+              "page": "1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-wp-totalpages": "1"
+            },
+            "json": [
+              {
+                "id": 12,
+                "name": "Guides"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/tags",
+            "query": {
+              "search": "ore",
+              "page": "1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-wp-totalpages": "1"
+            },
+            "json": [
+              {
+                "id": 55,
+                "name": "ore"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/posts",
+            "bodyIncludes": [
+              "\"featured_media\":77",
+              "src=\\\"https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png\\\"",
+              "\"status\":\"draft\""
+            ]
+          },
+          "response": {
+            "status": 201,
+            "json": {
+              "id": 43,
+              "link": "https://site.example/?p=43",
+              "slug": "why-ore-and-tar",
+              "status": "draft",
+              "featured_media": 77,
+              "modified_gmt": "2026-10-02T10:00:00",
+              "title": {
+                "raw": "Why ore & tar"
+              },
+              "content": {
+                "raw": "<p>Ore is heavy.</p>\n<figure><img src=\"https://site.example/wp-content/uploads/2026/10/why-ore-and-tar-1.png\" alt=\"The weighbridge\"></figure>"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
