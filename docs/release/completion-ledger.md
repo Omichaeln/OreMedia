@@ -33,12 +33,24 @@ moves only on evidence; documentation claims are leads to verify.
 - Recovery: nightly logical dump only; Railway MySQL has no point-in-time recovery (`r1-evidence.md` §8).
   Staging restore rehearsal passed (1 October). The 15-minute RPO is not met today: RA-13.
 
+### Findings from the discovery (2 October 2026, afternoon)
+
+- Staging object store: `OBJECT_STORE_ENDPOINT` on the staging api, worker-core and worker-render is the
+  placeholder `https://REPLACE_ME_ACCOUNT_ID.r2.cloudflarestorage.com` (seen in the db-backup run log at
+  14:20 UTC). Staging uploads, renders and releases cannot have worked; the connection inventory row "Object
+  store, staging: set" is corrected to "placeholder". A Railway bucket `staging-backups` (region sjc) now holds
+  the staging database dumps; the staging application object store is still a placeholder (owner action or a
+  second Railway bucket pair, see the checklist).
+- Staging `approval-monitor` and `db-roles` run in `europe-west4`; every other staging service and both MySQL
+  volumes are in `us-west2`. The staging approval-monitor fails on every 5-minute run with `Gmail token refresh failed: invalid_client The OAuth client was not found` (staging holds sample Gmail credentials; its log also labels the environment `production`). Owner action: real staging Gmail credentials, or disable the staging cron. A service in another
+  region pays about 140 ms per database round trip (measured on the first db-backup run).
+
 ### Connection inventory (capability level; variable names and states only, no values)
 
 | Capability                                                                                | Production                                                | Staging                                                      | State                                                                                                                                                                     |
 | ----------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Google sign-in (`AUTH_*`)                                                                 | set                                                       | set                                                          | usable and verified (sign-in works; smoke user signs in with password)                                                                                                    |
-| Object store R2 (`OBJECT_STORE_*`)                                                        | set on api, worker-core, worker-render                    | set                                                          | usable and verified (smoke upload through ingest and ClamAV)                                                                                                              |
+| Object store R2 (`OBJECT_STORE_*`)                                                        | set on api, worker-core, worker-render                    | placeholder endpoint (`REPLACE_ME_ACCOUNT_ID`)               | production usable and verified (smoke upload through ingest and ClamAV); staging not usable until real credentials or Railway buckets are set                             |
 | Model provider (`OPENROUTER_API_KEY_REF`, `OREMEDIA_MODEL_ID`, `OREMEDIA_IMAGE_MODEL_ID`) | set on worker-core and worker-ingest (sealed)             | set                                                          | configured; bounded real-model evaluation pending (RA-14)                                                                                                                 |
 | Meta `facebook_page`, `instagram_business` app credentials                                | set on api and workers                                    | set (samples per handover)                                   | configured but uncertified: Meta app `1111601258212850` unpublished, App Review and Business Verification pending (platform access pending); adapters `certifiedAt: null` |
 | LinkedIn `linkedin_page` app credentials                                                  | set                                                       | set (sample)                                                 | configured but uncertified: Community Management API review in progress (platform access pending)                                                                         |
