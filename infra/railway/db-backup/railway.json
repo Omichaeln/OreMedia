@@ -1,0 +1,13 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "infra/railway/db-backup/Dockerfile",
+    "watchPatterns": ["infra/railway/db-backup/**"]
+  },
+  "deploy": {
+    "cronSchedule": "*/15 * * * *",
+    "restartPolicyType": "NEVER",
+    "numReplicas": 1
+  }
+}
