@@ -92,3 +92,15 @@ scope by the mandate.
   `RESTORE_PASS oremedia from db-backups/staging/oremedia/oremedia-20261002T143201Z.sql.gz in 4s`. RA-13: RPO 15 minutes by schedule
   (no PITR on Railway MySQL), restore step 4 s on the staging data set; the full application-level path (re-point, holdRestored,
   deletion re-apply, smoke) remains an operator procedure in docs/runbooks/backup-and-restore.md with a three-hour budget.
+- 2 October 2026, 15:01 UTC: PR #32 (RA-13) squash-merged as 0ea97fe; production `db-backup` reconnected to the repo (main,
+  `infra/railway/db-backup/Dockerfile`, cron `*/15 * * * *`, start command `backup.sh`, region us-west2, Railway bucket
+  `production-backups`, prefix `db-backups/production`, local copy on the existing `/backups` volume). First scheduled run,
+  15:15 UTC: `DB_BACKUP_PASS oremedia … 183339 bytes binlog=0`, `DB_BACKUP_PASS temporal … 1449759 bytes binlog=0`,
+  `DB_BACKUP_DONE 20261002T151540Z` (5 s end to end). RA-13 engineering complete; the RPO is 15 minutes by schedule.
+- 2 October 2026, 15:03 UTC: PR #33 (RA-05, RA-06) squash-merged as f4c40f5; production api, worker-core, worker-render,
+  worker-ingest, web, redirector, approval monitor, temporal and db-roles deployed SUCCESS; db-roles log `PASS application`
+  and `PASS retention: oremedia_retention holds exactly the generated grants` (new retention grants applied). Staging deployed
+  the same (db-roles SUCCESS at 15:06).
+- 2 October 2026, 15:06 UTC: PR #34 (RA-07) squash-merged as d0c5566; production and staging api, workers and web deployed
+  SUCCESS.
+- Staging `approval-monitor` still crashes on every run (sample Gmail credentials); unchanged by these merges.
