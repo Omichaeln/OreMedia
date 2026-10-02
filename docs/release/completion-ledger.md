@@ -83,3 +83,12 @@ scope by the mandate.
 ## 4. Evidence log
 
 (appended per increment: commit, command, environment, counts, failures, skips)
+
+- 2 October 2026, 14:32 UTC, staging: first scheduled database backup from `infra/railway/db-backup` (PR #32, commit 077980b):
+  `DB_BACKUP_PASS oremedia s3://staging-backups-…/db-backups/staging/oremedia/oremedia-20261002T143201Z.sql.gz 16897 bytes binlog=0`.
+  The Temporal dump failed on that run (wrong database name, 495 bytes); fixed in 077980b with `SRC2_DB=temporal temporal_visibility`, next run pending.
+- 2 October 2026, 14:34 UTC, staging: timed restore drill (`restore.sh`, service `restore-rehearsal` into `mysql-restore`):
+  `RESTORE_STEP downloaded +1s`, `unpacked +1s`, `loaded +4s`, `RESTORE_TABLES expected=109 restored=109 migration_rows=20`,
+  `RESTORE_PASS oremedia from db-backups/staging/oremedia/oremedia-20261002T143201Z.sql.gz in 4s`. RA-13: RPO 15 minutes by schedule
+  (no PITR on Railway MySQL), restore step 4 s on the staging data set; the full application-level path (re-point, holdRestored,
+  deletion re-apply, smoke) remains an operator procedure in docs/runbooks/backup-and-restore.md with a three-hour budget.
