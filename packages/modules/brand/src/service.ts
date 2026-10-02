@@ -274,33 +274,6 @@ async function recordGuidelineAuthor(
   );
 }
 
-/**
- * Separation of duties for guidelines (the owner's decision, 25 September 2026): a version whose guidelines differ
- * from the published ones, other than by removing them, is published only by someone other than whoever last
- * imported or edited them, because agents follow that text. Unknown authorship is refused (fail closed).
- */
-async function assertGuidelinesApprover(
-  actor: ResolvedActor,
-  versionId: string,
-  document: BrandSystemDocumentV1,
-  published: BrandSystemDocumentV1 | null,
-  tx: Tx,
-): Promise<void> {
-  if (!document.guidelines) return;
-  if (published && guidelinesKey(published) === guidelinesKey(document)) return;
-  const author = await guidelineAuthorsRepo.findById(versionId, tx);
-  if (!author)
-    throw new PolicyDeniedError(
-      'distinct_approver_required',
-      'These guidelines have no recorded author; re-import them so a second person can approve',
-    );
-  if (author.authorKind === actor.kind && author.authorId === actor.id)
-    throw new PolicyDeniedError(
-      'distinct_approver_required',
-      'New brand guidelines must be published by someone other than the person who imported or last edited them',
-    );
-}
-
 /** Adds the colours read from guidelines that the palette does not already hold (by value); keys stay unique. */
 function mergePalette(
   palette: BrandSystemDocumentV1['tokens']['colours'],
@@ -716,13 +689,6 @@ export const brandService = {
       const toState = transition(brandVersionMachine, v.state, 'publish', 'versionId');
       const document = BrandSystemDocumentV1.parse(v.document);
       const previous = await versionsRepo.findPublished(brand.id, tx);
-      await assertGuidelinesApprover(
-        actor,
-        v.id,
-        document,
-        previous ? BrandSystemDocumentV1.parse(previous.document) : null,
-        tx,
-      );
       if (previous && previous.id !== v.id)
         await versionsRepo.update(
           previous.id,
@@ -1126,7 +1092,8 @@ export const brandService = {
     /**
      * Imports a brand skill (Agent Skills package) as a new draft version: the draft starts from the published
      * document, carries the package's text as its guidelines, and adds the colours its tables state. People only;
-     * the importer cannot publish the draft (assertGuidelinesApprover). Skipped files are reported, never stored.
+     * the importer is recorded as the guidelines' author (brand_guideline_authors) and may publish the draft
+     * themselves (the owner's decision, 2 October 2026). Skipped files are reported, never stored.
      */
     async import(actor: ResolvedActor, input: z.infer<typeof BrandGuidelinesImport>, tx: Tx) {
       const parsed = BrandGuidelinesImport.parse(input);

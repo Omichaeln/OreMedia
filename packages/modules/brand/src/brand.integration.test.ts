@@ -18,9 +18,10 @@ import { runInTenant, withTransaction, type TenantContext, type Tx } from '@orem
 import { tenants } from '@oremedia/db/schema/access';
 import {
   approvedFacts,
+  brandGuidelineAuthors,
   brandObjectives,
-  brandVersions,
   brands,
+  brandVersions,
   designTokens,
   policyVersions,
 } from '@oremedia/db/schema/brand';
@@ -1136,13 +1137,9 @@ describe('brand module (spec 8) against MySQL 8', () => {
       ]);
     });
 
-    it('the importer cannot publish it; another person can, and agents then receive the guidelines', async () => {
+    it('the importer publishes it themselves (2 October 2026), and agents then receive the guidelines', async () => {
       const expected = await toReview(imported);
-      await expect(publishAs(importer, imported, expected)).rejects.toMatchObject({
-        code: 'FORBIDDEN',
-        reason: 'distinct_approver_required',
-      });
-      await publishAs(approver, imported, expected);
+      await publishAs(importer, imported, expected);
       const snapshot = await runInTenant(ctx(tenantA), () =>
         brandService.resolveBrandSnapshot(importer, { brandId: brandSkill }),
       );
@@ -1152,7 +1149,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
       ]);
     });
 
-    it('an edit to the guidelines makes the editor their author; palette-only edits and unchanged guidelines do not', async () => {
+    it('an edit to the guidelines records the editor as their author; the author still publishes', async () => {
       const draft = await run(tenantA, (tx) =>
         brandService.versions.createDraft(approver, { brandId: brandSkill }, tx),
       );
@@ -1170,7 +1167,7 @@ describe('brand module (spec 8) against MySQL 8', () => {
           tx,
         ),
       );
-      // Now the approver edits the guidelines themselves: they become the author and may not publish.
+      // Now the approver edits the guidelines themselves: they are recorded as the author and may still publish.
       const edited = {
         ...base,
         guidelines: {
@@ -1185,14 +1182,16 @@ describe('brand module (spec 8) against MySQL 8', () => {
           tx,
         ),
       );
+      const author = await tdb.db
+        .select()
+        .from(brandGuidelineAuthors)
+        .where(eq(brandGuidelineAuthors.id, draft.versionId));
+      expect(author).toMatchObject([{ authorKind: 'user', authorId: approver.id }]);
       const expected = await toReview(draft.versionId);
-      await expect(publishAs(approver, draft.versionId, expected)).rejects.toMatchObject({
-        reason: 'distinct_approver_required',
-      });
-      await publishAs(importer, draft.versionId, expected);
+      await publishAs(approver, draft.versionId, expected);
     });
 
-    it('removing guidelines needs no second person; an agent cannot import', async () => {
+    it('removing guidelines publishes as before; an agent cannot import', async () => {
       const draft = await run(tenantA, (tx) =>
         brandService.versions.createDraft(importer, { brandId: brandSkill }, tx),
       );

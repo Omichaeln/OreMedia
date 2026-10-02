@@ -74,9 +74,9 @@ export const brandVersions = mysqlTable(
 );
 
 /**
- * Who last changed a brand version's guidelines (import or edit), one row per version (id = the version's id).
- * Publishing a version whose guidelines differ from the published ones is refused to that author: a second person
- * approves what agents will follow. Kept beside brand_versions so that table's shape is unchanged.
+ * Who last changed a brand version's guidelines (import or edit), one row per version (id = the version's id):
+ * the audit trail of what agents will follow. Since 2 October 2026 the author may publish the version themselves;
+ * the row is kept for the record. Kept beside brand_versions so that table's shape is unchanged.
  */
 export const brandGuidelineAuthors = mysqlTable(
   'brand_guideline_authors',
