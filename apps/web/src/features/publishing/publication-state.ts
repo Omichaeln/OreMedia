@@ -7,7 +7,7 @@ import {
   type PublicationRemoteVerification as PublicationRemoteVerificationT,
   type PublicationState as PublicationStateT,
 } from '@oremedia/contracts/publishing';
-import type { ChannelConnectionStatus } from '@oremedia/contracts/providers';
+import type { ChannelConnectionStatus, ChannelHealth } from '@oremedia/contracts/providers';
 
 export interface StateChip {
   tone: Tone;
@@ -176,6 +176,54 @@ export interface ChannelChip extends StateChip {
   /** True when the channel cannot publish until someone acts (spec 21.2 token expiry). */
   needsAction: boolean;
 }
+
+/**
+ * RA-01: what the last refresh or read found about the channel's remote access, beside its status. A dead or
+ * unreachable grant needs a person (reconnect); an expiring token is the refresh workflow's to renew.
+ */
+export const CHANNEL_HEALTH_CHIP: Record<ChannelHealth, ChannelChip> = {
+  unknown: {
+    tone: 'neutral',
+    label: 'Not checked',
+    detail: 'No refresh or read has run yet.',
+    needsAction: false,
+  },
+  ok: {
+    tone: 'good',
+    label: 'Healthy',
+    detail: 'The last refresh or read went through.',
+    needsAction: false,
+  },
+  token_expiring: {
+    tone: 'warning',
+    label: 'Token expiring',
+    detail: 'The refresh due before the token expires did not go through; it is retried.',
+    needsAction: false,
+  },
+  token_expired: {
+    tone: 'critical',
+    label: 'Token expired',
+    detail: 'The platform refused the last read for an expired token.',
+    needsAction: true,
+  },
+  revoked: {
+    tone: 'critical',
+    label: 'Access revoked',
+    detail: 'The platform reports the grant as revoked; reconnect the channel before publishing.',
+    needsAction: true,
+  },
+  unreachable: {
+    tone: 'warning',
+    label: 'Unreachable',
+    detail: 'The platform could not be reached at the last read.',
+    needsAction: true,
+  },
+};
+
+/** A channel needs a person when its status or its health says so (spec 21.2 token expiry, RA-01 health). */
+export const channelNeedsAction = (c: { status: ChannelConnectionStatus; health: ChannelHealth }): boolean =>
+  CHANNEL_CHIP[c.status].needsAction ||
+  (c.status !== 'disabled' && CHANNEL_HEALTH_CHIP[c.health].needsAction);
 
 export const CHANNEL_CHIP: Record<ChannelConnectionStatus, ChannelChip> = {
   active: { tone: 'good', label: 'Connected', detail: 'The channel can publish.', needsAction: false },

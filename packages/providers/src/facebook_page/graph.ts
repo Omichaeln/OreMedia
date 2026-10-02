@@ -3,6 +3,7 @@ import type {
   ClientConfig,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import { classifyByStatus } from '../base';
 import { ProviderTransportError, type ProviderIO } from '../io';
@@ -14,6 +15,8 @@ import {
   get,
   num,
   readResponse,
+  revokeFromError,
+  revokeFromResponse,
   str,
   summarise,
   type IOResponse,
@@ -300,6 +303,23 @@ export const isMetaObjectUnavailable = (res: ProviderResponse): boolean => {
   const e = metaError(res.body);
   return res.status === 404 || (e.code === 100 && e.subcode === 33);
 };
+
+/**
+ * RA-01: `DELETE /me/permissions` with the user token revokes the user's login for the app as a whole (every
+ * permission, and with them the Page and Instagram tokens derived from it); Graph answers `{"success": true}`. A
+ * user token the platform no longer accepts (code 190: already expired or revoked) is `revoked` too, since the
+ * access it would have revoked is gone.
+ */
+export async function metaRevokeLogin(io: ProviderIO, userToken: string): Promise<RevokeResult> {
+  try {
+    const res = await graphDelete(io, '/me/permissions', userToken);
+    if (res.status === 200 && get(res.json, 'success') === true) return { outcome: 'revoked' };
+    if (metaError(res.body).code === 190) return { outcome: 'revoked' };
+    return revokeFromResponse(res, () => false);
+  } catch (err) {
+    return revokeFromError(err);
+  }
+}
 
 export function metaRefreshFailure(res: ProviderResponse): RefreshResult {
   const cls = classifyMetaError({ status: res.status, body: res.body, phase: 'after_send' });

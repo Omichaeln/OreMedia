@@ -8,6 +8,7 @@ import type {
   DecryptedCredentials,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import {
   ProviderAuthError,
@@ -140,6 +141,16 @@ export class FixtureSourceAdapter implements SourceAdapter {
         };
       }
     }
+  }
+
+  /** RA-01: what the vendor answers a remote revoke with; a revoked grant refuses the refreshes that follow. */
+  revokeBehaviour: RevokeResult | null = { outcome: 'revoked' };
+  readonly revokeCalls: DecryptedCredentials[] = [];
+  async revokeAccess(credentials: DecryptedCredentials): Promise<RevokeResult> {
+    this.revokeCalls.push({ ...credentials });
+    const result = this.revokeBehaviour ?? { outcome: 'not_supported' };
+    if (result.outcome === 'revoked') this.refreshBehaviour = { kind: 'revoked' };
+    return result;
   }
 
   async listTargets(): Promise<SourceTarget[]> {

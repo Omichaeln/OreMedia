@@ -68,5 +68,6 @@ export const xCapability: ProviderCapabilityV1 = {
     },
     additionalProperties: false,
   },
+  vendor: 'X',
   certifiedAt: null,
 };

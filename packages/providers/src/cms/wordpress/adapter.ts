@@ -1,4 +1,4 @@
-import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
+import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import { classifyByStatus, retryAfterMs, truncateForTemporal } from '../../base';
 import {
   CMS_MEDIA_MAX_BYTES,
@@ -24,6 +24,8 @@ import {
   get,
   num,
   readResponse,
+  revokeFromError,
+  revokeFromResponse,
   str,
   summarise,
   textFingerprint,
@@ -163,6 +165,40 @@ export class WordPressCmsAdapter implements CmsAdapter {
       displayName: str(get(res.json, 'name')) ?? str(get(res.json, 'slug')) ?? site.username,
       canPublish: can('publish_posts'),
     };
+  }
+
+  /**
+   * RA-01: revokes the application password the connection authenticates with. WordPress names the password in use
+   * at `GET /users/me/application-passwords/introspect` (its uuid) and deletes it at
+   * `DELETE /users/me/application-passwords/<uuid>` (`{"deleted": true}`); a password the site no longer accepts
+   * (401 / 403 on introspect) is already revoked.
+   */
+  async revokeAccess(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    try {
+      const headers = { ...basic(site, credentials), accept: 'application/json' };
+      const current = await request(
+        io,
+        api(site, '/users/me/application-passwords/introspect'),
+        { method: 'GET', headers },
+        false,
+      );
+      if (current.status === 401 || current.status === 403) return { outcome: 'revoked' };
+      const uuid = str(get(current.json, 'uuid'));
+      if (current.status !== 200 || !uuid) return revokeFromResponse(current, () => false);
+      const deleted = await request(
+        io,
+        api(site, `/users/me/application-passwords/${encodeURIComponent(uuid)}`),
+        { method: 'DELETE', headers },
+        true,
+      );
+      return revokeFromResponse(deleted, (r) => r.status === 200 && get(r.json, 'deleted') === true);
+    } catch (err) {
+      return revokeFromError(err);
+    }
   }
 
   async readArticle(

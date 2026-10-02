@@ -1,0 +1,2 @@
+ALTER TABLE `channel_connections` ADD `health` enum('unknown','ok','token_expiring','token_expired','revoked','unreachable') DEFAULT 'unknown' NOT NULL;--> statement-breakpoint
+ALTER TABLE `channel_connections` ADD `health_checked_at` datetime(3);

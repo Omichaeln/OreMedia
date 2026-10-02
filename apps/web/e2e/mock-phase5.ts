@@ -124,6 +124,9 @@ export interface Channel {
   status: 'active' | 'refresh_needed' | 'reconnect_needed' | 'disabled';
   tokenExpiresAt: string | null;
   capabilityVersion: number;
+  /** RA-01: what the last refresh or read found about the remote access, and when. */
+  health: 'unknown' | 'ok' | 'token_expiring' | 'token_expired' | 'revoked' | 'unreachable';
+  healthCheckedAt: string | null;
   /** RA-07: the capability's per-variant settings as a JSON Schema the editor renders; null = none. */
   settingsSchema: Record<string, unknown> | null;
   usable: boolean;
@@ -869,6 +872,8 @@ export class Phase5Backend {
       status,
       tokenExpiresAt,
       capabilityVersion: 1,
+      health: status === 'active' ? 'ok' : status === 'reconnect_needed' ? 'revoked' : 'unknown',
+      healthCheckedAt: status === 'disabled' ? null : now(),
       settingsSchema: SETTINGS_SCHEMA[providerKey] ?? null,
       usable: status === 'active',
       createdAt: now(),

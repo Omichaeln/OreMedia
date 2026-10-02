@@ -53,6 +53,19 @@ describe('Search Console site source adapter (ledger R2-1, spec 14.5 / 14.6)', (
     expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'reconnect_required' });
   });
 
+  it('revokeAccess (RA-01): the refresh token at Google’s revoke endpoint; invalid_token means already revoked; an outage is failed', async () => {
+    load('revoke_ok');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    expect(io.calls.map((c) => c.mutation)).toEqual([true]);
+    load('revoke_already_gone');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    load('revoke_refused');
+    expect(await adapter.revokeAccess(creds, client, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_503/),
+    });
+  });
+
   it('listTargets: the verified sites by their Search Console URL; an unverified entry is left out', async () => {
     load('targets');
     expect(await adapter.listTargets(creds, client, io)).toEqual([

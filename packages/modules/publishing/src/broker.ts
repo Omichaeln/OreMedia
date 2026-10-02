@@ -37,6 +37,15 @@ export interface CredentialRefTarget {
   aad: string;
 }
 
+/**
+ * RA-01: why a credential is opened. A disconnected channel's credential is unusable from the moment of the
+ * disconnect: only the remote revoke (channelRevokeWorkflowV1, which destroys it right after) may open it, by
+ * saying so; every other caller is refused with `credential_owner_disconnected`.
+ */
+export interface CredentialOpenOptions {
+  purpose?: 'revoke';
+}
+
 /** What the broker hands the caller next to the plaintext: references the adapter needs, never the row. */
 export interface ConnectionRef {
   channelConnectionId: string;
@@ -87,6 +96,11 @@ export const credentialBroker = {
     return id;
   },
 
+  /** Whether a credential row still holds its key material (RA-01: what the shred floors look for). */
+  async credentialRefIntact(credentialRefId: string, tx?: Tx): Promise<boolean> {
+    return (await credentialsRepo.getById(credentialRefId, tx)).destroyedAt === null;
+  },
+
   /** Crypto-shreds a credential row (data key and ciphertext overwritten); one destroyed already is left as it is. */
   async destroyCredentialRef(
     credentialRefId: string,
@@ -135,6 +149,7 @@ export const credentialBroker = {
     channelConnectionId: string,
     fn: (credentials: DecryptedCredentials, connection: ConnectionRef) => Promise<T>,
     tx?: Tx,
+    opts: CredentialOpenOptions = {},
   ): Promise<T> {
     if (!this.canDecrypt())
       throw new PolicyDeniedError(
@@ -144,6 +159,11 @@ export const credentialBroker = {
     const ctx = requireTenant();
     if (ctx.tenantId !== tenantId) throw new NotFoundError('ChannelConnection', channelConnectionId);
     const connection = await connectionsRepo.getById(channelConnectionId, tx);
+    if (connection.status === 'disabled' && opts.purpose !== 'revoke')
+      throw new PolicyDeniedError(
+        'credential_owner_disconnected',
+        'The channel is disconnected; its credential is no longer usable',
+      );
     const credential = await credentialsRepo.getById(connection.credentialRefId, tx);
     if (credential.destroyedAt)
       throw new PolicyDeniedError('credential_destroyed', 'The channel credential has been revoked');

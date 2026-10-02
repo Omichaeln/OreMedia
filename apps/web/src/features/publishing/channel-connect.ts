@@ -1,4 +1,5 @@
 import type { ErrorDetail } from '@oremedia/contracts/errors';
+import type { ProviderActivationState } from '@oremedia/contracts/providers';
 
 /**
  * The Release 1 provider keys (spec 14.8, the registry in packages/providers). The API has no provider listing, so
@@ -15,15 +16,46 @@ export const RELEASE_1_PROVIDERS: ReadonlyArray<{ key: string; label: string }> 
 export const providerLabel = (key: string): string =>
   RELEASE_1_PROVIDERS.find((p) => p.key === key)?.label ?? key;
 
-/** Why a provider cannot be connected, from the server's refusal details; null when the refusal is something else. */
-export function unavailableReason(details: readonly ErrorDetail[]): string | null {
-  for (const d of details) {
-    if (d.issue.startsWith('provider_not_certified:'))
-      return 'Not certified for use yet: the platform review for this provider is not complete (spec 14.6).';
-    if (d.issue.startsWith('unknown_provider:')) return 'Not available: this provider is not registered.';
+/** The chip for a provider's activation state (RA-01), as `operations.providers.list` derives it. */
+export const ACTIVATION_CHIP: Record<
+  ProviderActivationState,
+  { tone: 'good' | 'neutral' | 'warning'; label: string }
+> = {
+  ready: { tone: 'good', label: 'Ready' },
+  uncertified: { tone: 'neutral', label: 'Not certified' },
+  disabled: { tone: 'neutral', label: 'Disabled here' },
+  credentials_missing: { tone: 'warning', label: 'Credentials missing' },
+};
+
+/** Why a provider cannot be connected, from a refusal's issue code (`provider_not_certified:<key>`, ...); null for others. */
+export function reasonText(issue: string): string | null {
+  if (issue.startsWith('provider_not_certified:'))
+    return 'Not certified for use yet: the platform review for this provider is not complete (spec 14.6).';
+  if (issue.startsWith('unknown_provider:')) return 'Not available: this provider is not registered.';
+  if (issue.startsWith('provider_disabled:') || issue.startsWith('source_not_enabled:'))
+    return 'Not enabled on this deployment: the provider is listed as disabled in its environment configuration (OREMEDIA_DISABLED_CHANNELS / OREMEDIA_DISABLED_SOURCES, or its opt-in setting is off).';
+  if (issue.startsWith('credentials_missing:')) {
+    const names = issue.slice('credentials_missing:'.length).split(',').filter(Boolean);
+    return `Not configured on this deployment: the app credential reference${names.length === 1 ? '' : 's'} ${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} not set.`;
   }
   return null;
 }
+
+/** Why a provider cannot be connected, from the server's refusal details; null when the refusal is something else. */
+export function unavailableReason(details: readonly ErrorDetail[]): string | null {
+  for (const d of details) {
+    const text = reasonText(d.issue);
+    if (text) return text;
+  }
+  return null;
+}
+
+/** The reason text of a listed provider that is not ready (RA-01); null when ready. */
+export const activationReason = (p: {
+  state: ProviderActivationState;
+  reason: string | null;
+}): string | null =>
+  p.state === 'ready' ? null : (reasonText(p.reason ?? '') ?? `Not available: ${p.state}.`);
 
 /** The provider redirects back to the settings page with `state` and `code` in the query (spec 14.7 OAuth). */
 export function callbackParams(search: string): { state: string; code: string } | null {

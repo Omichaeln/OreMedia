@@ -1,8 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import type { z } from 'zod';
-import { ConflictError, NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
+import {
+  CapabilityUnsupportedError,
+  ConflictError,
+  NotFoundError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
-import type { AccountGrant, ChannelVariantInput, ValidationResult } from '@oremedia/contracts/providers';
+import {
+  providerActivationState,
+  type AccountGrant,
+  type ChannelVariantInput,
+  type RemoteRevokeOutcome,
+  type ValidationResult,
+} from '@oremedia/contracts/providers';
 import {
   ChannelConnectCancel,
   ChannelConnectStart,
@@ -22,8 +33,15 @@ import { missingScopes, type ProviderAdapter, type ProviderIO } from '@oremedia/
 import { credentialBroker } from './broker';
 import { actorRef, connectionUsable, toConnectionDto, transition, type ConnectionRow } from './common';
 import type { EnvelopeRow } from './envelope';
-import { assertBrandExists, destinations, providerClientFor, publishMedia, variants } from './hooks';
-import { adapterFor, providerIO } from './providers';
+import {
+  assertBrandExists,
+  channelActivationOf,
+  destinations,
+  providerClientFor,
+  publishMedia,
+  variants,
+} from './hooks';
+import { adapterFor, providerIO, registry } from './providers';
 import {
   ChannelConnectionRepository,
   CredentialRefRepository,
@@ -305,6 +323,19 @@ export const channelService = {
       await assertBrandExists(parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'channel.connect', brandResource(parsed.brandId), {}, tx);
       const adapter = adapterFor(parsed.providerKey); // CAPABILITY_UNSUPPORTED unless certified (spec 14.6)
+      // RA-01: a certified provider this environment disabled, or whose app credentials are not set, is refused
+      // with the reason the providers listing shows, before any state is issued.
+      const activation = channelActivationOf(adapter.key);
+      const readiness = providerActivationState({
+        key: adapter.key,
+        certifiedAt: adapter.capability.certifiedAt,
+        disabled: activation.disabled,
+        credentialRefs: activation.credentialRefs,
+      });
+      if (readiness.state !== 'ready')
+        throw new CapabilityUnsupportedError([
+          { path: 'providerKey', issue: readiness.reason ?? readiness.state },
+        ]);
       const redirectUri = connectCallbackUri ?? parsed.redirectUri;
       if (!redirectUri)
         throw new ValidationFailedError(
@@ -516,8 +547,13 @@ export const channelService = {
   },
 
   /**
-   * Spec 14.7 / 17.5 revoke: the credential row is destroyed (data key discarded), the connection disabled and
-   * every scheduled publication on it held with reason channel_active, through the publication machine.
+   * Spec 14.7 / 17.5 revoke: the connection is disabled and every scheduled publication on it held with reason
+   * channel_active, through the publication machine. RA-01: where the provider's adapter can revoke the grant
+   * remotely (`revokeAccess`, looked up whether or not the provider is still certified), the credential row is
+   * left for channelRevokeWorkflowV1 (worker-core, started by the outbox from `channel.disconnected`): the API
+   * cannot open it, the worker revokes it at the platform, records the outcome and destroys it whatever the
+   * platform answered. Otherwise the row is destroyed here (data key discarded), as before. The audit event and
+   * the event carry which (`remoteRevoke: requested | not_supported`).
    */
   async disconnect(actor: ResolvedActor, input: z.infer<typeof ChannelDisconnect>, tx: Tx) {
     const parsed = ChannelDisconnect.parse(input);
@@ -527,7 +563,11 @@ export const channelService = {
       throw new ConflictError('ChannelConnection', row.id, parsed.expectedVersion);
     await connectionsRepo.update(row.id, row.version, { status: 'disabled', tokenExpiresAt: null }, tx);
     const credential = await credentialsRepo.getById(row.credentialRefId, tx);
-    if (!credential.destroyedAt)
+    const remoteRevoke: RemoteRevokeOutcome =
+      !credential.destroyedAt && registry().lookup(row.providerKey)?.revokeAccess
+        ? 'requested'
+        : 'not_supported';
+    if (remoteRevoke === 'not_supported' && !credential.destroyedAt)
       await credentialsRepo.destroy(credential.id, credential.version, 'disconnected', tx);
     const held: string[] = [];
     for (const pub of await publicationsRepo.listScheduledForChannel(row.id, tx)) {
@@ -559,17 +599,25 @@ export const channelService = {
         fromState: row.status,
         toState: 'disabled',
         count: held.length,
+        remoteRevoke,
       },
     );
     await outbox.add(
       'channel.disconnected',
       { type: 'channel_connection', id: row.id, version: row.version + 1 },
-      { channelConnectionId: row.id, providerKey: row.providerKey, heldPublications: held.length },
+      {
+        channelConnectionId: row.id,
+        providerKey: row.providerKey,
+        heldPublications: held.length,
+        remoteRevoke,
+        actorKind: actor.kind,
+        actorId: actor.id,
+      },
       tx,
       { brandId: row.brandId },
     );
     const updated = await connectionsRepo.getById(row.id, tx);
-    return { ...toConnectionDto(updated), heldPublicationIds: held };
+    return { ...toConnectionDto(updated), heldPublicationIds: held, remoteRevoke };
   },
 
   /** Spec 13.4 `publishing.channelUsable`: false for a foreign or unknown id (never an error). */

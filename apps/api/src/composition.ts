@@ -41,11 +41,11 @@ import {
 } from '@oremedia/module-content';
 import {
   cmsCapabilities,
-  configureSourceAvailability,
+  configureSourceActivation,
   destinationArticles,
   destinationService,
   registerFindingWork,
-  sourceAvailabilityFromEnv,
+  sourceActivationFromEnv,
   sourceCapabilities,
 } from '@oremedia/module-destinations';
 import {
@@ -67,6 +67,8 @@ import {
   registerProviderClients,
   providerClientsFromEnv,
   channelCapabilities,
+  configureChannelActivation,
+  channelActivationFromEnv,
   registerPublishMediaSource,
   registerRevisionVariantSource,
   registerApprovalConsumer,
@@ -207,7 +209,9 @@ export function composeModules(): void {
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Ledger R2-1: the sources this deployment connects (app credentials present, not disabled).
-  configureSourceAvailability(sourceAvailabilityFromEnv());
+  configureSourceActivation(sourceActivationFromEnv());
+  // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.
+  configureChannelActivation(channelActivationFromEnv());
   // Spec 15.4 / 16.2: variant links are tracked and creative attributes captured at creation (measurement hooks).
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   // UX-11 / UX-12: every publication of a window (read to the end: the rollups aggregate the whole population).

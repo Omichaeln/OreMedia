@@ -148,6 +148,36 @@ describe('X adapter (spec 14.5, 14.8; D-04 open, X built as the fourth channel)'
     expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'reconnect_required' });
   });
 
+  it('fetchComments refused for the token (401) is raised with the classification the health mapping reads (RA-01)', async () => {
+    load('read', 'comments_unauthorised');
+    await expect(
+      adapter.fetchComments({ remotePostId: '1900000000000000001' }, creds, io),
+    ).rejects.toMatchObject({
+      name: 'SourceReadError',
+      status: 401,
+      classification: { kind: 'refresh_token' },
+    });
+  });
+
+  it('revokeAccess (RA-01): RFC 7009 revocation of the refresh token as the confidential client; a refusal is failed, never thrown', async () => {
+    load('auth', 'revoke_ok');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    expect(server.requests[0]?.headers['authorization']).toBe(
+      `Basic ${Buffer.from('cid:csecret').toString('base64')}`,
+    );
+    expect(io.calls.map((c) => c.mutation)).toEqual([true]);
+    load('auth', 'revoke_refused');
+    expect(await adapter.revokeAccess(creds, client, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_401/),
+    });
+    const refused = await fixtureIO(server, { providerKey: adapter.key, refuse: true });
+    expect(await adapter.revokeAccess(creds, client, refused)).toEqual({
+      outcome: 'failed',
+      reason: 'transport_before_send',
+    });
+  });
+
   it('validateVariant: 4 images max, 5 MB images / 15 MB GIF alone, no mixing, alt text', () => {
     const img = { mime: 'image/png', width: 800, height: 600, bytes: 1000 };
     expect(

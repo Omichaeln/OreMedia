@@ -129,6 +129,35 @@ export class DestinationRefreshDueRepository extends PlatformRepository {
   }
 }
 
+/** Rows the publication sweeper's shred floor visits per run (RA-01, bounded work); the rest wait for the next run. */
+export const SHRED_FLOOR_BATCH = 200;
+
+/**
+ * RA-01: the floor under destinationRevokeWorkflowV1 spans tenants like the daily refresh and runs inside the
+ * publication sweeper's platform job; it returns references only (tenant, destination and credential ids).
+ */
+export class DisconnectedDestinationRepository extends PlatformRepository {
+  /** Disconnected destinations still pointing at a credential, disconnected before `before`, oldest first. */
+  async listUnshredded(before: Date, tx?: Tx, limit = SHRED_FLOOR_BATCH) {
+    return this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        credentialRefId: brandDestinations.credentialRefId,
+      })
+      .from(brandDestinations)
+      .where(
+        and(
+          eq(brandDestinations.status, 'disconnected'),
+          isNotNull(brandDestinations.credentialRefId),
+          lt(brandDestinations.updatedAt, before),
+        ),
+      )
+      .orderBy(asc(brandDestinations.updatedAt), asc(brandDestinations.id))
+      .limit(limit);
+  }
+}
+
 /** What a pending grant row holds once shredded: no wrapped data key, no ciphertext (as pending_channel_grants). */
 const SHREDDED = { wrappedDataKey: '', ciphertext: '' };
 

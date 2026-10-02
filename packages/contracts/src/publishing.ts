@@ -371,6 +371,8 @@ export interface TokenRefreshActivitiesV1 {
 export interface SweepResultV1 {
   scheduledReemitted: number;
   dispatchingExpired: number;
+  /** RA-01: credentials of channels disconnected over an hour ago that the remote revoke had not shredded. */
+  credentialsShredded?: number;
 }
 export interface PublicationSweepActivitiesV1 {
   sweepPublications(input: PublicationSweepInputV1): Promise<SweepResultV1>;
@@ -510,3 +512,27 @@ export interface RenderedValidationActivitiesV1 {
   validateRenderedPublication(input: RenderedValidationInputV1): Promise<RenderedValidationResultV1>;
 }
 export type RenderedValidationRuntimeV1 = RenderedValidationActivitiesV1;
+
+// ---------------------------------------------------------------------------------------------------------------
+// RA-01 remote revoke on disconnect (appended; additive only). The API process cannot open a credential (WrapOnlyKms,
+// spec 14.7), so a disconnect of a channel whose adapter can revoke the grant remotely leaves the credential row
+// for channelRevokeWorkflowV1 (task queue `core`, started by the outbox from `channel.disconnected` with
+// `remoteRevoke: 'requested'`): the worker opens it, asks the platform to revoke it, records the outcome in the
+// audit trail and destroys the row whatever the platform answered. A disconnect of a channel without remote
+// revoke destroys the credential in its own transaction, as before.
+// ---------------------------------------------------------------------------------------------------------------
+export const ChannelRevokeInputV1 = TenantContextInput.extend({ channelConnectionId: z.string() });
+export type ChannelRevokeInputV1 = z.infer<typeof ChannelRevokeInputV1>;
+/**
+ * `revoked` / `failed`: the platform's answer, the credential destroyed either way; `not_supported`: the adapter
+ * has no remote revoke (the credential destroyed here); `already_destroyed`: nothing left to do (a repeat).
+ */
+export type ChannelRevokeResultV1 =
+  | { outcome: 'revoked' }
+  | { outcome: 'not_supported' }
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'already_destroyed' };
+export interface ChannelRevokeActivitiesV1 {
+  revokeChannelAccess(input: ChannelRevokeInputV1): Promise<ChannelRevokeResultV1>;
+}
+export type ChannelRevokeRuntimeV1 = ChannelRevokeActivitiesV1;

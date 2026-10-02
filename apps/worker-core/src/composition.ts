@@ -23,13 +23,14 @@ import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
 import {
   cmsCapabilities,
-  configureSourceAvailability,
+  configureSourceActivation,
   destinationArticles,
   destinationService,
   registerDestinationOutboxRoutes,
   registerFindingWork,
-  sourceAvailabilityFromEnv,
+  sourceActivationFromEnv,
   sourceCapabilities,
+  sweepDisconnectedDestinationCredentials,
 } from '@oremedia/module-destinations';
 import { assetService, registerAssetOutboxRoutes, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
@@ -113,12 +114,15 @@ import {
   registerRevisionVariantSource,
   providerClientsFromEnv,
   channelCapabilities,
+  configureChannelActivation,
+  channelActivationFromEnv,
   registerPublishingOutboxRoutes,
   registerPublishMediaSource,
   registerApprovalConsumer,
   registerReleaseEvaluator,
   registerVariantSource,
   registerWorkflowProbe,
+  registerDisconnectedCredentialSweep,
   registerPublishingBrandChecker,
   registerDestinationPublisher,
   type WorkflowProbe,
@@ -221,8 +225,12 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Ledger R2-1: the sources this deployment refreshes (app credentials present, not disabled).
-  configureSourceAvailability(sourceAvailabilityFromEnv());
+  configureSourceActivation(sourceActivationFromEnv());
+  // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.
+  configureChannelActivation(channelActivationFromEnv());
   registerWorkflowProbe(opts.workflowProbe ?? null);
+  // RA-01: the publication sweeper's shred floor covers disconnected destinations too (destinations runtime).
+  registerDisconnectedCredentialSweep(sweepDisconnectedDestinationCredentials);
   // Spec 15: measurement.collection_due starts the collection on worker-ingest's queues; variant links and
   // creative attributes are captured here too because agents run content commands in this process.
   registerMeasurementOutboxRoutes();

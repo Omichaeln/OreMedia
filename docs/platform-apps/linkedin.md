@@ -9,7 +9,7 @@ LinkedIn app and a super admin of the Ore & Tar LinkedIn Page (credentials never
 
 1. Configure the app (below) and set the credentials on Railway.
 2. Once the Community Management API development tier is granted, certify the adapter against the Ore & Tar Page
-   (`docs/runbooks/certify-a-channel.md`, steps 2 to 11). This sets `certifiedAt` and records D-04. The development
+   (`docs/runbooks/certify-a-provider.md`, steps 2 to 12). This sets `certifiedAt` and records D-04. The development
    tier is enough for this.
 3. Setting `certifiedAt` opens the provider to every tenant. The `publishing.channel.linkedin_page` flag is defined,
    but connect does not check it yet (open). The development tier's limits are the only gate until then.
@@ -74,6 +74,13 @@ both on one app, the adapter needs another way to identify the member (for examp
 
 **Refresh tokens:** LinkedIn issues refresh tokens only to approved partner apps. Until the app is one, access tokens
 last 60 days, and each connection goes to `reconnect_needed` when its token expires.
+
+**Revoking (RA-01):** a disconnect in the product asks LinkedIn to revoke the access token
+(`POST /oauth/v2/revoke` with the client id, secret and token) and destroys the stored credential whatever LinkedIn
+answers; the outcome is in the audit trail (`channel.remote_revoke`). After certification,
+`operations.providers.list` (Settings → Channels for owners and admins) reads the adapter's activation state on the
+deployment (`disabled` while `linkedin_page` is in `OREMEDIA_DISABLED_CHANNELS`, `credentials_missing` until both
+references are set, then `ready`).
 
 ## Standard tier application
 

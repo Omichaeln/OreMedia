@@ -1,4 +1,5 @@
 import {
+  ChannelRevokeInputV1,
   PublicationReconcileInputV1,
   PublicationRemoteChangeInputV1,
   PublicationSignalV1,
@@ -34,6 +35,10 @@ export const CONNECT_CHOICE_PURGE_SCHEDULE_ID = 'connect-choice-purge';
 export const publishTaskQueue = (providerKey: string): string => `publish-${providerKey}`;
 export const tokenRefreshWorkflowId = (channelConnectionId: string): string =>
   `token-refresh:${channelConnectionId}`;
+/** RA-01: the remote revoke of a disconnected channel's grant, one workflow per disconnect (the row version). */
+export const CHANNEL_REVOKE_WORKFLOW_TYPE = 'channelRevokeWorkflowV1';
+export const channelRevokeWorkflowId = (channelConnectionId: string, version: number): string =>
+  `channel-revoke:${channelConnectionId}:${version}`;
 
 /**
  * Spec 14.2: publication.scheduled → publicationWorkflowV1 with the stable workflow id the command chose
@@ -67,6 +72,25 @@ export function registerPublishingOutboxRoutes(): void {
         args: [input],
       };
     };
+  // RA-01: a disconnect whose provider can revoke the grant remotely leaves the credential for the worker: the
+  // workflow revokes it at the platform and destroys the row. A disconnect without one (`not_supported`, the
+  // credential already destroyed) stays informational.
+  registerOutboxRoute('channel.disconnected', (evt) => {
+    const p = evt.payload;
+    if (p['remoteRevoke'] !== 'requested') return null;
+    const input = ChannelRevokeInputV1.parse({
+      tenantId: evt.tenantId,
+      actor: { kind: p['actorKind'], id: p['actorId'] },
+      correlationId: evt.correlationId,
+      channelConnectionId: p['channelConnectionId'],
+    });
+    return {
+      workflowType: CHANNEL_REVOKE_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      workflowId: channelRevokeWorkflowId(input.channelConnectionId, evt.aggregateVersion),
+      args: [input],
+    };
+  });
   registerOutboxRoute('publication.cancel_requested', relay('cancel'));
   registerOutboxRoute('publication.rescheduled', relay('reschedule'));
   registerOutboxRoute('publication.reconcile_requested', (evt) => {

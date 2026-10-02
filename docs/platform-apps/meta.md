@@ -13,8 +13,8 @@ certified provider (spec 14.6). So certification comes first, in development mod
 works for people with a role on the app:
 
 1. Configure the app (below) and set the credentials on Railway.
-2. Certify both adapters with test accounts that hold a role on the app (`docs/runbooks/certify-a-channel.md`, steps
-   2 to 11). This sets `certifiedAt` and records D-04.
+2. Certify both adapters with test accounts that hold a role on the app (`docs/runbooks/certify-a-provider.md`, steps
+   2 to 12). This sets `certifiedAt` and records D-04.
 3. Setting `certifiedAt` opens both providers to every tenant. The `publishing.channel.*` flags are defined, but
    connect does not check them yet (open). Until it does, development mode is the gate: only people with a role on
    the app can complete the login.
@@ -103,6 +103,13 @@ points bear on the submission; close them or remove the scope before submitting:
 recorded with the platform's confirmation as evidence (screencast E). Instagram cannot: the Graph API has no edit or
 delete for published media, so `instagram_business` declares neither and the product tells the person to delete an
 Instagram post on Instagram. No Instagram justification may mention editing or deleting.
+
+**Revoking (RA-01):** a disconnect in the product asks Meta to revoke the user's login for the app
+(`DELETE /me/permissions` with the user token the Page token was derived from; the Instagram grant is the same
+login) and destroys the stored credential whatever Meta answers; the outcome is in the audit trail
+(`channel.remote_revoke`). After certification, `operations.providers.list` (Settings → Channels for owners and
+admins) reads each adapter's activation state on the deployment (`disabled` while the key is in
+`OREMEDIA_DISABLED_CHANNELS`, `credentials_missing` until both references are set, then `ready`).
 
 ## Review tenant and reviewer access
 

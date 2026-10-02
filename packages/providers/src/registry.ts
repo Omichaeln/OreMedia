@@ -33,6 +33,15 @@ export class ProviderRegistry {
     return this.adapters.get(key);
   }
 
+  /**
+   * Any registered adapter, certified or not: for work that winds a connection down (RA-01 remote revoke on
+   * disconnect), which a provider decertified since the connection was made must not block. Never for a connect,
+   * a publish or a read: those go through `get`.
+   */
+  lookup(key: string): ProviderAdapter | undefined {
+    return this.adapters.get(key);
+  }
+
   capability(key: string): ProviderCapabilityV1 | undefined {
     return this.adapters.get(key)?.capability;
   }
@@ -50,7 +59,7 @@ export class ProviderRegistry {
 
 /**
  * Release 1 adapters (spec 14.8; D-04 open: X built as the fourth channel). All four carry `certifiedAt: null`, so
- * `get()` refuses them for tenants until certification with the platform's own app (docs/runbooks/certify-a-channel.md).
+ * `get()` refuses them for tenants until certification with the platform's own app (docs/runbooks/certify-a-provider.md).
  */
 export const providerRegistry = new ProviderRegistry()
   .register(linkedInPageAdapter)
