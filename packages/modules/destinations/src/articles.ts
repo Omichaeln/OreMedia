@@ -498,19 +498,26 @@ export const destinationArticles: DestinationPublisher = {
         code: 'source_use_denied',
         message: 'the source-use policy does not allow a write',
       };
+    const readAllowed = await destinationArticles.useAllowed(row.brandId, row.kind, 'read');
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
-        const result = await adapter.unpublishArticle(
+        const io = cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {});
+        const result = await adapter.unpublishArticle(site, creds, io, input.remoteId);
+        if (result.outcome !== 'done') return result;
+        if (!result.article) return { outcome: 'done' };
+        // RA-02: the revert is proven by reading the article back as a draft, never by the write's own answer.
+        const { remote, verification } = await readBackAfterWrite(
+          adapter,
           site,
           creds,
-          cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}),
-          input.remoteId,
+          io,
+          readAllowed,
+          result.article,
+          { status: 'draft' },
         );
-        return result.outcome === 'done'
-          ? { outcome: 'done', ...(result.article ? { readback: toReadback(result.article) } : {}) }
-          : result;
+        return { outcome: 'done', readback: toReadback(remote), readbackVerification: verification };
       },
       () => ({
         outcome: 'rejected',

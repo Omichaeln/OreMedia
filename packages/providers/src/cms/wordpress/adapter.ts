@@ -303,7 +303,8 @@ export class WordPressCmsAdapter implements CmsAdapter {
    * (the original too, when the first update is made), newest first; the second-newest after the write is the
    * state the write replaced. When its modified instant is not the pre-write read's, the site changed between the
    * read and the write and that revision is what was lost. A listing that cannot be read (revisions off, refused)
-   * proves nothing: null, never a claim either way.
+   * proves nothing: null, never a claim either way. modified_gmt is second-granular, so a site save within the same
+   * second as the pre-write read is not told apart from it: the window is narrowed and detected, not closed.
    */
   private async replacedRevision(
     site: CmsSite,

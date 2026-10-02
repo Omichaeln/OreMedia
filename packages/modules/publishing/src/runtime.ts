@@ -534,25 +534,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           );
         // RA-04: a live article's page is checked again after the first delay (the workflow owns the later ones);
         // a draft is not public, so there is nothing to re-validate.
-        if (row.destinationId && row.remoteStatus === 'live') {
-          const publishedAt = now();
-          await outbox.add(
-            'publication.rendered_validation_due',
-            { type: 'publication', id: row.id, version: row.version + 1 },
-            {
-              publicationId: row.id,
-              publishedAt: publishedAt.toISOString(),
-              workflowId: renderedValidationWorkflowId(row.id, row.version + 1),
-              actorKind: actor.kind,
-              actorId: actor.id,
-            },
-            tx,
-            {
-              brandId: row.brandId,
-              availableAt: new Date(publishedAt.getTime() + RENDERED_VALIDATION_DELAYS_MS[0]),
-            },
-          );
-        }
+        if (row.destinationId && row.remoteStatus === 'live') await queueRenderedValidation(row, tx);
         count(METRIC.publicationOutcomes, 1, { outcome: 'published' });
         return result;
       }),
@@ -718,7 +700,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
   /**
    * RA-04: the verification a write earned. The read-back must have matched what was sent for the rendered page to
    * count: `verified` needs both, a mismatch on either is `failed`, and a read-back that could not be compared (no
-   * read allowed, missing) leaves the write `unverified` whatever the page showed.
+   * read allowed, missing) or a page not checked yet leaves the write `unverified` whatever else was seen.
    */
   const verificationOf = (
     readback: ArticleReadbackVerificationV1 | undefined,
@@ -726,7 +708,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
   ): PublicationRemoteVerification => {
     if (!readback || readback.outcome === 'unverified') return 'unverified';
     if (readback.outcome === 'mismatch') return 'failed';
-    return validationOk === null ? 'verified' : validationOk ? 'verified' : 'failed';
+    // A matching read-back alone proves the article, not the page: without a page check nothing is verified.
+    return validationOk === null ? 'unverified' : validationOk ? 'verified' : 'failed';
   };
 
   /** A fresh `remote_readback` evidence row: the remote revision as last read, with what it proved (RA-04). */
@@ -809,6 +792,31 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         tx,
       );
     }
+  }
+
+  /**
+   * RA-04: publication.rendered_validation_due with `availableAt` at the first delay, for the row as it will be
+   * after the caller's own update (version + 1): renderedValidationWorkflowV1 proves the live page at each delay.
+   */
+  async function queueRenderedValidation(row: PublicationRow, tx: Tx) {
+    const actor = workflowActor();
+    const publishedAt = now();
+    await outbox.add(
+      'publication.rendered_validation_due',
+      { type: 'publication', id: row.id, version: row.version + 1 },
+      {
+        publicationId: row.id,
+        publishedAt: publishedAt.toISOString(),
+        workflowId: renderedValidationWorkflowId(row.id, row.version + 1),
+        actorKind: actor.kind,
+        actorId: actor.id,
+      },
+      tx,
+      {
+        brandId: row.brandId,
+        availableAt: new Date(publishedAt.getTime() + RENDERED_VALIDATION_DELAYS_MS[0]),
+      },
+    );
   }
 
   const provider: PublishProviderRuntimeV1 = {
@@ -1503,8 +1511,9 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           },
           tx,
         );
-        // A fresh read-back after an edit and after a revert (RA-02): what the site holds now, and for an edit what
-        // the read-back proved; the revert sets the remote status, the edit the verification it earned.
+        // A fresh read-back after an edit and after a revert (RA-02, RA-04): what the site holds now and what the
+        // read-back proved. A revert counts only when the read-back says the article is no longer live; an edit of
+        // a live article is unverified until the delayed page check (queued here) proves the page.
         if (readback && (change.kind === 'edit' || change.kind === 'unpublish')) {
           await recordReadback(
             row,
@@ -1517,19 +1526,21 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             at,
             tx,
           );
-          const verification =
-            change.kind === 'edit' ? verificationOf(mutation.readbackVerification, null) : undefined;
+          const reverted = change.kind === 'unpublish' && readback.status !== 'publish';
+          const verification = verificationOf(mutation.readbackVerification, null);
+          if (change.kind === 'unpublish' && !reverted)
+            log.warn(
+              { tenantId: row.tenantId, publicationId: row.id, changeId: change.id },
+              'revert confirmed by the site but the article read back still live; status kept',
+            );
+          if (change.kind === 'edit' && row.remoteStatus === 'live') await queueRenderedValidation(row, tx);
           await publicationsRepo.update(
             row.id,
             row.version,
             {
-              ...(change.kind === 'unpublish' ? { remoteStatus: 'reverted' as const } : {}),
-              ...(verification
-                ? {
-                    remoteVerification: verification,
-                    remoteVerifiedAt: verification === 'verified' ? at : null,
-                  }
-                : {}),
+              ...(reverted ? { remoteStatus: 'reverted' as const } : {}),
+              remoteVerification: verification,
+              remoteVerifiedAt: verification === 'verified' ? at : null,
             },
             tx,
           );

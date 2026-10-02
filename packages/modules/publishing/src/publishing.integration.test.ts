@@ -2497,6 +2497,58 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect(calendar.find((c) => c.publicationId === pub.id)?.remoteStatus).toBe('reverted');
     });
 
+    it('revert (RA-02): when the site confirms the write but the article still reads back live, the status stays live and the mismatch is recorded', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const revert = await run(tenantA, (tx) =>
+        publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'still live?' }, tx),
+      );
+      unpublishResult = {
+        outcome: 'done',
+        readback: readbackOf('publish', { modifiedAt: '2026-10-02T11:30:00.000Z' }),
+        readbackVerification: {
+          outcome: 'mismatch',
+          matched: ['modifiedAt'],
+          mismatched: ['status'],
+          reason: null,
+          sentHash: 'b'.repeat(64),
+        },
+      };
+      const input = changeInput(pub.id, revert.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A));
+      if (result.outcome !== 'done') throw new Error('expected done');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+      );
+      expect(await row(pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'failed',
+        remoteVerifiedAt: null,
+      });
+      const latest = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(latest?.payload).toMatchObject({
+        status: 'publish',
+        changeId: revert.changeId,
+        verification: { outcome: 'mismatch', mismatched: ['status'] },
+      });
+      expect((await changesOf(pub.id)).find((c) => c.id === revert.changeId)?.state).toBe('succeeded');
+      // Still live: another revert may be asked for.
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'again' }, tx),
+        ),
+      ).resolves.toMatchObject({ accepted: true });
+    });
+
     it('edit (RA-12): the stored hash and modified instant are the precondition; a conflict refreshes the read-back; a write that replaced a site change is succeeded as conflict_overwritten with the lost revision as evidence', async () => {
       const { pub } = await publishArticle(
         {
@@ -2604,7 +2656,23 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         contentHash: 'e'.repeat(64),
         changeId: second.changeId,
       });
-      expect(await row(pub.id)).toMatchObject({ remoteStatus: 'live', remoteVerification: 'verified' });
+      // RA-04: the read-back proved the article, not the page: unverified until the queued page check runs.
+      const edited = await row(pub.id);
+      expect(edited).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'unverified',
+        remoteVerifiedAt: null,
+      });
+      const queued = (await eventsOf(tenantA, 'publication.rendered_validation_due')).filter(
+        (e) => e.payload['publicationId'] === pub.id,
+      );
+      expect(queued).toHaveLength(2); // one at publish, one for the edit
+      expect(queued.at(-1)?.payload['workflowId']).toBe(
+        `pub:${pub.id}:rendered-validation:${edited.version}`,
+      );
+      expect(queued.at(-1)!.availableAt.getTime()).toBeGreaterThan(
+        Date.now() + RENDERED_VALIDATION_DELAYS_MS[0] - 60_000,
+      );
       const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
       expect(dto.remote.changes[0]).toMatchObject({
         id: second.changeId,

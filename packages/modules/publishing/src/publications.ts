@@ -405,10 +405,14 @@ export async function fetchRenderedValidation(row: PublicationRow, tx?: Tx): Pro
     slug: variant.article.slug,
     firstParagraph: articleFirstParagraph(variant.article),
     lastParagraph: articleLastParagraph(variant.article),
-    // A draft (or a reverted article) is expected to be hidden; only a live page must be indexable (RA-02).
-    draft: row.remoteStatus !== 'live',
+    // A draft (or a reverted article) is expected to be hidden; only a live page must be indexable (RA-02). A row
+    // published before the status column existed (null) is read from its latest read-back, never assumed a draft.
+    draft: row.remoteStatus ? row.remoteStatus !== 'live' : await readbackSaysDraft(row.id, tx),
   });
 }
+
+const readbackSaysDraft = async (publicationId: string, tx?: Tx): Promise<boolean> =>
+  (await evidenceRepo.latestOfKind(publicationId, 'remote_readback', tx))?.payload['status'] !== 'publish';
 
 /**
  * Records what the page showed as insert-only `rendered_validation` evidence and sets the publication's
@@ -1099,10 +1103,13 @@ export const publicationService = {
    */
   async validateRendered(actor: ResolvedActor, input: PublicationValidateRendered, tx: Tx) {
     const parsed = PublicationValidateRendered.parse(input);
-    const row = await publicationsRepo.lock(parsed.publicationId, tx);
+    const row = await publicationsRepo.getById(parsed.publicationId, tx);
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
+    // The public fetch runs before the row lock is taken (as the delayed workflow's activity does), so a slow
+    // page never holds the row for other commands.
     const result = await fetchRenderedValidation(row, tx);
-    await recordRenderedValidation(row, result, tx);
+    const locked = await publicationsRepo.lock(row.id, tx);
+    await recordRenderedValidation(locked, result, tx);
     await audit.record(
       actorRef(actor),
       'publication.validate_rendered',

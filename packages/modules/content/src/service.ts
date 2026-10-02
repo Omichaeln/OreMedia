@@ -1551,9 +1551,11 @@ export const contentService = {
           details.push({ path: `exportIds.${i}`, issue: 'export_not_in_revision' });
       });
       if (details.length) throw new ValidationFailedError(details);
-      // RA-03: the input's cap is the article's (a destination variant carries the article as text); a channel
-      // variant's caption is held to the social cap here, once the variant's target is known.
-      if (variant.channelConnectionId && parsed.text.length > CHANNEL_VARIANT_TEXT_MAX_CHARS)
+      // RA-03: the input's cap is the article's (a destination variant carries the article as text); any other
+      // variant's text is held to the social cap here, once the variant's target and its copy are known.
+      const articleTarget =
+        variant.destinationId !== null && CopyDocumentV1.parse(revision.copy).article !== undefined;
+      if (!articleTarget && parsed.text.length > CHANNEL_VARIANT_TEXT_MAX_CHARS)
         throw new ValidationFailedError([
           { path: 'text', issue: `text_too_long:${parsed.text.length}>${CHANNEL_VARIANT_TEXT_MAX_CHARS}` },
         ]);

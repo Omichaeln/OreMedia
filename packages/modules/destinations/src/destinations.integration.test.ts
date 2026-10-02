@@ -1255,7 +1255,7 @@ describe('destinations module against MySQL 8', () => {
       cms.calls.length = 0;
       cms.pages.set(`${SITE}/?p=100`, {
         status: 200,
-        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><h3>Is it safe?</h3><p>Yes, mostly.</p></body></html>',
       });
       const result = await inTenant(tenantA, () =>
         destinationArticles.publish(input, undefined, async () => void sent++),
@@ -1282,7 +1282,7 @@ describe('destinations module against MySQL 8', () => {
         reason: null,
         sentHash: textFingerprint(renderArticleHtml(article)),
       });
-      expect(result.validation).toMatchObject({ ok: false, status: 200, truncated: false, error: null });
+      expect(result.validation).toMatchObject({ ok: true, status: 200, truncated: false, error: null });
       expect(result.validation?.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
         'status_ok:true',
         'title_present:true',
@@ -1290,7 +1290,30 @@ describe('destinations module against MySQL 8', () => {
         'indexable:true', // a draft may carry noindex
         'body_present:true',
         'canonical_matches:true', // the canonical names the slug's path on the site
-        'last_paragraph_present:false', // the page stops after the first paragraph: the FAQ's answer is missing
+        'last_paragraph_present:true',
+      ]);
+    });
+
+    it('a page that stops after the first paragraph fails the last-paragraph check (RA-04), everything else passing', async () => {
+      cms.pages.set(`${SITE}/?p=101`, {
+        status: 200,
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+      });
+      const result = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_truncated_page',
+          variant: variant(siteId),
+        }),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted', remotePostId: '101' });
+      if (result.outcome !== 'accepted') return;
+      expect(result.validation?.ok).toBe(false);
+      expect(result.validation?.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual([
+        'last_paragraph_present',
       ]);
     });
 
@@ -1472,7 +1495,13 @@ describe('destinations module against MySQL 8', () => {
       const reverted = await inTenant(tenantA, () =>
         destinationArticles.unpublish({ tenantId: tenantA, destinationId: siteId, remoteId: '100' }),
       );
-      expect(reverted).toMatchObject({ outcome: 'done', readback: { status: 'draft' } });
+      // RA-02: the revert is proven by reading the article back as a draft, not by the write's own answer.
+      expect(reverted).toMatchObject({
+        outcome: 'done',
+        readback: { status: 'draft' },
+        readbackVerification: { outcome: 'verified', matched: ['status', 'modifiedAt'], mismatched: [] },
+      });
+      expect(cms.calls.map((c) => c.op).slice(-2)).toEqual(['update', 'read']);
       cms.calls.length = 0;
       const validation = await inTenant(tenantA, () =>
         destinationArticles.validateRendered({
