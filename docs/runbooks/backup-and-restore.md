@@ -5,7 +5,7 @@
 
 ## What runs
 
-The `db-backup` service in each Railway environment is built from `infra/railway/db-backup/Dockerfile` (`mysql:9` client tools plus the AWS CLI) and runs `backup.sh` on the service's cron schedule (`*/15 * * * *`, restart policy never, Dockerfile path and watch pattern `infra/railway/db-backup/**` set in the service settings; Railway no longer reads `railway.json`). Each run:
+The `db-backup` service in each Railway environment is built from `infra/railway/db-backup/Dockerfile` (`mysql:9` client tools plus the AWS CLI) and runs `backup.sh` on the service's cron schedule (`*/15 * * * *`, restart policy never, Dockerfile path and watch pattern `infra/railway/db-backup/**` set in the service settings; Railway no longer reads `railway.json`). The service must run in the same region as the MySQL service (`us-west2`): a new service defaults to another region and the dump then crawls at one round trip of about 140 ms per statement. Each run:
 
 1. Dumps `SRC_DB` from `SRC_HOST` (the application database) and, when `SRC2_HOST` is set, `SRC2_DB` from `SRC2_HOST` (the Temporal persistence database) with `mysqldump --single-transaction --routines --triggers --events`. When binary logging is on, `--source-data=2` records the binlog position in the dump.
 2. Gzips each dump and copies it to the object store at `s3://$BACKUP_BUCKET/$BACKUP_PREFIX/<name>/<name>-<UTC stamp>.sql.gz` (`oremedia` and `temporal`), then confirms the stored size with a head request.
