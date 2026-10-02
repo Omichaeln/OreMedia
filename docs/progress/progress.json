@@ -1,7 +1,7 @@
 {
   "programme": "Oremedia",
   "specification": "docs/spec/BUILD_PROMPT.md (prepared 23 September 2026)",
-  "updatedAt": "2026-09-30T22:00:00Z",
+  "updatedAt": "2026-10-02T06:18:00Z",
   "repository": "Omichaeln/OreMedia · branch main",
   "statusLegend": {
     "complete": "Genuinely complete and verified; needs no additional work.",
@@ -654,8 +654,8 @@
           "StorageProvider: S3/R2, tenant-prefixed keys enforced, head/copy/delete, no local storage in production",
           "production",
           "9.1, 20.2",
-          "in_progress",
-          "storage.ts: StorageProvider interface, TenantPrefixedStorage template enforcing assertTenantKey on every operation (malformed/traversal and foreign-tenant keys → PolicyDeniedError), S3StorageProvider (AWS SDK v3, R2 via OBJECT_STORE_ENDPOINT, private buckets, presigned PUT/GET, releases bucket), MemoryStorageProvider, createStorageFromEnv fails closed in production. storage.test.ts (8) + module integration on the memory provider. Open: S3StorageProvider has not been exercised against a live R2/S3 bucket (no credentials in this environment)."
+          "complete",
+          "storage.ts: StorageProvider interface, TenantPrefixedStorage template enforcing assertTenantKey on every operation (malformed/traversal and foreign-tenant keys → PolicyDeniedError), S3StorageProvider (AWS SDK v3, R2 via OBJECT_STORE_ENDPOINT, private buckets, presigned PUT/GET, releases bucket), MemoryStorageProvider, createStorageFromEnv fails closed in production. storage.test.ts (8) + module integration on the memory provider. Open: S3StorageProvider has not been exercised against a live R2/S3 bucket (no credentials in this environment). Verified live: production smoke (every 6 hours since 29 September 2026; runs 7 to 23 passed) signs an upload intent, PUTs the bytes to the R2 assets bucket through a presigned URL, ingests and retires them."
         ],
         [
           "2.13",
@@ -679,7 +679,7 @@
           "critical",
           "9.1",
           "in_progress",
-          "ingest/scanner.ts: ClamAvScanner (clamd zINSTREAM over TCP, chunked, socket timeout), FakeScanner (EICAR), FailClosedScanner; no verdict → ScannerUnavailableError → Temporal retries → intent stays quarantined, never accepted; production without SCANNER_CLAMD_ADDRESS fails closed (scanner.test.ts 5, workflow test). Open: not run against a live clamd."
+          "ingest/scanner.ts: ClamAvScanner (clamd zINSTREAM over TCP, chunked, socket timeout), FakeScanner (EICAR), FailClosedScanner; no verdict → ScannerUnavailableError → Temporal retries → intent stays quarantined, never accepted; production without SCANNER_CLAMD_ADDRESS fails closed (scanner.test.ts 5, workflow test). Open: not run against a live clamd. 1 October 2026: production worker-render has SCANNER_CLAMD_ADDRESS set to the ClamAV service and production fails closed without a verdict, so every smoke ingest accepted since 29 September passed a live clean scan. Open: a detection (EICAR) in a deployed environment has not been observed."
         ],
         [
           "2.16",
@@ -1560,7 +1560,7 @@
           "critical",
           "14.3, 19.4",
           "in_progress",
-          "Versioning policy documented (v1 files immutable, new versions ship as v2); replay harness present but no histories recorded: the Temporal time-skipping test server download is blocked in this environment."
+          "Versioning policy documented (v1 files immutable, new versions ship as v2); replay harness present but no histories recorded: the Temporal time-skipping test server download is blocked in this environment. 1 October 2026: CI runs the time-skipping suite on every pull request (job \"Temporal time-skipping tests\", green on #15 to #24); replay still has no recorded histories."
         ],
         [
           "5.33",
@@ -1832,7 +1832,7 @@
           "critical",
           "17.6",
           "in_progress",
-          "publicationService.holdRestored (publishing.publications.holdRestored, owner/admin, idempotent, bounded batches with hasMore): scheduled and unsent dispatching rows go to held (restored_from_backup); processing and sent dispatching rows go to outcome_unknown and are reconciled against remote history (spec 14.3; 13.1 has no held → published move, so 17.6's \"moved to held\" applies literally only to unsent rows — interpretation accepted by the programme owner on 24 September 2026). The attempt is read with a locking read so a sentAt committed by the pre-send fence is never missed (two-connection test); a pre-send fence in publishOnce stops a restored or fenced-out run from sending. Rehearsed in runbooks.integration.test.ts: every in-flight row resolved, the live post reconciled as published with no second post, the other tenant untouched. Open: the PITR restore itself needs a live database."
+          "publicationService.holdRestored (publishing.publications.holdRestored, owner/admin, idempotent, bounded batches with hasMore): scheduled and unsent dispatching rows go to held (restored_from_backup); processing and sent dispatching rows go to outcome_unknown and are reconciled against remote history (spec 14.3; 13.1 has no held → published move, so 17.6's \"moved to held\" applies literally only to unsent rows — interpretation accepted by the programme owner on 24 September 2026). The attempt is read with a locking read so a sentAt committed by the pre-send fence is never missed (two-connection test); a pre-send fence in publishOnce stops a restored or fenced-out run from sending. Rehearsed in runbooks.integration.test.ts: every in-flight row resolved, the live post reconciled as published with no second post, the other tenant untouched. Open: the PITR restore itself needs a live database. 1 October 2026: database restore rehearsed on Railway staging: a dump of the staging database loaded into a separate MySQL, 103 of 103 tables and the migration ledger restored (RESTORE_REHEARSAL_PASS). Railway's MySQL offers no point-in-time recovery, so the recovery point is the nightly production dump (03:00 UTC, 14-day retention). Open: an application restored on that dump walking the held-versus-reconciled path, which waits on staging credentials."
         ],
         [
           "7.4",
@@ -1936,7 +1936,7 @@
           "critical",
           "17.5",
           "in_progress",
-          "deletionRequestWorkflowV1 fan-out proves every tenant-scoped table empty or anonymised; retentionSweepWorkflowV1 runs its applyRetention activity on a separate retention database role (DATABASE_URL_RETENTION; DELETE only on the TTL tables; retention-role integration tests). Open: tenant deletion of insert-only tables still runs on the app role and is refused there (recorded in process-deletion-request.md); Temporal visibility and log deletion are operator actions; bucket lifecycle rules."
+          "deletionRequestWorkflowV1 fan-out proves every tenant-scoped table empty or anonymised; retentionSweepWorkflowV1 runs its applyRetention activity on a separate retention database role (DATABASE_URL_RETENTION; DELETE only on the TTL tables; retention-role integration tests). Open: tenant deletion of insert-only tables still runs on the app role and is refused there (recorded in process-deletion-request.md); Temporal visibility and log deletion are operator actions; bucket lifecycle rules. 1 October 2026: the retention role exists in both environments (db-roles PASS for oremedia_retention); the Release 2 connectors add policy-driven pruning of report rows and audit runs and shred destination credentials on disconnect and tenant purge."
         ]
       ]
     },
@@ -2046,7 +2046,7 @@
           "critical",
           "Appendix A",
           "in_progress",
-          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases. Live status 25 September 2026: api and web complete (sign-in works); worker-core needs ANTHROPIC_API_KEY_REF (its agents worker cannot start) and worker-ingest needs COMMENT_AUTHOR_HASH_SECRET_REF or LINK_HASH_SECRET_REF; both now fail their health-checked deploys until set. 28 September 2026, merged #45 (claude/deploy-verification): every Node service now reports at start, per capability (uploads, channel:<provider>, models, web_origin), the settings it lacks, by name only, in one error line, keeps running, and lists the degraded capability names on /health (packages/observability/src/config-report.ts, runbook section 1c; OREMEDIA_CONFIG_STRICT=1 refuses to start, off by default). Not verified live: what the deployed services report. 29 September 2026: live, /health on production reports degraded: [] (smoke run 36607823530). Open: production worker-ingest lacks PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF (token refresh reads both values of the pair; being added by the owner's operator), and the render worker carries provider variables it does not need (to remove). Values are not readable by the build agent's Railway connection (names only)."
+          "Variable names wired in .env.example and the runbook per service; the api reads DATABASE_URL, REDIS_URL, WEB_ORIGIN, REVIEW_PORTAL_ORIGIN, SENTRY_DSN, OTEL endpoint and the D-03 sign-in names AUTH_ISSUER_URL, AUTH_CLIENT_ID, AUTH_CLIENT_SECRET (sealed), AUTH_REDIRECT_URI, AUTH_ALLOWED_DOMAINS (production fails at startup without the required ones); the web container reads API_INTERNAL_URL; remaining names are consumed by later phases. Live status 25 September 2026: api and web complete (sign-in works); worker-core needs ANTHROPIC_API_KEY_REF (its agents worker cannot start) and worker-ingest needs COMMENT_AUTHOR_HASH_SECRET_REF or LINK_HASH_SECRET_REF; both now fail their health-checked deploys until set. 28 September 2026, merged #45 (claude/deploy-verification): every Node service now reports at start, per capability (uploads, channel:<provider>, models, web_origin), the settings it lacks, by name only, in one error line, keeps running, and lists the degraded capability names on /health (packages/observability/src/config-report.ts, runbook section 1c; OREMEDIA_CONFIG_STRICT=1 refuses to start, off by default). Not verified live: what the deployed services report. 29 September 2026: live, /health on production reports degraded: [] (smoke run 36607823530). Then open: worker-ingest lacked PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF, and the render worker carries provider variables it does not need. Values are not readable by the build agent's Railway connection (names only). 1 October 2026: worker-ingest's missing settings (the Instagram secret ref, disabled sources, the model refs) wired by reference to the api and worker-core; on e185aa7 the api, worker-core and worker-ingest each log \"configuration complete: every capability is configured\". Open: worker-render still carries three provider variables it does not need (to remove)."
         ],
         [
           "R.6",
@@ -2062,7 +2062,7 @@
           "production",
           "17.1",
           "complete",
-          "Provisioned 24 September 2026 (Railway project OreMedia Social, production): web at oremedia-production.up.railway.app, api, worker-core, worker-ingest, worker-render, self-hosted Temporal with temporal-db, MySQL and Redis. Open: the redirector service is not created yet, and worker-core and worker-ingest fail their deploys until their secrets are set (R.5). 29 September 2026: all eight repository services (web, api, worker-core, worker-ingest, worker-render, redirector, temporal, approval monitor) rebuilt and deployed from 60e125e after the repository recreation; the six with watch patterns were force-deployed because Railway skipped them. All health checks passed; api migrations ran clean. Service names in Railway are auto-generated (api = successful-fulfillment, worker-core = sparkling-strength, worker-render = keen-charisma, approval monitor = dynamic-intuition). 30 September 2026: two leftover hello-world function services (alluring-bravery, function-bun) staged for deletion with the owner's approval; applying the deletion needs the owner's two-factor confirmation in the dashboard."
+          "Provisioned 24 September 2026 (Railway project OreMedia Social, production): web at oremedia-production.up.railway.app, api, worker-core, worker-ingest, worker-render, self-hosted Temporal with temporal-db, MySQL and Redis. Open: the redirector service is not created yet, and worker-core and worker-ingest fail their deploys until their secrets are set (R.5). 29 September 2026: all eight repository services (web, api, worker-core, worker-ingest, worker-render, redirector, temporal, approval monitor) rebuilt and deployed from 60e125e after the repository recreation; the six with watch patterns were force-deployed because Railway skipped them. All health checks passed; api migrations ran clean. Service names in Railway are auto-generated (api = successful-fulfillment, worker-core = sparkling-strength, worker-render = keen-charisma, approval monitor = dynamic-intuition). 30 September 2026: two leftover hello-world function services (alluring-bravery, function-bun) staged for deletion with the owner's approval; applying the deletion needs the owner's two-factor confirmation in the dashboard. 1 October 2026: db-roles (applies the application and retention roles after each migration) and db-backup (nightly dump, 03:00 UTC, 14-day retention) added; every deploy of #15 to #24 verified service by service. Service names stay generated (renaming is a dashboard action)."
         ],
         [
           "R.8",
@@ -2070,7 +2070,7 @@
           "critical",
           "17.1",
           "in_progress",
-          "29–30 September 2026: separate Railway project \"OreMedia Staging\" (environment staging, us-west2), sharing no database, volume or variable with production: application MySQL, Temporal MySQL (MySQL-zSdm), Redis, ClamAV, temporal, api, web, worker-core, worker-ingest, worker-render, redirector, with production's Dockerfiles, health checks, watch patterns and restart policies; tracks main. Web https://web-staging-6326.up.railway.app, redirector https://redirector-staging-766a.up.railway.app. Temporal runs; the api's first deploy applied every migration to the staging database and then stopped as designed without Google sign-in credentials; web waits on the api. Provider channels are disabled in staging (OREMEDIA_DISABLED_CHANNELS). Open: staging Google OAuth client, R2 bucket and scoped token, OpenRouter key and fresh internal secrets (with the owner's operator), then connecting the four remaining services, a staging smoke job, and a restricted database role (both environments currently connect as the MySQL root user; the runbook requires the application and retention roles). Development is local (docker compose)."
+          "29–30 September 2026: separate Railway project \"OreMedia Staging\" (environment staging, us-west2), sharing no database, volume or variable with production: application MySQL, Temporal MySQL (MySQL-zSdm), Redis, ClamAV, temporal, api, web, worker-core, worker-ingest, worker-render, redirector, with production's Dockerfiles, health checks, watch patterns and restart policies; tracks main. Web https://web-staging-6326.up.railway.app, redirector https://redirector-staging-766a.up.railway.app. Temporal runs; the api's first deploy applied every migration to the staging database and then stopped as designed without Google sign-in credentials; web waits on the api. Provider channels are disabled in staging (OREMEDIA_DISABLED_CHANNELS). Open: staging Google OAuth client, R2 bucket and scoped token, OpenRouter key and fresh internal secrets (with the owner's operator), then connecting the four remaining services, a staging smoke job, and a restricted database role (both environments currently connect as the MySQL root user; the runbook requires the application and retention roles). Development is local (docker compose). 1 October 2026: staging completed: every service deployed from main on the application and retention role users (db-roles PASS 05:26 UTC), production on the same roles (PASS 05:46 UTC), restore rehearsed on staging (7.3). Every external credential on staging is a REPLACE_ME sample until the owner connects real values (credentials last, by decision; docs/release/r2-handover.md section 2). Open: those credentials and the staging smoke secrets."
         ],
         [
           "R.9",
@@ -2340,6 +2340,318 @@
           "18",
           "complete",
           "packages/providers/src/ssrf.test.ts: the pinned dispatcher resolves once and connects to the checked address, never the rebound one (a control with an unpinned agent is rebound); a lookup answer containing any blocked address is refused whole; IPv6 in every notation, including IPv4-mapped hex forms, is judged by its embedded address (this found and fixed a metadata/loopback bypass via bracketed IPv6 literals). Tenant-configured outbound webhooks do not exist in Release 1; the covered path is the ProviderIO dispatcher, the only outbound HTTP path."
+        ]
+      ]
+    },
+    {
+      "id": "U",
+      "title": "Production UI programme (R1 social core, R2 connectors, R3)",
+      "spec": "docs/programme/production-ui",
+      "items": [
+        [
+          "UX-02",
+          "Authoritative package documents",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #3 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode LW, SB. Evidence: PR #3."
+        ],
+        [
+          "UX-13",
+          "Documents and packages discoverable",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #3 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #3."
+        ],
+        [
+          "UX-14",
+          "Cursor pagination in work queues",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #3 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #3."
+        ],
+        [
+          "UX-06",
+          "Named scheduling, brand-zone time",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #4 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #4."
+        ],
+        [
+          "UX-05",
+          "Asset management catalogue",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #5 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode LW, SB. Evidence: PR #5."
+        ],
+        [
+          "UX-04",
+          "Channel variant editor",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #4 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #4."
+        ],
+        [
+          "UX-03",
+          "Reviewer media preview",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #4 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode LW, SB. Evidence: PR #4."
+        ],
+        [
+          "UX-01",
+          "Studio → review",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #4 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode SB. Evidence: PR #4."
+        ],
+        [
+          "UX-15",
+          "Keep-mine conflict and compare",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #7, deployed (Railway 4d70f61 all services SUCCESS 01:41 UTC 1 Oct; smoke run 9 passed); LW/SB verification pending Verification mode FU, SB. Evidence: PR #7."
+        ],
+        [
+          "UX-18",
+          "Studio responsive panels",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #7, deployed (Railway 4d70f61 all services SUCCESS 01:41 UTC 1 Oct; smoke run 9 passed); LW/SB verification pending Verification mode SB. Evidence: PR #7."
+        ],
+        [
+          "UX-08",
+          "Task-oriented agent setup",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #6 (FU: unit, integration, cross-tenant harness, migration roll-forward, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #6."
+        ],
+        [
+          "UX-07",
+          "Studio agent conversation",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "merged #7, deployed (Railway 4d70f61 all services SUCCESS 01:41 UTC 1 Oct; smoke run 9 passed); LW/SB verification pending Verification mode LW, SB. Evidence: PR #7."
+        ],
+        [
+          "UX-09",
+          "Plan items and acceptance",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #6 (FU: unit, integration, cross-tenant harness, migration roll-forward, mock e2e); LW/SB verification pending Verification mode LW, SB. Evidence: PR #6."
+        ],
+        [
+          "UX-16",
+          "Budgets visibility and controls",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #6 (FU: unit, integration, cross-tenant harness, migration roll-forward, mock e2e); LW/SB verification pending Verification mode LW, SB. Evidence: PR #6."
+        ],
+        [
+          "UX-17",
+          "Skill lifecycle UI",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #6 (FU: unit, integration, cross-tenant harness, migration roll-forward, mock e2e); LW/SB verification pending Verification mode SB. Evidence: PR #6."
+        ],
+        [
+          "UX-11",
+          "Portfolio cross-brand performance",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #8, deployed (Railway 1d38411 all services SUCCESS 02:35 UTC 1 Oct; smoke run 10 passed); LW and SB pending Verification mode LW, SB. Evidence: PR #8."
+        ],
+        [
+          "UX-12",
+          "Performance panels",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #8, deployed (Railway 1d38411 all services SUCCESS 02:35 UTC 1 Oct; smoke run 10 passed); LW and SB pending Verification mode FU, SB. Evidence: PR #8."
+        ],
+        [
+          "UX-20",
+          "Brand-publication impact preview and policy",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #9, deployed (Railway 56538de all services SUCCESS 02:55 UTC 1 Oct; smoke run 11 passed); LW and SB pending; `flag` refused until binding v2 Verification mode LW, SB. Evidence: PR #9."
+        ],
+        [
+          "UX-19",
+          "Deployment brand verification",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #10, deployed (2487550; smoke run 12); FU: deployment-brand.e2e extended: cold nested load, refresh, deep link, malformed and stalled brand.json fallback, both themes at four widths; SB, PO pending Verification mode SB, PO. Evidence: PR #10."
+        ],
+        [
+          "UX-10",
+          "Provider certification (FB, IG, LinkedIn)",
+          "critical",
+          "production UI programme",
+          "blocked",
+          "blocked: platform prerequisites"
+        ],
+        [
+          "R1-A",
+          "Agent runs list",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #3 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode FU, SB. Evidence: PR #3."
+        ],
+        [
+          "R1-B",
+          "Asset ingest read-back",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #5 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode SB. Evidence: PR #5."
+        ],
+        [
+          "R1-C",
+          "Attempt ledger view",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "implemented, merged #4 (FU: unit, integration, cross-tenant harness, mock e2e); LW/SB verification pending Verification mode SB. Evidence: PR #4."
+        ],
+        [
+          "R1-D",
+          "Onboarding journey",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "merged #10, deployed (Railway 2487550 all services SUCCESS 03:30 UTC 1 Oct; smoke run 12 passed); SB pending Verification mode SB. Evidence: PR #10."
+        ],
+        [
+          "R1-E",
+          "Responsive and accessibility parity",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #10, deployed (2487550; smoke run 12); FU: responsive.e2e at 390/768/1024/1440, 200% zoom, long names, keyboard-only, focus restoration, reduced motion; SB pending Verification mode SB. Evidence: PR #10."
+        ],
+        [
+          "R1-F",
+          "Staging smoke and UAT journeys",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "staging smoke job and UAT runbook merged #11, deployed (3363900; smoke run 13); staging environment complete on Railway (every service deployed on the role users, 1 October); the GitHub `STAGING_SMOKE_*` secrets and the staging walk await the operator's credentials (`smoke.yml` staging job behind `STAGING_SMOKE_ENABLED`, `docs/runbooks/uat-journeys.md`) … Verification mode SB. Evidence: #11."
+        ],
+        [
+          "R1-G",
+          "Database roles in deployed environments",
+          "critical",
+          "production UI programme",
+          "complete",
+          "applied: the `db-roles` service (#13, #14) created `oremedia_app` and `oremedia_retention` with exactly the generated grants on staging (PASS 05:26 UTC) and production (PASS 05:46 UTC, 1 October); every application service connects as the role user, migrations run on `DATABASE_URL_MIGRATE`; LW done, PO: smoke run 14 on the role users … Evidence: #11, #13, #14."
+        ],
+        [
+          "R1-H",
+          "Restore rehearsal on Railway",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "database restore rehearsed on staging (dump 137,548 bytes into a separate MySQL, 103 of 103 tables and the migration ledger, 1 October 05:33 UTC); Railway MySQL offers no PITR, so the nightly `db-backup` dump on production (14-day retention) is the recovery point; object retrieval and held-vs-reconciled behaviour wait on staging credentials Verification mode SB."
+        ],
+        [
+          "R1-I",
+          "Release evidence pack",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "evidence pack and release checklist merged #11, deployed (3363900; smoke run 13) (`docs/release/r1-evidence.md`, `release-checklist.md`); completes with R1-F, R1-G, R1-H and UX-10 evidence Verification mode —. Evidence: #11."
+        ],
+        [
+          "R2-0",
+          "Brand destinations and source-use policy",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "merged #15 (WP-11), deployed (5711b3a; migrations 0015 and 0016; roles PASS; smoke run 16); implemented (FU: unit, integration, cross-tenant harness, migration roll-forward, mock e2e); LW: the role users and the schedules observed in production (PO); SB pending (staging walk waits on credentials) Verification mode LW. Evidence: #15."
+        ],
+        [
+          "R2-1",
+          "GA4 + Search Console reporting",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "part A (source adapters, connect flow, refresh) and part B (adapter reports, `destination_report_rows` with migration 0017, the daily sweep `destinationReportSweepWorkflowV1` on `ingest-metrics` with its per-destination children, the `destinations.reports.summary/rows/opportunities` read model, the opportunity queue, the Performance screen's Web section) merged #17 (WP-12) and #18 (WP-13), deployed (884ad96 and 99953 … Verification mode RP. Evidence: #17, #18."
+        ],
+        [
+          "R2-2",
+          "Google Business Profile",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "read-only slice merged #21 (WP-17), deployed (bec1538; no migration; smoke run 21), behind `OREMEDIA_ENABLE_GBP`: the `gbp_location` source adapter (Account Management accounts → Business Information locations with a read mask, paged and capped; Performance API daily metrics as `gbp.performance` and `gbp.surfaces` under `gbp.reports`, latency 120 h, 90-day bound … Verification mode RP. Evidence: #21."
+        ],
+        [
+          "R2-3",
+          "Website articles and FAQs (CMS)",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "merged #19 (WP-14), deployed (f42c03f; migration 0018 with the exactly-one-target CHECK constraints; roles PASS; smoke run 19): the `article` document on `CopyDocumentV1` (title, slug, excerpt, blocks incl. FAQ, terms; rendered and sanitised in one place, `contracts/article.ts`), the CMS-agnostic `CmsAdapter` contract with the WordPress REST adapter (Application Password … Verification mode RP. Evidence: #19."
+        ],
+        [
+          "R2-4",
+          "Technical SEO audit (bounded)",
+          "production",
+          "production UI programme",
+          "in_progress",
+          "merged #20 (WP-15), deployed (da70f0a; migration 0019; roles PASS; weekly `seo-audit-sweep` schedule created on worker-ingest; smoke run 20): an audit runs only against a `cms_site` destination's origin (never a free URL) and only when the brand's source-use policy allows `read` of `cms.audit` (`retain` with retentionDays optional; the kind's capabilities list it) … Verification mode LW, SB. Evidence: #20."
+        ],
+        [
+          "R2-5",
+          "Unified performance overview",
+          "critical",
+          "production UI programme",
+          "in_progress",
+          "merged #22 (WP-16), deployed (e185aa7; no migration; smoke run 23): `overview.summary` (apps/api router `overview`, module `packages/modules/overview`, contract `OverviewSummaryV1` in `packages/contracts/src/overview.ts`) composes, for a brand and a window of UTC day bounds, the social rollup (`measurement.metrics.brandSummary` plus `metrics.query` per channel over the window's released publications), every web sourc … Verification mode SB. Evidence: #22."
+        ],
+        [
+          "R3-1",
+          "Discord announcements",
+          "production",
+          "production UI programme",
+          "open",
+          "deferred by D-18 (announcements only via webhook, Release 3; the `discord_webhook` destination kind and its write capability exist from R2-0, no adapter yet)"
+        ],
+        [
+          "R3-2",
+          "Further channels (X, TikTok)",
+          "production",
+          "production UI programme",
+          "blocked",
+          "blocked: platform apps and certification per channel (D-04); no X or TikTok adapter"
+        ],
+        ["R3-3", "Advanced experiments", "production", "production UI programme", "open", "open"],
+        [
+          "R3-4",
+          "CRM / revenue / paid-media connectors",
+          "production",
+          "production UI programme",
+          "open",
+          "open"
         ]
       ]
     }
