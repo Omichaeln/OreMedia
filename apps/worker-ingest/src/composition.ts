@@ -2,8 +2,8 @@ import { modelsCapability } from '@oremedia/ai';
 import { registerBrandChecker } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import {
-  configureSourceAvailability,
-  sourceAvailabilityFromEnv,
+  configureSourceActivation,
+  sourceActivationFromEnv,
   sourceCapabilities,
   cmsCapabilities,
 } from '@oremedia/module-destinations';
@@ -22,6 +22,8 @@ import {
   createKmsFromEnv,
   providerClientsFromEnv,
   channelCapabilities,
+  configureChannelActivation,
+  channelActivationFromEnv,
   registerProviderClients,
   registerPublishingBrandChecker,
 } from '@oremedia/module-publishing';
@@ -44,7 +46,9 @@ export function composeModules(env: NodeJS.ProcessEnv = process.env): void {
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerProviderClients(providerClientsFromEnv(env));
   // R2-1 part B: the report sweep reads only the sources this deployment enables (PROVIDER_<KIND>_* set, not disabled).
-  configureSourceAvailability(sourceAvailabilityFromEnv(env));
+  configureSourceActivation(sourceActivationFromEnv(env));
+  // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.
+  configureChannelActivation(channelActivationFromEnv(env));
   configureAuthorHashing(authorHashingFromEnv(env));
   configureLinkTracking(linkTrackingFromEnv(env));
   registerCommentClassifier((comment) => intelligenceService.voice.classify(comment));

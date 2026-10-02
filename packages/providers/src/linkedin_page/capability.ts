@@ -3,7 +3,7 @@ import type { ProviderCapabilityV1 } from '@oremedia/contracts/providers';
 /**
  * LinkedIn Page (organisation) via the versioned Community Management API (spec 14.6, 14.8).
  * Values derived from current LinkedIn documentation knowledge; every entry marked in
- * docs/runbooks/certify-a-channel.md is re-verified during certification. `certifiedAt` stays null until then.
+ * docs/runbooks/certify-a-provider.md is re-verified during certification. `certifiedAt` stays null until then.
  */
 export const linkedInPageCapability: ProviderCapabilityV1 = {
   key: 'linkedin_page',
@@ -77,5 +77,6 @@ export const linkedInPageCapability: ProviderCapabilityV1 = {
     },
     additionalProperties: false,
   },
+  vendor: 'LinkedIn',
   certifiedAt: null,
 };

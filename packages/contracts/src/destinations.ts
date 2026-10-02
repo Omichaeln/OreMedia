@@ -625,6 +625,27 @@ export interface DestinationVerifyActivitiesV1 {
 /** The module-side implementation the activity wraps (tenant context is established by the activity host). */
 export type DestinationVerifyRuntimeV1 = DestinationVerifyActivitiesV1;
 
+// ---- destinationRevokeWorkflowV1 (RA-01, task queue `core`): the remote revoke of a disconnected destination ----
+
+/**
+ * A disconnect of a destination whose adapter can revoke the grant remotely (a Google source's `/revoke`, the
+ * WordPress application password) leaves the credential to this workflow, started by the outbox from
+ * `destination.disconnected` with `remoteRevoke: 'requested'`: the worker opens it (the API never can), asks the
+ * platform, records the outcome and destroys the row whatever the platform answered. The credential is unusable
+ * from the disconnect on: every other opener refuses a disconnected destination's credential.
+ */
+export const DestinationRevokeInputV1 = TenantContextInput.extend({ destinationId: z.string() });
+export type DestinationRevokeInputV1 = z.infer<typeof DestinationRevokeInputV1>;
+export type DestinationRevokeResultV1 =
+  | { outcome: 'revoked' }
+  | { outcome: 'not_supported' }
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'already_destroyed' };
+export interface DestinationRevokeActivitiesV1 {
+  revokeDestinationAccess(input: DestinationRevokeInputV1): Promise<DestinationRevokeResultV1>;
+}
+export type DestinationRevokeRuntimeV1 = DestinationRevokeActivitiesV1;
+
 // ---- article read-back (R2-3): the remote revision as evidence ----
 
 /** The remote article as read back after a write: identity, state, and the hash of its content (never the body). */

@@ -19,6 +19,9 @@ import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
 import type {
   AttemptInputV1,
   AttemptResult,
+  ChannelRevokeInputV1,
+  ChannelRevokeResultV1,
+  ChannelRevokeRuntimeV1,
   ClaimInputV1,
   ClaimResultV1,
   ConnectChoicePurgeInputV1,
@@ -66,6 +69,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { policy } from '@oremedia/module-access';
 import { MemoryRateLimiterStore, audit, outbox, type RateLimiterStore } from '@oremedia/module-operations';
 import { METRIC, count, logger, record } from '@oremedia/observability';
+import type { ChannelHealth, RevokeResult } from '@oremedia/contracts/providers';
 import {
   ProviderRateLimitWaitExceeded,
   ProviderTransportError,
@@ -136,6 +140,8 @@ export interface PublishingRuntime {
   connectChoicePurge: ConnectChoicePurgeRuntimeV1;
   /** renderedValidationWorkflowV1 (`core`, RA-04): the delayed re-validation of a live article's page. */
   renderedValidation: RenderedValidationRuntimeV1;
+  /** channelRevokeWorkflowV1 (`core`, RA-01): the remote revoke of a disconnected channel's grant. */
+  channelRevoke: ChannelRevokeRuntimeV1;
 }
 
 const publicationsRepo = new PublicationRepository();
@@ -153,6 +159,8 @@ const workflowActor = () => requireTenant().actor;
 
 const MAX_PRE_SEND_ATTEMPTS = 8;
 const REFRESH_LOCK_SECONDS = 60;
+/** RA-01: a disconnected channel's credential the remote revoke has not shredded within this long is shredded by the sweeper. */
+export const DISCONNECT_SHRED_FLOOR_MS = 60 * 60_000;
 /** Hold reason when an export's bytes no longer hash to what the approval pinned (spec 3.g4). */
 export const EXPORT_HASH_MISMATCH = 'export_hash_mismatch';
 
@@ -1087,7 +1095,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           await connectionsRepo.update(
             locked.id,
             locked.version,
-            { credentialRefId, tokenExpiresAt, status: 'active' },
+            { credentialRefId, tokenExpiresAt, status: 'active', health: 'ok', healthCheckedAt: now() },
             tx,
           );
           const old = await credentialsRepo.getById(locked.credentialRefId, tx);
@@ -1108,7 +1116,16 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           return { ok: true, tokenExpiresAt: tokenExpiresAt ? tokenExpiresAt.toISOString() : null };
         }
         const status = refreshed.reason === 'reconnect_required' ? 'reconnect_needed' : 'refresh_needed';
-        if (locked.status !== status) await connectionsRepo.update(locked.id, locked.version, { status }, tx);
+        // RA-01: a grant the platform refused for good is revoked; a refresh that did not go through leaves a
+        // token about to expire (the workflow retries, then the row stays refresh_needed).
+        const health: ChannelHealth =
+          refreshed.reason === 'reconnect_required' ? 'revoked' : 'token_expiring';
+        await connectionsRepo.update(
+          locked.id,
+          locked.version,
+          { ...(locked.status !== status ? { status } : {}), health, healthCheckedAt: now() },
+          tx,
+        );
         count(METRIC.tokenRefreshFailures, 1, { providerKey: locked.providerKey, reason: refreshed.reason });
         if (status === 'reconnect_needed')
           count(METRIC.reconnectNeeded, 1, { providerKey: locked.providerKey });
@@ -1143,6 +1160,83 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     },
   };
 
+  const channelRevoke: ChannelRevokeRuntimeV1 = {
+    /**
+     * RA-01: opens the disconnected connection's credential here (the API never can), asks the adapter (looked up
+     * whether or not the provider is still certified) to revoke the grant at the platform, records the outcome in
+     * the audit trail and destroys the credential row whatever the platform answered: a failed remote revoke
+     * never keeps a token. Idempotent: a credential already destroyed (a repeat, a reconnect meanwhile, a
+     * disconnect without remote revoke) is `already_destroyed`.
+     */
+    async revokeChannelAccess({
+      tenantId,
+      channelConnectionId,
+    }: ChannelRevokeInputV1): Promise<ChannelRevokeResultV1> {
+      const row = await connectionsRepo.getById(channelConnectionId);
+      const credential = await credentialsRepo.getById(row.credentialRefId);
+      if (credential.destroyedAt || row.status !== 'disabled') return { outcome: 'already_destroyed' };
+      const adapter = registry().lookup(row.providerKey);
+      const revokeAccess = adapter?.revokeAccess?.bind(adapter);
+      let result: RevokeResult;
+      if (!adapter || !revokeAccess) result = { outcome: 'not_supported' };
+      else {
+        try {
+          // The one opener that may read a disconnected channel's credential, by saying so (broker.ts).
+          result = await credentialBroker.withCredentials(
+            tenantId,
+            row.id,
+            (creds) => revokeAccess(creds, providerClientFor(adapter.key), providerIO(adapter.key, tenantId)),
+            undefined,
+            { purpose: 'revoke' },
+          );
+        } catch (err) {
+          if (err instanceof PolicyDeniedError && err.reason === 'credential_destroyed')
+            return { outcome: 'already_destroyed' };
+          // Name and code only (as provider-io logs): a token endpoint error message can carry a URL with secrets.
+          result = {
+            outcome: 'failed',
+            reason: (err as { code?: string })?.code ?? (err as Error)?.name ?? 'error',
+          };
+          log.warn(
+            {
+              channelConnectionId,
+              errorName: (err as Error)?.name,
+              errorCode: (err as { code?: string })?.code,
+            },
+            'remote revoke failed; the credential is destroyed locally',
+          );
+        }
+      }
+      return withTransaction(async (tx) => {
+        const locked = await connectionsRepo.lock(row.id, tx);
+        const current = await credentialsRepo.getById(locked.credentialRefId, tx);
+        if (!current.destroyedAt)
+          await credentialsRepo.destroy(current.id, current.version, 'disconnected', tx);
+        if (result.outcome === 'revoked' && locked.status === 'disabled')
+          await connectionsRepo.update(
+            locked.id,
+            locked.version,
+            { health: 'revoked', healthCheckedAt: now() },
+            tx,
+          );
+        await audit.record(
+          workflowActor(),
+          'channel.remote_revoke',
+          { type: 'channel_connection', id: locked.id },
+          result.outcome === 'failed' ? 'denied' : 'allowed',
+          tx,
+          {
+            brandId: locked.brandId,
+            channelConnectionId: locked.id,
+            remoteRevoke: result.outcome,
+            reason: result.outcome === 'failed' ? truncateForTemporal(result.reason, 300) : null,
+          },
+        );
+        return result;
+      });
+    },
+  };
+
   const sweep: PublicationSweepRuntimeV1 = {
     /**
      * Always-on safety net: a `scheduled` row past due with no running workflow gets its start re-emitted; a
@@ -1154,7 +1248,41 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       const stuck = await runAsPlatform('publication-sweeper', input.correlationId, () =>
         sweepRepo.findStuck(at, input.graceSeconds, input.claimLeaseSeconds),
       );
-      const summary: SweepResultV1 = { scheduledReemitted: 0, dispatchingExpired: 0 };
+      const summary: SweepResultV1 = { scheduledReemitted: 0, dispatchingExpired: 0, credentialsShredded: 0 };
+      // RA-01: the floor under the remote revoke. A credential a disconnect left to channelRevokeWorkflowV1 that
+      // is still intact an hour later (the worker was down, the event dead-lettered) is shredded here, audited.
+      const unshredded = await runAsPlatform('publication-sweeper', input.correlationId, () =>
+        sweepRepo.findDisabledWithLiveCredential(new Date(at.getTime() - DISCONNECT_SHRED_FLOOR_MS)),
+      );
+      for (const ref of unshredded)
+        await runInTenant(
+          {
+            tenantId: ref.tenantId,
+            actor: { kind: 'service_principal', id: 'publication-sweeper' },
+            brandIds: 'all',
+            correlationId: input.correlationId,
+          },
+          () =>
+            withTransaction(async (tx) => {
+              const locked = await connectionsRepo.lock(ref.channelConnectionId, tx);
+              const credential = await credentialsRepo.getById(locked.credentialRefId, tx);
+              if (locked.status !== 'disabled' || credential.destroyedAt) return;
+              await credentialsRepo.destroy(credential.id, credential.version, 'disconnected', tx);
+              await audit.record(
+                workflowActor(),
+                'channel.credential_shredded',
+                { type: 'channel_connection', id: locked.id },
+                'allowed',
+                tx,
+                { brandId: locked.brandId, channelConnectionId: locked.id, reason: 'disconnect_shred_floor' },
+              );
+              summary.credentialsShredded = (summary.credentialsShredded ?? 0) + 1;
+              log.warn(
+                { tenantId: locked.tenantId, channelConnectionId: locked.id },
+                'sweeper shredded the credential of a disconnected channel the remote revoke left behind',
+              );
+            }),
+        );
       for (const ref of stuck) {
         const workflowId = workflowIdOf({ id: ref.publicationId, claimant: ref.claimant });
         if (await workflowRunning(workflowId)) continue;
@@ -1691,5 +1819,6 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
     remoteChangeSweep,
     connectChoicePurge,
     renderedValidation,
+    channelRevoke,
   };
 }

@@ -15,6 +15,7 @@ import type {
   ReconcileResult,
   RefreshResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type {
@@ -32,6 +33,10 @@ import {
   ProviderAuthError,
   altTextIssues,
   arr,
+  assertReadAccess,
+  revokeFromError,
+  revokeFromResponse,
+  sourceReadError,
   bearer,
   checkFailure,
   expiresAtFrom,
@@ -177,6 +182,38 @@ export class XAdapter implements ProviderAdapter {
       };
     }
     return { ok: false, reason: res.status >= 400 && res.status < 500 ? 'reconnect_required' : 'transient' };
+  }
+
+  /**
+   * RA-01: OAuth 2.0 token revocation (RFC 7009) at `POST /2/oauth2/revoke`, authenticated as the confidential
+   * client; revoking the refresh token ends the authorization (the access token with it). X answers an already
+   * revoked token with 200 as the RFC asks, so a repeat is `revoked` too.
+   */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    const basic = Buffer.from(`${client.clientId}:${client.clientSecret}`).toString('base64');
+    const token = credentials.refreshToken ?? credentials.accessToken;
+    try {
+      const { res } = await io.request(
+        `${X_API}/oauth2/revoke`,
+        {
+          method: 'POST',
+          headers: { authorization: `Basic ${basic}`, 'content-type': 'application/x-www-form-urlencoded' },
+          body: formEncode({
+            token,
+            token_type_hint: credentials.refreshToken ? 'refresh_token' : 'access_token',
+            client_id: client.clientId,
+          }),
+        },
+        { mutation: true },
+      );
+      return revokeFromResponse(await readResponse(res), (r) => r.status === 200);
+    } catch (err) {
+      return revokeFromError(err);
+    }
   }
 
   validateVariant(variant: ChannelVariantInput): ValidationResult {
@@ -387,7 +424,10 @@ export class XAdapter implements ProviderAdapter {
         `/tweets/${encodeURIComponent(req.remotePostId)}?tweet.fields=public_metrics`,
         creds.accessToken,
       );
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const pub = get(res.json, 'data', 'public_metrics');
     const nonPub = get(res.json, 'data', 'non_public_metrics');
     return names.map((n) =>
@@ -407,7 +447,10 @@ export class XAdapter implements ProviderAdapter {
       `/users/${encodeURIComponent(req.remoteAccountId)}?user.fields=public_metrics`,
       creds.accessToken,
     );
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const pm = get(res.json, 'data', 'public_metrics');
     return names.map((n) => metricPoint(n, num(get(pm, n)), req.window, { unit: 'snapshot_count' }));
   }
@@ -427,7 +470,7 @@ export class XAdapter implements ProviderAdapter {
       ...(req.since ? { start_time: req.since.toISOString() } : {}),
     });
     const res = await this.api(io, 'GET', `/tweets/search/recent?${q.toString()}`, creds.accessToken);
-    if (res.status !== 200) throw new Error(`x comments failed: ${summarise(res, 200)}`);
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
     const users = new Map(
       arr(get(res.json, 'includes', 'users')).map((u) => [
         str(get(u, 'id')) ?? '',

@@ -3,6 +3,7 @@ import type {
   DecryptedCredentials,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { classifyByStatus } from '../../base';
@@ -23,6 +24,7 @@ import {
   googleGet,
   googlePost,
   googleRefresh,
+  googleRevoke,
 } from '../google-oauth';
 import { ga4PropertyCapability } from './capability';
 
@@ -64,6 +66,15 @@ export class Ga4PropertyAdapter implements SourceAdapter {
 
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult> {
     return googleRefresh(credentials, client, io);
+  }
+
+  /** RA-01: revokes the Google grant (the refresh token, and every access token under it). */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    return googleRevoke(credentials, io);
   }
 
   /** Every property of every account the grant can see, account by account as the summaries list them. */

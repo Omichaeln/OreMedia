@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activationReason,
   callbackError,
   callbackParams,
   connectRedirectUri,
@@ -20,6 +21,26 @@ describe('unavailableReason (spec 14.6)', () => {
       'not registered',
     );
     expect(unavailableReason([{ path: 'brandId', issue: 'other' }])).toBeNull();
+  });
+
+  it('RA-01: a provider disabled here or missing its credential references is explained by name, never by value', () => {
+    expect(unavailableReason([{ path: 'providerKey', issue: 'provider_disabled:x' }])).toContain(
+      'Not enabled on this deployment',
+    );
+    expect(unavailableReason([{ path: 'kind', issue: 'source_not_enabled:gbp_location' }])).toContain(
+      'Not enabled on this deployment',
+    );
+    const missing = unavailableReason([
+      { path: 'providerKey', issue: 'credentials_missing:PROVIDER_X_CLIENT_ID_REF,PROVIDER_X_SECRET_REF' },
+    ]);
+    expect(missing).toContain('PROVIDER_X_CLIENT_ID_REF, PROVIDER_X_SECRET_REF are not set');
+    expect(activationReason({ state: 'ready', reason: null })).toBeNull();
+    expect(activationReason({ state: 'uncertified', reason: 'provider_not_certified:x' })).toContain(
+      'Not certified',
+    );
+    expect(
+      activationReason({ state: 'credentials_missing', reason: 'credentials_missing:PROVIDER_X_SECRET_REF' }),
+    ).toContain('PROVIDER_X_SECRET_REF is not set');
   });
 });
 

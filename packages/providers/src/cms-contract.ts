@@ -3,6 +3,7 @@ import type {
   DecryptedCredentials,
   ProviderCapabilityV1,
   ProviderErrorClass,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
 
@@ -143,6 +144,11 @@ export interface CmsAdapter {
 
   /** Proves the identity can write articles on the site; read-only (the connect flow's health check). */
   verify(site: CmsSite, credentials: DecryptedCredentials, io: ProviderIO): Promise<CmsVerifyResult>;
+  /**
+   * RA-01: revokes the integration identity's secret on the site (as ProviderAdapter.revokeAccess), so a
+   * disconnect ends the access on the remote side too; optional, never throws.
+   */
+  revokeAccess?(site: CmsSite, credentials: DecryptedCredentials, io: ProviderIO): Promise<RevokeResult>;
   /** The current remote revision of an article by its remote id (read-only; the read-back after a write). */
   readArticle(
     site: CmsSite,

@@ -50,20 +50,12 @@ export async function seedContentPackage(
     authTag: 'fixture-authtag',
     aad: `${tenantId}:${channelConnectionId}`,
   });
-  await db.insert(channelConnections).values({
-    id: channelConnectionId,
-    tenantId,
-    brandId,
-    providerKey: 'fixture_provider',
-    remoteAccountId: `${label}-${channelConnectionId.slice(-8)}`,
-    displayName: `Seeded ${label} channel`,
-    credentialRefId,
-    grantedScopes: [],
-    missingScopes: [],
-    status: 'active',
-    tokenExpiresAt: null,
-    capabilityVersion: 1,
-  });
+  // sql``, not insert(channelConnections).values(): Drizzle would name health and health_checked_at (0022), which
+  // the roll-forward suites' earlier heads do not have; the columns named here exist at every head.
+  const seededAt = new Date();
+  await db.execute(
+    sql`insert into ${channelConnections} (id, tenant_id, brand_id, provider_key, remote_account_id, display_name, credential_ref_id, granted_scopes, missing_scopes, status, token_expires_at, capability_version, created_at, updated_at) values (${channelConnectionId}, ${tenantId}, ${brandId}, 'fixture_provider', ${`${label}-${channelConnectionId.slice(-8)}`}, ${`Seeded ${label} channel`}, ${credentialRefId}, '[]', '[]', 'active', null, 1, ${seededAt}, ${seededAt})`,
+  );
   const contentPackageId = newId('contentPackage');
   const contentRevisionId = newId('contentRevision');
   const copy = seedCopy(`Seeded ${label} caption`);

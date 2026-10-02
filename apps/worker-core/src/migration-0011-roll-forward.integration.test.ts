@@ -122,19 +122,10 @@ describe('migration 0011 rolls forward on a populated database (ledger 1.g4)', (
       authTag: 'Zml4dHVyZQ==',
       aad: `${tenantId}:${connectionId}`,
     });
-    await tdb.db.insert(channelConnections).values({
-      id: connectionId,
-      tenantId,
-      brandId: brandIds[0],
-      providerKey: 'fixture_provider',
-      remoteAccountId: 'acct_roll_forward_0011',
-      displayName: 'Roll-forward channel',
-      credentialRefId,
-      grantedScopes: ['w_post'],
-      missingScopes: [],
-      status: 'active',
-      capabilityVersion: 1,
-    });
+    // Raw sql: health and health_checked_at (0022) are not there at this head.
+    await tdb.db.execute(
+      sql`insert into ${channelConnections} (id, tenant_id, brand_id, provider_key, remote_account_id, display_name, credential_ref_id, granted_scopes, missing_scopes, status, token_expires_at, capability_version, created_at, updated_at) values (${connectionId}, ${tenantId}, ${brandIds[0]}, 'fixture_provider', 'acct_roll_forward_0011', 'Roll-forward channel', ${credentialRefId}, '["w_post"]', '[]', 'active', null, 1, ${new Date()}, ${new Date()})`,
+    );
     for (const state of STATES_BEFORE) {
       const id = newId('publication');
       publicationIds.set(state, id);

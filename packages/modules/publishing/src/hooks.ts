@@ -3,6 +3,7 @@ import type { RenderedValidationV1 } from '@oremedia/contracts/article';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
+  ProviderCredentialRefV1,
   PublishOutcome,
   RemoteMutationOutcome,
   ValidationResult,
@@ -201,6 +202,39 @@ const disabledChannelKeys = (env: NodeJS.ProcessEnv): ReadonlySet<string> =>
       .map((key) => key.trim().toLowerCase())
       .filter(Boolean),
   );
+
+/**
+ * RA-01: what this environment says about a registered channel provider beside its certification: whether the key
+ * is listed in OREMEDIA_DISABLED_CHANNELS and which app credential references the process reads are set (names
+ * only, never values). The composition roots configure it from the environment (channelActivationFromEnv); tests
+ * keep every channel enabled with nothing to set. The connect flow refuses a provider that is not ready with the
+ * same reason the providers listing shows (`provider_disabled:<key>`, `credentials_missing:<names>`).
+ */
+export interface ChannelActivation {
+  disabled: boolean;
+  credentialRefs: ProviderCredentialRefV1[];
+}
+export type ChannelActivationSource = (providerKey: string) => ChannelActivation;
+const everyChannelEnabled: ChannelActivationSource = () => ({ disabled: false, credentialRefs: [] });
+let channelActivation: ChannelActivationSource = everyChannelEnabled;
+export const configureChannelActivation = (fn: ChannelActivationSource | null): void => {
+  channelActivation = fn ?? everyChannelEnabled;
+};
+export const channelActivationOf = (providerKey: string): ChannelActivation => channelActivation(providerKey);
+
+/** Read once at composition for every registered provider (the environment does not change while a process runs). */
+export const channelActivationFromEnv = (env: NodeJS.ProcessEnv = process.env): ChannelActivationSource => {
+  const disabled = disabledChannelKeys(env);
+  const of = (providerKey: string): ChannelActivation => ({
+    disabled: disabled.has(providerKey),
+    credentialRefs: Object.values(providerClientSettings(providerKey)).map((name) => ({
+      name,
+      present: Boolean(env[name]),
+    })),
+  });
+  const known = new Map(providerRegistry.list().map(({ key }) => [key, of(key)]));
+  return (providerKey) => known.get(providerKey) ?? of(providerKey);
+};
 
 /**
  * Configuration report capabilities `channel:<providerKey>`, one per registered provider: the app credentials

@@ -14,6 +14,7 @@ import type {
   ReconcileResult,
   RefreshResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import type {
@@ -33,6 +34,10 @@ import {
   ProviderAuthError,
   altTextIssues,
   arr,
+  assertReadAccess,
+  revokeFromError,
+  revokeFromResponse,
+  sourceReadError,
   bearer,
   checkFailure,
   expiresAtFrom,
@@ -248,6 +253,36 @@ export class LinkedInPageAdapter implements ProviderAdapter {
       };
     }
     return { ok: false, reason: res.status >= 400 && res.status < 500 ? 'reconnect_required' : 'transient' };
+  }
+
+  /**
+   * RA-01: LinkedIn's token revocation endpoint (`POST /oauth/v2/revoke`, form-encoded client id, secret and the
+   * token): revoking the access token ends the member's authorization of the app. An already revoked or expired
+   * token answers 200 as well (RFC 7009), so a repeat is `revoked`.
+   */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    try {
+      const { res } = await io.request(
+        `${LINKEDIN_OAUTH}/revoke`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: formEncode({
+            client_id: client.clientId,
+            client_secret: client.clientSecret,
+            token: credentials.accessToken,
+          }),
+        },
+        { mutation: true },
+      );
+      return revokeFromResponse(await readResponse(res), (r) => r.status === 200);
+    } catch (err) {
+      return revokeFromError(err);
+    }
   }
 
   validateVariant(variant: ChannelVariantInput): ValidationResult {
@@ -473,7 +508,10 @@ export class LinkedInPageAdapter implements ProviderAdapter {
       `/rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${encodeURIComponent(org)}&${param}=List(${encodeURIComponent(req.remotePostId)})`,
       creds.accessToken,
     );
-    if (res.status !== 200) return names.map((n) => metricPoint(n, undefined, req.window));
+    if (res.status !== 200) {
+      assertReadAccess(this.key, (i) => this.classifyError(i), res);
+      return names.map((n) => metricPoint(n, undefined, req.window));
+    }
     const stats = get(arr(get(res.json, 'elements'))[0], 'totalShareStatistics');
     // Lifetime totals as of fetch time (LinkedIn does not window per-share statistics): unit says so.
     return names.map((n) => metricPoint(n, num(get(stats, n)), req.window, { unit: 'lifetime_count' }));
@@ -488,6 +526,7 @@ export class LinkedInPageAdapter implements ProviderAdapter {
     const interval = `timeIntervals=(timeRange:(start:${Date.parse(req.window.start)},end:${Date.parse(req.window.end)}),timeGranularityType:DAY)`;
     const series = async (path: string): Promise<unknown[] | undefined> => {
       const res = await this.rest(io, 'GET', path, creds.accessToken);
+      if (res.status !== 200) assertReadAccess(this.key, (i) => this.classifyError(i), res);
       return res.status === 200 ? arr(get(res.json, 'elements')) : undefined;
     };
     const [followers, shares, pages] = await Promise.all([
@@ -531,7 +570,7 @@ export class LinkedInPageAdapter implements ProviderAdapter {
       `/rest/socialActions/${encodeURIComponent(req.remotePostId)}/comments?start=${start}&count=${count}`,
       creds.accessToken,
     );
-    if (res.status !== 200) throw new Error(`linkedin comments failed: ${summarise(res, 200)}`);
+    if (res.status !== 200) throw sourceReadError(this.key, (i) => this.classifyError(i), res);
     const elements = arr(get(res.json, 'elements'));
     const items = elements
       .map((c) => ({

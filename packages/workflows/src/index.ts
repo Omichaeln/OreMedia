@@ -17,8 +17,10 @@ export { publicationSweeperWorkflowV1 } from './publication-sweeper.workflow.v1'
 export { remoteChangeSweepWorkflowV1 } from './remote-change-sweep.workflow.v1';
 export { connectChoicePurgeWorkflowV1 } from './connect-choice-purge.workflow.v1';
 export { tokenRefreshWorkflowV1 } from './token-refresh.workflow.v1';
+export { channelRevokeWorkflowV1 } from './channel-revoke.workflow.v1';
 export { destinationTokenRefreshWorkflowV1 } from './destination-token-refresh.workflow.v1';
 export { destinationVerifyWorkflowV1 } from './destination-verify.workflow.v1';
+export { destinationRevokeWorkflowV1 } from './destination-revoke.workflow.v1';
 export { renderedValidationWorkflowV1 } from './rendered-validation.workflow.v1';
 export {
   destinationReportSweepWorkflowV1,

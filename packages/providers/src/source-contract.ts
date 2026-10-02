@@ -12,6 +12,7 @@ import type {
   ProviderCapabilityV1,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
 
@@ -146,6 +147,12 @@ export interface SourceAdapter {
     io: ProviderIO,
   ): Promise<SourceGrant>;
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult>;
+  /** RA-01: revokes the grant at the vendor (as ProviderAdapter.revokeAccess); optional, never throws. */
+  revokeAccess?(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult>;
   /** Every target the grant can read, for the person to choose among (the connect flow's choice). */
   listTargets(
     credentials: DecryptedCredentials,

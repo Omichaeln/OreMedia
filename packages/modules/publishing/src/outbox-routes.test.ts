@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clearOutboxRoutes, outboxRouteFor, type OutboxEventRecord } from '@oremedia/module-operations';
 import {
+  CHANNEL_REVOKE_WORKFLOW_TYPE,
   CORE_TASK_QUEUE,
   PUBLICATION_REMOTE_DELETE_WORKFLOW_TYPE,
   PUBLICATION_REMOTE_EDIT_WORKFLOW_TYPE,
@@ -64,5 +65,37 @@ describe('remote change outbox routes', () => {
       requestedById: 'u',
     };
     expect(outboxRouteFor('publication.delete_remote_requested')!(event('x', legacy))).toBeNull();
+  });
+});
+
+describe('channel.disconnected route (RA-01 remote revoke)', () => {
+  beforeAll(() => registerPublishingOutboxRoutes());
+  afterAll(() => clearOutboxRoutes());
+
+  it('a disconnect that left the credential for the worker starts channelRevokeWorkflowV1 on core, one per row version', () => {
+    const route = outboxRouteFor('channel.disconnected')!;
+    const payload = {
+      channelConnectionId: 'cc_1',
+      providerKey: 'x',
+      heldPublications: 0,
+      actorKind: 'user',
+      actorId: 'usr_1',
+    };
+    expect(route(event('channel.disconnected', { ...payload, remoteRevoke: 'requested' }))).toEqual({
+      workflowType: CHANNEL_REVOKE_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      workflowId: 'channel-revoke:cc_1:3',
+      args: [
+        {
+          tenantId: 'ten_A',
+          actor: { kind: 'user', id: 'usr_1' },
+          correlationId: 'corr_1',
+          channelConnectionId: 'cc_1',
+        },
+      ],
+    });
+    // Without a remote revoke the credential was destroyed in the disconnect: nothing to start.
+    expect(route(event('channel.disconnected', { ...payload, remoteRevoke: 'not_supported' }))).toBeNull();
+    expect(route(event('channel.disconnected', payload))).toBeNull(); // an event from before RA-01
   });
 });

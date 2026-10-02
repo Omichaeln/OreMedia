@@ -8,6 +8,7 @@ export {
   configureCredentialBroker,
   createKmsFromEnv,
   type ConnectionRef,
+  type CredentialOpenOptions,
   type CredentialRefTarget,
 } from './broker';
 export type { EnvelopeRow } from './envelope';
@@ -47,6 +48,11 @@ export {
   providerClientsFromEnv,
   providerClientSettings,
   channelCapabilities,
+  configureChannelActivation,
+  channelActivationOf,
+  channelActivationFromEnv,
+  type ChannelActivation,
+  type ChannelActivationSource,
   registerWorkflowProbe,
   registerDestinationPublisher,
   resetDestinationPublisher,
@@ -77,7 +83,16 @@ export {
   registry as providerRegistryInUse,
   type PublishingProviderOptions,
 } from './providers';
-export { publicationWorkflowId, reconcileWorkflowId, remoteChangeWorkflowId, workflowIdOf } from './common';
+export {
+  publicationWorkflowId,
+  reconcileWorkflowId,
+  remoteChangeWorkflowId,
+  workflowIdOf,
+  healthFromClass,
+  healthFromReadFailure,
+} from './common';
+/** RA-01: the one writer of a channel's health from the ingest pulls (worker-ingest). */
+export { channelHealth, HEALTH_RESTAMP_MS } from './health';
 export {
   registerPublishingOutboxRoutes,
   publishTaskQueue,
@@ -87,6 +102,8 @@ export {
   PUBLICATION_RECONCILE_WORKFLOW_TYPE,
   PUBLICATION_SIGNAL_RELAY_WORKFLOW_TYPE,
   TOKEN_REFRESH_WORKFLOW_TYPE,
+  CHANNEL_REVOKE_WORKFLOW_TYPE,
+  channelRevokeWorkflowId,
   PUBLICATION_SWEEPER_WORKFLOW_TYPE,
   PUBLICATION_SWEEPER_WORKFLOW_ID,
   PUBLICATION_REMOTE_DELETE_WORKFLOW_TYPE,

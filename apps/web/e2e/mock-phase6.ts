@@ -108,6 +108,8 @@ export const P6 = {
   insights: { change: 'ins_change', gap: 'ins_gap', association: 'ins_assoc', finding: 'ins_finding' },
   /** Provider keys the mock registry has certified; every other key is refused as uncertified (spec 14.6). */
   certifiedProviders: ['linkedin_page', 'linkedin', 'instagram'],
+  /** RA-01: the mock's providers whose adapter has no remote revoke (the disconnect shreds the credential itself). */
+  withoutRemoteRevoke: ['x'],
   /** Per-channel caption limits the mock capability check applies when variants are generated. */
   captionLimits: { cc_x: 30 } as Record<string, number>,
 };
@@ -2071,6 +2073,8 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       status: 'active',
       tokenExpiresAt: daysFromNow(60),
       capabilityVersion: 1,
+      health: 'ok',
+      healthCheckedAt: now(),
       settingsSchema: null,
       usable: true,
       createdAt: now(),
@@ -2081,6 +2085,8 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       status: 'active',
       usable: true,
       tokenExpiresAt: daysFromNow(60),
+      health: 'ok',
+      healthCheckedAt: now(),
       updatedAt: now(),
     });
     row.version += existing ? 1 : 0;
@@ -2185,7 +2191,12 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           });
           held.push(p.id);
         }
-      return { ...c, heldPublicationIds: held };
+      // RA-01: a provider with a remote revoke leaves the credential to the worker; the others are shredded here.
+      return {
+        ...c,
+        heldPublicationIds: held,
+        remoteRevoke: P6.withoutRemoteRevoke.includes(c.providerKey) ? 'not_supported' : 'requested',
+      };
     }),
   };
 

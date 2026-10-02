@@ -606,7 +606,16 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const sources = page.getByTestId('destination-sources');
     await sources.waitFor({ timeout: 15_000 });
     expect(await sources.getByTestId('source-ga4_property').count()).toBe(1);
-    expect(await sources.getByTestId('source-gbp_location').count()).toBe(0); // not enabled here
+    // RA-01: an owner sees the kind that is off here with the reason, instead of nothing (not connectable); the
+    // mock's Business Profile adapter is uncertified and disabled, and certification is the first reason checked.
+    const gbpRow = sources.getByTestId('source-gbp_location');
+    expect(await gbpRow.count()).toBe(1);
+    expect(await gbpRow.getByTestId('unavailable-reason').textContent()).toContain('Not certified');
+    expect(
+      await gbpRow
+        .getByRole('button', { name: /Connect Google Business Profile location/ })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
     await page.close();
   }, 60_000);
 
@@ -841,8 +850,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const sources = page.getByTestId('destination-sources');
     await sources.waitFor({ timeout: 15_000 });
     expect(await sources.getByTestId('source-ga4_property').count()).toBe(1);
-    expect(await sources.getByTestId('source-search_console_site').count()).toBe(0); // not enabled here
+    // RA-01: the uncertified kind is listed for an owner with why it cannot be connected (the list says so
+    // before any click); a publisher, who cannot read the providers list, is not offered it at all.
+    const gsc = sources.getByTestId('source-search_console_site');
+    expect(await gsc.count()).toBe(1);
+    expect(await gsc.textContent()).toContain('Not certified');
+    expect(await gsc.getByTestId('unavailable-reason').textContent()).toContain('platform review');
     const row = sources.getByTestId('source-ga4_property');
+    expect(await row.textContent()).toContain('Ready');
     await row.getByRole('button', { name: 'Connect Google Analytics 4 property' }).click();
     const link = row.getByTestId('authorise-link');
     await expect.poll(() => link.count(), { timeout: 15_000 }).toBe(1);

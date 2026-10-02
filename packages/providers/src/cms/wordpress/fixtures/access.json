@@ -1,0 +1,100 @@
+{
+  "provider": "wordpress",
+  "scenarios": {
+    "revoke_ok": {
+      "description": "The application password in use is named by introspect and deleted (RA-01).",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me/application-passwords/introspect"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "uuid": "3b1f0e8a-1111-4e5b-9c2b-000000000001",
+              "app_id": "",
+              "name": "Oremedia",
+              "created": "2026-09-01T00:00:00",
+              "last_used": null,
+              "last_ip": null
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me/application-passwords/3b1f0e8a-1111-4e5b-9c2b-000000000001"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "deleted": true,
+              "previous": {
+                "uuid": "3b1f0e8a-1111-4e5b-9c2b-000000000001",
+                "name": "Oremedia"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "revoke_already_gone": {
+      "description": "A password the site no longer accepts: already revoked.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me/application-passwords/introspect"
+          },
+          "response": {
+            "status": 401,
+            "json": {
+              "code": "rest_not_logged_in",
+              "message": "You are not currently logged in.",
+              "data": {
+                "status": 401
+              }
+            }
+          }
+        }
+      ]
+    },
+    "revoke_refused": {
+      "description": "The site refuses the deletion: failed, the credential is still destroyed locally.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me/application-passwords/introspect"
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "uuid": "3b1f0e8a-1111-4e5b-9c2b-000000000001",
+              "name": "Oremedia"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "host": "site.example",
+            "path": "/wp-json/wp/v2/users/me/application-passwords/3b1f0e8a-1111-4e5b-9c2b-000000000001"
+          },
+          "response": {
+            "status": 500,
+            "json": {
+              "code": "internal_server_error",
+              "message": "There has been a critical error on this website."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

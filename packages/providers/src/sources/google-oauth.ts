@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { ClientConfig, DecryptedCredentials, RefreshResult } from '@oremedia/contracts/providers';
+import type {
+  ClientConfig,
+  DecryptedCredentials,
+  RefreshResult,
+  RevokeResult,
+} from '@oremedia/contracts/providers';
 import { ProviderTransportError, type ProviderIO } from '../io';
 import {
   ProviderAuthError,
@@ -8,6 +13,8 @@ import {
   get,
   num,
   readResponse,
+  revokeFromError,
+  revokeFromResponse,
   str,
   summarise,
   type ProviderResponse,
@@ -21,6 +28,7 @@ import type { SourceGrant } from '../source-contract';
  */
 export const GOOGLE_AUTHORIZE = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN = 'https://oauth2.googleapis.com/token';
+export const GOOGLE_REVOKE = 'https://oauth2.googleapis.com/revoke';
 
 /** PKCE S256: base64url(SHA-256(verifier)). */
 const codeChallenge = (verifier: string): string => createHash('sha256').update(verifier).digest('base64url');
@@ -168,4 +176,29 @@ export async function googlePost(
     { mutation: false },
   );
   return readResponse(res);
+}
+
+/**
+ * RA-01: Google's revocation endpoint (`POST /revoke` with the token form-encoded): revoking the refresh token
+ * revokes the grant and every access token issued under it. Google answers a token that is already invalid or
+ * revoked with 400 `invalid_token` (not the RFC 7009 200), which is `revoked` here too: the access is gone.
+ */
+export async function googleRevoke(credentials: DecryptedCredentials, io: ProviderIO): Promise<RevokeResult> {
+  try {
+    const { res } = await io.request(
+      GOOGLE_REVOKE,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: formEncode({ token: credentials.refreshToken ?? credentials.accessToken }),
+      },
+      { mutation: true },
+    );
+    return revokeFromResponse(
+      await readResponse(res),
+      (r) => r.status === 200 || (r.status === 400 && str(get(r.json, 'error')) === 'invalid_token'),
+    );
+  } catch (err) {
+    return revokeFromError(err);
+  }
 }

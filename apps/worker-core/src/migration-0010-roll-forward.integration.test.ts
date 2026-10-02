@@ -28,6 +28,7 @@ import {
   channelService,
   configureCredentialBroker,
   configurePublishingProviders,
+  configureChannelActivation,
   registerProviderClients,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
@@ -123,6 +124,7 @@ describe('migration 0010 rolls forward on a populated database (ledger 1.g4)', (
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('roll-forward-0010-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     fixture.grant = {
       ...fixture.grant,
       remoteAccountId: 'acct_rf_1',

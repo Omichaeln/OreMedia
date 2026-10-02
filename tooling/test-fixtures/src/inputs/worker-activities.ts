@@ -171,6 +171,10 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.refreshCredentials': {
       buildInput: (ctx, f) => ({ ...ctx, channelConnectionId: f['publishingChannelConnectionId'] }),
     },
+    // RA-01: a remote revoke names one connection; a foreign one is NOT_FOUND before any credential is opened.
+    'core.revokeChannelAccess': {
+      buildInput: (ctx, f) => ({ ...ctx, channelConnectionId: f['publishingChannelConnectionId'] }),
+    },
     'core.sweepPublications': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.purgeExpiredConnectChoices': {
       buildInput: null,
@@ -253,6 +257,10 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.listDueDestinationRefreshes': { buildInput: null, reason: PLATFORM_SWEEP },
     // destinationVerifyWorkflowV1 (ledger R2-3): a verification names one destination; a foreign one is NOT_FOUND.
     'core.verifyDestinationCredential': {
+      buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
+    },
+    // RA-01: a remote revoke names one destination; a foreign one is NOT_FOUND before any credential is opened.
+    'core.revokeDestinationAccess': {
       buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
     },
     'core.refreshDestinationCredential': {

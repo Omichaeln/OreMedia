@@ -4,6 +4,9 @@ import type {
   DestinationRefreshResultV1,
   DestinationRefreshRuntimeV1,
   DestinationReportsRuntimeV1,
+  DestinationRevokeInputV1,
+  DestinationRevokeResultV1,
+  DestinationRevokeRuntimeV1,
   DestinationTokenRefreshInputV1,
   DestinationVerifyInputV1,
   DestinationVerifyResultV1,
@@ -11,16 +14,17 @@ import type {
 } from '@oremedia/contracts/destinations';
 import type { SeoAuditRuntimeV1 } from '@oremedia/contracts/seo-audit';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
+import type { RevokeResult } from '@oremedia/contracts/providers';
 import { requireTenant, runAsPlatform, withTransaction } from '@oremedia/db';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
-import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
+import { credentialBroker, providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
-import { cmsIO } from './cms';
+import { cmsIO, cmsRegistryInUse } from './cms';
 import { createSeoAuditRuntime } from './audit-runtime';
 import { createDestinationReportRuntime } from './report-runtime';
 import { BrandDestinationRepository, DestinationRefreshDueRepository } from './repositories';
-import { StoredKind, enabledCmsAdapter } from './service';
-import { sourceAdapterFor, sourceIO } from './sources';
+import { StoredKind, enabledCmsAdapter, openDestinationCredential } from './service';
+import { registry, sourceAdapterFor, sourceIO } from './sources';
 
 const destinationsRepo = new BrandDestinationRepository();
 const dueRepo = new DestinationRefreshDueRepository();
@@ -40,6 +44,8 @@ export interface DestinationRuntimeOptions {
 
 export interface DestinationRuntime {
   refresh: DestinationRefreshRuntimeV1;
+  /** RA-01 (worker-core): destinationRevokeWorkflowV1, the remote revoke of a disconnected destination's grant. */
+  revoke: DestinationRevokeRuntimeV1;
   /** R2-1 part B (worker-ingest): the report sweep's activities, refreshing a dead token through `refresh`. */
   reports: DestinationReportsRuntimeV1;
   /** R2-3 (worker-core): destinationVerifyWorkflowV1, the health check of a destination connected with a secret. */
@@ -82,9 +88,8 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       const credentialRefId = row.credentialRefId;
       let refreshed: Awaited<ReturnType<typeof adapter.refresh>>;
       try {
-        refreshed = await credentialBroker.withCredentialRef(
-          { tenantId, credentialRefId, aad: aadFor(tenantId, row.id) },
-          (creds) => adapter.refresh(creds, providerClientFor(adapter.key), sourceIO(adapter.key, tenantId)),
+        refreshed = await openDestinationCredential(tenantId, { ...row, credentialRefId }, (creds) =>
+          adapter.refresh(creds, providerClientFor(adapter.key), sourceIO(adapter.key, tenantId)),
         );
       } catch (err) {
         refreshed =
@@ -173,14 +178,12 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       const credentialRefId = row.credentialRefId;
       let verified: Awaited<ReturnType<typeof adapter.verify>>;
       try {
-        verified = await credentialBroker.withCredentialRef(
-          { tenantId, credentialRefId, aad: aadFor(tenantId, row.id) },
-          (creds) =>
-            adapter.verify(
-              { siteUrl: row.externalId, username: creds.extra?.['username'] ?? '' },
-              creds,
-              cmsIO(adapter.key, tenantId),
-            ),
+        verified = await openDestinationCredential(tenantId, { ...row, credentialRefId }, (creds) =>
+          adapter.verify(
+            { siteUrl: row.externalId, username: creds.extra?.['username'] ?? '' },
+            creds,
+            cmsIO(adapter.key, tenantId),
+          ),
         );
       } catch (err) {
         verified =
@@ -224,8 +227,85 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
     },
   };
 
+  const revoke: DestinationRevokeRuntimeV1 = {
+    /**
+     * RA-01: opens the disconnected destination's credential here (the API never can; the only opener a
+     * disconnected destination's credential still answers), asks the kind's adapter (looked up whether or not it
+     * is still certified) to revoke the grant at the platform, records the outcome in the audit trail and destroys
+     * the credential row whatever the platform answered. Idempotent: a credential already destroyed (a repeat, a
+     * disconnect without remote revoke) is `already_destroyed`.
+     */
+    async revokeDestinationAccess({
+      tenantId,
+      destinationId,
+    }: DestinationRevokeInputV1): Promise<DestinationRevokeResultV1> {
+      const row = await destinationsRepo.getById(destinationId);
+      if (row.status !== 'disconnected' || !row.credentialRefId) return { outcome: 'already_destroyed' };
+      const credentialRefId = row.credentialRefId;
+      const cms = cmsRegistryInUse().lookup(row.kind);
+      const source = cms ? undefined : registry().lookup(row.kind);
+      let result: RevokeResult;
+      try {
+        if (cms?.revokeAccess) {
+          const revokeAccess = cms.revokeAccess.bind(cms);
+          result = await openDestinationCredential(
+            tenantId,
+            { ...row, credentialRefId },
+            (creds) =>
+              revokeAccess(
+                { siteUrl: row.externalId, username: creds.extra?.['username'] ?? '' },
+                creds,
+                cmsIO(cms.key, tenantId),
+              ),
+            { purpose: 'revoke' },
+          );
+        } else if (source?.revokeAccess) {
+          const revokeAccess = source.revokeAccess.bind(source);
+          result = await openDestinationCredential(
+            tenantId,
+            { ...row, credentialRefId },
+            (creds) => revokeAccess(creds, providerClientFor(source.key), sourceIO(source.key, tenantId)),
+            { purpose: 'revoke' },
+          );
+        } else result = { outcome: 'not_supported' };
+      } catch (err) {
+        if (err instanceof PolicyDeniedError && err.reason === 'credential_destroyed')
+          return { outcome: 'already_destroyed' };
+        // Name and code only: a token endpoint error message can carry a URL with secrets.
+        result = {
+          outcome: 'failed',
+          reason: (err as { code?: string })?.code ?? (err as Error)?.name ?? 'error',
+        };
+        log.warn(
+          { destinationId, errorName: (err as Error)?.name, errorCode: (err as { code?: string })?.code },
+          'remote revoke failed; the credential is destroyed locally',
+        );
+      }
+      return withTransaction(async (tx) => {
+        const locked = await destinationsRepo.lock(row.id, tx);
+        if (locked.credentialRefId)
+          await credentialBroker.destroyCredentialRef(locked.credentialRefId, 'disconnected', tx);
+        await audit.record(
+          workflowActor(),
+          'destination.remote_revoke',
+          { type: 'brand_destination', id: locked.id },
+          result.outcome === 'failed' ? 'denied' : 'allowed',
+          tx,
+          {
+            brandId: locked.brandId,
+            kind: locked.kind,
+            remoteRevoke: result.outcome,
+            reason: result.outcome === 'failed' ? result.reason.slice(0, 300) : null,
+          },
+        );
+        return result;
+      });
+    },
+  };
+
   return {
     refresh,
+    revoke,
     reports: createDestinationReportRuntime(refresh, {
       now,
       ...(opts.reportLock ? { reportLock: opts.reportLock } : {}),

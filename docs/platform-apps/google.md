@@ -16,12 +16,14 @@ labelled external link; no scraping, no fabricated scores).
 2. Enable the two APIs on the project: **Google Analytics Admin API** (`analyticsadmin.googleapis.com`, the account
    summaries the connect flow lists properties from) and **Google Search Console API** (`searchconsole.googleapis.com`,
    the site list). The Analytics Data API is enabled with part B (reports).
-3. Certify each adapter against a property and a site the Ore & Tar account can read. This is a manual step for now:
-   the certify harness (`pnpm certify`, `docs/runbooks/certify-a-channel.md`) knows channel adapters only, so the
-   operator walks the connect flow, the target listing and a refresh against the real APIs, records the exchanges
-   as fixtures and sets `certifiedAt` in `packages/providers/src/sources/<kind>/capability.ts` (teaching the harness
-   source adapters is a follow-up on the ledger's R2-1 row). Until then the kinds are refused for tenants
-   (`provider_not_certified:<kind>`) and the settings screen says so.
+3. Certify each adapter against a property and a site the Ore & Tar account can read with the certify harness
+   (`pnpm certify ga4_property …`, `pnpm certify search_console_site …`, `docs/runbooks/certify-a-provider.md`):
+   `auth-url` and `exchange` (the consent with offline access), `targets`, `read` of one report, `refresh`,
+   `revoke` (Google's `/revoke`) proven by the refused refresh, then `attest`; the recordings become the fixtures
+   and `certifiedAt` in `packages/providers/src/sources/<kind>/capability.ts` is set by hand from the attested
+   record. Until then the kinds are refused for tenants (`provider_not_certified:<kind>`), and
+   `operations.providers.list` (Settings → Destinations for owners and admins) says so, as it says `disabled` or
+   `credentials_missing` for a certified kind this deployment has not switched on.
 4. Submit the OAuth consent screen for verification (sensitive scopes, below). While the app is in testing, only the
    test users listed on the consent screen can authorise it, and their refresh tokens expire after seven days.
 
@@ -126,6 +128,15 @@ While the access is pending, a connected location (a project that lists accounts
 yet enabled) is not broken: the adapter classifies that 403 (a structured `SERVICE_DISABLED` / `accessNotConfigured` reason, never prose) as `access_required`, the destination is `degraded`
 with that reason in its `destination.report.fetched` audit and read again the next day; no reconnect is asked of
 the person, and no retry is attempted inside the day.
+
+## Disconnecting (RA-01)
+
+`destinations.disconnect` makes the sealed grant unusable at once (the module refuses to open a disconnected
+destination's credential for anything but the remote revoke) and leaves it to `destinationRevokeWorkflowV1`
+(worker-core), which revokes the refresh token at Google's `/revoke` endpoint, records `destination.remote_revoke`
+(`revoked` / `failed` with `http_<status>`) and destroys the credential whatever Google answered; the retention sweep
+shreds any credential still intact an hour after the disconnect. A grant Google has already revoked answers
+`invalid_token` and reads as revoked.
 
 ## What the product stores
 

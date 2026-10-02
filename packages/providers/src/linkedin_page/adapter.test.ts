@@ -161,6 +161,18 @@ describe('LinkedIn Page adapter (spec 14.5, 14.8)', () => {
     });
   });
 
+  it('revokeAccess (RA-01): the token revocation endpoint with client id, secret and the access token; a refusal is failed', async () => {
+    load('auth', 'revoke_ok');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    expect(io.calls.map((c) => c.mutation)).toEqual([true]);
+    expect(server.requests[0]?.body).toContain('client_secret=csecret');
+    load('auth', 'revoke_refused');
+    expect(await adapter.revokeAccess(creds, client, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_400/),
+    });
+  });
+
   it('validateVariant: capability limits plus platform rules (too long, wrong mime, too many images, mixed media, alt text)', () => {
     const img = { mime: 'image/jpeg', width: 1200, height: 627, bytes: 1000 };
     expect(adapter.validateVariant({ text: TEXT, altTexts: ['alt'], media: [img], settings: {} }).ok).toBe(

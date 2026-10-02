@@ -4,7 +4,8 @@ import { FixtureServer, fixtureIO, loadScenario, type FixtureIO } from '../../te
 import { textFingerprint } from '../../shared';
 import { RenderedPageError, remoteArticleFingerprint, wordpressCmsAdapter as adapter } from './adapter';
 
-const fx = (name: string) => loadScenario(new URL('./fixtures/articles.json', import.meta.url), name);
+const fx = (name: string, file = 'articles') =>
+  loadScenario(new URL(`./fixtures/${file}.json`, import.meta.url), name);
 const site = { siteUrl: 'https://site.example', username: 'ore-editor' };
 const creds: DecryptedCredentials = { accessToken: 'abcd efgh ijkl mnop', extra: { username: 'ore-editor' } };
 const expectedAuth = `Basic ${Buffer.from('ore-editor:abcd efgh ijkl mnop').toString('base64')}`;
@@ -29,10 +30,24 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
     io = await fixtureIO(server, { providerKey: adapter.key });
   });
   afterAll(() => server.stop());
-  const load = (name: string): void => {
-    server.load(fx(name));
+  const load = (name: string, file?: string): void => {
+    server.load(fx(name, file));
     io.calls.length = 0;
   };
+
+  it('revokeAccess (RA-01): the application password in use is introspected and deleted; one the site refuses is already revoked; a failed deletion is failed', async () => {
+    load('revoke_ok', 'access');
+    expect(await adapter.revokeAccess(site, creds, io)).toEqual({ outcome: 'revoked' });
+    expect(io.calls.map((c) => `${c.mutation ? 'M' : 'R'} ${c.method}`)).toEqual(['R GET', 'M DELETE']);
+    expect(server.requests.every((r) => r.headers['authorization'] === expectedAuth)).toBe(true);
+    load('revoke_already_gone', 'access');
+    expect(await adapter.revokeAccess(site, creds, io)).toEqual({ outcome: 'revoked' });
+    load('revoke_refused', 'access');
+    expect(await adapter.revokeAccess(site, creds, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_500/),
+    });
+  });
 
   it('verify: the application password over HTTP Basic reaches the editor; a 401 is a reconnect; a reader is refused', async () => {
     load('verify_ok');

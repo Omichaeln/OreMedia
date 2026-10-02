@@ -243,6 +243,11 @@ production keeps running with that capability degraded, and the gap is reported.
   same line says `refusing to start` and the process exits 2 (the deploy's health check then fails). Only the exact
   value `1` turns it on. Turn it on per service once that service's report is clean, so a later deploy that loses a
   variable fails instead of running degraded.
+- **Activation state per provider (RA-01).** `operations.providers.list` (owners and admins; Settings → Channels
+  and Settings → Destinations) reports every registered channel, source and CMS adapter with `certifiedAt`, whether
+  it is disabled on this service's configuration, which `PROVIDER_<KEY>_*` references are set (names only) and the
+  derived state `uncertified` / `disabled` / `credentials_missing` / `ready`; the connect flows refuse anything but
+  `ready` with the same reason.
 - **Intentionally unsupported channels.** `OREMEDIA_DISABLED_CHANNELS` is an explicit deployment policy for a
   provider that is registered in the product but not part of the current production rollout (for example, `x` while
   its app credentials and certification are unavailable). It defaults to empty, so omitting the variable does not hide

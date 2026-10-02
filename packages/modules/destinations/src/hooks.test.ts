@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   cmsCapabilities,
+  configureSourceActivation,
   configureSourceAvailability,
+  sourceActivationFromEnv,
+  sourceActivationOf,
   sourceAvailabilityFromEnv,
   sourceAvailable,
   sourceCapabilities,
@@ -97,5 +100,39 @@ describe('cms availability and the configuration report (ledger R2-3)', () => {
     expect(checks.map((c) => c.capability)).toEqual(['cms:wordpress']);
     expect(checks[0]!.missing(env({}))).toEqual([]);
     expect(cmsCapabilities(env({ OREMEDIA_DISABLED_SOURCES: 'cms_site' }))).toEqual([]);
+  });
+});
+
+describe('source activation facts (RA-01): what the providers listing shows behind the availability', () => {
+  afterEach(() => configureSourceActivation(null));
+
+  it('from the environment: disabled by the list or an opt-in that is off, credential references by name; a CMS kind has none', () => {
+    const of = sourceActivationFromEnv(
+      env({ PROVIDER_GA4_PROPERTY_CLIENT_ID_REF: 'id', OREMEDIA_DISABLED_SOURCES: 'search_console_site' }),
+    );
+    expect(of('ga4_property')).toEqual({
+      disabled: false,
+      credentialRefs: [
+        { name: 'PROVIDER_GA4_PROPERTY_CLIENT_ID_REF', present: true },
+        { name: 'PROVIDER_GA4_PROPERTY_SECRET_REF', present: false },
+      ],
+    });
+    expect(of('search_console_site').disabled).toBe(true);
+    expect(of('gbp_location').disabled).toBe(true); // OREMEDIA_ENABLE_GBP unset
+    expect(of('cms_site')).toEqual({ disabled: false, credentialRefs: [] });
+    expect(JSON.stringify(of('ga4_property'))).not.toContain('"id"');
+    // The availability is derived from the same facts.
+    expect(sourceAvailabilityFromEnv(env({ ...GA4 }))('ga4_property')).toBe(true);
+    expect(
+      sourceAvailabilityFromEnv(env({ PROVIDER_GA4_PROPERTY_CLIENT_ID_REF: 'id' }))('ga4_property'),
+    ).toBe(false);
+  });
+
+  it('the yes/no form of the configuration reads as disabled when refused, and the facts are enabled with nothing to set until configured', () => {
+    expect(sourceActivationOf('ga4_property')).toEqual({ disabled: false, credentialRefs: [] });
+    configureSourceAvailability((kind) => kind === 'ga4_property');
+    expect(sourceActivationOf('search_console_site')).toEqual({ disabled: true, credentialRefs: [] });
+    expect(sourceAvailable('search_console_site')).toBe(false);
+    expect(sourceAvailable('ga4_property')).toBe(true);
   });
 });

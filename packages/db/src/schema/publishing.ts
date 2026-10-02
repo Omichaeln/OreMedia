@@ -53,6 +53,21 @@ export const channelConnections = mysqlTable(
     status: mysqlEnum('status', ['active', 'refresh_needed', 'reconnect_needed', 'disabled']).notNull(),
     tokenExpiresAt: ts('token_expires_at'),
     capabilityVersion: int('capability_version').notNull(),
+    /**
+     * RA-01 (migration 0022): what the last refresh or read found about the remote access, beside `status`
+     * (ChannelHealth in contracts/providers); `unknown` until something ran. Both additive, as brand_destinations'.
+     */
+    health: mysqlEnum('health', [
+      'unknown',
+      'ok',
+      'token_expiring',
+      'token_expired',
+      'revoked',
+      'unreachable',
+    ])
+      .notNull()
+      .default('unknown'),
+    healthCheckedAt: ts('health_checked_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

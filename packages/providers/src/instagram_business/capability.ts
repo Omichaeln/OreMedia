@@ -69,5 +69,6 @@ export const instagramBusinessCapability: ProviderCapabilityV1 = {
     },
     additionalProperties: false,
   },
+  vendor: 'Meta',
   certifiedAt: null,
 };

@@ -1,4 +1,4 @@
-import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
+import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import {
   classifyByStatus,
   textFingerprint,
@@ -91,6 +91,19 @@ export class FixtureCmsAdapter implements CmsAdapter {
       case 'ok':
         return { ok: true, displayName: 'Fixture Editor', canPublish: this.verifyBehaviour.canPublish };
     }
+  }
+
+  /** RA-01: what the site answers a remote revoke with; a revoked secret refuses the verifies that follow. */
+  revokeBehaviour: RevokeResult | null = { outcome: 'revoked' };
+  async revokeAccess(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    _io: ProviderIO,
+  ): Promise<RevokeResult> {
+    this.record('revoke', site, credentials);
+    const result = this.revokeBehaviour ?? { outcome: 'not_supported' };
+    if (result.outcome === 'revoked') this.verifyBehaviour = { kind: 'unauthorised' };
+    return result;
   }
 
   async readArticle(

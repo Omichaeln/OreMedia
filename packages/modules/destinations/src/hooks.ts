@@ -1,3 +1,4 @@
+import type { ProviderCredentialRefV1 } from '@oremedia/contracts/providers';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { SeoAuditCheckKey, SeoAuditSeverity } from '@oremedia/contracts/seo-audit';
 import type { Tx } from '@oremedia/db';
@@ -70,11 +71,29 @@ export const findingWork: FindingWorkHooks = {
  * only the disabled list applies to it.
  */
 export type SourceAvailability = (kind: string) => boolean;
-let availability: SourceAvailability = () => true;
-export const configureSourceAvailability = (fn: SourceAvailability | null): void => {
-  availability = fn ?? (() => true);
+/**
+ * RA-01: the facts behind the availability, as the providers listing shows them: listed as disabled (or behind
+ * an opt-in that is off) and which app credential references are set (names only). A CMS kind has none to set.
+ */
+export interface SourceActivation {
+  disabled: boolean;
+  credentialRefs: ProviderCredentialRefV1[];
+}
+export type SourceActivationSource = (kind: string) => SourceActivation;
+const everySourceEnabled: SourceActivationSource = () => ({ disabled: false, credentialRefs: [] });
+let activation: SourceActivationSource = everySourceEnabled;
+export const configureSourceActivation = (fn: SourceActivationSource | null): void => {
+  activation = fn ?? everySourceEnabled;
 };
-export const sourceAvailable = (kind: string): boolean => availability(kind);
+export const sourceActivationOf = (kind: string): SourceActivation => activation(kind);
+const available = (a: SourceActivation): boolean => !a.disabled && a.credentialRefs.every((c) => c.present);
+export const sourceAvailable = (kind: string): boolean => available(activation(kind));
+/** The yes/no form (tests keep every source enabled with `() => true`); a `false` reads as disabled. */
+export const configureSourceAvailability = (fn: SourceAvailability | null): void => {
+  configureSourceActivation(
+    fn ? (kind) => (fn(kind) ? everySourceEnabled(kind) : { disabled: true, credentialRefs: [] }) : null,
+  );
+};
 
 const disabledSourceKinds = (env: NodeJS.ProcessEnv): ReadonlySet<string> =>
   new Set(
@@ -90,13 +109,20 @@ const optedIn = (env: NodeJS.ProcessEnv, kind: string): boolean => {
   return setting === undefined || env[setting] === '1';
 };
 
-export const sourceAvailabilityFromEnv =
-  (env: NodeJS.ProcessEnv = process.env): SourceAvailability =>
-  (kind) =>
-    !disabledSourceKinds(env).has(kind) &&
-    optedIn(env, kind) &&
-    (cmsRegistry.capability(kind) !== undefined ||
-      Object.values(providerClientSettings(kind)).every((name) => Boolean(env[name])));
+export const sourceActivationFromEnv =
+  (env: NodeJS.ProcessEnv = process.env): SourceActivationSource =>
+  (kind) => ({
+    disabled: disabledSourceKinds(env).has(kind) || !optedIn(env, kind),
+    credentialRefs:
+      cmsRegistry.capability(kind) !== undefined
+        ? []
+        : Object.values(providerClientSettings(kind)).map((name) => ({ name, present: Boolean(env[name]) })),
+  });
+
+export const sourceAvailabilityFromEnv = (env: NodeJS.ProcessEnv = process.env): SourceAvailability => {
+  const of = sourceActivationFromEnv(env);
+  return (kind) => available(of(kind));
+};
 
 /**
  * Configuration report capabilities `source:<kind>`, one per registered source adapter: the app credentials the

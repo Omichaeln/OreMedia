@@ -21,12 +21,15 @@ import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
 import {
+  ACTIVATION_CHIP,
+  activationReason,
   callbackError,
   callbackParams,
   connectRedirectUri,
   rememberConnect,
   unavailableReason,
 } from '../publishing/channel-connect';
+import { useProviders, type ProviderActivationDto } from '../settings/use-settings';
 import {
   useDestinationSources,
   useDestinations,
@@ -166,14 +169,33 @@ function DestinationRow({
  * as a link (never an iframe, the consent screen must be top-level). An uncertified source is refused with its
  * reason; one not enabled on this deployment is not offered at all.
  */
+/** RA-01: the activation chip and reason of a listed provider (owners and admins), beside the certification badge. */
+function ActivationNote({ activation }: { activation: ProviderActivationDto | null }) {
+  if (!activation) return null;
+  const chip = ACTIVATION_CHIP[activation.state];
+  const reason = activationReason(activation);
+  return (
+    <>
+      <Badge tone={chip.tone}>{chip.label}</Badge>
+      {reason && (
+        <p className="basis-full text-xs text-muted-foreground" data-testid="unavailable-reason">
+          {reason}
+        </p>
+      )}
+    </>
+  );
+}
+
 function ConnectSourceButton({
   brandId,
   source,
   redirectUri,
+  activation,
 }: {
   brandId: string;
   source: DestinationSourceDto;
   redirectUri: string;
+  activation: ProviderActivationDto | null;
 }) {
   const trpc = useTRPC();
   const deployment = useDeploymentBrand();
@@ -190,13 +212,15 @@ function ConnectSourceButton({
     }),
   );
   const ui = start.isError ? toUiError(start.error) : null;
-  const unavailable = ui ? unavailableReason(ui.details) : null;
+  const unavailable =
+    (ui ? unavailableReason(ui.details) : null) ?? (activation ? activationReason(activation) : null);
   return (
     <li className="flex flex-col gap-2 py-3" data-testid={`source-${source.kind}`}>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">{source.label}</span>
         <code className="text-xs text-muted-foreground">{source.kind}</code>
-        {!source.certified && <Badge tone="neutral">Not certified</Badge>}
+        {!source.certified && !activation && <Badge tone="neutral">Not certified</Badge>}
+        <ActivationNote activation={activation} />
       </div>
       <div>
         <Button
@@ -229,7 +253,7 @@ function ConnectSourceButton({
           data-testid="destination-connect-started"
         />
       )}
-      {unavailable && (
+      {unavailable && !activation && (
         <p className="text-xs text-muted-foreground" data-testid="unavailable-reason">
           {unavailable}
         </p>
@@ -426,7 +450,15 @@ function FinishDestinationConnect({
  * it, so the row appears as "Not checked" until the check ran. Writes land as drafts unless live publishing is
  * granted here.
  */
-function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: DestinationSourceDto }) {
+function ConnectWebsiteForm({
+  brandId,
+  source,
+  activation,
+}: {
+  brandId: string;
+  source: DestinationSourceDto;
+  activation: ProviderActivationDto | null;
+}) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
@@ -459,7 +491,8 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
   }, [isSuccess, reset]);
   const ui = connect.isError ? toUiError(connect.error) : null;
   const siteIssue = ui?.details.find((d) => d.path === 'siteUrl')?.issue;
-  const ready = siteUrl.trim().startsWith('https://') && username.trim() !== '' && secret !== '';
+  const blocked = activation ? activationReason(activation) : null;
+  const ready = !blocked && siteUrl.trim().startsWith('https://') && username.trim() !== '' && secret !== '';
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (ready)
@@ -478,7 +511,8 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">Connect a website ({source.vendor})</span>
         <code className="text-xs text-muted-foreground">{source.kind}</code>
-        {!source.certified && <Badge tone="neutral">Not certified</Badge>}
+        {!source.certified && !activation && <Badge tone="neutral">Not certified</Badge>}
+        <ActivationNote activation={activation} />
       </div>
       <form onSubmit={submit} className="flex flex-col gap-3" noValidate data-testid="connect-website">
         <div className="grid gap-3 sm:grid-cols-2">
@@ -583,8 +617,13 @@ function ConnectWebsiteForm({ brandId, source }: { brandId: string; source: Dest
 
 function ConnectSources({ brandId }: { brandId: string }) {
   const sources = useDestinationSources();
+  const providers = useProviders();
   const redirectUri = connectRedirectUri(window.location.origin);
-  const enabled = (sources.data?.items ?? []).filter((s) => s.enabled);
+  // RA-01: owners and admins also see the kinds this deployment has not enabled, with the reason; the others
+  // see the enabled kinds only, as before.
+  const activationOf = (kind: string) =>
+    providers.data?.items.find((p) => p.kind !== 'channel' && p.key === kind) ?? null;
+  const enabled = (sources.data?.items ?? []).filter((s) => s.enabled || activationOf(s.kind) !== null);
   const secretLabel = enabled.find((s) => s.connect === 'secret')?.credential?.label ?? 'a credential';
   if (!sources.isSuccess || enabled.length === 0) return null;
   return (
@@ -598,13 +637,19 @@ function ConnectSources({ brandId }: { brandId: string }) {
       <ul className="divide-y divide-border" aria-label="Sources">
         {enabled.map((source) =>
           source.connect === 'secret' ? (
-            <ConnectWebsiteForm key={source.kind} brandId={brandId} source={source} />
+            <ConnectWebsiteForm
+              key={source.kind}
+              brandId={brandId}
+              source={source}
+              activation={activationOf(source.kind)}
+            />
           ) : (
             <ConnectSourceButton
               key={source.kind}
               brandId={brandId}
               source={source}
               redirectUri={redirectUri}
+              activation={activationOf(source.kind)}
             />
           ),
         )}

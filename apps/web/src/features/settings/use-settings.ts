@@ -3,6 +3,7 @@ import type { inferOutput } from '@trpc/tanstack-react-query';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 
 export type SkillDto = inferOutput<Trpc['skills']['list']>['items'][number];
+export type ProviderActivationDto = inferOutput<Trpc['operations']['providers']['list']>['items'][number];
 export type SkillDetailDto = inferOutput<Trpc['skills']['get']>;
 export type BudgetsDto = inferOutput<Trpc['agents']['budgets']['read']>;
 
@@ -65,4 +66,14 @@ export function useMembers(enabled: boolean) {
 export function useMandates(brandId: string) {
   const trpc = useTRPC();
   return useQuery(trpc.review.mandates.list.queryOptions({ brandId, page: { limit: 100 } }));
+}
+
+/**
+ * RA-01: every registered provider (channel, source, CMS) with its activation state on this deployment and the
+ * reason it cannot be connected. Owners and admins only (audit.read): the screens fall back to the server's
+ * refusal when the list is denied. One hook per query.
+ */
+export function useProviders() {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.operations.providers.list.queryOptions(), retry: false });
 }

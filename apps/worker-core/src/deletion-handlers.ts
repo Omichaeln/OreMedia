@@ -298,4 +298,11 @@ export function registerRetentionHandlers(): void {
     dataClass: 'source_use_policy',
     run: (now, dryRun, tx) => destinationRetention.pruneSeoAudits(now, dryRun, tx),
   });
+  // RA-01: the floor under the remote revoke of a disconnected destination's credential (an hour after the
+  // disconnect), on the sweep's clock as the channel sweeper is for channels.
+  registerRetentionHandler({
+    name: 'destinations.disconnected_credentials',
+    dataClass: 'source_use_policy',
+    run: (now, dryRun, tx) => destinationRetention.shredDisconnectedCredentials(now, dryRun, tx),
+  });
 }

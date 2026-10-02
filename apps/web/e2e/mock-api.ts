@@ -82,6 +82,7 @@ import {
 import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } from '@oremedia/editor';
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
+import { providerActivationState, type ProviderActivationV1 } from '@oremedia/contracts/providers';
 import { PageRequest } from '@oremedia/contracts/pagination';
 import {
   SkillBindingSet,
@@ -379,6 +380,33 @@ const mockSkillVersion = (
   version: 0,
 });
 
+/** One operations.providers.list row from its facts, the state derived as the server derives it. */
+function provider(
+  kind: ProviderActivationV1['kind'],
+  key: string,
+  vendor: string,
+  certifiedAt: string | null,
+  disabled: boolean,
+  present: string[],
+  missing: string[],
+): ProviderActivationV1 {
+  const credentialRefs = [
+    ...present.map((name) => ({ name, present: true })),
+    ...missing.map((name) => ({ name, present: false })),
+  ];
+  const facts = {
+    key,
+    kind,
+    vendor,
+    capabilityVersion: 1,
+
+    certifiedAt,
+    disabled,
+    credentialRefs,
+  };
+  return { ...facts, ...providerActivationState(facts) };
+}
+
 export class MockBackend {
   /**
    * The brand's font faces (assets.fonts.list): the fixture brand's type roles name `ast_font`. Uploads and Google
@@ -539,6 +567,69 @@ export class MockBackend {
   };
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
+  /**
+   * RA-01: the registered providers with their activation state on this deployment (operations.providers.list,
+   * owners and admins). LinkedIn is ready; Facebook is not certified; Instagram is certified but its credential
+   * references are not set; X is disabled by OREMEDIA_DISABLED_CHANNELS; the Google sources and WordPress follow.
+   */
+  readonly providers: ProviderActivationV1[] = [
+    provider(
+      'channel',
+      'linkedin_page',
+      'LinkedIn',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_LINKEDIN_PAGE_CLIENT_ID_REF', 'PROVIDER_LINKEDIN_PAGE_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'channel',
+      'facebook_page',
+      'Meta',
+      null,
+      false,
+      ['PROVIDER_FACEBOOK_PAGE_CLIENT_ID_REF', 'PROVIDER_FACEBOOK_PAGE_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'channel',
+      'instagram_business',
+      'Meta',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_INSTAGRAM_BUSINESS_CLIENT_ID_REF'],
+      ['PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF'],
+    ),
+    provider(
+      'channel',
+      'x',
+      'X',
+      '2026-09-30T00:00:00.000Z',
+      true,
+      ['PROVIDER_X_CLIENT_ID_REF', 'PROVIDER_X_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'source',
+      'ga4_property',
+      'Google',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_GA4_PROPERTY_CLIENT_ID_REF', 'PROVIDER_GA4_PROPERTY_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'source',
+      'search_console_site',
+      'Google',
+      null,
+      false,
+      ['PROVIDER_SEARCH_CONSOLE_SITE_CLIENT_ID_REF', 'PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF'],
+      [],
+    ),
+    provider('source', 'gbp_location', 'Google', null, true, [], []),
+    provider('cms', 'cms_site', 'WordPress', '2026-09-30T00:00:00.000Z', false, [], []),
+  ];
   /**
    * Other people who can sign in (bearer token → session), shared by every company of the group so one person can
    * belong to several. The default `E2E.token` session stays the single-company owner the other suites use.
@@ -1718,6 +1809,13 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     operations: t.router({
+      // RA-01: the deployment's providers and their activation state; owners and admins (audit.read).
+      providers: t.router({
+        list: query.query(() => {
+          if (backend.role !== 'owner' && backend.role !== 'admin') throw new PolicyDeniedError('audit.read');
+          return { items: backend.providers };
+        }),
+      }),
       killSwitch: t.router({
         // As the server: engaged when the company-wide row is, or the brand's own row.
         get: query
