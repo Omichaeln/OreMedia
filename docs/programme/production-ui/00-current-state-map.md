@@ -21,7 +21,7 @@ in `packages/modules/*/src/outbox-routes.ts` and calls `TemporalWorkflowStarter`
 /portfolio              loader access.listCompanies
 /c/:company             loader brand.list
 /c/:company/b/:brand    loader brand.get
-  home | overview (R2-5) | system | assets | studio/:doc (creative.documents.get) | agents
+  home | overview (R2-5) | system | assets | studio (creative.documents.list) | studio/:doc (creative.documents.get) | agents
   calendar (publishing.channels.list) | review (review.inbox.list) | performance (publishing.channels.list)
   inbox (community.conversations.list) | intelligence (intelligence.workspace.get)
   experiments (experiments.list) | campaigns (content.campaigns.list) | settings (publishing.channels.list)

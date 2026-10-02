@@ -135,6 +135,12 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         page.locator('[data-testid="run-detail"][data-run-state="completed"]').waitFor({ timeout: 15_000 }),
     },
     {
+      // The Studio section: the documents index with the create form; the editor itself is listed separately.
+      name: 'studio documents',
+      path: () => brandPath('studio'),
+      ready: (page) => page.getByRole('button', { name: 'Create and open' }).waitFor({ timeout: 15_000 }),
+    },
+    {
       // R2-5: the sources strip, the social and web figures, the audit, the splits and the limits.
       name: 'overview',
       path: () => brandPath('overview?period=7'),

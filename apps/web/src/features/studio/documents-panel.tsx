@@ -10,7 +10,7 @@ import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 
-/** The brand's documents and the form that creates one: shown on the home page and on the Studio section. */
+/** The form that creates a document and opens it; shown with Documents on the home page and the Studio section. */
 export function NewDocument({ disabledReason }: { disabledReason?: string }) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
