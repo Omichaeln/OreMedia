@@ -34,6 +34,7 @@ import {
   type DeletionScope,
 } from '@oremedia/module-operations';
 import { CredentialRefRepository } from '@oremedia/module-publishing';
+import { destinationRetention } from '@oremedia/module-destinations';
 
 type Table = ReturnType<typeof tenantScopedTables>[number];
 
@@ -282,5 +283,19 @@ export function registerRetentionHandlers(): void {
       if (!dryRun) await clusters.anonymise({ sampleMessageRefs: [] }, { olderThan: cutoff }, tx);
       return removed;
     },
+  });
+  // Destination report rows and SEO audit runs (D-17): each destination's retention is its brand's source-use
+  // policy (retentionDays with `retain`, else the report cache / audit keep rule), applied here on the sweep's
+  // clock whether or not the destination is still connected, its kind enabled or certified, or its last read
+  // succeeded; the report and audit runs prune the same way after a planned run.
+  registerRetentionHandler({
+    name: 'destinations.reports',
+    dataClass: 'source_use_policy',
+    run: (now, dryRun, tx) => destinationRetention.pruneReports(now, dryRun, tx),
+  });
+  registerRetentionHandler({
+    name: 'destinations.seo_audits',
+    dataClass: 'source_use_policy',
+    run: (now, dryRun, tx) => destinationRetention.pruneSeoAudits(now, dryRun, tx),
   });
 }

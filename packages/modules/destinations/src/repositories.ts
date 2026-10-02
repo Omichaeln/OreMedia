@@ -69,6 +69,18 @@ export class BrandDestinationRepository extends BrandScopedRepository<typeof bra
       .orderBy(asc(brandDestinations.kind), asc(brandDestinations.displayName), asc(brandDestinations.id))
       .limit(LIST_MAX);
   }
+  /**
+   * Every destination of the tenant whatever its brand, status, kind or credential, in id order after `afterId`
+   * (the retention sweep's walk: a disconnected or disabled destination still owns rows to expire).
+   */
+  async listForTenant(afterId: string | null, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(brandDestinations)
+      .where(this.scope(afterId ? gt(brandDestinations.id, afterId) : undefined))
+      .orderBy(asc(brandDestinations.id))
+      .limit(limit);
+  }
 }
 
 /** Rows the daily refresh visits per run (spec 17.4 bounded work); the rest wait for the next day. */
@@ -196,29 +208,73 @@ export class SourceUsePolicyRepository extends BrandScopedRepository<typeof sour
   }
 }
 
-/** Rows the daily report sweep visits per run (spec 17.4 bounded work); the rest wait for the next day. */
+/** Rows a sweep's target listing reads per page (spec 17.4 bounded statements); the runtime pages to the end. */
 export const REPORT_SWEEP_BATCH = 1000;
+
+/** A page of sweep targets: references only (tenant and destination ids), oldest first, with the next cursor. */
+export interface SweepTargetPage {
+  items: Array<{ tenantId: string; destinationId: string }>;
+  nextCursor: string | null;
+}
+
+/** `limit + 1` rows are read to know whether a next page exists; the cursor is the last row's (createdAt, id). */
+function sweepTargetPage(
+  rows: Array<{ tenantId: string; destinationId: string; createdAt: Date }>,
+  limit: number,
+): SweepTargetPage {
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return {
+    items: items.map(({ tenantId, destinationId }) => ({ tenantId, destinationId })),
+    nextCursor:
+      rows.length > limit && last
+        ? encodeCursor({ id: last.destinationId, sort: last.createdAt.getTime() })
+        : null,
+  };
+}
+
+/** The keyset after a sweep target cursor over (createdAt, id); undefined for the first page or a bad cursor. */
+function sweepTargetAfter(cursor: string | undefined): SQL | undefined {
+  const c = cursor ? decodeCursor(cursor) : null;
+  if (!c || typeof c.sort !== 'number') return undefined;
+  const at = new Date(c.sort);
+  return or(
+    gt(brandDestinations.createdAt, at),
+    and(eq(brandDestinations.createdAt, at), gt(brandDestinations.id, c.id)),
+  ) as SQL;
+}
 
 /**
  * The daily report sweep (destinationReportSweepWorkflowV1) spans tenants like the token refresh and runs as a
  * declared platform job (spec 5.3); it returns references only (tenant and destination ids), never a row.
  */
 export class DestinationReportTargetRepository extends PlatformRepository {
-  /** Active destinations of the kinds with reports that hold a credential, oldest first. */
-  async listTargets(kinds: readonly string[], tx?: Tx, limit = REPORT_SWEEP_BATCH) {
-    if (kinds.length === 0) return [];
-    return this.conn(tx)
-      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+  /** Active destinations of the kinds with reports that hold a credential, oldest first, paged by cursor. */
+  async listTargets(
+    kinds: readonly string[],
+    page: { limit?: number; cursor?: string | undefined } = {},
+    tx?: Tx,
+  ): Promise<SweepTargetPage> {
+    const limit = page.limit ?? REPORT_SWEEP_BATCH;
+    if (kinds.length === 0) return { items: [], nextCursor: null };
+    const rows = await this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        createdAt: brandDestinations.createdAt,
+      })
       .from(brandDestinations)
       .where(
         and(
           eq(brandDestinations.status, 'active'),
           isNotNull(brandDestinations.credentialRefId),
           inArray(brandDestinations.kind, [...kinds]),
+          sweepTargetAfter(page.cursor),
         ),
       )
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
-      .limit(limit);
+      .limit(limit + 1);
+    return sweepTargetPage(rows, limit);
   }
 }
 
@@ -349,20 +405,29 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
         .values(rows.slice(i, i + INSERT_CHUNK).map((r) => ({ ...r, tenantId })));
   }
 
+  private beforeScope(brandId: string, destinationId: string, cutoffDate: string): SQL {
+    return this.brandScope(
+      brandId,
+      and(
+        eq(destinationReportRows.destinationId, destinationId),
+        lt(destinationReportRows.date, cutoffDate),
+      ) as SQL,
+    );
+  }
+
+  /** The destination's rows of days before the cut-off (every report): what a dry run of the prune would remove. */
+  async countBefore(brandId: string, destinationId: string, cutoffDate: string, tx?: Tx): Promise<number> {
+    const rows = await this.conn(tx)
+      .select({ c: sql<number>`count(*)` })
+      .from(destinationReportRows)
+      .where(this.beforeScope(brandId, destinationId, cutoffDate));
+    return Number(rows[0]?.c ?? 0);
+  }
+
   /** Deletes the destination's rows of days before the cut-off (every report); returns how many went. */
   async deleteBefore(brandId: string, destinationId: string, cutoffDate: string, tx: Tx): Promise<number> {
     return affectedRows(
-      await tx
-        .delete(destinationReportRows)
-        .where(
-          this.brandScope(
-            brandId,
-            and(
-              eq(destinationReportRows.destinationId, destinationId),
-              lt(destinationReportRows.date, cutoffDate),
-            ) as SQL,
-          ),
-        ),
+      await tx.delete(destinationReportRows).where(this.beforeScope(brandId, destinationId, cutoffDate)),
     );
   }
 
@@ -485,14 +550,30 @@ function parseDimensions(value: unknown): Record<string, string> {
  * it returns references only (tenant and destination ids), never a row.
  */
 export class SeoAuditTargetRepository extends PlatformRepository {
-  /** Active destinations of the website kind (a credential is not needed: public pages only), oldest first. */
-  async listTargets(kind: string, tx?: Tx, limit = REPORT_SWEEP_BATCH) {
-    return this.conn(tx)
-      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+  /** Active destinations of the website kind (a credential is not needed: public pages only), oldest first, paged. */
+  async listTargets(
+    kind: string,
+    page: { limit?: number; cursor?: string | undefined } = {},
+    tx?: Tx,
+  ): Promise<SweepTargetPage> {
+    const limit = page.limit ?? REPORT_SWEEP_BATCH;
+    const rows = await this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        createdAt: brandDestinations.createdAt,
+      })
       .from(brandDestinations)
-      .where(and(eq(brandDestinations.status, 'active'), eq(brandDestinations.kind, kind)))
+      .where(
+        and(
+          eq(brandDestinations.status, 'active'),
+          eq(brandDestinations.kind, kind),
+          sweepTargetAfter(page.cursor),
+        ),
+      )
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
-      .limit(limit);
+      .limit(limit + 1);
+    return sweepTargetPage(rows, limit);
   }
 }
 

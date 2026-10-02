@@ -1,5 +1,9 @@
 import type { z } from 'zod';
-import type { RetentionClassResultV1, RetentionDataClass } from '@oremedia/contracts/operations';
+import type {
+  RetentionClassResultV1,
+  RetentionDataClass,
+  RetentionHandlerClass,
+} from '@oremedia/contracts/operations';
 import { TenantScopedRepository, type Tx } from '@oremedia/db';
 import { retentionPolicies } from '@oremedia/db/schema/operations';
 import { audit, type AuditActor } from './audit';
@@ -18,10 +22,15 @@ export const RETENTION_DEFAULT_DAYS: Readonly<Partial<Record<DataClass, number>>
   customer_voice_raw: 365,
 };
 
-/** One module's TTL for one data class: removes (or, in a dry run, counts) its rows older than the cut-off. */
+/**
+ * One module's TTL for one data class: removes (or, in a dry run, counts) its rows older than the cut-off. A
+ * `source_use_policy` handler is called with `now` as the cut-off and reads its own retention per row owner
+ * (the brand's source-use policy for the destination, D-17), so it runs on every sweep, whatever the tenant's
+ * retention_policies say.
+ */
 export interface RetentionHandler {
   name: string;
-  dataClass: DataClass;
+  dataClass: RetentionHandlerClass;
   run(cutoff: Date, dryRun: boolean, tx: Tx): Promise<number>;
 }
 
@@ -82,9 +91,9 @@ export const retention = {
     const days = await retention.days(tx);
     const results: RetentionClassResultV1[] = [];
     for (const h of handlers) {
-      const d = days[h.dataClass];
-      if (d === null || d === undefined) continue;
-      const cutoff = new Date(now.getTime() - d * DAY_MS);
+      const d = h.dataClass === 'source_use_policy' ? null : days[h.dataClass];
+      if (d === undefined || (d === null && h.dataClass !== 'source_use_policy')) continue;
+      const cutoff = d === null ? now : new Date(now.getTime() - d * DAY_MS);
       const rows = await h.run(cutoff, dryRun, tx);
       results.push({
         dataClass: h.dataClass,

@@ -77,5 +77,11 @@ export const RETENTION_ROLE_GRANTS: Readonly<Record<string, readonly RetentionPr
   // customer_voice_raw (12 months): messages removed, cluster sample refs cleared
   messages: ['SELECT', 'DELETE'],
   customer_voice_clusters: ['SELECT', 'UPDATE'],
+  // source_use_policy (D-17): report rows and audit runs expired per destination by its brand's source-use policy
+  brand_destinations: ['SELECT'],
+  source_use_policies: ['SELECT'],
+  destination_report_rows: ['SELECT', 'DELETE'],
+  seo_audit_runs: ['SELECT', 'DELETE'],
+  seo_audit_pages: ['SELECT', 'DELETE'],
   audit_events: ['INSERT'],
 };
