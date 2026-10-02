@@ -34,12 +34,12 @@ Never restore over production. Restore into a separate MySQL instance, verify, t
 
 ## Recovery time budget
 
-| Step | Budget | Evidence |
-| --- | --- | --- |
-| Detect and decide | 30 min | incident ticket |
-| Provision the restore instance | 15 min | Railway service created |
-| `restore.sh` (download, load, verify) | 60 min for a database up to about 5 GB | `RESTORE_PASS … in Ns` |
-| Re-point services, hold restored rows, re-apply deletions | 45 min | holdRestored responses |
-| Smoke and release | 30 min | smoke run |
+| Step                                                      | Budget                                 | Evidence                |
+| --------------------------------------------------------- | -------------------------------------- | ----------------------- |
+| Detect and decide                                         | 30 min                                 | incident ticket         |
+| Provision the restore instance                            | 15 min                                 | Railway service created |
+| `restore.sh` (download, load, verify)                     | 60 min for a database up to about 5 GB | `RESTORE_PASS … in Ns`  |
+| Re-point services, hold restored rows, re-apply deletions | 45 min                                 | holdRestored responses  |
+| Smoke and release                                         | 30 min                                 | smoke run               |
 
 The sum is three hours against the four-hour objective. The staging drill measures the third row; the others are operator steps with the budgets above.
