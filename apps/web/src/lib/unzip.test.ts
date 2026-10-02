@@ -1,57 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { deflateRawSync } from 'node:zlib';
 import { isZipFileName, readZip, ZipReadError } from './unzip';
+import { zip } from '../../e2e/zip-writer';
 
-/** A minimal zip writer for the tests: stored or deflated entries with a correct central directory. */
-function crc32(bytes: Uint8Array): number {
-  let crc = -1;
-  for (const b of bytes) {
-    crc ^= b;
-    for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return (crc ^ -1) >>> 0;
-}
-export function zip(files: Array<{ path: string; content: string; deflate?: boolean }>): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-  for (const f of files) {
-    const name = Buffer.from(f.path, 'utf8');
-    const raw = Buffer.from(f.content, 'utf8');
-    const data = f.deflate ? deflateRawSync(raw) : raw;
-    const method = f.deflate ? 8 : 0;
-    const head = Buffer.alloc(30);
-    head.writeUInt32LE(0x04034b50, 0);
-    head.writeUInt16LE(20, 4);
-    head.writeUInt16LE(method, 8);
-    head.writeUInt32LE(crc32(raw), 14);
-    head.writeUInt32LE(data.length, 18);
-    head.writeUInt32LE(raw.length, 22);
-    head.writeUInt16LE(name.length, 26);
-    const local = Buffer.concat([head, name, data]);
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(method, 10);
-    central.writeUInt32LE(crc32(raw), 16);
-    central.writeUInt32LE(data.length, 20);
-    central.writeUInt32LE(raw.length, 24);
-    central.writeUInt16LE(name.length, 28);
-    central.writeUInt32LE(offset, 42);
-    centrals.push(Buffer.concat([central, name]));
-    locals.push(local);
-    offset += local.length;
-  }
-  const directory = Buffer.concat(centrals);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
-}
 const toArrayBuffer = (b: Buffer) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 const text = (e: { bytes: Uint8Array }) => new TextDecoder().decode(e.bytes);
 
@@ -88,5 +38,25 @@ describe('readZip (a .skill package is a zip archive)', () => {
     expect(isZipFileName('kinsley-estate-brand.skill')).toBe(true);
     expect(isZipFileName('Brand.ZIP')).toBe(true);
     expect(isZipFileName('SKILL.md')).toBe(false);
+  });
+});
+
+describe('readZip bounds', () => {
+  it('reports a zip64 entry as an unsupported archive, not as not-an-archive', async () => {
+    const archive = zip([{ path: 'SKILL.md', content: '# x' }]);
+    archive.writeUInt32LE(0xffffffff, archive.length - 22 - (46 + 'SKILL.md'.length) + 20); // central compressed size
+    await expect(readZip(toArrayBuffer(archive))).rejects.toMatchObject({ reason: 'unsupported_archive' });
+  });
+
+  it('skips entries over the caller bound without unpacking them', async () => {
+    const archive = zip([
+      { path: 'SKILL.md', content: '# small' },
+      { path: 'assets/big.svg', content: 'x'.repeat(5_000), deflate: true },
+    ]);
+    const entries = await readZip(toArrayBuffer(archive), 1_000);
+    expect(entries.map((e) => [e.path, e.skipped ?? false, e.bytes.length])).toEqual([
+      ['SKILL.md', false, 7],
+      ['assets/big.svg', true, 0],
+    ]);
   });
 });

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
-import { zip } from '../src/lib/unzip.test';
+import { zip } from './zip-writer';
 
 /**
  * Brand kit: voice and vocabulary extraction (spec 8.2 onboarding), and typography (fonts uploaded or imported from

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer, watchCspViolations, type CspViolation } from './static-server';
+import { zip } from './zip-writer';
 
 /**
  * Brand shell and home (the v3 prototype's navigation on this app's design language): a sidebar from 1024 px with
@@ -394,6 +395,23 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect.poll(() => page.getByTestId('skill-imported').count(), { timeout: 15_000 }).toBe(1);
     await expect.poll(() => skills.count(), { timeout: 15_000 }).toBe(4);
     expect(await skills.filter({ hasText: 'launch-hooks' }).textContent()).toContain('No published version');
+    // A .skill package (a zip wrapping one folder) is unpacked in the browser; SKILL.md front matter is its manifest.
+    await page.getByLabel('Skill package files').setInputFiles({
+      name: 'launch-zip.skill',
+      mimeType: '',
+      buffer: zip([
+        {
+          path: 'launch-zip/SKILL.md',
+          content: '---\nkey: launch-zip\ntitle: Launch zip\n---\n# Launch zip\n',
+          deflate: true,
+        },
+        { path: 'launch-zip/references/notes.md', content: '# Notes\n' },
+      ]),
+    });
+    await page.getByText('2 files: SKILL.md, references/notes.md').waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Import package' }).click();
+    await expect.poll(() => skills.count(), { timeout: 15_000 }).toBe(5);
+    expect(await skills.filter({ hasText: 'launch-zip' }).textContent()).toContain('No published version');
     await page.close();
   }, 60_000);
 

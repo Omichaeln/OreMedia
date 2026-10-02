@@ -6,22 +6,18 @@ import { useBrandContext } from './brand-context';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
-import { isZipFileName, readZip, ZipReadError } from '../../lib/unzip';
+import { isZipFileName, unpackPicked } from '../../lib/unzip';
 
 type ImportResult = inferOutput<Trpc['brand']['guidelines']['import']>;
 
 const TEXT_FILE = /\.(md|markdown|txt)$/i;
 
 const MAX_FILES = 100;
+/** The contract's per-file cap (BrandGuidelinesImport): larger entries are sent by name only, like non-text ones. */
+const MAX_ENTRY_BYTES = 512 * 1024;
 
 /** A picked file's path inside the package: the folder-relative path of a directory pick, else its name. */
 const pathOf = (f: File) => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-
-const ARCHIVE_MESSAGE: Record<ZipReadError['reason'], string> = {
-  not_an_archive: 'is not a zip archive; a .skill package is one',
-  unsupported_archive: 'is a zip64 archive, which is not supported; re-export the skill as a plain zip',
-  unsupported_entry: 'has an encrypted or unusually compressed entry; re-export the skill without a password',
-};
 
 /**
  * The files to send for what was picked: a `.skill` or `.zip` package is unpacked in the browser into its entries
@@ -31,17 +27,12 @@ async function packageFiles(picked: File[]): Promise<Array<{ path: string; conte
   const files: Array<{ path: string; content: string }> = [];
   for (const f of picked) {
     if (isZipFileName(f.name)) {
-      let entries;
-      try {
-        entries = await readZip(await f.arrayBuffer());
-      } catch (err) {
-        throw new Error(
-          `${f.name} ${err instanceof ZipReadError ? ARCHIVE_MESSAGE[err.reason] : 'could not be read'}.`,
-        );
-      }
       const text = new TextDecoder();
-      for (const e of entries)
-        files.push({ path: e.path, content: TEXT_FILE.test(e.path) ? text.decode(e.bytes) : '' });
+      for (const e of await unpackPicked(f, MAX_ENTRY_BYTES))
+        files.push({
+          path: e.path,
+          content: TEXT_FILE.test(e.path) && !e.skipped ? text.decode(e.bytes) : '',
+        });
     } else {
       files.push({ path: pathOf(f), content: TEXT_FILE.test(f.name) ? await f.text() : '' });
     }
@@ -78,6 +69,7 @@ export function BrandSkillImport() {
     if (picked.length === 0) return;
     setResult(null);
     setReadError(null);
+    importSkill.reset();
     let files: Array<{ path: string; content: string }>;
     try {
       files = await packageFiles(picked);

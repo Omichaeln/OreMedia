@@ -5,6 +5,7 @@ import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC, useTRPCClient } from '../../lib/trpc';
+import { isZipFileName, stripSharedRoot, unpackPicked } from '../../lib/unzip';
 import { useSkill, type SkillDetailDto } from './use-settings';
 
 const VERSION_CHIP: Record<string, { tone: Tone; label: string }> = {
@@ -145,12 +146,22 @@ function VersionRow({
   );
 }
 
-/** Spec 10.1 import: a package's files (manifest.json, SKILL.md, references) become the next draft version. */
+/** The manifest is manifest.json or SKILL.md's YAML front matter (spec 10.1); the server reads either. */
+const hasManifestIn = (files: Array<{ path: string; content: string }>) =>
+  files.some((f) => f.path === 'manifest.json') ||
+  files.some((f) => f.path === 'SKILL.md' && /^---\r?\n/.test(f.content));
+
+/**
+ * Spec 10.1 import: a package's files (manifest.json or SKILL.md with front matter, references) become the next
+ * draft version. The files are picked loose, as a folder, or as the `.skill` (zip) package Claude exports, which is
+ * unpacked in the browser.
+ */
 export function SkillImportForm({ brandId }: { brandId: string }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
   const [files, setFiles] = useState<Array<{ path: string; content: string }>>([]);
+  const [readError, setReadError] = useState<string | null>(null);
   const [scope, setScope] = useState<'tenant' | 'brand'>('brand');
   const importSkill = useMutation(
     trpc.skills.import.mutationOptions({
@@ -164,16 +175,35 @@ export function SkillImportForm({ brandId }: { brandId: string }) {
   );
   const onFiles = async (e: ChangeEvent<HTMLInputElement>) => {
     const list = Array.from(e.target.files ?? []);
-    const read = await Promise.all(
-      list.map(async (f) => ({
-        path:
-          (f as File & { webkitRelativePath?: string }).webkitRelativePath?.split('/').slice(1).join('/') ||
-          f.name,
-        content: await f.text(),
-      })),
-    );
-    setFiles(read);
     e.target.value = '';
+    setReadError(null);
+    importSkill.reset();
+    const read: Array<{ path: string; content: string }> = [];
+    const text = new TextDecoder();
+    try {
+      for (const f of list) {
+        if (isZipFileName(f.name)) {
+          const entries = await unpackPicked(f);
+          read.push(
+            ...stripSharedRoot(entries.map((x) => ({ path: x.path, content: text.decode(x.bytes) }))),
+          );
+        } else {
+          read.push({
+            path:
+              (f as File & { webkitRelativePath?: string }).webkitRelativePath
+                ?.split('/')
+                .slice(1)
+                .join('/') || f.name,
+            content: await f.text(),
+          });
+        }
+      }
+    } catch (err) {
+      setFiles([]);
+      setReadError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setFiles(read);
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -181,7 +211,7 @@ export function SkillImportForm({ brandId }: { brandId: string }) {
     importSkill.mutate({ files, scope, ...(scope === 'brand' ? { brandId } : {}) });
   };
   const ui = importSkill.isError ? toUiError(importSkill.error) : null;
-  const hasManifest = files.some((f) => f.path === 'manifest.json');
+  const hasManifest = hasManifestIn(files);
   return (
     <form
       onSubmit={submit}
@@ -192,20 +222,22 @@ export function SkillImportForm({ brandId }: { brandId: string }) {
       <Field
         label="Skill package files"
         htmlFor="skill-import-files"
-        hint="manifest.json and SKILL.md, plus any references; declarative only (scripts are refused)."
+        hint="A .skill package, or SKILL.md with front matter (or manifest.json) plus any references; declarative only (scripts are refused)."
       >
         <input
           id="skill-import-files"
           type="file"
           multiple
+          accept=".skill,.zip,.md,.markdown,.txt,.json,.html,.htm,.css,.csv,.yaml,.yml"
           onChange={(e) => void onFiles(e)}
           className="text-sm"
         />
       </Field>
+      {readError && <StatusBanner tone="critical" title="The package was not read" description={readError} />}
       {files.length > 0 && (
         <p className="text-xs text-muted-foreground">
           {files.length} file{files.length === 1 ? '' : 's'}: {files.map((f) => f.path).join(', ')}
-          {!hasManifest && ' · manifest.json is missing'}
+          {!hasManifest && ' · manifest.json or SKILL.md front matter is missing'}
         </p>
       )}
       <fieldset className="flex flex-wrap gap-3 text-sm">
@@ -254,7 +286,7 @@ export function SkillImportForm({ brandId }: { brandId: string }) {
             files.length === 0
               ? 'Choose the package files'
               : !hasManifest
-                ? 'The package needs manifest.json'
+                ? 'The package needs manifest.json or SKILL.md front matter'
                 : undefined
           }
         >

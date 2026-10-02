@@ -1342,14 +1342,17 @@ export function createMockRouter(backend: MockBackend) {
       }),
       /** A package's manifest.json names the skill; it lands as the next draft version of that key. */
       import: mutation.input(SkillImport).mutation(({ input }) => {
+        // As the API: manifest.json, else SKILL.md's front matter (key and title read as plain scalars here).
         const manifestFile = input.files.find((f) => f.path === 'manifest.json');
-        if (!manifestFile)
-          throw new ValidationFailedError([{ path: 'files', issue: 'manifest.json is required' }]);
-        const manifest = JSON.parse(manifestFile.content) as {
-          key?: string;
-          title?: string;
-          scripts?: unknown;
-        };
+        const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(
+          input.files.find((f) => f.path === 'SKILL.md')?.content ?? '',
+        )?.[1];
+        if (!manifestFile && !front)
+          throw new ValidationFailedError([{ path: 'manifest.json', issue: 'missing' }]);
+        const scalar = (key: string) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(front ?? '')?.[1]?.trim();
+        const manifest = manifestFile
+          ? (JSON.parse(manifestFile.content) as { key?: string; title?: string; scripts?: unknown })
+          : { key: scalar('key'), title: scalar('title'), scripts: scalar('scripts') };
         if (manifest.scripts)
           throw new ValidationFailedError([{ path: 'manifest.scripts', issue: 'declarative_only' }]);
         if (!manifest.key) throw new ValidationFailedError([{ path: 'manifest.key', issue: 'required' }]);
@@ -1907,13 +1910,20 @@ export function createMockRouter(backend: MockBackend) {
           const text = /\.(md|markdown|txt)$/i;
           const root = input.files.find((f) => /^([^/]+\/)?SKILL\.md$/.test(f.path));
           if (!root) throw new ValidationFailedError([{ path: 'files', issue: 'skill_md_missing' }]);
+          // The server's stripSharedRoot: the one folder every path sits in is dropped; otherwise paths stay.
           const prefix = root.path.slice(0, -'SKILL.md'.length);
-          const files = input.files.map((f) => ({ ...f, path: f.path.slice(prefix.length) }));
+          const shared = prefix !== '' && input.files.every((f) => f.path.startsWith(prefix));
+          const files = input.files.map((f) => ({
+            ...f,
+            path: shared ? f.path.slice(prefix.length) : f.path,
+          }));
           const name = /^name:\s*(.+)$/m.exec(root.content)?.[1]?.trim() ?? '';
           if (!name) throw new ValidationFailedError([{ path: 'files.SKILL.md', issue: 'name_missing' }]);
           const documents = files.filter((f) => text.test(f.path));
           const colours = new Set(documents.flatMap((d) => d.content.match(/#[0-9a-f]{6}\b/gi) ?? []));
-          backend.guidelineImports.push({ brandId: input.brandId, paths: files.map((f) => f.path) });
+          // Approximations against the real parser: colours are any six-digit hex in the text (the server reads table
+          // rows, case-folded), documents keep input order, source.description is empty.
+          backend.guidelineImports.push({ brandId: input.brandId, paths: input.files.map((f) => f.path) });
           return {
             versionId: `bv_e2e_${backend.guidelineImports.length + 2}`,
             number: backend.guidelineImports.length + 2,
