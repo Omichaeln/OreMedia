@@ -143,6 +143,8 @@ export const registerChannelKeySource = (fn: ChannelKeySource): void => {
 export const resetChannelKeySource = (): void => {
   channelKeySource = builtinChannelKeys;
 };
+/** The channel keys guidance may name now (BSC-4 suggestions name only these). */
+export const knownChannelKeys = (): string[] => channelKeySource();
 
 /**
  * BSC-2: the asset each listed version belongs to, for versions of this brand's live assets (composition wires
@@ -261,7 +263,7 @@ const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
  * drafts written before the check (some carry placeholder font ids) still save; rendering authorises every font at
  * the point of effect either way. Every problem is reported at once.
  */
-async function assertDocumentReferences(
+export async function assertDocumentReferences(
   brandId: string,
   document: BrandSystemDocumentV1,
   previous: BrandSystemDocumentV1 | null,
@@ -544,14 +546,19 @@ function mergePalette(
   return [...palette, ...added];
 }
 
-const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
-const brandResource = (b: BrandRow) => ({ type: 'brand', tenantId: b.tenantId, brandId: b.id, id: b.id });
+export const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
+export const brandResource = (b: BrandRow) => ({
+  type: 'brand',
+  tenantId: b.tenantId,
+  brandId: b.id,
+  id: b.id,
+});
 
 /**
  * Spec 5.5: agents hold brand.edit_standards / brand.publish_version with the propose_only obligation. They may
  * draft and propose; approving a fact, publishing a version or activating a policy is a person's decision.
  */
-function assertMayDecide(decision: Decision): void {
+export function assertMayDecide(decision: Decision): void {
   if (decision.obligations?.some((o) => o.type === 'propose_only'))
     throw new PolicyDeniedError('propose_only', 'Agents may only propose; a brand manager must decide');
 }

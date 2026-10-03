@@ -14,10 +14,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`asset_versions` TO '__APP
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`assets` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`audit_events` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`auth_events` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_assist_jobs` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_destinations` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_grants` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_guideline_authors` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_objectives` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_sources` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_suggestions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brand_versions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`brands` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`briefs` TO '__APP_USER__'@'%';

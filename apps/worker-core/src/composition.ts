@@ -42,6 +42,8 @@ import {
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
+  registerAssistModelGate,
+  registerBrandOutboxRoutes,
 } from '@oremedia/module-brand';
 import {
   creativeService,
@@ -61,6 +63,7 @@ import {
   skillsService,
 } from '@oremedia/module-skills';
 import {
+  brandAssistModelGate,
   createEvaluationRunnerFromEnv,
   createOpenRouterImageGeneratorFromEnv,
   createOpenRouterSpeechGeneratorFromEnv,
@@ -155,6 +158,10 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // Spec 12: agent runs start and are signalled through the outbox; the context resolver pins skills (spec 12.3).
   registerSkillBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerAgentOutboxRoutes();
+  // BSC-4: brand.assist_requested / brand.assist_cancel_requested → brandAssistWorkflowV1 (and its relay) on `agents`;
+  // the assist runtime reads the deployment's model and the tenant's routing policy through the gate.
+  registerBrandOutboxRoutes();
+  registerAssistModelGate(brandAssistModelGate());
   // Spec 12.2 / 12.7: provider job ids survive a worker restart; the tenant's stored routing policy gates every call.
   // Only here: agent runs (the only callers with a run row for fk_provider_job_run) dispatch tools in this process.
   // The API's surface path (MCP, spec 7.6 / 12.4) never reaches a provider job: the only tool that submits one,

@@ -169,6 +169,13 @@
       "when": 1791019468385,
       "tag": "0023_facts_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1791050815610,
+      "tag": "0024_brand_assist",
+      "breakpoints": true
     }
   ]
 }

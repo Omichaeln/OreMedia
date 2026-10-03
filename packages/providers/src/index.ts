@@ -68,6 +68,16 @@ export { CmsRegistry, cmsRegistry } from './cms-registry';
 export { WordPressCmsAdapter, wordpressCmsAdapter } from './cms/wordpress/adapter';
 // The one bounded public-page fetch (D-16 validation, R2-4 audit crawl): SSRF-checked per hop, pinned to a host.
 export { fetchPageBounded, RenderedPageError, type FetchedPage, type FetchPageOptions } from './page-fetch';
+// The pure robots.txt and sitemap rules both bounded crawls read (R2-4 audit, BSC-4 brand sources).
+export {
+  decodeEntities,
+  parseRobots,
+  robotsAllows,
+  sitemapUrls,
+  type RobotsRules,
+  type SitemapListing,
+} from './site-rules';
+export { scanMarkup, type MarkupToken } from './markup';
 export { wordpressCmsCapability } from './cms/wordpress/capability';
 export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/adapter';
 export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';

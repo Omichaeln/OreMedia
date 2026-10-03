@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { passwordSetupTokens, users } from '@oremedia/db/schema/access';
 import { planItems } from '@oremedia/db/schema/content';
 import {
@@ -29,6 +30,11 @@ const PREVIOUS_HEAD = '0012_comment_replies';
 const NEW_TABLES: MySqlTable[] = [passwordSetupTokens];
 /** Added by later migrations (0014). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   planItems,
   brandDestinations,
   sourceUsePolicies,

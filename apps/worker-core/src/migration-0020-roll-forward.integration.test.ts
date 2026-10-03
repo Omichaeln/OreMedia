@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { ARTICLE_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import { channelVariants } from '@oremedia/db/schema/content';
 import { brandDestinations, seoFindingWork } from '@oremedia/db/schema/destinations';
@@ -23,7 +24,13 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
  */
 const PREVIOUS_HEAD = '0019_seo_audit';
 /** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
-const LATER_TABLES: MySqlTable[] = [seoFindingWork];
+const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+  seoFindingWork,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));
