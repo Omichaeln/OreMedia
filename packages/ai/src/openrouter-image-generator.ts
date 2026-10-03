@@ -5,7 +5,11 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
 import { generatedAssetSink, type GeneratedAssetSink } from './generated-asset-sink';
-import { openRouterApiKeyFromEnv, openRouterProviderPreferences } from './openrouter-adapter';
+import {
+  openRouterApiKeyFromEnv,
+  openRouterFetch,
+  openRouterProviderPreferences,
+} from './openrouter-adapter';
 import type { ImageGenerator } from './tools/services';
 
 export interface OpenRouterImageGeneratorOptions {
@@ -44,7 +48,7 @@ export class OpenRouterImageGenerator implements ImageGenerator {
 
   constructor(private readonly opts: OpenRouterImageGeneratorOptions) {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? openRouterFetch;
     this.assets = opts.assets ?? generatedAssetSink;
     this.model = opts.model;
   }

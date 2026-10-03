@@ -5,7 +5,11 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
 import { generatedAssetSink, type GeneratedAssetSink } from './generated-asset-sink';
-import { openRouterApiKeyFromEnv, openRouterProviderPreferences } from './openrouter-adapter';
+import {
+  openRouterApiKeyFromEnv,
+  openRouterFetch,
+  openRouterProviderPreferences,
+} from './openrouter-adapter';
 import { ToolDeniedError } from './tool-dispatcher';
 import type { SpeechGenerator } from './tools/services';
 
@@ -40,7 +44,7 @@ export class OpenRouterSpeechGenerator implements SpeechGenerator {
 
   constructor(private readonly opts: OpenRouterSpeechGeneratorOptions) {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? openRouterFetch;
     this.assets = opts.assets ?? generatedAssetSink;
     this.model = opts.model;
   }

@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ModelRequest } from '@oremedia/contracts/agents';
@@ -145,6 +147,30 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
     await expect(run(200, { error: { code: 400, message: 'bad' } })).rejects.toBeInstanceOf(
       ValidationFailedError,
     );
+  });
+
+  it('sends the key in the Authorization header through its default transport (no injected fetch)', async () => {
+    const seen: Array<{ authorization?: string; contentType?: string }> = [];
+    const server = createServer((req, res) => {
+      seen.push({ authorization: req.headers.authorization, contentType: req.headers['content-type'] });
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(okBody));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const out = await new OpenRouterModelAdapter({
+        apiKey: 'k-test',
+        baseURL: `http://127.0.0.1:${port}`,
+      }).complete(request);
+      expect(seen).toEqual([{ authorization: 'Bearer k-test', contentType: 'application/json' }]);
+      expect(out.stopReason).toBe('tool_use'); // the fixture answer carries a tool call
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('treats a connection failure or timeout as unavailable', async () => {
