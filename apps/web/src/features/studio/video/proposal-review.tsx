@@ -15,6 +15,7 @@ const KIND_TONE: Record<Change['kind'], Tone> = {
   removed: 'critical',
   moved: 'info',
   trimmed: 'warning',
+  replaced: 'info',
   changed: 'neutral',
 };
 const span = (s: Change['before']) => (s ? `${timecode(s.startMs)}–${timecode(s.endMs)}` : '');

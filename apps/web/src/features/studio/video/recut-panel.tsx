@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { TrackItem, VideoProjectV1 } from '@oremedia/contracts/video';
 import type { VideoAiScope } from '@oremedia/contracts/video-ai';
-import { Button, EmptyState, Field, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, EmptyState, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
 import { Select } from '../../../components/select';
 import { toUiError } from '../../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../../lib/intent-key';
@@ -48,6 +48,7 @@ export function RecutPanel({
   const shownId = jobId ?? live?.id ?? active.data?.lastRecut?.id ?? null;
   const job = useVideoAiJob(shownId);
   const [instruction, setInstruction] = useState('');
+  const [ctaText, setCtaText] = useState('');
   const selected = studio.state.selection;
   const selectedItem = selected
     ? (project.tracks.find((t) => t.id === selected.trackId)?.items as TrackItem[] | undefined)?.find(
@@ -84,7 +85,14 @@ export function RecutPanel({
     start.mutate({
       documentId,
       baseRevisionId: studio.state.committed.revisionId,
-      request: { kind: 'recut', recut: { instruction: instruction.trim(), scope } },
+      request: {
+        kind: 'recut',
+        recut: {
+          instruction: instruction.trim(),
+          scope,
+          ...(ctaText.trim() ? { ctaText: ctaText.trim() } : {}),
+        },
+      },
     });
   };
   return (
@@ -123,6 +131,18 @@ export function RecutPanel({
                   submit();
                 }
               }}
+            />
+          </Field>
+          <Field
+            label="Call to action (optional)"
+            htmlFor="recut-cta"
+            hint="The AI places only this wording or the brand’s own call to action; it never writes one."
+          >
+            <Input
+              id="recut-cta"
+              maxLength={80}
+              value={ctaText}
+              onChange={(e) => setCtaText(e.target.value)}
             />
           </Field>
           <fieldset className="flex flex-col gap-1 text-sm">

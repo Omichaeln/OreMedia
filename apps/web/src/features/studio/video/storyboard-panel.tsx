@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { VIDEO_FORMATS, type VideoFormatKey, type VideoProjectV1 } from '@oremedia/contracts/video';
 import type {
@@ -346,24 +346,6 @@ export function StoryboardPanel({
   );
 }
 
-const draftKey = (jobId: string) => `oremedia:storyboard-draft:${jobId}`;
-function readDraft(jobId: string): Storyboard | null {
-  try {
-    const raw = sessionStorage.getItem(draftKey(jobId));
-    return raw ? (JSON.parse(raw) as Storyboard) : null;
-  } catch {
-    return null;
-  }
-}
-function writeDraft(jobId: string, s: Storyboard | null): void {
-  try {
-    if (s) sessionStorage.setItem(draftKey(jobId), JSON.stringify(s));
-    else sessionStorage.removeItem(draftKey(jobId));
-  } catch {
-    // Private mode or storage full: the draft lives in memory only.
-  }
-}
-
 /** A storyboard job: its status, then (once written) the storyboard to refine and assemble. */
 function StoryboardJob({
   job,
@@ -420,8 +402,26 @@ function StoryboardEditor({
   const { brandId } = useBrandContext();
   const assets = useShotAssets(brandId);
   const assembleKey = useIntentKey();
-  const [draft, setDraft] = useState<Storyboard>(() => readDraft(job.id) ?? initial);
-  useEffect(() => writeDraft(job.id, draft), [job.id, draft]);
+  // The person's edits are kept on the job (a reload or another device picks them up), saved once they settle.
+  const [draft, setDraft] = useState<Storyboard>(() => job.result?.draft ?? initial);
+  const settledDraft = useSettled(draft, 800);
+  const saved = useRef<Storyboard>(draft);
+  const jobVersion = useRef(job.version);
+  useEffect(() => {
+    jobVersion.current = Math.max(jobVersion.current, job.version);
+  }, [job.version]);
+  const { mutate: saveDraft, error: saveError } = useMutation(
+    trpc.creative.videoAi.saveDraft.mutationOptions({
+      onSuccess: (res) => {
+        jobVersion.current = res.version;
+      },
+    }),
+  );
+  useEffect(() => {
+    if (settledDraft === saved.current) return;
+    saved.current = settledDraft;
+    saveDraft({ jobId: job.id, expectedVersion: jobVersion.current, storyboard: settledDraft });
+  }, [settledDraft, job.id, saveDraft]);
   const assemble = useMutation(
     trpc.creative.videoAi.assemble.mutationOptions({
       ...mutationIntent(assembleKey.key),
@@ -659,6 +659,13 @@ function StoryboardEditor({
           tone="warning"
           title="Some parts could not be placed"
           description={assemble.data.conflicts.map((c) => c.message).join(' ')}
+        />
+      )}
+      {saveError && (
+        <StatusBanner
+          tone="warning"
+          title="Your storyboard edits are not saved yet"
+          description={toUiError(saveError).message}
         />
       )}
       <div className="flex flex-wrap gap-2">

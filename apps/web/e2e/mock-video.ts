@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { z } from 'zod';
-import { NotFoundError, StaleRevisionError, ValidationFailedError } from '@oremedia/contracts/errors';
+import {
+  ConflictError,
+  NotFoundError,
+  StaleRevisionError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
 import type {
   VideoMediaInfo,
   VideoOperationBatch,
@@ -16,6 +21,7 @@ import {
   type Storyboard,
   type VideoAiAccept,
   type VideoAiAssemble,
+  type VideoAiSaveDraft,
   type VideoAiJobState,
   type VideoAiPreflight,
   type VideoAiResult,
@@ -505,6 +511,9 @@ interface MockAiJob {
   updatedAt: string;
 }
 
+/** The mocked brand's channel call-to-action conventions (the only wording a recut may place unasked). */
+const BRAND_CTAS = ['Shop the range'];
+
 const ELIGIBLE_STORYBOARD: StoryboardAsset[] = VIDEO_LIBRARY.map((m) => ({
   assetVersionId: m.assetVersionId,
   kind: m.kind === 'image' ? ('photo' as const) : m.kind,
@@ -669,7 +678,28 @@ export class VideoAiMockBackend {
       ),
       effectiveFactIds: this.effectiveFactIds,
       scope,
+      script: this.scriptOf(job.documentId),
+      approvedCtas: [
+        ...(job.request.kind === 'recut' && job.request.recut.ctaText ? [job.request.recut.ctaText] : []),
+        ...BRAND_CTAS,
+      ],
     };
+  }
+
+  /** As the server: the narration of the document's last finished storyboard, by scene title. */
+  private scriptOf(documentId: string) {
+    const { head } = this.headOf(documentId);
+    const last = [...this.jobs.values()]
+      .reverse()
+      .find(
+        (j) => j.documentId === documentId && j.kind === 'storyboard' && j.state === 'completed' && j.result,
+      );
+    return (last?.result?.storyboard?.scenes ?? [])
+      .filter((s) => s.narration)
+      .map((s) => ({
+        sceneId: head.snapshot.scenes.find((p) => p.title === s.title)?.id ?? null,
+        narration: s.narration,
+      }));
   }
 
   private complete(job: MockAiJob): VideoAiResult {
@@ -711,6 +741,7 @@ export class VideoAiMockBackend {
         refused,
         findings: [],
         summary: storyboard.title,
+        draft: null,
       };
     }
     const output = job.output as ModelRecutOutput;
@@ -743,6 +774,7 @@ export class VideoAiMockBackend {
       refused: [],
       findings: [],
       summary: output.summary,
+      draft: null,
     };
   }
 
@@ -806,6 +838,17 @@ export class VideoAiMockBackend {
     return res;
   }
 
+  saveDraft(input: z.infer<typeof VideoAiSaveDraft>) {
+    const job = this.jobs.get(input.jobId);
+    if (!job || job.kind !== 'storyboard' || !job.result)
+      throw new NotFoundError('StudioVideoJob', input.jobId);
+    if (job.version !== input.expectedVersion)
+      throw new ConflictError('StudioVideoJob', job.id, input.expectedVersion);
+    job.result = { ...job.result, draft: input.storyboard };
+    job.version += 1;
+    return this.dto(job);
+  }
+
   assemble(input: z.infer<typeof VideoAiAssemble>) {
     const job = this.jobs.get(input.jobId);
     if (!job || job.kind !== 'storyboard' || !job.result)
@@ -827,7 +870,7 @@ export class VideoAiMockBackend {
     const summary = `Assembled storyboard “${input.storyboard.title}”`;
     job.result = { ...job.result, storyboard: input.storyboard, conflicts: compiled.conflicts };
     if (isEmptyProject(head.snapshot)) {
-      const res = this.commit(job, compiled.operations, summary, 'user');
+      const res = this.commit(job, compiled.operations, summary, 'agent'); // model-planned: agent guards
       return {
         applied: true as const,
         ...res,
@@ -840,7 +883,7 @@ export class VideoAiMockBackend {
       kind: 'assembly' as const,
       documentId: doc.id,
       baseRevisionId: head.id,
-      origin: 'user' as const,
+      origin: 'agent' as const,
       summary,
       operations: compiled.operations,
       groups: compiled.groups.map(({ operations: _o, ...g }) => g),

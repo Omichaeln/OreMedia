@@ -130,6 +130,12 @@ describe.skipIf(!enabled)('video AI: storyboard, assembly and recut (built app, 
     await page.getByLabel('Asset').nth(1).click();
     await page.getByRole('option', { name: /Sample photo/ }).click();
     await expect.poll(() => page.getByTestId('storyboard-length').textContent()).toContain('0:07.50');
+    // The edits are kept on the job (server side), so a reload or another device picks them up.
+    const draft = () =>
+      [...backend.videoAi.jobs.values()].find((j) => j.kind === 'storyboard')?.result?.draft ?? null;
+    await expect
+      .poll(() => draft()?.scenes.map((sc) => sc.title), { timeout: 5_000 })
+      .toEqual(['City', 'Opening']);
   }, 60_000);
 
   it('assembles into the empty video at once; undo and redo work from the keyboard', async () => {
