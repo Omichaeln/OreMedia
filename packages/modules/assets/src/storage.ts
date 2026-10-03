@@ -336,9 +336,12 @@ export class S3StorageProvider extends TenantPrefixedStorage {
       );
       return { bytes: firstPart.length };
     }
-    const created = await this.client.send(
-      new CreateMultipartUploadCommand({ Bucket, Key: key, ContentType: opts.contentType }),
-    );
+    const created = await this.client
+      .send(new CreateMultipartUploadCommand({ Bucket, Key: key, ContentType: opts.contentType }))
+      .catch((err: unknown) => {
+        body.destroy();
+        throw err;
+      });
     const UploadId = created.UploadId;
     if (!UploadId) throw new Error(`multipart upload not created for ${key}`);
     const done: Array<{ ETag: string; PartNumber: number }> = [];
@@ -360,6 +363,8 @@ export class S3StorageProvider extends TenantPrefixedStorage {
       );
       return { bytes };
     } catch (err) {
+      // The source stops too (a file or upstream stream is not left open behind a failed upload).
+      body.destroy();
       await this.client
         .send(new AbortMultipartUploadCommand({ Bucket, Key: key, UploadId }))
         .catch((abortErr: unknown) =>

@@ -180,7 +180,7 @@ describe.skipIf(!hasTools)('faststart detection by ranged reads on real MP4s', {
         const key = `assets/${T}/brd_1/exports/rev_1/rj_1/${name}`;
         await s.putObject(key, await readFile(join(dir, name)), { contentType: 'video/mp4' });
         const boxes = await topLevelBoxes(s, key, (await stat(join(dir, name))).size);
-        const p = (await probeFile(join(dir, name), 1)) as MediaProbeV1;
+        const p = (await probeFile(join(dir, name), 1, { mime: 'video/mp4' })) as MediaProbeV1;
         const issues = checkVideoExport(p, boxes, {
           ...expected,
           width: 320,

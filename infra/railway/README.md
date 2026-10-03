@@ -33,8 +33,8 @@ The render image carries ffmpeg and ffprobe (Ubuntu noble's 6.1.1 package, pinne
 `video` (video and audio ingest; the video export store) runs on `worker-render` beside `render` and `media`, with
 its own activity slots: `VIDEO_CONCURRENCY` (default 1) bounds concurrent ffmpeg jobs per container, independent of
 `RENDER_CONCURRENCY` and `MEDIA_CONCURRENCY`, so a ten-minute transcode never takes a still render's slot. A
-container without ffmpeg does not poll `video` (it logs `ffmpeg/ffprobe not found`); video jobs then wait in the
-queue rather than fail.
+production container without ffmpeg/ffprobe refuses to start (its deploy fails); outside production it does not
+poll `video` and logs `ffmpeg/ffprobe not found`. The start line names the queues polled.
 
 Expectations per container, for one video job at a time. Measured during STU-2a on a shared 4 vCPU host (ffmpeg
 6.1.1) with a deliberately hard 30 s 1080p30 source (12 Mbit/s with film-grain noise, 46 MB): probe 0.2–0.6 s,

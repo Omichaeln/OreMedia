@@ -312,8 +312,12 @@ accepted as soon as the API is on the new build):
    up to 1 GiB and are streamed to clamd; below the limit clamd gives no verdict and the upload stays quarantined
    (`scanner_unavailable`, the detail names `StreamMaxLength`).
 3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
-   default 1; resources in infra/railway/README.md). Check its log for `polling task queues render, media and video`
-   and no `ffmpeg/ffprobe not found` line.
+   default 1; resources in infra/railway/README.md). In production a container without ffmpeg/ffprobe refuses to
+   start (`refusing to start (task queue video)` in its log), so a broken image fails its deploy. Check the start
+   line names all three queues: `worker-render polling task queues render, media, video`.
+   The reviewer's captions track is fetched by the browser (then played from a blob URL): the assets bucket's CORS
+   rules must allow GET from the web origin, as they already allow the browser's upload PUT. Without that rule the
+   video still plays, without captions.
 4. Deploy the API and the other workers as usual. Upload completions now carry the intent's kind and video/audio
    ones start `videoIngestWorkflowV1` on `video`; image, font and PDF uploads keep `assetIngestWorkflowV1` on `media`.
    Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish

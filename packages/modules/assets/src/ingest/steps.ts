@@ -53,12 +53,16 @@ const MIME_EQUIVALENTS: ReadonlyArray<readonly string[]> = [
   ['font/otf', 'application/x-font-otf', 'application/font-sfnt', 'font/sfnt'],
   ['image/jpeg', 'image/jpg'],
   ['image/heic', 'image/heif'],
+  ['video/mp4', 'video/x-m4v'],
 ];
 
 const normaliseMime = (m: string): string => (m.split(';')[0] ?? '').trim().toLowerCase();
 
 /** Detector names with an accepted canonical mime (file-type reports M4A audio as audio/x-m4a). */
-const CANONICAL_MIME: Readonly<Record<string, string>> = { 'audio/x-m4a': 'audio/mp4' };
+const CANONICAL_MIME: Readonly<Record<string, string>> = {
+  'audio/x-m4a': 'audio/mp4',
+  'video/x-m4v': 'video/mp4',
+};
 
 function mimeMatches(declared: string, sniffed: string): boolean {
   const d = normaliseMime(declared);

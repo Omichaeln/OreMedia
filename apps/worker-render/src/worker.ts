@@ -131,10 +131,18 @@ const mediaWorker = await Worker.create({
 // Media jobs work in private temp directories (MEDIA_TMP_DIR); a container killed mid-job leaves them behind.
 const swept = await sweepStaleTempDirs({ olderThanMs: 6 * 3_600_000 });
 if (swept > 0) log.info({ count: swept }, 'removed stale media temp directories');
-// Each video job holds a source of up to 1 GiB on temp disk and runs one ffmpeg at a time (ffmpeg threads itself).
-// Without ffmpeg/ffprobe in the image the `video` queue is not polled: its jobs wait for a worker that has them
-// instead of failing their retries here.
-const videoWorker = (await mediaToolsAvailable())
+// Each video job holds a source of up to 1 GiB on temp disk and runs one ffmpeg at a time (two decoder threads).
+// The render image carries ffmpeg/ffprobe: in production a container without them refuses to start (a broken image
+// must fail its deploy, not leave video uploads waiting). Elsewhere `video` is simply not polled, and the log says so.
+const mediaTools = await mediaToolsAvailable();
+if (!mediaTools && production) {
+  log.error(
+    { queue: 'video' },
+    'ffmpeg/ffprobe not found in the image: refusing to start (task queue video)',
+  );
+  process.exit(2);
+}
+const videoWorker = mediaTools
   ? await Worker.create({
       connection,
       namespace,
@@ -156,7 +164,11 @@ const videoWorker = (await mediaToolsAvailable())
     })
   : null;
 if (!videoWorker) log.error({ queue: 'video' }, 'ffmpeg/ffprobe not found: task queue video is not polled');
-log.info({ status: RENDERER_VERSION }, 'worker-render polling task queues render, media and video');
+const polled = ['render', 'media', ...(videoWorker ? ['video'] : [])];
+log.info(
+  { status: RENDERER_VERSION, queue: polled.join(',') },
+  `worker-render polling task queues ${polled.join(', ')}`,
+);
 // Answer the platform health check only now that both workers were created (a failed start throws above).
 const health = await startHealthServer(undefined, config.degraded);
 

@@ -126,9 +126,11 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
     if (!scanned.ok) return reject(scanned);
     const inspected = await run(acts.inspectMediaUpload, { ...input, mime: sniffed.mime, group });
     if (!inspected.ok) return reject(inspected);
+    if (inspected.sourceKey !== begin.storageKey) cleanupKeys.push(inspected.sourceKey);
     const started = Date.now();
     const built = await run(acts.buildMediaDerivatives, {
       ...input,
+      sourceKey: inspected.sourceKey,
       mime: sniffed.mime,
       group,
       probe: inspected.probe,
@@ -138,7 +140,7 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
     cleanupKeys.push(...built.derivatives.map((d) => d.key));
     const moved = await run(acts.moveToImmutable, {
       ...input,
-      sanitisedKey: begin.storageKey,
+      sanitisedKey: inspected.sourceKey,
       derivatives: built.derivatives,
     });
     const catalogued = await run(acts.catalogueMediaAsset, {
@@ -146,15 +148,15 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
       ...moved,
       contentHash: inspected.contentHash,
       mime: sniffed.mime,
-      bytes: verified.bytes,
+      bytes: inspected.bytes,
       width: inspected.probe.video?.width ?? null,
       height: inspected.probe.video?.height ?? null,
       colourProfile: null,
-      sanitised: false,
+      sanitised: inspected.sanitised,
       probe: inspected.probe,
     });
     await run(acts.finaliseMediaUpload, { ...input, outcome: 'accepted' as const, cleanupKeys });
-    return { ok: true as const, ...catalogued, derivativesMs };
+    return { ok: true as const, ...catalogued, derivativesMs, sanitised: inspected.sanitised };
   }
 
   beforeAll(async () => {
@@ -194,6 +196,9 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
       join(dir, 'landscape.mp4'),
       '-c',
       'copy',
+      // A phone records where it was: the stored original must not keep it.
+      '-metadata',
+      'location=+48.8577+002.2950/',
       join(dir, 'clip.mp4'),
     ]);
     await ff([
@@ -309,6 +314,13 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
     }
     const proxy = derivatives.find((d) => d.purpose === 'proxy');
     expect(proxy).toMatchObject({ mime: 'video/mp4', width: 720, height: 1280 });
+    // The original is the metadata-free copy: no location, still rotated (the version's probe says 270).
+    expect(r.sanitised).toBe(true);
+    expect(version?.provenance).toMatchObject({ kind: 'upload', sanitised: true });
+    const original = await runInTenant(ctxFor(actorFor(ownerA, tenantA)), () =>
+      mem.getObject(version!.storageKey),
+    );
+    expect(original?.toString('latin1')).not.toContain('48.8577');
     expect(mem.keys().filter((k) => k.includes(intentId))).toEqual([]);
     // The library and pickers sign the poster frame as the thumbnail.
     const signed = await runInTenant(ctxFor(actorFor(ownerA, tenantA)), () =>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
  * STU-2a inline players for video and audio (the asset inspector and the review screens). Signed URLs are re-signed
@@ -16,10 +16,42 @@ function useStableSrc(latest: string | null): { src: string | null; onError: () 
   };
 }
 
+/**
+ * A captions sidecar fetched into a blob URL. The <video> never carries crossOrigin, so a store without CORS for GET
+ * still plays the video (only the captions are missing); the blob URL is same-origin for the track. Null while
+ * loading or when the fetch fails.
+ */
+function useCaptionsBlob(latest: string | null | undefined): string | null {
+  // The first signed URL is enough: the captions are fetched once per player, not on every re-sign.
+  const [url, setUrl] = useState<string | null>(latest ?? null);
+  if (!url && latest) setUrl(latest);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!url) return;
+    let created: string | null = null;
+    let cancelled = false;
+    fetch(url)
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => {
+        if (cancelled || !blob) return;
+        created = URL.createObjectURL(new Blob([blob], { type: 'text/vtt' }));
+        setBlobUrl(created);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+      setBlobUrl(null);
+    };
+  }, [url]);
+  return blobUrl;
+}
+
 export function VideoPlayer({
   src: latest,
   poster,
   captions,
+  captionsLang,
   label,
   width,
   height,
@@ -29,6 +61,8 @@ export function VideoPlayer({
   poster?: string | null;
   /** WebVTT sidecar, when the export has captions. */
   captions?: string | null;
+  /** The captions' language (BCP 47), when known; omitted otherwise rather than guessed. */
+  captionsLang?: string | null;
   /** What the video is (read by assistive technology). */
   label: string;
   width?: number | null;
@@ -36,6 +70,7 @@ export function VideoPlayer({
   className?: string;
 }) {
   const { src, onError } = useStableSrc(latest);
+  const track = useCaptionsBlob(captions);
   if (!src) return null;
   return (
     <video
@@ -48,11 +83,19 @@ export function VideoPlayer({
       height={height ?? undefined}
       aria-label={label}
       onError={onError}
-      crossOrigin={captions ? 'anonymous' : undefined}
       className={`h-auto max-h-[70vh] w-full rounded-sm bg-black object-contain ${className ?? ''}`}
       data-testid="inline-video"
     >
-      {captions && <track kind="captions" src={captions} srcLang="en" label="Captions" default />}
+      {track && (
+        <track
+          kind="captions"
+          src={track}
+          label="Captions"
+          default
+          {...(captionsLang ? { srcLang: captionsLang } : {})}
+          data-testid="captions-track"
+        />
+      )}
       Your browser cannot play this video.{' '}
       <a href={src} target="_blank" rel="noreferrer">
         Open the file

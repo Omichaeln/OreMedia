@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'node:child_process';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
@@ -53,8 +54,68 @@ export class MediaToolError extends Error {
   }
 }
 
+/**
+ * Where tool runs happen (an activity): its cancellation signal, so a cancelled or timed-out activity kills ffmpeg
+ * instead of leaving it running, and a tick called every TOOL_TICK_MS while a tool runs, so long probes and transcodes
+ * heartbeat even when they print no progress. Set once around a step with `withToolContext`.
+ */
+export interface ToolContext {
+  signal?: AbortSignal;
+  tick?: () => void;
+}
+const toolContext = new AsyncLocalStorage<ToolContext>();
+export const withToolContext = <T>(ctx: ToolContext, fn: () => Promise<T>): Promise<T> =>
+  toolContext.run(ctx, fn);
+export const TOOL_TICK_MS = 30_000;
+
+/** Only local files and pipes: no network, HLS, concat or data-URL protocol can ever be opened by a crafted input. */
+const PROTOCOLS = ['-protocol_whitelist', 'file,pipe'];
+/** Decoder threads per tool run (ffmpeg would otherwise take every core of the container). */
+export const TOOL_THREADS = '2';
+/** Largest decoded frame (8K UHD): a frame above it fails to decode, whatever the header claimed. */
+export const MAX_DECODE_PIXELS = 7680 * 4320;
+
+/** The demuxer for a sniffed mime: the input is opened with exactly this one, never by guessing from its content. */
+export function demuxerFor(mime: string): string | null {
+  const m = mime.toLowerCase();
+  if (m === 'video/mp4' || m === 'video/quicktime' || m === 'audio/mp4' || m === 'video/x-m4v') return 'mov';
+  if (m === 'video/webm') return 'matroska';
+  if (m === 'audio/mpeg') return 'mp3';
+  if (m === 'audio/wav') return 'wav';
+  if (m === 'audio/aac') return 'aac';
+  return null;
+}
+
+/** What ffprobe names each forced demuxer (format_name), to confirm the container is what was sniffed. */
+const CONTAINER_NAMES: Readonly<Record<string, RegExp>> = {
+  mov: /\bmov\b|\bmp4\b/,
+  matroska: /matroska|webm/,
+  mp3: /\bmp3\b/,
+  wav: /\bwav\b/,
+  aac: /\baac\b/,
+};
+
+/** Input options for one source: protocol whitelist, forced demuxer, thread and frame-size caps, then `-i`. */
+export function inputArgs(path: string, demuxer: string | null, extra: readonly string[] = []): string[] {
+  return [
+    ...PROTOCOLS,
+    '-threads',
+    TOOL_THREADS,
+    '-max_pixels',
+    String(MAX_DECODE_PIXELS),
+    ...(demuxer ? ['-f', demuxer] : []),
+    ...extra,
+    '-i',
+    path,
+  ];
+}
+
 export interface RunOptions {
   timeoutMs: number;
+  /** Defaults to the ambient ToolContext's signal. */
+  signal?: AbortSignal;
+  /** How often the ambient ToolContext's tick runs while the tool does (default TOOL_TICK_MS). */
+  tickMs?: number;
   /** stdout is collected up to this many bytes (more is an error) unless `onStdout` consumes it. */
   maxStdoutBytes?: number;
   onStdout?: (chunk: Buffer) => void;
@@ -68,18 +129,33 @@ export function runTool(
   args: readonly string[],
   opts: RunOptions,
 ): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+  const ctx = toolContext.getStore();
+  const signal = opts.signal ?? ctx?.signal;
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new MediaToolError(`${cmd} not started: cancelled`, ''));
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
     let outBytes = 0;
     let err = '';
     let lineBuffer = '';
     let timedOut = false;
+    let cancelled = false;
     let overflow = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');
     }, opts.timeoutMs);
+    const ticker = ctx?.tick ? setInterval(() => ctx.tick?.(), opts.tickMs ?? TOOL_TICK_MS) : null;
+    const onAbort = () => {
+      cancelled = true;
+      child.kill('SIGKILL');
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const done = () => {
+      clearTimeout(timer);
+      if (ticker) clearInterval(ticker);
+      signal?.removeEventListener('abort', onAbort);
+    };
     child.stdout.on('data', (chunk: Buffer) => {
       if (opts.onStdout) return opts.onStdout(chunk);
       if (opts.onLine) {
@@ -104,11 +180,12 @@ export function runTool(
       err = (err + chunk.toString('utf8')).slice(-16_384);
     });
     child.on('error', (e) => {
-      clearTimeout(timer);
+      done();
       reject(new MediaToolError(`${cmd} could not start: ${e.message}`, ''));
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
+      done();
+      if (cancelled) return reject(new MediaToolError(`${cmd} cancelled`, err));
       if (timedOut)
         return reject(new MediaToolError(`${cmd} timed out after ${opts.timeoutMs} ms`, err, true));
       if (overflow) return reject(new MediaToolError(`${cmd} wrote more output than allowed`, err));
@@ -153,7 +230,13 @@ interface RawStream {
 }
 export interface RawProbe {
   streams?: RawStream[];
-  format?: { format_name?: string; duration?: string; bit_rate?: string; size?: string };
+  format?: {
+    format_name?: string;
+    duration?: string;
+    bit_rate?: string;
+    size?: string;
+    tags?: Record<string, string>;
+  };
 }
 
 /** "30000/1001" → 29.97; "0/0" or garbage → 0. */
@@ -182,7 +265,7 @@ export function rotationOf(s: RawStream): number {
  * The probe as stored (MediaProbeV1). Cover art (an attached picture in an MP3 or M4A) is not a video stream. Null
  * when ffprobe found no container duration and no stream with one.
  */
-export function parseProbe(raw: RawProbe, bytes: number): MediaProbeV1 | null {
+export function parseProbe(raw: RawProbe, bytes: number, measuredMs?: number): MediaProbeV1 | null {
   const streams = raw.streams ?? [];
   const v = streams.find((s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1);
   const audio: MediaAudioStream[] = streams
@@ -194,9 +277,11 @@ export function parseProbe(raw: RawProbe, bytes: number): MediaProbeV1 | null {
       sampleRate: int(s.sample_rate) ?? 0,
       bitRate: int(s.bit_rate),
     }));
-  const durations = [Number(raw.format?.duration), ...streams.map((s) => Number(s.duration))].filter(
-    (d) => Number.isFinite(d) && d > 0,
-  );
+  const durations = [
+    Number(raw.format?.duration),
+    ...streams.map((s) => Number(s.duration)),
+    ...(measuredMs ? [measuredMs / 1000] : []),
+  ].filter((d) => Number.isFinite(d) && d > 0);
   if (durations.length === 0) return null;
   const durationMs = Math.round(
     (Number(raw.format?.duration) > 0 ? Number(raw.format?.duration) : Math.max(...durations)) * 1000,
@@ -236,11 +321,59 @@ export function parseProbe(raw: RawProbe, bytes: number): MediaProbeV1 | null {
   });
 }
 
-/** Runs ffprobe on a file; a file ffprobe cannot read at all is `media_malformed`. */
-export async function probeFile(path: string, bytes: number): Promise<MediaProbeV1 | MediaRejection> {
+/** Tags a container or stream may carry that say nothing about the person or place (everything else is stripped). */
+const TECHNICAL_TAGS = new Set([
+  'major_brand',
+  'minor_version',
+  'compatible_brands',
+  'handler_name',
+  'vendor_id',
+  'language',
+  'duration',
+]);
+
+/** Metadata keys beyond the technical ones (location, creation time, device, encoder user data, titles). */
+export function personalTags(raw: RawProbe): string[] {
+  const keys = [
+    ...Object.keys(raw.format?.tags ?? {}),
+    ...(raw.streams ?? []).flatMap((s) => Object.keys(s.tags ?? {})),
+  ];
+  return [...new Set(keys.filter((k) => !TECHNICAL_TAGS.has(k.toLowerCase())))].sort();
+}
+
+export interface ProbeOptions {
+  /** The sniffed mime: the file is opened with its demuxer only. */
+  mime: string;
+  /** Duration bound when the container records none and it has to be measured (seconds). */
+  maxSeconds?: number;
+}
+
+/**
+ * Runs ffprobe on a file with the sniffed demuxer forced and network protocols refused. A file it cannot read, or
+ * whose container is not the sniffed one, is `media_malformed`. A container without a recorded duration (a
+ * MediaRecorder WebM) has its duration measured by remuxing to null, bounded by `maxSeconds + 1`.
+ */
+export async function inspectFile(
+  path: string,
+  bytes: number,
+  opts: ProbeOptions,
+): Promise<{ probe: MediaProbeV1; personalTags: string[] } | MediaRejection> {
+  const demuxer = demuxerFor(opts.mime);
+  if (!demuxer) return rejection('format_unsupported', `${opts.mime} cannot be processed`);
   const r = await runTool(
     ffprobePath(),
-    ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', path],
+    [
+      ...PROTOCOLS,
+      '-f',
+      demuxer,
+      '-v',
+      'error',
+      '-print_format',
+      'json',
+      '-show_format',
+      '-show_streams',
+      path,
+    ],
     { timeoutMs: 60_000, maxStdoutBytes: 1024 * 1024 },
   );
   if (r.code !== 0)
@@ -251,10 +384,119 @@ export async function probeFile(path: string, bytes: number): Promise<MediaProbe
   } catch {
     return rejection('media_malformed', 'the file could not be read');
   }
-  return (
-    parseProbe(raw, bytes) ?? rejection('media_malformed', 'no duration: the file has no playable content')
-  );
+  if (!CONTAINER_NAMES[demuxer]?.test(raw.format?.format_name ?? ''))
+    return rejection('type_mismatch', `the container is not the ${opts.mime} the file was sniffed as`);
+  let probe = parseProbe(raw, bytes);
+  if (!probe) {
+    const measured = await measureDurationMs(path, demuxer, (opts.maxSeconds ?? 600) + 1);
+    probe = measured > 0 ? parseProbe(raw, bytes, measured) : null;
+  }
+  if (!probe) return rejection('media_malformed', 'no duration: the file has no playable content');
+  return { probe, personalTags: personalTags(raw) };
 }
+
+/** inspectFile without the metadata report. */
+export async function probeFile(
+  path: string,
+  bytes: number,
+  opts: ProbeOptions,
+): Promise<MediaProbeV1 | MediaRejection> {
+  const r = await inspectFile(path, bytes, opts);
+  return 'ok' in r ? r : r.probe;
+}
+
+/** Plays the file through without decoding (stream copy to null) and reads the last timestamp, bounded. */
+async function measureDurationMs(path: string, demuxer: string, maxSeconds: number): Promise<number> {
+  let outUs = 0;
+  const r = await runTool(
+    ffmpegPath(),
+    [
+      '-v',
+      'error',
+      '-nostdin',
+      ...inputArgs(path, demuxer, ['-t', String(maxSeconds)]),
+      '-map',
+      '0',
+      '-c',
+      'copy',
+      '-f',
+      'null',
+      '-',
+      '-progress',
+      'pipe:1',
+      '-nostats',
+    ],
+    {
+      timeoutMs: 5 * 60_000,
+      onLine: (line) => {
+        const m = /^out_time_us=(\d+)/.exec(line);
+        if (m) outUs = Number(m[1]);
+      },
+    },
+  );
+  return r.code === 0 ? Math.round(outUs / 1000) : 0;
+}
+
+/**
+ * STU-2a: a copy of a video or audio file without metadata (location, creation time, device, encoder user data,
+ * chapters, data tracks such as GPS telemetry), streams copied untouched; rotation is side data and is kept.
+ * Images lose their EXIF the same way at ingest. MP4/MOV outputs are faststart.
+ */
+export async function stripMetadata(
+  dir: TempDir,
+  input: string,
+  mime: string,
+  name: string,
+): Promise<{ path: string } | MediaRejection> {
+  const demuxer = demuxerFor(mime);
+  const muxer = MUXER_FOR[mime.toLowerCase()];
+  if (!demuxer || !muxer) return rejection('format_unsupported', `${mime} cannot be processed`);
+  const out = dir.file(name);
+  const r = await runTool(
+    ffmpegPath(),
+    [
+      '-v',
+      'error',
+      '-nostdin',
+      '-y',
+      ...inputArgs(input, demuxer),
+      '-map',
+      '0',
+      '-dn',
+      '-c',
+      'copy',
+      '-map_metadata',
+      '-1',
+      '-map_chapters',
+      '-1',
+      '-fflags',
+      '+bitexact',
+      ...(muxer === 'mp4' || muxer === 'mov' || muxer === 'ipod' ? ['-movflags', '+faststart'] : []),
+      // The rewrite counts against the job's temp disk budget.
+      '-fs',
+      String(Math.max(1, await dir.remaining())),
+      '-f',
+      muxer,
+      out,
+    ],
+    { timeoutMs: 10 * 60_000 },
+  );
+  if (r.code !== 0)
+    return rejection('media_malformed', firstToolLine(r.stderr) ?? 'the file could not be rewritten');
+  await dir.assertWithinBudget();
+  return { path: out };
+}
+
+const MUXER_FOR: Readonly<Record<string, string>> = {
+  'video/mp4': 'mp4',
+  'video/x-m4v': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+  'audio/mp4': 'ipod',
+  'audio/mpeg': 'mp3',
+  'audio/wav': 'wav',
+  'audio/aac': 'adts',
+};
 
 /** The first meaningful line a tool printed, without paths (user-safe detail). */
 export function firstToolLine(stderr: string): string | null {
@@ -324,7 +566,11 @@ export function checkProbe(
 }
 
 /** Decodes the first two seconds of every selected stream: catches a codec ffmpeg names but cannot decode. */
-export async function decodeCheck(path: string, group: 'video' | 'audio'): Promise<MediaRejection | null> {
+export async function decodeCheck(
+  path: string,
+  group: 'video' | 'audio',
+  mime: string,
+): Promise<MediaRejection | null> {
   const r = await runTool(
     ffmpegPath(),
     [
@@ -332,10 +578,7 @@ export async function decodeCheck(path: string, group: 'video' | 'audio'): Promi
       'error',
       '-nostdin',
       '-xerror',
-      '-t',
-      '2',
-      '-i',
-      path,
+      ...inputArgs(path, demuxerFor(mime), ['-t', '2']),
       ...(group === 'video' ? ['-map', '0:v:0'] : ['-map', '0:a:0']),
       '-f',
       'null',
@@ -344,6 +587,8 @@ export async function decodeCheck(path: string, group: 'video' | 'audio'): Promi
     { timeoutMs: 120_000 },
   );
   if (r.code === 0) return null;
+  if (OVERSIZED.test(r.stderr))
+    return rejection('media_dimensions_unsupported', 'a frame is larger than 8K (7680×4320)');
   return rejection('media_undecodable', firstToolLine(r.stderr) ?? 'the stream could not be decoded');
 }
 
@@ -360,6 +605,8 @@ export interface MediaDerivativeFile {
 }
 
 export interface MediaDerivativeOptions {
+  /** The sniffed mime of the source: its demuxer is forced. */
+  mime?: string;
   /** Called with a short phase name and a fraction of the whole job (heartbeats). */
   onProgress?: (phase: string, fraction: number) => void;
   proxyTimeoutMs?: number;
@@ -385,7 +632,14 @@ export const stripTimesMs = (durationMs: number, frames = STRIP_FRAMES): number[
   Array.from({ length: frames }, (_, i) => Math.floor(((i + 0.5) * durationMs) / frames));
 
 /** One frame as PNG, fitted inside maxSide; falls back to the first frame when seeking past the end gives none. */
-async function extractFrame(dir: TempDir, input: string, atMs: number, name: string, maxSide: number) {
+async function extractFrame(
+  dir: TempDir,
+  input: string,
+  demuxer: string | null,
+  atMs: number,
+  name: string,
+  maxSide: number,
+) {
   const out = dir.file(name);
   const run = (ms: number) =>
     runTool(
@@ -395,10 +649,7 @@ async function extractFrame(dir: TempDir, input: string, atMs: number, name: str
         'error',
         '-nostdin',
         '-y',
-        '-ss',
-        (ms / 1000).toFixed(3),
-        '-i',
-        input,
+        ...inputArgs(input, demuxer, ['-ss', (ms / 1000).toFixed(3)]),
         '-map',
         '0:v:0',
         '-frames:v',
@@ -460,7 +711,8 @@ async function thumbnailStrip(
   const times = stripTimesMs(probe.durationMs);
   const tiles: Array<{ input: Buffer; left: number; top: number }> = [];
   for (const [i, t] of times.entries()) {
-    const png = await extractFrame(dir, input, t, `strip-${i}.png`, STRIP_FRAME_WIDTH);
+    // The strip is drawn from the proxy (an MP4 this pipeline wrote).
+    const png = await extractFrame(dir, input, 'mov', t, `strip-${i}.png`, STRIP_FRAME_WIDTH);
     const tile = await sharp(png)
       .resize({ width: frame.width, height: frame.height, fit: 'cover' })
       .png()
@@ -508,14 +760,33 @@ async function writeJson(dir: TempDir, name: string, value: unknown) {
 /** Errors ffmpeg prints for a damaged source (truncated data, broken packets). */
 const CORRUPTION =
   /partial file|invalid data found|corrupt|error while decoding|invalid nal|moov atom not found|truncat/i;
+/** A decoded frame above MAX_DECODE_PIXELS (the header may have claimed less). */
+const OVERSIZED = /exceeds specified max pixel count/i;
+/** How far the played duration may exceed the container's own before the file is refused as lying about it. */
+export const DURATION_TOLERANCE = 0.05;
 
 export const PROXY_MAX_LONG = 1280;
 export const PROXY_MAX_SHORT = 720;
 export const PROXY_MAX_FPS = 30;
 
 /** ffmpeg arguments of the editing proxy (exported for tests and the runbook). */
-export function proxyArgs(input: string, output: string, probe: MediaProbeV1, maxBytes: number): string[] {
-  const common = ['-v', 'error', '-nostdin', '-y', '-i', input];
+export function proxyArgs(
+  input: string,
+  output: string,
+  probe: MediaProbeV1,
+  maxBytes: number,
+  source: { demuxer: string | null; maxSeconds: number } = { demuxer: null, maxSeconds: 600 },
+): string[] {
+  // `-t` bounds the work by the cap, whatever duration the header claims; output threads are capped too.
+  const common = [
+    '-v',
+    'error',
+    '-nostdin',
+    '-y',
+    ...inputArgs(input, source.demuxer, ['-t', String(source.maxSeconds + 1)]),
+    '-threads',
+    TOOL_THREADS,
+  ];
   const tail = [
     '-map_metadata',
     '-1',
@@ -564,19 +835,26 @@ async function proxy(
   input: string,
   probe: MediaProbeV1,
   opts: MediaDerivativeOptions,
-): Promise<{ ok: true; file: MediaDerivativeFile } | MediaRejection> {
+  maxSeconds: number,
+): Promise<{ ok: true; file: MediaDerivativeFile; playedMs: number } | MediaRejection> {
   const name = probe.video ? 'proxy.mp4' : 'proxy.m4a';
+  let playedUs = 0;
   // Room is kept for the waveform and images that follow the proxy.
   const remaining = await dir.remaining();
   const maxBytes = Math.max(1, remaining - Math.min(64 * 1024 * 1024, Math.floor(remaining / 4)));
-  const r = await runTool(ffmpegPath(), proxyArgs(input, dir.file(name), probe, maxBytes), {
+  const demuxer = opts.mime ? demuxerFor(opts.mime) : null;
+  const args = proxyArgs(input, dir.file(name), probe, maxBytes, { demuxer, maxSeconds });
+  const r = await runTool(ffmpegPath(), args, {
     timeoutMs: opts.proxyTimeoutMs ?? 30 * 60_000,
     onLine: (line) => {
       const m = /^out_time_us=(\d+)/.exec(line);
-      if (m && probe.durationMs > 0)
-        opts.onProgress?.('proxy', Math.min(1, Number(m[1]) / 1000 / probe.durationMs));
+      if (!m) return;
+      playedUs = Math.max(playedUs, Number(m[1]));
+      if (probe.durationMs > 0) opts.onProgress?.('proxy', Math.min(1, playedUs / 1000 / probe.durationMs));
     },
   });
+  if (OVERSIZED.test(r.stderr))
+    return rejection('media_dimensions_unsupported', 'a frame is larger than 8K (7680×4320)');
   if (r.code !== 0 || CORRUPTION.test(r.stderr))
     return CORRUPTION.test(r.stderr)
       ? rejection('media_malformed', firstToolLine(r.stderr) ?? 'the file is damaged')
@@ -587,6 +865,13 @@ async function proxy(
   const written = (await stat(dir.file(name))).size;
   if (written >= maxBytes)
     return rejection('media_processing_failed', 'the editing proxy exceeded its size budget');
+  // A header can understate the length (a patched duration): what actually played is what counts.
+  const playedMs = Math.round(playedUs / 1000);
+  if (playedMs > probe.durationMs * (1 + DURATION_TOLERANCE) + 100)
+    return rejection(
+      'media_malformed',
+      `the file says it lasts ${fmtSeconds(probe.durationMs)} but plays for ${fmtSeconds(playedMs)}${playedMs >= maxSeconds * 1000 ? ' or more' : ''}`,
+    );
   if (!probe.video)
     return {
       ok: true,
@@ -605,6 +890,7 @@ async function proxy(
           faststart: true,
         },
       },
+      playedMs,
     };
   const size = fitInside(probe.video.width, probe.video.height, PROXY_MAX_LONG, PROXY_MAX_SHORT);
   const file: MediaDerivativeFile = {
@@ -623,7 +909,7 @@ async function proxy(
       faststart: true,
     },
   };
-  return { ok: true, file };
+  return { ok: true, file, playedMs };
 }
 
 /**
@@ -681,6 +967,7 @@ async function waveform(
   input: string,
   probe: MediaProbeV1,
   maxDurationSeconds: number,
+  demuxer: string | null,
 ): Promise<{ file: MediaDerivativeFile; peaks: number[] }> {
   const acc = new PeakAccumulator(
     WAVEFORM_SAMPLE_RATE / WAVEFORM_PEAKS_PER_SECOND,
@@ -692,8 +979,7 @@ async function waveform(
       '-v',
       'error',
       '-nostdin',
-      '-i',
-      input,
+      ...inputArgs(input, demuxer, ['-t', String(maxDurationSeconds + 1)]),
       '-map',
       '0:a:0',
       '-ac',
@@ -781,21 +1067,28 @@ export async function buildMediaDerivatives(
   group: 'video' | 'audio',
   limits: MediaLimits,
   opts: MediaDerivativeOptions = {},
-): Promise<{ ok: true; files: MediaDerivativeFile[] } | MediaRejection> {
+): Promise<{ ok: true; files: MediaDerivativeFile[]; playedMs: number } | MediaRejection> {
   const files: MediaDerivativeFile[] = [];
+  const demuxer = opts.mime ? demuxerFor(opts.mime) : null;
+  let playedMs = 0;
   try {
     if (group === 'video') {
       // The poster comes from the source at full quality (one seek).
       opts.onProgress?.('poster', 0);
-      const frame = await extractFrame(dir, input, posterTimeMs(probe.durationMs), 'poster-frame.png', 1920);
+      const at = posterTimeMs(probe.durationMs);
+      const frame = await extractFrame(dir, input, demuxer, at, 'poster-frame.png', 1920);
       files.push(...(await posterDerivatives(dir, frame)));
     }
-    const proxied = await proxy(dir, input, probe, {
-      ...opts,
-      onProgress: (phase, f) => opts.onProgress?.(phase, 0.03 + f * 0.85),
-    });
+    const proxied = await proxy(
+      dir,
+      input,
+      probe,
+      { ...opts, onProgress: (phase, f) => opts.onProgress?.(phase, 0.03 + f * 0.85) },
+      limits.maxDurationSeconds,
+    );
     if (!proxied.ok) return proxied;
     files.push(proxied.file);
+    playedMs = proxied.playedMs;
     if (group === 'video') {
       // The strip's small frames come from the proxy: upright already, keyframes every two seconds, so ten seeks
       // stay cheap whatever GOP the source was encoded with.
@@ -804,18 +1097,20 @@ export async function buildMediaDerivatives(
     }
     if (probe.audio.length > 0) {
       opts.onProgress?.('waveform', 0.92);
-      const w = await waveform(dir, input, probe, limits.maxDurationSeconds);
+      const w = await waveform(dir, input, probe, limits.maxDurationSeconds, demuxer);
       files.push(w.file);
       if (group === 'audio') files.push(...(await waveformImages(dir, w.peaks)));
     }
     await dir.assertWithinBudget();
   } catch (err) {
+    if (err instanceof MediaToolError && !err.timedOut && OVERSIZED.test(err.stderr))
+      return rejection('media_dimensions_unsupported', 'a frame is larger than 8K (7680×4320)');
     if (err instanceof MediaToolError && !err.timedOut && CORRUPTION.test(err.stderr))
       return rejection('media_malformed', firstToolLine(err.stderr) ?? 'the file is damaged');
     throw err;
   }
   opts.onProgress?.('done', 1);
-  return { ok: true, files };
+  return { ok: true, files, playedMs };
 }
 
 /** Reads a small JSON derivative back (tests and the export validation). */

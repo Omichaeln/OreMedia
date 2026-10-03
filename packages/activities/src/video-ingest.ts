@@ -10,7 +10,7 @@ import {
 } from '@oremedia/module-assets';
 import { loadActorGrants, resolveActivityActor } from './actor';
 import { createAssetIngestActivities } from './asset-ingest';
-import { heartbeat, inTenant } from './tenant';
+import { cancellationSignal, heartbeat, inTenant } from './tenant';
 
 /**
  * STU-2a activities for videoIngestWorkflowV1 (task queue `video`, worker-render). begin, verify, sniff and move are
@@ -20,10 +20,10 @@ import { heartbeat, inTenant } from './tenant';
  * environment unless a worker passes its own (tests pass MemoryStorageProvider and FakeScanner).
  */
 export function createVideoIngestActivities(
-  overrides: Partial<Omit<MediaIngestDeps, 'onProgress'>> = {},
+  overrides: Partial<Omit<MediaIngestDeps, 'onProgress' | 'heartbeat' | 'signal'>> = {},
 ): VideoIngestActivitiesV1 {
   const shared = createAssetIngestActivities(overrides);
-  let cached: Omit<MediaIngestDeps, 'onProgress'> | null = null;
+  let cached: Omit<MediaIngestDeps, 'onProgress' | 'heartbeat' | 'signal'> | null = null;
   const deps = (): MediaIngestDeps => {
     if (!cached)
       cached = {
@@ -32,9 +32,12 @@ export function createVideoIngestActivities(
         ...(overrides.tmpMaxBytes !== undefined ? { tmpMaxBytes: overrides.tmpMaxBytes } : {}),
         ...(overrides.proxyTimeoutMs !== undefined ? { proxyTimeoutMs: overrides.proxyTimeoutMs } : {}),
       };
+    const signal = cancellationSignal();
     return {
       ...cached,
       onProgress: (phase, fraction) => heartbeat(`${phase}:${Math.round(fraction * 100)}%`),
+      heartbeat,
+      ...(signal ? { signal } : {}),
     };
   };
   return {

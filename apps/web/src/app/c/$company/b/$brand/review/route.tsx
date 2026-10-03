@@ -35,7 +35,7 @@ const FILTERS: Array<[Filter, string, (i: InboxItemDto) => boolean]> = [
  * shows the frozen manifest, decisions and external reviewer links. Stacked at phone width.
  */
 export function ReviewInboxRoute() {
-  const { brandId } = useBrandContext();
+  const { brandId, brand } = useBrandContext();
   const inbox = useReviewInboxPages(brandId);
   const channels = useChannels(brandId);
   const destinationMap = useDestinationMap(brandId);
@@ -215,6 +215,7 @@ export function ReviewInboxRoute() {
           reviewRequestId={selectedId}
           channels={channelMap}
           destinations={destinationMap}
+          locale={brand.defaultLocale}
           title={selected ? <PackageTitle contentPackageId={selected.contentPackageId} /> : undefined}
         />
       </div>

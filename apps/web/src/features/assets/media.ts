@@ -36,6 +36,7 @@ const MIME_ALIASES: Record<string, string> = {
   'audio/vnd.wave': 'audio/wav',
   'audio/mp3': 'audio/mpeg',
   'audio/x-aac': 'audio/aac',
+  'video/x-m4v': 'video/mp4',
 };
 export const normaliseMediaMime = (mime: string): string => MIME_ALIASES[mime.toLowerCase()] ?? mime;
 
