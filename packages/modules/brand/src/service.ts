@@ -32,6 +32,7 @@ import {
   defaultPolicyDocument,
   emptyBrandSystemDocument,
   type BrandSnapshot,
+  type FactState,
 } from '@oremedia/contracts/brand';
 import type { EvidenceItem } from '@oremedia/contracts/agents';
 import type { AssetKind } from '@oremedia/contracts/assets';
@@ -55,6 +56,7 @@ import { policyVersionMachine } from '@oremedia/domain/state-machines/policy-ver
 import { policy } from '@oremedia/module-access';
 import { entitlements } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
+import { providerRegistry } from '@oremedia/providers';
 import {
   ApprovedFactRepository,
   BrandObjectiveRepository,
@@ -252,7 +254,111 @@ async function assertDocumentReferences(
   for (const { r, i } of changedRoles)
     if (kinds.get(r.fontAssetId) !== 'font')
       issues.push({ path: `tokens.typeRoles.${i}.fontAssetId`, issue: 'not_a_font_of_this_brand' });
+  issues.push(...(await guidanceIssues(brandId, document, previous, tx)));
   if (issues.length) throw new ValidationFailedError(issues, 'The brand system draft has invalid references');
+}
+
+/** Every channel key a document refers to: channel guidance, copy templates and examples. */
+const channelKeysOf = (d: BrandSystemDocumentV1): Set<string> =>
+  new Set([
+    ...d.channelGuidance.map((c) => c.providerKey),
+    ...(d.copyTemplates ?? []).flatMap((t) => t.channelKeys),
+    ...d.voice.examples.flatMap((e) => (e.channelKey ? [e.channelKey] : [])),
+  ]);
+
+/** Reports every repeat of a key in a list (after its first use). */
+function duplicates<T>(
+  items: readonly T[],
+  key: (t: T) => string,
+  path: (i: number) => string,
+): ErrorDetail[] {
+  const seen = new Set<string>();
+  return items.flatMap((item, i) => {
+    const k = key(item);
+    if (seen.has(k)) return [{ path: path(i), issue: 'duplicate_key' }];
+    seen.add(k);
+    return [];
+  });
+}
+
+/**
+ * BSC-1 guidance references: channel keys name known channel providers, one guidance entry per channel; copy
+ * template keys, messaging pillar keys and vocabulary terms (case-insensitively) are unique; a pillar's proof facts
+ * are facts of this brand, and a fact a pillar newly cites is approved. As with type roles, references the applied
+ * document already held are not re-checked against the registry or the fact's state, so an older save still saves
+ * (a held fact that was since revoked stays cited until a person removes it; snapshots carry approved facts only).
+ */
+async function guidanceIssues(
+  brandId: string,
+  document: BrandSystemDocumentV1,
+  previous: BrandSystemDocumentV1 | null,
+  tx: Tx,
+): Promise<ErrorDetail[]> {
+  const issues: ErrorDetail[] = [];
+  const known = new Set(providerRegistry.list().map((p) => p.key));
+  const held = previous ? channelKeysOf(previous) : new Set<string>();
+  const unknown = (key: string) => !known.has(key) && !held.has(key);
+  document.channelGuidance.forEach((c, i) => {
+    if (unknown(c.providerKey))
+      issues.push({ path: `channelGuidance.${i}.providerKey`, issue: 'unknown_channel' });
+  });
+  issues.push(
+    ...duplicates(
+      document.channelGuidance,
+      (c) => c.providerKey,
+      (i) => `channelGuidance.${i}.providerKey`,
+    ),
+  );
+  (document.copyTemplates ?? []).forEach((t, i) =>
+    t.channelKeys.forEach((k, j) => {
+      if (unknown(k)) issues.push({ path: `copyTemplates.${i}.channelKeys.${j}`, issue: 'unknown_channel' });
+    }),
+  );
+  issues.push(
+    ...duplicates(
+      document.copyTemplates ?? [],
+      (t) => t.key,
+      (i) => `copyTemplates.${i}.key`,
+    ),
+  );
+  document.voice.examples.forEach((e, i) => {
+    if (e.channelKey && unknown(e.channelKey))
+      issues.push({ path: `voice.examples.${i}.channelKey`, issue: 'unknown_channel' });
+  });
+  issues.push(
+    ...duplicates(
+      document.vocabulary ?? [],
+      (v) => v.term.trim().toLocaleLowerCase(),
+      (i) => `vocabulary.${i}.term`,
+    ),
+  );
+  const pillars = document.messaging?.pillars ?? [];
+  issues.push(
+    ...duplicates(
+      pillars,
+      (p) => p.key,
+      (i) => `messaging.pillars.${i}.key`,
+    ),
+  );
+  const pillarKeys = new Set(pillars.map((p) => p.key));
+  (document.messaging?.keyMessages ?? []).forEach((m, i) => {
+    if (m.pillarKey !== undefined && !pillarKeys.has(m.pillarKey))
+      issues.push({ path: `messaging.keyMessages.${i}.pillarKey`, issue: 'unknown_pillar' });
+  });
+  const cited = new Set(previous?.messaging?.pillars.flatMap((p) => p.proofFactIds) ?? []);
+  const factIds = [...new Set(pillars.flatMap((p) => p.proofFactIds))];
+  const states = factIds.length
+    ? await factsRepo.statesOf(brandId, factIds, tx)
+    : new Map<string, FactState>();
+  pillars.forEach((p, i) =>
+    p.proofFactIds.forEach((id, j) => {
+      const state = states.get(id);
+      const path = `messaging.pillars.${i}.proofFactIds.${j}`;
+      if (state === undefined) issues.push({ path, issue: 'not_a_fact_of_this_brand' });
+      else if (state !== 'approved' && !cited.has(id)) issues.push({ path, issue: 'fact_not_approved' });
+    }),
+  );
+  return issues;
 }
 
 /** The guidelines' identity for change detection: absent guidelines are ''. */
@@ -1353,7 +1459,8 @@ export const brandService = {
     // A person changed the voice after the run started: their edit wins (CONFLICT, like any stale edit).
     if (hashCanonical(current.voice) !== baseVoiceHash)
       throw new ConflictError('BrandVersion', v.id, v.version);
-    const document = BrandSystemDocumentV1.parse({ ...current, voice });
+    // The proposal covers the original voice fields; guidance a person added (personality, rules) is kept.
+    const document = BrandSystemDocumentV1.parse({ ...current, voice: { ...current.voice, ...voice } });
     const contentHash = hashCanonical(document);
     await versionsRepo.update(v.id, v.version, { document, contentHash }, tx);
     await audit.record(

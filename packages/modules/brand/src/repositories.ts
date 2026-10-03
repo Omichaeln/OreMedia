@@ -205,6 +205,15 @@ export class ApprovedFactRepository extends BrandScopedRepository<typeof approve
       .limit(page.limit + 1);
     return pageOf(rows, page);
   }
+  /** The state of each listed fact of the brand; ids that are missing, foreign or of another brand are absent. */
+  async statesOf(brandId: string, ids: string[], tx?: Tx): Promise<Map<string, FactState>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.conn(tx)
+      .select({ id: approvedFacts.id, state: approvedFacts.state })
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, inArray(approvedFacts.id, ids)));
+    return new Map(rows.map((r) => [r.id, r.state]));
+  }
   /** Spec 8.3 "approved non-expired": approved and with a validity window containing `at`, ordered by id. */
   async listEffective(brandId: string, at: Date, tx?: Tx) {
     return this.conn(tx)

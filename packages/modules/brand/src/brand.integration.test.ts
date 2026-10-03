@@ -4,7 +4,7 @@ import {
   BrandCreate,
   defaultPolicyDocument,
   emptyBrandSystemDocument,
-  type BrandSystemDocumentV1,
+  BrandSystemDocumentV1,
 } from '@oremedia/contracts/brand';
 import {
   ConflictError,
@@ -1046,6 +1046,173 @@ describe('brand module (spec 8) against MySQL 8', () => {
       );
       expect(actions.has('brand.system.save')).toBe(true);
       expect(actions.has('brand.system.discard_proposal')).toBe(true);
+    });
+  });
+
+  describe('guidance references (BSC-1)', () => {
+    const brandG = newId('brand');
+    let approved = '';
+    let proposed = '';
+    let applied: string | null = null;
+    const guided = (over: Partial<BrandSystemDocumentV1> = {}): BrandSystemDocumentV1 => ({
+      ...emptyBrandSystemDocument(),
+      voice: {
+        ...emptyBrandSystemDocument().voice,
+        examples: [
+          {
+            text: 'Best coffee ever',
+            verdict: 'off_brand',
+            note: '',
+            channelKey: 'x',
+            rationale: 'An unprovable superlative',
+            rewrite: 'Roasted this morning',
+          },
+        ],
+        principles: [
+          { statement: 'Say what we can prove', rationale: 'Trust', provenance: { origin: 'user' } },
+        ],
+      },
+      messaging: {
+        positioning: 'The roaster for owners',
+        valueProposition: 'Fresh beans every week',
+        pillars: [{ key: 'fresh', title: 'Fresh', statement: 'Roasted weekly', proofFactIds: [approved] }],
+        keyMessages: [{ text: 'Roasted this week', pillarKey: 'fresh' }],
+      },
+      vocabulary: [
+        { term: 'Roast', usage: 'preferred', alternatives: [] },
+        { term: 'blend', usage: 'avoid', alternatives: ['roast'] },
+      ],
+      copyTemplates: [
+        {
+          key: 'proof-post',
+          name: 'Proof post',
+          contentType: 'social_post',
+          channelKeys: ['linkedin_page'],
+          purpose: 'Show a fact',
+          structure: [{ slot: 'hook', guidance: 'A number', maxLength: 80 }],
+        },
+      ],
+      channelBaseline: { cta: 'Invite a reply' },
+      channelGuidance: [
+        { providerKey: 'linkedin_page', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+      ],
+      ...over,
+    });
+    const save = (document: BrandSystemDocumentV1) =>
+      run(tenantA, (tx) =>
+        brandService.system.save(A, { brandId: brandG, basedOnVersionId: applied, document }, tx),
+      );
+    const issuesOf = async (document: BrandSystemDocumentV1) => {
+      const err = await save(document).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(ValidationFailedError);
+      return (err as ValidationFailedError).details;
+    };
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandG,
+        tenantId: tenantA,
+        name: 'G1',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'active',
+      });
+      approved = (
+        await run(tenantA, (tx) =>
+          brandService.facts.propose(
+            A,
+            { brandId: brandG, kind: 'claim', statement: 'Roasted every week', evidence },
+            tx,
+          ),
+        )
+      ).factId;
+      await run(tenantA, (tx) =>
+        brandService.facts.approve(A, { brandId: brandG, factId: approved, expectedVersion: 0 }, tx),
+      );
+      proposed = (
+        await run(tenantA, (tx) =>
+          brandService.facts.propose(
+            A,
+            { brandId: brandG, kind: 'claim', statement: 'Best in Harare', evidence },
+            tx,
+          ),
+        )
+      ).factId;
+    });
+
+    it('a document with valid guidance saves, round-trips and its snapshot carries the guidance', async () => {
+      const document = guided();
+      const saved = await save(document);
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
+      const row = (await tdb.db.select().from(brandVersions).where(eq(brandVersions.id, applied!)))[0]!;
+      expect(BrandSystemDocumentV1.parse(row.document)).toEqual(document);
+      const snapshot = await runInTenant(ctx(tenantA), () =>
+        brandService.resolveBrandSnapshot(A, { brandId: brandG }),
+      );
+      expect(snapshot.document.messaging?.pillars[0]?.proofFactIds).toEqual([approved]);
+      expect(snapshot.document.channelBaseline).toEqual({ cta: 'Invite a reply' });
+    });
+
+    it('a pillar cites facts of this brand only, and a newly cited fact must be approved', async () => {
+      const pillars = (ids: string[]) => ({
+        messaging: {
+          ...guided().messaging!,
+          pillars: [{ ...guided().messaging!.pillars[0]!, proofFactIds: ids }],
+        },
+      });
+      expect(await issuesOf(guided(pillars([approved, factBOfB, 'fact_missing'])))).toEqual([
+        { path: 'messaging.pillars.0.proofFactIds.1', issue: 'not_a_fact_of_this_brand' },
+        { path: 'messaging.pillars.0.proofFactIds.2', issue: 'not_a_fact_of_this_brand' },
+      ]);
+      expect(await issuesOf(guided(pillars([proposed])))).toEqual([
+        { path: 'messaging.pillars.0.proofFactIds.0', issue: 'fact_not_approved' },
+      ]);
+    });
+
+    it('channel keys must name known channels; keys, pillars and vocabulary terms are unique', async () => {
+      const base = guided();
+      const details = await issuesOf({
+        ...base,
+        voice: { ...base.voice, examples: [{ ...base.voice.examples[0]!, channelKey: 'myspace' }] },
+        channelGuidance: [
+          ...base.channelGuidance,
+          { providerKey: 'linkedin_page', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+          { providerKey: 'friendster', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+        ],
+        copyTemplates: [base.copyTemplates![0]!, { ...base.copyTemplates![0]!, channelKeys: ['bebo'] }],
+        vocabulary: [...base.vocabulary!, { term: ' roast ', usage: 'allowed', alternatives: [] }],
+        messaging: {
+          ...base.messaging!,
+          pillars: [...base.messaging!.pillars, base.messaging!.pillars[0]!],
+          keyMessages: [{ text: 'Orphan', pillarKey: 'gone' }],
+        },
+      });
+      expect(details).toEqual(
+        expect.arrayContaining([
+          { path: 'channelGuidance.2.providerKey', issue: 'unknown_channel' },
+          { path: 'channelGuidance.1.providerKey', issue: 'duplicate_key' },
+          { path: 'copyTemplates.1.channelKeys.0', issue: 'unknown_channel' },
+          { path: 'copyTemplates.1.key', issue: 'duplicate_key' },
+          { path: 'voice.examples.0.channelKey', issue: 'unknown_channel' },
+          { path: 'vocabulary.2.term', issue: 'duplicate_key' },
+          { path: 'messaging.pillars.1.key', issue: 'duplicate_key' },
+          { path: 'messaging.keyMessages.0.pillarKey', issue: 'unknown_pillar' },
+        ]),
+      );
+      expect(details).toHaveLength(8);
+    });
+
+    it('a fact the applied brand system already cites still saves after it is revoked', async () => {
+      await run(tenantA, (tx) =>
+        brandService.facts.revoke(A, { brandId: brandG, factId: approved, expectedVersion: 1 }, tx),
+      );
+      const saved = await save(guided({ channelBaseline: { cta: 'Invite a reply', links: 'One link' } }));
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
     });
   });
 
