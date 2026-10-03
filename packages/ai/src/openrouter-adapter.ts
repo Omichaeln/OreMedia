@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { fetch as undiciFetch } from 'undici';
 import type {
   ModelCompletion,
   ModelContent,
@@ -43,6 +44,15 @@ interface ChatResponse {
 }
 
 /**
+ * The default transport for every OpenRouter call (chat, image, speech, video): undici's own fetch, as the provider
+ * I/O layer and the Google sign-in use. On Railway, Node's built-in global fetch answers with empty Headers (the
+ * staging acceptance probe records it) and the staging model evaluation saw OpenRouter answer `401: Missing
+ * Authentication header` to a request that carried one. Tests inject their own fetch.
+ */
+export const openRouterFetch: typeof fetch = (input, init) =>
+  undiciFetch(input as never, init as never) as unknown as Promise<Response>;
+
+/**
  * ADR-11: every model call goes through OpenRouter's OpenAI-compatible chat API with tool use. The model id is the
  * routing policy's, never a literal here; OpenRouter's automatic router is not used. Retries belong to Temporal (no
  * retry here); the request timeout is the caller's timeoutMs. Providers that collect prompts are excluded
@@ -56,7 +66,7 @@ export class OpenRouterModelAdapter implements ModelAdapter {
 
   constructor(private readonly opts: OpenRouterAdapterOptions) {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? openRouterFetch;
   }
 
   async complete(req: ModelRequest): Promise<ModelCompletion> {
