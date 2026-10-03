@@ -107,3 +107,40 @@ Graphic documents keep schemaVersion 1 and change only additively; video is a ne
 | STU-2b | VideoProject model, ops, reducer, timeline editor UI, preview, ffmpeg compositor render, video templates                                                                                                                                                                                     |
 | STU-3  | AI storyboard, assembly, recut and targeted timeline edits, captions from script, audio options                                                                                                                                                                                              |
 | STU-4  | Studio -> review -> publish path for both kinds, campaign links, deployed acceptance journeys                                                                                                                                                                                                |
+
+## STU-3 implementation notes (AI storyboard, assembly, recut)
+
+- **Jobs.** `studio_video_jobs` (kind `storyboard` | `recut`) mirrors the generation job pattern: idempotent start per
+  (document, base revision, inputs hash), states queued → generating → validating → saving → completed (failed and
+  cancelled retry as a new attempt), budget reserved before the one model call and settled after, the checked model
+  output stored on the job. `studioVideoJobWorkflowV1` runs on the `agents` queue (the agents module holds the
+  adapter); the creative module owns every read and write (`videoAiService`, `videoAiJobs`).
+- **The model chooses, the server computes.** A storyboard names asset versions from the eligible set (approved,
+  rights recorded, person-supplied) and cites claims by effective fact id; invented assets and unsupported claims
+  are refused and listed, never silently dropped. A recut answers with edit actions (reorder scenes, move a clip,
+  fit a duration, tighten pauses, keep or remove clips, replace a shot, trim, captions from the script, a call to
+  action, transitions, a new-format version); deterministic planners in `packages/editor/src/video/recut.ts` turn
+  them into timeline operations. Pauses come from the STU-2a waveform peaks. Every planned operation is reduced and
+  guarded as it is planned, so what cannot be done is a reported conflict (locked material longer than a target,
+  missing messaging, out of scope), not a hidden failure.
+- **Assembly** (`storyboard.ts`) is a compile with no model: clips back to back per scene, pacing transitions between
+  scenes, scenes, titles (reusing the template's title overlay of the scene they fill), the brand's primary logo over
+  the last scene at least its minimum width, captions timed from each scene's script, the music bed. Into an empty
+  video it commits directly as the person's revision (undoable); otherwise it is a proposal.
+- **Proposals and accept.** Groups are actions (recut) or titles / captions / soundtrack / clips (assembly). Accept
+  recompiles the kept groups against the proposal's base (a moved head is 409), evaluates them with the request's
+  scope and commits one revision with `generation_inputs`. The studio adopts it as head and undo entry.
+- **Guard.** `guardVideoAgentScoped` refuses agent work on locked items and tracks with its own policy error and
+  keeps track and scene-order changes to whole-timeline requests; `guardVideoScopeChange` lets items outside the
+  scope only move in time. An agent may retime an unchanged protected overlay (same element, length and animations),
+  so a shortened video keeps its end card; it still cannot change, resize, remove or add a logo.
+- **Vertical (or other format) versions** are a new document (revision 1, generation inputs recorded): clips fill the
+  new frame around a focal point (the model's, else the clip's), titles keep their size within the new safe width,
+  logos and images scale and stay inside the safe area. The original is never changed.
+- **Stills "with motion".** The timeline has no motion keyframes; a still closes a footage gap held on screen.
+- **Transcription is an external dependency.** The OpenRouter connection as implemented carries text and tool calls
+  only (`ModelMessage` has no audio part, `OpenRouterModelAdapter` sends text), the routing policy has no
+  transcription task class and no model for it is configured, and the speech generator is text-to-speech. Audio
+  transcription of supplied clips therefore needs: an audio input part in the model contract and adapter, a
+  transcription model id permitted by routing policy, audio extraction to a format the model accepts, and a verified
+  provider behaviour. Captions come from the script; preflight reports `transcription: false`.
