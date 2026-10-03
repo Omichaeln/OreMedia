@@ -1,11 +1,13 @@
 import type { WaveformV1 } from '@oremedia/contracts/media';
 import {
   VIDEO_FORMATS,
+  audioTrackRole,
   VIDEO_MIN_DURATION_MS,
   VIDEO_MIN_ITEM_MS,
   VIDEO_SOURCE_MAX_MS,
   type CaptionItem,
   type OverlayItem,
+  type Track,
   type TrackItem,
   type VideoClipItem,
   type VideoOperation,
@@ -28,6 +30,7 @@ import {
   trackOfKind,
   type VideoCompileContext,
 } from './compile-support';
+import { looksLikeClaim } from '../validate';
 import { videoTimelineDiff } from './diff';
 import { guardVideoAgentScoped, guardVideoScopeChange, videoScopeOf, type VideoScopeState } from './guard';
 import { videoFormatOf } from './overlays';
@@ -48,8 +51,23 @@ export interface RecutContext extends VideoCompileContext {
   scope: VideoAiScope | null;
   /** The document's script by scene (its storyboard): captions are made from it, never from the model's words. */
   script: ReadonlyArray<{ sceneId: string | null; narration: string }>;
-  /** Calls to action that may be placed: the person's own (the request) and the brand's CTA conventions. */
+  /**
+   * Calls to action that may be placed, verbatim: the person's own (the request, already checked) and CTA copy from
+   * the brand's guidance for the request's channel (brandCtaCopy).
+   */
   approvedCtas: readonly string[];
+}
+
+/**
+ * The CTA copy in a channel's `ctaConventions`, when the convention is itself short CTA copy ("Learn more", "Shop the
+ * range") rather than prose about CTAs ("Use a soft CTA, e.g. learn more"): one line, at most six words and 40
+ * characters, no clause punctuation. Null otherwise: prose is never placed as a call to action.
+ */
+export function brandCtaCopy(convention: string): string | null {
+  const text = convention.trim().replace(/[.!]+$/, '');
+  if (!text || text.length > 40 || /[\n,;:()"“”]/.test(text)) return null;
+  if (text.split(/\s+/).length > 6) return null;
+  return text;
 }
 
 /** A span of the timeline to remove (clip content inside it is cut out and later items close up). */
@@ -140,8 +158,7 @@ function fitTransitions(
 }
 
 /** Music beds follow a shorter picture by ending earlier; any other sound (narration, a voice) is cut with it. */
-export const isMusicTrack = (t: { kind: string; id: string; name: string }): boolean =>
-  t.kind === 'audio' && (t.id === 'trk_music' || /music/i.test(t.name));
+export const isMusicTrack = (t: Track): boolean => t.kind === 'audio' && audioTrackRole(t) === 'music';
 
 /**
  * Removes `cuts` from the picture track (clips trimmed, split or removed with ripple, latest cut first so earlier
@@ -1064,8 +1081,9 @@ function addCta(work: WorkingProject, text: string, factIds: readonly string[], 
     });
     return;
   }
-  // Never the model's own words: only the person's call to action or a brand CTA convention is placed.
-  if (!ctx.approvedCtas.some((c) => norm(c) === norm(clean))) {
+  // Never the model's own words: only the person's call to action or the brand's CTA copy is placed, as written there.
+  const approved = ctx.approvedCtas.find((c) => norm(c) === norm(clean));
+  if (!approved) {
     work.conflict({
       code: 'cta_not_approved',
       message: `“${clean}” is not an approved call to action (${ctx.approvedCtas.map((c) => `“${c}”`).join(', ')}); nothing was added`,
@@ -1075,10 +1093,12 @@ function addCta(work: WorkingProject, text: string, factIds: readonly string[], 
     return;
   }
   const unsupported = factIds.filter((id) => !ctx.effectiveFactIds.has(id));
-  if (unsupported.length) {
+  if (unsupported.length || (looksLikeClaim(approved) && factIds.length === 0)) {
     work.conflict({
       code: 'claim_without_fact',
-      message: `The call to action cites facts that are not approved and in force (${unsupported.join(', ')}); it was not added`,
+      message: unsupported.length
+        ? `The call to action cites facts that are not approved and in force (${unsupported.join(', ')}); it was not added`
+        : `“${approved}” makes a claim and cites no approved fact; it was not added`,
       groupId,
       itemIds: [],
     });
@@ -1099,7 +1119,7 @@ function addCta(work: WorkingProject, text: string, factIds: readonly string[], 
   const end = Math.max(contentEndMs(work.project), Math.min(work.project.durationMs, VIDEO_MIN_DURATION_MS));
   const overlay = textOverlay(work.project, ctx, {
     id: mint(),
-    text: clean,
+    text: approved,
     startMs: Math.max(0, end - 3_000),
     endMs: end,
     band: 'lower',

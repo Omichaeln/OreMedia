@@ -519,8 +519,8 @@ async function evaluateVideoBatch(
     scope?: VideoAiScope | null;
     /** A scope already resolved (and grown) by an earlier part of the same change, carried across parts. */
     scopeState?: VideoScopeState | null;
-    /** STU-3 model-planned assembly: the brand's primary logo version it may place (see guardVideoAgent). */
-    brandLogoAssetVersionId?: string;
+    /** STU-3 model-planned assembly: the brand's primary logo it may place, by its rules (see guardVideoAgent). */
+    brandLogo?: { assetVersionId: string; minWidthPx: number };
   } = {},
 ) {
   const project = videoSnapshotOf(base);
@@ -542,7 +542,7 @@ async function evaluateVideoBatch(
         op,
         batch.origin,
         scope,
-        opts.brandLogoAssetVersionId ? { brandLogoAssetVersionId: opts.brandLogoAssetVersionId } : {},
+        opts.brandLogo ? { brandLogo: opts.brandLogo } : {},
       );
       const refs = videoOpAssetRefs(op, (id) => next.tracks.find((t) => t.id === id)?.kind);
       await authoriseRefs(refs, doc.brandId, tx);

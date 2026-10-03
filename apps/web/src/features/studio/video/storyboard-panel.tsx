@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { VIDEO_FORMATS, type VideoFormatKey, type VideoProjectV1 } from '@oremedia/contracts/video';
 import type {
@@ -11,8 +11,8 @@ import type {
 import { Badge, Button, Field, Input, StatusBanner, Textarea } from '@oremedia/ui';
 import { Select } from '../../../components/select';
 import { toUiError } from '../../../lib/errors';
-import { mutationIntent, useIntentKey } from '../../../lib/intent-key';
-import { useTRPC } from '../../../lib/trpc';
+import { intentContext, mutationIntent, newIntentKey, useIntentKey } from '../../../lib/intent-key';
+import { useTRPC, useTRPCClient } from '../../../lib/trpc';
 import { useBrandContext } from '../../brand/brand-context';
 import { ProposalReview } from './proposal-review';
 import { timecode } from './timecode';
@@ -386,6 +386,127 @@ function StoryboardJob({
   );
 }
 
+const DRAFT_SETTLE_MS = 800;
+const DRAFT_RETRY_MAX_MS = 30_000;
+
+/**
+ * Saves the person's storyboard edits on the job (videoAi.saveDraft) once they settle. One save at a time, each on
+ * the version the previous one returned, so two are never in flight on the same expectedVersion; the newest edit
+ * wins. A save is marked done only when it succeeded; a failure is retried with backoff, and a conflict (the job
+ * moved on, e.g. another device saved) re-reads the job's version first. An unsaved edit is flushed when the editor
+ * closes. Each payload carries its own idempotency key (retries of the same payload reuse it).
+ */
+function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
+  const client = useTRPCClient();
+  const settled = useSettled(draft, DRAFT_SETTLE_MS);
+  const [error, setError] = useState<unknown>(null);
+  const state = useRef({
+    jobId: job.id,
+    version: job.version,
+    saved: draft as Storyboard,
+    pending: null as Storyboard | null,
+    attempt: null as { storyboard: Storyboard; version: number; key: string } | null,
+    inFlight: false,
+    failures: 0,
+    timer: 0,
+  });
+  useEffect(() => {
+    state.current.version = Math.max(state.current.version, job.version);
+  }, [job.version]);
+
+  const pump = useCallback(async (): Promise<void> => {
+    const s = state.current;
+    if (s.inFlight || s.timer) return;
+    const storyboard = s.pending;
+    if (!storyboard) {
+      setError(null);
+      return;
+    }
+    if (storyboard === s.saved) {
+      s.pending = null;
+      return;
+    }
+    // The same payload on the same version is the same intent: a retry reuses its key.
+    const same = s.attempt && s.attempt.storyboard === storyboard && s.attempt.version === s.version;
+    const attempt = same && s.attempt ? s.attempt : { storyboard, version: s.version, key: newIntentKey() };
+    s.attempt = attempt;
+    s.inFlight = true;
+    try {
+      const res = await client.creative.videoAi.saveDraft.mutate(
+        { jobId: s.jobId, expectedVersion: attempt.version, storyboard },
+        intentContext(attempt.key),
+      );
+      s.version = Math.max(s.version, res.version);
+      s.saved = storyboard;
+      if (s.pending === storyboard) s.pending = null;
+      s.failures = 0;
+      setError(null);
+    } catch (err) {
+      s.failures += 1;
+      setError(err);
+      const kind = toUiError(err).kind;
+      // A refusal that a retry cannot change (the job is not an editable storyboard, no access) is shown, not retried.
+      if (kind === 'validation' || kind === 'forbidden' || kind === 'not_found' || kind === 'sign_in') return;
+      if (kind === 'conflict') {
+        try {
+          s.version = (await client.creative.videoAi.get.query({ jobId: s.jobId })).version;
+        } catch {
+          // The retry below tries again.
+        }
+      }
+      s.timer = window.setTimeout(
+        () => {
+          s.timer = 0;
+          void pump();
+        },
+        Math.min(DRAFT_RETRY_MAX_MS, 1_000 * 2 ** (s.failures - 1)),
+      );
+      return;
+    } finally {
+      s.inFlight = false;
+    }
+    if (s.pending) void pump(); // an edit that settled while this save ran
+  }, [client]);
+
+  useEffect(() => {
+    const s = state.current;
+    if (settled === s.saved) return;
+    s.pending = settled;
+    void pump();
+  }, [settled, pump]);
+
+  // Flush on close: the newest edit (even one that has not settled yet) goes through the same queue, after a save
+  // still in flight, without waiting out a retry delay.
+  const latest = useRef(draft);
+  latest.current = draft;
+  useEffect(
+    () => () => {
+      const s = state.current;
+      window.clearTimeout(s.timer);
+      s.timer = 0;
+      if (latest.current === s.saved) return;
+      s.pending = latest.current;
+      void pump();
+    },
+    [pump],
+  );
+
+  /** After assembling: the server cleared the draft and moved the job on; what is on screen counts as saved. */
+  const assembled = useCallback((version: number) => {
+    const s = state.current;
+    s.version = Math.max(s.version, version);
+    s.saved = latest.current;
+    s.pending = null;
+    s.attempt = null;
+    s.failures = 0;
+    window.clearTimeout(s.timer);
+    s.timer = 0;
+    setError(null);
+  }, []);
+
+  return { error, assembled };
+}
+
 function StoryboardEditor({
   job,
   initial,
@@ -404,29 +525,13 @@ function StoryboardEditor({
   const assembleKey = useIntentKey();
   // The person's edits are kept on the job (a reload or another device picks them up), saved once they settle.
   const [draft, setDraft] = useState<Storyboard>(() => job.result?.draft ?? initial);
-  const settledDraft = useSettled(draft, 800);
-  const saved = useRef<Storyboard>(draft);
-  const jobVersion = useRef(job.version);
-  useEffect(() => {
-    jobVersion.current = Math.max(jobVersion.current, job.version);
-  }, [job.version]);
-  const { mutate: saveDraft, error: saveError } = useMutation(
-    trpc.creative.videoAi.saveDraft.mutationOptions({
-      onSuccess: (res) => {
-        jobVersion.current = res.version;
-      },
-    }),
-  );
-  useEffect(() => {
-    if (settledDraft === saved.current) return;
-    saved.current = settledDraft;
-    saveDraft({ jobId: job.id, expectedVersion: jobVersion.current, storyboard: settledDraft });
-  }, [settledDraft, job.id, saveDraft]);
+  const drafts = useStoryboardDraftSaver(job, draft);
   const assemble = useMutation(
     trpc.creative.videoAi.assemble.mutationOptions({
       ...mutationIntent(assembleKey.key),
       onSuccess: (res) => {
         assembleKey.renew();
+        drafts.assembled(res.job.version); // the server cleared the draft: what was assembled is the storyboard now
         if (res.applied) studio.adoptRevision(res);
         void queryClient.invalidateQueries(trpc.creative.videoAi.pathFilter());
       },
@@ -661,11 +766,11 @@ function StoryboardEditor({
           description={assemble.data.conflicts.map((c) => c.message).join(' ')}
         />
       )}
-      {saveError && (
+      {drafts.error !== null && (
         <StatusBanner
           tone="warning"
-          title="Your storyboard edits are not saved yet"
-          description={toUiError(saveError).message}
+          title="Your storyboard edits are not saved yet; retrying"
+          description={toUiError(drafts.error).message}
         />
       )}
       <div className="flex flex-wrap gap-2">

@@ -18,7 +18,7 @@ import type {
   RenderValidationResult,
 } from '@oremedia/contracts/creative';
 import type { VideoOperationBatch, VideoProjectV1 } from '@oremedia/contracts/video';
-import type { VideoAiRequest, VideoAiResult, VideoGenerationInputs } from '@oremedia/contracts/video-ai';
+import type { StoredGenerationInputs, VideoAiRequest, VideoAiResult } from '@oremedia/contracts/video-ai';
 import { brandId, createdAt, hash, id, micros, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
@@ -73,9 +73,9 @@ export const creativeRevisions = mysqlTable(
      * STU-1b's (#59, migration 0027_studio_generation, GenerationInputs); STU-3 writes its video variant
      * (VideoGenerationInputs, `documentKind: 'video'`). Until #59 lands, the stand-in migration
      * 0027_generation_inputs_stand_in_for_stu1b adds the same column; it is dropped when this branch is rebased onto
-     * #59, and the column's type becomes the union of the two.
+     * #59, and the column's type is StoredGenerationInputs (video first, then #59's graphic shape).
      */
-    generationInputs: json('generation_inputs').$type<VideoGenerationInputs>(),
+    generationInputs: json('generation_inputs').$type<StoredGenerationInputs>(),
     createdAt: createdAt(),
   },
   (t) => [

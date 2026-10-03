@@ -77,6 +77,46 @@ describe('guardVideoAgent', () => {
       }),
     ).toMatch(/protected/);
   });
+  it('the brand-logo exception holds to the logo rules: minimum width, safe area, one logo per scene', () => {
+    const rule = { brandLogo: { assetVersionId: 'av_logo', minWidthPx: 300 } };
+    const logo = (withLogo().tracks[1]?.items as OverlayItem[]).find(
+      (o) => o.id === 'ov_logo',
+    ) as OverlayItem;
+    const brandLogo = (
+      over: Partial<OverlayItem['element']['transform']>,
+      at = { startMs: 0, endMs: 3_000 },
+    ) => ({
+      op: 'setOverlay' as const,
+      trackId: 'trk_titles',
+      overlay: {
+        ...logo,
+        ...at,
+        id: 'ov_brand_logo',
+        element: {
+          ...logo.element,
+          transform: { x: 340, y: 1_400, width: 400, height: 200, rotation: 0, ...over },
+        },
+      },
+    });
+    const check = (op: Op, p: VideoProjectV1) => {
+      try {
+        guardVideoAgent(p, op, 'agent', rule);
+        return null;
+      } catch (err) {
+        return (err as Error).message;
+      }
+    };
+    // Placed by the rules into a scene without a logo: allowed.
+    expect(check(brandLogo({}), fixtureVideoProject())).toBeNull();
+    expect(check(brandLogo({ width: 200, height: 100 }), fixtureVideoProject())).toMatch(/at least 300 px/);
+    expect(check(brandLogo({ x: 0, y: 0 }), fixtureVideoProject())).toMatch(/safe area/);
+    expect(check(brandLogo({ y: 1_700 }), fixtureVideoProject())).toMatch(/safe area/);
+    // Scene 2 already shows the logo (8-10 s): a second one there is refused.
+    expect(check(brandLogo({}, { startMs: 4_000, endMs: 6_000 }), withLogo())).toMatch(/one logo per scene/);
+    // Without the exception, or for another asset, an agent still cannot add a logo.
+    expect(denied(brandLogo({}), fixtureVideoProject())).toMatch(/Agents cannot add logo/);
+  });
+
   it('agents may edit ordinary items', () => {
     expect(denied({ op: 'moveClip', trackId: 'trk_video', itemId: 'clip_c', startMs: 11_000 })).toBeNull();
     expect(denied({ op: 'removeOverlay', trackId: 'trk_titles', itemId: 'ov_title' })).toBeNull();

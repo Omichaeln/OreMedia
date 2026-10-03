@@ -6175,6 +6175,10 @@
                                     "kind": {
                                       "const": "audio"
                                     },
+                                    "role": {
+                                      "type": "string",
+                                      "enum": ["music", "voice", "sound"]
+                                    },
                                     "muted": {
                                       "type": "boolean"
                                     },
@@ -7529,6 +7533,10 @@
                                     "kind": {
                                       "const": "audio"
                                     },
+                                    "role": {
+                                      "type": "string",
+                                      "enum": ["music", "voice", "sound"]
+                                    },
                                     "muted": {
                                       "type": "boolean"
                                     },
@@ -8636,6 +8644,9 @@
                               },
                               "ctaText": {
                                 "type": "string"
+                              },
+                              "channelKey": {
+                                "type": "string"
                               }
                             },
                             "required": ["instruction", "scope"]
@@ -9013,6 +9024,9 @@
                                 }
                               },
                               "ctaText": {
+                                "type": "string"
+                              },
+                              "channelKey": {
                                 "type": "string"
                               }
                             },
@@ -19704,6 +19718,10 @@
                               "kind": {
                                 "const": "audio"
                               },
+                              "role": {
+                                "type": "string",
+                                "enum": ["music", "voice", "sound"]
+                              },
                               "muted": {
                                 "type": "boolean"
                               },
@@ -21028,6 +21046,10 @@
                               "kind": {
                                 "const": "audio"
                               },
+                              "role": {
+                                "type": "string",
+                                "enum": ["music", "voice", "sound"]
+                              },
                               "muted": {
                                 "type": "boolean"
                               },
@@ -21976,6 +21998,9 @@
                         },
                         "ctaText": {
                           "type": "string"
+                        },
+                        "channelKey": {
+                          "type": "string"
                         }
                       },
                       "required": ["instruction", "scope"]
@@ -22326,6 +22351,9 @@
                           }
                         },
                         "ctaText": {
+                          "type": "string"
+                        },
+                        "channelKey": {
                           "type": "string"
                         }
                       },

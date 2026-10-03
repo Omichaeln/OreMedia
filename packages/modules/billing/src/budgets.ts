@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { BudgetExhaustedError, NotFoundError } from '@oremedia/contracts/errors';
+import { BudgetExhaustedError, NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { TenantScopedRepository, requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { budgetReservations, spendLimits, usageLedger } from '@oremedia/db/schema/billing';
 import { newId } from '@oremedia/domain/ids';
@@ -61,7 +61,9 @@ class ReservationRepository extends TenantScopedRepository<typeof budgetReservat
     scope: { brandId: string; dayKey: string } | { periodKey: string },
     tx: Tx,
   ): Promise<number> {
-    const states = inArray(budgetReservations.state, ['held', 'settled']);
+    // Released reservations count what they consumed (release sets reserved = consumed): money spent before a
+    // cancel or a retry, or charged afterwards by consumeIncurred, stays against the cap.
+    const states = inArray(budgetReservations.state, ['held', 'settled', 'released']);
     const where =
       'dayKey' in scope
         ? and(
@@ -72,7 +74,7 @@ class ReservationRepository extends TenantScopedRepository<typeof budgetReservat
         : and(states, eq(budgetReservations.periodKey, scope.periodKey));
     const rows = await tx
       .select({
-        total: sql<number>`coalesce(sum(greatest(${budgetReservations.reservedMicros}, ${budgetReservations.consumedMicros})), 0)`,
+        total: sql<number>`coalesce(sum(case when ${budgetReservations.state} = 'released' then ${budgetReservations.consumedMicros} else greatest(${budgetReservations.reservedMicros}, ${budgetReservations.consumedMicros}) end), 0)`,
       })
       .from(budgetReservations)
       .where(this.scope(where));
@@ -269,11 +271,14 @@ export const budgets = {
   ): Promise<{ closed: boolean; exceeded: boolean }> {
     return withTransaction(async (tx) => {
       const r = await reservations.lock(reservationId, tx);
+      if (r.brandId !== brandId)
+        throw new ValidationFailedError([{ path: 'brandId', issue: 'reservation_brand_mismatch' }]);
       const closed = r.state !== 'held';
       if (await ledger.findByIdempotencyKey(idempotencyKey, tx))
         return { closed, exceeded: r.consumedMicros > r.reservedMicros };
       const consumed = r.consumedMicros + costMicros;
-      // A closed reservation keeps reserved = consumed, so the period's committed spend grows by exactly this cost.
+      // A closed reservation keeps reserved = consumed; settled and released rows both count their consumption
+      // (committedMicros), so the period's committed spend grows by exactly this cost.
       await reservations.update(
         r.id,
         r.version,

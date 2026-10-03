@@ -73,6 +73,7 @@ export {
   planSilenceTrim,
   reframeProject,
   isMusicTrack,
+  brandCtaCopy,
   mergeCuts,
   timeMapper,
   FIT_MIN_CLIP_MS,

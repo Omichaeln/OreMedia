@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { BrandSnapshot } from '@oremedia/contracts/brand';
+import type { BrandSnapshot, BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import type { Finding } from '@oremedia/contracts/creative';
 import {
   BudgetExhaustedError,
@@ -31,6 +31,7 @@ import {
   VideoAiSaveDraft,
   VideoAiStart,
   type GapAlternative,
+  type RecutRequest,
   type GapKind,
   type Storyboard,
   type StudioVideoJobInputV1,
@@ -48,7 +49,9 @@ import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { IllegalTransitionError } from '@oremedia/domain/state-machines/machine';
 import { videoAiJobMachine, type VideoAiJobEvent } from '@oremedia/domain/state-machines/video-ai-job';
+import { looksLikeClaim, prohibitedPhrasesIn } from '@oremedia/editor/validate';
 import {
+  brandCtaCopy,
   checkModelStoryboard,
   compileAssembly,
   compileRecut,
@@ -343,15 +346,61 @@ async function prepare(
     prohibitedPhrases: snapshot.document.voice.prohibitedPhrases,
     // Recuts caption from the document's storyboard script and place only an approved call to action.
     script: request.kind === 'recut' ? await scriptOf(doc, project, tx) : [],
-    approvedCtas: [
-      ...(request.kind === 'recut' && request.recut.ctaText ? [request.recut.ctaText] : []),
-      ...snapshot.document.channelGuidance
-        .map((g) => g.ctaConventions.trim())
-        .filter((c) => c.length > 0 && c.length <= 80),
-    ],
+    approvedCtas:
+      request.kind === 'recut' ? await approvedCtasOf(doc, request.recut, snapshot.document, tx) : [],
   };
 }
 type Prepared = Awaited<ReturnType<typeof prepare>>;
+
+/**
+ * The calls to action a recut may place: the person's ctaText when it passes the copy checks (no prohibited phrase;
+ * a claim needs an approved fact in the request), and CTA copy from the brand's guidance for the request's channel
+ * (the recut's own, else its storyboard brief's). Without a channel, no brand convention applies.
+ */
+async function approvedCtasOf(
+  doc: CreativeDocumentRow,
+  recut: RecutRequest,
+  brand: BrandSystemDocumentV1,
+  tx?: Tx,
+): Promise<string[]> {
+  const out = recut.ctaText && ctaTextProblems(recut, brand, null).length === 0 ? [recut.ctaText] : [];
+  let channelKey = recut.channelKey ?? null;
+  if (!channelKey) {
+    const last = await lastStoryboardJob(doc, tx);
+    const req = last ? VideoAiRequest.safeParse(last.request) : null;
+    channelKey = req?.success && req.data.kind === 'storyboard' ? (req.data.brief.channelKey ?? null) : null;
+  }
+  const guidance = channelKey ? brand.channelGuidance.find((g) => g.providerKey === channelKey) : undefined;
+  const copy = guidance ? brandCtaCopy(guidance.ctaConventions) : null;
+  return copy ? [...out, copy] : out;
+}
+
+/** Why the person's ctaText may not be placed (the copy checks any on-screen text gets). */
+function ctaTextProblems(
+  recut: RecutRequest,
+  brand: BrandSystemDocumentV1,
+  effectiveFactIds: ReadonlySet<string> | null,
+): VideoAiIssue[] {
+  if (!recut.ctaText) return [];
+  const issues: VideoAiIssue[] = [];
+  const found = prohibitedPhrasesIn(recut.ctaText, brand.voice.prohibitedPhrases);
+  if (found.length)
+    issues.push({
+      code: 'cta_prohibited_phrase',
+      severity: 'blocking',
+      message: `The call to action uses a phrase the brand prohibits (${found.join(', ')})`,
+      ref: 'ctaText',
+    });
+  const facts = effectiveFactIds ? recut.factIds.filter((id) => effectiveFactIds.has(id)) : recut.factIds;
+  if (looksLikeClaim(recut.ctaText) && facts.length === 0)
+    issues.push({
+      code: 'cta_claim_without_fact',
+      severity: 'blocking',
+      message: 'The call to action makes a claim; choose the approved fact it rests on',
+      ref: 'ctaText',
+    });
+  return issues;
+}
 
 /** The preflight answer: material inputs, issues and cost (also what start checks). */
 function preflightOf(prepared: Prepared, request: VideoAiRequest) {
@@ -375,6 +424,8 @@ function preflightOf(prepared: Prepared, request: VideoAiRequest) {
         message: 'A chosen asset is not approved for creative use with recorded rights',
         ref: id,
       });
+  if (request.kind === 'recut')
+    issues.push(...ctaTextProblems(request.recut, prepared.snapshot.document, effectiveFactIds));
   const shots = [...eligible.values()].filter((a) => SHOT_KINDS.includes(a.kind));
   if (request.kind === 'storyboard') {
     const brief = request.brief;
@@ -563,7 +614,7 @@ async function commitInParts(
   base: Awaited<ReturnType<typeof engine.loadRevision>>,
   batch: VideoOperationBatch,
   evaluated: Awaited<ReturnType<typeof engine.evaluateVideoBatch>>,
-  guard: { scope: VideoAiScope | null; brandLogoAssetVersionId?: string },
+  guard: { scope: VideoAiScope | null; brandLogo?: { assetVersionId: string; minWidthPx: number } },
   cutPoints: readonly number[],
   inputs: VideoGenerationInputs,
   tx: Tx,
@@ -588,7 +639,7 @@ async function commitInParts(
     };
     const partEvaluated = await engine.evaluateVideoBatch(actor, current.doc, current.base, part, tx, {
       scopeState,
-      ...(guard.brandLogoAssetVersionId ? { brandLogoAssetVersionId: guard.brandLogoAssetVersionId } : {}),
+      ...(guard.brandLogo ? { brandLogo: guard.brandLogo } : {}),
     });
     last = await engine.commitVideoRevision(actor, current.doc, current.base, part, partEvaluated, tx, {
       ...inputs,
@@ -604,7 +655,12 @@ async function commitInParts(
 /** The brand's primary logo version a model-planned assembly may place (the agent guard's one exception). */
 const brandLogoOf = (prepared: Prepared) =>
   prepared.bindings.logoAssetVersionId
-    ? { brandLogoAssetVersionId: prepared.bindings.logoAssetVersionId }
+    ? {
+        brandLogo: {
+          assetVersionId: prepared.bindings.logoAssetVersionId,
+          minWidthPx: prepared.logoMinWidthPx,
+        },
+      }
     : {};
 
 /** The storyboard against today's brand and library: facts in force, eligible assets, prohibited phrases. */
@@ -654,7 +710,8 @@ export const videoAiService = {
   },
 
   /**
-   * Starts a job (idempotent per document, base revision and inputs hash). The preflight runs again and blocking
+   * Starts a job (idempotent per requester, document, base revision and inputs hash while the job is live; a job
+   * that stopped making progress is ended first, see liveJobOf). The preflight runs again and blocking
    * issues refuse the start; the outbox starts studioVideoJobWorkflowV1. creative.edit on the document and
    * agent.start_run on the brand (the job spends the brand's generation budget).
    */
@@ -667,7 +724,7 @@ export const videoAiService = {
     const request = normalised(parsed.request);
     const inputsHash = hashCanonical(request);
     const liveKey = liveKeyOf(actor.id, parsed.baseRevisionId, inputsHash);
-    const existing = await jobsRepo.findLive(doc.id, liveKey, tx);
+    const existing = await liveJobOf(doc.id, liveKey, tx);
     if (existing) return toJobDto(existing);
     if (doc.currentRevisionId !== parsed.baseRevisionId)
       throw new StaleRevisionError(doc.currentRevisionId ?? '');
@@ -806,7 +863,7 @@ export const videoAiService = {
         'The video changed since this was asked for; start a new request from the current revision',
       );
     const liveKey = liveKeyOf(actor.id, job.baseRevisionId, job.inputsHash);
-    const live = await jobsRepo.findLive(job.documentId, liveKey, tx);
+    const live = await liveJobOf(job.documentId, liveKey, tx);
     if (live) return toJobDto(live); // the same request is already running again: join it
     // The previous attempt's reservation is released now, so its late settle has nothing of the new attempt's to touch.
     if (job.budgetRunId) await budgets.release(job.budgetRunId, tx);
@@ -943,7 +1000,7 @@ export const videoAiService = {
       await jobsRepo.update(
         job.id,
         job.version,
-        { result: { ...result, storyboard, conflicts: compiled.conflicts } },
+        { result: { ...result, storyboard, draft: null, conflicts: compiled.conflicts } },
         tx,
       );
       await audit.record(
@@ -980,7 +1037,7 @@ export const videoAiService = {
     await jobsRepo.update(
       job.id,
       job.version,
-      { result: { ...result, storyboard, proposal, conflicts: compiled.conflicts } },
+      { result: { ...result, storyboard, draft: null, proposal, conflicts: compiled.conflicts } },
       tx,
     );
     await audit.record(
@@ -1197,10 +1254,53 @@ async function advance(job: JobRow, event: VideoAiJobEvent, tx: Tx, extra: Parti
   return toState;
 }
 
+/**
+ * How long a live job may go without a state change before it counts as dead (its workflow was lost): well above
+ * studioVideoJobWorkflowV1's longest path (control steps 5 × 1 min, the model call 3 × 4 min with backoff, the save
+ * 5 × 3 min, about 40 minutes), and above the 30-minute budget reservation it holds.
+ */
+export const VIDEO_JOB_STALE_MS = 60 * 60_000;
+
+/**
+ * The live job holding a request's key, or null. A job that stopped making progress (no state change for
+ * VIDEO_JOB_STALE_MS) is failed here, its reservation released and its key cleared, so the request can start again;
+ * a workflow that was only slow then stops at its next step (the attempt is over).
+ */
+async function liveJobOf(documentId: string, liveKey: string, tx: Tx, now = Date.now()) {
+  const found = await jobsRepo.findLive(documentId, liveKey, tx);
+  if (!found || now - found.updatedAt.getTime() <= VIDEO_JOB_STALE_MS) return found;
+  const job = await jobsRepo.lock(found.id, tx);
+  if (!LIVE.has(job.state)) return null;
+  await advance(job, 'fail', tx, {
+    errorCode: 'failed',
+    error: 'The job stopped making progress and was ended; ask again',
+    finishedAt: new Date(now),
+  });
+  if (job.budgetRunId) await budgets.release(job.budgetRunId, tx);
+  await audit.record(
+    SYSTEM,
+    'creative.video_ai.fail',
+    { type: 'studio_video_job', id: job.id },
+    'allowed',
+    tx,
+    {
+      brandId: job.brandId,
+      documentId: job.documentId,
+      code: 'stalled',
+    },
+  );
+  return null;
+}
+
+/** The document's latest finished storyboard job (its script and its brief's channel), if any. */
+async function lastStoryboardJob(doc: CreativeDocumentRow, tx?: Tx) {
+  const recent = await jobsRepo.recentForDocument(doc.brandId, doc.id, 20, tx);
+  return recent.find((j) => j.kind === 'storyboard' && j.state === 'completed' && j.result) ?? null;
+}
+
 /** The latest storyboard of the document, scene by scene, matched to the project's scenes by title. */
 async function scriptOf(doc: CreativeDocumentRow, project: VideoProjectV1, tx?: Tx) {
-  const recent = await jobsRepo.recentForDocument(doc.brandId, doc.id, 20, tx);
-  const last = recent.find((j) => j.kind === 'storyboard' && j.state === 'completed' && j.result);
+  const last = await lastStoryboardJob(doc, tx);
   const storyboard: Storyboard | null = last ? (VideoAiResult.parse(last.result).storyboard ?? null) : null;
   return (storyboard?.scenes ?? [])
     .filter((s) => s.narration)

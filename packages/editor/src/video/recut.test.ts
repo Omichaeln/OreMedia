@@ -6,6 +6,7 @@ import { VIDEO_FIXTURE_MEDIA, fixtureVideoProject } from './fixtures';
 import { videoScopeOf } from './guard';
 import { applyVideoBatch } from './reduce';
 import {
+  brandCtaCopy,
   compileRecut,
   mergeCuts,
   planDurationFit,
@@ -15,6 +16,7 @@ import {
   type RecutContext,
 } from './recut';
 import { contentEndMs, lengthOf } from './time';
+import { looksLikeClaim } from '../validate';
 
 const bindings = {
   fonts: { heading: 'av_font', caption: 'av_font' },
@@ -218,6 +220,28 @@ describe('silence-trim planner', () => {
     expect(result.conflicts.map((c) => c.code)).not.toContain('sound_out_of_sync');
   });
 
+  it('reads the music bed from the track’s role, not its name', () => {
+    const project = withNarration();
+    const voice = project.tracks.find((t) => t.id === 'trk_voice');
+    if (voice?.kind !== 'audio') throw new Error('fixture');
+    voice.name = 'Music for the voice'; // a name says nothing
+    const asSound = compileRecut(
+      project,
+      [{ kind: 'tighten' }],
+      ctx({ waveforms: { av_clip_a: waveform() } }),
+    );
+    expect(replay(project, asSound).tracks.find((t) => t.id === 'trk_voice')?.items).toHaveLength(2);
+    voice.role = 'music'; // the role does
+    const asMusic = compileRecut(
+      project,
+      [{ kind: 'tighten' }],
+      ctx({ waveforms: { av_clip_a: waveform() } }),
+    );
+    const bed = replay(project, asMusic).tracks.find((t) => t.id === 'trk_voice')?.items ?? [];
+    expect(bed).toHaveLength(1);
+    expect(bed[0]).toMatchObject({ startMs: 0, sourceOutMs: 10_000 - 900 });
+  });
+
   it('reports narration it may not cut (locked) as out of sync instead of trimming its tail', () => {
     const project = withNarration(true);
     const result = compileRecut(
@@ -331,6 +355,42 @@ describe('recut compile', () => {
     );
     expect(result.operations).toEqual([]);
     expect(result.conflicts.map((c) => c.code)).toEqual(['required_messaging_missing', 'claim_without_fact']);
+  });
+
+  it('places the approved wording (not the model’s casing) and asks a claim-like call to action for a fact', () => {
+    const result = compileRecut(
+      fixtureVideoProject(),
+      [{ kind: 'add_cta', text: 'order TODAY', factIds: [] }],
+      ctx(),
+    );
+    const cta = replay(fixtureVideoProject(), result)
+      .tracks.find((t) => t.kind === 'overlay')
+      ?.items.find((o) => o.startMs === 7_000);
+    expect(cta && 'element' in cta && cta.element.type === 'text' ? cta.element.text : null).toBe(
+      'Order today',
+    );
+    const claim = compileRecut(
+      fixtureVideoProject(),
+      [{ kind: 'add_cta', text: 'Twice as fast', factIds: [] }],
+      ctx(),
+    );
+    expect(claim.operations).toEqual([]);
+    expect(claim.conflicts.map((c) => c.code)).toEqual(['claim_without_fact']);
+  });
+
+  it('takes only short CTA copy from the brand’s channel guidance, never prose about CTAs', () => {
+    expect(brandCtaCopy('Learn more')).toBe('Learn more');
+    expect(brandCtaCopy(' Shop the range. ')).toBe('Shop the range');
+    expect(brandCtaCopy('Use a soft CTA, e.g. learn more')).toBeNull();
+    expect(brandCtaCopy('Always end with a question that invites the reader to reply')).toBeNull();
+    expect(brandCtaCopy('')).toBeNull();
+    // Plain CTA copy is not a claim; numbers, comparisons and superlatives are.
+    expect(['Learn more', 'Shop the range', 'Book a demo'].map(looksLikeClaim)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(['Save 20%', 'Twice as fast', 'The best bottle'].map(looksLikeClaim)).toEqual([true, true, true]);
   });
 
   it('takes caption text from the storyboard script only, and places only an approved call to action', () => {

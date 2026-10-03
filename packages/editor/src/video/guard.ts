@@ -2,14 +2,56 @@ import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { OverlayItem, TrackItem, VideoOperation, VideoProjectV1 } from '@oremedia/contracts/video';
 import type { VideoAiScope } from '@oremedia/contracts/video-ai';
 import { canonicalJson } from '@oremedia/domain/canonical-json';
+import { videoFormatOf } from './overlays';
 import { findItem, spanOf } from './time';
 
 export interface VideoAgentGuardOptions {
   /**
-   * STU-3 assembly: the brand's primary logo version (from the published logo rules). A model-planned assembly may
-   * place it, protected, over the last scene as the brand's rules say; any other logo is still refused.
+   * STU-3 assembly: the brand's primary logo version and its minimum width (from the published logo rules). A
+   * model-planned assembly may place it, protected, as the brand's rules say: at least that wide, inside the safe
+   * area, and no other logo in the same scene. Any other logo, or this one placed otherwise, is still refused.
    */
-  brandLogoAssetVersionId?: string;
+  brandLogo?: { assetVersionId: string; minWidthPx: number };
+}
+
+/** The brand-logo exception's placement rules, enforced here (not left to validation findings). */
+function assertBrandLogoPlacement(
+  project: VideoProjectV1,
+  overlay: OverlayItem,
+  rule: NonNullable<VideoAgentGuardOptions['brandLogo']>,
+): void {
+  const { x, y, width, height, rotation } = overlay.element.transform;
+  if (width < rule.minWidthPx)
+    throw new PolicyDeniedError(
+      'agent_logo_insert',
+      `The brand's logo must be at least ${rule.minWidthPx} px wide (logo rules); it was not placed`,
+    );
+  const f = videoFormatOf(project);
+  const safe = f.safeArea;
+  if (
+    rotation !== 0 ||
+    x < safe.left ||
+    y < safe.top ||
+    x + width > f.width - safe.right ||
+    y + height > f.height - safe.bottom
+  )
+    throw new PolicyDeniedError(
+      'agent_logo_insert',
+      "The brand's logo must sit upright inside the format's safe area; it was not placed",
+    );
+  const scene = project.scenes.find((sc) => overlay.startMs >= sc.startMs && overlay.startMs < sc.endMs);
+  const span = scene ?? { startMs: overlay.startMs, endMs: overlay.endMs };
+  const other = project.tracks
+    .flatMap((t) => (t.kind === 'overlay' ? t.items : []))
+    .find(
+      (o) =>
+        o.id !== overlay.id && o.element.type === 'logo' && o.startMs < span.endMs && o.endMs > span.startMs,
+    );
+  if (other)
+    throw new PolicyDeniedError(
+      'agent_logo_insert',
+      `There is already a logo in ${scene ? `scene "${scene.title}"` : 'that time'} (${other.id}); one logo per scene`,
+    );
 }
 
 /**
@@ -43,14 +85,15 @@ export function guardVideoAgent(
   if (op.op === 'setOverlay' && op.overlay.element.type === 'logo') {
     const existing = findItem(project, op.overlay.id);
     const brandLogo =
-      opts.brandLogoAssetVersionId !== undefined &&
-      op.overlay.element.assetVersionId === opts.brandLogoAssetVersionId &&
+      opts.brandLogo !== undefined &&
+      op.overlay.element.assetVersionId === opts.brandLogo.assetVersionId &&
       op.overlay.element.protected;
     if (!existing && !brandLogo)
       throw new PolicyDeniedError(
         'agent_logo_insert',
         'Agents cannot add logo overlays; logos are placed from approved assets by a person',
       );
+    if (!existing && opts.brandLogo) assertBrandLogoPlacement(project, op.overlay, opts.brandLogo);
   }
   const id = op.op === 'setOverlay' ? op.overlay.id : 'itemId' in op ? op.itemId : null;
   if (id) {

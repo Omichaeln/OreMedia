@@ -345,7 +345,7 @@ export function compileAssembly(
 ): AssemblyCompile {
   // Model-planned: held to the agent guards (locks, protected items), the brand's primary logo excepted.
   const guardOpts = ctx.bindings.logoAssetVersionId
-    ? { brandLogoAssetVersionId: ctx.bindings.logoAssetVersionId }
+    ? { brandLogo: { assetVersionId: ctx.bindings.logoAssetVersionId, minWidthPx: ctx.logoMinWidthPx ?? 0 } }
     : {};
   const work = new WorkingProject(project, { media: ctx.media as never, strictMedia: false }, (before, op) =>
     guardVideoAgentScoped(before, op, 'agent', null, guardOpts),
@@ -599,7 +599,15 @@ export function compileAssembly(
         !work.apply(
           {
             op: 'addTrack',
-            track: { id: mint(), kind: 'audio', name: 'Music', locked: false, muted: false, items: [] },
+            track: {
+              id: mint(),
+              kind: 'audio',
+              role: 'music',
+              name: 'Music',
+              locked: false,
+              muted: false,
+              items: [],
+            },
           },
           groupId,
         )

@@ -111,6 +111,8 @@ export const RecutRequest = z
      * the brand's channel CTA conventions; nothing else is placed.
      */
     ctaText: Line(80).optional(),
+    /** The channel the cut is for: the brand's CTA copy for it may be placed (else the storyboard brief's channel). */
+    channelKey: z.string().min(1).max(40).optional(),
   })
   .strict();
 export type RecutRequest = z.infer<typeof RecutRequest>;
@@ -453,6 +455,32 @@ export const VideoGenerationInputs = z.object({
   part: z.object({ index: z.number().int().min(1), count: z.number().int().min(1) }).optional(),
 });
 export type VideoGenerationInputs = z.infer<typeof VideoGenerationInputs>;
+
+/**
+ * What creative_revisions.generation_inputs may hold on any row: the video variant first, then STU-1b's graphic
+ * GenerationInputs (#59; no `documentKind`, or `documentKind: 'graphic'` once it gains the discriminator), kept as
+ * an opaque record here. Neither side's parse throws on the other's rows. At the rebase onto #59 the second member
+ * becomes #59's GenerationInputs.
+ */
+export const StoredGenerationInputs = z.union([
+  VideoGenerationInputs,
+  z
+    .object({ documentKind: z.literal('graphic').optional(), jobId: z.string() })
+    .passthrough()
+    .refine(
+      (v) => (v as { documentKind?: unknown }).documentKind !== 'video',
+      'a video row that does not parse',
+    ),
+]);
+export type StoredGenerationInputs = z.infer<typeof StoredGenerationInputs>;
+
+/** The video variant of a stored generation_inputs value; null for a graphic row, an empty one or a malformed one. */
+export function videoGenerationInputsOf(raw: unknown): VideoGenerationInputs | null {
+  if (!raw || typeof raw !== 'object' || (raw as { documentKind?: unknown }).documentKind !== 'video')
+    return null;
+  const parsed = VideoGenerationInputs.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
 
 export const VideoAiJobState = z.enum([
   'queued',

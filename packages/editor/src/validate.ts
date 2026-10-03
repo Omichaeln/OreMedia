@@ -62,6 +62,19 @@ export function prohibitedPhrasesIn(text: string, prohibited: readonly string[])
   return prohibited.map((p) => p.toLowerCase()).filter((p) => p && lower.includes(p));
 }
 
+/**
+ * Whether short copy (a call to action, a title) reads as a claim that needs an approved fact behind it: a number or
+ * a percentage, or a superlative, comparative or guarantee. Deliberately broad: a false positive only asks for a fact.
+ */
+export function looksLikeClaim(text: string): boolean {
+  return (
+    /\d/.test(text) ||
+    /\b(best|better|fastest|faster|cheapest|cheaper|strongest|stronger|lightest|lighter|longest|longer|most|first|only|leading|guaranteed?|proven|than|twice|double|half|#1|no\.? ?1|free)\b/i.test(
+      text,
+    )
+  );
+}
+
 export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSnapshot): Finding[] {
   const findings: Finding[] = [];
   const colours = new Map(snapshot.document.tokens.colours.map((c) => [c.key, c]));

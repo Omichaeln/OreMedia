@@ -825,6 +825,31 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     expect(await start(v.documentId, v.revisionId, request)).toMatchObject({ id: again.id });
   });
 
+  it('ends a live job that stopped making progress (its workflow was lost) so the same request can start again', async () => {
+    const v = await newVideo('Lost workflow');
+    const request = { kind: 'storyboard' as const, brief: { objective: 'Lost' } };
+    const lost = await start(v.documentId, v.revisionId, request);
+    const { runtime } = runtimeWith([]);
+    await inTenant(tenantA, async () => {
+      await runtime.begin(inputOf(lost));
+      await runtime.reserve(inputOf(lost));
+    });
+    const runId = (await jobRow(lost.id)).budgetRunId;
+    // Recent: still the same job.
+    expect((await start(v.documentId, v.revisionId, request)).id).toBe(lost.id);
+    await tdb.db
+      .update(studioVideoJobs)
+      .set({ updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+      .where(eq(studioVideoJobs.id, lost.id));
+    const fresh = await start(v.documentId, v.revisionId, request);
+    expect(fresh.id).not.toBe(lost.id);
+    const ended = await jobRow(lost.id);
+    expect(ended).toMatchObject({ state: 'failed', errorCode: 'failed', liveKey: null });
+    expect((await reservationOf(runId))?.state).toBe('released');
+    // A late step of the lost workflow stops: the attempt is over.
+    expect(await inTenant(tenantA, () => runtime.begin(inputOf(lost)))).toMatchObject({ proceed: false });
+  });
+
   it('a late settle of a superseded attempt never touches the retry’s reservation; retry released the old one', async () => {
     const v = await newVideo('Late settle');
     const job = await start(v.documentId, v.revisionId, { kind: 'storyboard', brief: { objective: 'Late' } });
@@ -882,6 +907,7 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
       },
     };
     const runtime = createStudioVideoRuntime({ adapter, modelConfig });
+    const committedBefore = (await inTenant(tenantA, () => budgets.summary(brandA))).day.committedMicros;
     expect(await drive(job, runtime)).toBe('stopped');
     const done = await getJob(job.id);
     expect(done.state).toBe('cancelled');
@@ -895,6 +921,17 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     const reservation = await reservationOf((await jobRow(job.id)).budgetRunId);
     expect(reservation?.state).toBe('released');
     expect(reservation?.consumedMicros).toBe(ledger[0]?.costMicros);
+    // What the cancelled call cost still counts against the cap: the next request sees less budget.
+    const after = await inTenant(tenantA, () => budgets.summary(brandA));
+    expect(after.day.committedMicros - committedBefore).toBe(ledger[0]?.costMicros);
+    const next = await inTenant(tenantA, () =>
+      videoAiService.preflight(A, {
+        documentId: v.documentId,
+        baseRevisionId: v.revisionId,
+        request: { kind: 'storyboard', brief: { objective: 'Next' } },
+      }),
+    );
+    expect(next.cost.remainingMicros).toBe(Math.min(after.month.remainingMicros, after.day.remainingMicros));
   });
 
   it('accept checks the storyboard again: a fact revoked or an asset no longer eligible since refuses it', async () => {
@@ -1018,6 +1055,43 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     expect(vertical.snapshot.tracks.find((t) => t.kind === 'video')?.items.map((c) => c.id)).toEqual(
       v.project.tracks.find((t) => t.kind === 'video')?.items.map((c) => c.id),
     );
+  });
+
+  it('places only the brand’s CTA copy for the storyboard’s channel (as written there) and checks the person’s ctaText', async () => {
+    const v = await assembledVideo('Call to action'); // storyboarded for linkedin_page: "Learn more"
+    const { job } = await recut(v.documentId, v.revision.id, {
+      summary: 'End with the call to action',
+      actions: [{ kind: 'add_cta', text: 'learn MORE', factIds: [] }],
+      unsupported: [],
+    });
+    const ops = job.result?.proposal?.operations ?? [];
+    const texts = ops.flatMap((o) =>
+      o.op === 'setOverlay' && o.overlay.element.type === 'text' ? [o.overlay.element.text] : [],
+    );
+    expect(texts).toEqual(['Learn more']);
+    const invented = await recut(v.documentId, v.revision.id, {
+      summary: 'Own words',
+      actions: [{ kind: 'add_cta', text: 'Grab yours now', factIds: [] }],
+      unsupported: [],
+    });
+    expect(invented.job.result?.conflicts.map((c) => c.code)).toEqual(['cta_not_approved']);
+    // The person's own call to action is held to the copy checks before anything starts.
+    const checked = await inTenant(tenantA, () =>
+      videoAiService.preflight(A, {
+        documentId: v.documentId,
+        baseRevisionId: v.revision.id,
+        request: {
+          kind: 'recut',
+          recut: { instruction: 'Add it', scope: { kind: 'timeline' }, ctaText: 'Cheap and 2x colder' },
+        },
+      }),
+    );
+    expect(
+      checked.issues
+        .filter((i) => i.severity === 'blocking')
+        .map((i) => i.code)
+        .sort(),
+    ).toEqual(['cta_claim_without_fact', 'cta_prohibited_phrase']);
   });
 
   it('a proposal on a moved document is stale; nothing is lost', async () => {

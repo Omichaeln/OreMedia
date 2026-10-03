@@ -868,7 +868,7 @@ export class VideoAiMockBackend {
     const ctx = { media: MEDIA, bindings: this.bindings(), idPrefix: `ai${job.id.slice(-6).toLowerCase()}_` };
     const compiled = compileAssembly(head.snapshot, input.storyboard, ctx);
     const summary = `Assembled storyboard “${input.storyboard.title}”`;
-    job.result = { ...job.result, storyboard: input.storyboard, conflicts: compiled.conflicts };
+    job.result = { ...job.result, storyboard: input.storyboard, draft: null, conflicts: compiled.conflicts };
     if (isEmptyProject(head.snapshot)) {
       const res = this.commit(job, compiled.operations, summary, 'agent'); // model-planned: agent guards
       return {
