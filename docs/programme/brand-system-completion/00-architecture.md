@@ -104,3 +104,21 @@ source can never be approved as-is: approval requires a source or an explicit re
 - The prompt renders guidance within a 12,000-character budget in a fixed order, the run's channel only, and cites a
   pillar's proof facts only while they are effective facts of the snapshot (BSC-3: approved, in their validity
   window, not superseded); a save refuses newly cited facts that are not in effect.
+
+### BSC-4 / BSC-5 as built
+
+- Tables (migration 0026, created only): `brand_sources`, `brand_assist_jobs`, `brand_suggestions`. Extracted text is
+  kept in a bounded column (400,000 characters); an uploaded document is deleted from the object store once read
+  (quarantine prefix, never served); an asset's original is read in place and never deleted.
+- `brandAssistWorkflowV1` (`brand-assist:<jobId>`, queue `agents`) spans three workers: websites on
+  `ingest-metrics` (worker-ingest: outbound fetch), documents on `media` (worker-render: untrusted parsers, object
+  store), budget, model calls and suggestions on `agents` (worker-core). Cancel is a signal relayed by
+  `brandAssistSignalRelayV1` from `brand.assist_cancel_requested`. Activities run as the requester (grants reloaded);
+  closing the job and settling the reservation run tenant-wide.
+- Robots and sitemap rules moved to `packages/providers/src/site-rules.ts` (shared with the SEO audit). PDF text
+  through unpdf (MIT, pinned 1.8.1, loaded only on worker-render); `.docx` through a bounded zip reader rather than a
+  library, so a zip bomb stops at a hard inflate cap.
+- Suggestion paths and document comparison live in `packages/domain/src/brand-suggestions.ts`; model output is
+  checked against strict per-section schemas (`contracts/brand-assist.ts`) and never repaired. A fact suggestion
+  becomes a proposed fact only when a person accepts it.
+- History is a read over applied versions; restore calls `brand.system.save` with the earlier document.
