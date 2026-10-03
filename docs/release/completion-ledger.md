@@ -202,3 +202,15 @@ applied` and `configuration complete`; every production service deployed SUCCESS
   `package.json` ignores that single advisory through `pnpm.auditConfig.ignoreGhsas` and residual risk R18 records the
   exception, its owner and removal trigger. The commit is ported into #40, #41 and #42. The owner may reject the
   exception by closing #43; merges then wait on an upstream fix.
+- 3 October 2026, 01:45 UTC: #43 (audit exception, e5fa896), #41 (focus race, 1236a6c), #40 (rejection detail,
+  b8e357a) and #42 (Google OIDC through undici, 9f2c9cf) squash-merged with CI green on each head. Every per-commit
+  production service deployed SUCCESS from 9f2c9cf in us-west2; production smoke run 37 passed on 9f2c9cf. Staging
+  acceptance run 8 (9f2c9cf): `ACCEPTANCE_DONE 85/86 (13 skipped)`, the counted failure still `smoke:upload:csp`;
+  the model evaluation now names its cause, `The model provider rejected the request (401: Missing Authentication
+header)`, and worker-core logs `openrouter 401: Missing Authentication header`. The key reference resolves (the
+  worker refuses to start without it) and the adapter always sends the header, so the likely casualty is the
+  transport: the OpenRouter adapters defaulted to Node's global fetch, the function the acceptance probe caught
+  returning empty Headers on Railway. Production's approval monitor sends a Bearer header through the same global
+  fetch to Gmail and completes every five minutes, so the fault is not universal; the root cause is not proven. PR
+  #45 moves the four OpenRouter adapters to undici's fetch; the next staging run discriminates: the same 401 after
+  #45 means the staging `OPENROUTER_API_KEY_REF` value is wrong (owner action; its value was not read).
