@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BrandSnapshot } from '@oremedia/contracts/brand';
 import type { RenderTargetInput } from '@oremedia/activities';
-import { STARTERS, blankDocument, instantiateStarter, type StarterBrand } from '@oremedia/editor';
+import {
+  STARTERS,
+  blankDocument,
+  instantiateStarter,
+  type StarterBrand,
+} from '@oremedia/editor/starters/index';
 import { latinFeedFixture } from '@oremedia/editor/renderer/fixtures';
 import { createChromiumRenderer } from './chromium-renderer';
 import { generateFixtureAsset, loadFixtureFont } from './fixture-assets';

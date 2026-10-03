@@ -12,7 +12,7 @@ import { creativeDocuments, creativeRevisions } from '@oremedia/db/schema/creati
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
-import { instantiateStarter, starterByKey, type StarterBrand } from '@oremedia/editor';
+import { instantiateStarter, starterByKey, type StarterBrand } from '@oremedia/editor/starters/index';
 import {
   brandService,
   registerBrandAssetKindSource,
