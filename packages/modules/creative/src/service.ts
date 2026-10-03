@@ -86,6 +86,7 @@ import {
   validateVideoProject,
   videoOpItemIds,
   videoScopeOf,
+  type VideoScopeState,
 } from '@oremedia/editor/video/index';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
@@ -514,7 +515,11 @@ async function evaluateVideoBatch(
   base: RevisionRow,
   batch: VideoOperationBatch,
   tx: Tx,
-  opts: { scope?: VideoAiScope | null } = {},
+  opts: {
+    scope?: VideoAiScope | null;
+    /** A scope already resolved (and grown) by an earlier part of the same change, carried across parts. */
+    scopeState?: VideoScopeState | null;
+  } = {},
 ) {
   const project = videoSnapshotOf(base);
   const snapshot = await resolveSnapshot(actor, doc.brandId, project.brandVersionId, tx);
@@ -522,7 +527,12 @@ async function evaluateVideoBatch(
   const media = await mediaLookup(timedAssetIds(project), tx);
   const changed = new Set<string>();
   // STU-3: an agent batch made for a scoped request is held to that scope (resolved against the base project).
-  const scope = batch.origin === 'agent' ? videoScopeOf(project, opts.scope ?? null) : null;
+  const scope =
+    batch.origin !== 'agent'
+      ? null
+      : opts.scopeState !== undefined
+        ? opts.scopeState
+        : videoScopeOf(project, opts.scope ?? null);
   for (const [index, op] of batch.operations.entries()) {
     try {
       guardVideoAgentScoped(next, op, batch.origin, scope);
@@ -1903,5 +1913,6 @@ export const creativeEngine = {
   findingDetail,
   assertVideo,
   authoriseRefs,
+  loadDocumentForUpdate: (id: string, tx: Tx) => documentsRepo.lock(id, tx),
 };
 export type CreativeDocumentRow = DocumentRow;

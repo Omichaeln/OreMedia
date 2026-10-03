@@ -502,6 +502,61 @@ const compileContext = (job: JobRow, prepared: Prepared, scope: VideoAiScope | n
 const stripGroupOps = <G extends { operations: unknown }>(groups: G[]) =>
   groups.map(({ operations: _o, ...g }) => g);
 
+/** The most operations one revision holds (VideoOperationBatch); a larger change is committed in parts. */
+const BATCH_MAX = 100;
+
+/**
+ * Commits a compiled change as one revision, or (above BATCH_MAX operations) as consecutive revisions of at most
+ * BATCH_MAX operations each, like a large restore: every state between parts is a state the reducer reached, each
+ * part is evaluated with the same (growing) scope and records the job's inputs. Returns the last commit and every
+ * revision written, in order, so the studio adopts each as an undo step.
+ */
+async function commitInParts(
+  actor: ResolvedActor,
+  doc: CreativeDocumentRow,
+  base: Awaited<ReturnType<typeof engine.loadRevision>>,
+  batch: VideoOperationBatch,
+  evaluated: Awaited<ReturnType<typeof engine.evaluateVideoBatch>>,
+  scope: VideoAiScope | null,
+  inputs: VideoGenerationInputs,
+  tx: Tx,
+) {
+  if (batch.operations.length <= BATCH_MAX) {
+    const committed = await engine.commitVideoRevision(actor, doc, base, batch, evaluated, tx, inputs);
+    return { ...committed, parts: [committed.revision] };
+  }
+  const project = parseSnapshot('video', base.snapshot).snapshot as VideoProjectV1;
+  const scopeState = batch.origin === 'agent' ? videoScopeOf(project, scope) : null;
+  const count = Math.ceil(batch.operations.length / BATCH_MAX);
+  const parts = [];
+  let current = { doc, base };
+  let last: Awaited<ReturnType<typeof engine.commitVideoRevision>> | null = null;
+  for (let k = 0; k < count; k++) {
+    const part: VideoOperationBatch = {
+      ...batch,
+      baseRevisionId: current.base.id,
+      operations: batch.operations.slice(k * BATCH_MAX, (k + 1) * BATCH_MAX),
+      summary: `${batch.summary} (part ${k + 1} of ${count})`.slice(-500),
+    };
+    const partEvaluated = await engine.evaluateVideoBatch(actor, current.doc, current.base, part, tx, {
+      scopeState,
+    });
+    last = await engine.commitVideoRevision(
+      actor,
+      current.doc,
+      current.base,
+      part,
+      partEvaluated,
+      tx,
+      inputs,
+    );
+    parts.push(last.revision);
+    const nextDoc = await engine.loadDocumentForUpdate(doc.id, tx);
+    current = { doc: nextDoc, base: await engine.loadRevision(nextDoc, last.revision.id, tx) };
+  }
+  return { ...(last as NonNullable<typeof last>), parts };
+}
+
 // ---- the service (router-facing) -----------------------------------------------------------------------------
 
 export const videoAiService = {
@@ -760,18 +815,19 @@ export const videoAiService = {
     const result = VideoAiResult.parse(job.result);
     const fresh = isEmptyProject(prepared.project);
     if (fresh) {
-      const committed = await engine.commitVideoRevision(
+      const committed = await commitInParts(
         actor,
         doc,
         prepared.base,
         batch,
         evaluated,
-        tx,
+        null,
         generationInputsOf(job, prepared, 'assembly', {
           assetVersionIds: compiled.assetVersionIds,
           factIds: compiled.factIds,
           storyboardHash,
         }),
+        tx,
       );
       await jobsRepo.update(
         job.id,
@@ -914,19 +970,20 @@ export const videoAiService = {
     const evaluated = await engine.evaluateVideoBatch(actor, doc, prepared.base, batch, tx, {
       scope: proposal.scope,
     });
-    const committed = await engine.commitVideoRevision(
+    const committed = await commitInParts(
       actor,
       doc,
       prepared.base,
       batch,
       evaluated,
-      tx,
+      proposal.scope,
       generationInputsOf(job, prepared, proposal.kind === 'recut' ? 'recut' : 'assembly', {
         assetVersionIds,
         factIds,
         acceptedGroupIds: [...only],
         ...(proposal.storyboard ? { storyboardHash: hashCanonical(proposal.storyboard) } : {}),
       }),
+      tx,
     );
     await jobsRepo.update(
       job.id,

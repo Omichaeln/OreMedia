@@ -385,7 +385,8 @@ export const VideoProposal = z.object({
   baseRevisionId: z.string(),
   origin: z.enum(['user', 'agent']),
   summary: z.string().max(500),
-  operations: z.array(VideoOperation).max(400),
+  /** Every operation of the proposal (for display; an accept recompiles the kept groups). */
+  operations: z.array(VideoOperation).max(4_000),
   groups: z.array(VideoProposalGroup).min(1),
   changes: z.array(TimelineChange),
   findings: z.array(Finding),

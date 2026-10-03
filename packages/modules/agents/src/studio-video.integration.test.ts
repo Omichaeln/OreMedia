@@ -580,6 +580,50 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     ).toBeInstanceOf(ValidationFailedError);
   });
 
+  it('commits a change above 100 operations as consecutive revisions (each a readable batch, one undo step each)', async () => {
+    const v = await newVideo('Long storyboard');
+    const answer: ModelStoryboardOutput = {
+      title: 'Twelve scenes',
+      scenes: Array.from({ length: 12 }, (_, i) => ({
+        title: `Scene ${i + 1}`,
+        narration: 'One line here. Another line there. And a third.',
+        onScreenText: `Title ${i + 1}`,
+        shots: Array.from({ length: 6 }, (_, k) => ({
+          description: `Still ${i + 1}.${k + 1}`,
+          assetVersionId: 'av_still',
+          durationMs: 1_000,
+        })),
+      })),
+      gaps: [],
+      musicAssetVersionId: 'av_music',
+    };
+    const { job } = await storyboardFor(v.documentId, v.revisionId, answer);
+    const assembled = await run(tenantA, (tx) =>
+      videoAiService.assemble(
+        A,
+        { jobId: job.id, baseRevisionId: v.revisionId, storyboard: job.result!.storyboard! },
+        tx,
+      ),
+    );
+    if (!assembled.applied) throw new Error('expected apply');
+    expect(assembled.parts.length).toBeGreaterThan(1);
+    for (const part of assembled.parts) expect(part.operations.operations.length).toBeLessThanOrEqual(100);
+    expect(assembled.parts.at(-1)?.id).toBe(assembled.revision.id);
+    expect(assembled.parts.map((p) => p.number)).toEqual(assembled.parts.map((_, k) => 2 + k));
+    const project = (await head(v.documentId)).snapshot;
+    expect(project.tracks.find((t) => t.kind === 'video')?.items).toHaveLength(72);
+    expect(project.durationMs).toBe(72_000);
+    // Every part reads back (VideoOperationBatch holds at most 100 operations) and records the job.
+    for (const part of assembled.parts) {
+      const rev = await inTenant(tenantA, () =>
+        creativeService.revisions.get(A, { documentId: v.documentId, revisionId: part.id }),
+      );
+      expect(rev.kind).toBe('video');
+      const [row] = await tdb.db.select().from(creativeRevisions).where(eq(creativeRevisions.id, part.id));
+      expect(row?.generationInputs).toMatchObject({ jobId: job.id, kind: 'assembly' });
+    }
+  });
+
   /** A 16:9 video assembled from a two-scene storyboard: intro 4 s, demo 8 s (music under both). */
   async function assembledVideo(title: string) {
     const v = await newVideo(title);
