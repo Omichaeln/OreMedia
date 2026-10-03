@@ -44,6 +44,8 @@ type Phase = 'begin' | 'resolve' | 'render' | 'store' | 'complete';
 export interface VideoRenderControl {
   /** Runs a step that a cancel signal stops (the activity is cancelled and its process killed). */
   cancellable<T>(fn: () => Promise<T>): Promise<T>;
+  /** Runs a step that no cancellation stops (cleaning up after one). */
+  shielded<T>(fn: () => Promise<T>): Promise<T>;
   cancelled(): boolean;
 }
 
@@ -61,6 +63,17 @@ export async function runVideoRender(
     return { outcome: 'failed', reason };
   };
   let phase: Phase = 'begin';
+  let work: { revisionId: string; documentId: string; brandId: string } | null = null;
+  // Best effort: what a cancelled or failed render left in the store (frames, an unrecorded MP4) is deleted.
+  const discard = async () => {
+    const refs = work;
+    if (!refs) return;
+    try {
+      await control.shielded(() => acts.discardVideoRenderWork({ ...input, ...refs }));
+    } catch {
+      // The working prefix is per job and never referenced by an export; a later sweep may remove it.
+    }
+  };
   try {
     const begun = await acts.beginVideoRender(input);
     phase = 'resolve';
@@ -93,6 +106,7 @@ export async function runVideoRender(
       produced = { pageId: 'timeline', formatKey: resolved.formatKey, ...resolved.reuse };
     } else {
       phase = 'render';
+      work = { revisionId: refs.revisionId, documentId: refs.documentId, brandId: refs.brandId };
       const overlays = await control.cancellable(() =>
         acts.renderVideoOverlays({
           ...refs,
@@ -100,6 +114,7 @@ export async function runVideoRender(
           fonts: resolved.fonts,
           assets: resolved.assets,
           rendererVersion: resolved.rendererVersion,
+          frameCount: resolved.overlayFrameCount,
         }),
       );
       findings = [...findings, ...overlays.findings];
@@ -114,7 +129,10 @@ export async function runVideoRender(
       );
       produced = composed;
     }
-    if (control.cancelled()) return { outcome: 'cancelled' };
+    if (control.cancelled()) {
+      await discard();
+      return { outcome: 'cancelled' };
+    }
 
     phase = 'store';
     const stored = await control.cancellable(async () => {
@@ -163,6 +181,7 @@ export async function runVideoRender(
     });
     return { outcome: 'ready', exportIds: completed.exportIds, reused: resolved.reuse !== null };
   } catch (err) {
+    await discard();
     if (wasCancelled(err, control)) return { outcome: 'cancelled' };
     // Retries are exhausted (or the error was non-retryable): the job must not stay in `rendering`.
     return fail(
@@ -193,17 +212,19 @@ export async function videoRenderJobWorkflowV1(input: RenderJobInputV1): Promise
       nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES,
     },
   });
-  // Overlays: one Chromium page per overlay or caption (a 180 s project holds a few hundred at most).
-  const overlays = proxyActivities<VideoRenderJobActivitiesV1>({
-    startToCloseTimeout: '15 minutes',
-    heartbeatTimeout: '1 minute',
-    retry: {
-      initialInterval: '10s',
-      maximumInterval: '2 minutes',
-      maximumAttempts: 3,
-      nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES,
-    },
-  });
+  // Overlays: one Chromium page per overlay or caption (at most VIDEO_MAX_OVERLAY_FRAMES); the time limit grows with
+  // the count (2 minutes plus 3 s a frame) and the per-frame heartbeat notices a lost worker within a minute.
+  const overlaysFor = (frames: number) =>
+    proxyActivities<VideoRenderJobActivitiesV1>({
+      startToCloseTimeout: `${120 + 3 * frames} seconds`,
+      heartbeatTimeout: '1 minute',
+      retry: {
+        initialInterval: '10s',
+        maximumInterval: '2 minutes',
+        maximumAttempts: 3,
+        nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES,
+      },
+    });
   // Compose downloads up to a few GiB of originals and encodes up to 180 s at 1080p; ffmpeg progress heartbeats
   // every few seconds (and at least every 30 s), so a lost worker is noticed in a minute.
   const compose = proxyActivities<VideoRenderJobActivitiesV1>({
@@ -239,15 +260,17 @@ export async function videoRenderJobWorkflowV1(input: RenderJobInputV1): Promise
     {
       beginVideoRender: fast.beginVideoRender,
       resolveVideoRender: fast.resolveVideoRender,
-      renderVideoOverlays: overlays.renderVideoOverlays,
+      renderVideoOverlays: (i) => overlaysFor(i.frameCount ?? 400).renderVideoOverlays(i),
       composeVideo: compose.composeVideo,
       storeVideoExport: store.storeVideoExport,
       completeVideoRender: fast.completeVideoRender,
       failVideoRender: fast.failVideoRender,
+      discardVideoRenderWork: fast.discardVideoRenderWork,
     },
     input,
     {
       cancellable: (fn) => scope.run(fn),
+      shielded: (fn) => CancellationScope.nonCancellable(fn),
       cancelled: () => cancelled,
     },
   );

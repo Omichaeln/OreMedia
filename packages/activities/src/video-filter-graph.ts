@@ -19,9 +19,11 @@ import { frameOf, lengthOf, previousAdjacent } from '@oremedia/editor/video/time
  * on the cut (contracts/video.ts): a crossfade or slide extends both sides by half the transition with a cloned edge
  * frame (tpad) and joins them with xfade; a fade through black fades the outgoing clip out over its last half and
  * the incoming one in over its first half. No clip moves and the length is unchanged. Overlays and captions are transparent
- * full-frame PNGs from the scene renderer, looped in memory over their window and overlaid with enable windows,
- * enter/exit animations written with the formulas of overlayAnimationAt. Sound: clip sound and audio items are
- * resampled to 48 kHz stereo, trimmed, gained, faded and delayed to the sample, then mixed without normalisation
+ * full-frame PNGs from the scene renderer, packed into a few lanes (overlayLanes: windows that overlap in time go to
+ * separate lanes, in drawing order). Each lane is ONE image-sequence input (one PNG per window, a shared transparent
+ * PNG for the gaps) retimed to its windows and held with fps, so ffmpeg decodes one frame per lane at a time however
+ * many titles and captions there are; enter/exit animations use the formulas of overlayAnimationAt. Sound: clip sound and audio items are
+ * resampled to 48 kHz stereo, trimmed, gained, faded and placed to the sample, then mixed without normalisation
  * and padded or cut to the exact duration.
  */
 
@@ -48,7 +50,12 @@ export interface ComposeFrameFile {
 export interface ComposePlanInput {
   project: VideoProjectV1;
   sources: Readonly<Record<string, ComposeSourceFile>>;
+  /** In drawing order (later frames are drawn above earlier ones they overlap). */
   frames: readonly ComposeFrameFile[];
+  /** A fully transparent PNG of the project size: the gaps between a lane's windows. */
+  blankFramePath: string;
+  /** Path of a lane's image sequence with `%05d` for its index (the caller places the files from `stills`). */
+  lanePattern: (lane: number) => string;
   /** Path of the filter_complex script the caller writes `filterGraph` to. */
   filterScriptPath: string;
   outputPath: string;
@@ -68,6 +75,63 @@ export interface ComposePlan {
   totalFrames: number;
   durationSeconds: number;
   inputCount: number;
+  /** Files of the lane sequences: each `path` is `from` (a frame file, or the blank) moved or linked into place. */
+  stills: Array<{ path: string; from: string }>;
+}
+
+/** Overlay and caption windows one render draws (each lane is one ffmpeg input, so this bounds its memory). */
+export const VIDEO_MAX_OVERLAY_FRAMES = 400;
+/** Overlays and captions on screen at the same moment (lanes). */
+export const VIDEO_MAX_OVERLAY_LANES = 8;
+
+/** The overlay and caption windows of a project in drawing order (tracks in order, items in order). */
+export function overlayWindows(
+  project: VideoProjectV1,
+): Array<{ itemId: string; kind: 'overlay' | 'caption'; startMs: number; endMs: number }> {
+  const out: Array<{ itemId: string; kind: 'overlay' | 'caption'; startMs: number; endMs: number }> = [];
+  for (const t of project.tracks) {
+    if (t.kind === 'overlay')
+      for (const o of t.items)
+        if (o.element.visible)
+          out.push({ itemId: o.id, kind: 'overlay', startMs: o.startMs, endMs: o.endMs });
+    if (t.kind === 'caption')
+      for (const c of t.items)
+        out.push({ itemId: c.id, kind: 'caption', startMs: c.startMs, endMs: c.endMs });
+  }
+  return out;
+}
+
+/**
+ * Packs windows (in drawing order) into lanes, each a list of window indices sorted by start: a window goes to the
+ * lowest lane above every earlier window it overlaps that is free over its frames, so drawing lanes bottom to top
+ * keeps the drawing order wherever windows overlap. Windows shorter than a frame are left out.
+ */
+export function overlayLanes(
+  windows: ReadonlyArray<{ startMs: number; endMs: number }>,
+  fps: number,
+  totalFrames: number,
+): number[][] {
+  const lanes: number[][] = [];
+  const span = (j: number) => {
+    const w = windows[j] as { startMs: number; endMs: number };
+    return [frameOf(w.startMs, fps), Math.min(totalFrames, frameOf(w.endMs, fps))] as const;
+  };
+  const overlaps = (a: number, b: number) => {
+    const [a0, a1] = span(a);
+    const [b0, b1] = span(b);
+    return a0 < b1 && b0 < a1;
+  };
+  const laneOf = new Map<number, number>();
+  windows.forEach((_, j) => {
+    const [s0, s1] = span(j);
+    if (s1 <= s0) return;
+    let lane = 0;
+    for (const [k, l] of laneOf) if (l >= lane && overlaps(k, j)) lane = l + 1;
+    while (lanes[lane]?.some((k) => overlaps(k, j))) lane++;
+    (lanes[lane] ??= []).push(j);
+    laneOf.set(j, lane);
+  });
+  return lanes.map((l) => [...l].sort((a, b) => span(a)[0] - span(b)[0]));
 }
 
 /** ffmpeg demuxer per accepted mime, forced so a file is never sniffed into another format (or protocol). */
@@ -112,9 +176,11 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
   const args: string[] = ['-v', 'error', '-nostdin', '-y', '-hide_banner'];
   const graph: string[] = [];
   let inputs = 0;
-  const addInput = (path: string, mime: string, opts: string[]): number => {
-    const demuxer = demuxerFor(mime);
-    args.push(...SAFE_INPUT, ...opts, ...(demuxer ? ['-f', demuxer] : []), '-i', path);
+  const addInput = (path: string, mime: string, opts: string[], forced?: string): number => {
+    // Never sniffed: a file whose demuxer is not known is refused rather than probed.
+    const demuxer = forced ?? demuxerFor(mime);
+    if (!demuxer) throw new Error(`no forced demuxer for ${mime}`);
+    args.push(...SAFE_INPUT, ...opts, '-f', demuxer, '-i', path);
     return inputs++;
   };
 
@@ -201,14 +267,18 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
       const fadeOut = hOut ? sec(hOut, F) : null;
       graph.push(
         [
-          `[${k}:a]asetpts=PTS-STARTPTS`,
-          `aresample=${AUDIO_RATE}`,
+          // Timestamps are kept (the seek point is 0): sound that starts after it (an edit list's empty edit,
+          // encoder priming) is padded with silence from 0 instead of being pulled earlier.
+          `[${k}:a]aresample=${AUDIO_RATE}:async=1:first_pts=0`,
           'aformat=sample_fmts=fltp:channel_layouts=stereo',
           `atrim=end_sample=${Math.round((n * AUDIO_RATE) / F)}`,
           `volume=${clip.gainDb}dB`,
           ...(fadeIn ? [`afade=t=in:st=0:d=${fadeIn}`] : []),
           ...(fadeOut ? [`afade=t=out:st=${sec(n - hOut, F)}:d=${fadeOut}`] : []),
-          `adelay=delays=${Math.round((f0 * AUDIO_RATE) / F)}S:all=1`,
+          // Placed by timestamp (in samples) and padded with silence from 0: adelay's leading silence carries no
+          // timestamps in ffmpeg 6.1, which the AAC path then drops (the sound would land early).
+          `asetpts=PTS+${Math.round((f0 * AUDIO_RATE) / F)}`,
+          `aresample=${AUDIO_RATE}:async=1:first_pts=0`,
         ].join(',') + `[${a}]`,
       );
       audioLabels.push(a);
@@ -263,41 +333,64 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
   if (!picture) throw new Error('empty project');
 
   // ---- overlays and captions ---------------------------------------------------------------------------------
-  input.frames.forEach((f, j) => {
-    const s0 = frameOf(f.startMs, F);
-    const s1 = Math.min(totalFrames, frameOf(f.endMs, F));
-    if (s1 <= s0) return;
-    const k = addInput(f.path, 'image/png', []);
-    const start = sec(s0, F);
-    const end = sec(s1, F);
+  const stills: Array<{ path: string; from: string }> = [];
+  overlayLanes(input.frames, F, totalFrames).forEach((lane, l) => {
+    const pattern = input.lanePattern(l);
+    const at: number[] = [];
+    const place = (from: string, frame: number) => {
+      stills.push({ path: pattern.replace('%05d', String(at.length).padStart(5, '0')), from });
+      at.push(frame);
+    };
     const anim: string[] = [];
-    let y = '0';
-    const enter = f.overlay?.enter;
-    const exit = f.overlay?.exit;
-    if (enter && enter.kind !== 'none' && enter.durationMs > 0) {
-      const d = ms3(enter.durationMs);
-      if (enter.kind === 'fade') anim.push(`fade=t=in:st=${start}:d=${d}:alpha=1`);
-      else y = `if(lt(t,${start}+${d}),(1-(t-${start})/${d})*${SLIDE_FRACTION}*${H},0)`;
+    const ys: string[] = [];
+    const enable: string[] = [];
+    let cursor = 0;
+    for (const j of lane) {
+      const f = input.frames[j] as ComposeFrameFile;
+      const s0 = frameOf(f.startMs, F);
+      const s1 = Math.min(totalFrames, frameOf(f.endMs, F));
+      if (s0 > cursor) place(input.blankFramePath, cursor);
+      place(f.path, s0);
+      cursor = s1;
+      const start = sec(s0, F);
+      const end = sec(s1, F);
+      const shown = `between(t,${start},${(s1 / F - 0.5 / F).toFixed(6)})`;
+      enable.push(shown);
+      let y = '';
+      const enter = f.overlay?.enter;
+      const exit = f.overlay?.exit;
+      if (enter && enter.kind !== 'none' && enter.durationMs > 0) {
+        const d = ms3(enter.durationMs);
+        if (enter.kind === 'fade') anim.push(`fade=t=in:st=${start}:d=${d}:alpha=1:enable='${shown}'`);
+        else y = `if(lt(t,${start}+${d}),(1-(t-${start})/${d})*${SLIDE_FRACTION}*${H},0)`;
+      }
+      if (exit && exit.kind !== 'none' && exit.durationMs > 0) {
+        const d = ms3(exit.durationMs);
+        if (exit.kind === 'fade')
+          anim.push(
+            `fade=t=out:st=${(s1 / F - exit.durationMs / 1000).toFixed(6)}:d=${d}:alpha=1:enable='${shown}'`,
+          );
+        else y = `${y || '0'}-if(gt(t,${end}-${d}),(1-(${end}-t)/${d})*${SLIDE_FRACTION}*${H},0)`;
+      }
+      if (y) ys.push(`if(${shown},${y},0)`);
     }
-    if (exit && exit.kind !== 'none' && exit.durationMs > 0) {
-      const d = ms3(exit.durationMs);
-      if (exit.kind === 'fade')
-        anim.push(`fade=t=out:st=${(s1 / F - exit.durationMs / 1000).toFixed(6)}:d=${d}:alpha=1`);
-      else y = `${y}-if(gt(t,${end}-${d}),(1-(${end}-t)/${d})*${SLIDE_FRACTION}*${H},0)`;
-    }
-    const ov = `ov${j}`;
-    graph.push(
-      [
-        `[${k}:v]format=rgba`,
-        'loop=loop=-1:size=1:start=0',
-        `trim=end_frame=${s1 - s0}`,
-        `settb=1/${F},setpts=N+${s0}`,
-        ...anim,
-      ].join(',') + `[${ov}]`,
+    // The lane ends on a blank frame, so its last window is held to its end and nothing after it.
+    place(input.blankFramePath, cursor);
+    const k = addInput(
+      pattern,
+      'image/png',
+      ['-framerate', String(F), '-start_number', '0', '-pattern_type', 'sequence'],
+      'image2',
     );
-    const out = `pic${j}`;
+    const retime = at.map((frame, n) => (n > 0 && frame > 0 ? `+eq(N,${n})*${frame}` : '')).join('');
+    const ov = `ov${l}`;
     graph.push(
-      `[${picture}][${ov}]overlay=x=0:y='${y}':eof_action=pass:enable='between(t,${start},${(s1 / F - 0.5 / F).toFixed(6)})'[${out}]`,
+      [`[${k}:v]format=rgba`, `settb=1/${F}`, `setpts='0${retime}'`, `fps=${F}`, ...anim].join(',') +
+        `[${ov}]`,
+    );
+    const out = `pic${l}`;
+    graph.push(
+      `[${picture}][${ov}]overlay=x=0:y='${ys.join('+') || '0'}':eof_action=pass:enable='${enable.join('+')}'[${out}]`,
     );
     picture = out;
   });
@@ -315,14 +408,16 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
       const a = `au${audioLabels.length}`;
       graph.push(
         [
-          `[${k}:a]asetpts=PTS-STARTPTS`,
-          `aresample=${AUDIO_RATE}`,
+          // Timestamps are kept (the seek point is 0): sound that starts after it (an edit list's empty edit,
+          // encoder priming) is padded with silence from 0 instead of being pulled earlier.
+          `[${k}:a]aresample=${AUDIO_RATE}:async=1:first_pts=0`,
           'aformat=sample_fmts=fltp:channel_layouts=stereo',
           `atrim=end_sample=${Math.round((len * AUDIO_RATE) / 1000)}`,
           `volume=${item.gainDb}dB`,
           ...(item.fadeInMs ? [`afade=t=in:st=0:d=${ms3(item.fadeInMs)}`] : []),
           ...(item.fadeOutMs ? [`afade=t=out:st=${ms3(len - item.fadeOutMs)}:d=${ms3(item.fadeOutMs)}`] : []),
-          `adelay=delays=${Math.round((item.startMs * AUDIO_RATE) / 1000)}S:all=1`,
+          `asetpts=PTS+${Math.round((item.startMs * AUDIO_RATE) / 1000)}`,
+          `aresample=${AUDIO_RATE}:async=1:first_pts=0`,
         ].join(',') + `[${a}]`,
       );
       audioLabels.push(a);
@@ -393,7 +488,7 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
     '-nostats',
     input.outputPath,
   );
-  return { args, filterGraph: graph.join(';\n'), totalFrames, durationSeconds, inputCount: inputs };
+  return { args, filterGraph: graph.join(';\n'), totalFrames, durationSeconds, inputCount: inputs, stills };
 }
 
 /** ffmpeg args of the poster frame (WebP, full size) taken from the rendered MP4. */

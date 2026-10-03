@@ -52,6 +52,7 @@ const resolved: VideoRenderResolveSuccess = {
     revisionContentHash: H('c'),
   },
   tempBudgetBytes: 1 << 30,
+  overlayFrameCount: 1,
   findings: [],
 };
 const composed: VideoComposeResult = {
@@ -119,6 +120,7 @@ function fakes(compose: 'ok' | 'transient' | 'hang') {
     failVideoRender: rec('fail', () => {
       throw ApplicationFailure.nonRetryable('must not fail a cancelled job', 'Unexpected');
     }),
+    discardVideoRenderWork: rec('discard', () => ({ deleted: 1 })),
   };
   return {
     acts,
@@ -191,6 +193,8 @@ describe('videoRenderJobWorkflowV1 on a Temporal server (time-skipping in CI)', 
     expect(f.sawCancel()).toBe(true);
     expect(f.count('complete')).toBe(0);
     expect(f.count('fail')).toBe(0);
+    // The cancelled run's working files are discarded outside the cancelled scope.
+    expect(f.count('discard')).toBe(1);
     histories.push(history);
   }, 300_000);
 

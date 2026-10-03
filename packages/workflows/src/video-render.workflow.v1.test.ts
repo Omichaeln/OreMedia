@@ -50,6 +50,7 @@ const resolved = (over: Partial<VideoRenderResolveSuccess> = {}): VideoRenderRes
     revisionContentHash: H('c'),
   },
   tempBudgetBytes: 1_000_000_000,
+  overlayFrameCount: 1,
   findings: [],
   ...over,
 });
@@ -132,10 +133,15 @@ function fakes(
     ),
     completeVideoRender: rec('complete', () => ({ exportIds: ['exp_1'] })),
     failVideoRender: rec('fail', () => undefined),
+    discardVideoRenderWork: rec('discard', () => ({ deleted: 2 })),
   };
   return { acts, calls, seen };
 }
-const control = (cancelled = () => false): VideoRenderControl => ({ cancellable: (fn) => fn(), cancelled });
+const control = (cancelled = () => false): VideoRenderControl => ({
+  cancellable: (fn) => fn(),
+  shielded: (fn) => fn(),
+  cancelled,
+});
 
 describe('runVideoRender (videoRenderJobWorkflowV1 orchestration)', () => {
   it('begins, resolves, draws overlays, composes, verifies and completes with the dedupe key and all findings', async () => {
@@ -214,6 +220,13 @@ describe('runVideoRender (videoRenderJobWorkflowV1 orchestration)', () => {
     ).toEqual({ outcome: 'cancelled' });
     expect(f.calls).not.toContain('fail');
     expect(f.calls).not.toContain('complete');
+    // Its working files (overlay frames, any uploaded MP4) are discarded.
+    expect(f.calls.at(-1)).toBe('discard');
+    expect(f.seen['discard']).toMatchObject({
+      revisionId: 'rev_1',
+      brandId: 'brd_1',
+      documentId: expect.any(String),
+    });
   });
 
   it('a job found cancelled by the activity (RenderCancelledError) also ends as cancelled', async () => {
@@ -238,6 +251,7 @@ describe('runVideoRender (videoRenderJobWorkflowV1 orchestration)', () => {
       outcome: 'failed',
       reason: 'export_integrity',
     });
+    expect(integrity.calls.slice(-2)).toEqual(['discard', 'fail']);
     const crash = fakes({ compose: () => Promise.reject(new Error('ffmpeg failed (1): x')) });
     expect(await runVideoRender(crash.acts, input, control())).toEqual({
       outcome: 'failed',

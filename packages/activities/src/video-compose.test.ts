@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MediaProbeV1 } from '@oremedia/contracts/media';
 import type { VideoProjectV1 } from '@oremedia/contracts/video';
 import { mediaToolsAvailable, probeFile, runTool, withTempDir } from '@oremedia/module-assets';
-import { buildComposePlan, demuxerFor, type ComposeSourceFile } from './video-filter-graph';
+import { buildComposePlan, demuxerFor, overlayLanes, type ComposeSourceFile } from './video-filter-graph';
 import { encodeProject } from './video-render';
 
 /**
@@ -234,6 +234,15 @@ describe.skipIf(!hasTools)('compositor on real ffmpeg', { timeout: 300_000 }, ()
       '1',
       join(dir, 'caption.png'),
     ]);
+    await ff([
+      '-f',
+      'lavfi',
+      '-i',
+      box(100, 300, 800, 200, 0, 255, 0),
+      '-frames:v',
+      '1',
+      join(dir, 'cover.png'),
+    ]);
     sources = {
       A: {
         path: join(dir, 'a.mp4'),
@@ -391,6 +400,40 @@ describe.skipIf(!hasTools)('compositor on real ffmpeg', { timeout: 300_000 }, ()
     expect(await g(60)).toBeLessThan(40);
   });
 
+  it('draws many windows through one input per lane, and overlapping ones in drawing order', async () => {
+    const short = project((x) => {
+      x.tracks[0]!.items.length = 1;
+      x.durationMs = 4_000;
+      (x.tracks[2]!.items as unknown[]).length = 0;
+    });
+    // 40 back-to-back 100 ms windows alternating title and caption: one lane.
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      path: join(dir, i % 2 ? 'caption.png' : 'title.png'),
+      startMs: i * 100,
+      endMs: (i + 1) * 100,
+      itemId: `w${i}`,
+    }));
+    const out = await render(short, many);
+    const magenta = (p: number[]) => (p[0] ?? 0) > 200 && (p[2] ?? 0) > 200 && (p[1] ?? 255) < 60;
+    const cyan = (p: number[]) => (p[1] ?? 0) > 200 && (p[2] ?? 0) > 200 && (p[0] ?? 255) < 60;
+    for (const i of [0, 1, 17, 38, 39]) {
+      const f = 3 * i + 1;
+      expect(magenta(await pixel(out.output, f, 500, 400)), `frame ${f}`).toBe(i % 2 === 0);
+      expect(cyan(await pixel(out.output, f, 540, 1450)), `frame ${f}`).toBe(i % 2 === 1);
+    }
+    // A green box over the title, drawn after it, overlaps it from 1.5 s to 2.0 s: a second lane, on top.
+    const layered = await render(short, [
+      { path: join(dir, 'title.png'), startMs: 1_000, endMs: 2_000, itemId: 't' },
+      { path: join(dir, 'cover.png'), startMs: 1_500, endMs: 2_500, itemId: 'c' },
+    ]);
+    const green = (p: number[]) => (p[1] ?? 0) > 200 && (p[0] ?? 255) < 60 && (p[2] ?? 255) < 60;
+    expect(magenta(await pixel(layered.output, 40, 500, 400))).toBe(true);
+    expect(green(await pixel(layered.output, 50, 500, 400))).toBe(true);
+    expect(green(await pixel(layered.output, 70, 500, 400))).toBe(true);
+    const after = await pixel(layered.output, 80, 500, 400);
+    expect(green(after) || magenta(after)).toBe(false);
+  });
+
   it('keeps sound in sync: a beep 1.0 s into its source, trimmed by 0.5 s and placed at 2.0 s, sounds at 2.5 s', async () => {
     const pcm = await runTool(
       'ffmpeg',
@@ -407,6 +450,85 @@ describe.skipIf(!hasTools)('compositor on real ffmpeg', { timeout: 300_000 }, ()
     expect(Math.abs(onset / 48 - 2_500)).toBeLessThanOrEqual(10); // ms
     // A is muted: silence before the beep.
     expect(Math.max(...samples.slice(0, 48 * 2_400).map(Math.abs))).toBeLessThan(200);
+  });
+
+  it("keeps a clip's own sound in sync with its picture for MOV and MP4 sources with edit lists", async () => {
+    // A flash on frame 30 (1.0 s) and a beep at 1.0 s; the sound starts 0.2 s after the picture (an empty edit).
+    for (const [ext, mime, acodec] of [
+      ['mov', 'video/quicktime', 'pcm_s16le'],
+      ['mp4', 'video/mp4', 'aac'],
+    ] as const) {
+      const file = join(dir, `sync.${ext}`);
+      await ff([
+        '-f',
+        'lavfi',
+        '-i',
+        "color=c=black:s=320x240:r=30,format=gbrp,geq=r='if(eq(N,30),255,0)':g='if(eq(N,30),255,0)':b='if(eq(N,30),255,0)'",
+        '-itsoffset',
+        '0.2',
+        '-f',
+        'lavfi',
+        '-i',
+        "aevalsrc=exprs='if(between(t,0.8,0.9),0.8*sin(2*PI*1000*t),0)':s=48000:d=3.8",
+        '-t',
+        '4',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        acodec,
+        file,
+      ]);
+      const synced = {
+        ...sources,
+        SYNC: { path: file, kind: 'video' as const, mime, hasAudio: true, width: 320, height: 240 },
+      };
+      for (const sourceInMs of [0, 500]) {
+        const p = project((x) => {
+          const v = x.tracks[0];
+          if (v?.kind !== 'video') return;
+          v.items = [
+            {
+              ...v.items[0]!,
+              assetVersionId: 'SYNC',
+              sourceInMs,
+              sourceOutMs: 3_000,
+              startMs: 500,
+              muted: false,
+            },
+          ];
+          x.durationMs = 4_000;
+          (x.tracks[2]!.items as unknown[]).length = 0;
+        });
+        const saved = sources;
+        sources = synced;
+        const out = await render(p).finally(() => {
+          sources = saved;
+        });
+        const at = 500 + 1_000 - sourceInMs; // where the source's 1.0 s lands on the timeline
+        const flash = Math.round((at * 30) / 1000);
+        expect((await pixel(out.output, flash, 160, 960))[0], `${ext} flash`).toBeGreaterThan(200);
+        expect((await pixel(out.output, flash - 1, 160, 960))[0]).toBeLessThan(40);
+        const pcm = await runTool(
+          'ffmpeg',
+          ['-v', 'error', '-i', out.output, '-map', '0:a:0', '-ac', '1', '-ar', '48000', '-f', 's16le', '-'],
+          { timeoutMs: 60_000, maxStdoutBytes: 64 * 1024 * 1024 },
+        );
+        const samples = new Int16Array(
+          pcm.stdout.buffer,
+          pcm.stdout.byteOffset,
+          Math.floor(pcm.stdout.length / 2),
+        );
+        const onset = samples.findIndex((x) => Math.abs(x) > 3_000);
+        expect(
+          Math.abs(onset / 48 - at),
+          `${ext} from ${sourceInMs} ms: beep at ${onset / 48} ms, picture at ${at}`,
+        ).toBeLessThanOrEqual(15);
+      }
+    }
   });
 
   it('frames a clip with fit (black bars) or fill (cropped to cover)', async () => {
@@ -469,6 +591,8 @@ describe('compose plan (pure)', () => {
       project: p,
       sources: files,
       frames: [],
+      blankFramePath: '/x/blank.png',
+      lanePattern: (l) => `/x/lane${l}_%05d.png`,
       filterScriptPath: '/x/g.txt',
       outputPath: '/x/o.mp4',
       encoder: { preset: 'veryfast', crf: 20, threads: 2, audioBitrate: '160k', maxBytes: 1e9 },
@@ -505,8 +629,54 @@ describe('compose plan (pure)', () => {
     expect(g).toContain('trim=end_frame=120'); // A: 0-4 s at 30 fps
     expect(g).toContain('tpad=start=15:start_mode=clone'); // B: half of the 1 s crossfade before its cut
     expect(g).toContain('xfade=transition=fade:duration=1.000000:offset=3.500000');
-    expect(g).toContain('adelay=delays=96000S:all=1'); // the beep at 2.0 s, to the sample
+    expect(g).toContain('asetpts=PTS+96000,aresample=48000:async=1:first_pts=0'); // the beep at 2.0 s, to the sample
     expect(g).not.toContain('[0:a]'); // A is muted
+  });
+  it('packs overlapping windows into lanes that keep the drawing order', () => {
+    const w = (startMs: number, endMs: number) => ({ startMs, endMs });
+    // w1 overlaps w0 (above it); w2 overlaps w1 (above it); w3 overlaps only w0 and fits beside w1.
+    expect(overlayLanes([w(0, 1_000), w(500, 1_500), w(1_000, 2_000), w(200, 300)], 30, 300)).toEqual([
+      [0],
+      [3, 1],
+      [2],
+    ]);
+    // A window shorter than a frame is not drawn.
+    expect(overlayLanes([w(0, 10)], 30, 300)).toEqual([]);
+  });
+  it('gives 150 titles and captions one ffmpeg input when they do not overlap (memory does not grow with them)', () => {
+    const frames = Array.from({ length: 150 }, (_, i) => ({
+      path: `/x/f${i}.png`,
+      startMs: i * 60,
+      endMs: (i + 1) * 60,
+    }));
+    const p = buildComposePlan({
+      project: project(),
+      sources: files,
+      frames,
+      blankFramePath: '/x/blank.png',
+      lanePattern: (l) => `/x/lane${l}_%05d.png`,
+      filterScriptPath: '/x/g.txt',
+      outputPath: '/x/o.mp4',
+      encoder: { preset: 'veryfast', crf: 20, threads: 2, audioBitrate: '160k', maxBytes: 1e9 },
+    });
+    expect(p.inputCount).toBe(plan(project()).inputCount + 1);
+    expect(p.stills.filter((x) => x.from !== '/x/blank.png')).toHaveLength(150);
+    expect(p.args).toEqual(expect.arrayContaining(['-f', 'image2', '-i', '/x/lane0_%05d.png']));
+  });
+  it('refuses a source whose demuxer is not known instead of letting ffmpeg sniff it', () => {
+    const heic = { ...files, S: { ...files['S']!, path: '/x/s.heic', mime: 'image/heic' } };
+    expect(() =>
+      buildComposePlan({
+        project: project(),
+        sources: heic,
+        frames: [],
+        blankFramePath: '/x/blank.png',
+        lanePattern: (l) => `/x/lane${l}_%05d.png`,
+        filterScriptPath: '/x/g.txt',
+        outputPath: '/x/o.mp4',
+        encoder: { preset: 'veryfast', crf: 20, threads: 2, audioBitrate: '160k', maxBytes: 1e9 },
+      }),
+    ).toThrow(/no forced demuxer for image\/heic/);
   });
   it('fills gaps with black and an empty video track with black for the whole duration', () => {
     const g = plan(project((x) => void ((x.tracks[0] as { items: unknown[] }).items = []))).filterGraph;

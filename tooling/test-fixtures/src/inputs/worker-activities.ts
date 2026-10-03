@@ -546,6 +546,7 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
       },
     },
     'video.failVideoRender': { buildInput: (ctx, f) => ({ ...renderJob(ctx, f), reason: 'render_failed' }) },
+    'video.discardVideoRenderWork': { buildInput: (ctx, f, own) => videoTarget(ctx, f, own) },
     'video.storeVideoExport': {
       buildInput: (ctx, f, own) => {
         const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['creativeRevisionId']}/${f['renderJobId']}/page_1-reel`;

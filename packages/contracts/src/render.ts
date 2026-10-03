@@ -25,6 +25,8 @@ export const RenderFailureReason = z.enum([
   'storage_failed', // the object store refused or lost the export after retries
   // STU-2b (appended): a video's sources and output would not fit the worker's temp disk or limits
   'too_large',
+  // STU-2b (appended): a still clip in a format the compositor cannot read and without a raster rendition
+  'unsupported_source',
 ]);
 export type RenderFailureReason = z.infer<typeof RenderFailureReason>;
 
@@ -274,6 +276,8 @@ export const VideoRenderResolveSuccess = z.object({
   manifest: RenderManifest,
   /** Temp disk the compose step may use: sources + overlays + output, capped by the worker setting. */
   tempBudgetBytes: z.number().int().positive(),
+  /** Overlay and caption frames the render draws (sizes the overlay step's time limit). */
+  overlayFrameCount: z.number().int().nonnegative(),
   findings: z.array(Finding),
 });
 export type VideoRenderResolveSuccess = z.infer<typeof VideoRenderResolveSuccess>;
@@ -290,6 +294,8 @@ export const VideoOverlayRenderInput = VideoJobRefs.extend({
   fonts: z.array(RenderFontRef),
   assets: z.array(RenderAssetRef),
   rendererVersion: z.string(),
+  /** How many frames the step draws (from resolve); the workflow scales the step's time limit with it. */
+  frameCount: z.number().int().nonnegative().optional(),
 });
 export type VideoOverlayRenderInput = z.infer<typeof VideoOverlayRenderInput>;
 
@@ -355,6 +361,13 @@ export type VideoRenderResultV1 =
  * are drawn by the Chromium scene renderer; compose runs ffmpeg (heartbeating, honouring cancellation) and writes
  * the MP4, poster and captions; storeVideoExport (STU-2a) verifies them. Frozen once deployed.
  */
+/**
+ * STU-2b: after a cancelled or failed render, the working files it left in the store: the overlay and caption frames,
+ * and the MP4, poster and captions it uploaded unless the job recorded them (ready).
+ */
+export const VideoRenderDiscardInput = VideoJobRefs;
+export type VideoRenderDiscardInput = z.infer<typeof VideoRenderDiscardInput>;
+
 export interface VideoRenderJobActivitiesV1 {
   beginVideoRender(input: RenderJobInputV1): Promise<RenderBeginResult>;
   resolveVideoRender(input: RenderResolveInput): Promise<VideoRenderResolveResult>;
@@ -363,4 +376,5 @@ export interface VideoRenderJobActivitiesV1 {
   storeVideoExport(input: VideoExportStoreInput): Promise<VideoExportStoreResult>;
   completeVideoRender(input: VideoRenderCompleteInput): Promise<RenderCompleteResult>;
   failVideoRender(input: RenderFailInput): Promise<void>;
+  discardVideoRenderWork(input: VideoRenderDiscardInput): Promise<{ deleted: number }>;
 }

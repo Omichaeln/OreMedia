@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { copyFile, link, rename, statfs, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Context } from '@temporalio/activity';
 import { IMAGE_CREATIVE_KINDS, type AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSnapshot } from '@oremedia/contracts/brand';
@@ -32,15 +33,20 @@ import type {
 import type { VideoProjectV1 } from '@oremedia/contracts/video';
 import { withTransaction, type Tx } from '@oremedia/db';
 import { captionPage, captionsVtt, overlayPage, videoFormatOf } from '@oremedia/editor/video/overlays';
+import { frameOf } from '@oremedia/editor/video/time';
 import { validateVideoProject } from '@oremedia/editor/video/validate';
 import {
+  AssetDerivativeRepository,
   AssetVersionRepository,
   assetService,
   ffmpegPath,
+  runTool,
   probeFile,
   withToolContext,
   renderFontFaces,
   storage,
+  tempRoot,
+  TempDiskBudgetExceededError,
   withTempDir,
   type StorageProvider,
   type TempDir,
@@ -50,8 +56,17 @@ import { METRIC, count, logger, record } from '@oremedia/observability';
 import { loadActorGrants, resolveActivityActor } from './actor';
 import type { RenderJobStore } from './render-job';
 import { RenderIntegrityError } from './render-job';
-import { heartbeat, inTenant } from './tenant';
-import { buildComposePlan, posterArgs, type ComposeSourceFile } from './video-filter-graph';
+import { cancellationSignal, heartbeat, inTenant } from './tenant';
+import {
+  VIDEO_MAX_OVERLAY_FRAMES,
+  VIDEO_MAX_OVERLAY_LANES,
+  buildComposePlan,
+  demuxerFor,
+  overlayLanes,
+  overlayWindows,
+  posterArgs,
+  type ComposeSourceFile,
+} from './video-filter-graph';
 import { createVideoExportActivities, videoExportDedupeKey, videoExportStorageKeys } from './video-export';
 
 /**
@@ -103,7 +118,10 @@ export interface VideoRenderDeps {
   /** packages/editor RENDERER_VERSION (overlays); the compositor version is appended. */
   rendererVersion: string;
   storage?: StorageProvider;
-  /** Most temp disk one render may use (MEDIA_TMP_MAX_BYTES); default 20 GiB. */
+  /**
+   * Most temp disk one render may use (MEDIA_TMP_MAX_BYTES); default 10 GiB, and never more than the free space of
+   * MEDIA_TMP_DIR less a 1 GiB margin, measured when the render is resolved and again before it composes.
+   */
   tmpMaxBytes?: number;
   /** x264 settings; production uses `veryfast` / CRF 20 / 2 threads. */
   encoder?: { preset?: string; crf?: number; threads?: number };
@@ -111,7 +129,19 @@ export interface VideoRenderDeps {
   encodeTimeoutMs?: number;
 }
 
-const DEFAULT_TMP_MAX = 20 * 1024 ** 3;
+const DEFAULT_TMP_MAX = 10 * 1024 ** 3;
+/** Disk left free beside a render's temp directory (other jobs, logs, the OS). */
+const TMP_FREE_MARGIN = 1024 ** 3;
+
+/** The temp budget now: the configured cap, never more than the free space of the temp root less the margin. */
+export async function tempBudget(configured: number, root?: string): Promise<number> {
+  try {
+    const fs = await statfs(tempRoot(root));
+    return Math.max(0, Math.min(configured, fs.bavail * fs.bsize - TMP_FREE_MARGIN));
+  } catch {
+    return configured; // no statfs on this platform: the configured cap (and -fs) still bound the job
+  }
+}
 const PICTURE_KINDS: readonly AssetKind[] = ['video', ...IMAGE_CREATIVE_KINDS];
 const SOUND_KINDS: readonly AssetKind[] = ['audio', 'video'];
 const HEARTBEAT_EVERY_MS = 30_000;
@@ -252,6 +282,8 @@ export async function encodeProject(o: EncodeOptions): Promise<{
         ...(overlay ? { overlay: { enter: overlay.enter, exit: overlay.exit } } : {}),
       };
     }),
+    blankFramePath: o.dir.file('blank.png'),
+    lanePattern: (lane) => o.dir.file(`lane${lane}_00000.png`).replace('00000', '%05d'),
     filterScriptPath: script,
     outputPath: output,
     encoder: {
@@ -263,6 +295,39 @@ export async function encodeProject(o: EncodeOptions): Promise<{
     },
   });
   await writeFile(script, plan.filterGraph);
+  if (plan.stills.length) {
+    // The lanes' image sequences: each frame file moves into place; gaps link the one transparent frame.
+    const { width, height } = o.project.format;
+    const blank = await runFfmpeg(
+      [
+        '-v',
+        'error',
+        '-nostdin',
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        `color=c=black@0:s=${width}x${height},format=rgba`,
+        '-frames:v',
+        '1',
+        '-threads',
+        '2',
+        '-f',
+        'image2',
+        '-c:v',
+        'png',
+        o.dir.file('blank.png'),
+      ],
+      { timeoutMs: 60_000, ...(o.signal ? { signal: o.signal } : {}) },
+    );
+    if (blank.code !== 0) throw new Error(`blank frame failed: ${blank.stderr.trim().slice(-300)}`);
+    const blankPath = o.dir.file('blank.png');
+    const own = (path: string) => dirname(path) === o.dir.path;
+    for (const still of plan.stills)
+      if (still.from === blankPath) await link(still.from, still.path);
+      else if (own(still.from)) await rename(still.from, still.path);
+      else await copyFile(still.from, still.path);
+  }
   const totalUs = plan.durationSeconds * 1_000_000;
   const run = await runFfmpeg(plan.args, {
     timeoutMs: o.timeoutMs,
@@ -293,10 +358,23 @@ export async function encodeProject(o: EncodeOptions): Promise<{
 export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJobActivitiesV1 {
   const store = () => deps.storage ?? storage();
   const versionsRepo = new AssetVersionRepository();
+  const derivativesRepo = new AssetDerivativeRepository();
   const log = () => logger().child('video-render');
   const exportStore = createVideoExportActivities(deps.storage ? { storage: deps.storage } : {});
   const rendererVersion = `${deps.rendererVersion}+${VIDEO_COMPOSITOR_VERSION}`;
   const tmpMax = deps.tmpMaxBytes ?? DEFAULT_TMP_MAX;
+  const encoder = {
+    preset: deps.encoder?.preset ?? 'veryfast',
+    crf: deps.encoder?.crf ?? 20,
+    threads: deps.encoder?.threads ?? 2,
+  };
+  // What the encode depends on besides the project: x264 settings and the ffmpeg build (read once per worker).
+  let encoderId: Promise<string> | null = null;
+  const encoderFingerprint = () =>
+    (encoderId ??= runTool(ffmpegPath(), ['-hide_banner', '-version'], { timeoutMs: 10_000 }).then(
+      (r) =>
+        `x264 ${encoder.preset} crf ${encoder.crf} threads ${encoder.threads}; ${r.stdout.toString().split('\n')[0]?.trim() ?? ''}`,
+    ));
 
   const readPinned = async (ref: { storageKey: string; contentHash: string }): Promise<Buffer> => {
     const bytes = await store().getObject(ref.storageKey);
@@ -402,13 +480,27 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
             const v = await pin(id, 'creative', input.brandId, kinds);
             const m = summaries.get(id);
             if (!m) throw new NotFoundError('AssetVersion', id);
+            // ffmpeg reads every source with a forced demuxer. A still it has none for (AVIF, HEIC, SVG…) is read
+            // from its raster rendition (the SVG PNG, else the 2048 px WebP); without one the render is refused.
+            let file: { storageKey: string; contentHash: string; mime: string; bytes: number } = v;
+            if (m.kind === 'image' && !demuxerFor(v.mime)) {
+              const raster =
+                (await derivativesRepo.find(v.id, 'png')) ?? (await derivativesRepo.find(v.id, 'web'));
+              if (!raster || !demuxerFor(raster.mime))
+                return {
+                  ok: false,
+                  reason: 'unsupported_source',
+                  detail: `${id}: ${v.mime} has no raster rendition the compositor can read`,
+                };
+              file = raster;
+            }
             sources.push({
               assetVersionId: v.id,
-              storageKey: v.storageKey,
-              contentHash: v.contentHash,
-              mime: v.mime,
+              storageKey: file.storageKey,
+              contentHash: file.contentHash,
+              mime: file.mime,
               kind: m.kind,
-              bytes: v.bytes,
+              bytes: file.bytes,
               durationMs: m.durationMs,
               hasAudio: m.hasAudio,
             });
@@ -458,26 +550,44 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
             formatKey: project.format.key,
             fps: project.format.fps,
             assetContentHashes: [...sources, ...fonts, ...assets].map((a) => a.contentHash),
+            encoder: await encoderFingerprint(),
           });
           const previous = await deps.store.findVideoExport(input.brandId, dedupeKey);
           const reuse = previous && (await store().headObject(previous.storageKey)) ? previous : null;
-          const overlayCount = project.tracks.reduce(
-            (n, t) => n + (t.kind === 'overlay' || t.kind === 'caption' ? t.items.length : 0),
-            0,
-          );
           const W = project.format.width;
           const H = project.format.height;
+          // Every lane of titles and captions is one ffmpeg input holding a frame or two: bound both.
+          const windows = overlayWindows(project);
+          const lanes = overlayLanes(
+            windows,
+            project.format.fps,
+            frameOf(project.durationMs, project.format.fps),
+          );
+          if (!reuse && windows.length > VIDEO_MAX_OVERLAY_FRAMES)
+            return {
+              ok: false,
+              reason: 'too_large',
+              detail: `${windows.length} titles and captions; a video renders at most ${VIDEO_MAX_OVERLAY_FRAMES}`,
+            };
+          if (!reuse && lanes.length > VIDEO_MAX_OVERLAY_LANES)
+            return {
+              ok: false,
+              reason: 'too_large',
+              detail: `${lanes.length} titles and captions on screen at once; a video renders at most ${VIDEO_MAX_OVERLAY_LANES}`,
+            };
+          const overlayCount = windows.length;
           // Sources as stored, every overlay PNG at most an uncompressed frame, the MP4 at a generous 20 Mbit/s.
           const estimate =
             sources.reduce((n, s) => n + s.bytes, 0) +
             overlayCount * W * H * 4 +
             Math.ceil((project.durationMs / 1000) * 2.5 * 1024 * 1024) +
             256 * 1024 * 1024;
-          if (!reuse && estimate > tmpMax)
+          const budget = await tempBudget(tmpMax);
+          if (!reuse && estimate > budget)
             return {
               ok: false,
               reason: 'too_large',
-              detail: `the sources and output need about ${Math.ceil(estimate / 1024 ** 2)} MiB of working disk; the limit is ${Math.floor(tmpMax / 1024 ** 2)} MiB`,
+              detail: `the sources and output need about ${Math.ceil(estimate / 1024 ** 2)} MiB of working disk; ${Math.floor(budget / 1024 ** 2)} MiB is available`,
             };
           return {
             ok: true,
@@ -504,7 +614,8 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
               brandVersionId: project.brandVersionId,
               revisionContentHash: revision.contentHash,
             },
-            tempBudgetBytes: Math.min(tmpMax, Math.max(estimate, 512 * 1024 * 1024)),
+            tempBudgetBytes: Math.min(budget, Math.max(estimate, 512 * 1024 * 1024)),
+            overlayFrameCount: windows.length,
             findings,
           };
         } catch (err) {
@@ -552,42 +663,49 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
           assets.push({ assetVersionId: a.assetVersionId, mime: a.mime, bytes: await readPinned(a) });
         const colours = Object.fromEntries(snapshot.document.tokens.colours.map((c) => [c.key, c.value]));
         const format = videoFormatOf(project);
+        const overlayById = new Map(
+          project.tracks.flatMap((t) => (t.kind === 'overlay' ? t.items.map((o) => [o.id, o] as const) : [])),
+        );
+        const captionById = new Map(
+          project.tracks.flatMap((t) =>
+            t.kind === 'caption' ? t.items.map((c) => [c.id, { track: t, item: c }] as const) : [],
+          ),
+        );
         const pages: Array<{
           page: CreativePage;
           frame: Omit<VideoOverlayFrame, 'storageKey' | 'contentHash'>;
         }> = [];
-        for (const t of project.tracks) {
-          if (t.kind === 'overlay')
-            for (const o of t.items)
-              if (o.element.visible)
-                pages.push({
-                  page: overlayPage(project, o),
-                  frame: { itemId: o.id, kind: 'overlay', startMs: o.startMs, endMs: o.endMs },
-                });
-          if (t.kind === 'caption')
-            for (const c of t.items)
-              pages.push({
-                page: captionPage(project, t, c),
-                frame: { itemId: c.id, kind: 'caption', startMs: c.startMs, endMs: c.endMs },
-              });
+        for (const w of overlayWindows(project)) {
+          const o = overlayById.get(w.itemId);
+          const c = captionById.get(w.itemId);
+          const page = o ? overlayPage(project, o) : c ? captionPage(project, c.track, c.item) : null;
+          if (page) pages.push({ page, frame: w });
         }
         const frames: VideoOverlayFrame[] = [];
-        for (const [n, p] of pages.entries()) {
-          heartbeat(`video:overlays:${n + 1}/${pages.length}`);
-          const { png } = await deps.overlays.renderFrame({ page: p.page, format, fonts, assets, colours });
-          const storageKey = workKey(
-            input.tenantId,
-            input.brandId,
-            input.revisionId,
-            input.renderJobId,
-            `${p.frame.itemId}.png`,
-          );
-          await store().putObject(storageKey, png, { contentType: 'image/png' });
-          frames.push({
-            ...p.frame,
-            storageKey,
-            contentHash: createHash('sha256').update(png).digest('hex'),
-          });
+        const progress = progressReporter(input.renderJobId, 'overlays', 0.05, 0.15);
+        const signal = cancellationSignal();
+        try {
+          for (const [n, p] of pages.entries()) {
+            // Between frames: a cancelled activity (signal) or a job a person cancelled (state) stops here.
+            if (signal?.aborted || progress.cancelled()) throw new RenderCancelledError(input.renderJobId);
+            progress.report(n / Math.max(1, pages.length));
+            const { png } = await deps.overlays.renderFrame({ page: p.page, format, fonts, assets, colours });
+            const storageKey = workKey(
+              input.tenantId,
+              input.brandId,
+              input.revisionId,
+              input.renderJobId,
+              `${p.frame.itemId}.png`,
+            );
+            await store().putObject(storageKey, png, { contentType: 'image/png' });
+            frames.push({
+              ...p.frame,
+              storageKey,
+              contentHash: createHash('sha256').update(png).digest('hex'),
+            });
+          }
+        } finally {
+          await progress.flush();
         }
         return { frames, findings: [] };
       }),
@@ -606,96 +724,100 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
         const abort = new AbortController();
         signal?.addEventListener('abort', () => abort.abort(), { once: true });
         const started = Date.now();
-        const result = await withTempDir({ maxBytes: input.tempBudgetBytes }, async (dir) => {
-          // Originals, streamed to disk and re-hashed against their pins (never the proxies).
-          const files: Record<string, ComposeSourceFile> = {};
-          const probes = new Map<string, MediaProbeV1>();
-          for (const [n, s] of input.sources.entries()) {
-            heartbeat(`video:download:${n + 1}/${input.sources.length}`);
-            const local = await dir.download(store(), s.storageKey, `src${n}.${extensionFor(s.mime)}`, {
-              onProgress: () => heartbeat('video:download'),
-            });
-            if (!local) throw new NotFoundError('AssetObject', s.storageKey);
-            if (local.contentHash !== s.contentHash)
-              throw new RenderIntegrityError(s.storageKey, s.contentHash, local.contentHash);
-            let width: number | null = null;
-            let height: number | null = null;
-            if (s.kind === 'video') {
-              const probe = await withToolContext(
-                { signal: abort.signal, tick: () => heartbeat('video:probe') },
-                () => probeFile(local.path, local.bytes, { mime: s.mime, maxSeconds: 601 }),
-              );
-              if ('ok' in probe)
-                throw new ValidationFailedError([{ path: s.assetVersionId, issue: probe.reason }]);
-              probes.set(s.assetVersionId, probe);
-              width = probe.video?.width ?? null;
-              height = probe.video?.height ?? null;
-            } else if (s.kind === 'image') {
-              const v = await versionsRepo.findInTenant(s.assetVersionId);
-              width = v?.width ?? null;
-              height = v?.height ?? null;
+        // The disk may have filled since the job was resolved: refuse (too_large) before downloading anything.
+        const budget = Math.min(input.tempBudgetBytes, await tempBudget(tmpMax));
+        const needed = input.sources.reduce((n, s) => n + s.bytes, 0) + 64 * 1024 * 1024;
+        if (needed > budget) throw new TempDiskBudgetExceededError(needed, budget);
+        let result;
+        try {
+          result = await withTempDir({ maxBytes: budget }, async (dir) => {
+            // Originals, streamed to disk and re-hashed against their pins (never the proxies).
+            const files: Record<string, ComposeSourceFile> = {};
+            const probes = new Map<string, MediaProbeV1>();
+            for (const [n, s] of input.sources.entries()) {
+              heartbeat(`video:download:${n + 1}/${input.sources.length}`);
+              const local = await dir.download(store(), s.storageKey, `src${n}.${extensionFor(s.mime)}`, {
+                onProgress: () => heartbeat('video:download'),
+              });
+              if (!local) throw new NotFoundError('AssetObject', s.storageKey);
+              if (local.contentHash !== s.contentHash)
+                throw new RenderIntegrityError(s.storageKey, s.contentHash, local.contentHash);
+              let width: number | null = null;
+              let height: number | null = null;
+              if (s.kind === 'video') {
+                const probe = await withToolContext(
+                  { signal: abort.signal, tick: () => heartbeat('video:probe') },
+                  () => probeFile(local.path, local.bytes, { mime: s.mime, maxSeconds: 601 }),
+                );
+                if ('ok' in probe)
+                  throw new ValidationFailedError([{ path: s.assetVersionId, issue: probe.reason }]);
+                probes.set(s.assetVersionId, probe);
+                width = probe.video?.width ?? null;
+                height = probe.video?.height ?? null;
+              } else if (s.kind === 'image') {
+                const v = await versionsRepo.findInTenant(s.assetVersionId);
+                width = v?.width ?? null;
+                height = v?.height ?? null;
+              }
+              files[s.assetVersionId] = {
+                path: local.path,
+                kind: s.kind,
+                mime: s.mime,
+                hasAudio: s.kind === 'audio' || (probes.get(s.assetVersionId)?.audio.length ?? 0) > 0,
+                width,
+                height,
+              };
             }
-            files[s.assetVersionId] = {
-              path: local.path,
-              kind: s.kind,
-              mime: s.mime,
-              hasAudio: s.kind === 'audio' || (probes.get(s.assetVersionId)?.audio.length ?? 0) > 0,
-              width,
-              height,
-            };
-          }
-          const frames = [];
-          for (const [n, f] of input.frames.entries()) {
-            const local = await dir.download(store(), f.storageKey, `frame${n}.png`);
-            if (!local) throw new NotFoundError('OverlayFrame', f.storageKey);
-            if (local.contentHash !== f.contentHash)
-              throw new RenderIntegrityError(f.storageKey, f.contentHash, local.contentHash);
-            frames.push({ path: local.path, startMs: f.startMs, endMs: f.endMs, itemId: f.itemId });
-          }
-          const checkCancelled = setInterval(() => {
-            if (progress.cancelled()) abort.abort();
-          }, 1_000);
-          try {
-            const out = await encodeProject({
-              project,
-              sources: files,
-              frames,
-              dir,
-              encoder: {
-                preset: deps.encoder?.preset ?? 'veryfast',
-                crf: deps.encoder?.crf ?? 20,
-                threads: deps.encoder?.threads ?? 2,
-              },
-              timeoutMs: deps.encodeTimeoutMs ?? 50 * 60_000,
-              signal: abort.signal,
-              onProgress: (fraction) => progress.report(fraction),
-            });
-            heartbeat('video:upload');
-            const keys = videoExportStorageKeys(
-              input.tenantId,
-              input.brandId,
-              input.revisionId,
-              input.renderJobId,
-              VIDEO_PAGE_ID,
-              project.format.key,
-            );
-            const video = await dir.upload(store(), keys.video, 'output.mp4', 'video/mp4');
-            const poster = await dir.upload(store(), keys.poster, 'poster.webp', 'image/webp');
-            if (out.captions) await dir.upload(store(), keys.captions, 'captions.vtt', 'text/vtt');
-            return { out, keys, video, poster };
-          } catch (err) {
-            if (abort.signal.aborted) throw new RenderCancelledError(input.renderJobId);
-            throw err;
-          } finally {
-            clearInterval(checkCancelled);
-            await progress.flush();
-          }
-        });
-        // The overlay frames were working files of this job.
-        for (const f of input.frames)
-          await store()
-            .deleteObject(f.storageKey)
-            .catch(() => undefined);
+            const frames = [];
+            for (const [n, f] of input.frames.entries()) {
+              const local = await dir.download(store(), f.storageKey, `frame${n}.png`);
+              if (!local) throw new NotFoundError('OverlayFrame', f.storageKey);
+              if (local.contentHash !== f.contentHash)
+                throw new RenderIntegrityError(f.storageKey, f.contentHash, local.contentHash);
+              frames.push({ path: local.path, startMs: f.startMs, endMs: f.endMs, itemId: f.itemId });
+            }
+            const checkCancelled = setInterval(() => {
+              if (progress.cancelled()) abort.abort();
+            }, 1_000);
+            try {
+              const out = await encodeProject({
+                project,
+                sources: files,
+                frames,
+                dir,
+                encoder,
+                timeoutMs: deps.encodeTimeoutMs ?? 50 * 60_000,
+                signal: abort.signal,
+                onProgress: (fraction) => progress.report(fraction),
+              });
+              heartbeat('video:upload');
+              const keys = videoExportStorageKeys(
+                input.tenantId,
+                input.brandId,
+                input.revisionId,
+                input.renderJobId,
+                VIDEO_PAGE_ID,
+                project.format.key,
+              );
+              const video = await dir.upload(store(), keys.video, 'output.mp4', 'video/mp4');
+              const poster = await dir.upload(store(), keys.poster, 'poster.webp', 'image/webp');
+              if (out.captions) await dir.upload(store(), keys.captions, 'captions.vtt', 'text/vtt');
+              return { out, keys, video, poster };
+            } catch (err) {
+              if (abort.signal.aborted) throw new RenderCancelledError(input.renderJobId);
+              throw err;
+            } finally {
+              clearInterval(checkCancelled);
+              await progress.flush();
+            }
+          });
+        } finally {
+          // The overlay frames are working files of this job, done with whether it encoded, failed or was cancelled.
+          for (const f of input.frames)
+            await store()
+              .deleteObject(f.storageKey)
+              .catch(() => undefined);
+        }
         const encodeMs = Date.now() - started;
         record(METRIC.renderDurationMs, encodeMs, { formatKey: project.format.key });
         log().info(
@@ -755,6 +877,38 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
         const ready = await withTransaction((tx) => deps.store.markReady(input.renderJobId, exports, tx));
         count(METRIC.renderJobs, 1, { result: 'ready' });
         return ready;
+      }),
+
+    discardVideoRenderWork: (input) =>
+      inTenant(input, loadActorGrants, async () => {
+        const { actor } = await resolveActivityActor(input);
+        const job = await deps.store.getJob(actor, input.renderJobId);
+        const { project } = await deps.store.getVideoRevision(actor, input.documentId, input.revisionId);
+        const keys = overlayWindows(project).map((w) =>
+          workKey(input.tenantId, input.brandId, input.revisionId, input.renderJobId, `${w.itemId}.png`),
+        );
+        // A recorded export is evidence (insert-only); only a job that never became ready lost its files.
+        if (job.state !== 'ready') {
+          const out = videoExportStorageKeys(
+            input.tenantId,
+            input.brandId,
+            input.revisionId,
+            input.renderJobId,
+            VIDEO_PAGE_ID,
+            project.format.key,
+          );
+          keys.push(out.video, out.poster, out.captions);
+        }
+        let deleted = 0;
+        for (const key of keys) {
+          heartbeat('video:discard');
+          if (await store().headObject(key)) {
+            await store().deleteObject(key);
+            deleted += 1;
+          }
+        }
+        if (deleted) log().info({ renderJobId: input.renderJobId, deleted }, 'video render work discarded');
+        return { deleted };
       }),
 
     failVideoRender: (input) =>

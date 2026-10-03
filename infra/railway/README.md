@@ -61,9 +61,14 @@ order for STU-2a.
 
 `videoRenderJobWorkflowV1` composes a committed video document on `video`: Chromium draws title, caption and logo
 overlays as PNGs, then one ffmpeg run (`-threads` from `VIDEO_FFMPEG_THREADS`, default 2) encodes H.264 High + AAC
-with faststart. Measured on the same shared 4 vCPU host: a 30 s 1920x1080 30 fps project (3 clips, 2 transitions,
-6 captions) took 32.8 s end to end (about 1.1 x real time) and produced a 24.8 MB MP4. A project is at most 180 s, so
-expect up to about 3.5 minutes per export on 2 threads; the compose activity's timeout is 60 minutes with a 1 minute
-heartbeat. Temp files (sources, overlay PNGs, the MP4) count against `MEDIA_TMP_MAX_BYTES` (default 20 GiB for a
-render; the encoder's `-fs` stops at the remaining budget). The same `VIDEO_CONCURRENCY` slot bounds exports and
-ingest.
+with faststart. The same `VIDEO_CONCURRENCY` slot bounds exports and ingest.
+
+| Resource       | Expectation                                             | Why                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Time           | About 1.1–1.3 × the video's length on 2 threads         | Measured on a shared 4 vCPU host: a 30 s 1920x1080 30 fps project (3 clips, 2 transitions, 6 captions) took 32.8–37.7 s end to end and produced a 24.8 MB MP4. A project is at most 180 s; the compose step's time limit is 60 minutes with a 1 minute heartbeat timeout, the overlay step's 2 minutes plus 3 s a frame.                                                                                                   |
+| Memory         | About 0.5 GB for ffmpeg plus the Chromium render budget | Titles and captions are packed into at most 8 lanes, each one ffmpeg input that holds a frame at a time: 150 full-frame 1080x1920 overlays over 30 s peaked at 418 MiB resident for ffmpeg (one input per overlay grew to several GB). A render refuses more than 400 titles and captions, or more than 8 on screen at once, as `too_large`.                                                                               |
+| Ephemeral disk | The sources' size plus the MP4 plus a few hundred MB    | Originals (up to 1 GiB each) are streamed into a private temp directory with the overlay frames and the MP4. The budget is `MEDIA_TMP_MAX_BYTES` (default 10 GiB) but never more than the free space of `MEDIA_TMP_DIR` less 1 GiB, measured when the render is resolved and again before it composes; a project that does not fit fails as `too_large` before encoding, and ffmpeg's `-fs` stops at the remaining budget. |
+
+On Railway set `MEDIA_TMP_MAX_BYTES` on `worker-render` to what one job may use (for example `6442450944`, 6 GiB, on
+the default ephemeral disk), or attach a volume, point `MEDIA_TMP_DIR` at it and size the variable to it. Raising
+`VIDEO_CONCURRENCY` multiplies every line above.

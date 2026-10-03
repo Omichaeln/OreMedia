@@ -13,7 +13,7 @@ import type { RenderJobInputV1, VideoRenderJobActivitiesV1 } from '@oremedia/con
 import type { VideoClipItem, VideoOperation } from '@oremedia/contracts/video';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
-import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
+import { assetDerivatives, assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brandVersions, brands } from '@oremedia/db/schema/brand';
 import { renderJobs, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -139,7 +139,11 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
     correlationId: 'corr_video_e2e',
     renderJobId,
   });
-  const noCancel = { cancellable: <T>(fn: () => Promise<T>) => fn(), cancelled: () => false };
+  const noCancel = {
+    cancellable: <T>(fn: () => Promise<T>) => fn(),
+    shielded: <T>(fn: () => Promise<T>) => fn(),
+    cancelled: () => false,
+  };
   const seeded: Record<string, { versionId: string; contentHash: string }> = {};
   let fontVersion = '';
 
@@ -166,18 +170,16 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
       if ('ok' in p) throw new Error(`probe ${key}`);
       mediaInfo = p;
     }
-    await tdb.db
-      .insert(assets)
-      .values({
-        id,
-        tenantId: tenantA,
-        brandId: brandA,
-        kind,
-        name: key,
-        currentVersionId: versionId,
-        state: 'approved',
-        rightsState: 'recorded',
-      });
+    await tdb.db.insert(assets).values({
+      id,
+      tenantId: tenantA,
+      brandId: brandA,
+      kind,
+      name: key,
+      currentVersionId: versionId,
+      state: 'approved',
+      rightsState: 'recorded',
+    });
     await tdb.db.insert(assetVersions).values({
       id: versionId,
       tenantId: tenantA,
@@ -194,20 +196,18 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
       mediaInfo,
       provenance: { kind: 'upload', uploadedByUserId: ownerA, originalFilename: key },
     });
-    await tdb.db
-      .insert(usageRights)
-      .values({
-        id: newId('usageRights'),
-        tenantId: tenantA,
-        brandId: brandA,
-        assetId: id,
-        owner: 'owner',
-        permittedChannels: 'all',
-        territories: 'all',
-        expiresAt: null,
-        releases: [],
-        restrictions: [],
-      });
+    await tdb.db.insert(usageRights).values({
+      id: newId('usageRights'),
+      tenantId: tenantA,
+      brandId: brandA,
+      assetId: id,
+      owner: 'owner',
+      permittedChannels: 'all',
+      territories: 'all',
+      expiresAt: null,
+      releases: [],
+      restrictions: [],
+    });
     await read(() => mem.putObject(storageKey, bytes, { contentType: mime }));
     seeded[key] = { versionId, contentHash: sha256(bytes) };
     return { id, versionId };
@@ -306,26 +306,22 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
     await tdb.db
       .insert(users)
       .values({ id: ownerA, email: `${ownerA.toLowerCase()}@example.test`, name: 'owner a' });
-    await tdb.db
-      .insert(brands)
-      .values({
-        id: brandA,
-        tenantId: tenantA,
-        name: 'A1',
-        timezone: 'UTC',
-        defaultLocale: 'en',
-        status: 'active',
-      });
-    await tdb.db
-      .insert(memberships)
-      .values({
-        id: newId('membership'),
-        tenantId: tenantA,
-        userId: ownerA,
-        role: 'owner',
-        status: 'active',
-        allBrands: true,
-      });
+    await tdb.db.insert(brands).values({
+      id: brandA,
+      tenantId: tenantA,
+      name: 'A1',
+      timezone: 'UTC',
+      defaultLocale: 'en',
+      status: 'active',
+    });
+    await tdb.db.insert(memberships).values({
+      id: newId('membership'),
+      tenantId: tenantA,
+      userId: ownerA,
+      role: 'owner',
+      status: 'active',
+      allBrands: true,
+    });
     // The brand's type roles name the fixture font asset, so captions bind to it.
     const font = await loadFixtureFont(FIXTURE_FONTS.karla);
     const fontAsset = await seedAsset('font', 'font', font.mime, font.bytes, null, null);
@@ -333,19 +329,17 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
     const doc = brandDocument();
     doc.tokens.typeRoles = doc.tokens.typeRoles.map((t) => ({ ...t, fontAssetId: fontAsset.id }));
     const bvId = newId('brandVersion');
-    await tdb.db
-      .insert(brandVersions)
-      .values({
-        id: bvId,
-        tenantId: tenantA,
-        brandId: brandA,
-        number: 1,
-        state: 'published',
-        document: doc,
-        contentHash: hashCanonical(doc),
-        publishedAt: new Date(),
-        publishedByUserId: ownerA,
-      });
+    await tdb.db.insert(brandVersions).values({
+      id: bvId,
+      tenantId: tenantA,
+      brandId: brandA,
+      number: 1,
+      state: 'published',
+      document: doc,
+      contentHash: hashCanonical(doc),
+      publishedAt: new Date(),
+      publishedByUserId: ownerA,
+    });
     await tdb.db.update(brands).set({ publishedVersionId: bvId }).where(eq(brands.id, brandA));
     // Sources: solid-colour clips whose green channel counts frames, a still, and a beep at 1.0 s.
     await ff([
@@ -597,6 +591,11 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
         item: { ...clip('c2', a, { sourceOutMs: 4_000, startMs: 4_000 }), assetVersionId: a },
       },
       { op: 'setDuration', durationMs: 60_000 },
+      {
+        op: 'upsertCaption',
+        trackId: 'trk_captions',
+        caption: { id: 'cap_long', startMs: 0, endMs: 3_000, text: 'Long take', locked: false },
+      },
     ]);
     const slow = makeActs({ preset: 'medium', crf: 18, threads: 1 });
     const queued = await request(long.documentId, long.revisionId, 'video_9x16');
@@ -613,7 +612,63 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
     expect(
       await tdb.db.select().from(renderedExports).where(eq(renderedExports.revisionId, long.revisionId)),
     ).toEqual([]);
+    // Its working files (the caption frame) were deleted: nothing is left under the job's prefix.
+    expect(mem.keys().filter((k) => k.includes(`/${queued.renderJobId}/`))).toEqual([]);
   }, 600_000);
+
+  it('a HEIC still is read from its WebP rendition; one without a rendition is refused as unsupported_source', async () => {
+    await ff(['-f', 'lavfi', '-i', 'color=c=0x0000ff:s=800x600', '-frames:v', '1', join(dir, 'still.webp')]);
+    const heic = await seedAsset(
+      'heic',
+      'photo',
+      'image/heic',
+      Buffer.from('not decodable by ffmpeg'),
+      800,
+      600,
+    );
+    const webp = await readFile(join(dir, 'still.webp'));
+    const key = storageKeys.derivative(tenantA, brandA, heic.id, heic.versionId, 'web');
+    await read(() => mem.putObject(key, webp, { contentType: 'image/webp' }));
+    await tdb.db.insert(assetDerivatives).values({
+      id: newId('assetDerivative'),
+      tenantId: tenantA,
+      brandId: brandA,
+      assetVersionId: heic.versionId,
+      purpose: 'web',
+      transform: { op: 'resize', format: 'webp' },
+      storageKey: key,
+      contentHash: sha256(webp),
+      mime: 'image/webp',
+      width: 800,
+      height: 600,
+      bytes: webp.length,
+    });
+    const ok = await createVideo({ formatKey: 'video_9x16', fps: 30, durationMs: 1_000 }, [
+      { op: 'insertClip', trackId: 'trk_video', item: clip('still', heic.versionId, { sourceOutMs: 1_000 }) },
+    ]);
+    const queued = await request(ok.documentId, ok.revisionId, 'video_9x16');
+    expect(await runVideoRender(acts, inputFor(queued.renderJobId), noCancel)).toMatchObject({
+      outcome: 'ready',
+    });
+    const [row] = await tdb.db
+      .select()
+      .from(renderedExports)
+      .where(eq(renderedExports.revisionId, ok.revisionId));
+    const mp4 = await exportFile(row!.storageKey, 'heic.mp4');
+    const [r, , b] = await pixel(mp4.path, 10, 540, 960);
+    expect(b).toBeGreaterThan(200);
+    expect(r).toBeLessThan(40);
+
+    const bare = await seedAsset('heic2', 'photo', 'image/heic', Buffer.from('no rendition'), 800, 600);
+    const refused = await createVideo({ formatKey: 'video_9x16', fps: 30, durationMs: 1_000 }, [
+      { op: 'insertClip', trackId: 'trk_video', item: clip('bare', bare.versionId, { sourceOutMs: 1_000 }) },
+    ]);
+    const job = await request(refused.documentId, refused.revisionId, 'video_9x16');
+    expect(await runVideoRender(acts, inputFor(job.renderJobId), noCancel)).toEqual({
+      outcome: 'failed',
+      reason: 'unsupported_source',
+    });
+  }, 300_000);
 
   it('measures a 30 s 1080p (16:9) render at production settings', async () => {
     await ff([
