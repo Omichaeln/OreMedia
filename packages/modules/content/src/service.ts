@@ -877,21 +877,20 @@ export const contentService = {
       if (parsed.campaignId) await loadCampaign(brand.id, parsed.campaignId, tx);
       // BSC-3: a new brief offers only facts in effect now (approved, inside their validity window). Stored briefs
       // are not re-checked here; the copy and release checks hold whatever a brief carries.
-      const now = Date.now();
       for (const [i, factId] of parsed.offerFactIds.entries()) {
         const fact = await factsRepo.getById(factId, tx);
         if (fact.brandId !== brand.id)
           throw new ValidationFailedError([{ path: `offerFactIds.${i}`, issue: 'fact_not_in_brand' }]);
-        const inEffect =
-          fact.state === 'approved' &&
-          (fact.validFrom === null || fact.validFrom.getTime() <= now) &&
-          (fact.validUntil === null || fact.validUntil.getTime() > now);
-        if (!inEffect)
-          throw new ValidationFailedError(
-            [{ path: `offerFactIds.${i}`, issue: 'fact_not_effective' }],
-            'A brief can offer only approved facts that are in effect',
-          );
       }
+      const effective = new Set(
+        (await factsRepo.listEffectiveByIds(brand.id, parsed.offerFactIds, new Date(), tx)).map((f) => f.id),
+      );
+      const notEffective = parsed.offerFactIds.findIndex((id) => !effective.has(id));
+      if (notEffective >= 0)
+        throw new ValidationFailedError(
+          [{ path: `offerFactIds.${notEffective}`, issue: 'fact_not_effective' }],
+          'A brief can offer only approved facts that are in effect',
+        );
       for (const channelConnectionId of new Set(parsed.channelConnectionIds)) {
         const channel = await channelResolver(channelConnectionId, tx);
         if (!channel || channel.brandId !== brand.id)

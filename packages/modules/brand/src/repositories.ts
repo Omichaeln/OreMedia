@@ -325,6 +325,28 @@ export class ApprovedFactRepository extends BrandScopedRepository<typeof approve
       .limit(1);
     return rows[0] ?? null;
   }
+  /** Live facts stored without a dedupe key (before 0023, until the sweep keys them), bounded. */
+  async listLiveUnkeyed(brandId: string, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(
+        this.brandScope(
+          brandId,
+          and(isNull(approvedFacts.dedupeKey), inArray(approvedFacts.state, ['proposed', 'approved'])) as SQL,
+        ),
+      )
+      .orderBy(asc(approvedFacts.id))
+      .limit(LIVE_FACT_SCAN);
+  }
+  /** Of these facts of the brand, the ones in effect at `at` (spec 8.3: approved, validity window contains it). */
+  async listEffectiveByIds(brandId: string, ids: readonly string[], at: Date, tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select({ id: approvedFacts.id })
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, and(effectiveAt(at), inArray(approvedFacts.id, [...ids])) as SQL));
+  }
   /** Proposed corrections of an approved fact (at most one is allowed open at a time). */
   async listOpenCorrections(brandId: string, factId: string, tx?: Tx) {
     return this.conn(tx)

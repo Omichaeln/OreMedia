@@ -28,5 +28,5 @@ export {
 export {
   BRAND_FACT_SWEEP_SCHEDULE_ID,
   BRAND_FACT_SWEEP_WORKFLOW_TYPE,
-  createBrandFactSweepRuntime,
+  listBrandFactSweepTargets,
 } from './fact-sweep';

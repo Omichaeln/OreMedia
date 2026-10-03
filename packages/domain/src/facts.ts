@@ -3,14 +3,14 @@ import { sha256Hex } from './hash';
 /**
  * BSC-3 duplicate detection for facts. Two statements are the same fact when they read the same after Unicode
  * compatibility normalisation, case folding and with punctuation and spacing ignored ("Founded in 1998." and
- * "founded in 1998"); the hash of that form is the stored dedupe key. Statements that are only close (a word added
+ * "founded in 1998"); currency symbols, % and minus signs are kept, so "$10" and "€10", "10%" and "10" differ; the hash of that form is the stored dedupe key. Statements that are only close (a word added
  * or dropped) are surfaced as possible duplicates for a person to merge, never merged automatically.
  */
 export function normaliseFactStatement(statement: string): string {
   return statement
     .normalize('NFKC')
     .toLocaleLowerCase('en')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}\p{Sc}%-]+/gu, ' ')
     .trim();
 }
 

@@ -10,7 +10,7 @@ import { approvedFacts, brands } from '@oremedia/db/schema/brand';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { factDedupeKey } from '@oremedia/domain/facts';
 import { newId } from '@oremedia/domain/ids';
-import { createBrandFactSweepRuntime } from './fact-sweep';
+import { listBrandFactSweepTargets } from './fact-sweep';
 import { brandService } from './service';
 
 /**
@@ -176,6 +176,79 @@ describe('facts workspace (BSC-3) against MySQL 8', () => {
     expect(again).toEqual({ factId: first.factId, version: 0, duplicate: true });
     const count = (await list({ search: 'seven days' })).items.length;
     expect(count).toBe(1);
+  });
+
+  it('different amounts are different facts; two concurrent proposals of one statement make one fact (brand row lock)', async () => {
+    const usd = await propose('Plans from $10/month');
+    const eur = await propose('Plans from €10/month');
+    const pct = await propose('Save 10% on prints');
+    const plain = await propose('Save 10 on prints');
+    expect(new Set([usd.factId, eur.factId, pct.factId, plain.factId]).size).toBe(4);
+    const [a, b] = await Promise.all([propose('Raced statement'), propose('raced statement!')]);
+    expect(a.factId).toBe(b.factId);
+    expect([a.duplicate, b.duplicate].sort()).toEqual([false, true]);
+    expect((await list({ search: 'raced statement' })).items).toHaveLength(1);
+  });
+
+  it('an approved fact is never superseded by a proposed one (merge or conflict); a correction of a fact that no longer applies is refused', async () => {
+    const approvedFact = await propose('Studio opened in 2001', { sources: [url] });
+    await approve(approvedFact.factId);
+    const proposedFact = await propose('The studio opened in 2001 in Avondale');
+    await expect(
+      run(tenantA, (tx) =>
+        brandService.facts.merge(
+          A,
+          {
+            brandId: brandA,
+            keep: { factId: proposedFact.factId, expectedVersion: 0 },
+            merge: [{ factId: approvedFact.factId, expectedVersion: 1 }],
+          },
+          tx,
+        ),
+      ),
+    ).rejects.toMatchObject({ details: [{ path: 'keep.factId', issue: 'keep_not_approved' }] });
+    const conflicting = await propose('Studio opened in 2002', {
+      sources: [url],
+      conflicts: [{ factId: approvedFact.factId }],
+    });
+    await expect(
+      run(tenantA, (tx) =>
+        brandService.facts.resolveConflict(
+          A,
+          {
+            brandId: brandA,
+            factId: conflicting.factId,
+            expectedVersion: 0,
+            conflictId: 'c1',
+            outcome: 'kept_this',
+          },
+          tx,
+        ),
+      ),
+    ).rejects.toMatchObject({ details: [{ path: 'outcome', issue: 'kept_fact_not_approved' }] });
+    const correction = await run(tenantA, (tx) =>
+      brandService.facts.correct(
+        A,
+        {
+          brandId: brandA,
+          factId: approvedFact.factId,
+          expectedVersion: 1,
+          statement: 'Studio opened in March 2001',
+        },
+        tx,
+      ),
+    );
+    await run(tenantA, (tx) =>
+      brandService.facts.withdraw(
+        A,
+        { brandId: brandA, factId: approvedFact.factId, expectedVersion: 1, reason: 'Wrong year' },
+        tx,
+      ),
+    );
+    await expect(approve(correction.factId)).rejects.toMatchObject({
+      details: [{ path: 'factId', issue: 'corrects_not_live' }],
+    });
+    expect((await row(correction.factId)).state).toBe('proposed');
   });
 
   it('a proposed fact is edited; an agent edits only its own proposals; an approved fact is corrected, not edited', async () => {
@@ -583,9 +656,13 @@ describe('facts workspace (BSC-3) against MySQL 8', () => {
     await approve(offer.factId, 0, { reviewDueAt: new Date(Date.now() + 2 * HOUR).toISOString() });
     const unkeyed = await propose('Stored before duplicate keys');
     await tdb.db.update(approvedFacts).set({ dedupeKey: null }).where(eq(approvedFacts.id, unkeyed.factId));
-    const runtime = createBrandFactSweepRuntime();
+    // Before the sweep keys it, a fact stored without a key is still found as a duplicate.
+    expect(await propose('stored before duplicate keys.')).toMatchObject({
+      factId: unkeyed.factId,
+      duplicate: true,
+    });
     const now = new Date(Date.now() + 3 * HOUR).toISOString();
-    const targets = await runtime.listBrandFactSweepTargets({ correlationId: 'corr_sweep', now });
+    const targets = await listBrandFactSweepTargets({ correlationId: 'corr_sweep', now });
     expect(targets).toContainEqual({ tenantId: tenantA, brandId: brandA });
     expect(targets.some((t) => t.tenantId === tenantB)).toBe(false);
     const sweep = () =>
@@ -596,36 +673,30 @@ describe('facts workspace (BSC-3) against MySQL 8', () => {
           brandIds: 'all',
           correlationId: 'corr_sweep',
         },
-        () =>
-          runtime.sweepBrandFacts({
-            tenantId: tenantA,
-            brandId: brandA,
-            actor: { kind: 'platform_operator', id: 'brand-fact-sweep' },
-            correlationId: 'corr_sweep',
-            now,
-          }),
+        () => withTransaction((tx) => brandService.facts.sweep(brandA, new Date(now), tx)),
       );
     const first = await sweep();
     expect(first.expired).toBeGreaterThanOrEqual(1);
     expect(first.reviewDue).toBeGreaterThanOrEqual(1);
     expect(first.keyed).toBe(1);
+    expect(first.expiredFactIds).toContain(offer.factId); // the worker-core runtime holds their dependants
     expect(await events('brand.fact_expired', offer.factId)).toEqual([
       expect.objectContaining({
         factId: offer.factId,
         brandId: brandA,
         cause: 'expired',
         previousState: 'approved',
-        actorKind: 'user',
-        actorId: USER,
+        actorKind: 'platform_operator',
+        actorId: 'brand-fact-sweep',
       }),
     ]);
     expect(await row(offer.factId)).toMatchObject({ state: 'approved' });
     expect((await row(offer.factId)).reviewFlaggedAt).not.toBeNull();
     expect((await row(unkeyed.factId)).dedupeKey).toBe(factDedupeKey('Stored before duplicate keys'));
-    expect(await sweep()).toEqual({ expired: 0, reviewDue: 0, keyed: 0 });
+    expect(await sweep()).toEqual({ expired: 0, reviewDue: 0, keyed: 0, expiredFactIds: [] });
     expect(await events('brand.fact_expired', offer.factId)).toHaveLength(1);
     expect(
-      (await runtime.listBrandFactSweepTargets({ correlationId: 'corr_sweep', now })).some(
+      (await listBrandFactSweepTargets({ correlationId: 'corr_sweep', now })).some(
         (t) => t.brandId === brandA,
       ),
     ).toBe(false);

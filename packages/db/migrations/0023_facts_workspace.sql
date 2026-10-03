@@ -16,4 +16,5 @@ ALTER TABLE `approved_facts` ADD `expiry_notified_at` datetime(3);--> statement-
 CREATE INDEX `ix_fact_dedupe` ON `approved_facts` (`tenant_id`,`brand_id`,`dedupe_key`);--> statement-breakpoint
 UPDATE `approved_facts` SET `category` = `kind` WHERE `category` IS NULL;--> statement-breakpoint
 UPDATE `approved_facts` SET `origin` = IF(`proposed_by_kind` = 'agent', 'suggested', 'user') WHERE `origin` IS NULL;--> statement-breakpoint
-UPDATE `approved_facts` SET `sources` = `evidence` WHERE `sources` IS NULL;
+UPDATE `approved_facts` SET `sources` = `evidence` WHERE `sources` IS NULL;--> statement-breakpoint
+UPDATE `approved_facts` SET `review_due_at` = DATE_ADD(`updated_at`, INTERVAL 365 DAY) WHERE `state` = 'approved' AND `review_due_at` IS NULL;

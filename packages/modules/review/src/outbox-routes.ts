@@ -6,7 +6,7 @@ const CORE_TASK_QUEUE = 'core';
 export const BRAND_CHANGE_IMPACT_WORKFLOW_TYPE = 'brandChangeImpactWorkflowV1';
 
 /**
- * Spec 8.2 / 13.2: brand.version_published, brand.fact_revoked and brand.fact_expired → brandChangeImpactWorkflowV1 (invalidate the
+ * Spec 8.2 / 13.2: brand.version_published and brand.fact_revoked → brandChangeImpactWorkflowV1 (invalidate the
  * brand's approvals, re-evaluate and hold or flag its scheduled publications). The workflow id is stable per
  * outbox event so a redelivered event joins the running workflow; the outbox row is the dedupe authority
  * (spec 14.2). The actor is the one who published or revoked, carried for tenant re-establishment (spec 5.2).
@@ -28,13 +28,12 @@ export function registerReviewOutboxRoutes(): void {
       args: [input],
     };
   });
-  // brand.fact_revoked covers revoke, withdraw and supersede (payload `cause`); brand.fact_expired is the daily sweep's
-  // one event when an approved fact's validity ends (BSC-3). Both hold or flag the scheduled work citing the fact.
+  // brand.fact_revoked covers revoke, withdraw and supersede (payload `cause`). Expiry is held by the daily fact
+  // sweep itself (BSC-3), so brand.fact_expired is informational and has no route.
   registerOutboxRoute('brand.fact_revoked', factImpactRoute);
-  registerOutboxRoute('brand.fact_expired', factImpactRoute);
 }
 
-/** A fact that stopped applying (revoked, withdrawn, superseded or expired) → the brand's change impact. */
+/** A fact that stopped applying (revoked, withdrawn or superseded) → the brand's change impact. */
 const factImpactRoute: OutboxRoute = (evt) => {
   const p = evt.payload;
   const input = BrandChangeImpactInputV1.parse({

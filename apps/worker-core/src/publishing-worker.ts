@@ -48,11 +48,7 @@ import {
   publishTaskQueue,
   type WorkflowProbe,
 } from '@oremedia/module-publishing';
-import {
-  BRAND_FACT_SWEEP_SCHEDULE_ID,
-  BRAND_FACT_SWEEP_WORKFLOW_TYPE,
-  createBrandFactSweepRuntime,
-} from '@oremedia/module-brand';
+import { BRAND_FACT_SWEEP_SCHEDULE_ID, BRAND_FACT_SWEEP_WORKFLOW_TYPE } from '@oremedia/module-brand';
 import { createCommunityReplyRuntime } from '@oremedia/module-community';
 import {
   DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
@@ -62,6 +58,7 @@ import {
 import { logger } from '@oremedia/observability';
 import { cmsRegistry, providerRegistry } from '@oremedia/providers';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
+import { createBrandFactSweepRuntime } from './brand-fact-sweep-runtime';
 import { intelligenceActivities } from './intelligence-worker';
 import { operationsActivities } from './operations-worker';
 import type { TemporalConfig } from './temporal';

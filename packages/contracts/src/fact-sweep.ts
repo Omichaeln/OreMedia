@@ -4,7 +4,7 @@ import { TenantContextInput } from './tenancy';
 /**
  * BSC-3 daily fact sweep (brandFactSweepWorkflowV1, task queue `core`, started by the Temporal schedule
  * `brand-fact-sweep`): for every brand with work due, an approved fact whose validity has ended emits
- * `brand.fact_expired` exactly once (the impact workflow holds the scheduled work citing it), an approved fact past
+ * `brand.fact_expired` exactly once and the scheduled work citing it is held (as for a revocation), an approved fact past
  * its review date is flagged once for the workspace and Needs you, and a fact stored before duplicate detection gets
  * its duplicate key. Payloads carry references only.
  */

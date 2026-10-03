@@ -12,7 +12,8 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 /**
  * Ledger 1.g4 for migration 0023 (BSC-3 facts workspace): on a database populated at the previous head (0022) the
  * migration adds the workspace columns to approved_facts and the `superseded` state, and backfills category from
- * kind, origin from proposed_by_kind (user → user, agent → suggested) and sources from evidence; every existing
+ * kind, origin from proposed_by_kind (user → user, agent → suggested), sources from evidence and a review date a
+ * year after the last change for approved facts; every existing
  * column of every row is unchanged. On the migrated data the facts seeded before the migration list with their
  * category, origin and sources, a person's fact is approved and corrected, and the correction's approval
  * supersedes it. Additive and roll-forward safe: the new columns are in LATER_COLUMNS (seed.ts).
@@ -25,6 +26,7 @@ describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', (
   let tenantA: SeededTenant;
   let before = '';
   const agentFactId = 'fact_01ROLLFORWARD0023AGENT0';
+  const approvedFactId = 'fact_01ROLLFORWARD0023APPRVD';
 
   async function snapshot(): Promise<string> {
     const out: Record<string, unknown[]> = {};
@@ -43,6 +45,9 @@ describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', (
     // An agent's proposal as the previous release wrote it (no workspace columns).
     await tdb.db.execute(
       sql`insert into ${approvedFacts} (id, tenant_id, brand_id, kind, statement, evidence, state, proposed_by_kind, proposed_by_id, created_at, updated_at, version) values (${agentFactId}, ${tenantA.tenantId}, ${tenantA.brandIds[0]}, 'offer', 'Agent offer', ${JSON.stringify([{ kind: 'url', ref: 'https://example.test' }])}, 'proposed', 'agent', 'sp_seeded', ${at}, ${at}, 0)`,
+    );
+    await tdb.db.execute(
+      sql`insert into ${approvedFacts} (id, tenant_id, brand_id, kind, statement, evidence, state, proposed_by_kind, proposed_by_id, approved_by_user_id, created_at, updated_at, version) values (${approvedFactId}, ${tenantA.tenantId}, ${tenantA.brandIds[0]}, 'claim', 'Approved before 0023', ${JSON.stringify([{ kind: 'other', ref: 'x' }])}, 'approved', 'user', ${tenantA.ownerUserId}, ${tenantA.ownerUserId}, ${new Date('2026-05-01T00:00:00.000Z')}, ${new Date('2026-05-01T00:00:00.000Z')}, 1)`,
     );
     await expect(tdb.db.select().from(approvedFacts)).rejects.toThrow(); // the workspace columns are not there yet
     before = await snapshot();
@@ -66,7 +71,12 @@ describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', (
       dedupeKey: null,
       conflicts: null,
     });
-    expect(rows.every((r) => r.reviewDueAt === null && r.supersededByFactId === null)).toBe(true);
+    expect(rows.every((r) => r.supersededByFactId === null)).toBe(true);
+    // An approved fact is due for review a year after it was last changed; the others have no review date yet.
+    expect(rows.find((r) => r.id === approvedFactId)!.reviewDueAt?.toISOString()).toBe(
+      '2027-05-01T00:00:00.000Z',
+    );
+    expect(rows.filter((r) => r.id !== approvedFactId).every((r) => r.reviewDueAt === null)).toBe(true);
     await expect(
       tdb.db.execute(sql`update ${approvedFacts} set state = 'archived' where id = ${agentFactId}`),
     ).rejects.toMatchObject({ cause: { code: 'WARN_DATA_TRUNCATED' } });

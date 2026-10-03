@@ -16,11 +16,7 @@ import { releaseApprovals } from '@oremedia/db/schema/review';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { createBrandChangeImpactActivities } from '@oremedia/activities';
 import { assetService } from '@oremedia/module-assets';
-import {
-  brandService,
-  createBrandFactSweepRuntime,
-  registerBrandAssetKindSource,
-} from '@oremedia/module-brand';
+import { brandService, registerBrandAssetKindSource } from '@oremedia/module-brand';
 import { contentService } from '@oremedia/module-content';
 import { outboxRouteFor } from '@oremedia/module-operations';
 import {
@@ -39,6 +35,7 @@ import { BRAND_CHANGE_IMPACT_WORKFLOW_TYPE, reviewService } from '@oremedia/modu
 import { ProviderRegistry } from '@oremedia/providers';
 import { runBrandChangeImpact } from '@oremedia/workflows/brand-change-impact.workflow.v1';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
+import { createBrandFactSweepRuntime } from './brand-fact-sweep-runtime';
 import { composeModules } from './composition';
 
 /**
@@ -424,35 +421,38 @@ describe('brand change impact end to end (worker-core composition, real activiti
     expect(held.holdReasons).toEqual(expect.arrayContaining(['facts_valid']));
   });
 
-  it('BSC-3: the expiry event of the daily fact sweep starts the same impact workflow for the fact', async () => {
+  it('BSC-3: the daily fact sweep holds the scheduled publication citing an expired fact, as the platform job, once', async () => {
     const fact = await approvedFact('Back to school: 15% off');
+    const citing = await scheduledPublication('Cites the expiring offer', [fact]);
     await tdb.db
       .update(approvedFacts)
       .set({ validUntil: new Date(Date.now() - 60_000) })
       .where(eq(approvedFacts.id, fact));
     const sweepActor = { kind: 'platform_operator' as const, id: 'brand-fact-sweep' };
-    const now = new Date().toISOString();
-    const swept = await runInTenant(
-      { tenantId: tenantA, actor: sweepActor, brandIds: 'all', correlationId: 'corr_fact_sweep' },
-      () =>
-        createBrandFactSweepRuntime().sweepBrandFacts({
-          tenantId: tenantA,
-          brandId: brandA,
-          actor: sweepActor,
-          correlationId: 'corr_fact_sweep',
-          now,
-        }),
-    );
-    expect(swept.expired).toBeGreaterThanOrEqual(1);
-    const input = await routedInput('brand.fact_expired');
-    // The impact workflow acts for the person who approved the fact (it never runs as the platform job).
-    expect(input).toMatchObject({
-      tenantId: tenantA,
-      actor: { kind: 'user', id: USER },
-      brandId: brandA,
-      change: { kind: 'fact_revoked', factId: fact },
-    });
-    expect(await runBrandChangeImpact(acts, input)).toMatchObject({ publicationsHeld: 0 });
+    const sweep = () =>
+      runInTenant(
+        { tenantId: tenantA, actor: sweepActor, brandIds: 'all', correlationId: 'corr_fact_sweep' },
+        () =>
+          createBrandFactSweepRuntime().sweepBrandFacts({
+            tenantId: tenantA,
+            brandId: brandA,
+            actor: sweepActor,
+            correlationId: 'corr_fact_sweep',
+            now: new Date().toISOString(),
+          }),
+      );
+    expect((await sweep()).expired).toBeGreaterThanOrEqual(1);
+    const held = await row(citing.publicationId);
+    expect(held.state).toBe('held');
+    expect(held.holdReasons).toEqual(expect.arrayContaining(['facts_valid']));
+    expect(held.stateReason).toBe(`fact_expired:${fact}`);
+    const holds = await auditOf('publication.hold', citing.publicationId);
+    expect(holds).toHaveLength(1);
+    expect(holds[0]).toMatchObject({ actorKind: 'platform_operator', actorId: 'brand-fact-sweep' });
+    // brand.fact_expired is informational: nothing routes it, and a second sweep changes nothing.
+    expect(outboxRouteFor('brand.fact_expired')).toBeUndefined();
+    expect(await sweep()).toMatchObject({ expired: 0 });
+    expect(await row(citing.publicationId)).toMatchObject({ state: 'held', version: held.version });
   });
 
   it('a revoked fact under holdOnDependencyRevocation=false only flags the publication: needs-attention audit and event, state unchanged', async () => {

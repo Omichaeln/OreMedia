@@ -542,9 +542,20 @@ const factResource = (brand: BrandRow, fact: FactRow) => ({
   id: fact.id,
 });
 
+/**
+ * The live fact of the brand with this dedupe key: by the stored key, or, for a fact stored before 0023 whose key
+ * the daily sweep has not filled yet, by computing its key here (so existing facts are duplicates from day one).
+ */
+async function findLiveDuplicate(brandId: string, dedupeKey: string, tx: Tx) {
+  const keyed = await factsRepo.findLiveByDedupeKey(brandId, dedupeKey, tx);
+  if (keyed) return keyed;
+  const unkeyed = await factsRepo.listLiveUnkeyed(brandId, tx);
+  return unkeyed.find((f) => factDedupeKey(f.statement) === dedupeKey) ?? null;
+}
+
 /** Another live fact of the brand with the same normalised statement is a duplicate (typed for the workspace). */
 async function assertNotDuplicate(brandId: string, dedupeKey: string, except: string[], tx: Tx) {
-  const existing = await factsRepo.findLiveByDedupeKey(brandId, dedupeKey, tx);
+  const existing = await findLiveDuplicate(brandId, dedupeKey, tx);
   if (existing && !except.includes(existing.id))
     throw new ValidationFailedError(
       [{ path: 'statement', issue: 'duplicate_fact' }],
@@ -1142,7 +1153,7 @@ export const brandService = {
      */
     async propose(actor: ResolvedActor, input: z.input<typeof FactPropose>, tx: Tx) {
       const parsed = FactPropose.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       const category = parsed.category ?? parsed.kind;
       if (!category)
@@ -1151,7 +1162,7 @@ export const brandService = {
       const validUntil = dateOrNull(parsed.validUntil);
       assertValidity(validFrom, validUntil);
       const dedupeKey = factDedupeKey(parsed.statement);
-      const existing = await factsRepo.findLiveByDedupeKey(brand.id, dedupeKey, tx);
+      const existing = await findLiveDuplicate(brand.id, dedupeKey, tx);
       if (existing) return { factId: existing.id, version: existing.version, duplicate: true };
       const conflicts = await conflictsOf(brand.id, parsed.conflicts ?? [], new Date(), tx);
       const sources: FactSource[] = parsed.sources ?? parsed.evidence ?? [];
@@ -1192,7 +1203,7 @@ export const brandService = {
     /** Edit a proposed fact. An agent edits only its own proposals; a person any proposal of the brand. */
     async update(actor: ResolvedActor, input: z.input<typeof FactUpdate>, tx: Tx) {
       const parsed = FactUpdate.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
       await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
       if (fact.state !== 'proposed')
@@ -1245,11 +1256,22 @@ export const brandService = {
      */
     async approve(actor: ResolvedActor, input: z.input<typeof FactApprove>, tx: Tx) {
       const parsed = FactApprove.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
       const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
       assertMayDecide(decision);
       const toState = transition(approvedFactMachine, fact.state, 'approve', 'factId');
+      // A correction replaces a fact that still applies; one whose original was withdrawn or merged meanwhile is
+      // refused (propose it as a new fact instead), so approving it never silently stands alone.
+      const corrected = fact.supersedesFactId ? await factsRepo.findById(fact.supersedesFactId, tx) : null;
+      if (
+        fact.supersedesFactId &&
+        !(corrected && corrected.brandId === brand.id && LIVE_FACT_STATES.includes(corrected.state))
+      )
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'corrects_not_live' }],
+          'The fact this corrects no longer applies; propose the statement as a new fact instead',
+        );
       const origin = factOrigin(fact);
       const sources = factSources(fact);
       if (
@@ -1295,12 +1317,9 @@ export const brandService = {
         },
       );
       const supersededFactIds: string[] = [];
-      if (fact.supersedesFactId) {
-        const corrected = await factsRepo.findById(fact.supersedesFactId, tx);
-        if (corrected && corrected.brandId === brand.id && LIVE_FACT_STATES.includes(corrected.state)) {
-          await supersedeFact(actor, brand, corrected, corrected.version, fact.id, 'corrected', tx);
-          supersededFactIds.push(corrected.id);
-        }
+      if (corrected) {
+        await supersedeFact(actor, brand, corrected, corrected.version, fact.id, 'corrected', tx);
+        supersededFactIds.push(corrected.id);
       }
       return { factId: fact.id, state: toState, version: parsed.expectedVersion + 1, supersededFactIds };
     },
@@ -1331,7 +1350,7 @@ export const brandService = {
      */
     async correct(actor: ResolvedActor, input: z.input<typeof FactCorrect>, tx: Tx) {
       const parsed = FactCorrect.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
       await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
       if (fact.state !== 'approved')
@@ -1390,7 +1409,7 @@ export const brandService = {
     /** Keep one live fact; the others become superseded by it and their sources (deduplicated) join it. */
     async merge(actor: ResolvedActor, input: z.input<typeof FactMerge>, tx: Tx) {
       const parsed = FactMerge.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const ids = [parsed.keep.factId, ...parsed.merge.map((m) => m.factId)];
       if (new Set(ids).size !== ids.length)
         throw new ValidationFailedError([{ path: 'merge', issue: 'duplicate_fact_ids' }]);
@@ -1410,6 +1429,12 @@ export const brandService = {
       for (const { fact, expectedVersion } of all)
         if (fact.version !== expectedVersion)
           throw new ConflictError('ApprovedFact', fact.id, expectedVersion);
+      // An approved fact is never superseded by one nobody approved (it would stop applying with nothing in its place).
+      if (keep.state !== 'approved' && others.some(({ fact }) => fact.state === 'approved'))
+        throw new ValidationFailedError(
+          [{ path: 'keep.factId', issue: 'keep_not_approved' }],
+          'Keep an approved fact when an approved fact is merged into it',
+        );
       const seen = new Set<string>();
       const sources: FactSource[] = [];
       for (const s of all.flatMap(({ fact }) => factSources(fact))) {
@@ -1490,7 +1515,7 @@ export const brandService = {
      */
     async resolveConflict(actor: ResolvedActor, input: z.input<typeof FactResolveConflict>, tx: Tx) {
       const parsed = FactResolveConflict.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
       const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
       assertMayDecide(decision);
@@ -1509,6 +1534,14 @@ export const brandService = {
         throw new ValidationFailedError(
           [{ path: 'outcome', issue: 'no_live_conflicting_fact' }],
           'The conflicting source is not a fact of the brand; keep this fact or annotate the conflict',
+        );
+      // As for merge: an approved fact is superseded only by an approved one.
+      const kept = parsed.outcome === 'kept_other' ? other : fact;
+      const dropped = parsed.outcome === 'kept_other' ? fact : otherLive ? other : null;
+      if (parsed.outcome !== 'annotated' && dropped?.state === 'approved' && kept?.state !== 'approved')
+        throw new ValidationFailedError(
+          [{ path: 'outcome', issue: 'kept_fact_not_approved' }],
+          'The fact you keep must be approved, because the other one is: approve it first or annotate the conflict',
         );
       const now = new Date();
       const resolved = conflicts.map((c) =>
@@ -1598,16 +1631,17 @@ export const brandService = {
     },
 
     /**
-     * BSC-3 daily sweep for one brand (the caller is the sweep runtime in the brand's tenant): emits
-     * `brand.fact_expired` once per approved fact whose validity ended (data { factId, kind, previousState,
-     * validUntil, cause: 'expired', actorKind, actorId }, brandId in the payload; the actor is the person who approved
-     * the fact), flags approved facts past their
-     * review date once, and keys facts stored before duplicate detection. The markers make a re-run a no-op.
+     * BSC-3 daily sweep for one brand (the caller is the sweep runtime in the brand's tenant, as the platform job):
+     * marks each approved fact whose validity ended exactly once, audits it and emits the informational
+     * `brand.fact_expired` (data { factId, kind, previousState, validUntil, cause: 'expired', actorKind, actorId },
+     * brandId in the payload; no route), and returns those ids so the runtime holds the scheduled work citing them
+     * in the same transaction. Flags approved facts past their review date once and keys facts stored before
+     * duplicate detection. The markers make a re-run a no-op.
      */
     async sweep(brandId: string, at: Date, tx: Tx) {
       const { actor } = requireTenant();
       await brandsRepo.getById(brandId, tx); // a foreign or unknown brand is NOT_FOUND
-      const result = { expired: 0, reviewDue: 0, keyed: 0 };
+      const result = { expired: 0, reviewDue: 0, keyed: 0, expiredFactIds: [] as string[] };
       for (const f of await factsRepo.listSweepDue(brandId, at, tx)) {
         const approved = f.state === 'approved';
         const expiring =
@@ -1644,10 +1678,7 @@ export const brandService = {
           brandId,
           validUntil: f.validUntil?.toISOString() ?? null,
         });
-        // The impact workflow re-resolves its actor as a person or an agent of the tenant (spec 5.2), never the
-        // platform job, so it acts for the person who approved the fact (approval is always a person's act).
-        const owner = f.approvedByUserId ?? f.reviewedByUserId;
-        if (!owner) continue;
+        result.expiredFactIds.push(f.id);
         await outbox.add(
           'brand.fact_expired',
           { type: 'approved_fact', id: f.id, version: f.version + 1 },
@@ -1657,8 +1688,8 @@ export const brandService = {
             previousState: f.state,
             validUntil: f.validUntil?.toISOString() ?? null,
             cause: 'expired',
-            actorKind: 'user',
-            actorId: owner,
+            actorKind: actor.kind,
+            actorId: actor.id,
           },
           tx,
           { brandId },

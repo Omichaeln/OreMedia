@@ -8,7 +8,7 @@ import type {
 /**
  * BSC-3 (task queue `core`), started daily by the Temporal schedule `brand-fact-sweep`: every brand with fact work
  * due is swept in its own tenant, one activity per brand, so one failing brand never blocks the others. Per brand
- * an approved fact whose validity ended emits `brand.fact_expired` once (routed to brandChangeImpactWorkflowV1), a
+ * an approved fact whose validity ended is marked once and the scheduled work citing it is held (as a revocation is), a
  * fact past its review date is flagged once, and a fact without a duplicate key gets one; the markers make a re-run
  * (or the next day's run) a no-op. Modelled on destinationTokenRefreshWorkflowV1. The payload carries ids only.
  * Once deployed this file is immutable; changes ship as v2.

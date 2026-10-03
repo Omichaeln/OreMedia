@@ -69,8 +69,8 @@ export const EVENT_TYPES = {
   // RA-04 (appended; additive only): a live article's rendered page is due for a delayed re-validation; emitted
   // with `availableAt` at publish, renderedValidationWorkflowV1 re-runs the checks
   'publication.rendered_validation_due': 1,
-  // BSC-3 (appended; additive only): an approved fact's validity ended; emitted once by the daily fact sweep and
-  // routed to brandChangeImpactWorkflowV1 like brand.fact_revoked
+  // BSC-3 (appended; additive only): an approved fact's validity ended; emitted once by the daily fact sweep, which
+  // holds the scheduled work citing it itself (informational: no route)
   'brand.fact_expired': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;
