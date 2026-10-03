@@ -31,11 +31,13 @@ import { newId } from '@oremedia/domain/ids';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerChannelKeySource,
   registerEligibleTemplateSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   resetBrandAssetKindSource,
   resetBrandChangeImpactSource,
+  resetChannelKeySource,
   resetEligibleTemplateSource,
   resetOnboardingRunSource,
   type OnboardingRunSource,
@@ -1206,6 +1208,46 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(details).toHaveLength(8);
     });
 
+    it('channel keys come from the registered channel source', async () => {
+      registerChannelKeySource(() => ['linkedin_page']);
+      try {
+        // A channel the source does not list (and the applied document does not hold) is refused.
+        const base = guided();
+        expect(
+          await issuesOf({
+            ...base,
+            copyTemplates: [{ ...base.copyTemplates![0]!, channelKeys: ['facebook_page'] }],
+          }),
+        ).toEqual([{ path: 'copyTemplates.0.channelKeys.0', issue: 'unknown_channel' }]);
+      } finally {
+        resetChannelKeySource();
+      }
+    });
+
+    it('repeats and unresolvable facts the applied document already holds are not re-checked; new ones are', async () => {
+      // An applied document written before the checks, holding a repeated term and a fact id that is not this brand's.
+      const legacy = guided({
+        vocabulary: [
+          { term: 'roast', usage: 'preferred', alternatives: [] },
+          { term: 'Roast', usage: 'allowed', alternatives: [] },
+        ],
+        messaging: {
+          ...guided().messaging!,
+          pillars: [{ ...guided().messaging!.pillars[0]!, proofFactIds: [approved, 'fact_gone'] }],
+        },
+      });
+      await tdb.db.update(brandVersions).set({ document: legacy }).where(eq(brandVersions.id, applied!));
+      const saved = await save({ ...legacy, channelBaseline: { cta: 'Reply' } });
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
+      expect(
+        await issuesOf({
+          ...legacy,
+          copyTemplates: [legacy.copyTemplates![0]!, legacy.copyTemplates![0]!],
+        }),
+      ).toEqual([{ path: 'copyTemplates.1.key', issue: 'duplicate_key' }]);
+    });
+
     it('a fact the applied brand system already cites still saves after it is revoked', async () => {
       await run(tenantA, (tx) =>
         brandService.facts.revoke(A, { brandId: brandG, factId: approved, expectedVersion: 1 }, tx),
@@ -1661,7 +1703,12 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(written).toMatchObject({ versionId: draftId, version: before.version + 1 });
       const after = await versionOf(draftId);
       expect(after.state).toBe('draft');
-      expect(after.document.voice).toEqual(proposal);
+      // What the agent adds is marked as its suggestion.
+      expect(after.document.voice).toEqual({
+        ...proposal,
+        audiences: proposal.audiences.map((a) => ({ ...a, provenance: { origin: 'suggested' } })),
+        examples: proposal.examples.map((e) => ({ ...e, provenance: { origin: 'suggested' } })),
+      });
       expect(after.document.guidelines).toEqual(before.document.guidelines);
       expect(after.document.tokens).toEqual(before.document.tokens);
       // The voice is no longer the one the run started from: a repeat never overwrites.
@@ -1701,6 +1748,85 @@ describe('brand module (spec 8) against MySQL 8', () => {
         reason: 'not_an_onboarding_run',
       });
       await expect(propose('run_2', { ...proposal, tone: Array(13).fill('x') })).rejects.toThrow();
+    });
+
+    it("a proposal merges audiences and examples: a person's items are kept as they are, matched items keep their guidance fields", async () => {
+      const current = await versionOf(draftId);
+      const voice = current.document.voice;
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          person,
+          {
+            brandId: brandOnb,
+            versionId: draftId,
+            expectedVersion: current.version,
+            document: {
+              ...current.document,
+              voice: {
+                ...voice,
+                personality: [{ trait: 'Warm', provenance: { origin: 'user' } }],
+                audiences: [
+                  {
+                    key: 'regulars',
+                    description: 'Weekly buyers',
+                    needs: ['Fresh stock'],
+                    provenance: { origin: 'user' },
+                  },
+                  { key: 'cafes', description: 'Cafe owners', objections: ['Price'] },
+                ],
+                examples: [
+                  {
+                    text: 'This week: a Chipinge roast.',
+                    verdict: 'on_brand',
+                    note: 'plain',
+                    channelKey: 'x',
+                    rationale: 'Concrete',
+                  },
+                ],
+              },
+            },
+          },
+          tx,
+        ),
+      );
+      const { runId } = await start(draftId);
+      await propose(runId, {
+        ...proposal,
+        summary: 'Edited by a person.', // the later case reads the summary the person left
+        audiences: [
+          { key: 'regulars', description: 'Overwritten by the agent' },
+          { key: 'cafes', description: 'Independent cafes' },
+          { key: 'offices', description: 'Office managers' },
+        ],
+      });
+      const merged = (await versionOf(draftId)).document.voice;
+      expect(merged.personality).toEqual([{ trait: 'Warm', provenance: { origin: 'user' } }]);
+      expect(merged.audiences).toEqual([
+        {
+          key: 'regulars',
+          description: 'Weekly buyers',
+          needs: ['Fresh stock'],
+          provenance: { origin: 'user' },
+        },
+        {
+          key: 'cafes',
+          description: 'Independent cafes',
+          objections: ['Price'],
+          provenance: { origin: 'suggested' },
+        },
+        { key: 'offices', description: 'Office managers', provenance: { origin: 'suggested' } },
+      ]);
+      // Same text and values: the example keeps its channel and rationale.
+      expect(merged.examples).toEqual([
+        {
+          text: 'This week: a Chipinge roast.',
+          verdict: 'on_brand',
+          note: 'plain',
+          channelKey: 'x',
+          rationale: 'Concrete',
+          provenance: { origin: 'suggested' },
+        },
+      ]);
     });
 
     it('a draft that went to review takes no proposal, even from a run that started on it', async () => {

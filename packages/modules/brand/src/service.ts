@@ -116,6 +116,21 @@ export const resetBrandAssetKindSource = (): void => {
 };
 
 /**
+ * BSC-1: the channel provider keys guidance may name. Channels are the publishing module's registry (which tests and
+ * deployments may replace), so composition wires `providerRegistryInUse().list()`, the registry
+ * publishing.channels.limits reads. Until registered, the built-in provider registry answers.
+ */
+export type ChannelKeySource = () => string[];
+const builtinChannelKeys: ChannelKeySource = () => providerRegistry.list().map((p) => p.key);
+let channelKeySource: ChannelKeySource = builtinChannelKeys;
+export const registerChannelKeySource = (fn: ChannelKeySource): void => {
+  channelKeySource = fn;
+};
+export const resetChannelKeySource = (): void => {
+  channelKeySource = builtinChannelKeys;
+};
+
+/**
  * Spec 8.2 onboarding runs are agent runs, which are the agents module's rows, so it registers the source
  * (composition wires `agentsService.runs.start` / `runs.get`). `get` returns the run's brief as the server wrote it.
  * Unlike the other hooks there is no harmless default (a missing template or asset list is an empty answer; a
@@ -266,16 +281,29 @@ const channelKeysOf = (d: BrandSystemDocumentV1): Set<string> =>
     ...d.voice.examples.flatMap((e) => (e.channelKey ? [e.channelKey] : [])),
   ]);
 
-/** Reports every repeat of a key in a list (after its first use). */
+/** The keys a list holds more than once. */
+function repeated<T>(items: readonly T[], key: (t: T) => string): Set<string> {
+  const seen = new Set<string>();
+  const out = new Set<string>();
+  for (const item of items) (seen.has(key(item)) ? out : seen).add(key(item));
+  return out;
+}
+
+/**
+ * Reports every repeat of a key in a list (after its first use), except keys the applied document already held more
+ * than once: a document saved before the check still saves.
+ */
 function duplicates<T>(
   items: readonly T[],
+  previous: readonly T[],
   key: (t: T) => string,
   path: (i: number) => string,
 ): ErrorDetail[] {
+  const held = repeated(previous, key);
   const seen = new Set<string>();
   return items.flatMap((item, i) => {
     const k = key(item);
-    if (seen.has(k)) return [{ path: path(i), issue: 'duplicate_key' }];
+    if (seen.has(k) && !held.has(k)) return [{ path: path(i), issue: 'duplicate_key' }];
     seen.add(k);
     return [];
   });
@@ -284,9 +312,9 @@ function duplicates<T>(
 /**
  * BSC-1 guidance references: channel keys name known channel providers, one guidance entry per channel; copy
  * template keys, messaging pillar keys and vocabulary terms (case-insensitively) are unique; a pillar's proof facts
- * are facts of this brand, and a fact a pillar newly cites is approved. As with type roles, references the applied
- * document already held are not re-checked against the registry or the fact's state, so an older save still saves
- * (a held fact that was since revoked stays cited until a person removes it; snapshots carry approved facts only).
+ * are facts of this brand, and a fact a pillar newly cites is approved. As with type roles, what the applied document
+ * already held (channel keys, repeated keys, cited facts) is not re-checked, so an older save still saves (a held fact
+ * that was since revoked stays cited until a person removes it; snapshots and prompts use approved facts only).
  */
 async function guidanceIssues(
   brandId: string,
@@ -295,7 +323,7 @@ async function guidanceIssues(
   tx: Tx,
 ): Promise<ErrorDetail[]> {
   const issues: ErrorDetail[] = [];
-  const known = new Set(providerRegistry.list().map((p) => p.key));
+  const known = new Set(channelKeySource());
   const held = previous ? channelKeysOf(previous) : new Set<string>();
   const unknown = (key: string) => !known.has(key) && !held.has(key);
   document.channelGuidance.forEach((c, i) => {
@@ -305,6 +333,7 @@ async function guidanceIssues(
   issues.push(
     ...duplicates(
       document.channelGuidance,
+      previous?.channelGuidance ?? [],
       (c) => c.providerKey,
       (i) => `channelGuidance.${i}.providerKey`,
     ),
@@ -317,6 +346,7 @@ async function guidanceIssues(
   issues.push(
     ...duplicates(
       document.copyTemplates ?? [],
+      previous?.copyTemplates ?? [],
       (t) => t.key,
       (i) => `copyTemplates.${i}.key`,
     ),
@@ -328,6 +358,7 @@ async function guidanceIssues(
   issues.push(
     ...duplicates(
       document.vocabulary ?? [],
+      previous?.vocabulary ?? [],
       (v) => v.term.trim().toLocaleLowerCase(),
       (i) => `vocabulary.${i}.term`,
     ),
@@ -336,6 +367,7 @@ async function guidanceIssues(
   issues.push(
     ...duplicates(
       pillars,
+      previous?.messaging?.pillars ?? [],
       (p) => p.key,
       (i) => `messaging.pillars.${i}.key`,
     ),
@@ -354,11 +386,66 @@ async function guidanceIssues(
     p.proofFactIds.forEach((id, j) => {
       const state = states.get(id);
       const path = `messaging.pillars.${i}.proofFactIds.${j}`;
+      // A fact the applied document already cites is not re-checked (it may since have been revoked or removed).
+      if (cited.has(id)) return;
       if (state === undefined) issues.push({ path, issue: 'not_a_fact_of_this_brand' });
-      else if (state !== 'approved' && !cited.has(id)) issues.push({ path, issue: 'fact_not_approved' });
+      else if (state !== 'approved') issues.push({ path, issue: 'fact_not_approved' });
     }),
   );
   return issues;
+}
+
+type Voice = BrandSystemDocumentV1['voice'];
+type WithProvenance = { provenance?: { origin: string } };
+const SUGGESTED = { origin: 'suggested' as const };
+
+/**
+ * Merges a proposed list into the current one by `key`: an item a person entered (provenance `user`) is kept as it
+ * is; an item the proposal matches keeps its extra fields (needs, rationale, channel...) and takes the proposal's
+ * values, becoming `suggested` when they differ; an item the proposal adds is `suggested`. Items the proposal leaves
+ * out are dropped unless a person entered them.
+ */
+function mergeProposed<T extends WithProvenance, P extends object>(
+  current: readonly T[],
+  proposed: readonly P[],
+  key: (item: T | P) => string,
+): T[] {
+  const byKey = new Map(current.map((c) => [key(c), c]));
+  const out: T[] = [];
+  const used = new Set<string>();
+  for (const p of proposed) {
+    const k = key(p);
+    if (used.has(k)) continue;
+    used.add(k);
+    const existing = byKey.get(k);
+    if (existing?.provenance?.origin === 'user') {
+      out.push(existing);
+      continue;
+    }
+    const merged = { ...existing, ...p } as unknown as T;
+    const changed = !existing || hashCanonical({ ...existing, ...p }) !== hashCanonical(existing);
+    out.push({ ...merged, provenance: changed ? SUGGESTED : (existing.provenance ?? SUGGESTED) } as T);
+  }
+  for (const c of current)
+    if (c.provenance?.origin === 'user' && !used.has(key(c))) {
+      used.add(key(c));
+      out.push(c);
+    }
+  return out;
+}
+
+/**
+ * An onboarding proposal covers the original voice fields. Guidance a person added (personality, rules) is kept;
+ * audiences (by key) and examples (by text) are merged so their extra fields survive and a person's items are
+ * never overwritten; plain lists (tone, terms, phrases, locales) are replaced as before.
+ */
+export function mergeProposedVoice(current: Voice, proposal: BrandVoiceProposal): Voice {
+  return {
+    ...current,
+    ...proposal,
+    audiences: mergeProposed(current.audiences, proposal.audiences, (a) => a.key),
+    examples: mergeProposed(current.examples, proposal.examples, (e) => e.text),
+  };
 }
 
 /** The guidelines' identity for change detection: absent guidelines are ''. */
@@ -1459,8 +1546,10 @@ export const brandService = {
     // A person changed the voice after the run started: their edit wins (CONFLICT, like any stale edit).
     if (hashCanonical(current.voice) !== baseVoiceHash)
       throw new ConflictError('BrandVersion', v.id, v.version);
-    // The proposal covers the original voice fields; guidance a person added (personality, rules) is kept.
-    const document = BrandSystemDocumentV1.parse({ ...current, voice: { ...current.voice, ...voice } });
+    const document = BrandSystemDocumentV1.parse({
+      ...current,
+      voice: mergeProposedVoice(current.voice, voice),
+    });
     const contentHash = hashCanonical(document);
     await versionsRepo.update(v.id, v.version, { document, contentHash }, tx);
     await audit.record(
