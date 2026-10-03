@@ -853,6 +853,39 @@ describe('video documents (STU-2b) against MySQL 8', () => {
         ),
       ).toEqual({ items: [] });
     });
+
+    it('a cancel while the worker writes progress never conflicts; progress after the cancel changes nothing', async () => {
+      const queued = await run(tenantA, (tx) =>
+        creativeService.renders.request(
+          A,
+          { documentId: docId, revisionId: headRev, formatKeys: ['video_9x16'] },
+          tx,
+        ),
+      );
+      await run(tenantA, (tx) =>
+        creativeService.renders.markRendering({ renderJobId: queued.renderJobId }, tx),
+      );
+      const [before] = await tdb.db.select().from(renderJobs).where(eq(renderJobs.id, queued.renderJobId));
+      const note = (fraction: number) =>
+        run(tenantA, (tx) =>
+          creativeService.renders.markProgress(
+            { renderJobId: queued.renderJobId, progress: { phase: 'encoding', fraction } },
+            tx,
+          ),
+        );
+      const first = await note(0.1);
+      expect(first.version).toBe(before?.version); // progress does not move the optimistic version
+      // Twenty progress notes race the cancel; the cancel always commits.
+      const [cancelled] = await Promise.all([
+        run(tenantA, (tx) => creativeService.renders.cancel(A, { renderJobId: queued.renderJobId }, tx)),
+        ...Array.from({ length: 20 }, (_, i) => note(0.2 + i / 40)),
+      ]);
+      expect(cancelled.state).toBe('cancelled');
+      const late = await note(0.99);
+      expect(late.state).toBe('cancelled');
+      const [job] = await tdb.db.select().from(renderJobs).where(eq(renderJobs.id, queued.renderJobId));
+      expect(job).toMatchObject({ state: 'cancelled', progress: null });
+    });
   });
 
   describe('templates and tenancy', () => {

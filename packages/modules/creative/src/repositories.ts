@@ -125,6 +125,38 @@ export class RenderJobRepository extends BrandScopedRepository<typeof renderJobs
   async update(id: string, expectedVersion: number, values: Partial<typeof renderJobs.$inferInsert>, tx: Tx) {
     await this.updateScoped(id, expectedVersion, values, tx);
   }
+  /**
+   * Row lock (SELECT ... FOR UPDATE): a cancel serialises with the worker's state changes on the job. Same visibility
+   * rule as findById.
+   */
+  async lock(id: string, tx: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(renderJobs)
+      .where(this.scope(eq(renderJobs.id, id)))
+      .for('update');
+    const row = rows[0];
+    const ctx = requireTenant();
+    if (!row || (ctx.brandIds !== 'all' && !ctx.brandIds.has(row.brandId)))
+      throw new NotFoundError('RenderJob', id);
+    return row;
+  }
+  /**
+   * STU-2b: the worker's progress note on a job that is still rendering. Progress is advisory display state, so it
+   * is written WITHOUT bumping the optimistic version (a person's cancel never conflicts with it) and only while
+   * the job is `rendering` (a cancelled or finished job keeps its state). False when the job is not rendering.
+   */
+  async setProgressWhileRendering(
+    id: string,
+    progress: (typeof renderJobs.$inferInsert)['progress'],
+    tx: Tx,
+  ) {
+    const res = await this.conn(tx)
+      .update(renderJobs)
+      .set({ progress })
+      .where(this.scope(and(eq(renderJobs.id, id), eq(renderJobs.state, 'rendering'))));
+    return affectedRows(res) === 1;
+  }
 }
 
 /** Insert-only (spec 6.1): an approved export is what gets published, byte for byte. */

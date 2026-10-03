@@ -1533,8 +1533,11 @@ export const creativeService = {
       const parsed = RenderMarkProgress.parse(input);
       const job = await renderJobsRepo.getById(parsed.renderJobId, tx);
       if (job.state !== 'rendering') return { renderJobId: job.id, state: job.state, version: job.version };
-      await renderJobsRepo.update(job.id, job.version, { progress: parsed.progress }, tx);
-      return { renderJobId: job.id, state: job.state, version: job.version + 1 };
+      // No version bump (see setProgressWhileRendering): a cancel between two progress notes never conflicts.
+      if (await renderJobsRepo.setProgressWhileRendering(job.id, parsed.progress, tx))
+        return { renderJobId: job.id, state: job.state, version: job.version };
+      const now = await renderJobsRepo.getById(job.id, tx);
+      return { renderJobId: now.id, state: now.state, version: now.version };
     },
 
     /**
@@ -1543,7 +1546,8 @@ export const creativeService = {
      */
     async cancel(actor: ResolvedActor, input: z.infer<typeof RenderCancel>, tx: Tx, opts: ActorOptions = {}) {
       const parsed = RenderCancel.parse(input);
-      const job = await renderJobsRepo.getById(parsed.renderJobId, tx);
+      // Locked: the worker's state changes on the job wait for the cancel (and then find it cancelled).
+      const job = await renderJobsRepo.lock(parsed.renderJobId, tx);
       const revision = await revisionsRepo.getById(job.revisionId, tx);
       const doc = await documentsRepo.getById(revision.documentId, tx);
       await policy.assert(actor, 'creative.render', documentResource(doc), opts, tx);
