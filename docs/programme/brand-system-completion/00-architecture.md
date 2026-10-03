@@ -91,3 +91,15 @@ source can never be approved as-is: approval requires a source or an explicit re
 | BSC-4 | Sources and setup: brand_sources, capture (URL, PDF, DOCX, text, assets), assist jobs, workflow, suggestion generation, setup wizard and review by section, re-import preservation                                                |
 | BSC-5 | Collaboration: section assistant and overall assistant on BSC-4 jobs, compare with current, selective accept, undo, history and restore                                                                                           |
 | BSC-6 | Staging journeys and release evidence                                                                                                                                                                                             |
+
+### BSC-1 as built
+
+- Status: implemented on `claude/bsc-1-guidance-model` (document additions, save-time reference checks, prompt
+  rendering, skills, Brand System sections, platform limits read-only).
+- A channel entry's original `captionStyle` and `ctaConventions` are its `toneAdaptation` and `cta` overrides (blank
+  inherits the baseline), so entries do not carry two fields for the same thing; `effectiveChannelGuidance`
+  (packages/domain) and `channelOverride` (contracts) encode the mapping.
+- Platform limits reach the UI through `publishing.channels.limits` (certified providers' capability values, gated by
+  `brand.read`); the UI never writes them.
+- The prompt renders guidance within a 12,000-character budget in a fixed order, the run's channel only, and cites a
+  pillar's proof facts only while they are approved facts of the snapshot.

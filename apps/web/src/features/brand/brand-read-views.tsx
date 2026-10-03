@@ -1,10 +1,28 @@
 import { useState, type ReactNode } from 'react';
 import { prohibitedPhrasesIn } from '@oremedia/editor';
-import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
-import { Badge, Field, Textarea, cn } from '@oremedia/ui';
+import {
+  CHANNEL_GUIDANCE_FIELDS,
+  WRITING_PARTS,
+  channelOverride,
+  type BrandSystemDocumentV1,
+  type VocabularyUsage,
+} from '@oremedia/contracts/brand';
+import { Badge, Field, Skeleton, Textarea, cn } from '@oremedia/ui';
+import { RequestError } from '../../components/request-state';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useAsset } from '../assets/use-assets';
+import { useChannelLimits } from '../publishing/use-publishing';
+import { useBrandContext } from './brand-context';
 import { contrast } from './brand-kit-editor';
+import {
+  CHANNEL_FIELD_LABEL,
+  PlatformLimits,
+  ProvenanceBadge,
+  STYLE_TOPICS,
+  WRITING_PART_LABEL,
+  channelLabel,
+  contentTypeLabel,
+} from './guidance-fields';
 
 type Doc = BrandSystemDocumentV1;
 type Colour = Doc['tokens']['colours'][number];
@@ -46,6 +64,7 @@ function AssetById({ assetId, className }: { assetId: string; className?: string
 }
 
 const nothing = (what: string) => <p className="text-sm text-muted-foreground">No {what} yet.</p>;
+const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
 
 /** Swatch text in whichever of near-black or near-white reads better on the colour. */
 const inkOn = (hex: string) =>
@@ -148,7 +167,7 @@ const Chips = ({ items }: { items: string[] }) => (
   </ul>
 );
 
-/** Voice and writing: the summary, tone, audiences, terms, prohibited phrases, locales and examples. */
+/** Voice and personality: the summary, tone, terms, prohibited phrases, locales, then personality and the rules. */
 export function VoiceView({ doc }: { doc: Doc }) {
   const v = doc.voice;
   return (
@@ -156,20 +175,6 @@ export function VoiceView({ doc }: { doc: Doc }) {
       <ReadSection title="Summary">
         {v.summary ? <p className="max-w-prose text-sm">{v.summary}</p> : nothing('voice summary')}
         {v.tone.length > 0 && <Chips items={v.tone} />}
-      </ReadSection>
-      <ReadSection title="Audiences">
-        {v.audiences.length === 0 ? (
-          nothing('audiences')
-        ) : (
-          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
-            {v.audiences.map((a) => (
-              <div key={a.key} className="contents">
-                <dt className="font-medium">{a.key}</dt>
-                <dd className="text-muted-foreground">{a.description}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
       </ReadSection>
       <ReadSection title="Preferred terms">
         {v.preferredTerms.length === 0 ? (
@@ -196,28 +201,12 @@ export function VoiceView({ doc }: { doc: Doc }) {
           <Chips items={v.prohibitedPhrases} />
         )}
       </ReadSection>
-      <ReadSection title="Examples">
-        {v.examples.length === 0 ? (
-          nothing('examples')
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {v.examples.map((e, i) => (
-              <li key={i} className="rounded-md border border-border p-3 text-sm">
-                <Badge tone={e.verdict === 'on_brand' ? 'good' : 'critical'}>
-                  {e.verdict === 'on_brand' ? 'On brand' : 'Off brand'}
-                </Badge>
-                <p className="mt-2">“{e.text}”</p>
-                {e.note && <p className="mt-1 text-xs text-muted-foreground">{e.note}</p>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </ReadSection>
       {v.locales.length > 0 && (
         <ReadSection title="Locales">
           <Chips items={v.locales} />
         </ReadSection>
       )}
+      <PersonalityView voice={v} />
       <DraftCheck voice={v} />
     </div>
   );
@@ -292,7 +281,19 @@ const SECTION_PARTS: Array<{ key: string; label: string; parts: (d: Doc) => unkn
     label: 'Typography & layout',
     parts: (d) => [d.tokens.typeRoles, d.tokens.spacingScale, d.tokens.radii],
   },
-  { key: 'voice', label: 'Voice & writing', parts: (d) => d.voice },
+  {
+    key: 'voice',
+    label: 'Voice & personality',
+    parts: (d) => {
+      const { audiences: _a, examples: _e, ...voice } = d.voice;
+      return voice;
+    },
+  },
+  { key: 'messaging', label: 'Messaging', parts: (d) => [d.messaging ?? null, d.voice.audiences] },
+  { key: 'vocabulary', label: 'Vocabulary', parts: (d) => d.vocabulary ?? [] },
+  { key: 'writing', label: 'Writing patterns', parts: (d) => d.writingPatterns ?? {} },
+  { key: 'examples', label: 'Examples', parts: (d) => d.voice.examples },
+  { key: 'templates', label: 'Templates', parts: (d) => d.copyTemplates ?? [] },
   {
     key: 'imagery',
     label: 'Imagery',
@@ -300,10 +301,14 @@ const SECTION_PARTS: Array<{ key: string; label: string; parts: (d: Doc) => unkn
   },
   {
     key: 'patterns',
-    label: 'Patterns & templates',
+    label: 'Visual patterns',
     parts: (d) => d.patterns.filter((p) => p.key !== REFERENCE_PATTERN),
   },
-  { key: 'channels', label: 'Channel guidance', parts: (d) => d.channelGuidance },
+  {
+    key: 'channels',
+    label: 'Channel guidance',
+    parts: (d) => [d.channelGuidance, d.channelBaseline ?? null],
+  },
   { key: 'guidelines', label: 'Guidelines', parts: (d) => d.guidelines ?? null },
 ];
 
@@ -413,24 +418,6 @@ export function PatternsView({ doc }: { doc: Doc }) {
   );
 }
 
-export function ChannelsView({ doc }: { doc: Doc }) {
-  if (doc.channelGuidance.length === 0) return nothing('channel guidance');
-  return (
-    <ul className="flex flex-col divide-y divide-border text-sm">
-      {doc.channelGuidance.map((c) => (
-        <li key={c.providerKey} className="grid gap-1 py-3 sm:grid-cols-[10rem_1fr]">
-          <span className="font-medium">{c.providerKey}</span>
-          <div className="flex flex-col gap-1">
-            <p>{c.captionStyle}</p>
-            {c.preferredFormats.length > 0 && <Chips items={c.preferredFormats} />}
-            {c.ctaConventions && <p className="text-muted-foreground">Calls to action: {c.ctaConventions}</p>}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export function GuidelinesView({ doc }: { doc: Doc }) {
   const g = doc.guidelines;
   if (!g) return nothing('imported guidelines');
@@ -476,15 +463,28 @@ export function OverviewView({
     ['typography', 'Typography', `${doc.tokens.typeRoles.length} roles`],
     [
       'voice',
-      'Voice & writing',
+      'Voice & personality',
       `${doc.voice.tone.length} tone words · ${doc.voice.preferredTerms.length} preferred terms · ${doc.voice.prohibitedPhrases.length} prohibited`,
     ],
+    [
+      'messaging',
+      'Messaging',
+      `${count(doc.messaging?.pillars.length ?? 0, 'pillar')} · ${count(doc.messaging?.keyMessages.length ?? 0, 'key message')}`,
+    ],
+    ['vocabulary', 'Vocabulary', count(doc.vocabulary?.length ?? 0, 'term')],
+    ['writing', 'Writing patterns', count(Object.keys(doc.writingPatterns ?? {}).length, 'part')],
+    ['examples', 'Examples', count(doc.voice.examples.length, 'example')],
+    ['templates', 'Templates', count(doc.copyTemplates?.length ?? 0, 'copy template')],
     [
       'imagery',
       'Imagery',
       `${doc.patterns.find((p) => p.key === REFERENCE_PATTERN)?.exampleAssetIds.length ?? 0} reference images`,
     ],
-    ['patterns', 'Patterns', `${doc.patterns.filter((p) => p.key !== REFERENCE_PATTERN).length} patterns`],
+    [
+      'patterns',
+      'Visual patterns',
+      count(doc.patterns.filter((p) => p.key !== REFERENCE_PATTERN).length, 'pattern'),
+    ],
     ['channels', 'Channels', doc.channelGuidance.map((c) => c.providerKey).join(', ') || 'No guidance'],
     ['facts', 'Facts', factCount === undefined ? '…' : `${factCount} approved`],
   ];
@@ -544,6 +544,413 @@ export function OverviewView({
           creative documents only, never this application.
         </p>
       </ReadSection>
+    </div>
+  );
+}
+
+/** A titled list of guidance rows, each with its provenance; nothing when the list is empty. */
+function GuidanceList<T extends { provenance?: Parameters<typeof ProvenanceBadge>[0]['provenance'] }>({
+  title,
+  items,
+  render,
+}: {
+  title: string;
+  items: readonly T[];
+  render: (item: T) => ReactNode;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <ReadSection title={title}>
+      <ul className="flex flex-col divide-y divide-border text-sm">
+        {items.map((item, i) => (
+          <li key={i} className="flex flex-wrap items-start justify-between gap-2 py-2">
+            <div className="min-w-0 flex-1">{render(item)}</div>
+            <ProvenanceBadge provenance={item.provenance} />
+          </li>
+        ))}
+      </ul>
+    </ReadSection>
+  );
+}
+
+/** Personality, principles, spelling, style rules and claim rules (BSC-1), under the voice. */
+function PersonalityView({ voice: v }: { voice: Doc['voice'] }) {
+  const topic = (t: string) => STYLE_TOPICS.find((x) => x.value === t)?.label ?? t;
+  return (
+    <>
+      <GuidanceList
+        title="Personality"
+        items={v.personality ?? []}
+        render={(p) => (
+          <>
+            <span className="font-medium">{p.trait}</span>
+            {p.note && <span className="text-muted-foreground"> · {p.note}</span>}
+          </>
+        )}
+      />
+      <GuidanceList
+        title="Principles"
+        items={v.principles ?? []}
+        render={(p) => (
+          <>
+            <p className="font-medium">{p.statement}</p>
+            {p.rationale && <p className="text-muted-foreground">{p.rationale}</p>}
+          </>
+        )}
+      />
+      {v.spelling && (
+        <ReadSection title="Spelling">
+          <p className="text-sm">
+            <span className="font-medium">{v.spelling.locale}</span>
+            {v.spelling.notes && <span className="text-muted-foreground"> · {v.spelling.notes}</span>}
+          </p>
+        </ReadSection>
+      )}
+      <GuidanceList
+        title="Style rules"
+        items={v.styleRules ?? []}
+        render={(r) => (
+          <>
+            <span className="font-medium">{topic(r.topic)}:</span> {r.rule}
+          </>
+        )}
+      />
+      <GuidanceList title="Claim rules" items={v.claimRules ?? []} render={(r) => r.rule} />
+    </>
+  );
+}
+
+/** Messaging: positioning, value proposition, pillars with their proof (by statement), key messages, audiences. */
+export function MessagingView({
+  doc,
+  facts,
+}: {
+  doc: Doc;
+  facts: Array<{ id: string; statement: string }> | undefined;
+}) {
+  const m = doc.messaging;
+  const audiences = doc.voice.audiences;
+  if (!m && audiences.length === 0) return nothing('messaging');
+  const pillarTitle = (key: string) => m?.pillars.find((p) => p.key === key)?.title ?? key;
+  return (
+    <div className="flex flex-col gap-8">
+      {m?.positioning && (
+        <ReadSection title="Positioning">
+          <p className="max-w-prose text-sm">{m.positioning}</p>
+        </ReadSection>
+      )}
+      {m?.valueProposition && (
+        <ReadSection title="Value proposition">
+          <p className="max-w-prose text-sm">{m.valueProposition}</p>
+        </ReadSection>
+      )}
+      <GuidanceList
+        title="Pillars"
+        items={m?.pillars ?? []}
+        render={(p) => (
+          <>
+            <p className="font-medium">{p.title}</p>
+            {p.statement && <p className="text-muted-foreground">{p.statement}</p>}
+            {p.proofFactIds.length > 0 && (
+              <ul className="mt-1 flex flex-col gap-0.5 text-xs" aria-label={`Proof for ${p.title}`}>
+                {p.proofFactIds.map((id) => {
+                  const fact = facts?.find((f) => f.id === id);
+                  return (
+                    <li key={id} className="flex flex-wrap items-center gap-1.5">
+                      {fact ? (
+                        <>
+                          <Badge tone="good">Proof</Badge> {fact.statement}
+                        </>
+                      ) : facts ? (
+                        <Badge tone="warning">A cited fact is no longer approved</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">Loading proof…</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      />
+      <GuidanceList
+        title="Key messages"
+        items={m?.keyMessages ?? []}
+        render={(k) => (
+          <>
+            {k.text}
+            {k.pillarKey && <span className="text-muted-foreground"> · {pillarTitle(k.pillarKey)}</span>}
+          </>
+        )}
+      />
+      <GuidanceList
+        title="Audiences"
+        items={audiences}
+        render={(a) => (
+          <>
+            <p className="font-medium">{a.key}</p>
+            {a.description && <p className="text-muted-foreground">{a.description}</p>}
+            {(a.needs?.length ?? 0) > 0 && <p className="text-xs">Needs: {a.needs?.join('; ')}</p>}
+            {(a.objections?.length ?? 0) > 0 && (
+              <p className="text-xs">Objections: {a.objections?.join('; ')}</p>
+            )}
+          </>
+        )}
+      />
+    </div>
+  );
+}
+
+const USAGE: Record<VocabularyUsage, { label: string; tone: 'good' | 'neutral' | 'warning' | 'critical' }> = {
+  preferred: { label: 'Preferred', tone: 'good' },
+  allowed: { label: 'Allowed', tone: 'neutral' },
+  avoid: { label: 'Avoid', tone: 'warning' },
+  prohibited: { label: 'Prohibited', tone: 'critical' },
+};
+
+export function VocabularyView({ doc }: { doc: Doc }) {
+  const terms = doc.vocabulary ?? [];
+  if (terms.length === 0) return nothing('vocabulary');
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[32rem] text-sm">
+        <caption className="sr-only">Vocabulary</caption>
+        <thead>
+          <tr className="border-b border-border text-left text-xs text-muted-foreground">
+            <th scope="col" className="py-1.5 pr-3 font-medium">
+              Term
+            </th>
+            <th scope="col" className="py-1.5 pr-3 font-medium">
+              Usage
+            </th>
+            <th scope="col" className="py-1.5 pr-3 font-medium">
+              Instead or also
+            </th>
+            <th scope="col" className="py-1.5 font-medium">
+              Source
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {terms.map((t) => (
+            <tr key={t.term} className="border-b border-border align-top">
+              <td className="py-2 pr-3">
+                <span className="font-medium">{t.term}</span>
+                {t.definition && <p className="text-xs text-muted-foreground">{t.definition}</p>}
+              </td>
+              <td className="py-2 pr-3">
+                <Badge tone={USAGE[t.usage].tone}>{USAGE[t.usage].label}</Badge>
+              </td>
+              <td className="py-2 pr-3">{t.alternatives.join(', ') || '—'}</td>
+              <td className="py-2">
+                <ProvenanceBadge provenance={t.provenance} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function WritingView({ doc }: { doc: Doc }) {
+  const patterns = doc.writingPatterns ?? {};
+  const parts = WRITING_PARTS.filter((p) => patterns[p]);
+  if (parts.length === 0) return nothing('writing patterns');
+  return (
+    <div className="flex flex-col gap-8">
+      {parts.map((part) => {
+        const p = patterns[part];
+        if (!p) return null;
+        return (
+          <ReadSection key={part} title={WRITING_PART_LABEL[part]}>
+            <div className="flex flex-col gap-2 text-sm">
+              <ProvenanceBadge provenance={p.provenance} />
+              {p.guidance && <p className="max-w-prose">{p.guidance}</p>}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {p.dos.length > 0 && (
+                  <ul className="flex flex-col gap-1" aria-label={`${WRITING_PART_LABEL[part]}: dos`}>
+                    {p.dos.map((d) => (
+                      <li key={d} className="flex gap-1.5">
+                        <Badge tone="good">Do</Badge> {d}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {p.donts.length > 0 && (
+                  <ul className="flex flex-col gap-1" aria-label={`${WRITING_PART_LABEL[part]}: don'ts`}>
+                    {p.donts.map((d) => (
+                      <li key={d} className="flex gap-1.5">
+                        <Badge tone="critical">Don&apos;t</Badge> {d}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {p.examples.map((e) => (
+                <p key={e} className="rounded-md border border-border p-2">
+                  “{e}”
+                </p>
+              ))}
+            </div>
+          </ReadSection>
+        );
+      })}
+    </div>
+  );
+}
+
+export function ExamplesView({ doc }: { doc: Doc }) {
+  const examples = doc.voice.examples;
+  if (examples.length === 0) return nothing('examples');
+  return (
+    <ul className="flex flex-col gap-2">
+      {examples.map((e, i) => (
+        <li key={i} className="rounded-md border border-border p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge tone={e.verdict === 'on_brand' ? 'good' : 'critical'}>
+              {e.verdict === 'on_brand' ? 'On brand' : 'Off brand'}
+            </Badge>
+            {e.channelKey && <Badge glyph={false}>{channelLabel(e.channelKey)}</Badge>}
+            {e.contentType && <Badge glyph={false}>{contentTypeLabel(e.contentType)}</Badge>}
+            <ProvenanceBadge provenance={e.provenance} />
+          </div>
+          <p className="mt-2">“{e.text}”</p>
+          {(e.rationale || e.note) && (
+            <p className="mt-1 text-xs text-muted-foreground">{e.rationale || e.note}</p>
+          )}
+          {e.rewrite && (
+            <p className="mt-1 text-xs">
+              <span className="font-medium">On brand:</span> “{e.rewrite}”
+            </p>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function TemplatesView({ doc }: { doc: Doc }) {
+  const templates = doc.copyTemplates ?? [];
+  if (templates.length === 0) return nothing('copy templates');
+  return (
+    <ul className="flex flex-col gap-3">
+      {templates.map((t) => (
+        <li key={t.key} className="flex flex-col gap-2 rounded-md border border-border p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-medium">{t.name}</span>
+            <Badge glyph={false}>{contentTypeLabel(t.contentType)}</Badge>
+            {t.channelKeys.length === 0 ? (
+              <Badge glyph={false}>Any channel</Badge>
+            ) : (
+              t.channelKeys.map((k) => (
+                <Badge key={k} glyph={false}>
+                  {channelLabel(k)}
+                </Badge>
+              ))
+            )}
+            <ProvenanceBadge provenance={t.provenance} />
+          </div>
+          {t.purpose && <p className="text-muted-foreground">{t.purpose}</p>}
+          <ol className="flex list-decimal flex-col gap-0.5 pl-5" aria-label={`Parts of ${t.name}`}>
+            {t.structure.map((part, i) => (
+              <li key={i}>
+                <span className="font-medium">{part.slot}</span>
+                {part.guidance && <span>: {part.guidance}</span>}
+                {part.maxLength !== undefined && (
+                  <span className="text-muted-foreground"> (at most {part.maxLength} characters)</span>
+                )}
+              </li>
+            ))}
+          </ol>
+          {t.example && <p className="whitespace-pre-wrap rounded-md bg-muted/40 p-2">{t.example}</p>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Channel guidance: the baseline, then per channel what applies there, each field marked inherited from the
+ * baseline or overridden, beside the platform's limits (which win over any preference).
+ */
+export function ChannelsView({ doc }: { doc: Doc }) {
+  const { brandId } = useBrandContext();
+  const limits = useChannelLimits(brandId);
+  const baseline = doc.channelBaseline ?? {};
+  const baseFields = CHANNEL_GUIDANCE_FIELDS.filter((f) => baseline[f]?.trim());
+  if (doc.channelGuidance.length === 0 && baseFields.length === 0) return nothing('channel guidance');
+  return (
+    <div className="flex flex-col gap-8">
+      <ReadSection title="All channels (baseline)">
+        {baseFields.length === 0 ? (
+          nothing('baseline guidance')
+        ) : (
+          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[12rem_1fr]">
+            {baseFields.map((f) => (
+              <div key={f} className="contents">
+                <dt className="font-medium">{CHANNEL_FIELD_LABEL[f]}</dt>
+                <dd className="text-muted-foreground">{baseline[f]}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </ReadSection>
+      {doc.channelGuidance.map((c) => {
+        const fields = CHANNEL_GUIDANCE_FIELDS.flatMap((f) => {
+          const own = channelOverride(c, f);
+          const base = baseline[f]?.trim() ? baseline[f] : undefined;
+          return own !== undefined
+            ? [{ f, value: own, inherited: false }]
+            : base !== undefined
+              ? [{ f, value: base, inherited: true }]
+              : [];
+        });
+        return (
+          <ReadSection key={c.providerKey} title={channelLabel(c.providerKey)}>
+            <div
+              className="grid gap-4 lg:grid-cols-[1fr_16rem]"
+              data-testid={`channel-view-${c.providerKey}`}
+            >
+              <div className="flex min-w-0 flex-col gap-2 text-sm">
+                <ProvenanceBadge provenance={c.provenance} />
+                {fields.length === 0 && nothing('guidance for this channel')}
+                <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-[12rem_1fr]">
+                  {fields.map(({ f, value, inherited }) => (
+                    <div key={f} className="contents">
+                      <dt className="font-medium">{CHANNEL_FIELD_LABEL[f]}</dt>
+                      <dd>
+                        <p>{value}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {inherited ? 'Inherited from baseline' : 'Overridden for this channel'}
+                        </p>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                {c.preferredFormats.length > 0 && <Chips items={c.preferredFormats} />}
+                {c.formats && <p className="text-muted-foreground">Formats: {c.formats}</p>}
+                {c.audience && <p className="text-muted-foreground">Audience: {c.audience}</p>}
+                {(c.examples ?? []).map((e) => (
+                  <p key={e.text} className="rounded-md border border-border p-2">
+                    “{e.text}”
+                  </p>
+                ))}
+              </div>
+              <div>
+                {limits.isPending && <Skeleton label="Loading platform limits" lines={3} />}
+                {limits.isError && (
+                  <RequestError error={limits.error} onRetry={() => void limits.refetch()} />
+                )}
+                {limits.isSuccess && (
+                  <PlatformLimits limit={limits.data.items.find((l) => l.providerKey === c.providerKey)} />
+                )}
+              </div>
+            </div>
+          </ReadSection>
+        );
+      })}
     </div>
   );
 }

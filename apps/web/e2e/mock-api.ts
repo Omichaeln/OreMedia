@@ -213,6 +213,22 @@ function seedBrandVersions(brandId: string): MockBrandVersion[] {
   };
   const proposed = BrandSystemDocumentV1.parse({
     ...document,
+    // BSC-1: a term inferred from supplied examples, with its provenance, as an assisted import proposes one.
+    vocabulary: [
+      {
+        term: 'small-batch',
+        usage: 'preferred',
+        alternatives: [],
+        provenance: {
+          origin: 'inferred',
+          evidence: [
+            { kind: 'document', ref: 'guidelines:SKILL.md' },
+            { kind: 'document', ref: 'guidelines:references/tone.md' },
+          ],
+          confidence: 'medium',
+        },
+      },
+    ],
     patterns: [
       {
         key: 'reference-imagery',
@@ -532,6 +548,25 @@ export class MockBackend {
    * a save appends a published version and retires the previous one; imports and agents land drafts (proposals).
    */
   brandVersions: MockBrandVersion[];
+  /** BSC-1: the brand's facts (brand.facts.list): two approved, for pillars to cite as proof. */
+  readonly brandFacts = [
+    { id: 'fact_e2e_roasted', statement: 'Roasted in Harare every week', state: 'approved' as const },
+    { id: 'fact_e2e_farms', statement: 'Beans from three Chimanimani farms', state: 'approved' as const },
+  ].map((f) => ({
+    ...f,
+    brandId: E2E.brandId,
+    kind: 'claim' as const,
+    evidence: [{ kind: 'other' as const, ref: 'e2e' }],
+    validFrom: null,
+    validUntil: null,
+    proposedByKind: 'user' as const,
+    proposedById: 'usr_e2e',
+    approvedByUserId: 'usr_e2e',
+    revokedByUserId: null,
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z',
+    version: 1,
+  }));
   /** Every brand.system.save received, in order (tests read what the editor sent). */
   readonly brandSystemSaves: Array<z.infer<typeof BrandSystemSave>> = [];
   /** The last brand system document saved (brand.system.save, or brand.versions.update by an import or agent). */
@@ -2293,7 +2328,14 @@ export function createMockRouter(backend: MockBackend) {
           };
         }),
       }),
-      facts: t.router({ list: query.input(FactList).query(() => ({ items: [], nextCursor: null })) }),
+      facts: t.router({
+        list: query.input(FactList).query(({ input }) => ({
+          items: backend.brandFacts.filter(
+            (f) => f.brandId === input.brandId && (!input.state || f.state === input.state),
+          ),
+          nextCursor: null,
+        })),
+      }),
       objectives: t.router({
         list: query.input(ObjectiveList).query(() => ({ items: [], nextCursor: null })),
       }),

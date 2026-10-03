@@ -30,13 +30,18 @@ import {
   ChannelsView,
   changedSections,
   ColourView,
+  ExamplesView,
   GuidelinesView,
   ImageryView,
   LogoView,
+  MessagingView,
   OverviewView,
   PatternsView,
+  TemplatesView,
   TypographyView,
+  VocabularyView,
   VoiceView,
+  WritingView,
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
 import { VoiceExtraction } from '../../../../../../features/brand/voice-extraction';
@@ -61,6 +66,11 @@ type SectionKey =
   | 'colour'
   | 'typography'
   | 'voice'
+  | 'messaging'
+  | 'vocabulary'
+  | 'writing'
+  | 'examples'
+  | 'templates'
   | 'imagery'
   | 'patterns'
   | 'channels'
@@ -95,9 +105,41 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   },
   {
     key: 'voice',
-    label: 'Voice & writing',
-    description: 'How the brand sounds: tone, audiences, terms, banned phrases and examples.',
+    label: 'Voice & personality',
+    description:
+      'How the brand sounds: tone, personality, principles, terms, banned phrases, spelling and style rules.',
     kit: 'voice',
+  },
+  {
+    key: 'messaging',
+    label: 'Messaging',
+    description:
+      'Positioning, value proposition, pillars proved by approved facts, key messages and audiences.',
+    kit: 'messaging',
+  },
+  {
+    key: 'vocabulary',
+    label: 'Vocabulary',
+    description: 'Terms the brand prefers, allows, avoids or never uses, with what to write instead.',
+    kit: 'vocabulary',
+  },
+  {
+    key: 'writing',
+    label: 'Writing patterns',
+    description: 'How headlines, introductions, body copy, calls to action and long-form pieces are written.',
+    kit: 'writing',
+  },
+  {
+    key: 'examples',
+    label: 'Examples',
+    description: 'On-brand and off-brand copy with why, and the on-brand rewrite.',
+    kit: 'examples',
+  },
+  {
+    key: 'templates',
+    label: 'Templates',
+    description: 'Copy templates: the parts a piece of copy follows, in order, per content type and channel.',
+    kit: 'templates',
   },
   {
     key: 'imagery',
@@ -107,14 +149,14 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   },
   {
     key: 'patterns',
-    label: 'Patterns & templates',
-    description: 'Named layouts and the templates that implement them.',
+    label: 'Visual patterns',
+    description: 'Named visual layouts and the creative templates that implement them.',
     kit: 'patterns',
   },
   {
     key: 'channels',
     label: 'Channel guidance',
-    description: 'Caption style, formats and calls to action per channel.',
+    description: "Defaults for every channel and what changes per channel, beside each platform's limits.",
     kit: 'channels',
   },
   {
@@ -209,7 +251,7 @@ export function BrandSystemRoute() {
                 aria-current={x.key === section.key ? 'page' : undefined}
                 onClick={() => open(x.key)}
                 className={cn(
-                  'flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
+                  'relative flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   x.key === section.key
                     ? 'bg-secondary font-medium text-secondary-foreground'
@@ -312,7 +354,7 @@ export function BrandSystemRoute() {
                       section={section.key}
                       doc={appliedDoc}
                       brandName={brand.name}
-                      factCount={approvedFacts.data?.items.length}
+                      facts={approvedFacts.data?.items}
                       onOpen={open}
                     />
                   )}
@@ -336,18 +378,18 @@ function SectionView({
   section,
   doc,
   brandName,
-  factCount,
+  facts,
   onOpen,
 }: {
   section: SectionKey;
   doc: Doc;
   brandName: string;
-  factCount: number | undefined;
+  facts: Array<{ id: string; statement: string }> | undefined;
   onOpen: (key: string) => void;
 }) {
   switch (section) {
     case 'overview':
-      return <OverviewView doc={doc} brandName={brandName} factCount={factCount} onOpen={onOpen} />;
+      return <OverviewView doc={doc} brandName={brandName} factCount={facts?.length} onOpen={onOpen} />;
     case 'logo':
       return <LogoView doc={doc} />;
     case 'colour':
@@ -356,6 +398,16 @@ function SectionView({
       return <TypographyView doc={doc} />;
     case 'voice':
       return <VoiceView doc={doc} />;
+    case 'messaging':
+      return <MessagingView doc={doc} facts={facts} />;
+    case 'vocabulary':
+      return <VocabularyView doc={doc} />;
+    case 'writing':
+      return <WritingView doc={doc} />;
+    case 'examples':
+      return <ExamplesView doc={doc} />;
+    case 'templates':
+      return <TemplatesView doc={doc} />;
     case 'imagery':
       return <ImageryView doc={doc} />;
     case 'patterns':

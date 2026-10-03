@@ -178,23 +178,31 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     await openSection('overview');
     await expect
       .poll(() => banner().textContent(), { timeout: 15_000 })
-      .toContain('It changes Imagery, Guidelines.');
+      .toContain('It changes Vocabulary, Imagery, Guidelines.');
     await banner().getByRole('button', { name: 'Review' }).click();
     const review = page.getByTestId('proposal-review');
     await expect
       .poll(() => review.textContent(), { timeout: 15_000 })
-      .toContain('Changes Imagery, Guidelines.');
+      .toContain('Changes Vocabulary, Imagery, Guidelines.');
     // Every section is open for review, the two new ones included.
     for (const heading of [
       'Brand guidelines',
       'Palette',
       'Voice',
+      'Personality, style and claims',
+      'Messaging',
+      'Vocabulary',
+      'Writing patterns',
+      'Examples',
+      'Copy templates',
       'Reference imagery',
-      'Patterns',
+      'Visual patterns',
       'Channel guidance',
     ])
       await review.getByRole('heading', { name: heading, exact: true }).waitFor({ timeout: 15_000 });
     expect(await banner().count()).toBe(0);
+    // Where a proposed item came from is shown with it.
+    expect(await review.getByText('Inferred from examples (2 cited)').count()).toBe(1);
     await saveAndApply();
     await page.getByText('Brand system saved').waitFor({ timeout: 15_000 });
     expect(backend.brandSystemSaves.at(-1)).toMatchObject({
@@ -326,7 +334,7 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     expect(await page.getByRole('button', { name: /^Edit / }).count()).toBe(0);
     await page
       .getByRole('main')
-      .getByRole('button', { name: /^Voice & writing/ })
+      .getByRole('button', { name: /^Voice & personality/ })
       .last()
       .click();
     await expect.poll(() => new URL(page.url()).searchParams.get('section')).toBe('voice');
@@ -435,18 +443,50 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     expect(await page.getByRole('main').getByText('A pull quote over the paper colour.').count()).toBe(1);
   }, 45_000);
 
-  it('channel guidance: a channel is chosen from the known providers, its formats typed with commas; the read view shows it', async () => {
+  /** Picks an option of a Radix select by the trigger's id. */
+  const choose = async (id: string, option: string) => {
+    await page.locator(`#${id}`).click();
+    await page.getByRole('option', { name: option, exact: true }).click();
+  };
+  const saved = async () => {
+    await saveAndApply();
+    await page.getByText('Brand system saved').waitFor({ timeout: 15_000 });
+    await expect.poll(() => editor().count(), { timeout: 15_000 }).toBe(0);
+  };
+  const main = () => page.getByRole('main');
+
+  it('channel guidance: a baseline for every channel; a channel overrides a field, shows what it inherits, resets to the baseline and shows the platform limits', async () => {
     await openSection('channels');
     await page.getByText('No channel guidance yet.').waitFor({ timeout: 15_000 });
     await edit();
+    await page.locator('#kit-baseline-cta').fill('Invite a reply.');
+    await page.locator('#kit-baseline-hashtags').fill('At most two.');
     await editor().getByRole('button', { name: 'Add channel' }).click();
     const save = editor().getByRole('button', { name: 'Save', exact: true });
     expect(await save.getAttribute('aria-disabled')).toBe('true'); // no channel chosen yet
-    await page.locator('#kit-channel-0-provider').click();
-    await page.getByRole('option', { name: 'LinkedIn Page' }).click();
-    await editor().getByLabel('Caption style').fill('Short, first person plural, no hashtags.');
-    await editor().getByLabel('Preferred formats').fill('carousel, short video,');
-    await editor().getByLabel('Calls to action').fill('Ask for a reply, never a click.');
+    await choose('kit-channel-0-provider', 'LinkedIn Page');
+    const row = page.getByTestId('channel-row-0');
+    // The platform's limits, read-only beside the brand's preferences.
+    const limits = row.getByTestId('platform-limits');
+    await limits.waitFor({ timeout: 15_000 });
+    expect(await limits.textContent()).toContain('Platform limits · LinkedIn');
+    expect(await limits.textContent()).toContain('Up to 3,000 characters');
+    // CTA is inherited from the baseline until the channel sets it.
+    const cta = page.getByTestId('kit-channel-0-cta-field');
+    expect(await cta.textContent()).toContain('Inherited from baseline');
+    expect(await cta.textContent()).toContain('Baseline: Invite a reply.');
+    await page.locator('#kit-channel-0-cta').fill('Ask for a comment.');
+    expect(await cta.textContent()).toContain('Overridden');
+    await cta.getByRole('button', { name: 'Reset to baseline for calls to action' }).click();
+    expect(await cta.textContent()).toContain('Inherited from baseline');
+    expect(await page.locator('#kit-channel-0-cta').inputValue()).toBe('');
+    await page.locator('#kit-channel-0-toneAdaptation').fill('Short, first person plural, no hashtags.');
+    expect(await page.getByTestId('kit-channel-0-toneAdaptation-field').textContent()).toContain(
+      'Overridden',
+    );
+    await row.getByRole('button', { name: 'Add format' }).click();
+    await row.getByLabel('Preferred formats 1').fill('carousel');
+    await row.getByRole('button', { name: 'Add format' }).click(); // a blank row is not saved
     // A second row cannot take the same channel.
     await editor().getByRole('button', { name: 'Add channel' }).click();
     await page.locator('#kit-channel-1-provider').click();
@@ -458,20 +498,265 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
       .getByRole('button', { name: /^Remove guidance for row 2/ })
       .click();
     await expect.poll(() => save.getAttribute('aria-disabled')).toBeNull();
-    await saveAndApply();
-    await page.getByText('Brand system saved').waitFor({ timeout: 15_000 });
+    await saved();
+    expect(applied().document.channelBaseline).toEqual({ cta: 'Invite a reply.', hashtags: 'At most two.' });
     expect(applied().document.channelGuidance).toEqual([
       {
         providerKey: 'linkedin_page',
         captionStyle: 'Short, first person plural, no hashtags.',
-        preferredFormats: ['carousel', 'short video'],
-        ctaConventions: 'Ask for a reply, never a click.',
+        preferredFormats: ['carousel'],
+        ctaConventions: '',
+        provenance: { origin: 'user' },
       },
     ]);
-    const main = page.getByRole('main');
-    await main.getByText('Short, first person plural, no hashtags.').waitFor({ timeout: 15_000 });
-    expect(await main.getByText('short video', { exact: true }).count()).toBe(1);
+    const view = page.getByTestId('channel-view-linkedin_page');
+    await view.waitFor({ timeout: 15_000 });
+    expect(await view.textContent()).toContain('Short, first person plural, no hashtags.');
+    expect(await view.textContent()).toContain('Overridden for this channel');
+    expect(await view.textContent()).toContain('Inherited from baseline');
+    expect(await view.textContent()).toContain('Entered by you');
+    expect(await view.getByTestId('platform-limits').textContent()).toContain('Up to 3,000 characters');
+  }, 60_000);
+
+  it('voice & personality: traits, principles, spelling, style and claim rules are rows; the voice fields already there are kept', async () => {
+    const before = applied().document.voice;
+    await openSection('voice');
+    await edit();
+    await editor().getByRole('button', { name: 'Add trait' }).click();
+    await page.locator('#kit-trait-0').fill('Warm');
+    await page.locator('#kit-trait-0-note').fill('Like a neighbour, never a salesman');
+    await editor().getByRole('button', { name: 'Add principle' }).click();
+    await page.locator('#kit-principle-0').fill('Say only what we can prove');
+    await page.locator('#kit-principle-0-why').fill('Trust is what we sell.');
+    await page.locator('#kit-spelling-locale').fill('en-GB');
+    await editor().getByRole('button', { name: 'Add style rule' }).click();
+    await choose('kit-style-0-topic', 'Dates');
+    await page.locator('#kit-style-0-rule').fill('3 October 2026, never 10/3');
+    await editor().getByRole('button', { name: 'Add claim rule' }).click();
+    // An empty rule blocks the save until it is written or removed.
+    const save = editor().getByRole('button', { name: 'Save', exact: true });
+    expect(await save.getAttribute('aria-disabled')).toBe('true');
+    expect(await editor().getByText('Every claim rule needs its rule.').count()).toBe(1);
+    await page.locator('#kit-claim-0').fill('No superlatives without an approved fact');
+    await expect.poll(() => save.getAttribute('aria-disabled')).toBeNull();
+    await saved();
+    const voice = applied().document.voice;
+    expect(voice.personality).toEqual([
+      { trait: 'Warm', note: 'Like a neighbour, never a salesman', provenance: { origin: 'user' } },
+    ]);
+    expect(voice.principles).toEqual([
+      {
+        statement: 'Say only what we can prove',
+        rationale: 'Trust is what we sell.',
+        provenance: { origin: 'user' },
+      },
+    ]);
+    expect(voice.spelling).toEqual({ locale: 'en-GB', notes: '' });
+    expect(voice.styleRules).toEqual([
+      { topic: 'dates', rule: '3 October 2026, never 10/3', provenance: { origin: 'user' } },
+    ]);
+    expect(voice.claimRules).toEqual([
+      { rule: 'No superlatives without an approved fact', provenance: { origin: 'user' } },
+    ]);
+    expect(voice.preferredTerms).toEqual(before.preferredTerms);
+    expect(voice.prohibitedPhrases).toEqual(before.prohibitedPhrases);
+    await main()
+      .getByText('Like a neighbour, never a salesman', { exact: false })
+      .waitFor({ timeout: 15_000 });
+    expect(await main().getByText('3 October 2026, never 10/3', { exact: false }).count()).toBe(1);
+    expect(await main().getByText('Entered by you').count()).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('messaging: pillars cite approved facts picked by statement, never ids; key messages name a pillar; audiences carry needs and objections', async () => {
+    await openSection('messaging');
+    await page.getByText('No messaging yet.').waitFor({ timeout: 15_000 });
+    await edit();
+    await page.getByLabel('Positioning').fill('The roaster Harare cafes rely on.');
+    await page.getByLabel('Value proposition').fill('Fresh beans every week, delivered.');
+    await editor().getByRole('button', { name: 'Add pillar' }).click();
+    await page.locator('#kit-pillar-0-title').fill('Fresh');
+    await page.locator('#kit-pillar-0-key').fill('Fresh Beans');
+    expect(await page.locator('#kit-pillar-0-key').inputValue()).toBe('fresh-beans');
+    await page.locator('#kit-pillar-0-statement').fill('Roasted weekly, never stored for months.');
+    const proof = editor().getByRole('group', { name: 'Proof (approved facts)' });
+    await proof.getByText('Roasted in Harare every week').waitFor({ timeout: 15_000 });
+    // Approved facts are offered by their statement; no ids on the screen.
+    expect(await proof.getByText('Beans from three Chimanimani farms').count()).toBe(1);
+    expect(await editor().getByText('fact_e2e', { exact: false }).count()).toBe(0);
+    await proof.getByLabel('Roasted in Harare every week').check();
+    await editor().getByRole('button', { name: 'Add key message' }).click();
+    await page.locator('#kit-message-0').fill('Roasted this week, in your cup next week.');
+    await choose('kit-message-0-pillar', 'Fresh');
+    await editor().getByRole('button', { name: 'Add audience' }).click();
+    await page.locator('#kit-audience-0').fill('cafe-owners');
+    await page.locator('#kit-audience-0-description').fill('Independent cafe owners in Harare');
+    await editor().getByRole('button', { name: 'Add need' }).click();
+    await editor().getByLabel('Needs 1').fill('Reliable weekly delivery');
+    await editor().getByRole('button', { name: 'Add objection' }).click();
+    await editor().getByLabel('Objections 1').fill('Imported beans are cheaper');
+    await saved();
+    const doc = applied().document;
+    expect(doc.messaging).toEqual({
+      positioning: 'The roaster Harare cafes rely on.',
+      valueProposition: 'Fresh beans every week, delivered.',
+      pillars: [
+        {
+          key: 'fresh-beans',
+          title: 'Fresh',
+          statement: 'Roasted weekly, never stored for months.',
+          proofFactIds: ['fact_e2e_roasted'],
+          provenance: { origin: 'user' },
+        },
+      ],
+      keyMessages: [
+        {
+          text: 'Roasted this week, in your cup next week.',
+          pillarKey: 'fresh-beans',
+          provenance: { origin: 'user' },
+        },
+      ],
+    });
+    expect(doc.voice.audiences.at(-1)).toEqual({
+      key: 'cafe-owners',
+      description: 'Independent cafe owners in Harare',
+      needs: ['Reliable weekly delivery'],
+      objections: ['Imported beans are cheaper'],
+      provenance: { origin: 'user' },
+    });
+    const proofList = main().getByRole('list', { name: 'Proof for Fresh' });
+    await proofList.waitFor({ timeout: 15_000 });
+    expect(await proofList.textContent()).toContain('Roasted in Harare every week');
+    expect(await main().getByText('fact_e2e', { exact: false }).count()).toBe(0);
+    expect(await main().getByText('Objections: Imported beans are cheaper').count()).toBe(1);
+  }, 60_000);
+
+  it('vocabulary: terms with usage and what to write instead; an inferred term edited by a person becomes theirs; a term listed twice blocks the save', async () => {
+    await openSection('vocabulary');
+    const table = main().getByRole('table', { name: 'Vocabulary' });
+    await table.waitFor({ timeout: 15_000 });
+    expect(await table.textContent()).toContain('Inferred from examples (2 cited)');
+    await edit();
+    await page.locator('#kit-term-0-definition').fill('Roasted in lots of 20 kg or less');
+    await editor().getByRole('button', { name: 'Add term' }).click();
+    await page.locator('#kit-term-1').fill('roast');
+    await editor().getByRole('button', { name: 'Add term' }).click();
+    await page.locator('#kit-term-2').fill('blend');
+    await choose('kit-term-2-usage', 'Avoid');
+    await editor().getByRole('button', { name: 'Add alternative' }).nth(2).click();
+    await editor().getByLabel('Write instead 1').fill('roast');
+    await editor().getByRole('button', { name: 'Add term' }).click();
+    await page.locator('#kit-term-3').fill('Roast');
+    const save = editor().getByRole('button', { name: 'Save', exact: true });
+    expect(await save.getAttribute('aria-disabled')).toBe('true');
+    expect(await editor().getByText('A term is listed twice.').count()).toBe(1);
+    await editor().getByRole('button', { name: 'Remove term Roast', exact: true }).click();
+    await expect.poll(() => save.getAttribute('aria-disabled')).toBeNull();
+    await saved();
+    expect(applied().document.vocabulary).toEqual([
+      {
+        term: 'small-batch',
+        usage: 'preferred',
+        alternatives: [],
+        definition: 'Roasted in lots of 20 kg or less',
+        provenance: { origin: 'user' },
+      },
+      { term: 'roast', usage: 'preferred', alternatives: [], provenance: { origin: 'user' } },
+      { term: 'blend', usage: 'avoid', alternatives: ['roast'], provenance: { origin: 'user' } },
+    ]);
+    await table.waitFor({ timeout: 15_000 });
+    expect(await table.textContent()).toContain('Avoid');
+    expect(await table.textContent()).not.toContain('Inferred from examples');
   }, 45_000);
+
+  it('writing patterns and examples: a part gets guidance, dos and examples; an off-brand example carries why and the rewrite', async () => {
+    await openSection('writing');
+    await edit();
+    await editor().getByRole('button', { name: 'Add guidance for headlines' }).click();
+    await page.locator('#kit-writing-headline-guidance').fill('Short and concrete, with a number.');
+    await editor().getByRole('button', { name: 'Add do' }).first().click();
+    await editor().getByLabel('Headlines: dos 1').fill('Lead with the number');
+    await editor().getByRole('button', { name: "Add don't" }).first().click();
+    await editor().getByLabel("Headlines: don'ts 1").fill('Puns');
+    await saved();
+    expect(applied().document.writingPatterns).toEqual({
+      headline: {
+        guidance: 'Short and concrete, with a number.',
+        dos: ['Lead with the number'],
+        donts: ['Puns'],
+        examples: [],
+        provenance: { origin: 'user' },
+      },
+    });
+    await main().getByText('Lead with the number').waitFor({ timeout: 15_000 });
+
+    const before = applied().document.voice.examples.length;
+    await openSection('examples');
+    await edit();
+    await editor().getByRole('button', { name: 'Add example' }).click();
+    const i = before;
+    await choose(`kit-example-${i}-verdict`, 'Off brand');
+    await page.locator(`#kit-example-${i}-text`).fill('Best coffee ever!!!');
+    await page.locator(`#kit-example-${i}-why`).fill('An unprovable superlative.');
+    await page.locator(`#kit-example-${i}-rewrite`).fill('Roasted this morning in Harare.');
+    await choose(`kit-example-${i}-channel`, 'X');
+    await saved();
+    expect(applied().document.voice.examples.at(-1)).toEqual({
+      text: 'Best coffee ever!!!',
+      verdict: 'off_brand',
+      note: '',
+      rationale: 'An unprovable superlative.',
+      rewrite: 'Roasted this morning in Harare.',
+      channelKey: 'x',
+      provenance: { origin: 'user' },
+    });
+    await main().getByText('“Roasted this morning in Harare.”').waitFor({ timeout: 15_000 });
+  }, 60_000);
+
+  it('templates: a copy template with ordered parts, reordered and saved; reopening and saving changes nothing', async () => {
+    await openSection('templates');
+    await page.getByText('No copy templates yet.').waitFor({ timeout: 15_000 });
+    await edit();
+    await editor().getByRole('button', { name: 'Add copy template' }).click();
+    await page.locator('#kit-template-0-name').fill('Proof post');
+    expect(await page.locator('#kit-template-0-key').inputValue()).toBe('proof-post');
+    await editor().getByLabel('LinkedIn Page').check();
+    await page.locator('#kit-template-0-purpose').fill('Show one approved fact.');
+    await page.locator('#kit-template-0-part-0-slot').fill('hook');
+    await page.locator('#kit-template-0-part-0-guidance').fill('A number from a fact.');
+    await page.locator('#kit-template-0-part-0-max').fill('80');
+    await editor().getByRole('button', { name: 'Add part' }).click();
+    await page.locator('#kit-template-0-part-1-slot').fill('cta');
+    await page.locator('#kit-template-0-part-1-guidance').fill('Invite a reply.');
+    await editor().getByRole('button', { name: 'Move up part 2' }).click();
+    expect(await page.locator('#kit-template-0-part-0-slot').inputValue()).toBe('cta');
+    await editor().getByRole('button', { name: 'Move down part 1' }).click();
+    await saved();
+    expect(applied().document.copyTemplates).toEqual([
+      {
+        key: 'proof-post',
+        name: 'Proof post',
+        contentType: 'social_post',
+        channelKeys: ['linkedin_page'],
+        purpose: 'Show one approved fact.',
+        structure: [
+          { slot: 'hook', guidance: 'A number from a fact.', maxLength: 80 },
+          { slot: 'cta', guidance: 'Invite a reply.' },
+        ],
+        provenance: { origin: 'user' },
+      },
+    ]);
+    const parts = main().getByRole('list', { name: 'Parts of Proof post' });
+    await parts.waitFor({ timeout: 15_000 });
+    expect(await parts.textContent()).toContain('(at most 80 characters)');
+    // Visual patterns stay a separate section.
+    expect(applied().document.patterns.some((p) => p.key === 'proof-post')).toBe(false);
+    // The guidance round-trips: reopening and saving without an edit changes nothing.
+    const versions = backend.brandVersions.length;
+    await edit();
+    await saveAndApply();
+    await page.getByText('No changes to save').waitFor({ timeout: 15_000 });
+    expect(backend.brandVersions).toHaveLength(versions);
+  }, 60_000);
 
   it('a role without brand.publish_version sees no Edit, no import and no Review or Discard', async () => {
     backend.proposeBrandUpdate(E2E.brandId, applied().document);
