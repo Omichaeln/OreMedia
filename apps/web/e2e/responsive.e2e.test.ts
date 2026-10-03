@@ -248,9 +248,13 @@ describe.skipIf(!enabled)('responsive parity (built app in Chromium, mock transp
     await drawer.waitFor({ timeout: 15_000 });
     await phone.page.keyboard.press('Escape');
     await expect.poll(() => drawer.count()).toBe(0);
-    expect(
-      await phone.page.evaluate(() => (document.activeElement as HTMLElement | null)?.textContent?.trim()),
-    ).toBe('Menu');
+    // Radix's focus scope hands focus back to the trigger on a zero-delay timer after the dialog unmounts, so the
+    // dialog can be gone a tick before focus returns: wait for it rather than reading it once.
+    await expect
+      .poll(() =>
+        phone.page.evaluate(() => (document.activeElement as HTMLElement | null)?.textContent?.trim()),
+      )
+      .toBe('Menu');
     await phone.context.close();
   }, 60_000);
 
