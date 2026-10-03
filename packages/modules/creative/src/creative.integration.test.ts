@@ -1311,13 +1311,17 @@ describe('creative module (spec 11) against MySQL 8', () => {
         ],
       });
       await expect(
-        run(tenantA, (tx) =>
-          creativeService.operations.propose(agentA, { ...bindings({}), origin: 'agent' }, tx, AGENT_OPTS),
-        ),
+        run(tenantA, (tx) => creativeService.operations.propose(A, bindings({}), tx)),
       ).rejects.toMatchObject({
         code: 'VALIDATION_FAILED',
         details: [{ path: 'operations.0.slotBindings.headline', issue: 'slot_unbound' }],
       });
+      // STU-1a: the page holds a locked background, so an agent may not replace the page at all.
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.operations.propose(agentA, { ...bindings({}), origin: 'agent' }, tx, AGENT_OPTS),
+        ),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'element_locked' });
       expect((await revisionsOf(docId)).length).toBe(before2);
     });
   });

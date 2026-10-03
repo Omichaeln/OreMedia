@@ -6,8 +6,10 @@ import {
   CommentResolve,
   CreativeDocumentV1,
   DocumentCreate,
+  DocumentDuplicate,
   DocumentGet,
   DocumentList,
+  DocumentRename,
   OperationBatch,
   OperationsApply,
   OperationsPropose,
@@ -24,6 +26,7 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateRetire,
   TemplateSlot,
   TemplateSlotKind,
   TemplateVersionCreate,
@@ -47,8 +50,9 @@ import { newId } from '@oremedia/domain/ids';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
 import { renderJobMachine } from '@oremedia/domain/state-machines/render-job';
 import { templateMachine, templateVersionMachine } from '@oremedia/domain/state-machines/template-version';
-import { FORMAT_DEFINITIONS } from '@oremedia/editor/formats';
-import { guardLogoInsertion, guardProtected } from '@oremedia/editor/guard';
+import { formatFor } from '@oremedia/editor/formats';
+import { guardLocks, guardLogoInsertion, guardProtected } from '@oremedia/editor/guard';
+import { starterByKey } from '@oremedia/editor/starters/index';
 import {
   OperationError,
   SlotConstraintError,
@@ -270,7 +274,7 @@ async function resolveSnapshot(
 
 /** The minimal valid document (spec 11.2): one page in the default format, no elements. */
 function minimalDocument(brandVersionId: string): CreativeDocumentV1 {
-  const format = FORMAT_DEFINITIONS[DEFAULT_FORMAT_KEY];
+  const format = formatFor(DEFAULT_FORMAT_KEY);
   if (!format) throw new Error(`format ${DEFAULT_FORMAT_KEY} is not defined`);
   return {
     schemaVersion: 1,
@@ -334,6 +338,13 @@ function referencedAssetRefs(op: Operation, template: TemplateDocument | undefin
       return [];
   }
 }
+
+/** duplicatePage brings the source page's asset versions in again; they are authorised like any insertion. */
+const duplicatedAssetRefs = (doc: CreativeDocumentV1, op: Operation): AssetRef[] => {
+  if (op.op !== 'duplicatePage') return [];
+  const page = doc.pages.find((p) => p.id === op.pageId);
+  return page ? assetRefsIn(page.elements) : [];
+};
 
 /** One authorisation per distinct (asset version, purpose) pair. */
 function distinctRefs(refs: readonly AssetRef[]): AssetRef[] {
@@ -417,13 +428,16 @@ async function evaluateBatch(
   for (const [index, op] of batch.operations.entries()) {
     try {
       guardProtected(next, op, batch.origin); // agents cannot touch protected elements
+      guardLocks(next, op, batch.origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
       guardLogoInsertion(op, batch.origin); // agents cannot add logos
       if (op.op === 'applyTemplate') {
         templates[op.templateVersionId] ??= await resolveTemplate(doc, op, next, index, tx);
         for (const id of elementIdsOfPage(next, op.pageId)) changed.add(id); // every element of the page is replaced
       }
+      if (op.op === 'removePage') for (const id of elementIdsOfPage(next, op.pageId)) changed.add(id);
       const template = op.op === 'applyTemplate' ? templates[op.templateVersionId] : undefined;
-      for (const ref of distinctRefs(referencedAssetRefs(op, template)))
+      const refs = [...referencedAssetRefs(op, template), ...duplicatedAssetRefs(next, op)];
+      for (const ref of distinctRefs(refs))
         await assetAuthoriser(
           ref.assetVersionId,
           { tenantId: doc.tenantId, brandId: doc.brandId, purpose: ref.purpose },
@@ -625,7 +639,7 @@ async function queueRenderJob(
   preview: { snapshot: CreativeDocumentV1; contentHash: string } | null = null,
 ) {
   const formatKeys = [...new Set(requested)];
-  const unknown = formatKeys.filter((k) => FORMAT_DEFINITIONS[k] === undefined);
+  const unknown = formatKeys.filter((k) => formatFor(k) === undefined);
   if (unknown.length)
     throw new ValidationFailedError(
       unknown.map((k) => ({ path: 'formatKeys', issue: `unknown format ${k}` })),
@@ -706,6 +720,127 @@ const toTemplateVersionSummary = (v: TemplateVersionRow) => {
   return summary;
 };
 
+/**
+ * STU-1a: the document a create starts from. A brand template source is resolved here, from the approved version of
+ * the brand's own template (the client sends no document); a starter must name a built-in starter and send the
+ * document the client instantiated with the brand system.
+ */
+async function initialDocumentFor(
+  brandId: string,
+  parsed: z.infer<typeof DocumentCreate>,
+  tx: Tx,
+): Promise<CreativeDocumentV1 | undefined> {
+  const source = parsed.source;
+  if (source?.kind === 'template') {
+    if (parsed.document)
+      throw new ValidationFailedError([{ path: 'document', issue: 'not_allowed_with_template_source' }]);
+    const template = await templatesRepo.getById(source.templateId, tx);
+    if (template.brandId !== brandId) throw new NotFoundError('Template', source.templateId);
+    const tv = await loadTemplateVersion(template, source.templateVersionId, tx);
+    if (tv.state !== 'approved')
+      throw new ValidationFailedError(
+        [{ path: 'source.templateVersionId', issue: 'template_version_not_approved' }],
+        'Only approved template versions can be started from',
+      );
+    return { ...CreativeDocumentV1.parse(tv.document), templateVersionId: tv.id };
+  }
+  if (source?.kind === 'starter') {
+    if (!starterByKey(source.starterKey))
+      throw new ValidationFailedError([{ path: 'source.starterKey', issue: 'unknown_starter' }]);
+    if (!parsed.document)
+      throw new ValidationFailedError([{ path: 'document', issue: 'required_for_starter' }]);
+  }
+  return parsed.document;
+}
+
+/** STU-1a: a document made through the creation screen uses known formats (presets or valid custom sizes). */
+function assertKnownFormats(document: CreativeDocumentV1): void {
+  const details: ErrorDetail[] = [];
+  document.pages.forEach((page, i) => {
+    const format = formatFor(page.formatKey);
+    if (!format) details.push({ path: `document.pages.${i}.formatKey`, issue: 'unknown_format' });
+    else if (format.width !== page.width || format.height !== page.height)
+      details.push({ path: `document.pages.${i}`, issue: 'size_does_not_match_format' });
+  });
+  if (details.length) throw new ValidationFailedError(details, 'The page sizes are not valid formats');
+}
+
+/**
+ * Spec 11.1/11.4: a document is born with revision 1 in the same transaction (create and duplicate). Every asset the
+ * initial document references is authorised, exactly as an operation would be; agents must start clean.
+ */
+async function insertDocument(
+  actor: ResolvedActor,
+  input: {
+    brandId: string;
+    title: string;
+    contentPackageId: string | null;
+    document: CreativeDocumentV1;
+    summary: string;
+    auditAction: string;
+    auditMeta: Record<string, unknown>;
+  },
+  snapshot: Awaited<ReturnType<typeof resolveSnapshot>>,
+  tx: Tx,
+) {
+  const { brandId, document } = input;
+  const { tenantId } = requireTenant();
+  for (const ref of distinctRefs(assetRefsIn(document.pages.flatMap((p) => p.elements))))
+    await assetAuthoriser(ref.assetVersionId, { tenantId, brandId, purpose: ref.purpose }, tx);
+  const origin = authorKindOf(actor);
+  const findings = validateAgainstBrand(document, snapshot);
+  assertAgentClean(origin, findings);
+  const documentId = newId('creativeDocument');
+  const revisionId = newId('creativeRevision');
+  const contentHash = hashCanonical(document);
+  await documentsRepo.create(
+    {
+      id: documentId,
+      brandId,
+      contentPackageId: input.contentPackageId,
+      title: input.title,
+      currentRevisionId: null,
+      schemaVersion: document.schemaVersion,
+    },
+    tx,
+  );
+  await revisionsRepo.create(
+    {
+      id: revisionId,
+      brandId,
+      documentId,
+      parentRevisionId: null,
+      number: 1,
+      brandVersionId: document.brandVersionId,
+      agentRunId: null,
+      authorKind: origin,
+      authorId: actor.id,
+      changeSummary: input.summary,
+      operations: { ...initialBatch(document, origin), summary: input.summary },
+      snapshot: document,
+      contentHash,
+    },
+    tx,
+  );
+  await documentsRepo.setCurrentRevision(documentId, 0, revisionId, tx);
+  await audit.record(
+    actorRef(actor),
+    input.auditAction,
+    { type: 'creative_document', id: documentId },
+    'allowed',
+    tx,
+    { brandId, revisionId, ...input.auditMeta },
+  );
+  await outbox.add(
+    'creative.revision_created',
+    { type: 'creative_document', id: documentId, version: 1 },
+    { documentId, revisionId, number: 1, contentHash, brandVersionId: document.brandVersionId },
+    tx,
+    { brandId },
+  );
+  return { documentId, revisionId, number: 1, version: 1, contentHash, findings };
+}
+
 export const creativeService = {
   documents: {
     /**
@@ -715,7 +850,7 @@ export const creativeService = {
      */
     async create(
       actor: ResolvedActor,
-      input: z.infer<typeof DocumentCreate>,
+      input: z.input<typeof DocumentCreate>,
       tx: Tx,
       opts: ActorOptions = {},
     ) {
@@ -723,65 +858,95 @@ export const creativeService = {
       const brand = await brandService.get(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'creative.edit', brandResource(brand.id), opts, tx);
       const snapshot = await resolveSnapshot(actor, brand.id, undefined, tx);
+      const initial = await initialDocumentFor(brand.id, parsed, tx);
       const document = CreativeDocumentV1.parse({
-        ...(parsed.document ?? minimalDocument(snapshot.brandVersionId)),
+        ...(initial ?? minimalDocument(snapshot.brandVersionId)),
         brandVersionId: snapshot.brandVersionId,
+        ...(parsed.contentType ? { contentType: parsed.contentType } : {}),
       });
-      const { tenantId } = requireTenant();
-      for (const ref of distinctRefs(assetRefsIn(document.pages.flatMap((p) => p.elements))))
-        await assetAuthoriser(ref.assetVersionId, { tenantId, brandId: brand.id, purpose: ref.purpose }, tx);
-      const origin = authorKindOf(actor);
-      const findings = validateAgainstBrand(document, snapshot);
-      assertAgentClean(origin, findings);
-      const documentId = newId('creativeDocument');
-      const revisionId = newId('creativeRevision');
-      const contentHash = hashCanonical(document);
-      await documentsRepo.create(
+      if (parsed.source) assertKnownFormats(document);
+      const source = parsed.source;
+      return insertDocument(
+        actor,
         {
-          id: documentId,
           brandId: brand.id,
-          contentPackageId: parsed.contentPackageId ?? null,
           title: parsed.title,
-          currentRevisionId: null,
-          schemaVersion: document.schemaVersion,
+          contentPackageId: parsed.contentPackageId ?? null,
+          document,
+          summary: 'Initial document',
+          auditAction: 'creative.document.create',
+          auditMeta: {
+            ...(source ? { sourceType: source.kind } : {}),
+            ...(source?.kind === 'starter' ? { sourceId: source.starterKey } : {}),
+            ...(source?.kind === 'template' ? { sourceId: source.templateVersionId } : {}),
+            ...(document.contentType ? { contentType: document.contentType } : {}),
+          },
         },
+        snapshot,
         tx,
       );
-      await revisionsRepo.create(
+    },
+
+    /**
+     * STU-1a: a new document whose revision 1 is the source's current revision snapshot, unchanged (same brand
+     * version, same content hash); the audit records which document and revision it came from. Reading the source
+     * needs creative.read, creating needs creative.edit on its brand; every asset is authorised again.
+     */
+    async duplicate(
+      actor: ResolvedActor,
+      input: z.infer<typeof DocumentDuplicate>,
+      tx: Tx,
+      opts: ActorOptions = {},
+    ) {
+      const parsed = DocumentDuplicate.parse(input);
+      const source = await documentsRepo.getById(parsed.documentId, tx);
+      await policy.assert(actor, 'creative.read', documentResource(source), {}, tx);
+      await policy.assert(actor, 'creative.edit', brandResource(source.brandId), opts, tx);
+      const revision = await loadCurrentRevision(source, tx);
+      const document = CreativeDocumentV1.parse(revision.snapshot);
+      const snapshot = await resolveSnapshot(actor, source.brandId, document.brandVersionId, tx);
+      return insertDocument(
+        actor,
         {
-          id: revisionId,
-          brandId: brand.id,
-          documentId,
-          parentRevisionId: null,
-          number: 1,
-          brandVersionId: snapshot.brandVersionId,
-          agentRunId: null,
-          authorKind: origin,
-          authorId: actor.id,
-          changeSummary: 'Initial document',
-          operations: initialBatch(document, origin),
-          snapshot: document,
-          contentHash,
+          brandId: source.brandId,
+          title: parsed.title ?? `${source.title} (copy)`.slice(0, 200),
+          contentPackageId: null,
+          document,
+          summary: `Duplicate of revision ${revision.number} of ${source.title}`.slice(0, 500),
+          auditAction: 'creative.document.duplicate',
+          auditMeta: {
+            sourceType: 'creative_document',
+            sourceId: source.id,
+            sourceRevisionId: revision.id,
+            ...(document.contentType ? { contentType: document.contentType } : {}),
+          },
         },
+        snapshot,
         tx,
       );
-      await documentsRepo.setCurrentRevision(documentId, 0, revisionId, tx);
+    },
+
+    /** STU-1a: the title is a label (last writer wins under the row lock); revisions and approvals are untouched. */
+    async rename(
+      actor: ResolvedActor,
+      input: z.infer<typeof DocumentRename>,
+      tx: Tx,
+      opts: ActorOptions = {},
+    ) {
+      const parsed = DocumentRename.parse(input);
+      const doc = await documentsRepo.lock(parsed.documentId, tx);
+      await policy.assert(actor, 'creative.edit', documentResource(doc), opts, tx);
+      if (doc.title === parsed.title) return { documentId: doc.id, title: doc.title, version: doc.version };
+      await documentsRepo.rename(doc.id, doc.version, parsed.title, tx);
       await audit.record(
         actorRef(actor),
-        'creative.document.create',
-        { type: 'creative_document', id: documentId },
+        'creative.document.rename',
+        { type: 'creative_document', id: doc.id },
         'allowed',
         tx,
-        { brandId: brand.id, revisionId },
+        { brandId: doc.brandId, expectedVersion: doc.version },
       );
-      await outbox.add(
-        'creative.revision_created',
-        { type: 'creative_document', id: documentId, version: 1 },
-        { documentId, revisionId, number: 1, contentHash, brandVersionId: snapshot.brandVersionId },
-        tx,
-        { brandId: brand.id },
-      );
-      return { documentId, revisionId, number: 1, version: 1, contentHash, findings };
+      return { documentId: doc.id, title: parsed.title, version: doc.version + 1 };
     },
 
     /** Save/reopen: the document row plus the committed snapshot of its current revision. */
@@ -1239,8 +1404,7 @@ export const creativeService = {
         details.push(...slotDefinitionIssues(document, slot, i));
       });
       parsed.formats.forEach((f, i) => {
-        if (FORMAT_DEFINITIONS[f] === undefined)
-          details.push({ path: `formats.${i}`, issue: `unknown format ${f}` });
+        if (formatFor(f) === undefined) details.push({ path: `formats.${i}`, issue: `unknown format ${f}` });
       });
       if (details.length) throw new ValidationFailedError(details);
       const id = newId('templateVersion');
@@ -1324,6 +1488,82 @@ export const creativeService = {
         templateVersionId: tv.id,
         state: toState,
         templateState,
+        version: parsed.expectedVersion + 1,
+      };
+    },
+
+    /**
+     * STU-1a: retiring is a brand-standards decision like approval (brand.edit_standards, never an agent). A version
+     * is retired on its own (the template then points at its newest other approved version, or none); without a
+     * version id the template and all its versions retire. Retired versions are never applicable or eligible.
+     */
+    async retire(
+      actor: ResolvedActor,
+      input: z.infer<typeof TemplateRetire>,
+      tx: Tx,
+      opts: ActorOptions = {},
+    ) {
+      const parsed = TemplateRetire.parse(input);
+      const template = await templatesRepo.lock(parsed.templateId, tx);
+      const versions = await templateVersionsRepo.listForTemplate(template.brandId, template.id, tx);
+      const target = parsed.templateVersionId
+        ? await loadTemplateVersion(template, parsed.templateVersionId, tx)
+        : null;
+      const decision = await policy.assert(
+        actor,
+        'brand.edit_standards',
+        target
+          ? {
+              type: 'template_version',
+              tenantId: template.tenantId,
+              brandId: template.brandId,
+              id: target.id,
+              state: target.state,
+            }
+          : templateResource(template),
+        opts,
+        tx,
+      );
+      assertMayDecide(decision);
+      const retiring = target ? [target] : versions.filter((v) => v.state !== 'retired');
+      for (const v of retiring) {
+        const toState = transition(templateVersionMachine, v.state, 'retire', 'templateVersionId');
+        await templateVersionsRepo.setState(v.id, template.brandId, v.state, toState, tx);
+      }
+      const retired = new Set(retiring.map((v) => v.id));
+      const fallback = versions.find((v) => v.state === 'approved' && !retired.has(v.id)) ?? null;
+      const templateState = target
+        ? template.state
+        : transition(templateMachine, template.state, 'retire', 'templateId');
+      const currentVersionId =
+        target && template.currentVersionId !== target.id
+          ? template.currentVersionId
+          : (fallback?.id ?? null);
+      await templatesRepo.update(
+        template.id,
+        parsed.expectedVersion,
+        { currentVersionId: target ? currentVersionId : template.currentVersionId, state: templateState },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'creative.template.retire',
+        target ? { type: 'template_version', id: target.id } : { type: 'template', id: template.id },
+        'allowed',
+        tx,
+        {
+          brandId: template.brandId,
+          fromState: target ? target.state : template.state,
+          toState: 'retired',
+          count: retiring.length,
+          expectedVersion: parsed.expectedVersion,
+        },
+      );
+      return {
+        templateId: template.id,
+        templateVersionId: target?.id ?? null,
+        templateState,
+        currentVersionId: target ? currentVersionId : template.currentVersionId,
         version: parsed.expectedVersion + 1,
       };
     },

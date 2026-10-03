@@ -78,6 +78,10 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   async setCurrentRevision(id: string, expectedVersion: number, revisionId: string, tx: Tx) {
     await this.updateScoped(id, expectedVersion, { currentRevisionId: revisionId }, tx);
   }
+  /** STU-1a: the title only; optimistic version like every other row update. */
+  async rename(id: string, expectedVersion: number, title: string, tx: Tx) {
+    await this.updateScoped(id, expectedVersion, { title }, tx);
+  }
 }
 
 /** Insert-only (spec 6.1): revisions are never updated or deleted; undo is a new revision. */
