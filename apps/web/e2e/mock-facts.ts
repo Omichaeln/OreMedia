@@ -84,7 +84,7 @@ const normalise = (s: string) =>
   s
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}\p{Sc}%-]+/gu, ' ')
     .trim();
 const words = (s: string) => new Set(normalise(s).split(' ').filter(Boolean));
 const similar = (a: string, b: string) => {
@@ -452,6 +452,11 @@ export function factsRouter(b: FactsBackend, { router, query, mutation }: FactsB
         if (!LIVE.has(fact.state)) throw new ValidationFailedError([{ path: 'merge', issue: 'not_live' }]);
         if (fact.version !== expected) throw new ConflictError('ApprovedFact', fact.id, expected);
       }
+      if (keep.state !== 'approved' && others.some((o) => o.fact.state === 'approved'))
+        throw new ValidationFailedError(
+          [{ path: 'keep.factId', issue: 'keep_not_approved' }],
+          'Keep an approved fact when an approved fact is merged into it',
+        );
       const seen = new Set<string>();
       const sources = [keep, ...others.map((o) => o.fact)]
         .flatMap((f) => f.sources)
