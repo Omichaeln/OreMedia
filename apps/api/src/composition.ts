@@ -26,8 +26,11 @@ import {
   registerEligibleTemplateSource,
 } from '@oremedia/module-brand';
 import {
+  configureGenerationPricing,
   creativeService,
   registerAssetAuthoriser,
+  registerChannelCapabilitySource,
+  registerGenerationAssetSource,
   registerRevisionChangeHook,
 } from '@oremedia/module-creative';
 import {
@@ -96,6 +99,9 @@ import {
   registerReviewToolSource,
   registerRoutingPolicySource,
   registerSkillResolver,
+  IMAGE_COST_MICROS,
+  estimateCostMicros,
+  modelConfigFromEnv,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
 import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
@@ -324,6 +330,35 @@ export function composeModules(): void {
     contentService.revisions.withVariants(contentRevisionId, tx),
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
+  // STU-1b: generation reads the eligible assets, the channel capability register in use and its price list.
+  registerGenerationAssetSource(async (brandId, tx) =>
+    (
+      await assetService.findEligibleAssets(
+        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        { limit: 200 },
+        tx,
+      )
+    ).items.map((a) => ({
+      assetId: a.assetId,
+      assetVersionId: a.assetVersionId,
+      kind: a.kind,
+      altText: a.altText,
+      semanticRole: a.semanticRole,
+    })),
+  );
+  registerChannelCapabilitySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.capability),
+  );
+  const generationModel = modelConfigFromEnv();
+  configureGenerationPricing({
+    modelCallMicros: estimateCostMicros(generationModel, {
+      inputTokens: 12_000,
+      outputTokens: generationModel.maxOutputTokens,
+    }),
+    imageMicros: IMAGE_COST_MICROS,
+  });
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
   // BSC-1: guidance names the channels of the registry publishing uses (the one channels.limits reads).
   registerChannelKeySource(() =>

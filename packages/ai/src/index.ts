@@ -116,5 +116,11 @@ export {
   type ProviderJobStatus,
   type ProviderJobStore,
 } from './provider-jobs';
+export {
+  STUDIO_FILL_TOOL,
+  generationTool,
+  assembleGenerationPrompt,
+  parseGenerationOutput,
+} from './generation-prompt';
 export * from './tools';
 export * from './evaluation';

@@ -3,9 +3,12 @@ import {
   WRITING_PARTS,
   type BrandSystemDocumentV1,
   type ChannelGuidanceField,
-  type CopyTemplate,
 } from '@oremedia/contracts/brand';
-import { effectiveChannelGuidance } from '@oremedia/domain/channel-guidance';
+import {
+  effectiveChannelGuidance,
+  matchingCopyTemplates,
+  type GuidanceTarget,
+} from '@oremedia/domain/channel-guidance';
 import type { ContextSnapshot } from './context-resolver';
 
 /**
@@ -78,14 +81,9 @@ const list = (items: readonly string[]): string =>
 export const GUIDANCE_BUDGET_CHARS = 12_000;
 export const GUIDANCE_TRUNCATED = '[guidance truncated to fit the prompt budget]';
 const MAX_EXAMPLES_PER_VERDICT = 3;
-const MAX_TEMPLATES = 3;
 
 /** What the run is for, as the brief names it (at the top level or in a nested `brief`, as skill inputs do). */
-export interface GuidanceTarget {
-  channelKey?: string;
-  contentType?: string;
-  templateKey?: string;
-}
+export type { GuidanceTarget };
 
 const briefString = (brief: Record<string, unknown>, keys: string[]): string | undefined => {
   const nested = brief['brief'];
@@ -127,19 +125,7 @@ const block = (title: string, lines: readonly string[]): string[] =>
   lines.length ? [`${title}\n${lines.join('\n')}`] : [];
 
 /** The copy templates that fit the run: the one the brief names, else those for its content type and channel. */
-export function matchingTemplates(
-  templates: readonly CopyTemplate[],
-  target: GuidanceTarget,
-): CopyTemplate[] {
-  if (target.templateKey) return templates.filter((t) => t.key === target.templateKey).slice(0, 1);
-  if (!target.contentType && !target.channelKey) return [];
-  return templates
-    .filter((t) => !target.contentType || t.contentType === target.contentType)
-    .filter(
-      (t) => !target.channelKey || t.channelKeys.length === 0 || t.channelKeys.includes(target.channelKey),
-    )
-    .slice(0, MAX_TEMPLATES);
-}
+export const matchingTemplates = matchingCopyTemplates;
 
 /**
  * BSC-1: the approved guidance of the brand system as prompt text, in a fixed order (the effective guidance of the

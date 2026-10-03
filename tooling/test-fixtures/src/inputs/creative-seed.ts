@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { emptyBrandSystemDocument } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
 import { brandVersions, brands } from '@oremedia/db/schema/brand';
@@ -7,6 +7,7 @@ import {
   creativeRevisions,
   elementComments,
   renderJobs,
+  studioGenerationJobs,
   templateVersions,
   templates,
 } from '@oremedia/db/schema/creative';
@@ -88,26 +89,18 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     currentRevisionId: creativeRevisionId,
     schemaVersion: 1,
   });
-  await db.insert(creativeRevisions).values({
-    id: creativeRevisionId,
-    tenantId,
-    brandId,
-    documentId: creativeDocumentId,
-    parentRevisionId: null,
-    number: 1,
-    brandVersionId: creativePublishedBrandVersionId,
-    authorKind: 'user',
-    authorId: ownerUserId,
-    changeSummary: 'Initial document',
-    operations: {
-      baseRevisionId: '',
-      operations: document.pages.map((page, index) => ({ op: 'addPage', page, index })),
-      summary: 'Initial document',
-      origin: 'user',
-    },
-    snapshot: document,
-    contentHash: hashCanonical(document),
-  });
+  // sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0027), which the
+  // roll-forward suites' earlier heads do not have; the columns named here exist at every head, later ones are null.
+  const initialBatch = {
+    baseRevisionId: '',
+    operations: document.pages.map((page, index) => ({ op: 'addPage', page, index })),
+    summary: 'Initial document',
+    origin: 'user',
+  };
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${creativeRevisions} (id, tenant_id, brand_id, document_id, parent_revision_id, number, brand_version_id, author_kind, author_id, change_summary, operations, snapshot, content_hash, created_at) values (${creativeRevisionId}, ${tenantId}, ${brandId}, ${creativeDocumentId}, null, 1, ${creativePublishedBrandVersionId}, 'user', ${ownerUserId}, 'Initial document', ${JSON.stringify(initialBatch)}, ${JSON.stringify(document)}, ${hashCanonical(document)}, ${at})`,
+  );
   const commentId = newId('elementComment');
   await db.insert(elementComments).values({
     id: commentId,
@@ -156,7 +149,41 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     requestedByKind: 'user',
     requestedById: ownerUserId,
   });
+  // STU-1b (migration 0027): a failed generation job of the document (retry and cancel need a job id to try).
+  const generationJobId = newId('studioGenerationJob');
+  const generationAtHead = await db.execute(
+    sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'studio_generation_jobs'`,
+  );
+  const generationRequest = {
+    kind: 'refine' as const,
+    refine: {
+      instruction: 'Seeded request',
+      scope: { pageId: 'page_1', elementIds: [] },
+      action: { kind: 'edit' as const },
+      factIds: [],
+      assetVersionIds: [],
+    },
+  };
+  if (Array.isArray(generationAtHead[0]) && generationAtHead[0].length > 0)
+    await db.insert(studioGenerationJobs).values({
+      id: generationJobId,
+      tenantId,
+      brandId,
+      documentId: creativeDocumentId,
+      baseRevisionId: creativeRevisionId,
+      kind: 'refine',
+      state: 'failed',
+      progress: 100,
+      request: generationRequest,
+      inputsHash: hashCanonical(generationRequest),
+      attempt: 1,
+      errorCode: 'model_failed',
+      error: 'Seeded failure',
+      requestedByKind: 'user',
+      requestedById: ownerUserId,
+    });
   return {
+    generationJobId,
     creativePublishedBrandVersionId,
     creativeDocumentId,
     creativeRevisionId,

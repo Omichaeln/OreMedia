@@ -48,6 +48,7 @@ const skillEvaluation = (ctx: ActivityContext, f: Ids) => ({
   suiteId: f['evaluationSuiteId'],
   runs: 3,
 });
+const generation = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['generationJobId'], attempt: 1 });
 const publication = (ctx: ActivityContext, f: Ids) => ({ ...ctx, publicationId: f['publicationId'] });
 const reply = (ctx: ActivityContext, f: Ids) => ({ ...ctx, responseDraftId: f['responseDraftId'] });
 const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
@@ -141,6 +142,15 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'agents.failSkillEvaluation': {
       buildInput: (ctx, f) => ({ ...skillEvaluation(ctx, f), error: 'harness failure' }),
     },
+    // STU-1b studioGenerationWorkflowV1: a foreign job is NOT_FOUND before anything is read or written.
+    'agents.beginGeneration': { buildInput: generation },
+    'agents.reserveGenerationBudget': { buildInput: generation },
+    'agents.callGenerationModel': { buildInput: generation },
+    'agents.saveGeneration': { buildInput: generation },
+    'agents.failGeneration': {
+      buildInput: (ctx, f) => ({ ...generation(ctx, f), code: 'failed', detail: 'harness' }),
+    },
+    'agents.settleGenerationBudget': { buildInput: generation },
 
     // ---- task queue `core`: publicationWorkflowV1 control activities (spec 14.3) ----
     'core.readSchedule': { buildInput: publication },

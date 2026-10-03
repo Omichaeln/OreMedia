@@ -1,8 +1,14 @@
+import { StudioGenerationInputV1, StudioGenerationSignalV1 } from '@oremedia/contracts/generation';
 import { RenderJobInputV1 } from '@oremedia/contracts/render';
 import { registerOutboxRoute } from '@oremedia/module-operations';
 
 /** Task queue for isolated rendering (spec 4.4: worker-render hosts `render` and `media`). */
 export const RENDER_TASK_QUEUE = 'render';
+/** STU-1b: generation makes model calls, so it runs beside agent runs on worker-core's `agents` queue. */
+export const GENERATION_TASK_QUEUE = 'agents';
+export const STUDIO_GENERATION_WORKFLOW_TYPE = 'studioGenerationWorkflowV1';
+export const STUDIO_GENERATION_SIGNAL_RELAY_WORKFLOW_TYPE = 'studioGenerationSignalRelayV1';
+const generationWorkflowId = (jobId: string, attempt: number) => `studio-gen:${jobId}:${attempt}`;
 
 /**
  * Spec 11.5: creative.renders.request → renderJobWorkflowV1. The workflow id is stable per render job so a
@@ -22,6 +28,35 @@ export function registerCreativeOutboxRoutes(): void {
       taskQueue: RENDER_TASK_QUEUE,
       workflowId: `render:${input.renderJobId}`,
       args: [input],
+    };
+  });
+  // STU-1b: start and retry → studioGenerationWorkflowV1 (one workflow per attempt); cancel → a relay that signals it.
+  registerOutboxRoute('creative.generation_requested', (evt) => {
+    const p = evt.payload;
+    const input = StudioGenerationInputV1.parse({
+      tenantId: evt.tenantId,
+      actor: { kind: p['actorKind'], id: p['actorId'] },
+      correlationId: evt.correlationId,
+      jobId: p['jobId'],
+      attempt: Number(p['attempt']),
+    });
+    return {
+      workflowType: STUDIO_GENERATION_WORKFLOW_TYPE,
+      taskQueue: GENERATION_TASK_QUEUE,
+      workflowId: generationWorkflowId(input.jobId, input.attempt),
+      args: [input],
+    };
+  });
+  registerOutboxRoute('creative.generation_cancel_requested', (evt) => {
+    const signal = StudioGenerationSignalV1.parse({
+      workflowId: generationWorkflowId(String(evt.payload['jobId']), Number(evt.payload['attempt'])),
+      signal: 'cancel',
+    });
+    return {
+      workflowType: STUDIO_GENERATION_SIGNAL_RELAY_WORKFLOW_TYPE,
+      taskQueue: GENERATION_TASK_QUEUE,
+      workflowId: `${signal.workflowId}:signal:${evt.id}`,
+      args: [signal],
     };
   });
 }
