@@ -28,7 +28,7 @@ const PREVIOUS_HEAD = '0013_password_setup_tokens';
 const NEW_TABLES: MySqlTable[] = [planItems];
 /** Added after 0014 (R2-0): absent at both heads this suite runs at, so never snapshotted. */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

@@ -26,7 +26,7 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
  */
 const PREVIOUS_HEAD = '0020_article_remote_status';
 const NEW_TABLES: MySqlTable[] = [seoFindingWork];
-/** Tables later migrations add (BSC-4, 0026): absent at both heads this suite compares. */
+/** Tables later migrations add (BSC-4, 0024): absent at both heads this suite compares. */
 const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

@@ -36,7 +36,7 @@ const PREVIOUS_HEAD = '0002_provider_jobs_routing_previews_ledger_idempotency';
 const NEW_TABLES: MySqlTable[] = [externalIdentities, authEvents];
 /** Added by later migrations (0004 to 0013; see the migration-*-roll-forward tests in apps/worker-core/src). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

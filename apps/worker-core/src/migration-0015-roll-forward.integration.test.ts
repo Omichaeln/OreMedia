@@ -28,7 +28,7 @@ const PREVIOUS_HEAD = '0014_plan_items';
 const NEW_TABLES: MySqlTable[] = [brandDestinations, sourceUsePolicies];
 /** Added by later migrations (0016, 0017). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

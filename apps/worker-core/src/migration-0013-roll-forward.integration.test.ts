@@ -30,7 +30,7 @@ const PREVIOUS_HEAD = '0012_comment_replies';
 const NEW_TABLES: MySqlTable[] = [passwordSetupTokens];
 /** Added by later migrations (0014). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

@@ -107,7 +107,7 @@ source can never be approved as-is: approval requires a source or an explicit re
 
 ### BSC-4 / BSC-5 as built
 
-- Tables (migration 0026, created only): `brand_sources`, `brand_assist_jobs`, `brand_suggestions`. Extracted text is
+- Tables (migration 0024, created only): `brand_sources`, `brand_assist_jobs`, `brand_suggestions`. Extracted text is
   kept in a bounded column (400,000 characters); an uploaded document is deleted from the object store once read
   (quarantine prefix, never served); an asset's original is read in place and never deleted.
 - `brandAssistWorkflowV1` (`brand-assist:<jobId>`, queue `agents`) spans three workers: websites on

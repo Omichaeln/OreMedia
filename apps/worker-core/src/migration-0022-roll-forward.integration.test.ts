@@ -20,7 +20,7 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * the two columns are in LATER_COLUMNS (seed.ts), so the earlier suites keep seeding without them.
  */
 const PREVIOUS_HEAD = '0021_report_quality_finding_work';
-/** Tables later migrations add (BSC-4, 0026): absent at both heads this suite compares. */
+/** Tables later migrations add (BSC-4, 0024): absent at both heads this suite compares. */
 const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

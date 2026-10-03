@@ -46,7 +46,7 @@ const PREVIOUS_HEAD = '0009_brand_classification';
 const NEW_TABLES: MySqlTable[] = [pendingChannelGrants];
 /** Added by later migrations (0011 and 0013: their migration-*-roll-forward tests). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

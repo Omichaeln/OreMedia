@@ -58,7 +58,7 @@ const hashCanonical = (v: unknown) => createHash('sha256').update(JSON.stringify
 const NEW_TABLES: MySqlTable[] = [publicationRemoteChanges];
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

@@ -40,7 +40,7 @@ const PREVIOUS_HEAD = '0016_destination_connect';
 const NEW_TABLES: MySqlTable[] = [destinationReportRows];
 /** Added by migration 0019 (R2-4); absent at both heads this suite compares. */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

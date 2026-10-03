@@ -50,7 +50,7 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
 
 /** Added by later migrations (0003 to 0016). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

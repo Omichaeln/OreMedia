@@ -29,7 +29,7 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0011_remote_post_changes';
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

@@ -10,7 +10,7 @@ import { brandAssistService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0026 (BSC-4 sources and AI assist): on a database populated at the previous head (0023)
+ * Ledger 1.g4 for migration 0024 (BSC-4 sources and AI assist): on a database populated at the previous head (0023)
  * the migration only creates brand_sources, brand_assist_jobs and brand_suggestions; every existing column of every
  * row is unchanged and the new tables start empty. On the migrated data a person adds a source and lists it, and the
  * history lists what was applied before the migration. Additive and roll-forward safe: the previous release never
@@ -22,7 +22,7 @@ const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t));
 
-describe('migration 0026 rolls forward on a populated database (ledger 1.g4)', () => {
+describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
   let tenantA: SeededTenant;
   let before = '';
@@ -69,7 +69,7 @@ describe('migration 0026 rolls forward on a populated database (ledger 1.g4)', (
       tenantId: tenantA.tenantId,
       actor: { kind: 'user' as const, id: tenantA.ownerUserId },
       brandIds: 'all' as const,
-      correlationId: 'corr_roll_forward_0026',
+      correlationId: 'corr_roll_forward_0024',
     };
     const brandId = tenantA.brandIds[0]!;
     const run = <T>(fn: (tx: Tx) => Promise<T>) => runInTenant(ctx, () => withTransaction(fn));

@@ -35,7 +35,7 @@ const PREVIOUS_HEAD = '0005_lazy_redwing';
 const NEW_TABLES: MySqlTable[] = [brandGuidelineAuthors];
 /** Added by later migrations (0010 to 0013: their migration-*-roll-forward tests). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

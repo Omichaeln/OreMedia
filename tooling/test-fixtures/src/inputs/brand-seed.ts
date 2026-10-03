@@ -60,7 +60,7 @@ export const BRAND_SEED: SeedExtension = async (db, { tenantId, brandIds, ownerU
     state: 'draft',
     createdByUserId: ownerUserId,
   });
-  // BSC-4 (migration 0026): a source, an assist job over it and one suggestion, so a foreign caller has their ids.
+  // BSC-4 (migration 0024): a source, an assist job over it and one suggestion, so a foreign caller has their ids.
   const brandSourceId = newId('brandSource');
   const brandAssistJobId = newId('brandAssistJob');
   const brandSuggestionId = newId('brandSuggestion');

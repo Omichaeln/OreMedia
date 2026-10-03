@@ -30,7 +30,7 @@ const sha256 = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const PREVIOUS_HEAD = '0017_destination_report_rows';
 /** Added by migration 0019 (R2-4); absent at both heads this suite compares. */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,

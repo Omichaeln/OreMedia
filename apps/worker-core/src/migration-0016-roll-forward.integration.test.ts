@@ -41,7 +41,7 @@ const PREVIOUS_HEAD = '0015_brand_destinations';
 const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];
 /** Added by later migrations (0017). */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0026)
+  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,
