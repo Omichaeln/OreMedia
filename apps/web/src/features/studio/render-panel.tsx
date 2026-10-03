@@ -61,7 +61,26 @@ export function RenderPanel({ documentId, revisionId, formatKey, hasLocalWork }:
           tone="info"
           busy
           title={job.data.state === 'pending' ? 'Render queued' : 'Rendering…'}
-          description="The render worker picks the job up from the outbox; this page refreshes every two seconds."
+          description={
+            job.data.progress
+              ? `${job.data.progress.phase}: ${Math.round(job.data.progress.fraction * 100)}% done; this page refreshes every two seconds.`
+              : 'The render worker picks the job up from the outbox; this page refreshes every two seconds.'
+          }
+        />
+      )}
+      {jobId && job.data?.state === 'cancelled' && (
+        <StatusBanner
+          tone="neutral"
+          title="Render cancelled"
+          description="The render was stopped before it finished; nothing was exported."
+          actions={
+            <Button
+              size="sm"
+              onClick={() => request.mutate({ documentId, revisionId, formatKeys: [formatKey] })}
+            >
+              Render again
+            </Button>
+          }
         />
       )}
       {jobId && job.data?.state === 'failed' && (

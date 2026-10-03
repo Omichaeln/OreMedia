@@ -383,7 +383,7 @@ const fontFace = (
 
 interface MockAsset {
   id: string;
-  kind: 'photo' | 'logo' | 'illustration' | 'font';
+  kind: 'photo' | 'logo' | 'illustration' | 'font' | 'video' | 'audio';
   name: string;
   state: 'pending_review' | 'approved' | 'rejected' | 'retired';
   rights: { owner: string; licenceRef: string | null; expiresAt: string | null } | null;
@@ -416,19 +416,75 @@ const assetIssues = (a: MockAsset): string[] => {
     out.push('rights_expiring');
   return out;
 };
-const assetVersionOf = (a: MockAsset) => ({
-  id: 'av_photo',
-  assetId: a.id,
-  number: 1,
-  mime: 'image/png',
-  bytes: 68,
-  width: 2,
-  height: 2,
-  altText: a.kind === 'photo' ? 'Sample photo' : null,
-  contentHash: hash(a.id),
-  provenance: { kind: 'upload' as const },
-  createdAt: now(),
-});
+/** STU-2a: what ffprobe recorded for a mock video (a portrait phone clip) or audio upload. */
+const mockMediaInfo = (kind: MockAsset['kind']) =>
+  kind === 'video'
+    ? {
+        schemaVersion: 1 as const,
+        container: 'mov,mp4,m4a,3gp,3g2,mj2',
+        durationMs: 15_000,
+        bitRate: 8_000_000,
+        bytes: 15_000_000,
+        video: {
+          codec: 'h264',
+          profile: 'High',
+          pixelFormat: 'yuv420p',
+          codedWidth: 1920,
+          codedHeight: 1080,
+          width: 1080,
+          height: 1920,
+          rotation: 90,
+          fps: 30,
+          nominalFps: 30,
+          variableFrameRate: false,
+          bitRate: 7_800_000,
+        },
+        audio: [{ codec: 'aac', channels: 2, sampleRate: 48_000, bitRate: 128_000 }],
+      }
+    : kind === 'audio'
+      ? {
+          schemaVersion: 1 as const,
+          container: 'mov,mp4,m4a,3gp,3g2,mj2',
+          durationMs: 32_000,
+          bitRate: 128_000,
+          bytes: 512_000,
+          video: null,
+          audio: [{ codec: 'aac', channels: 2, sampleRate: 44_100, bitRate: 128_000 }],
+        }
+      : null;
+const assetVersionOf = (a: MockAsset) => {
+  const media = mockMediaInfo(a.kind);
+  return {
+    id: media ? `av_${a.kind}_${a.id}` : 'av_photo',
+    assetId: a.id,
+    number: 1,
+    mime: a.kind === 'video' ? 'video/mp4' : a.kind === 'audio' ? 'audio/mp4' : 'image/png',
+    bytes: media?.bytes ?? 68,
+    width: media?.video?.width ?? (media ? null : 2),
+    height: media?.video?.height ?? (media ? null : 2),
+    durationMs: media?.durationMs ?? null,
+    media,
+    altText: a.kind === 'photo' ? 'Sample photo' : null,
+    contentHash: hash(a.id),
+    provenance: { kind: 'upload' as const },
+    createdAt: now(),
+  };
+};
+/** The derivatives video ingest makes (STU-2a); stills have none in the mock. */
+const derivativesOf = (a: MockAsset) =>
+  (a.kind === 'video'
+    ? ['thumbnail', 'preview', 'poster', 'strip', 'strip_map', 'proxy', 'waveform']
+    : a.kind === 'audio'
+      ? ['thumbnail', 'preview', 'proxy', 'waveform']
+      : []
+  ).map((purpose) => ({
+    id: `ad_${a.id}_${purpose}`,
+    purpose,
+    mime: purpose === 'proxy' ? (a.kind === 'video' ? 'video/mp4' : 'audio/mp4') : 'image/webp',
+    width: null,
+    height: null,
+    bytes: 1000,
+  }));
 
 interface MockSkillVersion {
   id: string;
@@ -2357,7 +2413,7 @@ export function createMockRouter(backend: MockBackend) {
           state: a.state,
           rightsState: a.rights ? ('recorded' as const) : ('unknown' as const),
           currentVersion: assetVersionOf(a),
-          derivatives: [],
+          derivatives: derivativesOf(a),
           rights: a.rights
             ? {
                 id: `ur_${a.id}`,
@@ -2433,13 +2489,28 @@ export function createMockRouter(backend: MockBackend) {
           const intent = backend.fontIntents.get(input.intentId);
           if (!intent) throw new NotFoundError('UploadIntent', input.intentId);
           intent.polls += 1;
+          // STU-2a: a file named "damaged…" fails video/audio ingest the way a truncated MP4 does.
+          if (intent.polls >= 2 && intent.originalFilename.startsWith('damaged'))
+            return {
+              intentId: input.intentId,
+              state: 'rejected' as const,
+              assetId: null,
+              rejectionReason: 'media_malformed',
+              rejectionDetail: 'stream 0, offset 0x1c550: partial file',
+              kind: intent.kind,
+            };
           if (intent.polls >= 2 && !intent.assetId) {
             intent.assetId = rid('ast');
             if (intent.kind !== 'font')
               backend.assets.unshift(
                 mockAsset(
                   intent.assetId,
-                  intent.kind === 'logo' || intent.kind === 'illustration' ? intent.kind : 'photo',
+                  intent.kind === 'logo' ||
+                    intent.kind === 'illustration' ||
+                    intent.kind === 'video' ||
+                    intent.kind === 'audio'
+                    ? intent.kind
+                    : 'photo',
                   intent.originalFilename,
                   'pending_review',
                   null,
@@ -2451,6 +2522,8 @@ export function createMockRouter(backend: MockBackend) {
             state: intent.assetId ? ('accepted' as const) : ('uploaded' as const),
             assetId: intent.assetId,
             rejectionReason: null,
+            rejectionDetail: null,
+            kind: intent.kind,
           };
         }),
       }),
@@ -2502,6 +2575,19 @@ export function createMockRouter(backend: MockBackend) {
               expiresAt: new Date(Date.now() + 300_000),
               mime: 'font/ttf',
             };
+          // STU-2a: a video or audio version's proxy plays from the store (WebM in the e2e store); its images are PNG.
+          if (/^av_(video|audio)_/.test(input.assetVersionId))
+            return input.derivative === 'proxy'
+              ? {
+                  url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-proxy.webm`,
+                  expiresAt: new Date(Date.now() + 300_000),
+                  mime: input.assetVersionId.startsWith('av_video_') ? 'video/mp4' : 'audio/mp4',
+                }
+              : {
+                  url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-${input.derivative}.png`,
+                  expiresAt: new Date(Date.now() + 300_000),
+                  mime: 'image/webp',
+                };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
           // A signed GET on the store (an https address in production): the renderer keeps http(s) sources only.

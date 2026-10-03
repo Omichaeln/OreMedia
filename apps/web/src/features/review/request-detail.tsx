@@ -10,6 +10,8 @@ import { useTRPC } from '../../lib/trpc';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import { ArticlePreview } from '../content/article-preview';
+import { mediaClock } from '../assets/media';
+import { VideoPlayer } from '../assets/media-player';
 import {
   ATTENTION_CHIP,
   REQUEST_STATE_CHIP,
@@ -86,6 +88,20 @@ function ManifestMedia({
                   height={item.height ?? undefined}
                   className="h-auto w-full rounded-sm bg-muted object-contain"
                 />
+              ) : item.verified && item.url && item.mime?.startsWith('video/') ? (
+                // STU-2a: the exact frozen video export plays inline, with its poster frame and captions sidecar.
+                <VideoPlayer
+                  src={item.url}
+                  poster={item.posterUrl}
+                  captions={item.captionsUrl}
+                  label={`Rendered video for ${item.channelConnectionIds.map(name).join(', ')}${
+                    altFor(item.channelConnectionIds[0] ?? '', item.exportId)
+                      ? `: ${altFor(item.channelConnectionIds[0] ?? '', item.exportId)}`
+                      : ''
+                  }`}
+                  width={item.width}
+                  height={item.height}
+                />
               ) : item.verified && item.url ? (
                 <a href={item.url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
                   Open file ({item.mime ?? 'unknown type'})
@@ -97,8 +113,9 @@ function ManifestMedia({
               )}
               <span className="text-muted-foreground">
                 {item.channelConnectionIds.map(name).join(', ')}
-                {item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · hash{' '}
-                <code>{shortHash(item.contentHash)}</code>
+                {item.width && item.height ? ` · ${item.width}×${item.height}` : ''}
+                {item.durationMs ? ` · ${mediaClock(item.durationMs)}` : ''}
+                {item.fps ? ` · ${item.fps} fps` : ''} · hash <code>{shortHash(item.contentHash)}</code>
               </span>
             </li>
           ))}
