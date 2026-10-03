@@ -92,6 +92,7 @@ GRANT SELECT, INSERT ON `__DB_NAME__`.`review_decisions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`review_requests` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`seo_audit_pages` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`seo_audit_runs` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`seo_finding_work` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`service_principals` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`sessions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`skill_bindings` TO '__APP_USER__'@'%';
