@@ -78,13 +78,55 @@ const escapeText = (text: string): string =>
 /** An attribute value taken from markup: as `escapeText`, with the quote escaped too (entities kept, never doubled). */
 const escapeAttr = (value: string): string => escapeText(value).replace(/"/g, '&quot;');
 
-/** A URL an article may link to or embed: http(s), mailto, a relative path or a fragment; never a script. */
+/** A numeric character reference's character; anything that is not a Unicode scalar value (NUL, surrogates, beyond U+10FFFF) is U+FFFD. */
+const codePoint = (n: number): string =>
+  Number.isInteger(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff)
+    ? String.fromCodePoint(n)
+    : '\uFFFD';
+const URL_NAMED_REFS: Readonly<Record<string, string>> = {
+  amp: '&',
+  AMP: '&',
+  lt: '<',
+  LT: '<',
+  gt: '>',
+  GT: '>',
+  quot: '"',
+  QUOT: '"',
+  apos: "'",
+  nbsp: '\u00a0',
+  colon: ':',
+  Tab: '\t',
+  NewLine: '\n',
+};
+/**
+ * An attribute value's character references decoded, as a browser reads them before the URL is parsed: numeric
+ * references (the `;` optional, as browsers accept) and the named ones that can spell a scheme or its separator.
+ * Any other `&name;` stays literal text, and the caller escapes it again, so the browser cannot decode it either.
+ */
+const decodeUrlReferences = (value: string): string =>
+  value.replace(
+    /&(?:#(\d{1,8});?|#x([0-9a-f]{1,8});?|(amp|AMP|lt|LT|gt|GT|quot|QUOT|apos|nbsp|colon|Tab|NewLine);)/gi,
+    (ref, dec: string | undefined, hex: string | undefined, named: string | undefined) =>
+      dec !== undefined
+        ? codePoint(Number(dec))
+        : hex !== undefined
+          ? codePoint(parseInt(hex, 16))
+          : (URL_NAMED_REFS[named as string] ?? ref),
+  );
+
+/**
+ * A URL an article may link to or embed: http(s), mailto, a relative path or a fragment; never a script. The value
+ * is read as the browser reads it (character references decoded), and one carrying a control, format or whitespace
+ * character anywhere (or a malformed reference) is refused, so `javascript&#58;`, `java&Tab;script:` or a leading NUL cannot hide a scheme.
+ * The URL returned is decoded: the caller escapes it in full (`escapeHtml`), so what the browser sees is what was checked.
+ */
 export function safeArticleUrl(value: string): string | null {
-  const v = value.trim();
+  const v = decodeUrlReferences(value).trim();
   if (v === '') return null;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return /^(https?:|mailto:)/i.test(v) && !/[\s<>"]/.test(v) ? v : null;
+  if (/[\p{Cc}\p{Cf}\s<>"�]/u.test(v)) return null; // U+FFFD: a malformed reference (`&#0;`)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return /^(https?:|mailto:)/i.test(v) ? v : null;
   if (v.startsWith('//')) return null; // protocol-relative: the scheme is the page's, not ours
-  return /[\s<>"]/.test(v) ? null : v;
+  return v;
 }
 
 /**
@@ -126,7 +168,7 @@ export function sanitizeArticleHtml(html: string): string {
         if (URL_ATTRS.has(attr)) {
           const url = safeArticleUrl(value);
           if (!url) continue;
-          kept.push(`${attr}="${escapeAttr(url)}"`);
+          kept.push(`${attr}="${escapeHtml(url)}"`);
         } else kept.push(`${attr}="${escapeAttr(value)}"`);
       }
       if (name === 'a' && kept.some((k) => k.startsWith('href='))) kept.push('rel="noopener"');

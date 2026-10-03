@@ -93,6 +93,51 @@ describe('article document (ledger R2-3)', () => {
     expect(safeArticleUrl('mailto:a@b.example')).toBe('mailto:a@b.example');
   });
 
+  it.each([
+    ['a decimal reference for the colon', 'javascript&#58;alert(1)'],
+    ['a decimal reference without its semicolon', 'javascript&#58alert(1)'],
+    ['a hex reference for the colon', 'javascript&#x3a;alert(1)'],
+    ['the named colon reference', 'javascript&colon;alert(1)'],
+    ['a tab reference inside the scheme', 'java&#x09;script:alert(1)'],
+    ['the named tab reference inside the scheme', 'java&Tab;script:alert(1)'],
+    ['a newline reference inside the scheme', 'java&NewLine;script:alert(1)'],
+    ['a raw tab inside the scheme', 'java\tscript:alert(1)'],
+    ['a raw newline inside the scheme', 'java\nscript:alert(1)'],
+    ['a leading NUL', '\u0000javascript:alert(1)'],
+    ['a leading NUL reference', '&#0;javascript:alert(1)'],
+    ['a zero-width space inside the scheme', 'java​script:alert(1)'],
+    ['mixed case', 'JaVaScRiPt:alert(1)'],
+    ['an encoded letter in the scheme', '&#106;avascript:alert(1)'],
+    ['a data URL behind a reference', 'data&#58;text/html,x'],
+  ])('refuses a script URL hidden by %s, in a link and an image', (_, url) => {
+    expect(safeArticleUrl(url)).toBeNull();
+    const html = sanitizeArticleHtml(`<p><a href="${url}">x</a><img src="${url}" alt="i"></p>`);
+    expect(html).toBe('<p><a>x</a><img alt="i"></p>');
+    expect(html).not.toMatch(/href|src/);
+  });
+
+  it('keeps http, https, mailto and relative URLs exactly as before, escaping what it emits', () => {
+    for (const [input, expected] of [
+      ['https://example.com/a?b=1&amp;c=2#f', 'https://example.com/a?b=1&amp;c=2#f'],
+      ['http://example.com/p', 'http://example.com/p'],
+      ['HTTPS://Example.com/P', 'HTTPS://Example.com/P'],
+      ['mailto:a@b.example', 'mailto:a@b.example'],
+      ['/relative/path?x=1&amp;y=2', '/relative/path?x=1&amp;y=2'],
+      ['relative/page', 'relative/page'],
+      ['#section', '#section'],
+      ['https://example.com/a?b=1&c=2', 'https://example.com/a?b=1&amp;c=2'],
+      ['https&#58;//example.com/p', 'https://example.com/p'],
+      ['https://example.com/&copy;', 'https://example.com/&amp;copy;'],
+    ] as const) {
+      expect(sanitizeArticleHtml(`<a href="${input}">x</a>`)).toBe(
+        `<a href="${expected}" rel="noopener">x</a>`,
+      );
+      expect(sanitizeArticleHtml(`<img src="${input}">`)).toBe(`<img src="${expected}">`);
+    }
+    expect(safeArticleUrl('/relative/path')).toBe('/relative/path');
+    expect(safeArticleUrl('&#47;&#47;cdn.example/x')).toBeNull();
+  });
+
   it('rendered-page checks: status, title in <title> or h1, canonical, noindex only for a draft, first paragraph', () => {
     const page = (
       extra: string,
@@ -436,6 +481,7 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     ['unclosed tags', '<a x'.repeat(N / 4)],
     ['bare angle brackets', '<'.repeat(N)],
     ['unclosed quotes', '<a "'.repeat(N / 4)],
+    ['a URL of character references', `<a href="${'&#x3a'.repeat(N / 5)}&#">x</a>`],
   ])('sanitises %s in linear time', (_, input) => {
     fast(() => sanitizeArticleHtml(input));
   });
