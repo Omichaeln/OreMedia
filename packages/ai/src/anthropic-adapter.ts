@@ -9,7 +9,7 @@ import type {
 } from '@oremedia/contracts/agents';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
-import type { ModelAdapter } from './model-adapter';
+import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 import { rejectionDetail } from './openrouter-adapter';
 
 type ClientOptions = NonNullable<ConstructorParameters<typeof Anthropic>[0]>;
@@ -50,12 +50,17 @@ export class AnthropicModelAdapter implements ModelAdapter {
       max_tokens: req.maxOutputTokens,
       system: req.system,
       messages: req.messages.map(toSdkMessage),
-      tools: req.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-      })),
-      tool_choice: { type: 'auto' },
+      // A call without tools sends neither field: Anthropic refuses tool_choice without tools.
+      ...(req.tools.length
+        ? {
+            tools: req.tools.map((t) => ({
+              name: wireToolName(t.name),
+              description: t.description,
+              input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+            })),
+            tool_choice: { type: 'auto' as const },
+          }
+        : {}),
       metadata: { user_id: req.metadata.runId },
     };
     let message: Anthropic.Message;
@@ -64,7 +69,7 @@ export class AnthropicModelAdapter implements ModelAdapter {
     } catch (err) {
       throw mapError(err);
     }
-    return toCompletion(message);
+    return toCompletion(message, toolNamesOf(req.tools));
   }
 }
 
@@ -74,7 +79,7 @@ function toSdkMessage(m: ModelMessage): Anthropic.MessageParam {
       case 'text':
         return { type: 'text', text: part.text };
       case 'tool_use':
-        return { type: 'tool_use', id: part.id, name: part.name, input: part.input ?? {} };
+        return { type: 'tool_use', id: part.id, name: wireToolName(part.name), input: part.input ?? {} };
       case 'tool_result':
         return {
           type: 'tool_result',
@@ -90,13 +95,14 @@ function toSdkMessage(m: ModelMessage): Anthropic.MessageParam {
 /** Maps the response: text and tool_use blocks only; every other block type (reasoning, server tools) is dropped. */
 export function toCompletion(
   message: Pick<Anthropic.Message, 'content' | 'usage' | 'stop_reason'>,
+  names?: ReadonlyMap<string, string>,
 ): ModelCompletion {
   const content: ModelContent[] = [];
   const toolCalls: ModelToolCall[] = [];
   for (const block of message.content) {
     if (block.type === 'text') content.push({ type: 'text', text: block.text });
     else if (block.type === 'tool_use')
-      toolCalls.push({ id: block.id, name: block.name, arguments: block.input });
+      toolCalls.push({ id: block.id, name: names?.get(block.name) ?? block.name, arguments: block.input });
   }
   return {
     content,

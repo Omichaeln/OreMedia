@@ -7,6 +7,15 @@ export interface ModelAdapter {
   complete(req: ModelRequest): Promise<ModelCompletion>;
 }
 
+/**
+ * Providers accept tool names matching `^[a-zA-Z0-9_-]{1,64}$` (OpenAI and Anthropic alike); the platform's tool
+ * names are dotted (`facts.list`). Adapters send this wire form and map each tool call back to the platform name
+ * through the request's own tools (`toolNamesOf`), so policies, audit and workflows keep the dotted names.
+ */
+export const wireToolName = (name: string): string => name.replace(/\./g, '__');
+export const toolNamesOf = (tools: readonly { name: string }[]): ReadonlyMap<string, string> =>
+  new Map(tools.map((t) => [wireToolName(t.name), t.name]));
+
 /** The model configuration a run records (agent_runs.model_config) and prices its usage with. */
 export interface ModelConfig {
   provider: string;
