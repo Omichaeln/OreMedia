@@ -110,7 +110,6 @@ const CHANNEL_FIELD_LABEL: Record<ChannelGuidanceField, string> = {
   frequency: 'Frequency',
 };
 
-const bullets = (items: readonly string[]): string => items.map((i) => `- ${i}`).join('\n');
 const block = (title: string, lines: readonly string[]): string[] =>
   lines.length ? [`${title}\n${lines.join('\n')}`] : [];
 
