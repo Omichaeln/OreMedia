@@ -33,3 +33,4 @@ export {
   type KonvaAdapterOptions,
   type KonvaEditorHandle,
 } from './konva-adapter';
+export * from './video/index';

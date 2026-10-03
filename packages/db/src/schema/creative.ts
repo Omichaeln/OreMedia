@@ -30,6 +30,8 @@ export const creativeDocuments = mysqlTable(
     title: varchar('title', { length: 200 }).notNull(),
     currentRevisionId: ref('current_revision_id'),
     schemaVersion: int('schema_version').notNull(),
+    // STU-2b: graphic (CreativeDocumentV1 snapshots) or video (VideoProjectV1 snapshots); existing rows are graphic.
+    kind: mysqlEnum('kind', ['graphic', 'video']).notNull().default('graphic'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -99,10 +101,13 @@ export const renderedExports = mysqlTable(
     fps: int('fps'),
     posterStorageKey: varchar('poster_storage_key', { length: 300 }),
     captionsStorageKey: varchar('captions_storage_key', { length: 300 }),
+    // STU-2b: videoExportDedupeKey of a video export; an identical later render reuses the stored export.
+    dedupeKey: hash('dedupe_key'),
     createdAt: createdAt(),
   },
   (t) => [
     index('ix_export_revision').on(t.tenantId, t.revisionId, t.formatKey),
+    index('ix_export_dedupe').on(t.tenantId, t.brandId, t.dedupeKey),
     uniqueIndex('uq_export_tbi').on(t.tenantId, t.brandId, t.id),
     foreignKey({
       columns: [t.tenantId, t.brandId, t.revisionId],

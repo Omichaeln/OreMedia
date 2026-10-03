@@ -287,6 +287,25 @@ export const TemplateSlot = z.object({
 });
 export type TemplateSlot = z.infer<typeof TemplateSlot>;
 
+/**
+ * STU-2b: what a creative document is. `graphic` documents store CreativeDocumentV1 snapshots (pages of elements);
+ * `video` documents store VideoProjectV1 snapshots (a timeline; contracts/video.ts). Existing documents are graphic.
+ */
+export const DocumentKind = z.enum(['graphic', 'video']);
+export type DocumentKind = z.infer<typeof DocumentKind>;
+
+/**
+ * How a new video document starts: an output preset (9:16, 1:1, 4:5, 16:9) at 24, 25 or 30 fps, optionally from a
+ * built-in starter template (its scenes, placeholders and brand-bound overlays). The server builds the project.
+ */
+export const VideoDocumentOptions = z.object({
+  formatKey: z.enum(['video_9x16', 'video_1x1', 'video_4x5', 'video_16x9']),
+  fps: z.union([z.literal(24), z.literal(25), z.literal(30)]).default(30),
+  durationMs: z.number().int().min(1_000).max(180_000).optional(),
+  templateKey: z.string().min(1).max(60).optional(),
+});
+export type VideoDocumentOptions = z.infer<typeof VideoDocumentOptions>;
+
 // ---- router DTOs (spec 7.5 creative router) ----
 export const DocumentCreate = z.object({
   brandId: z.string(),
@@ -294,6 +313,10 @@ export const DocumentCreate = z.object({
   contentPackageId: z.string().optional(),
   /** Optional initial document; its brandVersionId is replaced by the published brand version resolved on the server. */
   document: CreativeDocumentV1.optional(),
+  /** STU-2b: absent means graphic (every caller before video). */
+  kind: DocumentKind.optional(),
+  /** Required for a video document; not allowed for a graphic one. */
+  video: VideoDocumentOptions.optional(),
 });
 export const DocumentGet = z.object({ documentId: z.string() });
 /** The brand's documents, newest first; optionally those created for one content package. */
@@ -383,10 +406,12 @@ export const RenderExportInput = z
     fps: z.number().int().positive().optional(),
     posterStorageKey: z.string().min(1).max(300).optional(),
     captionsStorageKey: z.string().min(1).max(300).optional(),
+    /** STU-2b: the video export's dedupe key (videoExportDedupeKey); a later identical render reuses the export. */
+    dedupeKey: z.string().length(64).optional(),
   })
   .superRefine((e, ctx) => {
     if (!e.mime.startsWith('video/')) {
-      for (const k of ['durationMs', 'fps', 'posterStorageKey', 'captionsStorageKey'] as const)
+      for (const k of ['durationMs', 'fps', 'posterStorageKey', 'captionsStorageKey', 'dedupeKey'] as const)
         if (e[k] !== undefined) ctx.addIssue({ code: 'custom', path: [k], message: 'video_only' });
       return;
     }
