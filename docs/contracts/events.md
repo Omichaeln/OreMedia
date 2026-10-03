@@ -53,6 +53,7 @@ a breaking change creates a new event type or schema version with dual publishin
 | `destination.disconnected`            | 1              |
 | `destination.audit_requested`         | 1              |
 | `publication.rendered_validation_due` | 1              |
+| `creative.render_cancel_requested`    | 1              |
 
 ## Error codes (spec 7.2)
 

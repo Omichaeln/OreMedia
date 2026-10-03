@@ -1,3 +1,4 @@
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
@@ -39,6 +40,12 @@ import {
   registerRevisionChangeHook,
   resetAssetAuthoriser,
 } from './service';
+
+/** documents.get returns either kind; these suites read graphic documents. */
+function graphicDocument<D extends { revision: { kind: string } }>(d: D) {
+  if (d.revision.kind !== 'graphic') throw new Error('expected a graphic document');
+  return d as D & { revision: Extract<D['revision'], { kind: 'graphic' }> };
+}
 
 const USER = 'usr_creative_test';
 const AGENT = 'sp_creative_test';
@@ -281,7 +288,8 @@ describe('creative module (spec 11) against MySQL 8', () => {
       .select()
       .from(outboxEvents)
       .where(and(eq(outboxEvents.tenantId, tenantId), eq(outboxEvents.eventType, type)));
-  const head = () => run(tenantA, () => creativeService.documents.get(A, { documentId: docId }));
+  const head = () =>
+    run(tenantA, () => creativeService.documents.get(A, { documentId: docId })).then(graphicDocument);
   const headlineOf = (doc: CreativeDocumentV1) => {
     const el = doc.pages[0]!.elements.find((e) => e.id === ids.headline);
     return el && el.type === 'text' ? el.text : null;
@@ -372,7 +380,13 @@ describe('creative module (spec 11) against MySQL 8', () => {
       expect(authoriserCalls).toHaveLength(2);
       expect(authoriserCalls).toEqual(
         expect.arrayContaining([
-          { assetVersionId: 'av_logo', tenantId: tenantA, brandId: brandA, purpose: 'creative' },
+          {
+            assetVersionId: 'av_logo',
+            tenantId: tenantA,
+            brandId: brandA,
+            purpose: 'creative',
+            kinds: IMAGE_CREATIVE_KINDS,
+          },
           { assetVersionId: 'av_font', tenantId: tenantA, brandId: brandA, purpose: 'font' },
         ]),
       );
@@ -389,8 +403,8 @@ describe('creative module (spec 11) against MySQL 8', () => {
       const minimal = await run(tenantA, (tx) =>
         creativeService.documents.create(A, { brandId: brandA, title: 'Blank' }, tx),
       );
-      const blank = await run(tenantA, () =>
-        creativeService.documents.get(A, { documentId: minimal.documentId }),
+      const blank = graphicDocument(
+        await run(tenantA, () => creativeService.documents.get(A, { documentId: minimal.documentId })),
       );
       expect(blank.revision.snapshot.pages[0]!.elements).toEqual([]);
       expect(blank.revision.snapshot.brandVersionId).toBe(brandVersionA);
@@ -729,8 +743,20 @@ describe('creative module (spec 11) against MySQL 8', () => {
         ),
       );
       expect(authoriserCalls).toEqual([
-        { assetVersionId: 'av_logo_2', tenantId: tenantA, brandId: brandA, purpose: 'creative' },
-        { assetVersionId: 'av_photo', tenantId: tenantA, brandId: brandA, purpose: 'creative' },
+        {
+          assetVersionId: 'av_logo_2',
+          tenantId: tenantA,
+          brandId: brandA,
+          purpose: 'creative',
+          kinds: IMAGE_CREATIVE_KINDS,
+        },
+        {
+          assetVersionId: 'av_photo',
+          tenantId: tenantA,
+          brandId: brandA,
+          purpose: 'creative',
+          kinds: IMAGE_CREATIVE_KINDS,
+        },
       ]);
       const got = await head();
       expect(got.revision.snapshot.pages[0]!.elements.find((e) => e.id === ids.logo)).toMatchObject({

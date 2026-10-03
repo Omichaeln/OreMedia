@@ -26,6 +26,7 @@ import {
 import {
   creativeService,
   registerAssetAuthoriser,
+  registerCreativeAssetCatalog,
   registerRevisionChangeHook,
 } from '@oremedia/module-creative';
 import {
@@ -115,7 +116,17 @@ export function composeModules(): void {
   }));
   // Spec 11.4 guardAssets: every asset version an operation introduces is authorised for its purpose.
   registerAssetAuthoriser(async (assetVersionId, ctx, tx) => {
-    await assetService.authoriseUse(assetVersionId, ctx.purpose, { brandId: ctx.brandId }, tx);
+    await assetService.authoriseUse(
+      assetVersionId,
+      ctx.purpose,
+      { brandId: ctx.brandId, ...(ctx.kinds ? { kinds: ctx.kinds } : {}) },
+      tx,
+    );
+  });
+  // STU-2b: video documents read their sources' kind, duration, size and derivatives through the assets module.
+  registerCreativeAssetCatalog({
+    mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
+    currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
   });
   // Spec 12.3: the context resolver pins skill versions through the skills module. Spec 19.6: evaluation suites
   // are graded by worker-core (skillEvaluationWorkflowV1), never inside an API transaction.

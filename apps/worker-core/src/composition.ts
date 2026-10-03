@@ -44,6 +44,7 @@ import {
 import {
   creativeService,
   registerAssetAuthoriser,
+  registerCreativeAssetCatalog,
   registerCreativeOutboxRoutes,
 } from '@oremedia/module-creative';
 import {
@@ -144,7 +145,17 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     channels: await channelService.countActive(tx),
   }));
   registerAssetAuthoriser(async (assetVersionId, ctx, tx) => {
-    await assetService.authoriseUse(assetVersionId, ctx.purpose, { brandId: ctx.brandId }, tx);
+    await assetService.authoriseUse(
+      assetVersionId,
+      ctx.purpose,
+      { brandId: ctx.brandId, ...(ctx.kinds ? { kinds: ctx.kinds } : {}) },
+      tx,
+    );
+  });
+  // STU-2b: video documents read their sources' kind, duration, size and derivatives through the assets module.
+  registerCreativeAssetCatalog({
+    mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
+    currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
   });
   registerAssetOutboxRoutes();
   registerCreativeOutboxRoutes();

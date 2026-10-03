@@ -104,6 +104,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
         (await client.creative.documents.get.query({ documentId })).revision.number;
       headText = async (documentId, elementId) => {
         const doc = await client.creative.documents.get.query({ documentId });
+        if (doc.revision.kind !== 'graphic') return null;
         const el = doc.revision.snapshot.pages[0]?.elements.find((e) => e.id === elementId);
         return el && el.type === 'text' ? el.text : null;
       };

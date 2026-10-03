@@ -147,6 +147,16 @@ export class RenderedExportRepository extends BrandScopedRepository<typeof rende
       .orderBy(asc(renderedExports.id))
       .limit(ID_LIST_MAX);
   }
+  /** STU-2b: the newest video export rendered with this dedupe key (index ix_export_dedupe). */
+  async findByDedupeKey(brandId: string, dedupeKey: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(renderedExports)
+      .where(this.brandScope(brandId, eq(renderedExports.dedupeKey, dedupeKey)))
+      .orderBy(desc(renderedExports.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
   /** Exports by id (render_jobs.export_ids), in id order; bounded by the id-list maximum (spec 7.4). */
   async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
     if (ids.length === 0) return [];

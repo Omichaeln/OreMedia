@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
+import type { VideoMediaInfo } from '@oremedia/contracts/video';
 import {
   ACCEPTED_MIMES,
   ARCHIVE_MIMES,
@@ -413,6 +414,44 @@ export const assetService = {
     for (const id of assetIds.slice(0, ID_LIST_MAX)) {
       const a = await assetsRepo.findInTenant(id, tx);
       if (a && a.brandId === brandId && a.state !== 'retired') out.set(a.id, a.kind);
+    }
+    return out;
+  },
+
+  /**
+   * STU-2b: what the timeline editor, the reducer and the compositor need to know about sources: kind (a video, an
+   * audio file or a still image), duration and displayed size from the ingest probe, whether it has sound, and the
+   * derivatives the editor can fetch (proxy, strip, waveform…). Tenant-scoped; ids not found are left out. Callers
+   * authorise use separately (authoriseUse); this is a description, not a permission.
+   */
+  async mediaSummaries(assetVersionIds: readonly string[], tx?: Tx): Promise<VideoMediaInfo[]> {
+    const out: VideoMediaInfo[] = [];
+    for (const id of [...new Set(assetVersionIds)].slice(0, ID_LIST_MAX)) {
+      const v = await versionsRepo.findInTenant(id, tx);
+      if (!v) continue;
+      const a = await assetsRepo.findInTenant(v.assetId, tx);
+      if (!a) continue;
+      const derivatives = await derivativesRepo.listForVersion(v.id, tx);
+      out.push({
+        assetVersionId: v.id,
+        kind: a.kind === 'video' ? 'video' : a.kind === 'audio' ? 'audio' : 'image',
+        mime: v.mime,
+        durationMs: v.durationMs ?? v.mediaInfo?.durationMs ?? null,
+        width: v.width,
+        height: v.height,
+        hasAudio: (v.mediaInfo?.audio.length ?? 0) > 0,
+        derivatives: [...new Set(derivatives.map((d) => d.purpose))].slice(0, 12),
+      });
+    }
+    return out;
+  },
+
+  /** STU-2b: the current version of each asset found in the tenant (templates bind brand fonts and logos by asset). */
+  async currentVersionIds(assetIds: readonly string[], tx?: Tx): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const id of [...new Set(assetIds)].slice(0, ID_LIST_MAX)) {
+      const a = await assetsRepo.findInTenant(id, tx);
+      if (a?.currentVersionId && a.state !== 'retired') out[a.id] = a.currentVersionId;
     }
     return out;
   },

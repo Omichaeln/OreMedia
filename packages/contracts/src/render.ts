@@ -23,6 +23,8 @@ export const RenderFailureReason = z.enum([
   'illegal_state', // the job was not pending/rendering when the worker reached it
   'render_failed', // the browser could not produce the export after retries
   'storage_failed', // the object store refused or lost the export after retries
+  // STU-2b (appended): a video's sources and output would not fit the worker's temp disk or limits
+  'too_large',
 ]);
 export type RenderFailureReason = z.infer<typeof RenderFailureReason>;
 
@@ -215,4 +217,150 @@ export type VideoExportStoreResult = z.infer<typeof VideoExportStoreResult>;
 /** Activity surface for the video export store (registered on task queue `video`; STU-2b's workflow calls it). */
 export interface VideoExportActivitiesV1 {
   storeVideoExport(input: VideoExportStoreInput): Promise<VideoExportStoreResult>;
+}
+
+// ---- STU-2b: videoRenderJobWorkflowV1 (task queue `video`, workflow id `render:<renderJobId>`) -----------------
+
+/** Relayed from the outbox to a running video render (creative.render_cancel_requested). */
+export const VideoRenderSignalV1 = z.object({
+  workflowId: z.string(),
+  signal: z.literal('cancelRender'),
+});
+export type VideoRenderSignalV1 = z.infer<typeof VideoRenderSignalV1>;
+
+/** A pinned clip or audio source: the original upload (never the editing proxy), read and re-hashed by compose. */
+export const VideoSourceRef = z.object({
+  assetVersionId: z.string(),
+  storageKey: z.string(),
+  contentHash: z.string().length(64),
+  mime: z.string(),
+  kind: z.enum(['video', 'audio', 'image']),
+  bytes: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  hasAudio: z.boolean(),
+});
+export type VideoSourceRef = z.infer<typeof VideoSourceRef>;
+
+/** An export that already exists for the same dedupe key: the job records it again instead of rendering. */
+export const VideoExportReuse = z.object({
+  storageKey: z.string(),
+  contentHash: z.string().length(64),
+  bytes: z.number().int().positive(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  durationMs: z.number().int().positive(),
+  fps: z.number().int().positive(),
+  posterStorageKey: z.string(),
+  captionsStorageKey: z.string().optional(),
+});
+export type VideoExportReuse = z.infer<typeof VideoExportReuse>;
+
+export const VideoRenderResolveSuccess = z.object({
+  ok: z.literal(true),
+  rendererVersion: z.string(),
+  brandVersionId: z.string(),
+  revisionContentHash: z.string().length(64),
+  formatKey: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  fps: z.number().int().positive(),
+  durationMs: z.number().int().positive(),
+  dedupeKey: z.string().length(64),
+  reuse: VideoExportReuse.nullable(),
+  sources: z.array(VideoSourceRef).max(400),
+  fonts: z.array(RenderFontRef),
+  /** Still images and logos the overlays draw. */
+  assets: z.array(RenderAssetRef),
+  manifest: RenderManifest,
+  /** Temp disk the compose step may use: sources + overlays + output, capped by the worker setting. */
+  tempBudgetBytes: z.number().int().positive(),
+  findings: z.array(Finding),
+});
+export type VideoRenderResolveSuccess = z.infer<typeof VideoRenderResolveSuccess>;
+export type VideoRenderResolveResult = VideoRenderResolveSuccess | RenderResolveRejection;
+
+const VideoJobRefs = RenderJobInputV1.extend({
+  revisionId: z.string(),
+  documentId: z.string(),
+  brandId: z.string(),
+});
+
+export const VideoOverlayRenderInput = VideoJobRefs.extend({
+  brandVersionId: z.string(),
+  fonts: z.array(RenderFontRef),
+  assets: z.array(RenderAssetRef),
+  rendererVersion: z.string(),
+});
+export type VideoOverlayRenderInput = z.infer<typeof VideoOverlayRenderInput>;
+
+/** A transparent full-frame PNG of one overlay or caption, shown from startMs to endMs. */
+export const VideoOverlayFrame = z.object({
+  itemId: z.string(),
+  kind: z.enum(['overlay', 'caption']),
+  storageKey: z.string(),
+  contentHash: z.string().length(64),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().positive(),
+});
+export type VideoOverlayFrame = z.infer<typeof VideoOverlayFrame>;
+export const VideoOverlayRenderResult = z.object({
+  frames: z.array(VideoOverlayFrame).max(1000),
+  findings: z.array(Finding),
+});
+export type VideoOverlayRenderResult = z.infer<typeof VideoOverlayRenderResult>;
+
+export const VideoComposeInput = VideoJobRefs.extend({
+  sources: z.array(VideoSourceRef),
+  frames: z.array(VideoOverlayFrame),
+  dedupeKey: z.string().length(64),
+  tempBudgetBytes: z.number().int().positive(),
+});
+export type VideoComposeInput = z.infer<typeof VideoComposeInput>;
+
+/** The rendered MP4, its poster and WebVTT captions, written under the job's export keys. */
+export const VideoComposeResult = z.object({
+  pageId: z.string(),
+  formatKey: z.string(),
+  storageKey: z.string(),
+  contentHash: z.string().length(64),
+  bytes: z.number().int().positive(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  durationMs: z.number().int().positive(),
+  fps: z.number().int().positive(),
+  posterStorageKey: z.string(),
+  posterContentHash: z.string().length(64),
+  captionsStorageKey: z.string().optional(),
+  /** Wall time of the encode, for the render journey metric and the runbook's sizing table. */
+  encodeMs: z.number().int().nonnegative(),
+});
+export type VideoComposeResult = z.infer<typeof VideoComposeResult>;
+
+export const VideoRenderCompleteInput = RenderJobInputV1.extend({
+  rendererVersion: z.string(),
+  manifest: RenderManifest,
+  dedupeKey: z.string().length(64),
+  findings: z.array(Finding),
+  export: VideoComposeResult.omit({ encodeMs: true, posterContentHash: true }),
+});
+export type VideoRenderCompleteInput = z.infer<typeof VideoRenderCompleteInput>;
+
+export type VideoRenderResultV1 =
+  | { outcome: 'ready'; exportIds: string[]; reused: boolean }
+  | { outcome: 'failed'; reason: RenderFailureReason }
+  | { outcome: 'cancelled' };
+
+/**
+ * The activity surface of videoRenderJobWorkflowV1. begin/resolve/complete/fail mirror the still render's; overlays
+ * are drawn by the Chromium scene renderer; compose runs ffmpeg (heartbeating, honouring cancellation) and writes
+ * the MP4, poster and captions; storeVideoExport (STU-2a) verifies them. Frozen once deployed.
+ */
+export interface VideoRenderJobActivitiesV1 {
+  beginVideoRender(input: RenderJobInputV1): Promise<RenderBeginResult>;
+  resolveVideoRender(input: RenderResolveInput): Promise<VideoRenderResolveResult>;
+  renderVideoOverlays(input: VideoOverlayRenderInput): Promise<VideoOverlayRenderResult>;
+  composeVideo(input: VideoComposeInput): Promise<VideoComposeResult>;
+  storeVideoExport(input: VideoExportStoreInput): Promise<VideoExportStoreResult>;
+  completeVideoRender(input: VideoRenderCompleteInput): Promise<RenderCompleteResult>;
+  failVideoRender(input: RenderFailInput): Promise<void>;
 }

@@ -39,7 +39,7 @@ describe('validateVideoProject', () => {
       expect.arrayContaining(['black_gap:warning:clip_b', 'unsupported_transition:warning:clip_b']),
     );
     expect(codes(run((p) => void ((p.tracks[0] as { items: unknown[] }).items = [])))).toContain(
-      'no_clips:blocking:',
+      'no_clips:warning:',
     );
   });
   it('flags overlapping and too-fast captions and prohibited phrases', () => {

@@ -9,6 +9,7 @@ import {
 import { CreativeDocumentV1, OperationBatch, RenderValidationResult } from '@oremedia/contracts/creative';
 import { OremediaError, PolicyDeniedError, NotFoundError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
+import { VideoProjectV1, isVideoProject } from '@oremedia/contracts/video';
 import type { PublicationForRelease } from '@oremedia/contracts/publishing';
 import type { Check, LiveBinding, ReleaseCheckKey, ReleaseDecision } from '@oremedia/contracts/review';
 import { requireTenant, type Tx } from '@oremedia/db';
@@ -38,6 +39,7 @@ import {
   RenderedExportRepository,
   TemplateVersionRepository,
   validateAgainstBrand,
+  validateVideoProject,
 } from '@oremedia/module-creative';
 import { killSwitch } from '@oremedia/module-operations';
 import {
@@ -325,7 +327,15 @@ export async function hasNoBlockingFindings(contentRevisionId: string, tx?: Tx):
     (snapshot.policy.reviewThresholds.blockOnBrandReviewSeverity === 'warning' && severity === 'warning');
   for (const id of revision.creativeRevisionIds) {
     const creative = await creativeRevisionsRepo.getById(id, tx);
-    const findings = validateAgainstBrand(CreativeDocumentV1.parse(creative.snapshot), snapshot);
+    // STU-2b: a video revision is checked with the timeline rules (overlays and captions against the brand); its
+    // sources were authorised when they were placed and are re-authorised from the export manifest below.
+    const findings = isVideoProject(creative.snapshot)
+      ? validateVideoProject(VideoProjectV1.parse(creative.snapshot), {
+          media: {},
+          snapshot,
+          checkSources: false,
+        })
+      : validateAgainstBrand(CreativeDocumentV1.parse(creative.snapshot), snapshot);
     if (findings.some((f) => blocks(f.severity))) return false;
   }
   const exportIds = new Set(
@@ -344,6 +354,7 @@ export async function hasNoBlockingFindings(contentRevisionId: string, tx?: Tx):
 async function templatesStillApproved(revision: Revision, tx?: Tx): Promise<boolean> {
   for (const id of revision.creativeRevisionIds) {
     const creative = await creativeRevisionsRepo.getById(id, tx);
+    if (isVideoProject(creative.snapshot)) continue; // timelines apply no graphic templates
     for (const op of OperationBatch.parse(creative.operations).operations) {
       if (op.op !== 'applyTemplate') continue;
       const tv = await templateVersionsRepo.findById(op.templateVersionId, tx);

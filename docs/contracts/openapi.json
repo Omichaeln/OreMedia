@@ -4379,6 +4379,39 @@
                       }
                     },
                     "required": ["schemaVersion", "brandVersionId", "pages"]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["graphic", "video"]
+                  },
+                  "video": {
+                    "type": "object",
+                    "properties": {
+                      "formatKey": {
+                        "type": "string",
+                        "enum": ["video_9x16", "video_1x1", "video_4x5", "video_16x9"]
+                      },
+                      "fps": {
+                        "anyOf": [
+                          {
+                            "const": 24
+                          },
+                          {
+                            "const": 25
+                          },
+                          {
+                            "const": 30
+                          }
+                        ]
+                      },
+                      "durationMs": {
+                        "type": "number"
+                      },
+                      "templateKey": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["formatKey"]
                   }
                 },
                 "required": ["brandId", "title"]
@@ -4785,6 +4818,1008 @@
         }
       }
     },
+    "/trpc/creative.operations.applyVideo": {
+      "post": {
+        "operationId": "creative.operations.applyVideo",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "baseRevisionId": {
+                    "type": "string"
+                  },
+                  "operations": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "insertClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "item": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "frame": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fit": {
+                                          "type": "string",
+                                          "enum": ["fill", "fit"]
+                                        },
+                                        "focalX": {
+                                          "type": "number"
+                                        },
+                                        "focalY": {
+                                          "type": "number"
+                                        },
+                                        "zoom": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": []
+                                    },
+                                    "transitionIn": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "fadeInMs": {
+                                      "type": "number"
+                                    },
+                                    "fadeOutMs": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              ]
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "item"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "moveClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "startMs": {
+                              "type": "number"
+                            },
+                            "toTrackId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "startMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "trimClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "sourceInMs": {
+                              "type": "number"
+                            },
+                            "sourceOutMs": {
+                              "type": "number"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "sourceInMs", "sourceOutMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "splitClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "atMs": {
+                              "type": "number"
+                            },
+                            "newItemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "atMs", "newItemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "duplicateClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "newItemId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "newItemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "replaceClipSource"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
+                            "sourceInMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "assetVersionId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setClipFrame"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "frame": {
+                              "type": "object",
+                              "properties": {
+                                "fit": {
+                                  "type": "string",
+                                  "enum": ["fill", "fit"]
+                                },
+                                "focalX": {
+                                  "type": "number"
+                                },
+                                "focalY": {
+                                  "type": "number"
+                                },
+                                "zoom": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": []
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "frame"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTransition"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "transition": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                },
+                                "durationMs": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind", "durationMs"]
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setAudio"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "gainDb": {
+                              "type": "number"
+                            },
+                            "muted": {
+                              "type": "boolean"
+                            },
+                            "fadeInMs": {
+                              "type": "number"
+                            },
+                            "fadeOutMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "upsertCaption"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "caption": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                },
+                                "text": {
+                                  "type": "string"
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "enum": ["top", "middle", "bottom"]
+                                },
+                                "locked": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "startMs", "endMs", "text"]
+                            }
+                          },
+                          "required": ["op", "trackId", "caption"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeCaption"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setCaptionStyle"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "style": {
+                              "type": "object",
+                              "properties": {
+                                "fontAssetVersionId": {
+                                  "type": "string"
+                                },
+                                "sizePx": {
+                                  "type": "number"
+                                },
+                                "weight": {
+                                  "type": "number"
+                                },
+                                "colourToken": {
+                                  "type": "string"
+                                },
+                                "colourValue": {
+                                  "type": "string"
+                                },
+                                "boxToken": {
+                                  "type": "string"
+                                },
+                                "boxOpacity": {
+                                  "type": "number"
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "enum": ["top", "middle", "bottom"]
+                                }
+                              },
+                              "required": ["fontAssetVersionId"]
+                            }
+                          },
+                          "required": ["op", "trackId", "style"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setOverlay"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "overlay": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                },
+                                "element": {
+                                  "$comment": "recursive"
+                                },
+                                "enter": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["none", "fade", "slide_up"]
+                                    },
+                                    "durationMs": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": ["kind", "durationMs"]
+                                },
+                                "exit": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["none", "fade", "slide_up"]
+                                    },
+                                    "durationMs": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": ["kind", "durationMs"]
+                                },
+                                "locked": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "startMs", "endMs", "element"]
+                            }
+                          },
+                          "required": ["op", "trackId", "overlay"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeOverlay"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTrackLock"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTrackMute"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "muted": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "muted"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setItemLock"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setDuration"
+                            },
+                            "durationMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "durationMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setScene"
+                            },
+                            "scene": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["id", "title", "startMs", "endMs"]
+                            }
+                          },
+                          "required": ["op", "scene"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeScene"
+                            },
+                            "sceneId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "sceneId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "reorderScenes"
+                            },
+                            "order": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["op", "order"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "addTrack"
+                            },
+                            "track": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "video"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "assetVersionId": {
+                                            "type": "string"
+                                          },
+                                          "sourceInMs": {
+                                            "type": "number"
+                                          },
+                                          "sourceOutMs": {
+                                            "type": "number"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "frame": {
+                                            "type": "object",
+                                            "properties": {
+                                              "fit": {
+                                                "type": "string",
+                                                "enum": ["fill", "fit"]
+                                              },
+                                              "focalX": {
+                                                "type": "number"
+                                              },
+                                              "focalY": {
+                                                "type": "number"
+                                              },
+                                              "zoom": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": []
+                                          },
+                                          "transitionIn": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "gainDb": {
+                                            "type": "number"
+                                          },
+                                          "muted": {
+                                            "type": "boolean"
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "assetVersionId",
+                                          "sourceInMs",
+                                          "sourceOutMs",
+                                          "startMs"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "audio"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "assetVersionId": {
+                                            "type": "string"
+                                          },
+                                          "sourceInMs": {
+                                            "type": "number"
+                                          },
+                                          "sourceOutMs": {
+                                            "type": "number"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "gainDb": {
+                                            "type": "number"
+                                          },
+                                          "fadeInMs": {
+                                            "type": "number"
+                                          },
+                                          "fadeOutMs": {
+                                            "type": "number"
+                                          },
+                                          "muted": {
+                                            "type": "boolean"
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "assetVersionId",
+                                          "sourceInMs",
+                                          "sourceOutMs",
+                                          "startMs"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "overlay"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "endMs": {
+                                            "type": "number"
+                                          },
+                                          "element": {
+                                            "$comment": "recursive"
+                                          },
+                                          "enter": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["none", "fade", "slide_up"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "exit": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["none", "fade", "slide_up"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": ["id", "startMs", "endMs", "element"]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "caption"
+                                    },
+                                    "style": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fontAssetVersionId": {
+                                          "type": "string"
+                                        },
+                                        "sizePx": {
+                                          "type": "number"
+                                        },
+                                        "weight": {
+                                          "type": "number"
+                                        },
+                                        "colourToken": {
+                                          "type": "string"
+                                        },
+                                        "colourValue": {
+                                          "type": "string"
+                                        },
+                                        "boxToken": {
+                                          "type": "string"
+                                        },
+                                        "boxOpacity": {
+                                          "type": "number"
+                                        },
+                                        "position": {
+                                          "type": "string",
+                                          "enum": ["top", "middle", "bottom"]
+                                        }
+                                      },
+                                      "required": ["fontAssetVersionId"]
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "endMs": {
+                                            "type": "number"
+                                          },
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "position": {
+                                            "type": "string",
+                                            "enum": ["top", "middle", "bottom"]
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": ["id", "startMs", "endMs", "text"]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "style", "items"]
+                                }
+                              ]
+                            },
+                            "index": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "track"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeTrack"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId"]
+                        }
+                      ]
+                    }
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": ["user", "agent"]
+                  },
+                  "agentRunId": {
+                    "type": "string"
+                  },
+                  "documentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/creative.operations.propose": {
       "post": {
         "operationId": "creative.operations.propose",
@@ -5131,6 +6166,1032 @@
                   }
                 },
                 "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.operations.proposeVideo": {
+      "post": {
+        "operationId": "creative.operations.proposeVideo",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "baseRevisionId": {
+                    "type": "string"
+                  },
+                  "operations": {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "insertClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "item": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "frame": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fit": {
+                                          "type": "string",
+                                          "enum": ["fill", "fit"]
+                                        },
+                                        "focalX": {
+                                          "type": "number"
+                                        },
+                                        "focalY": {
+                                          "type": "number"
+                                        },
+                                        "zoom": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": []
+                                    },
+                                    "transitionIn": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "fadeInMs": {
+                                      "type": "number"
+                                    },
+                                    "fadeOutMs": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              ]
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "item"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "moveClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "startMs": {
+                              "type": "number"
+                            },
+                            "toTrackId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "startMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "trimClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "sourceInMs": {
+                              "type": "number"
+                            },
+                            "sourceOutMs": {
+                              "type": "number"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "sourceInMs", "sourceOutMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "splitClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "atMs": {
+                              "type": "number"
+                            },
+                            "newItemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "atMs", "newItemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "duplicateClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "newItemId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "newItemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeClip"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "ripple": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "replaceClipSource"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
+                            "sourceInMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "assetVersionId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setClipFrame"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "frame": {
+                              "type": "object",
+                              "properties": {
+                                "fit": {
+                                  "type": "string",
+                                  "enum": ["fill", "fit"]
+                                },
+                                "focalX": {
+                                  "type": "number"
+                                },
+                                "focalY": {
+                                  "type": "number"
+                                },
+                                "zoom": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": []
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "frame"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTransition"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "transition": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                },
+                                "durationMs": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind", "durationMs"]
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setAudio"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "gainDb": {
+                              "type": "number"
+                            },
+                            "muted": {
+                              "type": "boolean"
+                            },
+                            "fadeInMs": {
+                              "type": "number"
+                            },
+                            "fadeOutMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "upsertCaption"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "caption": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                },
+                                "text": {
+                                  "type": "string"
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "enum": ["top", "middle", "bottom"]
+                                },
+                                "locked": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "startMs", "endMs", "text"]
+                            }
+                          },
+                          "required": ["op", "trackId", "caption"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeCaption"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setCaptionStyle"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "style": {
+                              "type": "object",
+                              "properties": {
+                                "fontAssetVersionId": {
+                                  "type": "string"
+                                },
+                                "sizePx": {
+                                  "type": "number"
+                                },
+                                "weight": {
+                                  "type": "number"
+                                },
+                                "colourToken": {
+                                  "type": "string"
+                                },
+                                "colourValue": {
+                                  "type": "string"
+                                },
+                                "boxToken": {
+                                  "type": "string"
+                                },
+                                "boxOpacity": {
+                                  "type": "number"
+                                },
+                                "position": {
+                                  "type": "string",
+                                  "enum": ["top", "middle", "bottom"]
+                                }
+                              },
+                              "required": ["fontAssetVersionId"]
+                            }
+                          },
+                          "required": ["op", "trackId", "style"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setOverlay"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "overlay": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                },
+                                "element": {
+                                  "$comment": "recursive"
+                                },
+                                "enter": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["none", "fade", "slide_up"]
+                                    },
+                                    "durationMs": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": ["kind", "durationMs"]
+                                },
+                                "exit": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["none", "fade", "slide_up"]
+                                    },
+                                    "durationMs": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": ["kind", "durationMs"]
+                                },
+                                "locked": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "startMs", "endMs", "element"]
+                            }
+                          },
+                          "required": ["op", "trackId", "overlay"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeOverlay"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTrackLock"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setTrackMute"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "muted": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "muted"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setItemLock"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            },
+                            "itemId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "trackId", "itemId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setDuration"
+                            },
+                            "durationMs": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "durationMs"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setScene"
+                            },
+                            "scene": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "startMs": {
+                                  "type": "number"
+                                },
+                                "endMs": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["id", "title", "startMs", "endMs"]
+                            }
+                          },
+                          "required": ["op", "scene"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeScene"
+                            },
+                            "sceneId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "sceneId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "reorderScenes"
+                            },
+                            "order": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["op", "order"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "addTrack"
+                            },
+                            "track": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "video"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "assetVersionId": {
+                                            "type": "string"
+                                          },
+                                          "sourceInMs": {
+                                            "type": "number"
+                                          },
+                                          "sourceOutMs": {
+                                            "type": "number"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "frame": {
+                                            "type": "object",
+                                            "properties": {
+                                              "fit": {
+                                                "type": "string",
+                                                "enum": ["fill", "fit"]
+                                              },
+                                              "focalX": {
+                                                "type": "number"
+                                              },
+                                              "focalY": {
+                                                "type": "number"
+                                              },
+                                              "zoom": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": []
+                                          },
+                                          "transitionIn": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "gainDb": {
+                                            "type": "number"
+                                          },
+                                          "muted": {
+                                            "type": "boolean"
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "assetVersionId",
+                                          "sourceInMs",
+                                          "sourceOutMs",
+                                          "startMs"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "audio"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "assetVersionId": {
+                                            "type": "string"
+                                          },
+                                          "sourceInMs": {
+                                            "type": "number"
+                                          },
+                                          "sourceOutMs": {
+                                            "type": "number"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "gainDb": {
+                                            "type": "number"
+                                          },
+                                          "fadeInMs": {
+                                            "type": "number"
+                                          },
+                                          "fadeOutMs": {
+                                            "type": "number"
+                                          },
+                                          "muted": {
+                                            "type": "boolean"
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "assetVersionId",
+                                          "sourceInMs",
+                                          "sourceOutMs",
+                                          "startMs"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "overlay"
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "endMs": {
+                                            "type": "number"
+                                          },
+                                          "element": {
+                                            "$comment": "recursive"
+                                          },
+                                          "enter": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["none", "fade", "slide_up"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "exit": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["none", "fade", "slide_up"]
+                                              },
+                                              "durationMs": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": ["kind", "durationMs"]
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": ["id", "startMs", "endMs", "element"]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "items"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    },
+                                    "kind": {
+                                      "const": "caption"
+                                    },
+                                    "style": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fontAssetVersionId": {
+                                          "type": "string"
+                                        },
+                                        "sizePx": {
+                                          "type": "number"
+                                        },
+                                        "weight": {
+                                          "type": "number"
+                                        },
+                                        "colourToken": {
+                                          "type": "string"
+                                        },
+                                        "colourValue": {
+                                          "type": "string"
+                                        },
+                                        "boxToken": {
+                                          "type": "string"
+                                        },
+                                        "boxOpacity": {
+                                          "type": "number"
+                                        },
+                                        "position": {
+                                          "type": "string",
+                                          "enum": ["top", "middle", "bottom"]
+                                        }
+                                      },
+                                      "required": ["fontAssetVersionId"]
+                                    },
+                                    "items": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "startMs": {
+                                            "type": "number"
+                                          },
+                                          "endMs": {
+                                            "type": "number"
+                                          },
+                                          "text": {
+                                            "type": "string"
+                                          },
+                                          "position": {
+                                            "type": "string",
+                                            "enum": ["top", "middle", "bottom"]
+                                          },
+                                          "locked": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": ["id", "startMs", "endMs", "text"]
+                                      }
+                                    }
+                                  },
+                                  "required": ["id", "name", "kind", "style", "items"]
+                                }
+                              ]
+                            },
+                            "index": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "track"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removeTrack"
+                            },
+                            "trackId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "trackId"]
+                        }
+                      ]
+                    }
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": ["user", "agent"]
+                  },
+                  "agentRunId": {
+                    "type": "string"
+                  },
+                  "documentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.renders.cancel": {
+      "post": {
+        "operationId": "creative.renders.cancel",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "renderJobId": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": ["renderJobId"]
               }
             }
           }
@@ -5517,6 +7578,27 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.videoTemplates.list": {
+      "get": {
+        "operationId": "creative.videoTemplates.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
               }
             }
           }
@@ -14475,6 +16557,39 @@
                 }
               },
               "required": ["schemaVersion", "brandVersionId", "pages"]
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["graphic", "video"]
+            },
+            "video": {
+              "type": "object",
+              "properties": {
+                "formatKey": {
+                  "type": "string",
+                  "enum": ["video_9x16", "video_1x1", "video_4x5", "video_16x9"]
+                },
+                "fps": {
+                  "anyOf": [
+                    {
+                      "const": 24
+                    },
+                    {
+                      "const": 25
+                    },
+                    {
+                      "const": 30
+                    }
+                  ]
+                },
+                "durationMs": {
+                  "type": "number"
+                },
+                "templateKey": {
+                  "type": "string"
+                }
+              },
+              "required": ["formatKey"]
             }
           },
           "required": ["brandId", "title"]
@@ -14850,6 +16965,987 @@
           "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
         }
       },
+      "creative.operations.applyVideo": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "baseRevisionId": {
+              "type": "string"
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "insertClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "item": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "sourceInMs": {
+                                "type": "number"
+                              },
+                              "sourceOutMs": {
+                                "type": "number"
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "frame": {
+                                "type": "object",
+                                "properties": {
+                                  "fit": {
+                                    "type": "string",
+                                    "enum": ["fill", "fit"]
+                                  },
+                                  "focalX": {
+                                    "type": "number"
+                                  },
+                                  "focalY": {
+                                    "type": "number"
+                                  },
+                                  "zoom": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": []
+                              },
+                              "transitionIn": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                  },
+                                  "durationMs": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": ["kind", "durationMs"]
+                              },
+                              "gainDb": {
+                                "type": "number"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "sourceInMs": {
+                                "type": "number"
+                              },
+                              "sourceOutMs": {
+                                "type": "number"
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "gainDb": {
+                                "type": "number"
+                              },
+                              "fadeInMs": {
+                                "type": "number"
+                              },
+                              "fadeOutMs": {
+                                "type": "number"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                          }
+                        ]
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "item"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "moveClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "startMs": {
+                        "type": "number"
+                      },
+                      "toTrackId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "startMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "trimClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "sourceInMs": {
+                        "type": "number"
+                      },
+                      "sourceOutMs": {
+                        "type": "number"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "sourceInMs", "sourceOutMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "splitClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "atMs": {
+                        "type": "number"
+                      },
+                      "newItemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "atMs", "newItemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "duplicateClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "newItemId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "newItemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "replaceClipSource"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
+                      "sourceInMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "assetVersionId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setClipFrame"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "frame": {
+                        "type": "object",
+                        "properties": {
+                          "fit": {
+                            "type": "string",
+                            "enum": ["fill", "fit"]
+                          },
+                          "focalX": {
+                            "type": "number"
+                          },
+                          "focalY": {
+                            "type": "number"
+                          },
+                          "zoom": {
+                            "type": "number"
+                          }
+                        },
+                        "required": []
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "frame"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTransition"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "transition": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["cut", "crossfade", "fade_black", "slide"]
+                          },
+                          "durationMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["kind", "durationMs"]
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setAudio"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "gainDb": {
+                        "type": "number"
+                      },
+                      "muted": {
+                        "type": "boolean"
+                      },
+                      "fadeInMs": {
+                        "type": "number"
+                      },
+                      "fadeOutMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "upsertCaption"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "caption": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "position": {
+                            "type": "string",
+                            "enum": ["top", "middle", "bottom"]
+                          },
+                          "locked": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "startMs", "endMs", "text"]
+                      }
+                    },
+                    "required": ["op", "trackId", "caption"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeCaption"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setCaptionStyle"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "style": {
+                        "type": "object",
+                        "properties": {
+                          "fontAssetVersionId": {
+                            "type": "string"
+                          },
+                          "sizePx": {
+                            "type": "number"
+                          },
+                          "weight": {
+                            "type": "number"
+                          },
+                          "colourToken": {
+                            "type": "string"
+                          },
+                          "colourValue": {
+                            "type": "string"
+                          },
+                          "boxToken": {
+                            "type": "string"
+                          },
+                          "boxOpacity": {
+                            "type": "number"
+                          },
+                          "position": {
+                            "type": "string",
+                            "enum": ["top", "middle", "bottom"]
+                          }
+                        },
+                        "required": ["fontAssetVersionId"]
+                      }
+                    },
+                    "required": ["op", "trackId", "style"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setOverlay"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "overlay": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "element": {
+                            "$comment": "recursive"
+                          },
+                          "enter": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["none", "fade", "slide_up"]
+                              },
+                              "durationMs": {
+                                "type": "number"
+                              }
+                            },
+                            "required": ["kind", "durationMs"]
+                          },
+                          "exit": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["none", "fade", "slide_up"]
+                              },
+                              "durationMs": {
+                                "type": "number"
+                              }
+                            },
+                            "required": ["kind", "durationMs"]
+                          },
+                          "locked": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "startMs", "endMs", "element"]
+                      }
+                    },
+                    "required": ["op", "trackId", "overlay"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeOverlay"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTrackLock"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTrackMute"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "muted": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "muted"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setItemLock"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setDuration"
+                      },
+                      "durationMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "durationMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setScene"
+                      },
+                      "scene": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["id", "title", "startMs", "endMs"]
+                      }
+                    },
+                    "required": ["op", "scene"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeScene"
+                      },
+                      "sceneId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "sceneId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "reorderScenes"
+                      },
+                      "order": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": ["op", "order"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "addTrack"
+                      },
+                      "track": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "video"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "frame": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fit": {
+                                          "type": "string",
+                                          "enum": ["fill", "fit"]
+                                        },
+                                        "focalX": {
+                                          "type": "number"
+                                        },
+                                        "focalY": {
+                                          "type": "number"
+                                        },
+                                        "zoom": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": []
+                                    },
+                                    "transitionIn": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "audio"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "fadeInMs": {
+                                      "type": "number"
+                                    },
+                                    "fadeOutMs": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "overlay"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "endMs": {
+                                      "type": "number"
+                                    },
+                                    "element": {
+                                      "$comment": "recursive"
+                                    },
+                                    "enter": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["none", "fade", "slide_up"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "exit": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["none", "fade", "slide_up"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "startMs", "endMs", "element"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "caption"
+                              },
+                              "style": {
+                                "type": "object",
+                                "properties": {
+                                  "fontAssetVersionId": {
+                                    "type": "string"
+                                  },
+                                  "sizePx": {
+                                    "type": "number"
+                                  },
+                                  "weight": {
+                                    "type": "number"
+                                  },
+                                  "colourToken": {
+                                    "type": "string"
+                                  },
+                                  "colourValue": {
+                                    "type": "string"
+                                  },
+                                  "boxToken": {
+                                    "type": "string"
+                                  },
+                                  "boxOpacity": {
+                                    "type": "number"
+                                  },
+                                  "position": {
+                                    "type": "string",
+                                    "enum": ["top", "middle", "bottom"]
+                                  }
+                                },
+                                "required": ["fontAssetVersionId"]
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "endMs": {
+                                      "type": "number"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "position": {
+                                      "type": "string",
+                                      "enum": ["top", "middle", "bottom"]
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "startMs", "endMs", "text"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "style", "items"]
+                          }
+                        ]
+                      },
+                      "index": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "track"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeTrack"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId"]
+                  }
+                ]
+              }
+            },
+            "summary": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string",
+              "enum": ["user", "agent"]
+            },
+            "agentRunId": {
+              "type": "string"
+            },
+            "documentId": {
+              "type": "string"
+            }
+          },
+          "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
+        }
+      },
       "creative.operations.propose": {
         "type": "mutation",
         "input": {
@@ -15193,6 +18289,1002 @@
           "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
         }
       },
+      "creative.operations.proposeVideo": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "baseRevisionId": {
+              "type": "string"
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "insertClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "item": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "sourceInMs": {
+                                "type": "number"
+                              },
+                              "sourceOutMs": {
+                                "type": "number"
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "frame": {
+                                "type": "object",
+                                "properties": {
+                                  "fit": {
+                                    "type": "string",
+                                    "enum": ["fill", "fit"]
+                                  },
+                                  "focalX": {
+                                    "type": "number"
+                                  },
+                                  "focalY": {
+                                    "type": "number"
+                                  },
+                                  "zoom": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": []
+                              },
+                              "transitionIn": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                  },
+                                  "durationMs": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": ["kind", "durationMs"]
+                              },
+                              "gainDb": {
+                                "type": "number"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "assetVersionId": {
+                                "type": "string"
+                              },
+                              "sourceInMs": {
+                                "type": "number"
+                              },
+                              "sourceOutMs": {
+                                "type": "number"
+                              },
+                              "startMs": {
+                                "type": "number"
+                              },
+                              "gainDb": {
+                                "type": "number"
+                              },
+                              "fadeInMs": {
+                                "type": "number"
+                              },
+                              "fadeOutMs": {
+                                "type": "number"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                          }
+                        ]
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "item"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "moveClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "startMs": {
+                        "type": "number"
+                      },
+                      "toTrackId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "startMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "trimClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "sourceInMs": {
+                        "type": "number"
+                      },
+                      "sourceOutMs": {
+                        "type": "number"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "sourceInMs", "sourceOutMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "splitClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "atMs": {
+                        "type": "number"
+                      },
+                      "newItemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "atMs", "newItemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "duplicateClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "newItemId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "newItemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeClip"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "replaceClipSource"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
+                      "sourceInMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "assetVersionId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setClipFrame"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "frame": {
+                        "type": "object",
+                        "properties": {
+                          "fit": {
+                            "type": "string",
+                            "enum": ["fill", "fit"]
+                          },
+                          "focalX": {
+                            "type": "number"
+                          },
+                          "focalY": {
+                            "type": "number"
+                          },
+                          "zoom": {
+                            "type": "number"
+                          }
+                        },
+                        "required": []
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "frame"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTransition"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "transition": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["cut", "crossfade", "fade_black", "slide"]
+                          },
+                          "durationMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["kind", "durationMs"]
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setAudio"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "gainDb": {
+                        "type": "number"
+                      },
+                      "muted": {
+                        "type": "boolean"
+                      },
+                      "fadeInMs": {
+                        "type": "number"
+                      },
+                      "fadeOutMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "upsertCaption"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "caption": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "position": {
+                            "type": "string",
+                            "enum": ["top", "middle", "bottom"]
+                          },
+                          "locked": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "startMs", "endMs", "text"]
+                      }
+                    },
+                    "required": ["op", "trackId", "caption"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeCaption"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setCaptionStyle"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "style": {
+                        "type": "object",
+                        "properties": {
+                          "fontAssetVersionId": {
+                            "type": "string"
+                          },
+                          "sizePx": {
+                            "type": "number"
+                          },
+                          "weight": {
+                            "type": "number"
+                          },
+                          "colourToken": {
+                            "type": "string"
+                          },
+                          "colourValue": {
+                            "type": "string"
+                          },
+                          "boxToken": {
+                            "type": "string"
+                          },
+                          "boxOpacity": {
+                            "type": "number"
+                          },
+                          "position": {
+                            "type": "string",
+                            "enum": ["top", "middle", "bottom"]
+                          }
+                        },
+                        "required": ["fontAssetVersionId"]
+                      }
+                    },
+                    "required": ["op", "trackId", "style"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setOverlay"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "overlay": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          },
+                          "element": {
+                            "$comment": "recursive"
+                          },
+                          "enter": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["none", "fade", "slide_up"]
+                              },
+                              "durationMs": {
+                                "type": "number"
+                              }
+                            },
+                            "required": ["kind", "durationMs"]
+                          },
+                          "exit": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": ["none", "fade", "slide_up"]
+                              },
+                              "durationMs": {
+                                "type": "number"
+                              }
+                            },
+                            "required": ["kind", "durationMs"]
+                          },
+                          "locked": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["id", "startMs", "endMs", "element"]
+                      }
+                    },
+                    "required": ["op", "trackId", "overlay"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeOverlay"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTrackLock"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setTrackMute"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "muted": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "muted"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setItemLock"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      },
+                      "itemId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "trackId", "itemId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setDuration"
+                      },
+                      "durationMs": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "durationMs"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setScene"
+                      },
+                      "scene": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "startMs": {
+                            "type": "number"
+                          },
+                          "endMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["id", "title", "startMs", "endMs"]
+                      }
+                    },
+                    "required": ["op", "scene"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeScene"
+                      },
+                      "sceneId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "sceneId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "reorderScenes"
+                      },
+                      "order": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": ["op", "order"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "addTrack"
+                      },
+                      "track": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "video"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "frame": {
+                                      "type": "object",
+                                      "properties": {
+                                        "fit": {
+                                          "type": "string",
+                                          "enum": ["fill", "fit"]
+                                        },
+                                        "focalX": {
+                                          "type": "number"
+                                        },
+                                        "focalY": {
+                                          "type": "number"
+                                        },
+                                        "zoom": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": []
+                                    },
+                                    "transitionIn": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["cut", "crossfade", "fade_black", "slide"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "audio"
+                              },
+                              "muted": {
+                                "type": "boolean"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "assetVersionId": {
+                                      "type": "string"
+                                    },
+                                    "sourceInMs": {
+                                      "type": "number"
+                                    },
+                                    "sourceOutMs": {
+                                      "type": "number"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "gainDb": {
+                                      "type": "number"
+                                    },
+                                    "fadeInMs": {
+                                      "type": "number"
+                                    },
+                                    "fadeOutMs": {
+                                      "type": "number"
+                                    },
+                                    "muted": {
+                                      "type": "boolean"
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "assetVersionId", "sourceInMs", "sourceOutMs", "startMs"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "overlay"
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "endMs": {
+                                      "type": "number"
+                                    },
+                                    "element": {
+                                      "$comment": "recursive"
+                                    },
+                                    "enter": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["none", "fade", "slide_up"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "exit": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["none", "fade", "slide_up"]
+                                        },
+                                        "durationMs": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": ["kind", "durationMs"]
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "startMs", "endMs", "element"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "items"]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "locked": {
+                                "type": "boolean"
+                              },
+                              "kind": {
+                                "const": "caption"
+                              },
+                              "style": {
+                                "type": "object",
+                                "properties": {
+                                  "fontAssetVersionId": {
+                                    "type": "string"
+                                  },
+                                  "sizePx": {
+                                    "type": "number"
+                                  },
+                                  "weight": {
+                                    "type": "number"
+                                  },
+                                  "colourToken": {
+                                    "type": "string"
+                                  },
+                                  "colourValue": {
+                                    "type": "string"
+                                  },
+                                  "boxToken": {
+                                    "type": "string"
+                                  },
+                                  "boxOpacity": {
+                                    "type": "number"
+                                  },
+                                  "position": {
+                                    "type": "string",
+                                    "enum": ["top", "middle", "bottom"]
+                                  }
+                                },
+                                "required": ["fontAssetVersionId"]
+                              },
+                              "items": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "startMs": {
+                                      "type": "number"
+                                    },
+                                    "endMs": {
+                                      "type": "number"
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    },
+                                    "position": {
+                                      "type": "string",
+                                      "enum": ["top", "middle", "bottom"]
+                                    },
+                                    "locked": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "startMs", "endMs", "text"]
+                                }
+                              }
+                            },
+                            "required": ["id", "name", "kind", "style", "items"]
+                          }
+                        ]
+                      },
+                      "index": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "track"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removeTrack"
+                      },
+                      "trackId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "trackId"]
+                  }
+                ]
+              }
+            },
+            "summary": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string",
+              "enum": ["user", "agent"]
+            },
+            "agentRunId": {
+              "type": "string"
+            },
+            "documentId": {
+              "type": "string"
+            }
+          },
+          "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
+        }
+      },
+      "creative.renders.cancel": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "renderJobId": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["renderJobId"]
+        }
+      },
       "creative.renders.get": {
         "type": "query",
         "input": {
@@ -15496,6 +19588,18 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "creative.videoTemplates.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
         }
       },
       "destinations.audit.createWork": {

@@ -327,6 +327,7 @@ describe('2.g1: ineligible assets never appear in search, agent context or rende
       },
       async getRevision(actor, documentId, revisionId) {
         const r = await creativeService.revisions.get(actor, { documentId, revisionId });
+        if (r.kind !== 'graphic') throw new Error('expected a graphic document');
         return { snapshot: r.snapshot, contentHash: r.contentHash, brandVersionId: r.brandVersionId };
       },
       markRendering: (id, tx) =>

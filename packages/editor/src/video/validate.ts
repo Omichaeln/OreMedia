@@ -15,6 +15,8 @@ export interface VideoValidationContext {
   media: Readonly<Record<string, VideoMediaInfo | undefined>>;
   /** Brand checks for overlays and captions (tokens, logo rules, contrast, facts, prohibited phrases). */
   snapshot?: BrandSnapshot;
+  /** False where sources are authorised elsewhere and their descriptions are not at hand (release review). */
+  checkSources?: boolean;
 }
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
@@ -32,7 +34,7 @@ export function validateVideoProject(project: VideoProjectV1, ctx: VideoValidati
 
   for (const track of project.tracks) {
     if (track.kind === 'video' || track.kind === 'audio') {
-      for (const item of track.items) {
+      for (const item of ctx.checkSources === false ? [] : track.items) {
         const media = ctx.media[item.assetVersionId];
         const label = item.name ?? (track.kind === 'video' ? 'A clip' : 'An audio item');
         if (!media) {
@@ -57,7 +59,7 @@ export function validateVideoProject(project: VideoProjectV1, ctx: VideoValidati
       if (!track.items.length)
         findings.push({
           code: 'no_clips',
-          severity: 'blocking',
+          severity: 'warning',
           message: 'Add at least one clip or image to the video track before rendering',
           pageId: 'timeline',
         });
