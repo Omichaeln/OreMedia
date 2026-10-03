@@ -71,7 +71,28 @@ returns `provider_not_certified`).
 Columns: ID · user outcome · current state · dependency · implementation · acceptance · tested commit ·
 environment · evidence level · remaining blocker · owner.
 
-(filled as each finding is revalidated; see sections below)
+Evidence levels: implemented (code on main), tested (CI on the merge commit: unit, integration on MySQL 8,
+cross-tenant, workflow replay), deployed (production deploy SUCCESS and a passing production smoke run on a commit
+that contains the change), externally verified (a real provider, account or client confirmed the behaviour).
+Production smoke runs by commit: 30 on d0c5566 (first run containing #32, #33 and #34), 31 on 7ac8c67, 32 on 8a9c0ec,
+33 on 74b8703, 34 on 133cfb7, 35 and the scheduled 36 on 726a92b.
+
+| ID    | User outcome                                                        | PR, commit        | Evidence level                                                                      | Remaining blocker                                                                                                 | Owner            |
+| ----- | ------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------- |
+| RA-01 | Providers activate only with certification evidence; revoke is real | #39, 133cfb7      | Deployed, smoke 34; staging acceptance shows every channel uncertified and disabled | Certification with real accounts per `docs/runbooks/certify-a-provider.md`                                        | Owner + engineer |
+| RA-02 | CMS draft, live and reverted states are proven by read-back         | #35, 7ac8c67      | Deployed, smoke 31                                                                  | External: a real WordPress site publish, revert and overwrite check                                               | Owner            |
+| RA-03 | One text cap: articles to MEDIUMTEXT, channels to 10,000 characters | #35, 7ac8c67      | Deployed, smoke 31; migration 0020 applied                                          | None                                                                                                              |                  |
+| RA-04 | Confirmation proves the approved content reached the page           | #35, 7ac8c67      | Deployed, smoke 31                                                                  | External: rendered-page check against a real site                                                                 | Owner            |
+| RA-05 | Retention decoupled from ingestion                                  | #33, f4c40f5      | Deployed, smoke 30                                                                  | Production apply mode is a deliberate switch (`RETENTION_SWEEP_APPLY`)                                            | Owner            |
+| RA-06 | Calendar and metrics read every page, no 200-row truncation         | #33, f4c40f5      | Deployed, smoke 30                                                                  | None                                                                                                              |                  |
+| RA-07 | No principal ids or JSON in forms; effective limits visible         | #34, d0c5566; #36 | Deployed, smoke 30 and 35; `runs.start` aligned in #36                              | None                                                                                                              |                  |
+| RA-08 | Rich article and FAQ authoring                                      | #38, 74b8703      | Deployed, smoke 33                                                                  | None                                                                                                              |                  |
+| RA-09 | Faithful frozen preview with draft or live intent                   | #38, 74b8703      | Deployed, smoke 33                                                                  | None                                                                                                              |                  |
+| RA-10 | GA4 in the property's zone with data-quality flags                  | #37, 8a9c0ec      | Deployed, smoke 32; migration 0021 applied                                          | External: a real GA4 property connected                                                                           | Owner            |
+| RA-11 | SEO findings become tracked work                                    | #37, 8a9c0ec      | Deployed, smoke 32                                                                  | None                                                                                                              |                  |
+| RA-12 | Preflight read and write race closed (overwrite detection)          | #35, 7ac8c67      | Deployed, smoke 31                                                                  | External: concurrent edit on a real WordPress site                                                                | Owner            |
+| RA-13 | 15-minute RPO and 4-hour RTO with a rehearsed restore               | #32, 0ea97fe      | Deployed both environments; staging restore drill RESTORE_PASS                      | Alert destination for a missed backup (no Railway webhook exists)                                                 | Owner            |
+| RA-14 | Deployed acceptance, model evaluation, load and a11y                | #36, 726a92b      | Deployed, smoke 35; staging run 7 85/86 checks                                      | Staging object store (upload CSP); model-provider rejection (#40 names the cause); load needs a certified channel | Owner + engineer |
 
 ## 3. Decisions in force that bound the scope
 
@@ -169,5 +190,15 @@ applied` and `configuration complete`; every production service deployed SUCCESS
   recorded anywhere an operator can see: PR #40 makes both model adapters carry the provider's status and message in the
   error; the next staging run will name the cause (invalid key, unknown model id or malformed request are the candidates;
   staging worker-core has OPENROUTER_API_KEY_REF and OREMEDIA_MODEL_ID set). RA-14 is otherwise complete: fixtures, sign-ins,
-  smoke, isolation, journey, a11y, deployed browser suites and the evaluation path proven on staging; the single failing
-  check remains `smoke:upload:csp` on the placeholder object store (owner action).
+  smoke, isolation, journey, a11y, deployed browser suites and the evaluation path proven on staging; the run reported
+  `ACCEPTANCE_DONE 85/86 (13 skipped)`, the single failing counted check being `smoke:upload:csp` on the placeholder
+  object store (owner action); the model evaluation reports on its own line (`MODEL_EVAL_FAIL`) outside that count.
+- 3 October 2026, 01:25 UTC: follow-ups opened as draft PRs, each waiting on CI: #40 (model adapters name the
+  provider's status and message on a rejected request), #41 (responsive e2e waits for focus to return to Menu after
+  the drawer closes; the race failed #40's first integration run), #42 (Google OIDC requests through undici's fetch,
+  the Railway empty-Headers finding) and #43. #43 answers GHSA-vfj7-8cjw-p6xm (braces <=3.0.3, high, published with no
+  patched release), which turned `pnpm audit --audit-level high` red on every branch including main: braces is
+  dev-only (eslint-plugin-boundaries > micromatch > braces; `pnpm why braces --prod` is empty), so the root
+  `package.json` ignores that single advisory through `pnpm.auditConfig.ignoreGhsas` and residual risk R18 records the
+  exception, its owner and removal trigger. The commit is ported into #40, #41 and #42. The owner may reject the
+  exception by closing #43; merges then wait on an upstream fix.

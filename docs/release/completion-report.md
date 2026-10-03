@@ -159,7 +159,7 @@ in Railway or the platform consoles and never pass through engineering or this r
        is why the acceptance job runs inside the staging project rather than from engineering's side. Where: the network access setting of the engineering sandbox environment. Engineering then runs
        smoke and acceptance checks against staging directly.
 7. [ ] **Staging model-provider rejection.** Both staging gradings failed with `The model provider rejected the
-    request`. Candidates recorded in the ledger are an invalid key, an unknown model id or a malformed request.
+ request`. Candidates recorded in the ledger are an invalid key, an unknown model id or a malformed request.
        It blocks the passing model evaluation, the last open part of RA-14. Where: Railway, `OreMedia Staging`,
        worker-core, `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID`. Engineering first merges PR #40 so the error
        carries the provider's status and message, re-runs the acceptance job, then tells the owner which value to
