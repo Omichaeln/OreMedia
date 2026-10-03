@@ -47,7 +47,9 @@ approve/revoke, "Propose a fact" form with validation) · Objectives (active car
 · Versions (Extract [toast], New draft [toast], per-row submit/publish/read-only, conflict-then-reload, diff rows,
 impact list).
 Disposition: exists (brand kit editor, facts, objectives, versions, guidelines import); **build** the versions
-impact preview before publish (UX-20); voice "check a draft" **build-R1 if cheap** (client-side pattern check is
+impact preview before publish (UX-20). Superseded by D-22 (3 October 2026): no version pills, draft banner or
+Versions tab; each section has Edit and Save (applied at once, impact confirmed first), and an import or agent
+suggestion waits as one proposed update to review or discard; voice "check a draft" **build-R1 if cheap** (client-side pattern check is
 already what the prototype does); noop buttons **exclude**.
 
 ## Review
