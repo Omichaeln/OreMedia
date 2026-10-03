@@ -907,6 +907,148 @@ describe('brand module (spec 8) against MySQL 8', () => {
     });
   });
 
+  describe('one brand system, saved in place (D-22)', () => {
+    const brandS = newId('brand');
+    const withSummary = (summary: string): BrandSystemDocumentV1 => {
+      const doc = emptyBrandSystemDocument();
+      doc.voice.summary = summary;
+      return doc;
+    };
+    const brandRow = async () => (await tdb.db.select().from(brands).where(eq(brands.id, brandS)))[0]!;
+    const versionsOfS = async () =>
+      tdb.db.select().from(brandVersions).where(eq(brandVersions.brandId, brandS));
+    const save = (
+      actor: ResolvedActor,
+      basedOnVersionId: string | null,
+      document: BrandSystemDocumentV1,
+      proposal?: { versionId: string; expectedVersion: number },
+    ) =>
+      run(tenantA, (tx) =>
+        brandService.system.save(
+          actor,
+          { brandId: brandS, basedOnVersionId, document, ...(proposal ? { proposal } : {}) },
+          tx,
+        ),
+      );
+    let first = '';
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandS,
+        tenantId: tenantA,
+        name: 'S1',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'setup',
+      });
+    });
+
+    it('the first save applies the brand system at once: one applied version, its tokens and the event', async () => {
+      const saved = await save(A, null, withSummary('Plain and direct.'));
+      expect(saved).toMatchObject({ brandId: brandS, changed: true });
+      first = saved.versionId!;
+      expect((await brandRow()).publishedVersionId).toBe(first);
+      const rows = await versionsOfS();
+      expect(rows.map((v) => [v.id, v.state])).toEqual([[first, 'published']]);
+      expect(
+        (await tdb.db.select().from(designTokens).where(eq(designTokens.brandVersionId, first))).length,
+      ).toBe(1);
+      const events = (await eventsOf('brand.version_published')).filter((e) => e.aggregateId === first);
+      expect(events.map((e) => e.payload)).toEqual([
+        expect.objectContaining({ brandVersionId: first, previousVersionId: null }),
+      ]);
+    });
+
+    it('a save over a newer brand system is a conflict and writes nothing', async () => {
+      await expect(save(A, null, withSummary('Stale edit.'))).rejects.toBeInstanceOf(ConflictError);
+      expect((await versionsOfS()).length).toBe(1);
+    });
+
+    it('a later save replaces the applied brand system and retires the previous one', async () => {
+      const saved = await save(A, first, withSummary('Plain, direct and warm.'));
+      expect(saved.changed).toBe(true);
+      expect((await brandRow()).publishedVersionId).toBe(saved.versionId);
+      const rows = await versionsOfS();
+      expect(rows.find((v) => v.id === first)?.state).toBe('retired');
+      expect(rows.filter((v) => v.state === 'published').map((v) => v.id)).toEqual([saved.versionId]);
+      const event = (await eventsOf('brand.version_published')).find(
+        (e) => e.aggregateId === saved.versionId,
+      );
+      expect(event?.payload).toMatchObject({ previousVersionId: first });
+      first = saved.versionId!;
+    });
+
+    it('saving what is already applied changes nothing and invalidates nothing', async () => {
+      const before = (await eventsOf('brand.version_published')).length;
+      const saved = await save(A, first, withSummary('Plain, direct and warm.'));
+      expect(saved).toMatchObject({ changed: false, versionId: first });
+      expect((await versionsOfS()).length).toBe(2);
+      expect((await eventsOf('brand.version_published')).length).toBe(before);
+    });
+
+    it('an agent can never save the brand system', async () => {
+      await expect(save(agent(tenantA), first, withSummary('Agent edit.'))).rejects.toBeInstanceOf(
+        PolicyDeniedError,
+      );
+      expect((await brandRow()).publishedVersionId).toBe(first);
+    });
+
+    it('a pending proposal is applied by a save and closed; it cannot be applied twice', async () => {
+      const proposal = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(A, { brandId: brandS }, tx),
+      );
+      const proposed = withSummary('Proposed by an import.');
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          A,
+          { brandId: brandS, versionId: proposal.versionId, expectedVersion: 0, document: proposed },
+          tx,
+        ),
+      );
+      const saved = await save(A, first, proposed, { versionId: proposal.versionId, expectedVersion: 1 });
+      expect(saved.changed).toBe(true);
+      const rows = await versionsOfS();
+      expect(rows.find((v) => v.id === proposal.versionId)?.state).toBe('retired');
+      expect(rows.find((v) => v.id === saved.versionId)?.state).toBe('published');
+      first = saved.versionId!;
+      await expect(
+        save(A, first, withSummary('Again.'), { versionId: proposal.versionId, expectedVersion: 2 }),
+      ).rejects.toMatchObject({ details: [{ path: 'proposal.versionId', issue: 'proposal_closed' }] });
+    });
+
+    it('discarding a proposal retires it and leaves the applied brand system as it was', async () => {
+      const proposal = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(A, { brandId: brandS }, tx),
+      );
+      const discarded = await run(tenantA, (tx) =>
+        brandService.system.discardProposal(
+          A,
+          { brandId: brandS, versionId: proposal.versionId, expectedVersion: 0 },
+          tx,
+        ),
+      );
+      expect(discarded).toMatchObject({ state: 'retired', version: 1 });
+      expect((await brandRow()).publishedVersionId).toBe(first);
+      // The applied brand system is not a proposal: discarding it is refused.
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.system.discardProposal(
+            A,
+            { brandId: brandS, versionId: first, expectedVersion: 1 },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      const actions = new Set(
+        (await tdb.db.select().from(auditEvents).where(eq(auditEvents.tenantId, tenantA))).map(
+          (r) => r.action,
+        ),
+      );
+      expect(actions.has('brand.system.save')).toBe(true);
+      expect(actions.has('brand.system.discard_proposal')).toBe(true);
+    });
+  });
+
   describe('brand kit references (logos, palette, reference imagery)', () => {
     const brandKit = newId('brand');
     let draft = '';
