@@ -220,7 +220,7 @@ describe('recut compile', () => {
       ctx({ scope: { kind: 'items', itemIds: ['clip_a'] } }),
     );
     const out = replay(project, result);
-    expect(out.tracks[0]?.items[0]?.assetVersionId).toBe('av_still');
+    expect(out.tracks[0]?.items[0]).toMatchObject({ assetVersionId: 'av_still' });
     expect(out.tracks[0]?.items.slice(1)).toEqual(project.tracks[0]?.items.slice(1));
     expect(result.assetVersionIds).toEqual(['av_still']);
   });
