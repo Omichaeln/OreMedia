@@ -18,6 +18,7 @@ import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { useFacts } from '../brand/use-brand';
 import { StartRunForm } from '../agents/start-run-form';
 import { dayKey } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
@@ -62,6 +63,32 @@ function planningValues(
     ),
     notes: b.constraints.join('\n'),
   };
+}
+
+/** A brief's offer facts by their statements (never ids), each marked when it no longer applies. */
+function OfferFacts({ brandId, factIds }: { brandId: string; factIds: string[] }) {
+  const facts = useFacts(brandId, { ids: factIds });
+  if (facts.isPending) return <span className="text-muted-foreground">Loading…</span>;
+  if (facts.isError)
+    return <span className="text-muted-foreground">The offer facts could not be loaded</span>;
+  const byId = new Map(facts.data.items.map((f) => [f.id, f]));
+  return (
+    <ul className="flex flex-col gap-0.5" data-testid="brief-offer-facts">
+      {factIds.map((id) => {
+        const f = byId.get(id);
+        return (
+          <li key={id} className="break-words">
+            {f ? f.statement : 'A fact that is no longer listed'}
+            {f && !f.effective && (
+              <Badge tone="warning" className="ml-1.5">
+                No longer in effect
+              </Badge>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 const PACKAGE_KIND_OPTIONS = [
@@ -275,6 +302,10 @@ export function BriefDetail({
                     })
                     .join(', ')
                 : 'none planned'}
+            </dd>
+            <dt className="text-muted-foreground">Offer facts</dt>
+            <dd>
+              {b.offerFactIds.length ? <OfferFacts brandId={brandId} factIds={b.offerFactIds} /> : 'none'}
             </dd>
             <dt className="text-muted-foreground">Constraints</dt>
             <dd>{b.constraints.length ? b.constraints.join('; ') : 'none'}</dd>

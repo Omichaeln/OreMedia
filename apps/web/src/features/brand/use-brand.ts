@@ -1,6 +1,8 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
-import type { FactState } from '@oremedia/contracts/brand';
+import type { z } from 'zod';
+import type { FactList, FactState } from '@oremedia/contracts/brand';
+import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 import { useCompanies } from '../portfolio/use-companies';
 
@@ -60,13 +62,30 @@ export function useBrandVersion(brandId: string, versionId: string | null) {
   });
 }
 
-export function useFacts(brandId: string, state?: FactState) {
+/** BSC-3 workspace filters (contracts FactList without the brand and the page). */
+export type FactFilter = Omit<z.input<typeof FactList>, 'brandId' | 'page'>;
+
+/** One page of facts (counts and lookups); a state alone is the filter most callers need. */
+export function useFacts(brandId: string, filter?: FactState | FactFilter) {
   const trpc = useTRPC();
+  const f = typeof filter === 'string' ? { state: filter } : filter;
   return useQuery({
-    ...trpc.brand.facts.list.queryOptions({ brandId, state, page: { limit: 100 } }),
+    ...trpc.brand.facts.list.queryOptions({ brandId, ...f, page: { limit: 100 } }),
     placeholderData: keepPreviousData,
   });
 }
+
+/** The facts workspace: every fact matching the filters, page by page (spec 7.4 cursor pagination). */
+export function useFactPages(brandId: string, filter: FactFilter) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  const input = { brandId, ...filter };
+  return useCursorPages({
+    queryKey: trpc.brand.facts.list.queryKey({ ...input, page: { limit: FACT_PAGE } }),
+    fetchPage: (cursor) => client.brand.facts.list.query({ ...input, page: { limit: FACT_PAGE, cursor } }),
+  });
+}
+const FACT_PAGE = 100;
 
 export function useObjectives(brandId: string) {
   const trpc = useTRPC();
