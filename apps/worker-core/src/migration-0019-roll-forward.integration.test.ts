@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import {
   brandDestinations,
@@ -26,13 +27,13 @@ const sha256Hex = (value: string) => createHash('sha256').update(value).digest('
  */
 const PREVIOUS_HEAD = '0018_cms_articles';
 const NEW_TABLES: MySqlTable[] = [seoAuditRuns, seoAuditPages];
-/** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
+/** Added by later migrations (0021 (RA-11), BSC-4 0024, STU-1b 0025); absent at both heads this suite compares. */
 const LATER_TABLES: MySqlTable[] = [
-  // BSC-4 (0024)
   brandSources,
   brandAssistJobs,
   brandSuggestions,
   seoFindingWork,
+  studioGenerationJobs,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

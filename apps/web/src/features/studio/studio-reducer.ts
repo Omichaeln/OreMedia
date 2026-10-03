@@ -34,6 +34,8 @@ export type StudioAction =
   | { type: 'conflict:keep-mine'; key: string }
   | { type: 'conflict:discard-all' }
   | { type: 'head:refresh'; head: Committed }
+  /** STU-1b: the head moved on by one revision made elsewhere (a generation job): adopted and undoable. */
+  | { type: 'head:advanced'; head: Committed; entry: HistoryEntry }
   | { type: 'select'; ids: string[] }
   | { type: 'page'; id: string }
   | { type: 'template:resolved'; templateVersionId: string; template: TemplateDocument }
@@ -317,6 +319,15 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
       if (state.pending || state.inFlight || state.conflict) return state;
       if (action.head.revisionId === state.committed.revisionId) return state;
       return { ...state, committed: action.head, undo: [], redo: [] };
+    case 'head:advanced':
+      if (state.pending || state.inFlight || state.conflict) return state;
+      if (action.head.revisionId === state.committed.revisionId) return state;
+      return {
+        ...state,
+        committed: action.head,
+        undo: [...state.undo, action.entry].slice(-50),
+        redo: [],
+      };
     case 'select':
       return { ...state, selection: action.ids };
     case 'page':

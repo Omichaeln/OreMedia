@@ -44,6 +44,12 @@ export function HistoryPanel({ documentId, headRevisionId }: { documentId: strin
               <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {r.id === headRevisionId && <Badge tone="good">Current</Badge>}
                 <span>{r.authorKind === 'agent' ? 'Agent' : 'Person'}</span>
+                {r.generationInputs && (
+                  <Badge tone="info">
+                    {r.generationInputs.kind === 'refine' ? 'AI change' : 'Generated'}
+                    {r.generationInputs.acceptedGroupIds ? ' (accepted)' : ''}
+                  </Badge>
+                )}
                 {r.agentRunId && (
                   <Link
                     to={brandPath(companyId, brandId, `agents?run=${encodeURIComponent(r.agentRunId)}`)}

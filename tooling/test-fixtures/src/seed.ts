@@ -278,6 +278,7 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'review_flagged_at',
     'expiry_notified_at',
   ], // 0023
+  creative_revisions: ['generation_inputs'], // 0025
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */

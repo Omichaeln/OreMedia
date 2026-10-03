@@ -26,6 +26,10 @@ export const EVENT_TYPES = {
   'creative.revision_created': 1,
   'creative.render_requested': 1,
   'creative.render_completed': 1,
+  // STU-1b: studio generation jobs (start/retry → workflow, cancel → signal relay, completion for observers).
+  'creative.generation_requested': 1,
+  'creative.generation_cancel_requested': 1,
+  'creative.generation_completed': 1,
   'content.revision_created': 1,
   'review.requested': 1,
   'review.decided': 1,

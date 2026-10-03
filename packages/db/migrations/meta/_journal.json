@@ -176,6 +176,13 @@
       "when": 1791050815610,
       "tag": "0024_brand_assist",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1791055662066,
+      "tag": "0025_studio_generation",
+      "breakpoints": true
     }
   ]
 }

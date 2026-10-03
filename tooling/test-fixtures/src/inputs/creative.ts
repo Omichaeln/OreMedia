@@ -90,4 +90,23 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
   'creative.templates.get': {
     buildInput: (f) => ({ templateId: f['templateId'], templateVersionId: f['templateVersionId'] }),
   },
+  // STU-1b generation jobs: a foreign document, revision or job is NOT_FOUND.
+  'creative.generation.preflight': {
+    buildInput: (f) => ({
+      documentId: f['creativeDocumentId'],
+      baseRevisionId: f['creativeRevisionId'],
+      request: { kind: 'refine', refine: { instruction: 'x', scope: { pageId: 'page_1' } } },
+    }),
+  },
+  'creative.generation.start': {
+    buildInput: (f) => ({
+      documentId: f['creativeDocumentId'],
+      baseRevisionId: f['creativeRevisionId'],
+      request: { kind: 'refine', refine: { instruction: 'x', scope: { pageId: 'page_1' } } },
+    }),
+  },
+  'creative.generation.get': { buildInput: (f) => ({ jobId: f['generationJobId'] }) },
+  'creative.generation.active': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
+  'creative.generation.cancel': { buildInput: (f) => ({ jobId: f['generationJobId'], expectedVersion: 0 }) },
+  'creative.generation.retry': { buildInput: (f) => ({ jobId: f['generationJobId'], expectedVersion: 0 }) },
 };

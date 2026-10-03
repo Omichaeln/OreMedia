@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandAssistService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -18,9 +19,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  */
 const PREVIOUS_HEAD = '0023_facts_workspace';
 const NEW_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions];
+/** Added by a later migration (STU-1b, 0025): absent at the previous head. */
+const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

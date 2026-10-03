@@ -19,7 +19,37 @@ export {
   type SlotFinding,
   type TemplateDocument,
 } from './reduce';
-export { guardProtected, guardLocks, guardLogoInsertion } from './guard';
+export {
+  guardProtected,
+  guardLocks,
+  guardLogoInsertion,
+  guardScope,
+  scopeState,
+  type ScopeState,
+} from './guard';
+export {
+  ancestryOf,
+  inScope,
+  isImageArea,
+  imageForArea,
+  generationSlots,
+  textCapacity,
+  structureFor,
+  bindSlots,
+  compileFill,
+  groupOperations,
+  operationsOfGroups,
+  preflightGeneration,
+  type GenerationSlot,
+  type GenerationSlotKind,
+  type FixedReason,
+  type Structure,
+  type CompileContext,
+  type CompiledFill,
+  type PreflightAsset,
+  type PreflightInput,
+  type PreflightResult,
+} from './generation';
 export { fontFaceDescriptors } from './renderer/scene';
 export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';

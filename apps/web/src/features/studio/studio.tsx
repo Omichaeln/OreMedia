@@ -22,6 +22,7 @@ import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
 import { PropertiesPanel } from './properties-panel';
 import { AgentPanel } from './agent-panel';
+import { GeneratePanel } from './generate-panel';
 import { RenderPanel } from './render-panel';
 import { ReviewPanel } from './review-panel';
 import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
@@ -36,7 +37,7 @@ import type { DocumentDto } from './types';
 const devTools = (): boolean =>
   import.meta.env.DEV || new URLSearchParams(window.location.search).has('devtools');
 
-type RightTab = 'agent' | 'comments' | 'checks' | 'history';
+type RightTab = 'generate' | 'agent' | 'comments' | 'checks' | 'history';
 
 /** A tab's count, read as part of its name ("Comments, 2 open"); nothing is shown at zero. */
 function TabCount({ n, label }: { n: number; label: string }) {
@@ -78,7 +79,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const [focusText, setFocusText] = useState(0);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const [rightTab, setRightTab] = useState<RightTab>('agent');
+  const [rightTab, setRightTab] = useState<RightTab>('generate');
   const [reviewOpen, setReviewOpen] = useState(false);
   const { panels, toggle: togglePanel } = useStudioPanels();
   const comments = useCommentPages(documentId);
@@ -130,9 +131,10 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const dirty = hasLocalWork(state);
   // A proposal needs a decision before anything else in the document moves, so it brings its tab forward.
   const hasProposal = state.proposal !== null;
+  const generationProposal = Boolean(state.proposal?.generation);
   useEffect(() => {
-    if (hasProposal) setRightTab('agent');
-  }, [hasProposal]);
+    if (hasProposal) setRightTab(generationProposal ? 'generate' : 'agent');
+  }, [hasProposal, generationProposal]);
 
   const selectPage = (id: string) => {
     studio.setPage(id);
@@ -473,9 +475,15 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 className="flex min-h-0 flex-1 flex-col"
               >
                 <TabList label="Document panels" className="flex-wrap">
+                  <Tab value="generate">
+                    Generate
+                    {state.proposal?.generation && <TabCount n={1} label="proposal waiting" />}
+                  </Tab>
                   <Tab value="agent">
                     Agent
-                    {state.proposal && <TabCount n={1} label="proposal waiting" />}
+                    {state.proposal && !state.proposal.generation && (
+                      <TabCount n={1} label="proposal waiting" />
+                    )}
                   </Tab>
                   <Tab value="comments">
                     Comments
@@ -487,6 +495,17 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   </Tab>
                   <Tab value="history">History</Tab>
                 </TabList>
+                <TabPanel value="generate" className="flex flex-col gap-3 p-3" keepMounted>
+                  <GeneratePanel
+                    documentId={documentId}
+                    page={page}
+                    state={state}
+                    studio={studio}
+                    proposalDiff={proposalDiff}
+                    hasLocalWork={dirty}
+                    readOnly={readOnly}
+                  />
+                </TabPanel>
                 <TabPanel value="agent" className="flex flex-col gap-3 p-3">
                   <AgentPanel
                     brandId={brandId}

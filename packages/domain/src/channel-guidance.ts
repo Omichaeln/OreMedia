@@ -3,7 +3,10 @@ import {
   channelOverride,
   type BrandSystemDocumentV1,
   type ChannelGuidanceField,
+  type CopyContentType,
+  type CopyTemplate,
 } from '@oremedia/contracts/brand';
+import type { ContentType } from '@oremedia/contracts/creative';
 
 type ChannelExample = NonNullable<BrandSystemDocumentV1['channelGuidance'][number]['examples']>[number];
 
@@ -65,4 +68,45 @@ export function effectiveChannelGuidance(
     ...(audience !== undefined ? { audience } : {}),
     examples: entry?.examples ?? [],
   };
+}
+
+/** What a run or a generation is for, as the brand guidance is selected by it. */
+export interface GuidanceTarget {
+  channelKey?: string;
+  contentType?: string;
+  templateKey?: string;
+}
+
+const MAX_TEMPLATES = 3;
+
+/**
+ * BSC-1: the copy templates that fit: the one the target names, else those for its content type and channel (a
+ * template without channels fits every channel), at most three. Shared by the prompt and the studio's generate panel.
+ */
+export function matchingCopyTemplates(
+  templates: readonly CopyTemplate[],
+  target: GuidanceTarget,
+): CopyTemplate[] {
+  if (target.templateKey) return templates.filter((t) => t.key === target.templateKey).slice(0, 1);
+  if (!target.contentType && !target.channelKey) return [];
+  return templates
+    .filter((t) => !target.contentType || t.contentType === target.contentType)
+    .filter(
+      (t) => !target.channelKey || t.channelKeys.length === 0 || t.channelKeys.includes(target.channelKey),
+    )
+    .slice(0, MAX_TEMPLATES);
+}
+
+/** STU-1b: the copy content type a graphic content type is written as (null: no copy template applies). */
+export function copyContentTypeFor(contentType: ContentType | undefined): CopyContentType | null {
+  switch (contentType) {
+    case 'social_post':
+    case 'carousel':
+    case 'story':
+      return 'social_post';
+    case 'thumbnail_banner':
+      return 'ad';
+    default:
+      return null;
+  }
 }

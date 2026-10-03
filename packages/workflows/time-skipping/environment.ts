@@ -29,3 +29,6 @@ export async function createTestEnvironment(): Promise<TestEnvironment> {
 
 /** The workflow entry the core worker bundles (publication workflows live on task queue `core`). */
 export const CORE_WORKFLOWS = fileURLToPath(new URL('../src/queues/core.ts', import.meta.url));
+
+/** The workflow entry the agents worker bundles (agent runs and STU-1b studio generation live on task queue `agents`). */
+export const AGENTS_WORKFLOWS = fileURLToPath(new URL('../src/queues/agents.ts', import.meta.url));

@@ -8282,6 +8282,586 @@
         }
       }
     },
+    "/trpc/creative.generation.active": {
+      "get": {
+        "operationId": "creative.generation.active",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["documentId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.generation.cancel": {
+      "post": {
+        "operationId": "creative.generation.cancel",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["jobId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.generation.get": {
+      "get": {
+        "operationId": "creative.generation.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["jobId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.generation.preflight": {
+      "get": {
+        "operationId": "creative.generation.preflight",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "baseRevisionId": {
+                    "type": "string"
+                  },
+                  "request": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "generate"
+                          },
+                          "brief": {
+                            "type": "object",
+                            "properties": {
+                              "objective": {
+                                "type": "string"
+                              },
+                              "audience": {
+                                "type": "string"
+                              },
+                              "keyMessage": {
+                                "type": "string"
+                              },
+                              "contentType": {
+                                "type": "string",
+                                "enum": [
+                                  "social_post",
+                                  "carousel",
+                                  "story",
+                                  "video",
+                                  "thumbnail_banner",
+                                  "custom"
+                                ]
+                              },
+                              "channelKeys": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "pageIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "layout": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "current"
+                                      }
+                                    },
+                                    "required": ["kind"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "template"
+                                      },
+                                      "templateVersionId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "templateVersionId"]
+                                  }
+                                ]
+                              },
+                              "requiredCopy": {
+                                "type": "object",
+                                "properties": {
+                                  "headline": {
+                                    "type": "string"
+                                  },
+                                  "body": {
+                                    "type": "string"
+                                  },
+                                  "cta": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": []
+                              },
+                              "copyTemplateKey": {
+                                "type": "string"
+                              },
+                              "factIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "assets": {
+                                "type": "object",
+                                "properties": {
+                                  "include": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "exclude": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "prioritise": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": []
+                              },
+                              "visualDirection": {
+                                "type": "string"
+                              },
+                              "referenceAssetVersionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "variations": {
+                                "type": "number"
+                              },
+                              "generateImages": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": []
+                          }
+                        },
+                        "required": ["kind", "brief"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "refine"
+                          },
+                          "refine": {
+                            "type": "object",
+                            "properties": {
+                              "instruction": {
+                                "type": "string"
+                              },
+                              "scope": {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "string"
+                                  },
+                                  "elementIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": ["pageId"]
+                              },
+                              "action": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "edit"
+                                      }
+                                    },
+                                    "required": ["kind"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "alternatives"
+                                      },
+                                      "count": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": ["kind", "count"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "adapt"
+                                      },
+                                      "formatKey": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "formatKey"]
+                                  }
+                                ]
+                              },
+                              "factIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "assetVersionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["instruction", "scope"]
+                          }
+                        },
+                        "required": ["kind", "refine"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["documentId", "baseRevisionId", "request"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.generation.retry": {
+      "post": {
+        "operationId": "creative.generation.retry",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["jobId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.generation.start": {
+      "post": {
+        "operationId": "creative.generation.start",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "baseRevisionId": {
+                    "type": "string"
+                  },
+                  "request": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "generate"
+                          },
+                          "brief": {
+                            "type": "object",
+                            "properties": {
+                              "objective": {
+                                "type": "string"
+                              },
+                              "audience": {
+                                "type": "string"
+                              },
+                              "keyMessage": {
+                                "type": "string"
+                              },
+                              "contentType": {
+                                "type": "string",
+                                "enum": [
+                                  "social_post",
+                                  "carousel",
+                                  "story",
+                                  "video",
+                                  "thumbnail_banner",
+                                  "custom"
+                                ]
+                              },
+                              "channelKeys": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "pageIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "layout": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "current"
+                                      }
+                                    },
+                                    "required": ["kind"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "template"
+                                      },
+                                      "templateVersionId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "templateVersionId"]
+                                  }
+                                ]
+                              },
+                              "requiredCopy": {
+                                "type": "object",
+                                "properties": {
+                                  "headline": {
+                                    "type": "string"
+                                  },
+                                  "body": {
+                                    "type": "string"
+                                  },
+                                  "cta": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": []
+                              },
+                              "copyTemplateKey": {
+                                "type": "string"
+                              },
+                              "factIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "assets": {
+                                "type": "object",
+                                "properties": {
+                                  "include": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "exclude": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "prioritise": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": []
+                              },
+                              "visualDirection": {
+                                "type": "string"
+                              },
+                              "referenceAssetVersionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "variations": {
+                                "type": "number"
+                              },
+                              "generateImages": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": []
+                          }
+                        },
+                        "required": ["kind", "brief"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "refine"
+                          },
+                          "refine": {
+                            "type": "object",
+                            "properties": {
+                              "instruction": {
+                                "type": "string"
+                              },
+                              "scope": {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "string"
+                                  },
+                                  "elementIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": ["pageId"]
+                              },
+                              "action": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "edit"
+                                      }
+                                    },
+                                    "required": ["kind"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "alternatives"
+                                      },
+                                      "count": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": ["kind", "count"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "const": "adapt"
+                                      },
+                                      "formatKey": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "formatKey"]
+                                  }
+                                ]
+                              },
+                              "factIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "assetVersionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": ["instruction", "scope"]
+                          }
+                        },
+                        "required": ["kind", "refine"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["documentId", "baseRevisionId", "request"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/creative.operations.applyBatch": {
       "post": {
         "operationId": "creative.operations.applyBatch",
@@ -8819,6 +9399,21 @@
                   },
                   "documentId": {
                     "type": "string"
+                  },
+                  "generation": {
+                    "type": "object",
+                    "properties": {
+                      "jobId": {
+                        "type": "string"
+                      },
+                      "groupIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": ["jobId", "groupIds"]
                   }
                 },
                 "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]
@@ -22436,6 +23031,518 @@
           "required": ["documentId", "title"]
         }
       },
+      "creative.generation.active": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            }
+          },
+          "required": ["documentId"]
+        }
+      },
+      "creative.generation.cancel": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "jobId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["jobId", "expectedVersion"]
+        }
+      },
+      "creative.generation.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "jobId": {
+              "type": "string"
+            }
+          },
+          "required": ["jobId"]
+        }
+      },
+      "creative.generation.preflight": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "baseRevisionId": {
+              "type": "string"
+            },
+            "request": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "generate"
+                    },
+                    "brief": {
+                      "type": "object",
+                      "properties": {
+                        "objective": {
+                          "type": "string"
+                        },
+                        "audience": {
+                          "type": "string"
+                        },
+                        "keyMessage": {
+                          "type": "string"
+                        },
+                        "contentType": {
+                          "type": "string",
+                          "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                        },
+                        "channelKeys": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "pageIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "layout": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "current"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "template"
+                                },
+                                "templateVersionId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "templateVersionId"]
+                            }
+                          ]
+                        },
+                        "requiredCopy": {
+                          "type": "object",
+                          "properties": {
+                            "headline": {
+                              "type": "string"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "cta": {
+                              "type": "string"
+                            }
+                          },
+                          "required": []
+                        },
+                        "copyTemplateKey": {
+                          "type": "string"
+                        },
+                        "factIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "assets": {
+                          "type": "object",
+                          "properties": {
+                            "include": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "exclude": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "prioritise": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": []
+                        },
+                        "visualDirection": {
+                          "type": "string"
+                        },
+                        "referenceAssetVersionIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "variations": {
+                          "type": "number"
+                        },
+                        "generateImages": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": []
+                    }
+                  },
+                  "required": ["kind", "brief"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "refine"
+                    },
+                    "refine": {
+                      "type": "object",
+                      "properties": {
+                        "instruction": {
+                          "type": "string"
+                        },
+                        "scope": {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["pageId"]
+                        },
+                        "action": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "edit"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "alternatives"
+                                },
+                                "count": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind", "count"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "adapt"
+                                },
+                                "formatKey": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "formatKey"]
+                            }
+                          ]
+                        },
+                        "factIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "assetVersionIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["instruction", "scope"]
+                    }
+                  },
+                  "required": ["kind", "refine"]
+                }
+              ]
+            }
+          },
+          "required": ["documentId", "baseRevisionId", "request"]
+        }
+      },
+      "creative.generation.retry": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "jobId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["jobId", "expectedVersion"]
+        }
+      },
+      "creative.generation.start": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "baseRevisionId": {
+              "type": "string"
+            },
+            "request": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "generate"
+                    },
+                    "brief": {
+                      "type": "object",
+                      "properties": {
+                        "objective": {
+                          "type": "string"
+                        },
+                        "audience": {
+                          "type": "string"
+                        },
+                        "keyMessage": {
+                          "type": "string"
+                        },
+                        "contentType": {
+                          "type": "string",
+                          "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                        },
+                        "channelKeys": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "pageIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "layout": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "current"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "template"
+                                },
+                                "templateVersionId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "templateVersionId"]
+                            }
+                          ]
+                        },
+                        "requiredCopy": {
+                          "type": "object",
+                          "properties": {
+                            "headline": {
+                              "type": "string"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "cta": {
+                              "type": "string"
+                            }
+                          },
+                          "required": []
+                        },
+                        "copyTemplateKey": {
+                          "type": "string"
+                        },
+                        "factIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "assets": {
+                          "type": "object",
+                          "properties": {
+                            "include": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "exclude": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "prioritise": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": []
+                        },
+                        "visualDirection": {
+                          "type": "string"
+                        },
+                        "referenceAssetVersionIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "variations": {
+                          "type": "number"
+                        },
+                        "generateImages": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": []
+                    }
+                  },
+                  "required": ["kind", "brief"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "refine"
+                    },
+                    "refine": {
+                      "type": "object",
+                      "properties": {
+                        "instruction": {
+                          "type": "string"
+                        },
+                        "scope": {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["pageId"]
+                        },
+                        "action": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "edit"
+                                }
+                              },
+                              "required": ["kind"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "alternatives"
+                                },
+                                "count": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind", "count"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "const": "adapt"
+                                },
+                                "formatKey": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "formatKey"]
+                            }
+                          ]
+                        },
+                        "factIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "assetVersionIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["instruction", "scope"]
+                    }
+                  },
+                  "required": ["kind", "refine"]
+                }
+              ]
+            }
+          },
+          "required": ["documentId", "baseRevisionId", "request"]
+        }
+      },
       "creative.operations.applyBatch": {
         "type": "mutation",
         "input": {
@@ -22968,6 +24075,21 @@
             },
             "documentId": {
               "type": "string"
+            },
+            "generation": {
+              "type": "object",
+              "properties": {
+                "jobId": {
+                  "type": "string"
+                },
+                "groupIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["jobId", "groupIds"]
             }
           },
           "required": ["baseRevisionId", "operations", "summary", "origin", "documentId"]

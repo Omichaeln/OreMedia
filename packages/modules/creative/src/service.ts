@@ -52,7 +52,20 @@ import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/stat
 import { renderJobMachine } from '@oremedia/domain/state-machines/render-job';
 import { templateMachine, templateVersionMachine } from '@oremedia/domain/state-machines/template-version';
 import { formatFor } from '@oremedia/editor/formats';
-import { guardLocks, guardLogoInsertion, guardProtected } from '@oremedia/editor/guard';
+import {
+  graphicGenerationInputs,
+  GenerationProposal,
+  type GenerationInputs,
+  type GenerationScope,
+} from '@oremedia/contracts/generation';
+import { operationsOfGroups } from '@oremedia/editor/generation';
+import {
+  guardLocks,
+  guardLogoInsertion,
+  guardProtected,
+  guardScope,
+  scopeState,
+} from '@oremedia/editor/guard';
 import { starterByKey } from '@oremedia/editor/starters/index';
 import {
   OperationError,
@@ -76,6 +89,7 @@ import {
   RenderJobRepository,
   RenderPreviewRepository,
   RenderedExportRepository,
+  StudioGenerationJobRepository,
   TemplateRepository,
   TemplateVersionRepository,
 } from './repositories';
@@ -89,6 +103,7 @@ const previewExportsRepo = new PreviewExportRepository();
 const commentsRepo = new ElementCommentRepository();
 const templatesRepo = new TemplateRepository();
 const templateVersionsRepo = new TemplateVersionRepository();
+const generationJobsRepo = new StudioGenerationJobRepository();
 
 type DocumentRow = Awaited<ReturnType<typeof documentsRepo.getById>>;
 type RevisionRow = Awaited<ReturnType<typeof revisionsRepo.getById>>;
@@ -420,16 +435,22 @@ async function evaluateBatch(
   base: RevisionRow,
   batch: OperationBatch,
   tx: Tx,
+  opts: { scope?: GenerationScope | null; requestedOperations?: number } = {},
 ) {
   const baseDocument = CreativeDocumentV1.parse(base.snapshot);
   const snapshot = await resolveSnapshot(actor, doc.brandId, baseDocument.brandVersionId, tx);
   let next = structuredClone(baseDocument);
   const templates: Record<string, TemplateDocument> = {};
   const changed = new Set(changedElementIds(batch));
+  // STU-1b: a batch made for a scope may change only what the scope holds (every origin: a person accepting it too).
+  const scoped = opts.scope ? scopeState(opts.scope) : null;
   for (const [index, op] of batch.operations.entries()) {
+    // STU-1b: the leading operations a person requested of a generation (template, page copy, adaptation) are theirs.
+    const origin = index < (opts.requestedOperations ?? 0) ? 'user' : batch.origin;
     try {
-      guardProtected(next, op, batch.origin); // agents cannot touch protected elements
-      guardLocks(next, op, batch.origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
+      guardProtected(next, op, origin); // agents cannot touch protected elements
+      guardLocks(next, op, origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
+      if (scoped) guardScope(next, op, scoped);
       if (op.op === 'applyTemplate') {
         templates[op.templateVersionId] ??= await resolveTemplate(doc, op, next, index, tx);
         for (const id of elementIdsOfPage(next, op.pageId)) changed.add(id); // every element of the page is replaced
@@ -437,7 +458,7 @@ async function evaluateBatch(
       // Agents cannot add logos: inserted, on a new or copied page, in a variant or from a template.
       guardLogoInsertion(
         op,
-        batch.origin,
+        origin,
         next,
         op.op === 'applyTemplate' ? templates[op.templateVersionId]?.page.elements : undefined,
       );
@@ -471,6 +492,127 @@ async function evaluateBatch(
   const parsed = CreativeDocumentV1.parse(next); // schema bounds
   const findings = validateAgainstBrand(parsed, snapshot); // tokens, logo rules, min sizes, contrast, facts
   return { next: parsed, findings, contentHash: hashCanonical(parsed), changedElementIds: [...changed] };
+}
+
+type Evaluated = Awaited<ReturnType<typeof evaluateBatch>>;
+
+/**
+ * Spec 11.4 the write half of applyOperations: insert-only revision, optimistic head move, comment outdating, outbox
+ * event, approvals hook, audit. STU-1b: an AI-generated revision carries its generation inputs (principle 8).
+ */
+async function commitRevision(
+  actor: ResolvedActor,
+  doc: DocumentRow,
+  base: RevisionRow,
+  batch: OperationBatch,
+  evaluated: Evaluated,
+  tx: Tx,
+  generationInputs: GenerationInputs | null = null,
+) {
+  const revisionId = newId('creativeRevision');
+  const number = base.number + 1;
+  await revisionsRepo.create(
+    {
+      id: revisionId,
+      brandId: doc.brandId,
+      documentId: doc.id,
+      parentRevisionId: base.id,
+      number,
+      brandVersionId: evaluated.next.brandVersionId,
+      agentRunId: batch.agentRunId ?? null,
+      authorKind: batch.origin,
+      authorId: actor.id,
+      changeSummary: batch.summary,
+      operations: batch,
+      snapshot: evaluated.next,
+      contentHash: evaluated.contentHash,
+      generationInputs,
+    },
+    tx,
+  );
+  await documentsRepo.setCurrentRevision(doc.id, doc.version, revisionId, tx);
+  const outdatedComments = await commentsRepo.markOutdated(
+    doc.brandId,
+    doc.id,
+    evaluated.changedElementIds,
+    tx,
+  ); // anchored comments never silently drift
+  await outbox.add(
+    'creative.revision_created',
+    { type: 'creative_document', id: doc.id, version: doc.version + 1 },
+    {
+      documentId: doc.id,
+      revisionId,
+      number,
+      contentHash: evaluated.contentHash,
+      brandVersionId: evaluated.next.brandVersionId,
+    },
+    tx,
+    { brandId: doc.brandId },
+  );
+  await revisionChangeHook(doc.id, tx); // any approval bound to the old hash (Phase 5)
+  await audit.record(
+    actorRef(actor),
+    'creative.operations.apply',
+    { type: 'creative_revision', id: revisionId },
+    'allowed',
+    tx,
+    {
+      brandId: doc.brandId,
+      revisionId,
+      count: batch.operations.length,
+      runId: batch.agentRunId ?? null,
+      ...(generationInputs ? { generationJobId: generationInputs.jobId } : {}),
+    },
+  );
+  return {
+    revision: toRevisionDto(await revisionsRepo.getById(revisionId, tx)),
+    findings: evaluated.findings,
+    outdatedComments,
+    version: doc.version + 1,
+  };
+}
+
+/**
+ * STU-1b selective accept: the batch must be exactly the operations of the named groups of a completed job's
+ * proposal for this document and base revision, in proposal order. Accepted as the agent's batch it must be clean;
+ * a person may instead take it as their own (origin user: blocking findings become theirs to fix, as with Modify).
+ * Either way the proposal's scope is checked again and its generation inputs, with the groups kept, go on the
+ * revision.
+ */
+async function acceptedProposal(
+  doc: DocumentRow,
+  batch: OperationBatch,
+  generation: { jobId: string; groupIds: string[] },
+  tx: Tx,
+): Promise<{ scope: GenerationScope | null; requestedOperations: number; inputs: GenerationInputs }> {
+  const job = await generationJobsRepo.getById(generation.jobId, tx);
+  if (job.documentId !== doc.id || job.brandId !== doc.brandId)
+    throw new NotFoundError('StudioGenerationJob', generation.jobId);
+  const proposal = job.result?.proposal ? GenerationProposal.parse(job.result.proposal) : null;
+  if (job.state !== 'completed' || !proposal)
+    throw new ValidationFailedError([{ path: 'generation.jobId', issue: 'job_has_no_proposal' }]);
+  if (proposal.baseRevisionId !== batch.baseRevisionId)
+    throw new ValidationFailedError([{ path: 'baseRevisionId', issue: 'not_the_proposal_base' }]);
+  const unknown = generation.groupIds.filter((id) => !proposal.groups.some((g) => g.id === id));
+  if (unknown.length)
+    throw new ValidationFailedError(
+      unknown.map((id) => ({ path: 'generation.groupIds', issue: `unknown_group ${id}` })),
+    );
+  const expected = operationsOfGroups(proposal.operations, proposal.groups, generation.groupIds);
+  if (hashCanonical(expected) !== hashCanonical(batch.operations))
+    throw new ValidationFailedError(
+      [{ path: 'operations', issue: 'not_the_proposed_operations' }],
+      'The operations are not those of the chosen proposal groups',
+    );
+  const chosen = new Set(
+    proposal.groups.filter((g) => generation.groupIds.includes(g.id)).flatMap((g) => g.operationIndexes),
+  );
+  return {
+    scope: proposal.scope,
+    requestedOperations: [...chosen].filter((i) => i < proposal.requestedOperations).length,
+    inputs: { ...proposal.inputs, acceptedGroupIds: [...generation.groupIds] },
+  };
 }
 
 /** Longest edge of a proposal preview: small enough to draw inline beside the conversation. */
@@ -537,6 +679,8 @@ const toRevisionDto = (r: RevisionRow) => ({
   operations: OperationBatch.parse(r.operations),
   snapshot: CreativeDocumentV1.parse(r.snapshot),
   contentHash: r.contentHash,
+  /** STU-1b: what produced an AI-generated revision (brief or request, template, scope, assets, cost); graphic only. */
+  generationInputs: graphicGenerationInputs(r.generationInputs),
   createdAt: r.createdAt.toISOString(),
 });
 const toRevisionSummary = (r: RevisionRow) => {
@@ -1017,69 +1161,19 @@ export const creativeService = {
       tx: Tx,
       opts: ActorOptions = {},
     ) {
-      const { documentId, ...batch } = OperationsApply.parse(input);
+      const { documentId, generation, ...batch } = OperationsApply.parse(input);
       const doc = await documentsRepo.lock(documentId, tx);
       await policy.assert(actor, 'creative.edit', documentResource(doc), opts, tx);
       assertOrigin(actor, batch.origin);
       await assertStale(doc, batch.baseRevisionId);
       const base = await loadRevision(doc, batch.baseRevisionId, tx);
-      const evaluated = await evaluateBatch(actor, doc, base, batch, tx);
+      const accepted = generation ? await acceptedProposal(doc, batch, generation, tx) : null;
+      const evaluated = await evaluateBatch(actor, doc, base, batch, tx, {
+        scope: accepted?.scope ?? null,
+        requestedOperations: accepted?.requestedOperations ?? 0,
+      });
       assertAgentClean(batch.origin, evaluated.findings);
-      const revisionId = newId('creativeRevision');
-      const number = base.number + 1;
-      await revisionsRepo.create(
-        {
-          id: revisionId,
-          brandId: doc.brandId,
-          documentId: doc.id,
-          parentRevisionId: base.id,
-          number,
-          brandVersionId: evaluated.next.brandVersionId,
-          agentRunId: batch.agentRunId ?? null,
-          authorKind: batch.origin,
-          authorId: actor.id,
-          changeSummary: batch.summary,
-          operations: batch,
-          snapshot: evaluated.next,
-          contentHash: evaluated.contentHash,
-        },
-        tx,
-      );
-      await documentsRepo.setCurrentRevision(doc.id, doc.version, revisionId, tx);
-      const outdatedComments = await commentsRepo.markOutdated(
-        doc.brandId,
-        doc.id,
-        evaluated.changedElementIds,
-        tx,
-      ); // anchored comments never silently drift
-      await outbox.add(
-        'creative.revision_created',
-        { type: 'creative_document', id: doc.id, version: doc.version + 1 },
-        {
-          documentId: doc.id,
-          revisionId,
-          number,
-          contentHash: evaluated.contentHash,
-          brandVersionId: evaluated.next.brandVersionId,
-        },
-        tx,
-        { brandId: doc.brandId },
-      );
-      await revisionChangeHook(doc.id, tx); // any approval bound to the old hash (Phase 5)
-      await audit.record(
-        actorRef(actor),
-        'creative.operations.apply',
-        { type: 'creative_revision', id: revisionId },
-        'allowed',
-        tx,
-        { brandId: doc.brandId, revisionId, count: batch.operations.length, runId: batch.agentRunId ?? null },
-      );
-      return {
-        revision: toRevisionDto(await revisionsRepo.getById(revisionId, tx)),
-        findings: evaluated.findings,
-        outdatedComments,
-        version: doc.version + 1,
-      };
+      return commitRevision(actor, doc, base, batch, evaluated, tx, accepted?.inputs ?? null);
     },
 
     /**
@@ -1638,3 +1732,88 @@ export const creativeService = {
     },
   },
 };
+
+/**
+ * STU-1b: a template version of the brand as the generator reads it (its first page in the wanted format, and its
+ * slots), or null when the id is not a version of this brand (or not approved, when that is required).
+ */
+async function templateVersionOf(
+  brandId: string,
+  templateVersionId: string,
+  opts: { approvedOnly: boolean; formatKey?: string },
+  tx?: Tx,
+): Promise<(TemplateDocument & { templateVersionId: string }) | null> {
+  const tv = await templateVersionsRepo.findById(templateVersionId, tx);
+  if (!tv || tv.brandId !== brandId) return null;
+  if (opts.approvedOnly && tv.state !== 'approved') return null;
+  const document = CreativeDocumentV1.parse(tv.document);
+  const page = document.pages.find((p) => p.formatKey === opts.formatKey) ?? document.pages[0];
+  if (!page) return null;
+  return { page, slots: TemplateSlot.array().parse(tv.slots), templateVersionId: tv.id };
+}
+
+/**
+ * STU-1b: a variation copy of a generation job: a new document whose revision 1 is exactly the job's base revision
+ * (not the source's current head, which the job's first variation may already have changed), designed against the
+ * brand version that revision was made against, as the job's inputs record. Same permissions and asset
+ * authorisation as documents.duplicate; the audit names the job.
+ */
+async function duplicateRevision(
+  actor: ResolvedActor,
+  source: DocumentRow,
+  revision: RevisionRow,
+  title: string,
+  jobId: string,
+  tx: Tx,
+) {
+  await policy.assert(actor, 'creative.read', documentResource(source), {}, tx);
+  await policy.assert(actor, 'creative.edit', brandResource(source.brandId), {}, tx);
+  const document = CreativeDocumentV1.parse(revision.snapshot);
+  const snapshot = await resolveSnapshot(actor, source.brandId, document.brandVersionId, tx);
+  return insertDocument(
+    actor,
+    {
+      brandId: source.brandId,
+      title: title.slice(0, 200),
+      contentPackageId: null,
+      document,
+      summary: `Variation of revision ${revision.number} of ${source.title}`.slice(0, 500),
+      auditAction: 'creative.document.duplicate',
+      auditMeta: {
+        sourceType: 'creative_document',
+        sourceId: source.id,
+        sourceRevisionId: revision.id,
+        sourceBrandVersionId: document.brandVersionId,
+        generationJobId: jobId,
+        ...(document.contentType ? { contentType: document.contentType } : {}),
+      },
+    },
+    snapshot,
+    tx,
+  );
+}
+
+/**
+ * STU-1b: the operation engine as the generation job service (generation.ts) composes it. Not part of the module's
+ * public index: other modules reach generation through its service and runtime API only.
+ */
+export const creativeEngine = {
+  documentsRepo,
+  revisionsRepo,
+  evaluateBatch,
+  commitRevision,
+  duplicateRevision,
+  loadRevision,
+  loadCurrentRevision,
+  resolveSnapshot,
+  templateVersionOf,
+  documentResource,
+  brandResource,
+  actorRef,
+  requesterKindOf,
+  isBlocking,
+  findingDetail,
+  toRevisionDto,
+};
+export type CreativeDocumentRow = DocumentRow;
+export type CreativeRevisionRow = RevisionRow;
