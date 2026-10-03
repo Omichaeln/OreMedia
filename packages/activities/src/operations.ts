@@ -1,6 +1,8 @@
 import type {
   DeletionActivitiesV1,
   DeletionRuntimeV1,
+  IdempotencyKeyPurgeActivitiesV1,
+  IdempotencyKeyPurgeRuntimeV1,
   RetentionActivitiesV1,
   RetentionRuntimeV1,
 } from '@oremedia/contracts/operations';
@@ -64,5 +66,17 @@ export function createRetentionActivities(runtime: RetentionRuntimeV1): Retentio
         throw toActivityFailure(err);
       }
     },
+  };
+}
+
+/** The idempotency purge is platform-level (no tenant input); the runtime declares the platform job itself. */
+export function createIdempotencyKeyPurgeActivities(
+  runtime: IdempotencyKeyPurgeRuntimeV1,
+): IdempotencyKeyPurgeActivitiesV1 {
+  return {
+    purgeExpiredIdempotencyKeys: (input) =>
+      withLogContext({ correlationId: input.correlationId }, () =>
+        runtime.purgeExpiredIdempotencyKeys(input),
+      ),
   };
 }

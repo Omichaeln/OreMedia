@@ -2,7 +2,7 @@ import { reportConfiguration, startTelemetry, stopTelemetry } from '@oremedia/ob
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { configureConnectCallback } from '@oremedia/module-publishing';
 import { createServer } from './server';
-import { configureRateLimiter } from './trpc';
+import { configureRateLimiter, rateLimitRedisUrlFromEnv } from './trpc';
 import { apiCapabilities, composeModules } from './composition';
 import { authConfigFromEnv, type AuthConfig } from './auth/config';
 import { webOriginFromEnv } from './web-origin';
@@ -42,9 +42,19 @@ configureConnectCallback(webOrigin);
 if (!webOrigin)
   log.warn({}, 'WEB_ORIGIN not set: channel connect uses the redirect the browser sends (development only)');
 
-if (process.env['REDIS_URL']) {
+let redisUrl: string | null;
+try {
+  redisUrl = rateLimitRedisUrlFromEnv();
+} catch (err) {
+  log.error(
+    { errorMessage: err instanceof Error ? err.message : String(err) },
+    'rate limit configuration invalid',
+  );
+  process.exit(2);
+}
+if (redisUrl) {
   const { default: Redis } = await import('ioredis');
-  configureRateLimiter(new Redis(process.env['REDIS_URL'], { maxRetriesPerRequest: 2, lazyConnect: false }));
+  configureRateLimiter(new Redis(redisUrl, { maxRetriesPerRequest: 2, lazyConnect: false }));
 } else {
   configureRateLimiter();
   log.warn({}, 'REDIS_URL not set: using in-memory rate limiting (single instance only)');

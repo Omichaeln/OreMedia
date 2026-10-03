@@ -186,6 +186,20 @@ const tenantScoped = t.middleware(async ({ ctx, path, next }) => {
   return result;
 });
 
+/**
+ * REDIS_URL: the rate limiter's shared store, or null when unset outside production (in memory: one process,
+ * development and tests). Production (NODE_ENV=production) requires it: in memory, every limit and the per-account
+ * password lockout would be per replica and start again at every restart.
+ */
+export function rateLimitRedisUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const value = env['REDIS_URL']?.trim();
+  if (!value && (env['NODE_ENV'] ?? 'development') === 'production')
+    throw new Error(
+      'REDIS_URL is required in production: rate limits and the password lockout must be shared by every replica',
+    );
+  return value || null;
+}
+
 let limiter: RateLimiter | null = null;
 export function configureRateLimiter(redis?: ConstructorParameters<typeof RedisRateLimiterStore>[0]): void {
   limiter = new RateLimiter(redis ? new RedisRateLimiterStore(redis) : new MemoryRateLimiterStore());

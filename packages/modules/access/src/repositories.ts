@@ -74,18 +74,21 @@ export class UserDirectory extends PlatformRepository {
       );
   }
   /**
-   * A live session: not revoked, before its absolute expiry, and used within the idle window (last seen, or created
-   * when never seen since).
+   * A live session: not revoked, before its absolute expiry, used within the idle window (last seen, or created
+   * when never seen since), and of a user who is still active (a user disabled or deleted outside the application,
+   * by an operator in the database, is signed out of every session on their next request).
    */
   async sessionByTokenHash(tokenHash: string, tx?: Tx) {
     const now = new Date();
     const idleCutoff = new Date(now.getTime() - SESSION_IDLE_MS);
     const rows = await this.conn(tx)
-      .select()
+      .select({ session: sessions })
       .from(sessions)
+      .innerJoin(users, eq(users.id, sessions.userId))
       .where(
         and(
           eq(sessions.tokenHash, tokenHash),
+          eq(users.status, 'active'),
           isNull(sessions.revokedAt),
           gt(sessions.expiresAt, now),
           or(
@@ -95,7 +98,7 @@ export class UserDirectory extends PlatformRepository {
         ),
       )
       .limit(1);
-    return rows[0] ?? null;
+    return rows[0]?.session ?? null;
   }
   /** Idle-timeout bookkeeping: moves lastSeenAt forward, at most once per SESSION_TOUCH_MS per session. */
   async touchSession(id: string, lastSeenAt: Date | null, tx?: Tx) {
@@ -326,6 +329,25 @@ export class UserDirectory extends PlatformRepository {
   /** Insert-only: pre-tenant authentication outcomes (auth_events has no update or delete method). */
   async recordAuthEvent(values: typeof authEvents.$inferInsert, tx?: Tx) {
     await this.conn(tx).insert(authEvents).values(values);
+  }
+  /**
+   * The method that opened a session (auth.sign_in's provider: `password` for a password or setup link, else the
+   * identity provider), or null when none was recorded. Read through the user's index: a session is one person's.
+   */
+  async signInProviderOfSession(userId: string, sessionId: string, tx?: Tx): Promise<string | null> {
+    const rows = await this.conn(tx)
+      .select({ provider: authEvents.provider })
+      .from(authEvents)
+      .where(
+        and(
+          eq(authEvents.userId, userId),
+          eq(authEvents.sessionId, sessionId),
+          eq(authEvents.action, 'auth.sign_in'),
+          eq(authEvents.decision, 'allowed'),
+        ),
+      )
+      .limit(1);
+    return rows[0]?.provider ?? null;
   }
   async servicePrincipalFor(id: string, tenantId: string, tx?: Tx) {
     const rows = await this.conn(tx)

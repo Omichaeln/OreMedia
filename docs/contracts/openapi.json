@@ -224,7 +224,17 @@
                   "roles": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "brand_manager",
+                        "creator",
+                        "reviewer",
+                        "publisher",
+                        "analyst",
+                        "community"
+                      ]
                     }
                   }
                 },
@@ -16089,7 +16099,17 @@
             "roles": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "admin",
+                  "brand_manager",
+                  "creator",
+                  "reviewer",
+                  "publisher",
+                  "analyst",
+                  "community"
+                ]
               }
             }
           },
