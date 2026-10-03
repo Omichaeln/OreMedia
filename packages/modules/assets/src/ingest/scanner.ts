@@ -13,7 +13,14 @@ export interface Scanner {
   readonly engine: string;
   /** Resolves with a verdict; throws ScannerUnavailableError when no verdict could be obtained. */
   scan(bytes: Uint8Array): Promise<ScanVerdict>;
+  /**
+   * STU-2a: the same scan over a stream (video and audio up to 1 GiB are never loaded whole). clamd reads INSTREAM
+   * chunks as they come; its StreamMaxLength must cover the largest upload or it answers with no verdict.
+   */
+  scanStream?(stream: ByteStream, onProgress?: (bytes: number) => void): Promise<ScanVerdict>;
 }
+
+export type ByteStream = AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
 
 export class ScannerUnavailableError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -38,6 +45,14 @@ export class ClamAvScanner implements Scanner {
   constructor(private readonly opts: ClamAvOptions) {}
 
   scan(bytes: Uint8Array): Promise<ScanVerdict> {
+    return this.scanStream([bytes]);
+  }
+
+  /**
+   * Streams the chunks to clamd with backpressure. `timeoutMs` is an idle timeout (no traffic either way), so a
+   * large file is not cut off while it is still flowing.
+   */
+  scanStream(stream: ByteStream, onProgress?: (bytes: number) => void): Promise<ScanVerdict> {
     const { host, port } = this.opts;
     const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const chunk = this.opts.chunkBytes ?? DEFAULT_CHUNK;
@@ -67,18 +82,49 @@ export class ClamAvScanner implements Scanner {
         if (/\bOK$/.test(reply)) return resolve({ clean: true, engine: this.engine });
         const found = /^stream:\s*(.+?)\s+FOUND$/.exec(reply);
         if (found) return resolve({ clean: false, engine: this.engine, signature: found[1] as string });
+        if (/size limit exceeded/i.test(reply))
+          return reject(
+            new ScannerUnavailableError(
+              "clamd stream limit (StreamMaxLength) is below this file's size; raise it to cover the upload caps",
+            ),
+          );
         reject(new ScannerUnavailableError(`clamd returned no verdict: ${reply.slice(0, 120)}`));
       });
+      // Backpressure: wait for drain, or for the socket to close (clamd answered early); never hang.
+      const write = (buf: Buffer): Promise<void> =>
+        new Promise((done) => {
+          if (settled || socket.destroyed) return done();
+          if (socket.write(buf)) return done();
+          const finish = () => {
+            socket.off('drain', finish);
+            socket.off('close', finish);
+            done();
+          };
+          socket.once('drain', finish);
+          socket.once('close', finish);
+        });
       socket.connect(port, host, () => {
-        socket.write(Buffer.from('zINSTREAM\0', 'ascii'));
-        for (let offset = 0; offset < bytes.length; offset += chunk) {
-          const part = bytes.subarray(offset, Math.min(offset + chunk, bytes.length));
-          const len = Buffer.alloc(4);
-          len.writeUInt32BE(part.length, 0);
-          socket.write(len);
-          socket.write(part);
-        }
-        socket.write(Buffer.alloc(4, 0));
+        void (async () => {
+          try {
+            await write(Buffer.from('zINSTREAM\0', 'ascii'));
+            let sent = 0;
+            for await (const raw of stream) {
+              const bytes = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+              for (let offset = 0; offset < bytes.length; offset += chunk) {
+                if (settled || socket.destroyed) return; // clamd answered (or failed) early
+                const part = bytes.subarray(offset, Math.min(offset + chunk, bytes.length));
+                const len = Buffer.alloc(4);
+                len.writeUInt32BE(part.length, 0);
+                await write(Buffer.concat([len, part]));
+              }
+              sent += bytes.length;
+              onProgress?.(sent);
+            }
+            if (!settled && !socket.destroyed) await write(Buffer.alloc(4, 0));
+          } catch (err) {
+            fail(err instanceof Error ? err : new Error(String(err)));
+          }
+        })();
       });
     });
   }
@@ -96,6 +142,18 @@ export class FakeScanner implements Scanner {
       ? { clean: false, engine: this.engine, signature: 'Eicar-Test-Signature' }
       : { clean: true, engine: this.engine };
   }
+  async scanStream(stream: ByteStream): Promise<ScanVerdict> {
+    // The marker is looked for in the first 4 KiB, as scan() does; the rest of the stream is drained.
+    const head: Buffer[] = [];
+    let headBytes = 0;
+    for await (const chunk of stream) {
+      if (headBytes < 4096) {
+        head.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+        headBytes += chunk.byteLength;
+      }
+    }
+    return this.scan(Buffer.concat(head));
+  }
 }
 
 /** Production without a configured scanner: never a verdict, so nothing is ever accepted (fail closed). */
@@ -103,6 +161,9 @@ export class FailClosedScanner implements Scanner {
   readonly engine = 'none';
   async scan(): Promise<ScanVerdict> {
     throw new ScannerUnavailableError('SCANNER_CLAMD_ADDRESS is not configured; uploads stay quarantined');
+  }
+  async scanStream(): Promise<ScanVerdict> {
+    return this.scan();
   }
 }
 
