@@ -107,6 +107,14 @@ export {
 } from './tool-dispatcher';
 export { redactForRecord } from './redact';
 export {
+  assembleVideoAiPrompt,
+  createVideoAiCapabilitySource,
+  parseVideoAiOutput,
+  videoAiTool,
+  STORYBOARD_TOOL,
+  RECUT_TOOL,
+} from './video-ai-prompt';
+export {
   MemoryProviderJobStore,
   registerProviderJobStore,
   providerJobs,

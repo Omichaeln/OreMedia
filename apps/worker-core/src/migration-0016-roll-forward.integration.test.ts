@@ -26,7 +26,12 @@ import {
   registerProviderClients,
 } from '@oremedia/module-publishing';
 import { SourceRegistry } from '@oremedia/providers';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+  LATER_TABLE_NAMES,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0016 (R2-1 destination connect): on a database populated at the previous head (0015)
@@ -42,7 +47,8 @@ const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];
 const LATER_TABLES: MySqlTable[] = [destinationReportRows, seoAuditRuns, seoAuditPages, seoFindingWork];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0016 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

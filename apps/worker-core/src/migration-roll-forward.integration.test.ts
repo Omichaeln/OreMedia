@@ -27,7 +27,12 @@ import {
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { budgets } from '@oremedia/module-billing';
 import { creativeService } from '@oremedia/module-creative';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+  LATER_TABLE_NAMES,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4: the new migration rolls forward on a populated database. The database is migrated to the previous
@@ -65,7 +70,8 @@ const LATER_TABLES: MySqlTable[] = [
 
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t as never) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t as never) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migrations roll forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

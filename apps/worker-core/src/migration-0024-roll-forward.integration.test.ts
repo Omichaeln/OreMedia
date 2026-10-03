@@ -9,7 +9,12 @@ import { renderJobs, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { assetService } from '@oremedia/module-assets';
 import { creativeService } from '@oremedia/module-creative';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+  LATER_TABLE_NAMES,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0024 (STU-2a video media): on a database populated at the previous head the migration
@@ -19,7 +24,9 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * detail, and the seeded pending render job can be cancelled. The columns are in LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0023_facts_workspace';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

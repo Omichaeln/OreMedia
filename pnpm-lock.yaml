@@ -738,6 +738,9 @@ importers:
       '@oremedia/module-brand':
         specifier: workspace:*
         version: link:../brand
+      '@oremedia/module-creative':
+        specifier: workspace:*
+        version: link:../creative
       '@oremedia/module-operations':
         specifier: workspace:*
         version: link:../operations

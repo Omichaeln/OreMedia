@@ -19,6 +19,9 @@ a breaking change creates a new event type or schema version with dual publishin
 | `creative.revision_created`           | 1              |
 | `creative.render_requested`           | 1              |
 | `creative.render_completed`           | 1              |
+| `creative.video_job_requested`        | 1              |
+| `creative.video_job_cancel_requested` | 1              |
+| `creative.video_job_completed`        | 1              |
 | `content.revision_created`            | 1              |
 | `review.requested`                    | 1              |
 | `review.decided`                      | 1              |

@@ -28,6 +28,9 @@ import {
   creativeService,
   registerAssetAuthoriser,
   registerCreativeAssetCatalog,
+  registerVideoAiAssetSource,
+  registerVideoAiCapabilitySource,
+  configureVideoAiPricing,
   registerExportSigner,
   registerRevisionChangeHook,
 } from '@oremedia/module-creative';
@@ -96,6 +99,9 @@ import {
   registerReviewToolSource,
   registerRoutingPolicySource,
   registerSkillResolver,
+  createVideoAiCapabilitySource,
+  estimateCostMicros,
+  modelConfigFromEnv,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
 import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
@@ -129,6 +135,18 @@ export function composeModules(): void {
   registerCreativeAssetCatalog({
     mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
     currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
+    waveforms: (ids, tx) => assetService.waveforms(ids, tx),
+  });
+  // STU-3: storyboards read the eligible, person-supplied assets; gaps say whether generated media could close them;
+  // the job's estimate is one model call at the configured price list.
+  registerVideoAiAssetSource((brandId, tx) => assetService.storyboardCandidates(brandId, tx));
+  registerVideoAiCapabilitySource(createVideoAiCapabilitySource());
+  const videoAiModel = modelConfigFromEnv();
+  configureVideoAiPricing({
+    modelCallMicros: estimateCostMicros(videoAiModel, {
+      inputTokens: 12_000,
+      outputTokens: videoAiModel.maxOutputTokens,
+    }),
   });
   registerExportSigner((storageKey) => assetService.signStorageKey(storageKey));
   // Spec 12.3: the context resolver pins skill versions through the skills module. Spec 19.6: evaluation suites

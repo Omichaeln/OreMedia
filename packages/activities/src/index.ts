@@ -35,6 +35,7 @@ export {
   type RenderTargetOutput,
 } from './render-job';
 export { createAgentRunActivities, toActivityFailure } from './agent-run';
+export { createStudioVideoActivities } from './studio-video';
 export {
   createSkillEvaluationActivities,
   loadSkillEvaluationGrants,

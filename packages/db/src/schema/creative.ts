@@ -18,7 +18,8 @@ import type {
   RenderValidationResult,
 } from '@oremedia/contracts/creative';
 import type { VideoOperationBatch, VideoProjectV1 } from '@oremedia/contracts/video';
-import { brandId, createdAt, hash, id, ref, tenantId, updatedAt, version } from './_columns';
+import type { VideoAiRequest, VideoAiResult, VideoGenerationInputs } from '@oremedia/contracts/video-ai';
+import { brandId, createdAt, hash, id, micros, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
 export const creativeDocuments = mysqlTable(
@@ -67,6 +68,8 @@ export const creativeRevisions = mysqlTable(
     operations: json('operations').$type<OperationBatch | VideoOperationBatch>().notNull(), // what changed from parent
     snapshot: json('snapshot').$type<CreativeDocumentV1 | VideoProjectV1>().notNull(), // full document at this revision
     contentHash: hash('content_hash').notNull(),
+    /** STU-3 (principle 8): what produced an AI-assisted revision; null for people's own edits and older rows. */
+    generationInputs: json('generation_inputs').$type<VideoGenerationInputs>(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -297,6 +300,65 @@ export const previewExports = mysqlTable(
       columns: [t.tenantId, t.brandId, t.renderJobId],
       foreignColumns: [renderJobs.tenantId, renderJobs.brandId, renderJobs.id],
       name: 'fk_preview_export_job',
+    }),
+  ],
+);
+
+/**
+ * STU-3: a durable studio video AI job for one video document (studioVideoJobWorkflowV1): a storyboard from a brief,
+ * or a recut of the timeline. Start is idempotent per (document, base revision, inputs hash); a retry is a new attempt
+ * of the same row. The model's checked output and the result (the storyboard, a proposal, a new-format document) are
+ * stored here, so a retried activity never calls the model twice and the studio reattaches after a reload.
+ */
+export const studioVideoJobs = mysqlTable(
+  'studio_video_jobs',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    documentId: ref('document_id').notNull(),
+    baseRevisionId: ref('base_revision_id').notNull(),
+    kind: mysqlEnum('kind', ['storyboard', 'recut']).notNull(),
+    state: mysqlEnum('state', [
+      'queued',
+      'generating',
+      'validating',
+      'saving',
+      'completed',
+      'failed',
+      'cancelled',
+    ])
+      .notNull()
+      .default('queued'),
+    progress: int('progress').notNull().default(0),
+    request: json('request').$type<VideoAiRequest>().notNull(),
+    inputsHash: hash('inputs_hash').notNull(),
+    attempt: int('attempt').notNull().default(1),
+    /** The current attempt's budget reservation key (budget_reservations.run_id). */
+    budgetRunId: ref('budget_run_id'),
+    budgetReservationId: ref('budget_reservation_id'),
+    costReservedMicros: micros('cost_reserved_micros').notNull().default(0),
+    costSpentMicros: micros('cost_spent_micros').notNull().default(0),
+    /** The model's checked output for the current attempt, with the ledger key of the call. */
+    modelOutput: json('model_output').$type<{ output: unknown; callRef: string }>(),
+    result: json('result').$type<VideoAiResult>(),
+    errorCode: varchar('error_code', { length: 40 }),
+    error: varchar('error', { length: 500 }),
+    requestedByKind: mysqlEnum('requested_by_kind', ['user', 'agent', 'system']).notNull(),
+    requestedById: ref('requested_by_id').notNull(),
+    finishedAt: ts('finished_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_video_job_inputs').on(t.tenantId, t.documentId, t.baseRevisionId, t.inputsHash),
+    index('ix_video_job_document').on(t.tenantId, t.documentId, t.state),
+    uniqueIndex('uq_video_job_tbi').on(t.tenantId, t.brandId, t.id),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.documentId],
+      foreignColumns: [creativeDocuments.tenantId, creativeDocuments.brandId, creativeDocuments.id],
+      name: 'fk_video_job_document',
     }),
   ],
 );

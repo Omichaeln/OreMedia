@@ -2,3 +2,5 @@
 // apps/worker-core (bundleWorkflowCode) into dist/workflows.agents.js; only what this queue serves is exported here.
 export { agentRunWorkflowV1, agentRunSignalRelayV1 } from '../agent-run.workflow.v1';
 export { skillEvaluationWorkflowV1 } from '../skill-evaluation.workflow.v1';
+// STU-3: one attempt of a studio video AI job (storyboard or recut), and the relay that signals its cancel.
+export { studioVideoJobWorkflowV1, studioVideoJobSignalRelayV1 } from '../studio-video.workflow.v1';

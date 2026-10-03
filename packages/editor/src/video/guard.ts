@@ -5,10 +5,23 @@ import { canonicalJson } from '@oremedia/domain/canonical-json';
 import { findItem, spanOf } from './time';
 
 /**
+ * STU-3: the same protected overlay at another time: element, length and animations unchanged. A recut that
+ * shortens the picture keeps the brand's end card on the last seconds this way; the logo itself (asset, placement,
+ * size, appearance) is never touched, and an agent still cannot lengthen, shorten, remove or add it.
+ */
+function isRetime(existing: OverlayItem, next: OverlayItem): boolean {
+  const strip = (o: OverlayItem) => {
+    const { startMs: _s, endMs: _e, ...rest } = o;
+    return canonicalJson(rest);
+  };
+  return existing.endMs - existing.startMs === next.endMs - next.startMs && strip(existing) === strip(next);
+}
+
+/**
  * Agent guards for timelines (architecture principle 2): locks bind everyone through the reducer, and an agent may
  * never lock or unlock anything (locks are a person's decision); protected overlays (logos, `protected` elements)
- * cannot be changed, moved or removed by an agent, and agents cannot add logo overlays (logos are placed from
- * approved assets by a person). People are not limited here.
+ * cannot be changed, resized, moved in the frame or removed by an agent (STU-3: they may be retimed, unchanged), and
+ * agents cannot add logo overlays (logos are placed from approved assets by a person). People are not limited here.
  */
 export function guardVideoAgent(project: VideoProjectV1, op: VideoOperation, origin: 'user' | 'agent'): void {
   if (origin !== 'agent') return;
@@ -26,8 +39,9 @@ export function guardVideoAgent(project: VideoProjectV1, op: VideoOperation, ori
   if (id) {
     const found = findItem(project, id);
     if (found && 'element' in found.item) {
-      const el = (found.item as OverlayItem).element;
-      if (el.protected || el.type === 'logo')
+      const existing = found.item as OverlayItem;
+      const el = existing.element;
+      if ((el.protected || el.type === 'logo') && !(op.op === 'setOverlay' && isRetime(existing, op.overlay)))
         throw new PolicyDeniedError('protected_element', `Agents cannot change protected overlay ${id}`);
     }
   }

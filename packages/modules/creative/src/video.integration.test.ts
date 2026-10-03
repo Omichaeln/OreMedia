@@ -721,7 +721,9 @@ describe('video documents (STU-2b) against MySQL 8', () => {
       const locked = await failure(
         asAgent([{ op: 'moveClip', trackId: 'trk_video', itemId: 'c0', startMs: 20_000 }]),
       );
-      expect((locked as ValidationFailedError).details?.[0]?.issue).toMatch(/^item_locked/);
+      // STU-3: the agent guard refuses work on locked items itself (a policy error), before the reducer would.
+      expect(locked).toBeInstanceOf(PolicyDeniedError);
+      expect((locked as PolicyDeniedError).reason).toBe('locked');
       const dirty = await failure(
         asAgent([
           {

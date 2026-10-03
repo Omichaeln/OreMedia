@@ -65,6 +65,17 @@ describe('guardVideoAgent', () => {
       denied({ op: 'setOverlay', trackId: 'trk_titles', overlay: { ...logo, id: 'ov_new_logo' } }),
     ).toMatch(/logo/);
     expect(denied({ op: 'removeTrack', trackId: 'trk_titles' })).toMatch(/protected/);
+    // STU-3: the same logo at another time (length, element and animations unchanged) is a retime, not a change.
+    expect(
+      denied({ op: 'setOverlay', trackId: 'trk_titles', overlay: { ...logo, startMs: 6_000, endMs: 8_000 } }),
+    ).toBeNull();
+    expect(
+      denied({
+        op: 'setOverlay',
+        trackId: 'trk_titles',
+        overlay: { ...logo, startMs: 6_000, endMs: 8_000, element: { ...logo.element, opacity: 0.5 } },
+      }),
+    ).toMatch(/protected/);
   });
   it('agents may edit ordinary items', () => {
     expect(denied({ op: 'moveClip', trackId: 'trk_video', itemId: 'clip_c', startMs: 11_000 })).toBeNull();

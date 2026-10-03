@@ -12,7 +12,12 @@ import {
 } from '@oremedia/db/schema/destinations';
 import { publicationRemoteChanges, publications, remoteEvidence } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+  LATER_TABLE_NAMES,
+} from '../../../tooling/test-fixtures/src/seed';
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 const sha256 = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -31,7 +36,8 @@ const PREVIOUS_HEAD = '0017_destination_report_rows';
 const LATER_TABLES: MySqlTable[] = [seoAuditRuns, seoAuditPages, seoFindingWork];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !LATER_TABLES.includes(t));
+  .filter((t) => !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0018 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

@@ -183,6 +183,13 @@
       "when": 1791033169282,
       "tag": "0025_video_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1791040314798,
+      "tag": "0026_studio_video_jobs",
+      "breakpoints": true
     }
   ]
 }

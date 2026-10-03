@@ -166,7 +166,16 @@ export function applyCuts(
       const e = s + lengthOf(c);
       const a = Math.max(cut.startMs, s);
       const b = Math.min(cut.endMs, e);
-      if (b - a < 1 || !inScope(opts.scope, c.id)) continue;
+      if (b - a < 1) continue;
+      if (!inScope(opts.scope, c.id)) {
+        work.conflict({
+          code: 'out_of_scope',
+          message: `Clip ${nameOf(c)} is outside ${opts.scope?.label ?? 'the scope'}; it was not changed`,
+          groupId: opts.groupId,
+          itemIds: [c.id],
+        });
+        continue;
+      }
       if (c.locked) {
         work.conflict({
           code: 'item_locked',
@@ -1085,14 +1094,18 @@ export function reframeProject(
         const height = t.height * s;
         const cx = ((t.x + t.width / 2) / w1) * f2.width;
         const cy = ((t.y + t.height / 2) / h1) * f2.height;
+        // Kept inside the new safe area (a logo near an edge of the wide frame stays clear of the platform's chrome).
+        const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+        const x = clamp(cx - width / 2, f2.safeArea.left, f2.width - f2.safeArea.right - width);
+        const y = clamp(cy - height / 2, f2.safeArea.top, f2.height - f2.safeArea.bottom - height);
         return {
           ...o,
           element: {
             ...o.element,
             transform: {
               ...t,
-              x: Math.round(cx - width / 2),
-              y: Math.round(cy - height / 2),
+              x: Math.round(x),
+              y: Math.round(y),
               width: Math.round(width),
               height: Math.round(height),
             },

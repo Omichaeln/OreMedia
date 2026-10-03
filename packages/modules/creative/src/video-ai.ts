@@ -1,0 +1,1371 @@
+import type { z } from 'zod';
+import type { BrandSnapshot } from '@oremedia/contracts/brand';
+import type { Finding } from '@oremedia/contracts/creative';
+import {
+  BudgetExhaustedError,
+  NotFoundError,
+  OremediaError,
+  StaleRevisionError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
+import type { ResolvedActor } from '@oremedia/contracts/policy';
+import {
+  type VideoMediaInfo,
+  type VideoOperationBatch,
+  type VideoProjectV1,
+  type VideoTemplateSummary,
+} from '@oremedia/contracts/video';
+import {
+  ModelRecutOutput,
+  ModelStoryboardOutput,
+  VIDEO_AI_PROGRESS,
+  VideoAiAccept,
+  VideoAiActive,
+  VideoAiAssemble,
+  VideoAiCancel,
+  VideoAiGet,
+  VideoAiPreflight,
+  VideoAiRequest,
+  VideoAiResult,
+  VideoAiRetry,
+  VideoAiStart,
+  type GapAlternative,
+  type GapKind,
+  type Storyboard,
+  type StudioVideoJobInputV1,
+  type VideoAiErrorCode,
+  type VideoAiIssue,
+  type VideoAiJobState,
+  type VideoAiScope,
+  type VideoConflict,
+  type VideoGenerationInputs,
+  type VideoJobStepOutcomeV1,
+  type VideoProposal,
+} from '@oremedia/contracts/video-ai';
+import { withTransaction, type Tx } from '@oremedia/db';
+import { hashCanonical } from '@oremedia/domain/hash';
+import { newId } from '@oremedia/domain/ids';
+import { IllegalTransitionError } from '@oremedia/domain/state-machines/machine';
+import { videoAiJobMachine, type VideoAiJobEvent } from '@oremedia/domain/state-machines/video-ai-job';
+import {
+  checkModelStoryboard,
+  compileAssembly,
+  compileRecut,
+  isEmptyProject,
+  listVideoTemplates,
+  storyboardProblems,
+  validateVideoProject,
+  videoScopeOf,
+  videoTimelineDiff,
+  SHOT_KINDS,
+  type StoryboardAsset,
+} from '@oremedia/editor/video/index';
+import { policy } from '@oremedia/module-access';
+import { budgets } from '@oremedia/module-billing';
+import { audit, outbox } from '@oremedia/module-operations';
+import { StudioVideoJobRepository } from './repositories';
+import { creativeEngine as engine, type CreativeDocumentRow } from './service';
+import {
+  brandBindings,
+  mediaLookup,
+  parseSnapshot,
+  projectAssetRefs,
+  timedAssetIds,
+  waveformLookup,
+} from './video-support';
+
+/**
+ * STU-3: the studio video AI service (preflight, start, get, active, cancel, retry, assemble, accept) and the
+ * runtime surface the agents worker drives (studioVideoJobWorkflowV1). The model call itself lives in the agents
+ * module (it holds the model adapter); everything that reads or writes creative state is here, through the same
+ * engine as every other change: the storyboard and recut compilers produce timeline operations, which are evaluated
+ * by evaluateVideoBatch (guards with the request's scope, asset authorisation, reducer, validation) and committed by
+ * commitVideoRevision with the job's generation inputs.
+ */
+
+const jobsRepo = new StudioVideoJobRepository();
+type JobRow = Awaited<ReturnType<typeof jobsRepo.getById>>;
+
+// ---- cross-module hooks (registered by the composition roots, as registerAssetAuthoriser) ---------------------
+
+/** Assets a storyboard may use: person-supplied, approved, with recorded rights, eligible for creative use now. */
+export type VideoAiAssetSource = (brandId: string, tx?: Tx) => Promise<StoryboardAsset[]>;
+const unregisteredAssets: VideoAiAssetSource = async () => {
+  throw new Error(
+    'video AI asset source not registered (composition root must call registerVideoAiAssetSource)',
+  );
+};
+let assetSource: VideoAiAssetSource = unregisteredAssets;
+export const registerVideoAiAssetSource = (fn: VideoAiAssetSource): void => {
+  assetSource = fn;
+};
+export const resetVideoAiAssetSource = (): void => {
+  assetSource = unregisteredAssets;
+};
+
+/** Whether generated media can close a gap for this brand: the feature, the provider, and its price. */
+export interface VideoAiCapabilities {
+  videoGeneration: { available: boolean; reason?: string; costMicrosPerSecond?: number };
+  speechGeneration: { available: boolean; reason?: string; costMicros?: number };
+}
+export type VideoAiCapabilitySource = (tenantId: string, tx?: Tx) => Promise<VideoAiCapabilities>;
+const NOT_CONFIGURED: VideoAiCapabilitySource = async () => ({
+  videoGeneration: { available: false, reason: 'Video generation is not configured for this deployment' },
+  speechGeneration: { available: false, reason: 'Speech generation is not configured for this deployment' },
+});
+let capabilitySource: VideoAiCapabilitySource = NOT_CONFIGURED;
+export const registerVideoAiCapabilitySource = (fn: VideoAiCapabilitySource | null): void => {
+  capabilitySource = fn ?? NOT_CONFIGURED;
+};
+
+/** Price list for the estimate (micro-units): the composition root sets it from the model configuration. */
+export interface VideoAiPricing {
+  modelCallMicros: number;
+}
+const DEFAULT_PRICING: VideoAiPricing = { modelCallMicros: 170_000 };
+let pricing: VideoAiPricing = DEFAULT_PRICING;
+export const configureVideoAiPricing = (p: Partial<VideoAiPricing>): void => {
+  pricing = { ...DEFAULT_PRICING, ...p };
+};
+
+// ---- helpers -------------------------------------------------------------------------------------------------
+
+const jobResource = (j: JobRow) => ({
+  type: 'creative_document',
+  tenantId: j.tenantId,
+  brandId: j.brandId,
+  id: j.documentId,
+});
+
+function move(from: VideoAiJobState, event: VideoAiJobEvent): VideoAiJobState {
+  try {
+    return videoAiJobMachine.transition(from, event);
+  } catch (err) {
+    if (err instanceof IllegalTransitionError)
+      throw new ValidationFailedError(
+        [{ path: 'state', issue: err.message }],
+        `The job is ${from}; this is not possible now`,
+      );
+    throw err;
+  }
+}
+
+const SYSTEM = { kind: 'system' as const, id: 'studio_video_job' };
+const LIVE: ReadonlySet<VideoAiJobState> = new Set(['queued', 'generating', 'validating', 'saving']);
+export const videoJobWorkflowId = (jobId: string, attempt: number): string =>
+  `studio-video:${jobId}:${attempt}`;
+export const videoJobModelCallRef = (jobId: string, attempt: number): string =>
+  `svj:${jobId}:${attempt}:model`;
+/** Item ids a job's compiles mint (deterministic, so an accept's recompile yields the proposal's ids). */
+const idPrefixOf = (jobId: string) => `ai${jobId.slice(-6).toLowerCase()}_`;
+
+const parseOutput = (job: JobRow) => {
+  if (!job.modelOutput) return null;
+  const raw = job.modelOutput as { output: unknown; callRef: string };
+  return job.kind === 'storyboard'
+    ? { kind: 'storyboard' as const, output: ModelStoryboardOutput.parse(raw.output), callRef: raw.callRef }
+    : { kind: 'recut' as const, output: ModelRecutOutput.parse(raw.output), callRef: raw.callRef };
+};
+
+function toJobDto(j: JobRow) {
+  return {
+    id: j.id,
+    brandId: j.brandId,
+    documentId: j.documentId,
+    baseRevisionId: j.baseRevisionId,
+    kind: j.kind,
+    state: j.state,
+    progress: j.progress,
+    attempt: j.attempt,
+    live: LIVE.has(j.state),
+    request: VideoAiRequest.parse(j.request),
+    costReservedMicros: j.costReservedMicros,
+    costSpentMicros: j.costSpentMicros,
+    error: j.errorCode ? { code: j.errorCode, message: j.error ?? '' } : null,
+    result: j.result ? VideoAiResult.parse(j.result) : null,
+    createdAt: j.createdAt.toISOString(),
+    updatedAt: j.updatedAt.toISOString(),
+    finishedAt: j.finishedAt?.toISOString() ?? null,
+    version: j.version,
+  };
+}
+export type VideoAiJobDto = ReturnType<typeof toJobDto>;
+
+/** The request as stored and hashed: parsed with every default, so equal intents hash equally. */
+const normalised = (request: z.input<typeof VideoAiRequest>) => VideoAiRequest.parse(request);
+
+async function remainingBudget(brandId: string, tx?: Tx): Promise<number | null> {
+  try {
+    const s = await budgets.summary(brandId, tx);
+    return Math.min(s.month.remainingMicros, s.day.remainingMicros);
+  } catch {
+    return null; // shown as unknown; reserving at start is the authority
+  }
+}
+
+/** A generated clip of this length is what a gap's alternative is priced at. */
+const GENERATED_CLIP_SECONDS = 5;
+
+/** The supported ways to close a gap, with this brand's availability (never offered silently: the person picks). */
+function alternativesFor(
+  kind: GapKind,
+  caps: VideoAiCapabilities,
+  eligible: ReadonlyMap<string, StoryboardAsset>,
+  remainingMicros: number | null,
+): GapAlternative[] {
+  const stills = [...eligible.values()].some((a) => SHOT_KINDS.includes(a.kind) && a.kind !== 'video');
+  const withSound = [...eligible.values()].some((a) => a.kind === 'video' && a.hasAudio);
+  const priced = (
+    gen: { available: boolean; reason?: string },
+    cost: number | undefined,
+  ): { available: boolean; reason?: string; costMicros?: number } => {
+    if (!gen.available) return { available: false, reason: gen.reason ?? 'Not available' };
+    if (cost !== undefined && remainingMicros !== null && cost > remainingMicros)
+      return { available: false, reason: 'The remaining budget does not cover it', costMicros: cost };
+    return { available: true, ...(cost !== undefined ? { costMicros: cost } : {}) };
+  };
+  switch (kind) {
+    case 'footage': {
+      const perSecond = caps.videoGeneration.costMicrosPerSecond;
+      return [
+        {
+          kind: 'use_still',
+          label: 'Use an approved still for the shot (held on screen; no motion)',
+          available: stills,
+          ...(stills ? {} : { reason: 'No eligible stills in the library' }),
+        },
+        {
+          kind: 'generated_clip',
+          label: `Generate a ${GENERATED_CLIP_SECONDS} s clip (labelled as generated, held for approval)`,
+          ...priced(
+            caps.videoGeneration,
+            perSecond !== undefined ? perSecond * GENERATED_CLIP_SECONDS : undefined,
+          ),
+        },
+        {
+          kind: 'ask_for_footage',
+          label: 'Ask for footage: upload it to the library with its rights',
+          available: true,
+        },
+      ];
+    }
+    case 'music':
+      return [
+        { kind: 'ask_for_footage', label: 'Upload licensed music to the library', available: true },
+        {
+          kind: 'use_clip_sound',
+          label: 'Use the clips’ own sound',
+          available: withSound,
+          ...(withSound ? {} : { reason: 'No eligible clip has sound' }),
+        },
+        { kind: 'no_music', label: 'No music', available: true },
+      ];
+    case 'voiceover':
+      return [
+        { kind: 'record_voiceover', label: 'Ask for a recording of the script', available: true },
+        {
+          kind: 'generated_speech',
+          label: 'Generate speech from the script (labelled as generated, held for approval)',
+          ...priced(caps.speechGeneration, caps.speechGeneration.costMicros),
+        },
+        {
+          kind: 'use_clip_sound',
+          label: 'Use the clips’ own sound',
+          available: withSound,
+          ...(withSound ? {} : { reason: 'No eligible clip has sound' }),
+        },
+      ];
+  }
+}
+
+/**
+ * Everything a request is checked, generated and compiled against: the base project, the brand snapshot it is
+ * designed against and its template bindings, the eligible assets (minus excluded ones) and what is known about every
+ * source, the effective facts, the template structure, waveforms for pause detection, capabilities and the budget.
+ */
+async function prepare(
+  actor: ResolvedActor,
+  doc: CreativeDocumentRow,
+  baseRevisionId: string,
+  request: VideoAiRequest,
+  tx?: Tx,
+) {
+  const base = await engine.loadRevision(doc, baseRevisionId, tx);
+  const project = parseSnapshot('video', base.snapshot).snapshot as VideoProjectV1;
+  const snapshot: BrandSnapshot = await engine.resolveSnapshot(
+    actor,
+    doc.brandId,
+    project.brandVersionId,
+    tx,
+  );
+  const bindings = await brandBindings(snapshot, tx);
+  const brief = request.kind === 'storyboard' ? request.brief : null;
+  const excluded = new Set(brief?.assets.exclude ?? []);
+  const eligible = new Map(
+    (await assetSource(doc.brandId, tx))
+      .filter((a) => !excluded.has(a.assetVersionId))
+      .map((a) => [a.assetVersionId, a] as const),
+  );
+  const effectiveFactIds = new Set(snapshot.facts.map((f) => f.id));
+  const templateKey = brief?.templateKey ?? project.templateKey ?? null;
+  const template: VideoTemplateSummary | null = templateKey
+    ? (listVideoTemplates().find((t) => t.key === templateKey) ?? null)
+    : null;
+  const media: Record<string, VideoMediaInfo> = await mediaLookup(
+    [...new Set([...timedAssetIds(project), ...eligible.keys()])],
+    tx,
+  );
+  const videoSources = timedAssetIds(project).filter((id) => media[id]?.kind === 'video');
+  const waveforms = request.kind === 'recut' ? await waveformLookup(videoSources, tx) : {};
+  const caps = await capabilitySource(doc.tenantId, tx);
+  const remainingMicros = await remainingBudget(doc.brandId, tx);
+  const logoRule = snapshot.document.logoRules.find((r) => r.variant === 'primary');
+  return {
+    base,
+    project,
+    snapshot,
+    bindings,
+    eligible,
+    effectiveFactIds,
+    template,
+    templateKey,
+    media,
+    waveforms,
+    caps,
+    remainingMicros,
+    logoMinWidthPx: logoRule?.minWidthPx ?? 0,
+    estimateMicros: pricing.modelCallMicros,
+  };
+}
+type Prepared = Awaited<ReturnType<typeof prepare>>;
+
+/** The preflight answer: material inputs, issues and cost (also what start checks). */
+function preflightOf(prepared: Prepared, request: VideoAiRequest) {
+  const issues: VideoAiIssue[] = [];
+  const { project, eligible, effectiveFactIds } = prepared;
+  const factIds = request.kind === 'storyboard' ? request.brief.factIds : request.recut.factIds;
+  for (const id of factIds)
+    if (!effectiveFactIds.has(id))
+      issues.push({
+        code: 'fact_not_effective',
+        severity: 'blocking',
+        message: 'A chosen fact is not approved and in force; pick another or ask for it to be approved',
+        ref: id,
+      });
+  const picked = request.kind === 'storyboard' ? request.brief.assets.include : request.recut.assetVersionIds;
+  for (const id of picked)
+    if (!eligible.has(id))
+      issues.push({
+        code: 'asset_not_eligible',
+        severity: 'blocking',
+        message: 'A chosen asset is not approved for creative use with recorded rights',
+        ref: id,
+      });
+  const shots = [...eligible.values()].filter((a) => SHOT_KINDS.includes(a.kind));
+  if (request.kind === 'storyboard') {
+    const brief = request.brief;
+    if (brief.formatKey && brief.formatKey !== project.format.key)
+      issues.push({
+        code: 'format_mismatch',
+        severity: 'blocking',
+        message: `This video is ${project.format.width}×${project.format.height}; storyboard it in its own format, then make a version in another format from the timeline`,
+        ref: 'formatKey',
+      });
+    if (!shots.some((a) => a.kind === 'video'))
+      issues.push({
+        code: 'no_footage',
+        severity: 'warning',
+        message:
+          'There is no approved footage with recorded rights; the storyboard will list the shots it needs',
+      });
+    if (brief.audio === 'music' && ![...eligible.values()].some((a) => a.kind === 'audio'))
+      issues.push({
+        code: 'no_music',
+        severity: 'warning',
+        message: 'There is no approved music in the library; the storyboard will list it as a gap',
+      });
+    if (brief.audio === 'voiceover')
+      issues.push({
+        code: 'voiceover_needs_recording',
+        severity: 'info',
+        message: prepared.caps.speechGeneration.available
+          ? 'A voice-over needs a recording, or generated speech (offered as an alternative, never used silently)'
+          : 'A voice-over needs a recording of the script; generated speech is not available',
+      });
+    if (brief.captions && !(prepared.bindings.fonts.caption ?? prepared.bindings.fonts.body))
+      issues.push({
+        code: 'no_caption_font',
+        severity: 'warning',
+        message: 'The brand system has no caption or body font, so captions cannot be added',
+      });
+    if (brief.logo && !prepared.bindings.logoAssetVersionId)
+      issues.push({
+        code: 'no_logo',
+        severity: 'warning',
+        message: 'The brand system names no primary logo',
+      });
+  } else {
+    const v = project.tracks.find((t) => t.kind === 'video');
+    if (!v || v.items.length === 0)
+      issues.push({
+        code: 'nothing_to_recut',
+        severity: 'blocking',
+        message: 'The timeline has no clips yet; make a storyboard and assemble it first',
+      });
+    try {
+      videoScopeOf(project, request.recut.scope);
+    } catch (err) {
+      issues.push({
+        code: 'scope_invalid',
+        severity: 'blocking',
+        message: err instanceof Error ? err.message : 'The scope names something that is not on the timeline',
+        ref: 'scope',
+      });
+    }
+  }
+  if (prepared.remainingMicros !== null && prepared.estimateMicros > prepared.remainingMicros)
+    issues.push({
+      code: 'budget_insufficient',
+      severity: 'blocking',
+      message: 'The remaining generation budget is below what this request would reserve',
+    });
+  return {
+    blocking: issues.some((i) => i.severity === 'blocking'),
+    issues,
+    cost: { modelCalls: 1, totalMicros: prepared.estimateMicros, remainingMicros: prepared.remainingMicros },
+    inputs: {
+      brandVersionId: prepared.snapshot.brandVersionId,
+      brandVersionNumber: prepared.snapshot.brandVersionNumber,
+      formatKey: project.format.key,
+      durationMs: project.durationMs,
+      templateKey: prepared.templateKey,
+      templateScenes: prepared.template?.scenes.map((s) => ({ id: s.id, title: s.title })) ?? [],
+      eligible: {
+        clips: shots.filter((a) => a.kind === 'video').length,
+        stills: shots.filter((a) => a.kind !== 'video').length,
+        audio: [...eligible.values()].filter((a) => a.kind === 'audio').length,
+      },
+      facts: factIds.map((id) => ({
+        id,
+        statement: prepared.snapshot.facts.find((f) => f.id === id)?.statement ?? null,
+        effective: effectiveFactIds.has(id),
+      })),
+      capabilities: {
+        videoGeneration: prepared.caps.videoGeneration.available,
+        speechGeneration: prepared.caps.speechGeneration.available,
+        transcription: false,
+      },
+      empty: isEmptyProject(project),
+    },
+  };
+}
+
+async function loadJob(jobId: string, tx?: Tx) {
+  return jobsRepo.getById(jobId, tx);
+}
+
+const generationInputsOf = (
+  job: JobRow,
+  prepared: Prepared,
+  kind: VideoGenerationInputs['kind'],
+  extra: Partial<VideoGenerationInputs> & { assetVersionIds: string[]; factIds: string[] },
+): VideoGenerationInputs => {
+  const stored = parseOutput(job);
+  const request = VideoAiRequest.parse(job.request);
+  return {
+    jobId: job.id,
+    kind,
+    request,
+    inputsHash: job.inputsHash,
+    brandVersionId: prepared.snapshot.brandVersionId,
+    templateKey: prepared.templateKey,
+    scope: request.kind === 'recut' ? request.recut.scope : null,
+    modelCallRefs: stored ? [stored.callRef] : [],
+    costMicros: job.costSpentMicros,
+    ...extra,
+  };
+};
+
+/** The compile context of a job against a prepared base. */
+const compileContext = (job: JobRow, prepared: Prepared, scope: VideoAiScope | null) => ({
+  media: prepared.media,
+  bindings: prepared.bindings,
+  idPrefix: idPrefixOf(job.id),
+  waveforms: prepared.waveforms,
+  eligibleAssetIds: new Set(
+    [...prepared.eligible.values()].filter((a) => SHOT_KINDS.includes(a.kind)).map((a) => a.assetVersionId),
+  ),
+  effectiveFactIds: prepared.effectiveFactIds,
+  scope,
+});
+
+const stripGroupOps = <G extends { operations: unknown }>(groups: G[]) =>
+  groups.map(({ operations: _o, ...g }) => g);
+
+// ---- the service (router-facing) -----------------------------------------------------------------------------
+
+export const videoAiService = {
+  /** Preflight: nothing is written; creative.edit on the document (it is the check of a change to it). */
+  async preflight(actor: ResolvedActor, input: z.input<typeof VideoAiPreflight>, tx?: Tx) {
+    const parsed = VideoAiPreflight.parse(input);
+    const doc = await engine.documentsRepo.getById(parsed.documentId, tx);
+    await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
+    engine.assertVideo(doc);
+    if (doc.currentRevisionId !== parsed.baseRevisionId)
+      throw new StaleRevisionError(doc.currentRevisionId ?? '');
+    const request = normalised(parsed.request);
+    return preflightOf(await prepare(actor, doc, parsed.baseRevisionId, request, tx), request);
+  },
+
+  /**
+   * Starts a job (idempotent per document, base revision and inputs hash). The preflight runs again and blocking
+   * issues refuse the start; the outbox starts studioVideoJobWorkflowV1. creative.edit on the document and
+   * agent.start_run on the brand (the job spends the brand's generation budget).
+   */
+  async start(actor: ResolvedActor, input: z.input<typeof VideoAiStart>, tx: Tx) {
+    const parsed = VideoAiStart.parse(input);
+    const doc = await engine.documentsRepo.lock(parsed.documentId, tx);
+    await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
+    await policy.assert(actor, 'agent.start_run', engine.brandResource(doc.brandId), {}, tx);
+    engine.assertVideo(doc);
+    const request = normalised(parsed.request);
+    const inputsHash = hashCanonical(request);
+    const existing = await jobsRepo.findByInputs(doc.id, parsed.baseRevisionId, inputsHash, tx);
+    if (existing) return toJobDto(existing);
+    if (doc.currentRevisionId !== parsed.baseRevisionId)
+      throw new StaleRevisionError(doc.currentRevisionId ?? '');
+    const prepared = await prepare(actor, doc, parsed.baseRevisionId, request, tx);
+    const checked = preflightOf(prepared, request);
+    if (checked.blocking)
+      throw new ValidationFailedError(
+        checked.issues
+          .filter((i) => i.severity === 'blocking')
+          .map((i) => ({ path: i.ref ? `request.${i.ref}` : 'request', issue: `${i.code}: ${i.message}` })),
+        'The request cannot start',
+      );
+    const id = newId('studioVideoJob');
+    await jobsRepo.create(
+      {
+        id,
+        brandId: doc.brandId,
+        documentId: doc.id,
+        baseRevisionId: parsed.baseRevisionId,
+        kind: request.kind,
+        state: 'queued',
+        progress: VIDEO_AI_PROGRESS.queued,
+        request,
+        inputsHash,
+        attempt: 1,
+        costReservedMicros: checked.cost.totalMicros, // the estimate until the worker reserves it
+        costSpentMicros: 0,
+        requestedByKind: engine.requesterKindOf(actor),
+        requestedById: actor.id,
+      },
+      tx,
+    );
+    await audit.record(
+      engine.actorRef(actor),
+      'creative.video_ai.start',
+      { type: 'studio_video_job', id },
+      'allowed',
+      tx,
+      {
+        brandId: doc.brandId,
+        documentId: doc.id,
+        baseRevisionId: parsed.baseRevisionId,
+        kind: request.kind,
+        inputsHash,
+        estimateMicros: checked.cost.totalMicros,
+      },
+    );
+    await outbox.add(
+      'creative.video_job_requested',
+      { type: 'studio_video_job', id, version: 0 },
+      { jobId: id, attempt: 1, actorKind: actor.kind, actorId: actor.id },
+      tx,
+      { brandId: doc.brandId },
+    );
+    return toJobDto(await jobsRepo.getById(id, tx));
+  },
+
+  async get(actor: ResolvedActor, input: z.input<typeof VideoAiGet>, tx?: Tx) {
+    const parsed = VideoAiGet.parse(input);
+    const job = await loadJob(parsed.jobId, tx);
+    await policy.assert(actor, 'creative.read', jobResource(job), {}, tx);
+    return toJobDto(job);
+  },
+
+  /** The jobs of a document a person comes back to: every live one and the most recent finished one of each kind. */
+  async active(actor: ResolvedActor, input: z.input<typeof VideoAiActive>, tx?: Tx) {
+    const parsed = VideoAiActive.parse(input);
+    const doc = await engine.documentsRepo.getById(parsed.documentId, tx);
+    await policy.assert(actor, 'creative.read', engine.documentResource(doc), {}, tx);
+    const recent = await jobsRepo.recentForDocument(doc.brandId, doc.id, 20, tx);
+    const live = recent.filter((j) => LIVE.has(j.state));
+    const lastOf = (kind: JobRow['kind']) =>
+      recent.find((j) => j.kind === kind && !LIVE.has(j.state)) ?? null;
+    const storyboard = lastOf('storyboard');
+    const recut = lastOf('recut');
+    return {
+      items: live.map(toJobDto),
+      lastStoryboard: storyboard ? toJobDto(storyboard) : null,
+      lastRecut: recut ? toJobDto(recut) : null,
+    };
+  },
+
+  /**
+   * Cancel: the row moves at once (nothing is written after this commits: the save locks the row and stops on a
+   * cancelled job), the attempt's reservation is released and the workflow is signalled through the outbox. A job
+   * that is already saving cannot be cancelled: it finishes, and its result is a proposal or can be undone.
+   */
+  async cancel(actor: ResolvedActor, input: z.input<typeof VideoAiCancel>, tx: Tx) {
+    const parsed = VideoAiCancel.parse(input);
+    const job = await jobsRepo.lock(parsed.jobId, tx);
+    await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
+    if (job.state === 'cancelled') return toJobDto(job); // a replayed cancel
+    const toState = move(job.state, 'cancel');
+    await jobsRepo.update(
+      job.id,
+      job.version,
+      { state: toState, progress: VIDEO_AI_PROGRESS.cancelled, finishedAt: new Date() },
+      tx,
+    );
+    if (job.budgetRunId) await budgets.release(job.budgetRunId, tx);
+    await audit.record(
+      engine.actorRef(actor),
+      'creative.video_ai.cancel',
+      { type: 'studio_video_job', id: job.id },
+      'allowed',
+      tx,
+      { brandId: job.brandId, documentId: job.documentId, fromState: job.state, toState },
+    );
+    await outbox.add(
+      'creative.video_job_cancel_requested',
+      { type: 'studio_video_job', id: job.id, version: job.version + 1 },
+      { jobId: job.id, attempt: job.attempt },
+      tx,
+      { brandId: job.brandId },
+    );
+    return toJobDto(await jobsRepo.getById(job.id, tx));
+  },
+
+  /**
+   * Retry a failed or cancelled job as a new attempt from the same base revision (refused when the document moved
+   * on: start a new request from the current revision instead). Same permissions as start.
+   */
+  async retry(actor: ResolvedActor, input: z.input<typeof VideoAiRetry>, tx: Tx) {
+    const parsed = VideoAiRetry.parse(input);
+    const job = await jobsRepo.lock(parsed.jobId, tx);
+    await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
+    await policy.assert(actor, 'agent.start_run', engine.brandResource(job.brandId), {}, tx);
+    if (LIVE.has(job.state)) return toJobDto(job); // a replayed retry: the new attempt is already under way
+    const toState = move(job.state, 'retry');
+    const doc = await engine.documentsRepo.getById(job.documentId, tx);
+    if (doc.currentRevisionId !== job.baseRevisionId)
+      throw new ValidationFailedError(
+        [{ path: 'jobId', issue: 'stale_document' }],
+        'The video changed since this was asked for; start a new request from the current revision',
+      );
+    const attempt = job.attempt + 1;
+    await jobsRepo.update(
+      job.id,
+      parsed.expectedVersion,
+      {
+        state: toState,
+        progress: VIDEO_AI_PROGRESS.queued,
+        attempt,
+        budgetRunId: null,
+        budgetReservationId: null,
+        modelOutput: null,
+        result: null,
+        errorCode: null,
+        error: null,
+        finishedAt: null,
+      },
+      tx,
+    );
+    await audit.record(
+      engine.actorRef(actor),
+      'creative.video_ai.retry',
+      { type: 'studio_video_job', id: job.id },
+      'allowed',
+      tx,
+      { brandId: job.brandId, documentId: job.documentId, attempt },
+    );
+    await outbox.add(
+      'creative.video_job_requested',
+      { type: 'studio_video_job', id: job.id, version: job.version + 1 },
+      { jobId: job.id, attempt, actorKind: actor.kind, actorId: actor.id },
+      tx,
+      { brandId: job.brandId },
+    );
+    return toJobDto(await jobsRepo.getById(job.id, tx));
+  },
+
+  /**
+   * Assemble a storyboard (as the person edited it) into the video. It is checked again (eligible assets, effective
+   * facts, length), compiled into timeline operations and evaluated like any batch; into an empty project it is
+   * committed at once (nothing to replace; undoable), otherwise it becomes a proposal on the job, accepted per group.
+   * The person's edited storyboard is stored on the job either way. creative.edit on the document.
+   */
+  async assemble(actor: ResolvedActor, input: z.input<typeof VideoAiAssemble>, tx: Tx) {
+    const parsed = VideoAiAssemble.parse(input);
+    const job = await jobsRepo.lock(parsed.jobId, tx);
+    await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
+    if (job.kind !== 'storyboard' || job.state !== 'completed' || !job.result)
+      throw new ValidationFailedError(
+        [{ path: 'jobId', issue: 'storyboard_not_ready' }],
+        'Assemble a completed storyboard',
+      );
+    const doc = await engine.documentsRepo.lock(job.documentId, tx);
+    engine.assertVideo(doc);
+    if (doc.currentRevisionId !== parsed.baseRevisionId)
+      throw new StaleRevisionError(doc.currentRevisionId ?? '');
+    const request = VideoAiRequest.parse(job.request);
+    const prepared = await prepare(actor, doc, parsed.baseRevisionId, request, tx);
+    const storyboard = parsed.storyboard;
+    const problems = storyboardProblems(storyboard, {
+      eligible: prepared.eligible,
+      effectiveFactIds: prepared.effectiveFactIds,
+      brief: request.kind === 'storyboard' ? request.brief : (undefined as never),
+    });
+    if (problems.length)
+      throw new ValidationFailedError(
+        problems.map((p) => ({
+          path: `storyboard.${p.path}`,
+          issue: `${p.reason}${p.detail ? `: ${p.detail}` : ''}`,
+        })),
+        'The storyboard uses something it may not; fix it before assembling',
+      );
+    const compiled = compileAssembly(prepared.project, storyboard, {
+      media: prepared.media,
+      bindings: prepared.bindings,
+      idPrefix: idPrefixOf(job.id),
+      logoMinWidthPx: prepared.logoMinWidthPx,
+    });
+    if (!compiled.operations.length)
+      throw new ValidationFailedError(
+        compiled.conflicts.map((c) => ({ path: 'storyboard', issue: `${c.code}: ${c.message}` })),
+        'Nothing in the storyboard can be placed on the timeline',
+      );
+    const summary = `Assembled storyboard “${storyboard.title}”`.slice(0, 500);
+    const batch: VideoOperationBatch = {
+      baseRevisionId: prepared.base.id,
+      operations: compiled.operations,
+      summary,
+      origin: 'user',
+    };
+    const evaluated = await engine.evaluateVideoBatch(actor, doc, prepared.base, batch, tx);
+    const storyboardHash = hashCanonical(storyboard);
+    const result = VideoAiResult.parse(job.result);
+    const fresh = isEmptyProject(prepared.project);
+    if (fresh) {
+      const committed = await engine.commitVideoRevision(
+        actor,
+        doc,
+        prepared.base,
+        batch,
+        evaluated,
+        tx,
+        generationInputsOf(job, prepared, 'assembly', {
+          assetVersionIds: compiled.assetVersionIds,
+          factIds: compiled.factIds,
+          storyboardHash,
+        }),
+      );
+      await jobsRepo.update(
+        job.id,
+        job.version,
+        { result: { ...result, storyboard, conflicts: compiled.conflicts } },
+        tx,
+      );
+      await audit.record(
+        engine.actorRef(actor),
+        'creative.video_ai.assemble',
+        { type: 'studio_video_job', id: job.id },
+        'allowed',
+        tx,
+        { brandId: job.brandId, documentId: doc.id, applied: true, revisionId: committed.revision.id },
+      );
+      return {
+        applied: true as const,
+        ...committed,
+        conflicts: compiled.conflicts,
+        proposal: null,
+        job: toJobDto(await jobsRepo.getById(job.id, tx)),
+      };
+    }
+    const proposal: VideoProposal = {
+      kind: 'assembly',
+      documentId: doc.id,
+      baseRevisionId: prepared.base.id,
+      origin: 'user',
+      summary,
+      operations: compiled.operations,
+      groups: stripGroupOps(compiled.groups),
+      changes: videoTimelineDiff(prepared.project, evaluated.next),
+      findings: evaluated.findings,
+      contentHash: evaluated.contentHash,
+      scope: null,
+      storyboard,
+      acceptedRevisionId: null,
+    };
+    await jobsRepo.update(
+      job.id,
+      job.version,
+      { result: { ...result, storyboard, proposal, conflicts: compiled.conflicts } },
+      tx,
+    );
+    await audit.record(
+      engine.actorRef(actor),
+      'creative.video_ai.assemble',
+      { type: 'studio_video_job', id: job.id },
+      'allowed',
+      tx,
+      { brandId: job.brandId, documentId: doc.id, applied: false, groups: proposal.groups.length },
+    );
+    return {
+      applied: false as const,
+      proposal,
+      conflicts: compiled.conflicts,
+      job: toJobDto(await jobsRepo.getById(job.id, tx)),
+    };
+  },
+
+  /**
+   * Accept some or all groups of a job's proposal. The chosen groups are recompiled against the proposal's base (which
+   * must still be the head: a moved document is a 409 and the studio asks for a fresh request), evaluated with the
+   * request's scope and the agent guards, and committed as one revision with the job's generation inputs and the
+   * groups kept. creative.edit on the document.
+   */
+  async accept(actor: ResolvedActor, input: z.input<typeof VideoAiAccept>, tx: Tx) {
+    const parsed = VideoAiAccept.parse(input);
+    const job = await jobsRepo.lock(parsed.jobId, tx);
+    await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
+    const result = job.result ? VideoAiResult.parse(job.result) : null;
+    const proposal = result?.proposal;
+    if (!result || !proposal)
+      throw new ValidationFailedError([{ path: 'jobId', issue: 'no_proposal' }], 'This job has no proposal');
+    if (proposal.acceptedRevisionId)
+      throw new ValidationFailedError(
+        [{ path: 'jobId', issue: 'proposal_already_accepted' }],
+        'This proposal was already accepted; undo it from the history if needed',
+      );
+    const known = new Set(proposal.groups.map((g) => g.id));
+    const unknown = parsed.groupIds.filter((id) => !known.has(id));
+    if (unknown.length)
+      throw new ValidationFailedError(
+        unknown.map((id) => ({ path: 'groupIds', issue: `unknown_group: ${id}` })),
+      );
+    const doc = await engine.documentsRepo.lock(job.documentId, tx);
+    engine.assertVideo(doc);
+    if (
+      doc.currentRevisionId !== proposal.baseRevisionId ||
+      parsed.baseRevisionId !== proposal.baseRevisionId
+    )
+      throw new StaleRevisionError(doc.currentRevisionId ?? '');
+    const request = VideoAiRequest.parse(job.request);
+    const prepared = await prepare(actor, doc, proposal.baseRevisionId, request, tx);
+    const only = new Set(parsed.groupIds);
+    let operations: VideoOperationBatch['operations'];
+    let assetVersionIds: string[];
+    let factIds: string[];
+    if (proposal.kind === 'recut') {
+      const stored = parseOutput(job);
+      if (stored?.kind !== 'recut')
+        throw new ValidationFailedError([{ path: 'jobId', issue: 'no_model_output' }]);
+      const compiled = compileRecut(
+        prepared.project,
+        stored.output.actions,
+        compileContext(job, prepared, proposal.scope),
+        only,
+      );
+      ({ operations, assetVersionIds, factIds } = compiled);
+    } else {
+      if (!proposal.storyboard) throw new ValidationFailedError([{ path: 'jobId', issue: 'no_storyboard' }]);
+      const compiled = compileAssembly(
+        prepared.project,
+        proposal.storyboard,
+        {
+          media: prepared.media,
+          bindings: prepared.bindings,
+          idPrefix: idPrefixOf(job.id),
+          logoMinWidthPx: prepared.logoMinWidthPx,
+        },
+        only,
+      );
+      ({ operations, assetVersionIds, factIds } = compiled);
+    }
+    if (!operations.length)
+      throw new ValidationFailedError(
+        [{ path: 'groupIds', issue: 'nothing_to_apply' }],
+        'The chosen changes no longer apply to the video',
+      );
+    const kept = proposal.groups.filter((g) => only.has(g.id));
+    const batch: VideoOperationBatch = {
+      baseRevisionId: proposal.baseRevisionId,
+      operations,
+      summary:
+        kept.length === proposal.groups.length
+          ? proposal.summary
+          : `${proposal.summary} (${kept.map((g) => g.label).join('; ')})`.slice(0, 500),
+      origin: proposal.origin,
+    };
+    const evaluated = await engine.evaluateVideoBatch(actor, doc, prepared.base, batch, tx, {
+      scope: proposal.scope,
+    });
+    const committed = await engine.commitVideoRevision(
+      actor,
+      doc,
+      prepared.base,
+      batch,
+      evaluated,
+      tx,
+      generationInputsOf(job, prepared, proposal.kind === 'recut' ? 'recut' : 'assembly', {
+        assetVersionIds,
+        factIds,
+        acceptedGroupIds: [...only],
+        ...(proposal.storyboard ? { storyboardHash: hashCanonical(proposal.storyboard) } : {}),
+      }),
+    );
+    await jobsRepo.update(
+      job.id,
+      job.version,
+      { result: { ...result, proposal: { ...proposal, acceptedRevisionId: committed.revision.id } } },
+      tx,
+    );
+    await audit.record(
+      engine.actorRef(actor),
+      'creative.video_ai.accept',
+      { type: 'studio_video_job', id: job.id },
+      'allowed',
+      tx,
+      {
+        brandId: job.brandId,
+        documentId: doc.id,
+        revisionId: committed.revision.id,
+        groups: [...only].join(','),
+      },
+    );
+    return { ...committed, job: toJobDto(await jobsRepo.getById(job.id, tx)) };
+  },
+};
+
+// ---- the runtime surface (studioVideoJobWorkflowV1 activities, via the agents module) -------------------------
+
+/** What the model is shown and may answer about; built by `modelContext`, rendered by packages/ai. */
+export interface VideoAiModelContext {
+  jobId: string;
+  attempt: number;
+  brandId: string;
+  request: VideoAiRequest;
+  snapshot: BrandSnapshot;
+  project: VideoProjectV1;
+  eligible: StoryboardAsset[];
+  template: VideoTemplateSummary | null;
+  /** The latest storyboard's script by scene (recut: captions come from it). */
+  script: Array<{ sceneId: string | null; title: string; narration: string }>;
+  media: Record<string, VideoMediaInfo>;
+  /** Sources with a waveform (pauses can be found in them). */
+  waveformSources: string[];
+  estimateMicros: number;
+}
+
+function outcomeFor(job: JobRow, attempt: number): VideoJobStepOutcomeV1 {
+  if (job.attempt !== attempt) return { proceed: false, reason: 'finished' };
+  if (job.state === 'cancelled') return { proceed: false, reason: 'cancelled' };
+  if (job.state === 'completed' || job.state === 'failed') return { proceed: false, reason: 'finished' };
+  return { proceed: true };
+}
+
+async function loadForInput(input: StudioVideoJobInputV1, tx?: Tx) {
+  const job = await loadJob(input.jobId, tx);
+  if (job.tenantId !== input.tenantId) throw new NotFoundError('StudioVideoJob', input.jobId);
+  return job;
+}
+
+async function advance(job: JobRow, event: VideoAiJobEvent, tx: Tx, extra: Partial<JobRow> = {}) {
+  const toState = move(job.state, event);
+  await jobsRepo.update(
+    job.id,
+    job.version,
+    { state: toState, progress: VIDEO_AI_PROGRESS[toState], ...extra },
+    tx,
+  );
+  return toState;
+}
+
+/** The latest storyboard of the document, scene by scene, matched to the project's scenes by title. */
+async function scriptOf(doc: CreativeDocumentRow, project: VideoProjectV1, tx?: Tx) {
+  const recent = await jobsRepo.recentForDocument(doc.brandId, doc.id, 20, tx);
+  const last = recent.find((j) => j.kind === 'storyboard' && j.state === 'completed' && j.result);
+  const storyboard: Storyboard | null = last ? (VideoAiResult.parse(last.result).storyboard ?? null) : null;
+  return (storyboard?.scenes ?? [])
+    .filter((s) => s.narration)
+    .map((s) => ({
+      sceneId: project.scenes.find((p) => p.title === s.title)?.id ?? null,
+      title: s.title,
+      narration: s.narration,
+    }));
+}
+
+export const videoAiJobs = {
+  async begin(input: StudioVideoJobInputV1): Promise<VideoJobStepOutcomeV1> {
+    return withTransaction(async (tx) => {
+      const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      const outcome = outcomeFor(job, input.attempt);
+      if (!outcome.proceed) return outcome;
+      if (job.state === 'queued') {
+        await advance(job, 'start', tx);
+        await audit.record(
+          SYSTEM,
+          'creative.video_ai.begin',
+          { type: 'studio_video_job', id: job.id },
+          'allowed',
+          tx,
+          {
+            brandId: job.brandId,
+            attempt: job.attempt,
+          },
+        );
+      }
+      return { proceed: true };
+    });
+  },
+
+  /** The attempt's reservation (once): the estimate is reserved before the model call. */
+  async reserve(input: StudioVideoJobInputV1): Promise<VideoJobStepOutcomeV1> {
+    const job = await loadForInput(input);
+    const outcome = outcomeFor(job, input.attempt);
+    if (!outcome.proceed || job.budgetRunId) return outcome;
+    const estimate = Math.max(job.costReservedMicros, pricing.modelCallMicros);
+    const budgetRunId = newId('budgetReservation');
+    const reservation = await budgets.reserveSpend(
+      job.brandId,
+      budgetRunId,
+      estimate,
+      new Date(Date.now() + 30 * 60_000),
+    ); // atomic; throws BudgetExhausted
+    return withTransaction(async (tx) => {
+      const fresh = await jobsRepo.lock(job.id, tx);
+      const now = outcomeFor(fresh, input.attempt);
+      if (!now.proceed) {
+        await budgets.release(budgetRunId, tx);
+        return now;
+      }
+      await jobsRepo.update(
+        fresh.id,
+        fresh.version,
+        { budgetRunId, budgetReservationId: reservation.id, costReservedMicros: reservation.reservedMicros },
+        tx,
+      );
+      return { proceed: true } as const;
+    });
+  },
+
+  /** What the model call needs; null when the attempt already has its output or should stop. */
+  async modelContext(
+    actor: ResolvedActor,
+    input: StudioVideoJobInputV1,
+  ): Promise<VideoAiModelContext | null> {
+    const job = await loadForInput(input);
+    if (!outcomeFor(job, input.attempt).proceed || job.modelOutput) return null;
+    if (!job.budgetRunId) throw new BudgetExhaustedError('no_reservation');
+    const doc = await engine.documentsRepo.getById(job.documentId);
+    await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, undefined);
+    const request = VideoAiRequest.parse(job.request);
+    const prepared = await prepare(actor, doc, job.baseRevisionId, request);
+    const include = new Set(
+      request.kind === 'storyboard' ? request.brief.assets.include : request.recut.assetVersionIds,
+    );
+    const eligible = [...prepared.eligible.values()].sort(
+      (a, b) => Number(include.has(b.assetVersionId)) - Number(include.has(a.assetVersionId)),
+    );
+    return {
+      jobId: job.id,
+      attempt: job.attempt,
+      brandId: job.brandId,
+      request,
+      snapshot: prepared.snapshot,
+      project: prepared.project,
+      eligible,
+      template: prepared.template,
+      script: request.kind === 'recut' ? await scriptOf(doc, prepared.project) : [],
+      media: prepared.media,
+      waveformSources: Object.keys(prepared.waveforms),
+      estimateMicros: prepared.estimateMicros,
+    };
+  },
+
+  /** The model's validated output, stored before anything is compiled (a retried save never calls the model again). */
+  async recordModelOutput(
+    input: StudioVideoJobInputV1,
+    stored: { output: unknown; callRef: string; costMicros: number },
+  ): Promise<VideoJobStepOutcomeV1> {
+    return withTransaction(async (tx) => {
+      const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      const outcome = outcomeFor(job, input.attempt);
+      if (!outcome.proceed || job.modelOutput) return outcome;
+      await advance(job, 'validate', tx, {
+        modelOutput: { output: stored.output, callRef: stored.callRef },
+        costSpentMicros: job.costSpentMicros + stored.costMicros,
+      });
+      return { proceed: true };
+    });
+  },
+
+  /** Spend that does not come with an output (a model call whose answer was refused). */
+  async addSpend(input: StudioVideoJobInputV1, costMicros: number): Promise<void> {
+    await withTransaction(async (tx) => {
+      const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      await jobsRepo.update(job.id, job.version, { costSpentMicros: job.costSpentMicros + costMicros }, tx);
+    });
+  },
+
+  async status(input: StudioVideoJobInputV1): Promise<VideoJobStepOutcomeV1> {
+    return outcomeFor(await loadForInput(input), input.attempt);
+  },
+
+  async reservationIdOf(input: StudioVideoJobInputV1): Promise<string | null> {
+    return (await loadForInput(input)).budgetReservationId;
+  },
+
+  /**
+   * Check, compile and write in one transaction with the job row locked: a storyboard (nothing on the timeline), or
+   * a recut proposal (evaluated with the scope; accepted per group later), or a new-format document (revision 1 of a
+   * new video; the original untouched). Then the job completes. A cancelled job writes nothing; a moved document
+   * fails the job (stale_document).
+   */
+  async save(actor: ResolvedActor, input: StudioVideoJobInputV1) {
+    return withTransaction(async (tx) => {
+      const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      const outcome = outcomeFor(job, input.attempt);
+      if (!outcome.proceed) return { jobId: job.id, state: job.state };
+      const stored = parseOutput(job);
+      if (job.state !== 'validating' || !stored)
+        throw new ValidationFailedError([
+          { path: 'state', issue: `job is ${job.state} without a stored output` },
+        ]);
+      const request = VideoAiRequest.parse(job.request);
+      const doc = await engine.documentsRepo.lock(job.documentId, tx);
+      await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
+      if (doc.currentRevisionId !== job.baseRevisionId)
+        throw new ValidationFailedError(
+          [{ path: 'baseRevisionId', issue: 'stale_document' }],
+          'The video changed while the job ran; nothing was saved',
+        );
+      await advance(job, 'save', tx);
+      const prepared = await prepare(actor, doc, job.baseRevisionId, request, tx);
+      let result: VideoAiResult;
+      if (stored.kind === 'storyboard' && request.kind === 'storyboard') {
+        const checked = checkModelStoryboard(stored.output, {
+          brief: request.brief,
+          eligible: prepared.eligible,
+          effectiveFactIds: prepared.effectiveFactIds,
+          alternatives: (kind) =>
+            alternativesFor(kind, prepared.caps, prepared.eligible, prepared.remainingMicros),
+          mint: (() => {
+            let n = 0;
+            const prefix = idPrefixOf(job.id);
+            return () => `${prefix}s${++n}`;
+          })(),
+        });
+        result = {
+          storyboard: checked.storyboard,
+          proposal: null,
+          revisions: [],
+          conflicts: [],
+          refused: checked.refused,
+          findings: [],
+          summary: `Storyboard “${checked.storyboard.title}”: ${checked.storyboard.scenes.length} scenes, ${checked.storyboard.gaps.length} gaps`,
+        };
+      } else if (stored.kind === 'recut' && request.kind === 'recut') {
+        result = await saveRecut(
+          actor,
+          job,
+          doc,
+          prepared,
+          stored.output,
+          request.recut.scope,
+          stored.callRef,
+          tx,
+        );
+      } else throw new ValidationFailedError([{ path: 'output', issue: 'model_output_invalid: wrong kind' }]);
+      const fresher = await jobsRepo.lock(job.id, tx);
+      await advance(fresher, 'complete', tx, { result, finishedAt: new Date() });
+      await audit.record(
+        engine.actorRef(actor),
+        'creative.video_ai.complete',
+        { type: 'studio_video_job', id: job.id },
+        'allowed',
+        tx,
+        {
+          brandId: job.brandId,
+          documentId: job.documentId,
+          kind: job.kind,
+          proposal: result.proposal !== null,
+          revisions: result.revisions.map((r) => r.revisionId).join(','),
+          refused: result.refused.length,
+          conflicts: result.conflicts.length,
+        },
+      );
+      await outbox.add(
+        'creative.video_job_completed',
+        { type: 'studio_video_job', id: job.id, version: fresher.version + 1 },
+        { jobId: job.id, documentId: job.documentId, kind: job.kind },
+        tx,
+        { brandId: job.brandId },
+      );
+      return { jobId: job.id, state: 'completed' as const };
+    });
+  },
+
+  /** The attempt's terminal failure (tolerant of a job that is already finished or belongs to a newer attempt). */
+  async fail(input: StudioVideoJobInputV1, code: VideoAiErrorCode, detail?: string) {
+    return withTransaction(async (tx) => {
+      const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      if (!outcomeFor(job, input.attempt).proceed) return { jobId: job.id, state: job.state };
+      const toState = await advance(job, 'fail', tx, {
+        errorCode: code,
+        error: (detail ?? code).slice(0, 500),
+        finishedAt: new Date(),
+      });
+      await audit.record(
+        SYSTEM,
+        'creative.video_ai.fail',
+        { type: 'studio_video_job', id: job.id },
+        'allowed',
+        tx,
+        {
+          brandId: job.brandId,
+          documentId: job.documentId,
+          code,
+        },
+      );
+      return { jobId: job.id, state: toState };
+    });
+  },
+
+  /** Releases what the attempt reserved and did not spend (idempotent). */
+  async settle(input: StudioVideoJobInputV1): Promise<void> {
+    const job = await loadForInput(input);
+    if (job.budgetRunId) await budgets.settle(job.budgetRunId);
+  },
+};
+
+/** A recut's result: the proposal (scoped, evaluated) or a new-format document, and every conflict. */
+async function saveRecut(
+  actor: ResolvedActor,
+  job: JobRow,
+  doc: CreativeDocumentRow,
+  prepared: Prepared,
+  output: z.infer<typeof ModelRecutOutput>,
+  scope: VideoAiScope,
+  callRef: string,
+  tx: Tx,
+): Promise<VideoAiResult> {
+  const compiled = compileRecut(prepared.project, output.actions, compileContext(job, prepared, scope));
+  const conflicts: VideoConflict[] = [
+    ...compiled.conflicts,
+    ...output.unsupported.map((text) => ({ code: 'not_supported', message: text, itemIds: [] })),
+  ];
+  if (!output.actions.length && !output.unsupported.length)
+    conflicts.push({
+      code: 'nothing_asked',
+      message: 'No change could be read from the request',
+      itemIds: [],
+    });
+  const revisions: VideoAiResult['revisions'] = [];
+  let findings: Finding[] = [];
+  const version = compiled.version;
+  if (version) {
+    const project = parseSnapshot('video', version.project).snapshot as VideoProjectV1;
+    await engine.authoriseRefs(projectAssetRefs(project), doc.brandId, tx);
+    const versionFindings = validateVideoProject(project, {
+      media: await mediaLookup(timedAssetIds(project), tx),
+      snapshot: prepared.snapshot,
+    });
+    findings = versionFindings;
+    if (versionFindings.some(engine.isBlocking))
+      conflicts.push({
+        code: 'version_blocked',
+        message: `The ${version.label.toLowerCase()} has blocking findings (${versionFindings
+          .filter(engine.isBlocking)
+          .map((f) => f.message)
+          .join('; ')}); it was not created`,
+        itemIds: [],
+      });
+    else {
+      const created = await engine.insertNewDocument(
+        actor,
+        {
+          brandId: doc.brandId,
+          title: `${doc.title} – ${version.label}`.slice(0, 200),
+          contentPackageId: doc.contentPackageId,
+          kind: 'video',
+          snapshot: project,
+          operations: engine.initialVideoBatch(project, 'agent'),
+          brandVersionId: project.brandVersionId,
+          origin: 'agent',
+          generationInputs: generationInputsOf(job, prepared, 'vertical_version', {
+            assetVersionIds: [...new Set(timedAssetIds(project))],
+            factIds: compiled.factIds,
+            modelCallRefs: [callRef],
+          }),
+        },
+        tx,
+      );
+      revisions.push({
+        documentId: created.documentId,
+        revisionId: created.revisionId,
+        label: version.label,
+      });
+    }
+    return {
+      storyboard: null,
+      proposal: null,
+      revisions,
+      conflicts,
+      refused: [],
+      findings,
+      summary: output.summary,
+    };
+  }
+  let proposal: VideoProposal | null = null;
+  if (compiled.operations.length) {
+    const batch: VideoOperationBatch = {
+      baseRevisionId: prepared.base.id,
+      operations: compiled.operations,
+      summary: output.summary,
+      origin: 'agent',
+    };
+    const evaluated = await engine.evaluateVideoBatch(actor, doc, prepared.base, batch, tx, { scope });
+    findings = evaluated.findings;
+    proposal = {
+      kind: 'recut',
+      documentId: doc.id,
+      baseRevisionId: prepared.base.id,
+      origin: 'agent',
+      summary: output.summary,
+      operations: compiled.operations,
+      groups: stripGroupOps(compiled.groups),
+      changes: videoTimelineDiff(prepared.project, evaluated.next),
+      findings: evaluated.findings,
+      contentHash: evaluated.contentHash,
+      scope,
+      acceptedRevisionId: null,
+    };
+  }
+  return { storyboard: null, proposal, revisions, conflicts, refused: [], findings, summary: output.summary };
+}
+
+/** Maps a thrown domain error to the code a failed job records. */
+export function videoAiErrorCode(err: unknown): VideoAiErrorCode {
+  if (err instanceof BudgetExhaustedError) return 'budget_exhausted';
+  if (err instanceof OremediaError) {
+    if (err.code === 'FORBIDDEN') return 'policy_denied';
+    if (err.code === 'NOT_FOUND') return 'not_found';
+    if (err.code === 'VALIDATION_FAILED') return 'validation_failed';
+  }
+  return 'failed';
+}

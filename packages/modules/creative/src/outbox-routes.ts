@@ -1,4 +1,5 @@
 import { RenderJobInputV1, VideoRenderSignalV1 } from '@oremedia/contracts/render';
+import { StudioVideoJobInputV1, StudioVideoJobSignalV1 } from '@oremedia/contracts/video-ai';
 import { registerOutboxRoute } from '@oremedia/module-operations';
 
 /** Task queue for isolated rendering (spec 4.4: worker-render hosts `render` and `media`). */
@@ -9,6 +10,11 @@ export const VIDEO_RENDER_WORKFLOW_TYPE = 'videoRenderJobWorkflowV1';
 export const VIDEO_RENDER_SIGNAL_WORKFLOW_TYPE = 'videoRenderSignalRelayV1';
 
 const renderWorkflowId = (renderJobId: string) => `render:${renderJobId}`;
+/** STU-3: studio video AI jobs make model calls, so they run beside agent runs on worker-core's `agents` queue. */
+export const VIDEO_AI_TASK_QUEUE = 'agents';
+export const STUDIO_VIDEO_JOB_WORKFLOW_TYPE = 'studioVideoJobWorkflowV1';
+export const STUDIO_VIDEO_JOB_SIGNAL_RELAY_WORKFLOW_TYPE = 'studioVideoJobSignalRelayV1';
+const videoJobWorkflowId = (jobId: string, attempt: number) => `studio-video:${jobId}:${attempt}`;
 
 /**
  * Spec 11.5: creative.renders.request → renderJobWorkflowV1. The workflow id is stable per render job so a
@@ -42,6 +48,35 @@ export function registerCreativeOutboxRoutes(): void {
     return {
       workflowType: VIDEO_RENDER_SIGNAL_WORKFLOW_TYPE,
       taskQueue: VIDEO_RENDER_TASK_QUEUE,
+      workflowId: `${signal.workflowId}:signal:${evt.id}`,
+      args: [signal],
+    };
+  });
+  // STU-3: start and retry → studioVideoJobWorkflowV1 (one workflow per attempt); cancel → a relay that signals it.
+  registerOutboxRoute('creative.video_job_requested', (evt) => {
+    const p = evt.payload;
+    const input = StudioVideoJobInputV1.parse({
+      tenantId: evt.tenantId,
+      actor: { kind: p['actorKind'], id: p['actorId'] },
+      correlationId: evt.correlationId,
+      jobId: p['jobId'],
+      attempt: Number(p['attempt']),
+    });
+    return {
+      workflowType: STUDIO_VIDEO_JOB_WORKFLOW_TYPE,
+      taskQueue: VIDEO_AI_TASK_QUEUE,
+      workflowId: videoJobWorkflowId(input.jobId, input.attempt),
+      args: [input],
+    };
+  });
+  registerOutboxRoute('creative.video_job_cancel_requested', (evt) => {
+    const signal = StudioVideoJobSignalV1.parse({
+      workflowId: videoJobWorkflowId(String(evt.payload['jobId']), Number(evt.payload['attempt'])),
+      signal: 'cancel',
+    });
+    return {
+      workflowType: STUDIO_VIDEO_JOB_SIGNAL_RELAY_WORKFLOW_TYPE,
+      taskQueue: VIDEO_AI_TASK_QUEUE,
       workflowId: `${signal.workflowId}:signal:${evt.id}`,
       args: [signal],
     };
