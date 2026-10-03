@@ -2,13 +2,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError, type AnyTRPCProcedure } from '@trpc/server';
 import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
 import {
+  ARTICLE_TEXT_MAX_CHARS,
   CalendarRange,
   ChannelVariantGet,
   ContentRevisionGet,
   type ArticleDocumentV1,
   type CopyDocumentV1,
 } from '@oremedia/contracts/content';
-import { RenderedCheckKey } from '@oremedia/contracts/article';
+import { RenderedCheckKey, renderArticleHtml } from '@oremedia/contracts/article';
+import { articleImages } from '@oremedia/contracts/content';
+import type { ManifestChange } from '@oremedia/contracts/review';
 import {
   ConflictError,
   NotFoundError,
@@ -86,12 +89,21 @@ export const P5 = {
     invalidated: 'rr_invalidated',
     revoked: 'rr_revoked',
     approved: 'rr_approved',
+    /** RA-09: an open request on a rich article (image, link, quote, rich FAQ) bound for the website as a draft. */
+    article: 'rr_article',
+    /** RA-09: the decided request behind the live article (approval meant "publish live"). */
+    articleLive: 'rr_article_live',
   },
   links: { revoked: 'rl_already_revoked', active: 'rl_active_link', expired: 'rl_expired_link' },
   approvalId: 'apr_seed',
 };
 
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+/** As the server's hashText (domain/hash): NFC, trailing whitespace trimmed. */
+const hashText = (text: string) =>
+  createHash('sha256').update(text.normalize('NFC').replace(/\s+$/u, '')).digest('hex');
+/** The destinations mock's cms site (mock-destinations.ts), as a frozen manifest names it (RA-09). */
+const CMS_SITE = { displayName: 'acme.example', siteUrl: 'https://acme.example', kind: 'cms_site' };
 const now = () => new Date().toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 const todayAt = (hour: number) => {
@@ -112,6 +124,11 @@ export interface Channel {
   status: 'active' | 'refresh_needed' | 'reconnect_needed' | 'disabled';
   tokenExpiresAt: string | null;
   capabilityVersion: number;
+  /** RA-01: what the last refresh or read found about the remote access, and when. */
+  health: 'unknown' | 'ok' | 'token_expiring' | 'token_expired' | 'revoked' | 'unreachable';
+  healthCheckedAt: string | null;
+  /** RA-07: the capability's per-variant settings as a JSON Schema the editor renders; null = none. */
+  settingsSchema: Record<string, unknown> | null;
   usable: boolean;
   createdAt: string;
   updatedAt: string;
@@ -216,6 +233,10 @@ export interface Publication {
   holdReasons: string[];
   remotePostId: string | null;
   remoteUrl: string | null;
+  /** RA-02 / RA-04 (website articles; null for a channel): what the website holds and whether it was proven. */
+  remoteStatus: 'draft' | 'live' | 'reverted' | null;
+  remoteVerification: 'unverified' | 'verified' | 'failed' | null;
+  remoteVerifiedAt: string | null;
   fencingToken: number | null;
   claimedAt: string | null;
   scheduledByKind: 'user';
@@ -331,7 +352,8 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
   timing: { kind: 'exact', at: todayAt(15) },
   brandVersionId: 'bv_e2e',
   policyVersionId: 'pv_e2e',
-  // R2-3: the article revision the reviewer approves, as the server freezes it.
+  // R2-3: the article revision the reviewer approves, as the server freezes it; RA-09 adds the rendered hash,
+  // the frozen document and what approving means for each website target.
   ...(revision.copy.article
     ? {
         article: {
@@ -339,10 +361,37 @@ const manifestFor = (revision: Revision, variants: Variant[]): FrozenManifestV1 
           slug: revision.copy.article.slug,
           articleHash: hash(revision.copy.article),
           blocks: revision.copy.article.blocks.length,
+          renderedHtmlHash: hashText(renderArticleHtml(revision.copy.article)),
+          images: articleImages(revision.copy.article).length,
+          document: revision.copy.article,
         },
       }
     : {}),
+  websites: variants
+    .filter((v) => v.destinationId)
+    .map((v) => ({
+      destinationId: v.destinationId as string,
+      ...CMS_SITE,
+      path: revision.copy.article ? `/${revision.copy.article.slug}` : '',
+      publishMode: v.settings['publishMode'] === 'publish' ? ('publish' as const) : ('draft' as const),
+    })),
 });
+/** RA-09: what differs between a frozen manifest and the live one, as the server's manifestChanges reports it. */
+const manifestChanges = (frozen: FrozenManifestV1, live: FrozenManifestV1): ManifestChange[] => {
+  const changes: ManifestChange[] = [];
+  if (frozen.article?.articleHash !== live.article?.articleHash) changes.push('article');
+  if (frozen.article?.renderedHtmlHash !== live.article?.renderedHtmlHash) changes.push('rendering');
+  const key = (c: { channelConnectionId?: string; destinationId?: string }) =>
+    c.destinationId ?? c.channelConnectionId ?? '';
+  for (const c of frozen.captions) {
+    const l = live.captions.find((x) => key(x) === key(c));
+    if (!l) continue;
+    if (l.text !== c.text && !changes.includes('captions')) changes.push('captions');
+    if (l.settingsHash !== c.settingsHash && !changes.includes('settings')) changes.push('settings');
+  }
+  if (hash(frozen.websites ?? null) !== hash(live.websites ?? null)) changes.push('websites');
+  return changes;
+};
 /** A variant's target as a binding names it (the server's variantTarget). */
 const targetOf = (v: Pick<Variant, 'channelConnectionId' | 'destinationId'>) =>
   v.destinationId ? { destinationId: v.destinationId } : { channelConnectionId: v.channelConnectionId ?? '' };
@@ -359,6 +408,61 @@ export const P5_ARTICLE: ArticleDocumentV1 = {
   ],
   categories: ['Guides'],
   tags: ['ore'],
+};
+
+/** RA-08: a rich article (featured image, image block, link, quote, FAQ answered in blocks) awaiting review. */
+export const P5_RICH_ARTICLE: ArticleDocumentV1 = {
+  kind: 'article',
+  v: 2,
+  title: 'How ore is weighed',
+  slug: 'how-ore-is-weighed',
+  excerpt: 'Scales, tare and trust.',
+  featuredImage: { assetVersionId: 'av_photo', alt: 'A weighbridge at dawn' },
+  blocks: [
+    { type: 'paragraph', text: 'Every load is weighed twice.' },
+    {
+      type: 'image',
+      assetVersionId: 'av_photo',
+      alt: 'The weighbridge',
+      caption: 'The bridge at the north gate.',
+    },
+    { type: 'link', href: 'https://acme.example/scales', text: 'How our scales are certified' },
+    { type: 'quote', text: 'Weigh twice, invoice once.', cite: 'Yard foreman' },
+    {
+      type: 'faq',
+      question: 'What is tare?',
+      answer: 'The empty weight.\nIt is subtracted from the gross.',
+      answerBlocks: [
+        { type: 'paragraph', text: 'The empty weight.' },
+        { type: 'list', ordered: false, items: ['It is subtracted from the gross.'] },
+      ],
+    },
+  ],
+  categories: ['Guides'],
+  tags: ['ore'],
+};
+
+/** What the capability register says a variant on each provider may carry (packages/providers capabilities). */
+const SETTINGS_SCHEMA: Record<string, Record<string, unknown>> = {
+  x: {
+    type: 'object',
+    properties: {
+      replySettings: {
+        type: 'string',
+        enum: ['following', 'mentionedUsers', 'subscribers'],
+        description: 'Who may reply; everyone when left empty.',
+      },
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
+  linkedin: {
+    type: 'object',
+    properties: {
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
 };
 
 export class Phase5Backend {
@@ -444,18 +548,42 @@ export class Phase5Backend {
         Object.assign(c, { state: 'succeeded', finishedAt: now() });
         if (c.kind === 'delete') this.transition(p.id, { state: 'removed', stateReason: 'remote_deleted' });
         else if (c.kind === 'unpublish') {
-          const payload = { changeId: c.id, remotePostId: p.remotePostId, outcome: 'done' };
-          this.evidence.push({
-            id: rid('ev'),
-            publicationId: p.id,
-            attemptId: null,
-            kind: 'remote_unpublish',
-            remotePostId: p.remotePostId,
+          // RA-02: the website confirmed the draft; a fresh read-back is recorded and the status says reverted.
+          const readback = {
+            remoteId: p.remotePostId,
             remoteUrl: p.remoteUrl,
-            payload,
-            payloadHash: hash(payload),
-            capturedAt: now(),
-          });
+            title: P5_ARTICLE.title,
+            slug: P5_ARTICLE.slug,
+            status: 'draft',
+            modifiedAt: now(),
+            contentHash: hash('<p>Ore is heavy.</p>'),
+          };
+          const payload = { changeId: c.id, remotePostId: p.remotePostId, outcome: 'done', readback };
+          this.evidence.push(
+            {
+              id: rid('ev'),
+              publicationId: p.id,
+              attemptId: null,
+              kind: 'remote_unpublish',
+              remotePostId: p.remotePostId,
+              remoteUrl: p.remoteUrl,
+              payload,
+              payloadHash: hash(payload),
+              capturedAt: now(),
+            },
+            {
+              id: rid('ev'),
+              publicationId: p.id,
+              attemptId: null,
+              kind: 'remote_readback',
+              remotePostId: p.remotePostId,
+              remoteUrl: p.remoteUrl,
+              payload: { ...readback, changeId: c.id },
+              payloadHash: hash({ ...readback, changeId: c.id }),
+              capturedAt: now(),
+            },
+          );
+          p.remoteStatus = 'reverted';
         } else p.currentText = c.text;
       } else
         Object.assign(c, {
@@ -480,7 +608,13 @@ export class Phase5Backend {
     const providerKey = this.channels.get(p.channelConnectionId ?? '')?.providerKey ?? '';
     // A website (R2-3) allows every live-article action; a channel what its capability says.
     const rules = p.destinationId
-      ? { edit: true, delete: true, unpublish: true, textMaxLength: 50_000, textWeighted: false }
+      ? {
+          edit: true,
+          delete: true,
+          unpublish: true,
+          textMaxLength: ARTICLE_TEXT_MAX_CHARS,
+          textWeighted: false,
+        }
       : {
           ...(LIVE_POST_RULES[providerKey] ?? {
             edit: false,
@@ -547,6 +681,10 @@ export class Phase5Backend {
       .find((e) => e.publicationId === p.id && e.kind === 'rendered_validation');
     const row = this.renderedValidation(p.id, previous ? previous.payload['ok'] !== true : true);
     this.evidence.push(row);
+    // RA-04: the verification follows the latest check.
+    const ok = row.payload['ok'] === true;
+    p.remoteVerification = ok ? 'verified' : 'failed';
+    p.remoteVerifiedAt = ok ? row.capturedAt : null;
     return row.payload;
   }
 
@@ -734,6 +872,9 @@ export class Phase5Backend {
       status,
       tokenExpiresAt,
       capabilityVersion: 1,
+      health: status === 'active' ? 'ok' : status === 'reconnect_needed' ? 'revoked' : 'unknown',
+      healthCheckedAt: status === 'disabled' ? null : now(),
+      settingsSchema: SETTINGS_SCHEMA[providerKey] ?? null,
       usable: status === 'active',
       createdAt: now(),
       updatedAt: now(),
@@ -823,6 +964,9 @@ export class Phase5Backend {
       holdReasons: [],
       remotePostId: null,
       remoteUrl: null,
+      remoteStatus: null,
+      remoteVerification: null,
+      remoteVerifiedAt: null,
       fencingToken: null,
       claimedAt: null,
       scheduledByKind: 'user',
@@ -1005,7 +1149,8 @@ export class Phase5Backend {
       payloadHash: hash({ id: 'x_123' }),
       capturedAt: todayAt(11),
     });
-    // R2-3: a website article published as a draft (D-16) with its read-back and a rendered validation.
+    // R2-3: a website article published live (the grant allowed it) with its read-back, verified against what
+    // was sent (RA-04), and a rendered validation; the calendar shows it as Live, never as a bare Published (RA-02).
     this.revision(P5.revisions.article, 'pkg_article', 'approved', 'Why ore and tar last.', P5_ARTICLE);
     this.variants.set(P5.variants.article, {
       id: P5.variants.article,
@@ -1017,7 +1162,7 @@ export class Phase5Backend {
       destinationId: P5.destination,
       text: 'Why ore and tar last.',
       altTexts: [],
-      settings: { publishMode: 'draft' },
+      settings: { publishMode: 'publish' },
       exportIds: [],
       exportHashes: [],
       article: P5_ARTICLE,
@@ -1031,17 +1176,27 @@ export class Phase5Backend {
       channelVariantId: P5.variants.article,
       destinationId: P5.destination,
       remotePostId: '42',
-      remoteUrl: 'https://acme.example/?p=42',
+      remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
+      remoteStatus: 'live',
+      remoteVerification: 'verified',
+      remoteVerifiedAt: todayAt(8),
     });
     const readback = {
       remoteId: '42',
-      remoteUrl: 'https://acme.example/?p=42',
+      remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
       title: P5_ARTICLE.title,
       slug: P5_ARTICLE.slug,
-      status: 'draft',
+      status: 'publish',
       modifiedAt: todayAt(8),
       contentHash: hash('<p>Ore is heavy.</p>'),
       attemptId: 'att_article_1',
+      verification: {
+        outcome: 'verified',
+        matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+        mismatched: [],
+        reason: null,
+        sentHash: hash('<p>Ore is heavy.</p>'),
+      },
     };
     this.evidence.push(
       {
@@ -1050,7 +1205,7 @@ export class Phase5Backend {
         attemptId: 'att_article_1',
         kind: 'remote_readback',
         remotePostId: '42',
-        remoteUrl: 'https://acme.example/?p=42',
+        remoteUrl: 'https://acme.example/why-ore-and-tar-last/',
         payload: readback,
         payloadHash: hash(readback),
         capturedAt: todayAt(8),
@@ -1101,6 +1256,36 @@ export class Phase5Backend {
         ],
       },
     );
+    // RA-09: the rich article awaiting review as a website draft, and the decided request behind the live one.
+    this.revision(
+      'cr_article_rich',
+      'pkg_article_rich',
+      'in_review',
+      'Scales, tare and trust.',
+      P5_RICH_ARTICLE,
+    );
+    this.variants.set('cv_article_rich', {
+      id: 'cv_article_rich',
+      tenantId: this.tenantId,
+      brandId: this.brandId,
+      contentPackageId: 'pkg_article_rich',
+      contentRevisionId: 'cr_article_rich',
+      channelConnectionId: null,
+      destinationId: P5.destination,
+      text: 'Scales, tare and trust.',
+      altTexts: [],
+      settings: { publishMode: 'draft' },
+      exportIds: [],
+      exportHashes: [],
+      article: P5_RICH_ARTICLE,
+      capabilityVersion: 1,
+      validation: { ok: true, issues: [] },
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+    });
+    this.requestRow(P5.requests.article, 'cr_article_rich', 'open');
+    this.requestRow(P5.requests.articleLive, P5.revisions.article, 'decided');
     this.requestRow(P5.requests.open, P5.revisions.one, 'open');
     this.requestRow(P5.requests.stale, P5.revisions.one, 'stale', 'variant_changed');
     this.requestRow(P5.requests.changes, P5.revisions.changes, 'decided');
@@ -1254,6 +1439,8 @@ export function phase5Routers(
               destinationId: p.destinationId,
               scheduledFor: p.scheduledFor,
               state: p.state,
+              remoteStatus: p.remoteStatus,
+              remoteVerification: p.remoteVerification,
             })),
         };
       }),
@@ -1318,6 +1505,9 @@ export function phase5Routers(
           holdReasons: [],
           remotePostId: null,
           remoteUrl: null,
+          remoteStatus: null,
+          remoteVerification: null,
+          remoteVerifiedAt: null,
           fencingToken: null,
           claimedAt: null,
           scheduledByKind: 'user',
@@ -1431,6 +1621,12 @@ export function phase5Routers(
       /** R2-3 rollback: the article is set back to a draft on its website (publication.delete_remote). */
       unpublishRemote: mutation.input(PublicationUnpublishRemote).mutation(({ ctx, input }) => {
         assertMayChangeLivePost(ctx.member?.role, 'publication.delete_remote');
+        // RA-02: only a live article is reverted.
+        if (b.publication(input.publicationId).remoteStatus !== 'live')
+          throw new ValidationFailedError(
+            [{ path: 'publicationId', issue: 'not_live' }],
+            'Only a live article can be reverted to a draft',
+          );
         const change = b.requestRemoteChange(
           input.publicationId,
           'unpublish',
@@ -1570,7 +1766,31 @@ export function phase5Routers(
             expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
           });
         }
-        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items };
+        // RA-09: the frozen article's images, signed per asset version; only the seeded photo exists.
+        const document = r.frozenManifest.article?.document;
+        const images = [
+          ...new Set((document ? articleImages(document) : []).map((i) => i.assetVersionId)),
+        ].map((assetVersionId) =>
+          assetVersionId === 'av_photo'
+            ? {
+                assetVersionId,
+                verified: true as const,
+                // The store's address for the version (the renderer keeps http(s) and relative sources only).
+                url: `/e2e-object/${assetVersionId}.png`,
+                expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+                mime: 'image/png',
+                contentHash: hash('photo'),
+              }
+            : {
+                assetVersionId,
+                verified: false as const,
+                url: null,
+                expiresAt: null,
+                mime: null,
+                contentHash: null,
+              },
+        );
+        return { reviewRequestId: r.id, manifestHash: r.manifestHash, items, images };
       }),
       get: query.input(ReviewRequestGet).query(({ ctx, input }) => {
         const r = b.request(input.reviewRequestId);
@@ -1588,9 +1808,22 @@ export function phase5Routers(
             createdAt: r.createdAt,
           };
         }
+        // RA-09: the live manifest (the revision's variants as they are now) against the frozen one.
+        const revision = b.revisions.get(r.contentRevisionId);
+        const live = revision
+          ? {
+              ...manifestFor(
+                revision,
+                [...b.variants.values()].filter((v) => v.contentRevisionId === revision.id),
+              ),
+              timing: r.frozenManifest.timing,
+            }
+          : null;
         return {
           ...r,
           revisionState: revisionStateFor(b, r),
+          liveManifestHash: live ? hash(live) : null,
+          changedSinceFreeze: live ? manifestChanges(r.frozenManifest, live) : [],
           decisions: b.decisions.filter((d) => d.reviewRequestId === r.id),
           approvals: b.approvals.filter((a) => a.reviewRequestId === r.id),
           externalLinks: linksFor(b, r.id),

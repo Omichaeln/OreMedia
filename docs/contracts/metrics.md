@@ -97,7 +97,16 @@ equal length in days and read "insufficient sample" below 5 days with data on ei
 Reports and their dimensions (the date is always a dimension): `ga4.acquisition` (`sessionDefaultChannelGroup`),
 `ga4.landing_pages` (`landingPage`), `ga4.engagement` (none); `gsc.queries` (`query`), `gsc.pages` (`page`),
 `gsc.countries_devices` (`country`, `device`). Freshness: a report is stale when its latest day ended more than
-latency × 2 ago (GA4 48 h, Search Console 72 h). The opportunity queue (`destinations.reports.opportunities`) is
+latency × 2 ago (GA4 48 h, Search Console 72 h), the day ending in its reporting zone. Reporting zone and quality
+(RA-10): a source adapter that can read its target's own zone (`describeTarget`: a GA4 property's `timeZone` and
+`currencyCode` from the Admin API) has its days planned and stored in that zone (`destination_report_rows.time_zone`,
+remembered on `brand_destinations.reporting_time_zone`); "yesterday" is the zone's last complete day, never a UTC
+day still running there. Rows stored before the zone was known (`time_zone` null) are UTC days and read as before.
+Every window carries `quality` (`DestinationReportQualityV1`): the zone, the latest local day it reads "as of", and
+`provisional` while that day may still move (inside the report's latency, flagged `partial_day` by the sweep, or
+`not_final` by the platform), with the flags the platform exposed on its answer (`sampled`, `thresholded`,
+`data_loss`) passed through, never inferred. The screens read "as of <local day>, <zone>, provisional" with the
+flags as chips. The opportunity queue (`destinations.reports.opportunities`) is
 computed over the last 28 days: queries and pages with ≥ 100 impressions and a CTR below half the site's pooled CTR,
 landing pages with ≥ 50 sessions and an engagement rate below half the property's pooled rate. AI search (D-19):
 no figure; the screen links to the vendor's console.
@@ -131,7 +140,12 @@ crawler measured, never field data; nothing in them is aggregated with the metri
 ## Overview (R2-5)
 
 `overview.summary` (`packages/modules/overview`, contract `OverviewSummaryV1`) composes the read models above for one
-brand and one window of UTC day bounds; it forms no new number. Composition: the social figures are the brand rollup
+brand and one window of UTC day bounds; it forms no new number. Population: `measurement.metrics.query` caps one
+call at 200 subjects, but every composed read model (`brandSummary`, the attribute aggregate, the overview) aggregates
+the window's whole population, reading the subjects in chunks of 200 server side; the result states it
+(`subjectsTotal`, `truncated: false`), and the Performance screen reads the per-publication values page by page
+(`measurement.metrics.publicationValues`, newest first, a cursor per page). Nothing is cut to a window's newest
+200 publications. Composition: the social figures are the brand rollup
 (`measurement.metrics.brandSummary`: flows summed, rates pooled, unique counts / levels / gauges listed with the
 dictionary's words, the D-14 sample on both sides), the per-channel coverage and freshness come from
 `measurement.metrics.query` over the window's released publications grouped by channel, the web figures are each

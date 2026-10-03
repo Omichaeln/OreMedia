@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
+import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
@@ -76,4 +77,28 @@ export function useAgentPrincipals(brandId: string) {
 export function useTaskKinds(brandId: string) {
   const trpc = useTRPC();
   return useQuery(trpc.skills.taskKinds.queryOptions({ brandId }));
+}
+
+export type EffectiveLimitsDto = inferOutput<Trpc['agents']['runs']['effectiveLimits']>;
+
+/**
+ * RA-07: the autonomy, budget and tools a run of `taskKind` under the principal would be bound by, read before it
+ * starts (agent.start_run, as the principal list). Nothing is asked until a principal is chosen.
+ */
+export function useEffectiveLimits(
+  brandId: string,
+  servicePrincipalId: string | null,
+  taskKind: string,
+  requestedAutonomy: AutonomyMode,
+) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.agents.runs.effectiveLimits.queryOptions({
+      brandId,
+      servicePrincipalId: servicePrincipalId ?? '',
+      taskKind,
+      requestedAutonomy,
+    }),
+    enabled: servicePrincipalId !== null && servicePrincipalId !== '',
+  });
 }

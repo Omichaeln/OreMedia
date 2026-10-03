@@ -6,6 +6,11 @@ export const OPERATIONS_INPUTS: Record<string, CrossTenantFixture> = {
     expectEmpty: true,
   },
   'operations.flags.snapshot': { buildInput: null, reason: 'no input' },
+  'operations.providers.list': {
+    buildInput: null,
+    reason:
+      'Lists the registered provider adapters of the deployment with their activation state; takes no ids and returns no tenant content.',
+  },
   'operations.killSwitch.get': { buildInput: (f) => ({ scope: 'release_dispatch', brandId: f['brandId'] }) },
   'operations.killSwitch.set': {
     buildInput: (f) => ({ scope: 'release_dispatch', brandId: f['brandId'], engaged: true, reason: 'x' }),

@@ -171,6 +171,10 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.refreshCredentials': {
       buildInput: (ctx, f) => ({ ...ctx, channelConnectionId: f['publishingChannelConnectionId'] }),
     },
+    // RA-01: a remote revoke names one connection; a foreign one is NOT_FOUND before any credential is opened.
+    'core.revokeChannelAccess': {
+      buildInput: (ctx, f) => ({ ...ctx, channelConnectionId: f['publishingChannelConnectionId'] }),
+    },
     'core.sweepPublications': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.purgeExpiredConnectChoices': {
       buildInput: null,
@@ -255,8 +259,20 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'core.verifyDestinationCredential': {
       buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
     },
+    // RA-01: a remote revoke names one destination; a foreign one is NOT_FOUND before any credential is opened.
+    'core.revokeDestinationAccess': {
+      buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
+    },
     'core.refreshDestinationCredential': {
       buildInput: (ctx, f) => ({ ...ctx, destinationId: f['destinationId'] }),
+    },
+    // renderedValidationWorkflowV1 (RA-04): a re-validation names one publication; a foreign one is NOT_FOUND
+    // before any page is fetched.
+    'core.validateRenderedPublication': {
+      buildInput: (ctx, f) => ({
+        ...publication(ctx, f),
+        publishedAt: '2026-01-01T00:00:00.000Z',
+      }),
     },
     'core.listRetentionTenants': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.applyRetention': {

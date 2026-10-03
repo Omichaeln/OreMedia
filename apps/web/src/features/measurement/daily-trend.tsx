@@ -14,7 +14,7 @@ import {
   type TrendDay,
   type TrendPost,
 } from './performance-helpers';
-import { usePublicationMetrics } from './use-measurement';
+import { usePublicationValues } from './use-measurement';
 
 export const AGES: ReadonlyArray<[MetricAgeDays, string]> = [
   [1, '1 day'],
@@ -23,8 +23,6 @@ export const AGES: ReadonlyArray<[MetricAgeDays, string]> = [
   [28, '28 days'],
 ];
 const DAY_MS = 86_400_000;
-/** The query's own bound (MetricsQuery: subjectIds ≤ 200); this period's posts first, then the previous period's. */
-const MAX_SUBJECTS = 200;
 
 const number = (v: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(v);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -44,7 +42,8 @@ const publishedIn = (list: CalendarPublicationDto[] | undefined, channelFilter: 
  * The daily trend on Performance: posts by the day they were published, each measured at the same age, so a post
  * from yesterday is not set against one from last month. Collection pulls a post's lifetime total at +1 h, +1 d,
  * +3 d, +7 d, +28 d and weekly after, so there is no honest per-calendar-day activity series; this is the series
- * the numbers support. The baseline is the previous period of the same length, measured the same way.
+ * the numbers support. The baseline is the previous period of the same length, measured the same way. Every post
+ * of both periods is read (page by page), so no day's posts stand unread.
  */
 export function DailyTrend({
   brandId,
@@ -84,29 +83,28 @@ export function DailyTrend({
     () => publishedIn(previous.data?.publications, channelFilter),
     [previous.data, channelFilter],
   );
-  const subjectIds = useMemo(
-    () => [...thisPeriod, ...lastPeriod].slice(0, MAX_SUBJECTS).map((p) => p.publicationId),
-    [thisPeriod, lastPeriod],
-  );
-  const metrics = usePublicationMetrics(brandId, subjectIds, groupKeys, prior.from, range.to, ageDays);
+  const metrics = usePublicationValues(brandId, groupKeys, prior.from, range.to, {
+    ageDays,
+    channelConnectionId: channelFilter,
+    enabled: thisPeriod.length + lastPeriod.length > 0,
+  });
 
   const now = Date.now();
-  const read = new Set(subjectIds);
   const atAge = (posts: CalendarPublicationDto[]): TrendPost[] =>
     posts.map((p) => {
       const { value } = groupValue(
-        (metrics.data?.values ?? []).filter(
+        metrics.items.filter(
           (v) => v.subjectId === p.publicationId && v.comparableGroup === group.comparableGroup,
         ),
       );
       return {
         day: dayKey(p.scheduledFor, timeZone),
         value,
-        status: trendStatus(value, read.has(p.publicationId), p.scheduledFor, ageDays, now),
+        status: trendStatus(value, true, p.scheduledFor, ageDays, now),
       };
     });
-  const currentPosts = metrics.data ? atAge(thisPeriod) : [];
-  const priorPosts = metrics.data ? atAge(lastPeriod) : [];
+  const currentPosts = metrics.complete ? atAge(thisPeriod) : [];
+  const priorPosts = metrics.complete ? atAge(lastPeriod) : [];
   // The midday of each local day, so a daylight-saving change never skips or repeats a key.
   const dayKeys = Array.from({ length: days }, (_, i) =>
     dayKey(new Date(Date.parse(range.from) + i * DAY_MS + DAY_MS / 2), timeZone),
@@ -114,7 +112,6 @@ export function DailyTrend({
   const series = trendDays(currentPosts, dayKeys);
   const { currentMean, baseline, measured, change } = periodComparison(currentPosts, priorPosts);
   const notYetNow = currentPosts.filter((p) => p.status === 'not_yet').length;
-  const unread = [...currentPosts, ...priorPosts].filter((p) => p.status === 'unread').length;
   const top = Math.max(1, baseline ?? 0, ...series.map((d) => d.perPost ?? 0)) * 1.1;
 
   const ageLabel = AGES.find(([a]) => a === ageDays)?.[1] ?? `${ageDays} days`;
@@ -132,14 +129,12 @@ export function DailyTrend({
           d.perPost !== null && `${number(d.perPost)} per post at ${ageLabel}`,
           d.notYet > 0 && `${d.notYet} not measured at ${ageLabel} yet`,
           d.missing > 0 && `${d.missing} without a number`,
-          d.unread > 0 && `${d.unread} not read`,
         ]
           .filter(Boolean)
           .join(', ');
 
   const failed = [current, previous, metrics].find((q) => q.isError);
-  const loading =
-    current.isPending || previous.isPending || (metrics.isPending && metrics.fetchStatus !== 'idle');
+  const loading = current.isPending || previous.isPending || (metrics.isPending && !metrics.isError);
 
   return (
     <Section id="trend-heading" title={`${group.label} per post by day published`} testId="daily-trend">
@@ -159,7 +154,7 @@ export function DailyTrend({
       </div>
       {failed && <RequestError error={failed.error} onRetry={() => void failed.refetch()} />}
       {loading && <Skeleton label="Loading the daily trend" lines={3} />}
-      {metrics.data && (
+      {metrics.complete && (
         <>
           <p className="text-sm" data-testid="trend-summary">
             {currentMean === null ? (
@@ -227,8 +222,6 @@ export function DailyTrend({
             Each post counts on the day it was published, measured {ageLabel} after; a dashed outline marks a
             day whose posts have no number at that age. Collection pulls lifetime totals at fixed ages, so a
             per-calendar-day activity count is not shown.
-            {unread > 0 &&
-              ` ${plural(unread, 'post was', 'posts were')} not read: only ${MAX_SUBJECTS} posts are asked for, this period's newest first.`}
           </p>
           <details className="text-sm">
             <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>
@@ -240,7 +233,6 @@ export function DailyTrend({
                   <th className="py-1 font-medium">Per post at {ageLabel}</th>
                   <th className="py-1 font-medium">Not measured yet</th>
                   <th className="py-1 font-medium">Without a number</th>
-                  <th className="py-1 font-medium">Not read</th>
                 </tr>
               </thead>
               <tbody>
@@ -253,7 +245,6 @@ export function DailyTrend({
                       <td className="py-1">{d.perPost === null ? '—' : number(d.perPost)}</td>
                       <td className="py-1">{d.notYet}</td>
                       <td className="py-1">{d.missing}</td>
-                      <td className="py-1">{d.unread}</td>
                     </tr>
                   ))}
               </tbody>

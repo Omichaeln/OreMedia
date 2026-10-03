@@ -18,6 +18,7 @@ import {
   seoAuditPages,
   seoAuditRuns,
   sourceUsePolicies,
+  seoFindingWork,
 } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
@@ -27,6 +28,7 @@ import {
   channelService,
   configureCredentialBroker,
   configurePublishingProviders,
+  configureChannelActivation,
   registerProviderClients,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
@@ -52,6 +54,7 @@ const LATER_TABLES: MySqlTable[] = [
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,
+  seoFindingWork,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
@@ -121,6 +124,7 @@ describe('migration 0010 rolls forward on a populated database (ledger 1.g4)', (
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('roll-forward-0010-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'c', clientSecret: 's' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     fixture.grant = {
       ...fixture.grant,
       remoteAccountId: 'acct_rf_1',

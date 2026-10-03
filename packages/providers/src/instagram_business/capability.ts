@@ -62,5 +62,13 @@ export const instagramBusinessCapability: ProviderCapabilityV1 = {
     'pages_read_engagement',
     'business_management',
   ],
+  settings: {
+    type: 'object',
+    properties: {
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
+  vendor: 'Meta',
   certifiedAt: null,
 };

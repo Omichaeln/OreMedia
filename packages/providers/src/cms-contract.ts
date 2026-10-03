@@ -3,6 +3,7 @@ import type {
   DecryptedCredentials,
   ProviderCapabilityV1,
   ProviderErrorClass,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
 
@@ -46,7 +47,34 @@ export interface CmsArticleInput {
   tags: string[];
   /** `draft` unless the publication's effective publish mode is `publish` (D-16). */
   status: 'draft' | 'publish';
+  /** RA-08: the media item the site uploaded (`uploadMedia`) to feature on the page; absent leaves it unset. */
+  featuredMedia?: CmsMediaRef;
 }
+
+/**
+ * RA-08: an image the article carries, as the publisher hands it to the adapter: a signed release URL the assets
+ * module minted for the publishing window (spec 9.3; the adapter fetches it through ProviderIO, never raw bytes
+ * from storage), its type and hash, the alt text the page carries and the file name the site should keep.
+ */
+export interface CmsMediaInput {
+  url: string;
+  mime: string;
+  contentHash: string;
+  alt: string;
+  filename: string;
+}
+/** RA-08: the most bytes an article image may weigh on its way to the site (the ingest cap for a web image). */
+export const CMS_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+/** A media item as the site holds it: its remote id and the public address the article's markup references. */
+export interface CmsMediaRef {
+  remoteId: string;
+  url: string;
+}
+export type CmsMediaResult =
+  | { outcome: 'done'; media: CmsMediaRef }
+  | { outcome: 'rejected'; code: string; message: string }
+  | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
+  | { outcome: 'unknown'; code: string; message: string };
 
 /** The remote article as the adapter reads it: identity, state, content hash; the body for a diff, never stored. */
 export interface CmsRemoteArticle extends ArticleReadbackV1 {
@@ -67,9 +95,19 @@ export type CmsReadResult =
  * The classified result of a write. `conflict` is the refusal of an update whose precondition (the hash or the
  * modified timestamp the caller read back) no longer matches the remote: nothing was written, the current remote
  * revision is returned so the person can decide. The outcomes otherwise follow PublishOutcome (spec 14.5).
+ *
+ * RA-12: an update's `done` carries `previous`, the remote revision read immediately before the write (the
+ * precondition was checked against it), and `overwritten` when the adapter could prove that the revision the write
+ * replaced was not `previous` (the remote changed between the read and the write): that replaced revision, so the
+ * caller records what was lost. A CMS without compare-and-swap cannot close that window, only narrow and detect it.
  */
 export type CmsWriteResult =
-  | { outcome: 'done'; article: CmsRemoteArticle }
+  | {
+      outcome: 'done';
+      article: CmsRemoteArticle;
+      previous?: CmsRemoteArticle;
+      overwritten?: CmsRemoteArticle;
+    }
   | { outcome: 'conflict'; current: CmsRemoteArticle }
   | { outcome: 'rejected'; code: string; message: string }
   | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
@@ -91,7 +129,10 @@ export interface CmsRenderedPage {
   url: string;
 }
 
-/** What an update must match on the remote before it writes: the hash read back, and/or the modified timestamp. */
+/**
+ * What an update must match on the remote before it writes: the hash read back and the modified timestamp (both,
+ * when the caller has both: the hash covers the content and identity, the timestamp a change that kept them).
+ */
 export interface CmsUpdatePrecondition {
   expectedHash?: string;
   expectedModifiedAt?: string | null;
@@ -103,6 +144,11 @@ export interface CmsAdapter {
 
   /** Proves the identity can write articles on the site; read-only (the connect flow's health check). */
   verify(site: CmsSite, credentials: DecryptedCredentials, io: ProviderIO): Promise<CmsVerifyResult>;
+  /**
+   * RA-01: revokes the integration identity's secret on the site (as ProviderAdapter.revokeAccess), so a
+   * disconnect ends the access on the remote side too; optional, never throws.
+   */
+  revokeAccess?(site: CmsSite, credentials: DecryptedCredentials, io: ProviderIO): Promise<RevokeResult>;
   /** The current remote revision of an article by its remote id (read-only; the read-back after a write). */
   readArticle(
     site: CmsSite,
@@ -110,6 +156,17 @@ export interface CmsAdapter {
     io: ProviderIO,
     remoteId: string,
   ): Promise<CmsReadResult>;
+  /**
+   * RA-08: uploads one image to the site's media library from its signed release URL, so the article's markup can
+   * reference the site's own copy and the page can feature it. Runs before the article write; a failure is
+   * classified like a write's (the upload is itself an effect on the site).
+   */
+  uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult>;
   /** Creates the article (a draft unless `status` is `publish`); the returned article is read back after the write. */
   createArticle(
     site: CmsSite,

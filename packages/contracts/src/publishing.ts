@@ -97,7 +97,7 @@ export const MandateCreate = z.object({
 import { PAGE_MAX, PageRequest } from './pagination';
 import { TenantContextInput } from './tenancy';
 import type { ActivityHooks } from './agents';
-import type { ArticleDocumentV1 } from './content';
+import { ARTICLE_TEXT_MAX_CHARS, type ArticleDocumentV1 } from './content';
 import type { ResolvedActor } from './policy';
 import type {
   ChannelConnectionStatus,
@@ -127,7 +127,8 @@ export const PublicationDeleteRemote = z.object({ publicationId: z.string(), rea
  */
 export const PublicationEditRemote = z.object({
   publicationId: z.string(),
-  text: z.string().min(1).max(70_000),
+  /** RA-03: an article's body (HTML for a website) is bounded by the one article text cap, as its variant is. */
+  text: z.string().min(1).max(ARTICLE_TEXT_MAX_CHARS),
   reason: z.string().max(500).optional(),
 });
 /**
@@ -139,6 +140,21 @@ export const PublicationUnpublishRemote = z.object({
   publicationId: z.string(),
   reason: z.string().max(500),
 });
+/**
+ * RA-02 (destination publications; null for a channel): what the website holds, set from the read-back at publish
+ * (`live` only when the remote status is `publish`; a `publish` mode whose read-back is not live is a draft) and
+ * `reverted` once the article was set back to a draft. Beside the publication state, which stays the approval's
+ * binding (spec 13.1); never a replacement for it.
+ */
+export const PublicationRemoteStatus = z.enum(['draft', 'live', 'reverted']);
+export type PublicationRemoteStatus = z.infer<typeof PublicationRemoteStatus>;
+/**
+ * RA-04: whether the write was proven: `verified` when the read-back matched what was sent and the rendered page
+ * passed its checks (remoteVerifiedAt is then set), `failed` when either did not, `unverified` when nothing could
+ * be compared (no read allowed, read-back missing).
+ */
+export const PublicationRemoteVerification = z.enum(['unverified', 'verified', 'failed']);
+export type PublicationRemoteVerification = z.infer<typeof PublicationRemoteVerification>;
 /**
  * Spec 17.6 restore rule (runbook "restore a single tenant", step 5): the restored tenant's in-flight publications,
  * or one brand's (`brandId` is required; null means the whole tenant). One call handles at most `limit` rows in its
@@ -355,6 +371,8 @@ export interface TokenRefreshActivitiesV1 {
 export interface SweepResultV1 {
   scheduledReemitted: number;
   dispatchingExpired: number;
+  /** RA-01: credentials of channels disconnected over an hour ago that the remote revoke had not shredded. */
+  credentialsShredded?: number;
 }
 export interface PublicationSweepActivitiesV1 {
   sweepPublications(input: PublicationSweepInputV1): Promise<SweepResultV1>;
@@ -468,3 +486,53 @@ export interface RemoteChangeSweepActivitiesV1 {
 }
 export type RemoteChangeSweepRuntimeV1 = RemoteChangeSweepActivitiesV1;
 export type ConnectChoicePurgeRuntimeV1 = ConnectChoicePurgeActivitiesV1;
+
+// ---------------------------------------------------------------------------------------------------------------
+// RA-04 delayed re-validation of a live article (appended; additive only). markPublished emits
+// publication.rendered_validation_due through the outbox with `availableAt`; the outbox starts
+// renderedValidationWorkflowV1 on task queue `core`, which re-runs the rendered validation at the delays and
+// records each result as evidence with the publication's verification.
+// ---------------------------------------------------------------------------------------------------------------
+/**
+ * When the rendered page of a live article is checked again after publish: 2 and 15 minutes (RA-04). Mirrored in
+ * rendered-validation.workflow.v1.ts (workflow code imports no values); its test asserts the two agree.
+ */
+export const RENDERED_VALIDATION_DELAYS_MS = [2 * 60_000, 15 * 60_000] as const;
+export const RenderedValidationInputV1 = PublicationWorkflowInputV1.extend({
+  /** The publication moment the delays count from. */
+  publishedAt: z.string().datetime(),
+});
+export type RenderedValidationInputV1 = z.infer<typeof RenderedValidationInputV1>;
+/** `skipped`: the publication is no longer a published article (nothing to validate); nothing was recorded. */
+export type RenderedValidationResultV1 =
+  | { outcome: 'validated'; ok: boolean; verification: PublicationRemoteVerification }
+  | { outcome: 'skipped'; reason: string };
+/** Task queue `core`: no credential (the page is public), one fetch per call; idempotent (evidence is appended). */
+export interface RenderedValidationActivitiesV1 {
+  validateRenderedPublication(input: RenderedValidationInputV1): Promise<RenderedValidationResultV1>;
+}
+export type RenderedValidationRuntimeV1 = RenderedValidationActivitiesV1;
+
+// ---------------------------------------------------------------------------------------------------------------
+// RA-01 remote revoke on disconnect (appended; additive only). The API process cannot open a credential (WrapOnlyKms,
+// spec 14.7), so a disconnect of a channel whose adapter can revoke the grant remotely leaves the credential row
+// for channelRevokeWorkflowV1 (task queue `core`, started by the outbox from `channel.disconnected` with
+// `remoteRevoke: 'requested'`): the worker opens it, asks the platform to revoke it, records the outcome in the
+// audit trail and destroys the row whatever the platform answered. A disconnect of a channel without remote
+// revoke destroys the credential in its own transaction, as before.
+// ---------------------------------------------------------------------------------------------------------------
+export const ChannelRevokeInputV1 = TenantContextInput.extend({ channelConnectionId: z.string() });
+export type ChannelRevokeInputV1 = z.infer<typeof ChannelRevokeInputV1>;
+/**
+ * `revoked` / `failed`: the platform's answer, the credential destroyed either way; `not_supported`: the adapter
+ * has no remote revoke (the credential destroyed here); `already_destroyed`: nothing left to do (a repeat).
+ */
+export type ChannelRevokeResultV1 =
+  | { outcome: 'revoked' }
+  | { outcome: 'not_supported' }
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'already_destroyed' };
+export interface ChannelRevokeActivitiesV1 {
+  revokeChannelAccess(input: ChannelRevokeInputV1): Promise<ChannelRevokeResultV1>;
+}
+export type ChannelRevokeRuntimeV1 = ChannelRevokeActivitiesV1;

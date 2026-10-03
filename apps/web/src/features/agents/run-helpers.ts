@@ -219,15 +219,74 @@ export function pendingProposal(steps: StepDto[]): PendingProposal | null {
   return null;
 }
 
-/** The batch a person edits under Modify: what the server validates, minus `origin` (it sets that). */
-export const modifyBatchOf = (p: ProposalPayload) =>
-  JSON.stringify(
-    {
-      documentId: p.documentId,
-      baseRevisionId: p.baseRevisionId,
-      operations: p.operations,
-      summary: p.summary,
-    },
-    null,
-    2,
-  );
+/** One proposed creative operation as the person reviews it: what it does, where, and the text it sets if any. */
+export interface ReviewedOperation {
+  /** Position in the proposal; stable while operations are removed and restored. */
+  index: number;
+  op: string;
+  label: string;
+  /** The element (or page) the operation targets, for the person to find it in the studio. */
+  target: string;
+  /** setText only: the text the person may edit in place. */
+  text: string | null;
+  kept: boolean;
+}
+
+const OPERATION_LABEL: Readonly<Record<string, string>> = {
+  insertElement: 'Insert an element',
+  removeElement: 'Remove an element',
+  setText: 'Set the text',
+  setStyle: 'Change the style',
+  replaceAsset: 'Replace the asset',
+  moveElement: 'Move an element',
+  resizeElement: 'Resize an element',
+  reorderElement: 'Reorder an element',
+  setCrop: 'Crop an element',
+  applyTemplate: 'Apply a template',
+  addPage: 'Add a page',
+  createFormatVariant: 'Create a format variant',
+  setLock: 'Lock or unlock an element',
+};
+
+const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+/** The proposal's operations as review rows (spec 11.3 operation contract), all kept until the person removes one. */
+export function reviewedOperations(operations: readonly unknown[]): ReviewedOperation[] {
+  return operations.map((raw, index) => {
+    const o = isRecord(raw) ? raw : {};
+    const op = str(o['op']) ?? 'unknown';
+    const element = str(o['elementId']);
+    const page = str(o['pageId']) ?? str(o['sourcePageId']);
+    const target = element
+      ? `element ${element}${page ? ` on page ${page}` : ''}`
+      : page
+        ? `page ${page}`
+        : 'the document';
+    return {
+      index,
+      op,
+      label: OPERATION_LABEL[op] ?? `Operation ${op}`,
+      target,
+      text: op === 'setText' ? (str(o['text']) ?? '') : null,
+      kept: true,
+    };
+  });
+}
+
+/**
+ * The batch Modify applies in place of the proposal: the kept operations in their proposed order, each setText
+ * carrying the person's edited text, under the person's summary. `origin` is set by the server, never here.
+ */
+export function modifyBatchOf(
+  p: ProposalPayload,
+  rows: readonly ReviewedOperation[],
+  summary: string,
+): { documentId: string; baseRevisionId: string; operations: unknown[]; summary: string } {
+  const operations = rows
+    .filter((r) => r.kept)
+    .map((r) => {
+      const raw = p.operations[r.index];
+      return r.text !== null && isRecord(raw) ? { ...raw, text: r.text } : raw;
+    });
+  return { documentId: p.documentId, baseRevisionId: p.baseRevisionId, operations, summary };
+}

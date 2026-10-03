@@ -2,13 +2,17 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type {
   AccountGrant,
+  CommentPage,
   DecryptedCredentials,
+  MetricWindow,
   PendingCheck,
   ProviderCapabilityV1,
   PublishOutcome,
+  RawMetricPoint,
   ReconcileResult,
   RefreshResult,
   RemoteMutationOutcome,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import {
   ProviderAuthError,
@@ -220,8 +224,25 @@ export class FixtureProviderAdapter implements ProviderAdapter {
   }
   async refresh(credentials: DecryptedCredentials): Promise<RefreshResult> {
     this.calls.push(`refresh:${credentials.refreshToken ?? ''}`);
+    if (this.revokedTokens.has(credentials.refreshToken ?? credentials.accessToken))
+      return { ok: false, reason: 'reconnect_required' };
     return this.refreshBehaviour;
   }
+  /**
+   * RA-01: what the platform answers a remote revoke with. A test models an adapter without a remote revoke by
+   * setting `revokeAccess` to undefined (the disconnect then records not_supported and destroys the credential
+   * itself). A revoked grant is remembered so a later refresh with it reports reconnect_required, as the real
+   * platforms do; `revokedTokens.clear()` forgets it.
+   */
+  revokeBehaviour: RevokeResult = { outcome: 'revoked' };
+  readonly revokedTokens = new Set<string>();
+  revokeAccess?: (credentials: DecryptedCredentials) => Promise<RevokeResult> = async (credentials) => {
+    this.calls.push(`revokeAccess:${credentials.refreshToken ?? credentials.accessToken}`);
+    const result = this.revokeBehaviour;
+    if (result.outcome === 'revoked')
+      this.revokedTokens.add(credentials.refreshToken ?? credentials.accessToken);
+    return result;
+  };
   validateVariant(variant: Parameters<ProviderAdapter['validateVariant']>[0]) {
     return validateVariantAgainstCapability(this.capability, variant, this.measureText.bind(this));
   }
@@ -330,6 +351,34 @@ export class FixtureProviderAdapter implements ProviderAdapter {
       post.text = req.text;
       return { outcome: 'done' };
     });
+  }
+  /**
+   * The read surfaces the certification harness drives (RA-01): every metric the capability declares, one per
+   * published post (a value of 1, lifetime), and the comments scripted on `comments` (none by default).
+   */
+  readonly comments: CommentPage['items'] = [];
+  async fetchPostMetrics(
+    req: { remotePostId: string; window: MetricWindow },
+    _creds?: DecryptedCredentials,
+    _io?: ProviderIO,
+  ): Promise<RawMetricPoint[]> {
+    this.calls.push(`fetchPostMetrics:${req.remotePostId}`);
+    const known = this.posts.some((p) => p.id === req.remotePostId);
+    return this.capability.analytics.post.map((nativeName) => ({
+      nativeName,
+      value: known ? 1 : null,
+      windowStart: req.window.start,
+      windowEnd: req.window.end,
+      completeness: known ? ('complete' as const) : ('unavailable' as const),
+    }));
+  }
+  async fetchComments(
+    req: { remotePostId: string; since?: Date; cursor?: string },
+    _creds?: DecryptedCredentials,
+    _io?: ProviderIO,
+  ): Promise<CommentPage> {
+    this.calls.push(`fetchComments:${req.remotePostId}`);
+    return { items: this.comments.map((c) => ({ ...c })) };
   }
   classifyError(input: Parameters<ProviderAdapter['classifyError']>[0]) {
     return classifyByStatus(input);

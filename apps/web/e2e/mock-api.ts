@@ -29,6 +29,7 @@ import {
   RoutingPolicySet,
   RunApproveProposal,
   RunCancel,
+  RunEffectiveLimits,
   RunGet,
   RunList,
   RunPendingProposals,
@@ -81,6 +82,7 @@ import {
 import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } from '@oremedia/editor';
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
+import { providerActivationState, type ProviderActivationV1 } from '@oremedia/contracts/providers';
 import { PageRequest } from '@oremedia/contracts/pagination';
 import {
   SkillBindingSet,
@@ -378,6 +380,33 @@ const mockSkillVersion = (
   version: 0,
 });
 
+/** One operations.providers.list row from its facts, the state derived as the server derives it. */
+function provider(
+  kind: ProviderActivationV1['kind'],
+  key: string,
+  vendor: string,
+  certifiedAt: string | null,
+  disabled: boolean,
+  present: string[],
+  missing: string[],
+): ProviderActivationV1 {
+  const credentialRefs = [
+    ...present.map((name) => ({ name, present: true })),
+    ...missing.map((name) => ({ name, present: false })),
+  ];
+  const facts = {
+    key,
+    kind,
+    vendor,
+    capabilityVersion: 1,
+
+    certifiedAt,
+    disabled,
+    credentialRefs,
+  };
+  return { ...facts, ...providerActivationState(facts) };
+}
+
 export class MockBackend {
   /**
    * The brand's font faces (assets.fonts.list): the fixture brand's type roles name `ast_font`. Uploads and Google
@@ -538,6 +567,69 @@ export class MockBackend {
   };
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
+  /**
+   * RA-01: the registered providers with their activation state on this deployment (operations.providers.list,
+   * owners and admins). LinkedIn is ready; Facebook is not certified; Instagram is certified but its credential
+   * references are not set; X is disabled by OREMEDIA_DISABLED_CHANNELS; the Google sources and WordPress follow.
+   */
+  readonly providers: ProviderActivationV1[] = [
+    provider(
+      'channel',
+      'linkedin_page',
+      'LinkedIn',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_LINKEDIN_PAGE_CLIENT_ID_REF', 'PROVIDER_LINKEDIN_PAGE_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'channel',
+      'facebook_page',
+      'Meta',
+      null,
+      false,
+      ['PROVIDER_FACEBOOK_PAGE_CLIENT_ID_REF', 'PROVIDER_FACEBOOK_PAGE_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'channel',
+      'instagram_business',
+      'Meta',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_INSTAGRAM_BUSINESS_CLIENT_ID_REF'],
+      ['PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF'],
+    ),
+    provider(
+      'channel',
+      'x',
+      'X',
+      '2026-09-30T00:00:00.000Z',
+      true,
+      ['PROVIDER_X_CLIENT_ID_REF', 'PROVIDER_X_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'source',
+      'ga4_property',
+      'Google',
+      '2026-09-30T00:00:00.000Z',
+      false,
+      ['PROVIDER_GA4_PROPERTY_CLIENT_ID_REF', 'PROVIDER_GA4_PROPERTY_SECRET_REF'],
+      [],
+    ),
+    provider(
+      'source',
+      'search_console_site',
+      'Google',
+      null,
+      false,
+      ['PROVIDER_SEARCH_CONSOLE_SITE_CLIENT_ID_REF', 'PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF'],
+      [],
+    ),
+    provider('source', 'gbp_location', 'Google', null, true, [], []),
+    provider('cms', 'cms_site', 'WordPress', '2026-09-30T00:00:00.000Z', false, [], []),
+  ];
   /**
    * Other people who can sign in (bearer token → session), shared by every company of the group so one person can
    * belong to several. The default `E2E.token` session stays the single-company owner the other suites use.
@@ -989,8 +1081,6 @@ export function createMockRouter(backend: MockBackend) {
     publishedByUserId: null,
   };
   const summaryOf = ({ document: _doc, ...rest }: typeof brandDraft) => rest;
-  const pngDataUrl =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC';
 
   const p6 = phase6Routers(backend.phase6, { router: t.router, query, mutation });
   const p5 = phase5Routers(
@@ -1032,19 +1122,7 @@ export function createMockRouter(backend: MockBackend) {
               'Your role does not include agent.start_run for this brand',
             );
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
-          return {
-            items: [
-              {
-                id: 'sp_e2e_agent',
-                name: 'E2E agent',
-                kind: 'agent' as const,
-                maxAutonomy: 'prepare_release' as const,
-                actions: ['brand.read', 'content.plan', 'creative.edit'],
-                createdAt: '2026-09-01T09:00:00.000Z',
-              },
-            ],
-            nextCursor: null,
-          };
+          return { items: E2E_PRINCIPALS, nextCursor: null };
         }),
       }),
       members: t.router({
@@ -1492,6 +1570,18 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       runs: t.router({
+        /** RA-07: the limits a run would be bound by, read before it starts; gated as the principal list is. */
+        effectiveLimits: query.input(RunEffectiveLimits).query(({ ctx, input }) => {
+          if (ctx.member?.role === 'reviewer' || ctx.member?.role === 'publisher')
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include agent.start_run for this brand',
+            );
+          if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
+          const principal = E2E_PRINCIPALS.find((p) => p.id === input.servicePrincipalId);
+          if (!principal) throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
+          return mockEffectiveLimits(input, principal);
+        }),
         /** UX-07: a layout run on a document; as the server it is accepted at once and works on its own. */
         start: mutation.input(RunStart).mutation(({ input }) => {
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
@@ -1719,6 +1809,13 @@ export function createMockRouter(backend: MockBackend) {
       }),
     }),
     operations: t.router({
+      // RA-01: the deployment's providers and their activation state; owners and admins (audit.read).
+      providers: t.router({
+        list: query.query(() => {
+          if (backend.role !== 'owner' && backend.role !== 'admin') throw new PolicyDeniedError('audit.read');
+          return { items: backend.providers };
+        }),
+      }),
       killSwitch: t.router({
         // As the server: engaged when the company-wide row is, or the brand's own row.
         get: query
@@ -2224,7 +2321,12 @@ export function createMockRouter(backend: MockBackend) {
             };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
-          return { url: pngDataUrl, expiresAt: new Date(Date.now() + 300_000), mime: 'image/png' };
+          // A signed GET on the store (an https address in production): the renderer keeps http(s) sources only.
+          return {
+            url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
+            expiresAt: new Date(Date.now() + 300_000),
+            mime: 'image/png',
+          };
         }),
       }),
     }),
@@ -2437,6 +2539,118 @@ function companyHandler(backend: MockBackend) {
  * stores; requests without a tenant (listCompanies, the review portal) and unknown tenants go to the first company,
  * which answers them or refuses the tenant as apps/api does.
  */
+/** UX-08: the agent principals granted the E2E brand, each with the actions its grants cover there. */
+const E2E_PRINCIPALS = [
+  {
+    id: 'sp_e2e_agent',
+    name: 'E2E agent',
+    kind: 'agent' as const,
+    maxAutonomy: 'prepare_release' as const,
+    actions: ['brand.read', 'content.plan', 'creative.edit'],
+    createdAt: '2026-09-01T09:00:00.000Z',
+  },
+  {
+    id: 'sp_e2e_onboarding',
+    name: 'Onboarding agent',
+    kind: 'agent' as const,
+    maxAutonomy: 'create' as const,
+    actions: ['brand.edit_standards', 'brand.read'],
+    createdAt: '2026-09-02T09:00:00.000Z',
+  },
+  {
+    id: 'sp_e2e_analyst',
+    name: 'Brand analyst',
+    kind: 'agent' as const,
+    maxAutonomy: 'create' as const,
+    actions: ['brand.read', 'experiment.manage', 'insight.manage', 'insight.read'],
+    createdAt: '2026-09-03T09:00:00.000Z',
+  },
+];
+
+/** The tools each E2E task kind's skill names and the action each needs (the Release 1 registry's values). */
+const E2E_TASK_TOOLS: Record<string, Array<{ name: string; action: string }>> = {
+  copywriting: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'content.draftCopy', action: 'content.edit' },
+    { name: 'creative.proposeOperations', action: 'creative.edit' },
+  ],
+  campaign_planning: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'content.proposePlan', action: 'content.plan' },
+  ],
+  layout: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'creative.proposeOperations', action: 'creative.edit' },
+  ],
+  brand_onboarding: [
+    { name: 'brand.getSnapshot', action: 'brand.read' },
+    { name: 'brand.proposeVoice', action: 'brand.edit_standards' },
+  ],
+  performance_review: [
+    { name: 'metrics.query', action: 'insight.read' },
+    { name: 'recommendations.create', action: 'insight.read' },
+    { name: 'experiments.proposeDesign', action: 'experiment.manage' },
+  ],
+};
+const AUTONOMY_RANK = ['assist', 'create', 'prepare_release', 'managed_autopublish'];
+
+/**
+ * RA-07 as agents.runs.effectiveLimits computes it: autonomy = min(requested, principal, tenant policy
+ * prepare_release, plan prepare_release); budget = the skill's; tools denied where the principal lacks the action.
+ */
+function mockEffectiveLimits(
+  input: { brandId: string; taskKind: string; requestedAutonomy: string },
+  principal: (typeof E2E_PRINCIPALS)[number],
+) {
+  const effective = [input.requestedAutonomy, principal.maxAutonomy, 'prepare_release'].reduce((min, m) =>
+    AUTONOMY_RANK.indexOf(m) < AUTONOMY_RANK.indexOf(min) ? m : min,
+  );
+  const tools = (E2E_TASK_TOOLS[input.taskKind] ?? []).map((t) => ({
+    ...t,
+    allowed: principal.actions.includes(t.action),
+  }));
+  const skill = input.taskKind in E2E_TASK_TOOLS;
+  return {
+    brandId: input.brandId,
+    taskKind: input.taskKind,
+    principal: { id: principal.id, name: principal.name, maxAutonomy: principal.maxAutonomy },
+    autonomy: {
+      requested: input.requestedAutonomy,
+      principalMax: principal.maxAutonomy,
+      tenantPolicyMax: 'prepare_release',
+      entitlementMax: 'prepare_release',
+      effective,
+    },
+    skills: skill
+      ? [
+          {
+            key: `e2e-${input.taskKind}`,
+            title: `E2E ${input.taskKind.replace(/_/g, ' ')}`,
+            versionNumber: 1,
+          },
+        ]
+      : [],
+    budget: {
+      maxSteps: 12,
+      maxTokens: 120_000,
+      maxCostMicros: 1_500_000,
+      maxVariants: 4,
+      deadlineSeconds: 900,
+    },
+    reservedMicros: 1_500_000,
+    spend: {
+      month: { limitMicros: 250_000_000, remainingMicros: 207_500_000 },
+      day: { limitMicros: 20_000_000, remainingMicros: 16_900_000 },
+    },
+    tools,
+    deniedActions: [...new Set(tools.filter((t) => !t.allowed).map((t) => t.action))].sort(),
+    blockers: skill
+      ? []
+      : [{ code: 'no_skill' as const, message: 'No published skill serves this task kind for the brand.' }],
+    canStart: skill,
+  };
+}
+
 export function createMockHandler(backend: MockBackend): RequestListener {
   const handlers = new Map<string, RequestListener>(
     [backend, ...backend.companies].map((company) => [company.tenantId, companyHandler(company)]),

@@ -8,7 +8,7 @@ import { withTransaction } from '@oremedia/db';
 import { tenantKeyedHash } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { confirmIngestedOwnReply, outboundAuthorHash } from '@oremedia/module-community';
-import { adapterFor, credentialBroker, providerIO } from '@oremedia/module-publishing';
+import { adapterFor, channelHealth, credentialBroker, providerIO } from '@oremedia/module-publishing';
 import { collectionPlan, loadPublication } from './common';
 import { authorHashSecretInUse, classifyComment, notifyCommentSinks, type IngestedComment } from './hooks';
 import { ConversationRepository, MessageRepository } from './repositories';
@@ -36,8 +36,10 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
     async pullComments(input: PullCommentsInputV1, hooks?: ActivityHooks): Promise<PullCommentsResultV1> {
       const { tenantId, publicationId } = input;
       const { row, connection } = await loadPublication(publicationId);
-      // Deleted from the channel through the product: no comments left to read; what was ingested stays.
-      if (row.state === 'removed') return { ingested: 0, duplicates: 0, nextCursor: null };
+      // Deleted from the channel through the product: no comments left to read; what was ingested stays. A
+      // disconnected channel's credential is unusable from the disconnect (RA-01): nothing is read either.
+      if (row.state === 'removed' || connection.status === 'disabled')
+        return { ingested: 0, duplicates: 0, nextCursor: null };
       const adapter = adapterFor(connection.providerKey);
       const fetchComments = adapter.fetchComments?.bind(adapter);
       if (!fetchComments || !adapter.capability.comments.read || !row.remotePostId)
@@ -55,17 +57,26 @@ export function createCommentIngestionRuntime(): CommentIngestionRuntimeV1 {
           ? ((await messagesRepo.latestRemoteCreatedAt(known.id)) ?? undefined)
           : undefined;
       hooks?.heartbeat(`comments:${publicationId}:${input.pullIndex}`);
-      const page = await credentialBroker.withCredentials(tenantId, connection.id, (creds) =>
-        fetchComments(
-          {
-            remotePostId,
-            ...(since ? { since } : {}),
-            ...(input.cursor ? { cursor: input.cursor } : {}),
-          },
-          creds,
-          providerIO(adapter.key, tenantId, hooks),
-        ),
-      );
+      let page: Awaited<ReturnType<typeof fetchComments>>;
+      try {
+        page = await credentialBroker.withCredentials(tenantId, connection.id, (creds) =>
+          fetchComments(
+            {
+              remotePostId,
+              ...(since ? { since } : {}),
+              ...(input.cursor ? { cursor: input.cursor } : {}),
+            },
+            creds,
+            providerIO(adapter.key, tenantId, hooks),
+          ),
+        );
+      } catch (err) {
+        // RA-01: a refused token or an unreachable platform is recorded as the channel's health (generic mapping);
+        // the pull itself still fails to the activity's retry policy as before.
+        await channelHealth.recordReadFailure(connection.id, err);
+        throw err;
+      }
+      await channelHealth.recordRead(connection.id); // RA-01: the access works
       // The connected account's own comments (the brand's replies) are not customer voice: stored outbound, never
       // classified or handed to the sinks.
       // The comment it answers; a reply to the post itself (X threads) is a top-level comment.

@@ -3,6 +3,7 @@ import type {
   DecryptedCredentials,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import { classifyByStatus } from '../../base';
@@ -26,7 +27,13 @@ import {
   type SourceReportRow,
   type SourceTarget,
 } from '../../source-contract';
-import { googleAuthorizationUrl, googleExchangeCode, googleGet, googleRefresh } from '../google-oauth';
+import {
+  googleAuthorizationUrl,
+  googleExchangeCode,
+  googleGet,
+  googleRefresh,
+  googleRevoke,
+} from '../google-oauth';
 import { GBP_ACTION_METRICS, GBP_IMPRESSION_METRICS, gbpLocationCapability } from './capability';
 
 export const GBP_ACCOUNT_API = 'https://mybusinessaccountmanagement.googleapis.com/v1';
@@ -76,6 +83,15 @@ export class GbpLocationAdapter implements SourceAdapter {
 
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult> {
     return googleRefresh(credentials, client, io);
+  }
+
+  /** RA-01: revokes the Google grant (the refresh token, and every access token under it). */
+  async revokeAccess(
+    credentials: DecryptedCredentials,
+    _client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    return googleRevoke(credentials, io);
   }
 
   /**

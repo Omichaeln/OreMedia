@@ -7,6 +7,7 @@ import type {
   RawMetricPoint,
   ReconcileResult,
   RemoteMutationOutcome,
+  RevokeResult,
   ValidationResult,
 } from '@oremedia/contracts/providers';
 import { outcomeFromClass, redactBody, retryAfterMs, truncateForTemporal } from './base';
@@ -108,21 +109,75 @@ export type Classifier = (input: {
   error?: unknown;
 }) => ProviderErrorClass;
 
+/** Why a media fetch was refused: the status, a body over the caller's cap, or a type the caller did not expect. */
+export type MediaFetchReason = 'status' | 'too_large' | 'unexpected_type';
+
 /** Thrown when a signed media URL (spec 9.3) cannot be read; always before the effect boundary. */
 export class MediaFetchError extends Error {
   readonly status: number;
-  constructor(url: string, status: number) {
-    super(`media fetch failed with HTTP ${status}: ${new URL(url).pathname}`);
+  readonly reason: MediaFetchReason;
+  constructor(url: string, status: number, reason: MediaFetchReason = 'status') {
+    super(
+      reason === 'status'
+        ? `media fetch failed with HTTP ${status}: ${new URL(url).pathname}`
+        : `media fetch refused (${reason}): ${new URL(url).pathname}`,
+    );
     this.name = 'MediaFetchError';
     this.status = status;
+    this.reason = reason;
   }
 }
 
-/** Fetches media bytes through ProviderIO so the SSRF policy, timeout and logging apply to release URLs too. */
-export async function fetchBytes(io: ProviderIO, url: string): Promise<Uint8Array> {
+export interface FetchBytesOptions {
+  /** The most bytes the caller accepts: checked against Content-Length first, then as the body streams in. */
+  maxBytes?: number;
+  /** A Content-Type prefix the answer must carry (e.g. `image/`); anything else is refused unread. */
+  expectType?: string;
+}
+
+/**
+ * Fetches media bytes through ProviderIO so the SSRF policy, timeout and logging apply to release URLs too. With
+ * `maxBytes` the body is bounded (RA-08: an image for a website is never read past the cap, whatever the header
+ * said); with `expectType` the answer's Content-Type is checked before a byte is read. Without options the
+ * behaviour is as before (the channel adapters fetch what the release described).
+ */
+export async function fetchBytes(
+  io: ProviderIO,
+  url: string,
+  opts: FetchBytesOptions = {},
+): Promise<Uint8Array> {
   const { res } = await io.request(url, { method: 'GET' }, { mutation: false });
   if (res.status !== 200) throw new MediaFetchError(url, res.status);
-  return new Uint8Array(await res.arrayBuffer());
+  if (opts.expectType !== undefined) {
+    const type = (res.headers.get('content-type') ?? '').toLowerCase();
+    if (!type.startsWith(opts.expectType.toLowerCase()))
+      throw new MediaFetchError(url, res.status, 'unexpected_type');
+  }
+  if (opts.maxBytes === undefined) return new Uint8Array(await res.arrayBuffer());
+  const declared = Number(res.headers.get('content-length') ?? '');
+  if (Number.isFinite(declared) && declared > opts.maxBytes)
+    throw new MediaFetchError(url, res.status, 'too_large');
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > opts.maxBytes) {
+      await reader.cancel();
+      throw new MediaFetchError(url, res.status, 'too_large');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
 }
 
 export function outcomeFromTransportError(
@@ -398,8 +453,10 @@ export class ProviderAuthError extends Error {
 }
 
 /**
- * Raised by a source adapter's fetchReport when the platform answered a read with a failure (R2-1 part B); the
- * classification is the adapter's own reading of the status, so the ingestion runtime never maps statuses itself.
+ * Raised by an adapter's read surface when the platform answered a read with a failure: a source adapter's
+ * fetchReport (R2-1 part B) for every refusal, a channel adapter's fetchComments for every refusal and its metric
+ * reads when the grant itself was refused (RA-01 channel health). The classification is the adapter's own reading
+ * of the status, so the ingestion runtimes never map statuses themselves.
  */
 export class SourceReadError extends Error {
   readonly providerKey: string;
@@ -427,6 +484,31 @@ export function sourceReadError(key: string, classify: Classifier, res: Provider
       : classification,
     summarise(res),
   );
+}
+
+/**
+ * RA-01: a metric read the platform refused for the token itself (a 401: expired, or revoked for good) is raised
+ * with its classification so the collection runtime can record the channel's health; any other failure, a 403 for
+ * one statistic's permission included, stays the caller's `unavailable` (never zero, never a throw).
+ */
+export function assertReadAccess(key: string, classify: Classifier, res: ProviderResponse): void {
+  if (res.status !== 401) return;
+  const cls = classify({ status: res.status, body: res.body, phase: 'after_send' });
+  if (cls.kind === 'refresh_token' || cls.kind === 'reconnect_required')
+    throw new SourceReadError(key, res.status, cls, summarise(res));
+}
+
+/** RA-01 revokeAccess: a platform answer or a transport failure as the outcome the disconnect records; never a throw. */
+export function revokeFromResponse(
+  res: ProviderResponse,
+  ok: (res: ProviderResponse) => boolean,
+): RevokeResult {
+  // The reason is the status alone: a response body could carry a token or a URL with secrets.
+  return ok(res) ? { outcome: 'revoked' } : { outcome: 'failed', reason: `http_${res.status}` };
+}
+export function revokeFromError(err: unknown): RevokeResult {
+  if (err instanceof ProviderTransportError) return { outcome: 'failed', reason: `transport_${err.phase}` };
+  throw err;
 }
 
 /** Encodes a multipart/form-data body as bytes (undici's fetch does not accept Node's global FormData). */

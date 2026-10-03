@@ -3,6 +3,8 @@ import type {
   DestinationReportOpportunityKind,
   DestinationReportPresentationV1,
   SourceReportMetricV1,
+  SourceReportQualityFlag,
+  SourceTargetMetadataV1,
 } from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
@@ -10,6 +12,7 @@ import type {
   ProviderCapabilityV1,
   ProviderErrorClass,
   RefreshResult,
+  RevokeResult,
 } from '@oremedia/contracts/providers';
 import type { ProviderIO } from './io';
 
@@ -85,7 +88,10 @@ export interface SourceReportSpec {
   opportunity?: SourceReportOpportunitySpec;
 }
 
-/** One row of a report: the UTC day, the dimension values by name and the metric values by name. */
+/**
+ * One row of a report: the platform's reporting day (the target's own zone when the adapter reports one through
+ * `reportingTimeZone`, else a UTC day), the dimension values by name and the metric values by name.
+ */
 export interface SourceReportRow {
   date: string;
   dimensions: Record<string, string>;
@@ -103,6 +109,14 @@ export interface SourceReportRequest {
 export interface SourceReportPage {
   rows: SourceReportRow[];
   nextPageToken: string | null;
+  /**
+   * RA-10: the zone the page's days are keyed in, when the platform states it with the report (GA4 answers with
+   * the property's zone); absent or null, the runtime keys them by the target metadata, else as UTC days.
+   */
+  reportingTimeZone?: string | null;
+  currencyCode?: string | null;
+  /** RA-10: the quality the platform exposed for this answer (sampling, thresholding, data loss, not final). */
+  quality?: SourceReportQualityFlag[];
 }
 
 /** What a code exchange yields: the sealed-to-be credentials and the scopes the person actually granted. */
@@ -133,12 +147,30 @@ export interface SourceAdapter {
     io: ProviderIO,
   ): Promise<SourceGrant>;
   refresh(credentials: DecryptedCredentials, client: ClientConfig, io: ProviderIO): Promise<RefreshResult>;
+  /** RA-01: revokes the grant at the vendor (as ProviderAdapter.revokeAccess); optional, never throws. */
+  revokeAccess?(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+  ): Promise<RevokeResult>;
   /** Every target the grant can read, for the person to choose among (the connect flow's choice). */
   listTargets(
     credentials: DecryptedCredentials,
     client: ClientConfig,
     io: ProviderIO,
   ): Promise<SourceTarget[]>;
+  /**
+   * RA-10: the reporting zone and currency of one target, from the platform's own metadata (a GA4 property's
+   * `timeZone`); the sweep plans a day range in that zone and keys the stored days by it. A source whose
+   * platform exposes none leaves the method out, and its days stay UTC days. Refusals are thrown as for
+   * fetchReport (a SourceReadError the runtime treats as "unknown for now", never a failed run).
+   */
+  describeTarget?(
+    credentials: DecryptedCredentials,
+    client: ClientConfig,
+    io: ProviderIO,
+    externalId: string,
+  ): Promise<SourceTargetMetadataV1>;
   /**
    * One page of one report for a target the grant can read (part B). A platform refusal is thrown as a
    * SourceReadError carrying the adapter's classification (a 401 refresh, a 403 reconnect, a 429 rate limited, a

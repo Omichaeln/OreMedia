@@ -160,6 +160,19 @@ describe('Instagram Business adapter (spec 14.5, 14.8, 20.3)', () => {
     expect(await adapter.refresh(creds, client, io)).toEqual({ ok: false, reason: 'reconnect_required' });
   });
 
+  it('revokeAccess (RA-01): DELETE /me/permissions with the user token; a token already gone (190) is revoked; another refusal is failed', async () => {
+    load('auth', 'revoke_ok');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    expect(io.calls.map((c) => `${c.mutation ? 'M' : 'R'} ${c.method}`)).toEqual(['M DELETE']);
+    load('auth', 'revoke_already_gone');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    load('auth', 'revoke_refused');
+    expect(await adapter.revokeAccess(creds, client, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_500/),
+    });
+  });
+
   it('validateVariant: media required, JPEG only, 4:5–1.91:1 aspect ratio, carousel ≤ 10, alt text', () => {
     const ok = { mime: 'image/jpeg', width: 1080, height: 1350, bytes: 1000 };
     expect(adapter.validateVariant({ text: TEXT, altTexts: ['alt'], media: [ok], settings: {} }).ok).toBe(

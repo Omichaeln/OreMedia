@@ -9,6 +9,7 @@ import { PageRequest } from '@oremedia/contracts/pagination';
 import { NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
+import { providerService } from '@oremedia/module-destinations';
 import {
   audit,
   deletion,
@@ -41,6 +42,14 @@ export const operationsRouter = router({
   }),
   flags: router({
     snapshot: tenantQuery.query(({ ctx }) => featureFlag.snapshot(ctx.tenant.context.tenantId)),
+  }),
+  /**
+   * RA-01: every registered provider (channel, source, CMS) with its activation state on this deployment:
+   * certified, disabled here, app credential references set (names only), and the reason it cannot be connected.
+   * Owners and admins (audit.read); a read of the deployment, never of tenant content.
+   */
+  providers: router({
+    list: tenantQuery.query(({ ctx }) => providerService.list(ctx.tenant.actor)),
   }),
   killSwitch: router({
     get: tenantQuery

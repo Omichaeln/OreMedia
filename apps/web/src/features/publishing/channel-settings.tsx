@@ -8,9 +8,13 @@ import { Section } from '../../components/section';
 import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
-import { useTRPC } from '../../lib/trpc';
+import type { inferOutput } from '@trpc/tanstack-react-query';
+import { useTRPC, type Trpc } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { useProviders, type ProviderActivationDto } from '../settings/use-settings';
 import {
+  ACTIVATION_CHIP,
+  activationReason,
   callbackError,
   callbackParams,
   providerLabel,
@@ -19,7 +23,7 @@ import {
   RELEASE_1_PROVIDERS,
   unavailableReason,
 } from './channel-connect';
-import { CHANNEL_CHIP } from './publication-state';
+import { CHANNEL_CHIP, CHANNEL_HEALTH_CHIP, channelNeedsAction } from './publication-state';
 import { useChannels, type ChannelDto, type ConnectResultDto } from './use-publishing';
 
 type ConnectChoice = Extract<ConnectResultDto, { outcome: 'choose' }>;
@@ -112,7 +116,15 @@ function ConnectButton({
   );
 }
 
-function DisconnectButton({ channel }: { channel: ChannelDto }) {
+type DisconnectResultDto = inferOutput<Trpc['publishing']['channels']['disconnect']>;
+
+function DisconnectButton({
+  channel,
+  onDisconnected,
+}: {
+  channel: ChannelDto;
+  onDisconnected: (result: DisconnectResultDto) => void;
+}) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
@@ -120,9 +132,10 @@ function DisconnectButton({ channel }: { channel: ChannelDto }) {
   const disconnect = useMutation(
     trpc.publishing.channels.disconnect.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: () => {
+      onSuccess: (data) => {
         intent.renew();
         setOpen(false);
+        onDisconnected(data); // the row shows what happened once this button is gone with the connection
         void queryClient.invalidateQueries(trpc.publishing.pathFilter());
         void queryClient.invalidateQueries(trpc.content.calendar.pathFilter());
       },
@@ -157,12 +170,7 @@ function DisconnectButton({ channel }: { channel: ChannelDto }) {
           </DialogActions>
         </DialogContent>
       </Dialog>
-      {disconnect.data && disconnect.data.heldPublicationIds.length > 0 && (
-        <p className="text-xs text-muted-foreground" data-testid="held-after-disconnect">
-          {disconnect.data.heldPublicationIds.length} scheduled publication
-          {disconnect.data.heldPublicationIds.length === 1 ? ' is' : 's are'} now held.
-        </p>
-      )}
+
       {ui && ui.kind === 'forbidden' && (
         <StatusBanner
           tone="critical"
@@ -188,21 +196,30 @@ function ChannelRow({
   redirectUri: string;
 }) {
   const chip = CHANNEL_CHIP[channel.status];
-  const reconnect = channel.status !== 'active';
+  const health = CHANNEL_HEALTH_CHIP[channel.health];
+  const reconnect = channel.status !== 'active' || channelNeedsAction(channel);
+  /** What the disconnect of this row did (held publications, the remote side), shown after the button is gone. */
+  const [disconnected, setDisconnected] = useState<DisconnectResultDto | null>(null);
   return (
     <li
       className="flex flex-col gap-2 py-3"
       data-testid={`channel-${channel.id}`}
       data-channel-status={channel.status}
+      data-channel-health={channel.health}
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">
           {channel.displayName} ({channel.providerKey})
         </span>
         <Badge tone={chip.tone}>{chip.label}</Badge>
+        {channel.status !== 'disabled' && <Badge tone={health.tone}>{health.label}</Badge>}
       </div>
       <p className="text-xs text-muted-foreground">
         {chip.detail}
+        {channel.status !== 'disabled' && ` ${health.detail}`}
+        {channel.status !== 'disabled' &&
+          channel.healthCheckedAt &&
+          ` Checked ${new Date(channel.healthCheckedAt).toLocaleString()}.`}
         {channel.tokenExpiresAt &&
           ` Token ${new Date(channel.tokenExpiresAt).getTime() < Date.now() ? 'expired' : 'expires'} ${new Date(channel.tokenExpiresAt).toLocaleString()}.`}
         {channel.missingScopes.length > 0 && ` Missing scopes: ${channel.missingScopes.join(', ')}.`}
@@ -216,8 +233,23 @@ function ChannelRow({
             label={channel.status === 'disabled' ? 'Connect again' : 'Reconnect'}
           />
         )}
-        {channel.status !== 'disabled' && <DisconnectButton channel={channel} />}
+        {channel.status !== 'disabled' && (
+          <DisconnectButton channel={channel} onDisconnected={setDisconnected} />
+        )}
       </div>
+      {disconnected && disconnected.heldPublicationIds.length > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="held-after-disconnect">
+          {disconnected.heldPublicationIds.length} scheduled publication
+          {disconnected.heldPublicationIds.length === 1 ? ' is' : 's are'} now held.
+        </p>
+      )}
+      {disconnected && (
+        <p className="text-xs text-muted-foreground" data-testid="remote-revoke">
+          {disconnected.remoteRevoke === 'requested'
+            ? 'The platform is being asked to revoke the access; the stored credential is destroyed right after, whatever it answers.'
+            : 'This provider has no remote revoke; the stored credential was destroyed. Remove the app from the account at the platform if you want the access gone there too.'}
+        </p>
+      )}
     </li>
   );
 }
@@ -391,6 +423,15 @@ export function ChannelSettings() {
   const redirectUri = connectRedirectUri(window.location.origin);
   const clearCallback = () => setParams({}, { replace: true });
   const listUi = channels.isError ? toUiError(channels.error) : null;
+  // RA-01: owners and admins see every registered channel provider with why it cannot be connected here; the
+  // others get the Release 1 list and the server's refusal, as before.
+  const providers = useProviders();
+  const listed: ReadonlyArray<{ key: string; label: string; activation: ProviderActivationDto | null }> =
+    providers.data
+      ? providers.data.items
+          .filter((p) => p.kind === 'channel')
+          .map((p) => ({ key: p.key, label: providerLabel(p.key), activation: p }))
+      : RELEASE_1_PROVIDERS.map((p) => ({ ...p, activation: null }));
 
   return (
     <div className="flex flex-col gap-8">
@@ -455,15 +496,34 @@ export function ChannelSettings() {
             others and the reason is shown here.
           </p>
           <ul className="divide-y divide-border" aria-label="Providers">
-            {RELEASE_1_PROVIDERS.map((p) => {
-              const reason = unavailable[p.key] ?? null;
+            {listed.map((p) => {
+              const reason = unavailable[p.key] ?? (p.activation ? activationReason(p.activation) : null);
+              const activation = p.activation ? ACTIVATION_CHIP[p.activation.state] : null;
               return (
-                <li key={p.key} className="flex flex-col gap-2 py-3" data-testid={`provider-${p.key}`}>
+                <li
+                  key={p.key}
+                  className="flex flex-col gap-2 py-3"
+                  data-testid={`provider-${p.key}`}
+                  data-provider-state={p.activation?.state ?? 'unknown'}
+                >
                   <div className="flex flex-wrap items-center gap-2 text-sm">
                     <span className="font-medium">{p.label}</span>
                     <code className="text-xs text-muted-foreground">{p.key}</code>
-                    {reason && <Badge tone="neutral">Unavailable</Badge>}
+                    {activation && activation.label !== 'Ready' && (
+                      <Badge tone={activation.tone}>Unavailable: {activation.label.toLowerCase()}</Badge>
+                    )}
+                    {activation && activation.label === 'Ready' && <Badge tone="good">Ready</Badge>}
+                    {!activation && reason && <Badge tone="neutral">Unavailable</Badge>}
                   </div>
+                  {p.activation && p.activation.credentialRefs.length > 0 && (
+                    <p className="text-xs text-muted-foreground" data-testid="credential-refs">
+                      Credential references:{' '}
+                      {p.activation.credentialRefs
+                        .map((c) => `${c.name} (${c.present ? 'set' : 'not set'})`)
+                        .join(', ')}
+                      .
+                    </p>
+                  )}
                   {reason && (
                     <p className="text-xs text-muted-foreground" data-testid="unavailable-reason">
                       {reason}

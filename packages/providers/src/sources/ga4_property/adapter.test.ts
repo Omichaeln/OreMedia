@@ -94,6 +94,19 @@ describe('GA4 property source adapter (ledger R2-1, spec 14.5 / 14.6)', () => {
     expect(await adapter.refresh(creds, client, refused)).toEqual({ ok: false, reason: 'transient' });
   });
 
+  it('revokeAccess (RA-01): the refresh token at Google’s revoke endpoint; invalid_token means already revoked; an outage is failed', async () => {
+    load('revoke_ok');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    expect(io.calls.map((c) => c.mutation)).toEqual([true]);
+    load('revoke_already_gone');
+    expect(await adapter.revokeAccess(creds, client, io)).toEqual({ outcome: 'revoked' });
+    load('revoke_refused');
+    expect(await adapter.revokeAccess(creds, client, io)).toMatchObject({
+      outcome: 'failed',
+      reason: expect.stringMatching(/^http_503/),
+    });
+  });
+
   it('listTargets: every property of every account over the pages, as `properties/<id>` with the account named', async () => {
     load('targets');
     const targets = await adapter.listTargets(creds, client, io);

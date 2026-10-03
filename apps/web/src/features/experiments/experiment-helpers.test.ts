@@ -60,6 +60,22 @@ describe('parseDesign', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.issues.map((i) => i.path)).toContain('hypothesis');
   });
+  it('an arm without a package or a design without a metric is refused beside its field, never sent empty', () => {
+    const r = parseDesign({
+      ...EMPTY_DESIGN,
+      hypothesis: 'x',
+      variants: [
+        { label: 'A', contentRevisionId: 'cr_a', allocationWeight: '1' },
+        { label: 'B', contentRevisionId: '', allocationWeight: '1' },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok)
+      expect(r.issues).toEqual([
+        { path: 'primaryMetricKey', issue: 'Choose a metric.' },
+        { path: 'variants.1.contentRevisionId', issue: 'Choose a content package.' },
+      ]);
+  });
   it('builds a pre-registration document from a complete form', () => {
     const r = parseDesign({
       ...EMPTY_DESIGN,
@@ -69,7 +85,7 @@ describe('parseDesign', () => {
         { label: 'B', contentRevisionId: 'cr_b', allocationWeight: '1' },
       ],
       primaryMetricKey: 'saves',
-      guardrailMetricKeys: 'complaints, unfollows',
+      guardrailMetricKeys: ['complaints', 'unfollows'],
       stoppingRule: 'sequential_msprt',
     });
     expect(r.ok).toBe(true);

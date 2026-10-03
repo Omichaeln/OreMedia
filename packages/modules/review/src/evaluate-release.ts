@@ -1,5 +1,11 @@
+import { renderArticleHtml } from '@oremedia/contracts/article';
 import { PolicyDocumentV1, defaultPolicyDocument } from '@oremedia/contracts/brand';
-import type { ContentClass } from '@oremedia/contracts/content';
+import {
+  ARTICLE_IMAGE_KINDS,
+  ARTICLE_IMAGE_MIMES,
+  articleImages,
+  type ContentClass,
+} from '@oremedia/contracts/content';
 import { CreativeDocumentV1, OperationBatch, RenderValidationResult } from '@oremedia/contracts/creative';
 import { OremediaError, PolicyDeniedError, NotFoundError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
@@ -7,6 +13,7 @@ import type { PublicationForRelease } from '@oremedia/contracts/publishing';
 import type { Check, LiveBinding, ReleaseCheckKey, ReleaseDecision } from '@oremedia/contracts/review';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { ApprovalBindingV1, bindingHash, withinTiming } from '@oremedia/domain/approval-binding';
+import { hashText } from '@oremedia/domain/hash';
 import { publishTargetId } from '@oremedia/contracts/publishing';
 import {
   ExternalReviewerLinkRepository,
@@ -118,6 +125,9 @@ export type ReleaseAssetAuthoriser = (
     purpose: ReleaseAssetPurpose;
     channelConnectionIds: readonly string[];
     scheduledFor: Date;
+    /** RA-08: the kinds and types the use accepts (a website page takes raster images only); any when absent. */
+    kinds?: readonly string[];
+    mimes?: readonly string[];
   },
   tx?: Tx,
 ) => Promise<void>;
@@ -279,7 +289,24 @@ export async function buildLiveBinding(pub: PublicationForRelease, tx?: Tx) {
     ? request.frozenManifest.timing
     : { kind: 'exact', at: new Date(pub.scheduledFor).toISOString() };
   const live = await bindingForRevision(revision, timing, tx);
-  return { ...live, revision, approval };
+  return { ...live, revision, approval, request };
+}
+
+/**
+ * RA-09: a website article still renders to the body the approved request froze. The frozen manifest carries the
+ * hash of the rendered HTML (requests frozen since RA-09); a renderer that moved between approval and dispatch
+ * would publish something the reviewer never saw, so the publication is held. A manifest without the hash (frozen
+ * before) proves nothing either way and passes; a channel publication has no article and passes.
+ */
+export function articleRenderingMatches(
+  pub: Pick<PublicationForRelease, 'destinationId'>,
+  revision: Pick<Revision, 'copy'>,
+  request: { frozenManifest: { article?: { renderedHtmlHash?: string } } } | null,
+): boolean {
+  const frozen = request?.frozenManifest.article?.renderedHtmlHash;
+  if (!pub.destinationId || frozen === undefined) return true;
+  const article = revision.copy.article;
+  return article !== undefined && hashText(renderArticleHtml(article)) === frozen;
 }
 
 // ---- brand review (spec 13.4 brand_review_clean) ----
@@ -349,6 +376,14 @@ async function assetsUsable(
       for (const f of e.manifest.fonts)
         await assetAuthoriser(f.assetVersionId, { ...ctx, purpose: 'font' }, tx);
     }
+    // RA-08: a website article's images (the featured image and the image blocks) are asset versions too.
+    if (variant.article)
+      for (const image of articleImages(variant.article))
+        await assetAuthoriser(
+          image.assetVersionId,
+          { ...ctx, purpose: 'creative', kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_MIMES },
+          tx,
+        );
     return true;
   } catch (err) {
     if (err instanceof OremediaError) return false; // RIGHTS_INELIGIBLE, NOT_FOUND: never a silent publish
@@ -407,6 +442,9 @@ export async function evaluateRelease(
       ),
     );
     checks.push(check('timing_within_binding', withinTiming(live.binding.timing, at)));
+    checks.push(
+      check('article_rendering_matches', articleRenderingMatches(pub, live.revision, live.request)),
+    );
   } else {
     const m = pub.mandateId ? await mandatesRepo.findById(pub.mandateId, tx) : null;
     const clean = await hasNoBlockingFindings(pub.contentRevisionId, tx);

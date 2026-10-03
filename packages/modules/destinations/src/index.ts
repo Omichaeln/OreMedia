@@ -30,6 +30,8 @@ export {
   registerDestinationOutboxRoutes,
   DESTINATION_VERIFY_WORKFLOW_TYPE,
   destinationVerifyWorkflowId,
+  DESTINATION_REVOKE_WORKFLOW_TYPE,
+  destinationRevokeWorkflowId,
   SEO_AUDIT_WORKFLOW_TYPE,
   seoAuditWorkflowId,
 } from './outbox-routes';
@@ -38,6 +40,9 @@ export {
 // pages, findings with suggested tasks) and the on-demand `run` command (seo_audit.run, AGENT_NEVER).
 export { seoAuditService, createSeoAuditService } from './audit';
 export { createSeoAuditRuntime, type SeoAuditRuntimeOptions } from './audit-runtime';
+// Spec 17.5: the TTL handlers worker-core registers with the platform retention sweep (D-17 retention applied
+// on the sweep's own clock, independently of any fetch, connection or enabled kind).
+export { destinationRetention } from './retention';
 export {
   robotsDisallowFor,
   robotsAllows,
@@ -52,11 +57,16 @@ export {
   destinationReportService,
   createDestinationReportService,
   reportFreshness,
+  reportQuality,
   reportComparison,
 } from './reports';
 export {
   createDestinationReportRuntime,
   reportRange,
+  REPORTING_ZONE_RECHECK_DAYS,
+  dateKey,
+  dayEnd,
+  knownTimeZone,
   type DestinationReportRuntimeOptions,
 } from './report-runtime';
 export {
@@ -68,16 +78,30 @@ export {
   SeoAuditPageRepository,
   SeoAuditRunRepository,
   SeoAuditTargetRepository,
+  SeoFindingWorkRepository,
   SourceUsePolicyRepository,
 } from './repositories';
 export {
   configureSourceAvailability,
+  configureSourceActivation,
+  sourceActivationOf,
+  sourceActivationFromEnv,
   sourceAvailable,
   sourceAvailabilityFromEnv,
   sourceCapabilities,
   cmsCapabilities,
+  registerFindingWork,
+  resetFindingWork,
   type SourceAvailability,
+  type SourceActivation,
+  type SourceActivationSource,
+  type FindingWorkHooks,
+  type FindingWorkInput,
+  type FindingWorkRef,
 } from './hooks';
+// RA-01: every registered provider (channel, source, CMS) with its activation state on this deployment.
+export { providerService, listProviders } from './providers';
+export { openDestinationCredential } from './service';
 export {
   configureDestinationSources,
   sourceAdapterFor,
@@ -85,7 +109,12 @@ export {
   registry as sourceRegistryInUse,
   type DestinationSourceOptions,
 } from './sources';
-export { createDestinationRuntime, type DestinationRuntime, type DestinationRuntimeOptions } from './runtime';
+export {
+  createDestinationRuntime,
+  sweepDisconnectedDestinationCredentials,
+  type DestinationRuntime,
+  type DestinationRuntimeOptions,
+} from './runtime';
 /** Spec 14.7 pattern for the daily refresh: one Temporal schedule per namespace on task queue `core`. */
 export const DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE = 'destinationTokenRefreshWorkflowV1';
 export const DESTINATION_TOKEN_REFRESH_SCHEDULE_ID = 'destination-token-refresh';
@@ -102,3 +131,4 @@ export {
   type RefreshBehaviour as FixtureRefreshBehaviour,
   type ReportBehaviour as FixtureReportBehaviour,
 } from './testing/fixture-source';
+export { FixtureCmsAdapter, fixtureCmsCapability, fixtureArticleHash } from './testing/fixture-cms';

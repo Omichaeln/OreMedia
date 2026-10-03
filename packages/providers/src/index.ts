@@ -52,6 +52,9 @@ export type {
   CmsCapabilityV1,
   CmsSite,
   CmsArticleInput,
+  CmsMediaInput,
+  CmsMediaRef,
+  CmsMediaResult,
   CmsRemoteArticle,
   CmsVerifyResult,
   CmsReadResult,
@@ -60,6 +63,7 @@ export type {
   CmsRenderedPage,
   CmsUpdatePrecondition,
 } from './cms-contract';
+export { CMS_MEDIA_MAX_BYTES } from './cms-contract';
 export { CmsRegistry, cmsRegistry } from './cms-registry';
 export { WordPressCmsAdapter, wordpressCmsAdapter } from './cms/wordpress/adapter';
 // The one bounded public-page fetch (D-16 validation, R2-4 audit crawl): SSRF-checked per hop, pinned to a host.

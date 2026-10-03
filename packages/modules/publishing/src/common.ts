@@ -5,7 +5,8 @@ import type { PublicationForRelease } from '@oremedia/contracts/publishing';
 import { IllegalTransitionError } from '@oremedia/domain/state-machines/machine';
 import { publicationMachine, type PublicationEvent } from '@oremedia/domain/state-machines/publication';
 import type { PublicationState } from '@oremedia/contracts/publishing';
-import { missingScopes } from '@oremedia/providers';
+import type { ChannelHealth, ProviderErrorClass } from '@oremedia/contracts/providers';
+import { ProviderTransportError, SourceReadError, missingScopes } from '@oremedia/providers';
 import { registry } from './providers';
 import type {
   ChannelConnectionRepository,
@@ -75,6 +76,41 @@ export function connectionUsable(row: ConnectionRow): boolean {
   return missingScopes(cap.requiredScopes, row.grantedScopes).length === 0;
 }
 
+/**
+ * RA-01: the channel health a provider's own classification of a refusal means, the same for every provider
+ * (never a branch on a key): a refused token is `token_expired`, a grant that is gone is `revoked`; a throttle, a
+ * rejection or an ambiguous answer says nothing about the access (null: the health stays as it was).
+ */
+export function healthFromClass(cls: ProviderErrorClass): ChannelHealth | null {
+  switch (cls.kind) {
+    case 'refresh_token':
+      return 'token_expired';
+    case 'reconnect_required':
+      return 'revoked';
+    default:
+      return null;
+  }
+}
+
+/**
+ * The health a failed read (comments, metrics) establishes: the platform out of reach is `unreachable`; a refusal
+ * the adapter raised with its classification is mapped above, but only when the token itself was refused (401): a
+ * 403 may be one endpoint's permission, which is a scope gap, not a dead grant. Anything else is not a health fact.
+ */
+/**
+ * RA-01: what a failed remote revoke's reason may say in the audit trail: a code shaped by the adapter helpers
+ * (`http_<status>`, `transport_<phase>`, an error name in snake case). Anything else (a message, a URL, a
+ * platform's own text) is replaced, since audit metadata is read by every tenant operator.
+ */
+export const auditRevokeReason = (reason: string): string =>
+  /^[a-z_]+(_\d+)?$/.test(reason) ? reason : 'provider_error';
+
+export function healthFromReadFailure(err: unknown): ChannelHealth | null {
+  if (err instanceof ProviderTransportError) return 'unreachable';
+  if (err instanceof SourceReadError) return err.status === 401 ? healthFromClass(err.classification) : null;
+  return null;
+}
+
 /** Never the credential reference: a connection DTO carries state and scopes only. */
 export const toConnectionDto = (c: ConnectionRow) => ({
   id: c.id,
@@ -87,6 +123,11 @@ export const toConnectionDto = (c: ConnectionRow) => ({
   status: c.status,
   tokenExpiresAt: c.tokenExpiresAt ? c.tokenExpiresAt.toISOString() : null,
   capabilityVersion: c.capabilityVersion,
+  /** RA-01: what the last refresh or read found about the remote access, and when (null until something ran). */
+  health: c.health,
+  healthCheckedAt: c.healthCheckedAt ? c.healthCheckedAt.toISOString() : null,
+  /** RA-07: the settings a variant on this channel may carry, as fields; null when the channel takes none. */
+  settingsSchema: registry().capability(c.providerKey)?.settings ?? null,
   usable: connectionUsable(c),
   createdAt: c.createdAt.toISOString(),
   updatedAt: c.updatedAt.toISOString(),
@@ -114,6 +155,10 @@ export const toPublicationDto = (p: PublicationRow) => ({
   holdReasons: HoldReasons.parse(p.holdReasons ?? null) ?? [],
   remotePostId: p.remotePostId,
   remoteUrl: p.remoteUrl,
+  /** RA-02 / RA-04 (destination publications; null for a channel): what the website holds and whether it was proven. */
+  remoteStatus: p.remoteStatus,
+  remoteVerification: p.remoteVerification,
+  remoteVerifiedAt: p.remoteVerifiedAt ? p.remoteVerifiedAt.toISOString() : null,
   fencingToken: p.fencingToken,
   claimedAt: p.claimedAt ? p.claimedAt.toISOString() : null,
   scheduledByKind: p.scheduledByKind,

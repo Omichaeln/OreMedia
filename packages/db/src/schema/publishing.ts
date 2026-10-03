@@ -7,9 +7,9 @@ import {
   index,
   int,
   json,
+  mediumtext,
   mysqlEnum,
   mysqlTable,
-  text,
   uniqueIndex,
   varbinary,
   varchar,
@@ -53,6 +53,21 @@ export const channelConnections = mysqlTable(
     status: mysqlEnum('status', ['active', 'refresh_needed', 'reconnect_needed', 'disabled']).notNull(),
     tokenExpiresAt: ts('token_expires_at'),
     capabilityVersion: int('capability_version').notNull(),
+    /**
+     * RA-01 (migration 0022): what the last refresh or read found about the remote access, beside `status`
+     * (ChannelHealth in contracts/providers); `unknown` until something ran. Both additive, as brand_destinations'.
+     */
+    health: mysqlEnum('health', [
+      'unknown',
+      'ok',
+      'token_expiring',
+      'token_expired',
+      'revoked',
+      'unreachable',
+    ])
+      .notNull()
+      .default('unknown'),
+    healthCheckedAt: ts('health_checked_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -153,6 +168,11 @@ export const publications = mysqlTable(
     holdReasons: json('hold_reasons').$type<string[]>(),
     remotePostId: varchar('remote_post_id', { length: 200 }),
     remoteUrl: varchar('remote_url', { length: 1000 }),
+    // RA-02 / RA-04 (destination publications only; null for a channel): what the website holds after the write and
+    // whether the read-back and the rendered page proved it. Beside `state`, never a replacement for it.
+    remoteStatus: mysqlEnum('remote_status', ['draft', 'live', 'reverted']),
+    remoteVerification: mysqlEnum('remote_verification', ['unverified', 'verified', 'failed']),
+    remoteVerifiedAt: ts('remote_verified_at'),
     fencingToken: int('fencing_token').notNull().default(0),
     claimant: varchar('claimant', { length: 160 }),
     claimedAt: ts('claimed_at'),
@@ -275,7 +295,7 @@ export const publicationRemoteChanges = mysqlTable(
     publicationId: ref('publication_id').notNull(),
     kind: mysqlEnum('kind', ['edit', 'delete', 'unpublish']).notNull(), // unpublish: R2-3 revert to draft
     state: mysqlEnum('state', ['requested', 'succeeded', 'failed']).notNull(),
-    text: text('text'), // edits only
+    text: mediumtext('text'), // edits only; an article's body (RA-03: ARTICLE_TEXT_MAX_CHARS) outgrows TEXT
     textHash: hash('text_hash'),
     reason: varchar('reason', { length: 500 }),
     requestedByKind: mysqlEnum('requested_by_kind', ['user', 'service_principal']).notNull(),

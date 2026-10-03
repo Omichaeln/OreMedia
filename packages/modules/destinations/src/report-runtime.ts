@@ -9,9 +9,12 @@ import {
   type DestinationReportPlanV1,
   type DestinationReportRangeV1,
   type DestinationReportSweepInputV1,
+  type DestinationReportTargetV1,
   type DestinationReportsInputV1,
   type DestinationReportsRuntimeV1,
   type DestinationRefreshRuntimeV1,
+  type SourceReportQualityFlag,
+  type SourceTargetMetadataV1,
   type SourceUseCheckResult,
 } from '@oremedia/contracts/destinations';
 import {
@@ -23,12 +26,14 @@ import { requireTenant, runAsPlatform, withTransaction, type Tx } from '@oremedi
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
-import { aadFor, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
+import { providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
 import {
   ProviderTransportError,
   SOURCE_ACCESS_REQUIRED,
   SourceReadError,
+  type SourceAdapter,
+  type SourceReportPage,
   type SourceReportRow,
   type SourceReportSpec,
 } from '@oremedia/providers';
@@ -39,7 +44,7 @@ import {
   DestinationReportTargetRepository,
   SourceUsePolicyRepository,
 } from './repositories';
-import { sourceUseDecision } from './service';
+import { openDestinationCredential, sourceUseDecision } from './service';
 import { registry, sourceAdapterFor, sourceIO } from './sources';
 
 const destinationsRepo = new BrandDestinationRepository();
@@ -57,6 +62,8 @@ const REPORT_LOCK_SECONDS = 15 * 60;
  */
 export const MAX_REPORT_PAGES = 50;
 const DAY_MS = 86_400_000;
+/** A remembered reporting zone is read again from the platform after this long (a property's zone rarely moves). */
+export const REPORTING_ZONE_RECHECK_DAYS = 7;
 type ReportRowInsert = Parameters<DestinationReportRowRepository['replaceWindow']>[5][number];
 
 /** Raised inside the broker call when a report exceeds the page cap; mapped to a `transient` result, never stored. */
@@ -94,9 +101,81 @@ export async function reportUseDecision(
   return last;
 }
 
-export const dateKey = (d: Date): string => d.toISOString().slice(0, 10);
+/** The parts of an instant in an IANA zone (`en-CA` prints ISO order); an unknown zone throws RangeError. */
+const zoneParts = (d: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(d);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return {
+    date: `${String(get('year')).padStart(4, '0')}-${String(get('month')).padStart(2, '0')}-${String(get('day')).padStart(2, '0')}`,
+    utcOfParts: Date.UTC(
+      get('year'),
+      get('month') - 1,
+      get('day'),
+      get('hour'),
+      get('minute'),
+      get('second'),
+    ),
+  };
+};
+/** Whether a zone is one the runtime can key days by (a stored zone is validated on read, spec 6.1). */
+export const knownTimeZone = (timeZone: string | null | undefined): timeZone is string => {
+  if (!timeZone) return false;
+  try {
+    zoneParts(new Date(0), timeZone);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/**
+ * The calendar day of an instant: in the reporting zone when one is known (RA-10: a GA4 property's own zone, the
+ * one its `date` dimension is keyed by), else the UTC day (rows stored before the zone was known, and sources
+ * that report none).
+ */
+export const dateKey = (d: Date, timeZone: string | null = null): string =>
+  knownTimeZone(timeZone) ? zoneParts(d, timeZone).date : d.toISOString().slice(0, 10);
 export const addDays = (date: string, days: number): string =>
-  dateKey(new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS));
+  new Date(Date.parse(`${date}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
+/** The instant a calendar day ends (23:59:59.999) in the zone, or in UTC without one. */
+export const dayEnd = (date: string, timeZone: string | null = null): Date => {
+  const utcEnd = Date.parse(`${date}T23:59:59.999Z`);
+  if (!knownTimeZone(timeZone)) return new Date(utcEnd);
+  // The zone's offset at the UTC instant is a first guess; across a DST change (the UTC instant is already the
+  // next local day east of UTC) the offset is read again at the instant that guess gives, which is on the day.
+  const offsetAt = (instant: number) =>
+    zoneParts(new Date(instant), timeZone).utcOfParts - Math.floor(instant / 1000) * 1000;
+  const first = utcEnd - offsetAt(utcEnd);
+  return new Date(utcEnd - offsetAt(first));
+};
+
+/**
+ * A destination's report retention (D-17): the policy's retentionDays when `retain` is allowed, else the operational
+ * cache (REPORT_CACHE_DAYS); days before the cut-off are deleted, every report of the destination. A kind the
+ * registry declares no reports for (unknown, or one that never had any) falls back to the cache: its rows are
+ * never kept longer. The same rule serves the sweep's prune and the platform retention sweep (retention.ts).
+ */
+export async function reportRetention(
+  row: { brandId: string; kind: string },
+  now: Date,
+  tx?: Tx,
+): Promise<{ days: number; cutoff: string; dataType: string }> {
+  const reports = registry().capability(row.kind)?.reports ?? [];
+  const cache = { days: REPORT_CACHE_DAYS, cutoff: addDays(dateKey(now), -REPORT_CACHE_DAYS) };
+  if (reports.length === 0) return { ...cache, dataType: `${row.kind}.reports` };
+  const { dataType, decision } = await reportUseDecision(row.brandId, row.kind, reports, 'retain', now, tx);
+  if (!decision.allowed || !decision.policy?.retentionDays) return { ...cache, dataType };
+  const days = decision.policy.retentionDays;
+  return { days, cutoff: addDays(dateKey(now), -days), dataType };
+}
 
 /**
  * The incremental range of one report (pure, unit-tested): from the last stored day minus the report's latency
@@ -107,8 +186,10 @@ export function reportRange(
   spec: { key: string; latencyHours: number; maxRangeDays: number },
   latestDate: string | null,
   now: Date,
+  timeZone: string | null = null,
 ): DestinationReportRangeV1 | null {
-  const end = addDays(dateKey(now), -1);
+  // Yesterday in the reporting zone: the platform's last complete day, never a day still running there.
+  const end = addDays(dateKey(now, timeZone), -1);
   const floor = addDays(end, -(spec.maxRangeDays - 1));
   let start = latestDate
     ? addDays(latestDate, -Math.ceil(spec.latencyHours / 24))
@@ -157,6 +238,75 @@ export function createDestinationReportRuntime(
     );
 
   /**
+   * RA-10: the reporting zone a destination's days are keyed by. The adapter's target metadata is read through
+   * the broker (one cheap read-only call) when nothing is remembered or the remembered zone is older than
+   * REPORTING_ZONE_RECHECK_DAYS, and remembered on the destination row; a refusal or a transport failure keeps
+   * what is remembered (the fetch itself handles a dead token), and a kind whose adapter exposes none keeps UTC
+   * days.
+   */
+  async function reportingZone(
+    row: {
+      id: string;
+      status: 'active' | 'disconnected';
+      externalId: string;
+      credentialRefId: string;
+      reportingTimeZone: string | null;
+      reportingZoneCheckedAt: Date | null;
+    },
+    tenantId: string,
+    adapter: SourceAdapter,
+    at: Date,
+  ): Promise<string | null> {
+    const describe = adapter.describeTarget?.bind(adapter);
+    const remembered = knownTimeZone(row.reportingTimeZone) ? row.reportingTimeZone : null;
+    if (!describe) return remembered;
+    if (
+      remembered &&
+      row.reportingZoneCheckedAt &&
+      at.getTime() - row.reportingZoneCheckedAt.getTime() < REPORTING_ZONE_RECHECK_DAYS * DAY_MS
+    )
+      return remembered;
+    let described: SourceTargetMetadataV1;
+    try {
+      described = await openDestinationCredential(
+        tenantId,
+        { ...row, credentialRefId: row.credentialRefId },
+        (creds) =>
+          describe(creds, providerClientFor(adapter.key), sourceIO(adapter.key, tenantId), row.externalId),
+      );
+    } catch (err) {
+      if (!(err instanceof SourceReadError) && !(err instanceof ProviderTransportError)) throw err;
+      log.warn({ destinationId: row.id, reason: err.message }, 'target metadata not read; zone kept');
+      return remembered;
+    }
+    await rememberZone(row.id, described, at);
+    return knownTimeZone(described.reportingTimeZone) ? described.reportingTimeZone : remembered;
+  }
+
+  /**
+   * Stores a zone or currency the platform just stated, when it differs from the row (under the row lock); a
+   * metadata read (`checkedAt`) also records when, so the next plans skip the call for a while.
+   */
+  async function rememberZone(
+    destinationId: string,
+    described: SourceTargetMetadataV1,
+    checkedAt?: Date,
+  ): Promise<void> {
+    const zone = knownTimeZone(described.reportingTimeZone) ? described.reportingTimeZone : null;
+    const currency = described.currencyCode ? described.currencyCode.slice(0, 3).toUpperCase() : null;
+    if (!zone && !currency && !checkedAt) return;
+    await withTransaction(async (tx) => {
+      const locked = await destinationsRepo.lock(destinationId, tx);
+      const values: { reportingTimeZone?: string; currencyCode?: string; reportingZoneCheckedAt?: Date } = {};
+      if (zone && zone !== locked.reportingTimeZone) values.reportingTimeZone = zone;
+      if (currency && currency !== locked.currencyCode) values.currencyCode = currency;
+      if (checkedAt) values.reportingZoneCheckedAt = checkedAt;
+      if (Object.keys(values).length > 0)
+        await destinationsRepo.update(locked.id, locked.version, values, tx);
+    });
+  }
+
+  /**
    * The fetch's failure as the workflow reads it (a returned result, never a thrown error: the activity retry
    * policy does not apply, the destination is degraded for today and the next day's run reads again); anything
    * that is not a platform answer propagates.
@@ -190,7 +340,17 @@ export function createDestinationReportRuntime(
 
   return {
     listDestinationReportTargets: ({ correlationId }: DestinationReportSweepInputV1) =>
-      runAsPlatform(REPORT_JOB, correlationId, () => targetsRepo.listTargets(kindsWithReports())),
+      runAsPlatform(REPORT_JOB, correlationId, async () => {
+        // Paged to the end: a deployment past one batch is read whole, references only.
+        const kinds = kindsWithReports();
+        const targets: DestinationReportTargetV1[] = [];
+        for (let cursor: string | undefined; ;) {
+          const page = await targetsRepo.listTargets(kinds, { cursor });
+          targets.push(...page.items);
+          if (!page.nextCursor) return targets;
+          cursor = page.nextCursor;
+        }
+      }),
 
     async planDestinationReports({
       tenantId,
@@ -228,12 +388,19 @@ export function createDestinationReportRuntime(
         REPORT_LOCK_SECONDS,
       );
       if (lock.count > 1) return { outcome: 'skipped', reason: 'locked' };
+      const zone = await reportingZone(
+        { ...row, credentialRefId: row.credentialRefId },
+        tenantId,
+        sourceAdapterFor(row.kind),
+        new Date(at),
+      );
       const planned: DestinationReportRangeV1[] = [];
       for (const spec of reports) {
         const range = reportRange(
           spec,
           await rowsRepo.latestDate(row.brandId, row.id, spec.key),
           new Date(at),
+          zone,
         );
         if (range) planned.push(range);
       }
@@ -257,28 +424,34 @@ export function createDestinationReportRuntime(
           `${row.kind} has no report ${reportKey}`,
         );
       const client = providerClientFor(adapter.key);
+      // RA-10: what the platform said beside the rows (the first page's zone and currency, every page's flags).
+      const stated: SourceTargetMetadataV1 = { reportingTimeZone: null, currencyCode: null };
+      const flags = new Set<SourceReportQualityFlag>();
+      const answered = (page: SourceReportPage) => {
+        stated.reportingTimeZone ??= page.reportingTimeZone ?? null;
+        stated.currencyCode ??= page.currencyCode ?? null;
+        for (const f of page.quality ?? []) flags.add(f);
+      };
       const read = (credentialRefId: string) =>
-        credentialBroker.withCredentialRef(
-          { tenantId, credentialRefId, aad: aadFor(tenantId, row.id) },
-          async (creds) => {
-            const rows: SourceReportRow[] = [];
-            let pageToken: string | undefined;
-            for (let page = 0; page < MAX_REPORT_PAGES; page++) {
-              hooks?.heartbeat(`report:${destinationId}:${reportKey}:${page}`);
-              const result = await adapter.fetchReport(creds, client, sourceIO(adapter.key, tenantId), {
-                externalId: row.externalId,
-                report: reportKey,
-                dateRange: { start, end },
-                ...(pageToken ? { pageToken } : {}),
-              });
-              rows.push(...result.rows);
-              if (!result.nextPageToken) return rows;
-              pageToken = result.nextPageToken;
-            }
-            log.warn({ destinationId, reportKey, pages: MAX_REPORT_PAGES }, 'report page cap reached');
-            throw new ReportPageCapError();
-          },
-        );
+        openDestinationCredential(tenantId, { ...row, credentialRefId }, async (creds) => {
+          const rows: SourceReportRow[] = [];
+          let pageToken: string | undefined;
+          for (let page = 0; page < MAX_REPORT_PAGES; page++) {
+            hooks?.heartbeat(`report:${destinationId}:${reportKey}:${page}`);
+            const result = await adapter.fetchReport(creds, client, sourceIO(adapter.key, tenantId), {
+              externalId: row.externalId,
+              report: reportKey,
+              dateRange: { start, end },
+              ...(pageToken ? { pageToken } : {}),
+            });
+            rows.push(...result.rows);
+            answered(result);
+            if (!result.nextPageToken) return rows;
+            pageToken = result.nextPageToken;
+          }
+          log.warn({ destinationId, reportKey, pages: MAX_REPORT_PAGES }, 'report page cap reached');
+          throw new ReportPageCapError();
+        });
       let fetched: SourceReportRow[];
       try {
         fetched = await read(row.credentialRefId);
@@ -305,11 +478,22 @@ export function createDestinationReportRuntime(
           return failureOf(again);
         }
       }
+      // The zone the days are keyed by: what the answer stated, else what the destination remembers (both learnt
+      // from the platform, never assumed); a zone the answer states is remembered for the next plan.
+      if (stated.reportingTimeZone || stated.currencyCode) await rememberZone(row.id, stated);
+      const timeZone = knownTimeZone(stated.reportingTimeZone)
+        ? stated.reportingTimeZone
+        : knownTimeZone(row.reportingTimeZone)
+          ? row.reportingTimeZone
+          : null;
       // One row per (day, dimensions) inside the window; the platform's last word on a duplicate wins.
       const fetchedAt = now();
+      const today = dateKey(fetchedAt, timeZone);
       const byKey = new Map<string, ReportRowInsert>();
       for (const r of fetched) {
         if (r.date < start || r.date > end) continue;
+        // A day that has not ended in the reporting zone is partial: flagged, re-read by the next plan's latency.
+        const quality = r.date >= today ? [...flags, 'partial_day' as const] : [...flags];
         const dimensions = Object.fromEntries(
           Object.entries(r.dimensions).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
         );
@@ -325,6 +509,8 @@ export function createDestinationReportRuntime(
           metrics: r.metrics,
           fetchedAt,
           source: 'provider',
+          timeZone,
+          quality,
         });
       }
       const rows = [...byKey.values()];
@@ -381,21 +567,7 @@ export function createDestinationReportRuntime(
      */
     async pruneDestinationReports({ destinationId, now: at }: DestinationReportsInputV1) {
       const row = await destinationsRepo.getById(destinationId);
-      const reports = registry().capability(row.kind)?.reports ?? [];
-      const cutoffFor = (days: number) => addDays(dateKey(new Date(at)), -days);
-      if (reports.length === 0) return { deleted: 0, cutoff: cutoffFor(REPORT_CACHE_DAYS) };
-      const { dataType, decision } = await reportUseDecision(
-        row.brandId,
-        row.kind,
-        reports,
-        'retain',
-        new Date(at),
-      );
-      const days =
-        decision.allowed && decision.policy?.retentionDays
-          ? decision.policy.retentionDays
-          : REPORT_CACHE_DAYS;
-      const cutoff = cutoffFor(days);
+      const { days, cutoff, dataType } = await reportRetention(row, new Date(at));
       const deleted = await withTransaction(async (tx) => {
         const n = await rowsRepo.deleteBefore(row.brandId, row.id, cutoff, tx);
         if (n > 0)

@@ -21,6 +21,8 @@ import {
   createCommunityReplyProviderActivities,
   createConnectChoicePurgeActivities,
   createDestinationRefreshActivities,
+  createChannelRevokeActivities,
+  createDestinationRevokeActivities,
   createDestinationVerifyActivities,
   createPublicationSweepActivities,
   createPublishControlActivities,
@@ -28,6 +30,7 @@ import {
   createRemoteChangeControlActivities,
   createRemoteChangeProviderActivities,
   createRemoteChangeSweepActivities,
+  createRenderedValidationActivities,
   createTokenRefreshActivities,
 } from '@oremedia/activities';
 import {
@@ -118,13 +121,19 @@ export async function startPublishingWorkers(
       // publicationRemoteEditWorkflowV1 / publicationRemoteDeleteWorkflowV1 record their outcome here
       ...createRemoteChangeControlActivities(runtime.remoteChangeControl),
       ...createRemoteChangeSweepActivities(runtime.remoteChangeSweep),
+      // renderedValidationWorkflowV1 (RA-04): a live article's page checked again at the delays after publish
+      ...createRenderedValidationActivities(runtime.renderedValidation),
       ...createTokenRefreshActivities(runtime.tokenRefresh),
+      // channelRevokeWorkflowV1 (RA-01): the remote revoke of a disconnected channel's grant, then the shred
+      ...createChannelRevokeActivities(runtime.channelRevoke),
       ...createPublicationSweepActivities(runtime.sweep),
       ...createConnectChoicePurgeActivities(runtime.connectChoicePurge),
       // destinationTokenRefreshWorkflowV1 (ledger R2-1): the daily refresh of brand destinations' source grants
       ...createDestinationRefreshActivities(destinations.refresh),
       // destinationVerifyWorkflowV1 (ledger R2-3): the health check of a destination connected with a secret
       ...createDestinationVerifyActivities(destinations.verify),
+      // destinationRevokeWorkflowV1 (RA-01): the remote revoke of a disconnected destination's grant, then the shred
+      ...createDestinationRevokeActivities(destinations.revoke),
       // brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 (spec 8.2)
       ...createBrandChangeImpactActivities(createBrandChangeImpactRuntime()),
       // brandAnalystWorkflowV1 / brandAnalystSweepWorkflowV1 / baselineComparisonWorkflowV1 (spec 16.3, 16.8)

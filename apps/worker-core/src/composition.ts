@@ -23,12 +23,14 @@ import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
 import {
   cmsCapabilities,
-  configureSourceAvailability,
+  configureSourceActivation,
   destinationArticles,
   destinationService,
   registerDestinationOutboxRoutes,
-  sourceAvailabilityFromEnv,
+  registerFindingWork,
+  sourceActivationFromEnv,
   sourceCapabilities,
+  sweepDisconnectedDestinationCredentials,
 } from '@oremedia/module-destinations';
 import { assetService, registerAssetOutboxRoutes, uploadsCapability } from '@oremedia/module-assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
@@ -102,6 +104,7 @@ import {
   reviewToolSource,
 } from '@oremedia/module-review';
 import { registerCommunityOutboxRoutes } from '@oremedia/module-community';
+import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
 import type { CapabilityCheck } from '@oremedia/observability';
 import {
   channelService,
@@ -111,12 +114,15 @@ import {
   registerRevisionVariantSource,
   providerClientsFromEnv,
   channelCapabilities,
+  configureChannelActivation,
+  channelActivationFromEnv,
   registerPublishingOutboxRoutes,
   registerPublishMediaSource,
   registerApprovalConsumer,
   registerReleaseEvaluator,
   registerVariantSource,
   registerWorkflowProbe,
+  registerDisconnectedCredentialSweep,
   registerPublishingBrandChecker,
   registerDestinationPublisher,
   type WorkflowProbe,
@@ -219,15 +225,19 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
   // Ledger R2-1: the sources this deployment refreshes (app credentials present, not disabled).
-  configureSourceAvailability(sourceAvailabilityFromEnv());
+  configureSourceActivation(sourceActivationFromEnv());
+  // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.
+  configureChannelActivation(channelActivationFromEnv());
   registerWorkflowProbe(opts.workflowProbe ?? null);
+  // RA-01: the publication sweeper's shred floor covers disconnected destinations too (destinations runtime).
+  registerDisconnectedCredentialSweep(sweepDisconnectedDestinationCredentials);
   // Spec 15: measurement.collection_due starts the collection on worker-ingest's queues; variant links and
   // creative attributes are captured here too because agents run content commands in this process.
   registerMeasurementOutboxRoutes();
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
-  // UX-11 / UX-12: the brand's publications in a window, as the calendar reads them.
+  // UX-11 / UX-12: every publication of a window (read to the end: the rollups aggregate the whole population).
   registerMeasurementPublicationSource((brandId, from, to, tx) =>
-    publicationService.calendarRange(brandId, from, to, tx),
+    publicationService.calendarRangeAll(brandId, from, to, tx),
   );
   // Comment inbox: community.reply_requested starts communityReplyWorkflowV1 on `core`.
   registerCommunityOutboxRoutes();
@@ -312,6 +322,26 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerRecommendationResolver((recommendationId, brandId, tx) =>
     intelligenceService.recommendations.belongsToBrand(recommendationId, brandId, tx),
   );
+  // RA-11: an SEO finding becomes tracked work as a recommendation (spec 16.4) with the finding's provenance; the
+  // destinations module reads the work's title and state back the same way.
+  registerFindingWork({
+    create: async (actor, input, tx) => {
+      const created = await intelligenceService.recommendations.createFromFinding(actor, input, tx);
+      return {
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: created.recommendationId,
+        title: created.title,
+        state: created.state,
+      };
+    },
+    describe: async (brandId, workIds, tx) =>
+      (await intelligenceService.recommendations.describeForBrand(brandId, workIds, tx)).map((r) => ({
+        workType: SEO_FINDING_WORK_TYPE,
+        workId: r.id,
+        title: r.title,
+        state: r.state,
+      })),
+  });
   registerExperimentListener((milestone, tx) =>
     intelligenceService.learning.onExperimentMilestone(milestone, tx),
   );

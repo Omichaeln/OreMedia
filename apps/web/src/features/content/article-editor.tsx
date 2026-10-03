@@ -1,12 +1,27 @@
+import { useState } from 'react';
 import { Button, Field, Input, Textarea, toneTextClass } from '@oremedia/ui';
 import {
   ARTICLE_BLOCKS_MAX,
+  ARTICLE_FAQ_ANSWER_BLOCKS_MAX,
+  ARTICLE_IMAGES_MAX,
+  ARTICLE_IMAGE_ALT_MAX,
+  ARTICLE_IMAGE_CAPTION_MAX,
+  ARTICLE_LINK_TEXT_MAX,
+  ARTICLE_LINK_URL_MAX,
+  ARTICLE_QUOTE_CITE_MAX,
   ARTICLE_SLUG_PATTERN,
   ARTICLE_TITLE_MAX,
   ArticleDocumentV1,
+  articleBlockText,
+  articleImages,
+  faqAnswerText,
   type ArticleBlockV1,
+  type ArticleFaqAnswerBlockV1,
+  type ArticleImageV1,
 } from '@oremedia/contracts/content';
 import { Select } from '../../components/select';
+import { AssetPickerDialog } from '../assets/asset-picker';
+import { AssetThumb } from '../assets/asset-thumb';
 
 /** What the editor holds between keystrokes: the document with its terms as comma-separated text. */
 export interface ArticleDraft {
@@ -16,6 +31,8 @@ export interface ArticleDraft {
   blocks: ArticleBlockV1[];
   categories: string;
   tags: string;
+  /** RA-08: the page's featured image, an asset version from the library with its alt text; null for none. */
+  featuredImage: ArticleImageV1 | null;
 }
 
 export const emptyArticleDraft = (): ArticleDraft => ({
@@ -25,6 +42,7 @@ export const emptyArticleDraft = (): ArticleDraft => ({
   blocks: [{ type: 'paragraph', text: '' }],
   categories: '',
   tags: '',
+  featuredImage: null,
 });
 
 export const articleToDraft = (a: ArticleDocumentV1): ArticleDraft => ({
@@ -34,6 +52,7 @@ export const articleToDraft = (a: ArticleDocumentV1): ArticleDraft => ({
   blocks: a.blocks.map((b) => ({ ...b })),
   categories: a.categories.join(', '),
   tags: a.tags.join(', '),
+  featuredImage: a.featuredImage ? { ...a.featuredImage } : null,
 });
 
 /** The CMS's slug rule: lower-case words joined by hyphens, as a person would type a path segment. */
@@ -55,24 +74,45 @@ const terms = (text: string): string[] => [
   ),
 ];
 
-/** The draft as the server parses it, or the first problems by field (the server re-checks on save). */
+/** A block as the server stores it: a rich FAQ answer keeps its plain text beside the blocks (contract). */
+const storedBlock = (b: ArticleBlockV1): ArticleBlockV1 => {
+  if (b.type !== 'faq') return b;
+  const answerBlocks = (b.answerBlocks ?? []).filter((a) => articleBlockText(a).trim() !== '');
+  if (answerBlocks.length === 0) {
+    const { answerBlocks: _dropped, ...plain } = b;
+    return plain;
+  }
+  return { ...b, answerBlocks, answer: faqAnswerText({ answer: b.answer, answerBlocks }) };
+};
+
+/**
+ * The draft as the server parses it, or the first problems by field (the server re-checks on save). A document the
+ * editor writes is version 2 (RA-08): it may carry rich blocks and a featured image, and the server sends the
+ * featured image with the article when it publishes.
+ */
 export function parseArticleDraft(
   draft: ArticleDraft,
 ): { ok: true; article: ArticleDocumentV1 } | { ok: false; issues: Record<string, string> } {
   const parsed = ArticleDocumentV1.safeParse({
     kind: 'article',
+    v: 2,
     title: draft.title.trim(),
     slug: draft.slug.trim(),
     excerpt: draft.excerpt.trim(),
-    blocks: draft.blocks,
+    blocks: draft.blocks.map(storedBlock),
     categories: terms(draft.categories),
     tags: terms(draft.tags),
+    ...(draft.featuredImage ? { featuredImage: draft.featuredImage } : {}),
   });
   if (parsed.success) return { ok: true, article: parsed.data };
   const issues: Record<string, string> = {};
   for (const issue of parsed.error.issues) {
     const path = issue.path.join('.');
-    const key = path.startsWith('blocks') ? 'blocks' : path || 'article';
+    const key = path.startsWith('blocks')
+      ? 'blocks'
+      : path.startsWith('featuredImage')
+        ? 'featuredImage'
+        : path || 'article';
     if (!issues[key]) issues[key] = issue.message === 'Required' ? 'Required' : issue.message;
   }
   return { ok: false, issues };
@@ -82,8 +122,14 @@ const BLOCK_OPTIONS = [
   { value: 'paragraph', label: 'Paragraph' },
   { value: 'heading', label: 'Heading' },
   { value: 'list', label: 'List' },
+  { value: 'link', label: 'Link' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'image', label: 'Image (from the asset library)' },
   { value: 'faq', label: 'FAQ (question and answer)' },
 ];
+const ANSWER_BLOCK_OPTIONS = BLOCK_OPTIONS.filter((o) =>
+  ['paragraph', 'list', 'link', 'quote'].includes(o.value),
+);
 const HEADING_OPTIONS = [
   { value: '2', label: 'Heading 2' },
   { value: '3', label: 'Heading 3' },
@@ -99,23 +145,111 @@ const newBlock = (type: ArticleBlockV1['type']): ArticleBlockV1 => {
       return { type, ordered: false, items: [''] };
     case 'faq':
       return { type, question: '', answer: '' };
+    case 'link':
+      return { type, href: '', text: '' };
+    case 'quote':
+      return { type, text: '' };
+    case 'image':
+      return { type, assetVersionId: '', alt: '' };
   }
 };
-const BLOCK_LABEL: Record<ArticleBlockV1['type'], string> = {
+const newAnswerBlock = (type: ArticleFaqAnswerBlockV1['type']): ArticleFaqAnswerBlockV1 =>
+  newBlock(type) as ArticleFaqAnswerBlockV1;
+export const BLOCK_LABEL: Record<ArticleBlockV1['type'], string> = {
   paragraph: 'Paragraph',
   heading: 'Heading',
   list: 'List',
   faq: 'FAQ',
+  link: 'Link',
+  quote: 'Quote',
+  image: 'Image',
 };
 
-function BlockFields({
+/** An image slot: the chosen asset version's thumbnail with its alt text, or the button that opens the picker. */
+function ImageFields({
+  brandId,
+  image,
+  idPrefix,
+  label,
+  onChange,
+  disabled,
+}: {
+  brandId: string;
+  image: ArticleImageV1 | null;
+  idPrefix: string;
+  label: string;
+  onChange: (next: ArticleImageV1 | null) => void;
+  /** No more images may be added (ARTICLE_IMAGES_MAX); an existing one can still be replaced or removed. */
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-2" data-testid={`${idPrefix}-image`}>
+      <div className="flex flex-wrap items-center gap-2">
+        {image && image.assetVersionId !== '' ? (
+          <AssetThumb
+            assetVersionId={image.assetVersionId}
+            alt={image.alt}
+            className="h-16 w-16 rounded-sm"
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">No image chosen.</span>
+        )}
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={() => setOpen(true)}
+          disabled={disabled && !image}
+          disabledReason={disabled && !image ? `At most ${ARTICLE_IMAGES_MAX} images per article` : undefined}
+          data-testid={`${idPrefix}-choose`}
+        >
+          {image && image.assetVersionId !== ''
+            ? `Replace ${label.toLowerCase()}`
+            : `Choose ${label.toLowerCase()}`}
+        </Button>
+        {image && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => onChange(null)}>
+            Remove {label.toLowerCase()}
+          </Button>
+        )}
+      </div>
+      {image && (
+        <Field
+          label="Alt text"
+          htmlFor={`${idPrefix}-alt`}
+          hint="What the image shows, for readers who cannot see it."
+        >
+          <Input
+            id={`${idPrefix}-alt`}
+            value={image.alt}
+            onChange={(e) => onChange({ ...image, alt: e.target.value })}
+            maxLength={ARTICLE_IMAGE_ALT_MAX}
+          />
+        </Field>
+      )}
+      <AssetPickerDialog
+        brandId={brandId}
+        purpose="creative"
+        open={open}
+        onOpenChange={setOpen}
+        title={`Choose ${label.toLowerCase()}`}
+        onPick={(asset) =>
+          onChange({ assetVersionId: asset.assetVersionId, alt: image?.alt || (asset.altText ?? '') })
+        }
+      />
+    </div>
+  );
+}
+
+function AnswerBlockFields({
   block,
   idPrefix,
   onChange,
 }: {
-  block: ArticleBlockV1;
+  block: ArticleFaqAnswerBlockV1;
   idPrefix: string;
-  onChange: (next: ArticleBlockV1) => void;
+  onChange: (next: ArticleFaqAnswerBlockV1) => void;
 }) {
   switch (block.type) {
     case 'paragraph':
@@ -128,27 +262,6 @@ function BlockFields({
             rows={3}
           />
         </Field>
-      );
-    case 'heading':
-      return (
-        <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
-          <Field label="Level" htmlFor={`${idPrefix}-level`}>
-            <Select
-              id={`${idPrefix}-level`}
-              value={String(block.level)}
-              onValueChange={(v) => onChange({ ...block, level: Number(v) as 2 | 3 | 4 })}
-              options={HEADING_OPTIONS}
-            />
-          </Field>
-          <Field label="Heading" htmlFor={`${idPrefix}-text`}>
-            <Input
-              id={`${idPrefix}-text`}
-              value={block.text}
-              onChange={(e) => onChange({ ...block, text: e.target.value })}
-              maxLength={300}
-            />
-          </Field>
-        </div>
       );
     case 'list':
       return (
@@ -171,7 +284,124 @@ function BlockFields({
           </Field>
         </div>
       );
-    case 'faq':
+    case 'link':
+      return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Field label="Address" htmlFor={`${idPrefix}-href`} hint="An absolute http(s) address.">
+            <Input
+              id={`${idPrefix}-href`}
+              type="url"
+              value={block.href}
+              onChange={(e) => onChange({ ...block, href: e.target.value })}
+              maxLength={ARTICLE_LINK_URL_MAX}
+            />
+          </Field>
+          <Field
+            label="Link text"
+            htmlFor={`${idPrefix}-text`}
+            hint="Shown instead of the address when given."
+          >
+            <Input
+              id={`${idPrefix}-text`}
+              value={block.text}
+              onChange={(e) => onChange({ ...block, text: e.target.value })}
+              maxLength={ARTICLE_LINK_TEXT_MAX}
+            />
+          </Field>
+        </div>
+      );
+    case 'quote':
+      return (
+        <div className="flex flex-col gap-2">
+          <Field label="Quote" htmlFor={`${idPrefix}-text`}>
+            <Textarea
+              id={`${idPrefix}-text`}
+              value={block.text}
+              onChange={(e) => onChange({ ...block, text: e.target.value })}
+              rows={3}
+            />
+          </Field>
+          <Field label="Source" htmlFor={`${idPrefix}-cite`} hint="Who said it (optional).">
+            <Input
+              id={`${idPrefix}-cite`}
+              value={block.cite ?? ''}
+              onChange={(e) => {
+                const { cite: _cite, ...rest } = block;
+                onChange(e.target.value === '' ? rest : { ...rest, cite: e.target.value });
+              }}
+              maxLength={ARTICLE_QUOTE_CITE_MAX}
+            />
+          </Field>
+        </div>
+      );
+  }
+}
+
+function BlockFields({
+  brandId,
+  block,
+  idPrefix,
+  onChange,
+  imagesFull,
+}: {
+  brandId: string;
+  block: ArticleBlockV1;
+  idPrefix: string;
+  onChange: (next: ArticleBlockV1) => void;
+  imagesFull: boolean;
+}) {
+  switch (block.type) {
+    case 'heading':
+      return (
+        <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
+          <Field label="Level" htmlFor={`${idPrefix}-level`}>
+            <Select
+              id={`${idPrefix}-level`}
+              value={String(block.level)}
+              onValueChange={(v) => onChange({ ...block, level: Number(v) as 2 | 3 | 4 })}
+              options={HEADING_OPTIONS}
+            />
+          </Field>
+          <Field label="Heading" htmlFor={`${idPrefix}-text`}>
+            <Input
+              id={`${idPrefix}-text`}
+              value={block.text}
+              onChange={(e) => onChange({ ...block, text: e.target.value })}
+              maxLength={300}
+            />
+          </Field>
+        </div>
+      );
+    case 'image':
+      return (
+        <div className="flex flex-col gap-2">
+          <ImageFields
+            brandId={brandId}
+            image={{ assetVersionId: block.assetVersionId, alt: block.alt }}
+            idPrefix={idPrefix}
+            label="Image"
+            disabled={imagesFull}
+            onChange={(next) =>
+              onChange({ ...block, assetVersionId: next?.assetVersionId ?? '', alt: next?.alt ?? '' })
+            }
+          />
+          <Field label="Caption" htmlFor={`${idPrefix}-caption`} hint="Shown under the image (optional).">
+            <Input
+              id={`${idPrefix}-caption`}
+              value={block.caption ?? ''}
+              onChange={(e) => {
+                const { caption: _caption, ...rest } = block;
+                onChange(e.target.value === '' ? rest : { ...rest, caption: e.target.value });
+              }}
+              maxLength={ARTICLE_IMAGE_CAPTION_MAX}
+            />
+          </Field>
+        </div>
+      );
+    case 'faq': {
+      const answerBlocks = block.answerBlocks ?? [];
+      const setAnswer = (i: number, next: ArticleFaqAnswerBlockV1) =>
+        onChange({ ...block, answerBlocks: answerBlocks.map((b, j) => (j === i ? next : b)) });
       return (
         <div className="flex flex-col gap-2">
           <Field label="Question" htmlFor={`${idPrefix}-question`}>
@@ -182,20 +412,88 @@ function BlockFields({
               maxLength={500}
             />
           </Field>
-          <Field label="Answer" htmlFor={`${idPrefix}-answer`}>
+          <Field
+            label="Answer"
+            htmlFor={`${idPrefix}-answer`}
+            hint={
+              answerBlocks.length > 0
+                ? 'The answer blocks below are what publishes; this plain text is kept beside them.'
+                : 'Plain text; add answer blocks below for lists, links or quotes in the answer.'
+            }
+          >
             <Textarea
               id={`${idPrefix}-answer`}
               value={block.answer}
               onChange={(e) => onChange({ ...block, answer: e.target.value })}
               rows={3}
+              readOnly={answerBlocks.length > 0}
             />
           </Field>
+          <fieldset
+            className="flex flex-col gap-2 border-l-2 border-border pl-3"
+            data-testid={`${idPrefix}-answer-blocks`}
+          >
+            <legend className="text-xs font-medium text-muted-foreground">
+              Answer blocks ({answerBlocks.length})
+            </legend>
+            {answerBlocks.map((a, i) => (
+              <div
+                key={i}
+                className="flex flex-col gap-2"
+                data-testid="faq-answer-block"
+                data-block-type={a.type}
+              >
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-medium">
+                    {i + 1}. {BLOCK_LABEL[a.type]}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      onChange({ ...block, answerBlocks: answerBlocks.filter((_, j) => j !== i) })
+                    }
+                    aria-label={`Remove answer block ${i + 1}`}
+                  >
+                    Remove
+                  </Button>
+                </div>
+                <AnswerBlockFields
+                  block={a}
+                  idPrefix={`${idPrefix}-answer-${i}`}
+                  onChange={(next) => setAnswer(i, next)}
+                />
+              </div>
+            ))}
+            <Field label="Add an answer block" htmlFor={`${idPrefix}-answer-add`}>
+              <Select
+                id={`${idPrefix}-answer-add`}
+                value=""
+                placeholder="Choose a block type"
+                onValueChange={(v) =>
+                  onChange({
+                    ...block,
+                    answerBlocks: [...answerBlocks, newAnswerBlock(v as ArticleFaqAnswerBlockV1['type'])],
+                  })
+                }
+                options={ANSWER_BLOCK_OPTIONS}
+                disabled={answerBlocks.length >= ARTICLE_FAQ_ANSWER_BLOCKS_MAX}
+                aria-label="Answer block type to add"
+              />
+            </Field>
+          </fieldset>
         </div>
       );
+    }
+    default:
+      return <AnswerBlockFields block={block} idPrefix={idPrefix} onChange={onChange} />;
   }
 }
 
 export interface ArticleEditorProps {
+  /** The brand whose asset library the images come from. */
+  brandId: string;
   draft: ArticleDraft;
   onChange: (next: ArticleDraft) => void;
   idPrefix: string;
@@ -204,12 +502,13 @@ export interface ArticleEditorProps {
 }
 
 /**
- * Ledger R2-3: the article document a website package carries (title, slug, excerpt, the body as an ordered list
- * of blocks with FAQ blocks, the terms it is filed under). Blocks are added, removed and moved by buttons, so the
- * whole editor works from the keyboard; the slug follows the title until it is edited by hand. Rendering to HTML
- * happens on the server in one place (article.ts); nothing here produces markup.
+ * Ledger R2-3 / RA-08: the article document a website package carries (title, slug, excerpt, the body as an
+ * ordered list of blocks with headings, lists, links, quotes, images from the asset library and FAQ entries whose
+ * answers may be blocks themselves, a featured image, the terms it is filed under). Blocks are added, removed and
+ * moved by buttons, so the whole editor works from the keyboard; the slug follows the title until it is edited by
+ * hand. Rendering to HTML happens in one place (contracts/article.ts); nothing here produces markup.
  */
-export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: ArticleEditorProps) {
+export function ArticleEditor({ brandId, draft, onChange, idPrefix, issues = {} }: ArticleEditorProps) {
   // The slug follows the title until it was edited by hand (it then differs from the title's slug).
   const slugTouched = draft.slug !== '' && draft.slug !== slugify(draft.title);
   const setBlock = (i: number, next: ArticleBlockV1) =>
@@ -221,6 +520,11 @@ export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: Articl
     [blocks[i], blocks[j]] = [blocks[j] as ArticleBlockV1, blocks[i] as ArticleBlockV1];
     onChange({ ...draft, blocks });
   };
+  const images = articleImages({
+    blocks: draft.blocks,
+    ...(draft.featuredImage ? { featuredImage: draft.featuredImage } : {}),
+  }).length;
+  const imagesFull = images >= ARTICLE_IMAGES_MAX;
   return (
     <div className="flex flex-col gap-3" data-testid="article-editor">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -270,9 +574,26 @@ export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: Articl
           rows={2}
         />
       </Field>
+      <fieldset className="flex flex-col gap-2" data-testid="article-featured">
+        <legend className="text-xs font-medium text-muted-foreground">Featured image</legend>
+        {issues['featuredImage'] && (
+          <p className={`text-xs ${toneTextClass.critical}`} role="alert">
+            {issues['featuredImage']}
+          </p>
+        )}
+        <ImageFields
+          brandId={brandId}
+          image={draft.featuredImage}
+          idPrefix={`${idPrefix}-featured`}
+          label="Featured image"
+          disabled={imagesFull}
+          onChange={(featuredImage) => onChange({ ...draft, featuredImage })}
+        />
+      </fieldset>
       <fieldset className="flex flex-col gap-2" data-testid="article-blocks">
         <legend className="text-xs font-medium text-muted-foreground">
-          Body ({draft.blocks.length} block{draft.blocks.length === 1 ? '' : 's'})
+          Body ({draft.blocks.length} block{draft.blocks.length === 1 ? '' : 's'}
+          {images > 0 ? `, ${images} of ${ARTICLE_IMAGES_MAX} images` : ''})
         </legend>
         {issues['blocks'] && (
           <p className={`text-xs ${toneTextClass.critical}`} role="alert">
@@ -322,9 +643,11 @@ export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: Articl
                 </Button>
               </div>
               <BlockFields
+                brandId={brandId}
                 block={block}
                 idPrefix={`${idPrefix}-block-${i}`}
                 onChange={(next) => setBlock(i, next)}
+                imagesFull={imagesFull}
               />
             </li>
           ))}
@@ -334,6 +657,7 @@ export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: Articl
             <AddBlock
               id={`${idPrefix}-add`}
               disabled={draft.blocks.length >= ARTICLE_BLOCKS_MAX}
+              imagesFull={imagesFull}
               onAdd={(type) => onChange({ ...draft, blocks: [...draft.blocks, newBlock(type)] })}
             />
           </Field>
@@ -367,10 +691,12 @@ export function ArticleEditor({ draft, onChange, idPrefix, issues = {} }: Articl
 function AddBlock({
   id,
   disabled,
+  imagesFull,
   onAdd,
 }: {
   id: string;
   disabled: boolean;
+  imagesFull: boolean;
   onAdd: (type: ArticleBlockV1['type']) => void;
 }) {
   return (
@@ -380,13 +706,25 @@ function AddBlock({
         value=""
         placeholder="Choose a block type"
         onValueChange={(v) => onAdd(v as ArticleBlockV1['type'])}
-        options={BLOCK_OPTIONS}
+        options={BLOCK_OPTIONS.map((o) => (o.value === 'image' && imagesFull ? { ...o, disabled: true } : o))}
         disabled={disabled}
         aria-label="Block type to add"
       />
     </div>
   );
 }
+
+/** One block's text for the summary: a list's items dotted, a FAQ's question and answer, an image's alt text. */
+const summaryText = (b: ArticleBlockV1): string =>
+  b.type === 'list'
+    ? b.items.join(' · ')
+    : b.type === 'faq'
+      ? `${b.question} — ${faqAnswerText(b)}`
+      : b.type === 'image'
+        ? `${b.alt || '(no alt text)'}${b.caption ? ` — ${b.caption}` : ''}`
+        : b.type === 'link'
+          ? `${b.text || b.href} → ${b.href}`
+          : articleBlockText(b);
 
 /** A read-only rendering of an article's structure (the revision as it is), without producing HTML. */
 export function ArticleSummary({ article }: { article: ArticleDocumentV1 }) {
@@ -397,15 +735,21 @@ export function ArticleSummary({ article }: { article: ArticleDocumentV1 }) {
         <code className="text-xs text-muted-foreground">/{article.slug}</code>
       </p>
       {article.excerpt && <p className="text-muted-foreground">{article.excerpt}</p>}
+      {article.featuredImage && (
+        <p className="flex items-center gap-2 text-xs" data-testid="article-summary-featured">
+          <AssetThumb
+            assetVersionId={article.featuredImage.assetVersionId}
+            alt={article.featuredImage.alt}
+            className="h-10 w-10 rounded-sm"
+          />
+          <span className="text-muted-foreground">Featured image:</span>{' '}
+          {article.featuredImage.alt || '(no alt text)'}
+        </p>
+      )}
       <ol className="flex flex-col gap-1" aria-label="Article body">
         {article.blocks.map((b, i) => (
           <li key={i} className="text-xs" data-block-type={b.type}>
-            <span className="text-muted-foreground">{BLOCK_LABEL[b.type]}:</span>{' '}
-            {b.type === 'list'
-              ? b.items.join(' · ')
-              : b.type === 'faq'
-                ? `${b.question} — ${b.answer}`
-                : b.text}
+            <span className="text-muted-foreground">{BLOCK_LABEL[b.type]}:</span> {summaryText(b)}
           </li>
         ))}
       </ol>

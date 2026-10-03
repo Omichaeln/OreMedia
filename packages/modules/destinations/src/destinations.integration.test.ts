@@ -13,6 +13,7 @@ import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import {
   brandDestinations,
@@ -21,7 +22,9 @@ import {
 } from '@oremedia/db/schema/destinations';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { credentialRefs } from '@oremedia/db/schema/publishing';
+import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
+import { MemoryStorageProvider, configureStorage, storageKeys } from '@oremedia/module-assets';
 import {
   LocalKms,
   configureCredentialBroker,
@@ -34,11 +37,13 @@ import type { ArticleDocumentV1 } from '@oremedia/contracts/content';
 import { renderArticleHtml } from '@oremedia/contracts/article';
 import { destinationArticles, effectivePublishMode } from './articles';
 import { configureDestinationCms } from './cms';
-import { configureSourceAvailability } from './hooks';
-import { createDestinationRuntime } from './runtime';
+import { providerService } from './providers';
+import { openDestinationCredential } from './service';
+import { configureSourceActivation, configureSourceAvailability } from './hooks';
+import { createDestinationRuntime, sweepDisconnectedDestinationCredentials } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
-import { FixtureCmsAdapter } from './testing/fixture-cms';
+import { FixtureCmsAdapter, fixtureArticleHash } from './testing/fixture-cms';
 import { FixtureSourceAdapter, fixtureSourceCapability } from './testing/fixture-source';
 
 /**
@@ -630,6 +635,42 @@ describe('destinations module against MySQL 8', () => {
       ];
     });
 
+    it('RA-01: providers.list names every registered provider of the three kinds with its activation state and the reason; owners and admins only', async () => {
+      configureSourceActivation((kind) =>
+        kind === 'ga4_property'
+          ? {
+              disabled: false,
+              credentialRefs: [{ name: 'PROVIDER_GA4_PROPERTY_CLIENT_ID_REF', present: true }],
+            }
+          : kind === 'cms_site'
+            ? { disabled: true, credentialRefs: [] }
+            : {
+                disabled: false,
+                credentialRefs: [{ name: 'PROVIDER_SEARCH_CONSOLE_SITE_SECRET_REF', present: false }],
+              },
+      );
+      const { items } = await inTenant(tenantA, () => providerService.list(owner()));
+      const byKey = Object.fromEntries(items.map((p) => [`${p.kind}:${p.key}`, p]));
+      expect(byKey['source:ga4_property']).toMatchObject({
+        vendor: 'Fixture',
+        state: 'ready',
+        reason: null,
+        disabled: false,
+      });
+      expect(byKey['source:search_console_site']).toMatchObject({
+        state: 'uncertified',
+        reason: 'provider_not_certified:search_console_site',
+      });
+      expect(byKey['cms:cms_site']).toMatchObject({ vendor: 'WordPress', state: 'uncertified' });
+      expect(items.some((p) => p.kind === 'channel')).toBe(true); // the channel registry's providers are listed too
+      // Facts are names and booleans only: never a credential value.
+      expect(JSON.stringify(items)).not.toMatch(/fixture-secret|fixture-client/);
+      configureSourceActivation(null);
+      await expect(
+        inTenant(tenantA, () => providerService.list(member(tenantA, 'publisher'))),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+    });
+
     it('sources.list names each registered kind with its certification and whether it is enabled here', async () => {
       configureSourceAvailability((kind) => kind === 'ga4_property');
       const { items } = await destinationService.sources.list();
@@ -985,21 +1026,94 @@ describe('destinations module against MySQL 8', () => {
       fixture.refreshBehaviour = { kind: 'refresh' };
     });
 
-    it('disconnect destroys the credential; the broker refuses it afterwards and the refresh skips it', async () => {
+    it('disconnect leaves the credential to the remote revoke, unusable at once; the worker revokes it at the vendor and destroys it; the refresh skips it', async () => {
       const row = await destinationRow(connectedId);
-      await run(tenantA, (tx) =>
+      const gone = await run(tenantA, (tx) =>
         destinationService.disconnect(
           owner(),
           { brandId: brandA, destinationId: connectedId, expectedVersion: row.version },
           tx,
         ),
       );
+      expect(gone.remoteRevoke).toBe('requested'); // the fixture source can revoke at the vendor
       const after = await destinationRow(connectedId);
       expect(after).toMatchObject({ status: 'disconnected', tokenExpiresAt: null });
+      expect((await credentialRow(row.credentialRefId!)).destroyedAt).toBeNull();
+      // RA-01: unusable from the disconnect on, for every opener but the revoke.
+      await expect(
+        inTenant(tenantA, () =>
+          openDestinationCredential(
+            tenantA,
+            { ...after, credentialRefId: row.credentialRefId! },
+            async () => 'x',
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'credential_owner_disconnected' });
+      expect((await auditsOf('destination.disconnect')).at(-1)?.metadata).toMatchObject({
+        remoteRevoke: 'requested',
+      });
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().revoke.revokeDestinationAccess({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_revoke',
+          }),
+        ),
+      ).toEqual({ outcome: 'revoked' });
+      expect(fixture.revokeCalls.at(-1)?.refreshToken).toBe('rt_fixture_src');
+      expect((await auditsOf('destination.remote_revoke')).at(-1)?.metadata).toMatchObject({
+        remoteRevoke: 'revoked',
+        kind: 'ga4_property',
+      });
+      // A repeat has nothing left to do.
+      expect(
+        await asPlatformJob(tenantA, () =>
+          createDestinationRuntime().revoke.revokeDestinationAccess({
+            tenantId: tenantA,
+            destinationId: connectedId,
+            actor: REFRESH_ACTOR,
+            correlationId: 'corr_revoke',
+          }),
+        ),
+      ).toEqual({ outcome: 'already_destroyed' });
       const credential = await credentialRow(row.credentialRefId!);
       expect(credential.destroyedAt).toBeInstanceOf(Date);
       expect(credential.rotatedAt).toBeNull();
       expect(credential.wrappedDataKey).toBe('');
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull(); // nothing left to point at
+      // RA-01, the floor under the revoke: a credential still intact an hour after the disconnect is shredded by
+      // the publication sweeper's floor (the application role; registered by worker-core), audited, and the row
+      // stops pointing at it; within the hour it is left to the workflow.
+      const leftover = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_left',
+            refreshToken: 'rt_left',
+          }),
+          tx,
+        ),
+      );
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: leftover, updatedAt: new Date(Date.now() - 30 * 60_000) })
+        .where(eq(brandDestinations.id, connectedId));
+      const floor = () => new Date(Date.now() - 60 * 60_000);
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
+      expect((await credentialRow(leftover)).destroyedAt).toBeNull();
+      await tdb.db
+        .update(brandDestinations)
+        .set({ updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(eq(brandDestinations.id, connectedId));
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(1);
+      expect((await credentialRow(leftover)).destroyedAt).toBeInstanceOf(Date);
+      expect((await destinationRow(connectedId)).credentialRefId).toBeNull();
+      expect((await auditsOf('destination.credential_shredded')).at(-1)?.metadata).toMatchObject({
+        reason: 'disconnect_shred_floor',
+        kind: 'ga4_property',
+      });
+      expect(await sweepDisconnectedDestinationCredentials(floor(), 'sweep')).toBe(0);
       await expect(
         inTenant(tenantA, () =>
           credentialBroker.withCredentialRef(
@@ -1024,6 +1138,70 @@ describe('destinations module against MySQL 8', () => {
         withinHours: 24,
       });
       expect(due.some((d) => d.destinationId === connectedId)).toBe(false);
+    });
+
+    it('RA-01: a reconnect between the revoke’s read and its destroy keeps the new credential (status re-checked under the lock)', async () => {
+      // The row is disconnected with a credential the revoke has not reached yet (as a worker catching up).
+      const stale = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_old',
+            refreshToken: 'rt_old',
+          }),
+          tx,
+        ),
+      );
+      const fresh = await run(tenantA, async (tx) =>
+        credentialBroker.createCredentialRef(
+          await credentialBroker.seal(tenantA, connectedId, {
+            accessToken: 'at_new',
+            refreshToken: 'rt_new',
+          }),
+          tx,
+        ),
+      );
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: stale, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
+      const revokeAudits = (await auditsOf('destination.remote_revoke')).length;
+      // The vendor call takes long enough for a person to reconnect the destination with a new grant.
+      const behaviour = fixture.revokeBehaviour;
+      fixture.revokeBehaviour = null;
+      const revokeAccess = fixture.revokeAccess.bind(fixture);
+      fixture.revokeAccess = async (creds) => {
+        await tdb.db
+          .update(brandDestinations)
+          .set({ credentialRefId: fresh, status: 'active' })
+          .where(eq(brandDestinations.id, connectedId));
+        return revokeAccess(creds);
+      };
+      try {
+        expect(
+          await asPlatformJob(tenantA, () =>
+            createDestinationRuntime().revoke.revokeDestinationAccess({
+              tenantId: tenantA,
+              destinationId: connectedId,
+              actor: REFRESH_ACTOR,
+              correlationId: 'corr_revoke_race',
+            }),
+          ),
+        ).toEqual({ outcome: 'already_destroyed' });
+      } finally {
+        delete (fixture as { revokeAccess?: unknown }).revokeAccess;
+        fixture.revokeBehaviour = behaviour;
+      }
+      expect(fixture.revokeCalls.at(-1)?.refreshToken).toBe('rt_old');
+      const after = await destinationRow(connectedId);
+      expect(after).toMatchObject({ status: 'active', credentialRefId: fresh });
+      expect((await credentialRow(fresh)).destroyedAt).toBeNull();
+      expect((await credentialRow(stale)).destroyedAt).toBeNull(); // nothing of the row touched either
+      expect((await auditsOf('destination.remote_revoke')).length).toBe(revokeAudits); // nothing recorded either
+      // Put back as the later tests expect it: disconnected, nothing to point at.
+      await tdb.db
+        .update(brandDestinations)
+        .set({ credentialRefId: null, status: 'disconnected' })
+        .where(eq(brandDestinations.id, connectedId));
     });
   });
   describe('website articles (ledger R2-3, D-16): a secret connect, its verification and the article publisher', () => {
@@ -1198,6 +1376,9 @@ describe('destinations module against MySQL 8', () => {
         kind: 'cms_site',
         capabilityVersion: 1,
         writable: true,
+        displayName: 'blog.acme.example',
+        externalId: SITE,
+        grantedScopes: ['articles:write'],
       });
       expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
         id: siteId,
@@ -1255,7 +1436,7 @@ describe('destinations module against MySQL 8', () => {
       cms.calls.length = 0;
       cms.pages.set(`${SITE}/?p=100`, {
         status: 200,
-        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><h3>Is it safe?</h3><p>Yes, mostly.</p></body></html>',
       });
       const result = await inTenant(tenantA, () =>
         destinationArticles.publish(input, undefined, async () => void sent++),
@@ -1272,7 +1453,15 @@ describe('destinations module against MySQL 8', () => {
       expect(result.readback).toMatchObject({
         remoteId: '100',
         status: 'draft',
-        contentHash: textFingerprint(renderArticleHtml(article)),
+        contentHash: cms.articles.get('100')?.contentHash,
+      });
+      // RA-04: the read-back is compared with what was sent, field by field, and says so.
+      expect(result.readbackVerification).toEqual({
+        outcome: 'verified',
+        matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+        mismatched: [],
+        reason: null,
+        sentHash: textFingerprint(renderArticleHtml(article)),
       });
       expect(result.validation).toMatchObject({ ok: true, status: 200, truncated: false, error: null });
       expect(result.validation?.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
@@ -1281,7 +1470,220 @@ describe('destinations module against MySQL 8', () => {
         'canonical_present:true',
         'indexable:true', // a draft may carry noindex
         'body_present:true',
+        'canonical_matches:true', // the canonical names the slug's path on the site
+        'last_paragraph_present:true',
       ]);
+    });
+
+    it('a page that stops after the first paragraph fails the last-paragraph check (RA-04), everything else passing', async () => {
+      cms.pages.set(`${SITE}/?p=101`, {
+        status: 200,
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+      });
+      const result = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_truncated_page',
+          variant: variant(siteId),
+        }),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted', remotePostId: '101' });
+      if (result.outcome !== 'accepted') return;
+      expect(result.validation?.ok).toBe(false);
+      expect(result.validation?.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual([
+        'last_paragraph_present',
+      ]);
+    });
+
+    it('publish (RA-04): with no read allowed the write is recorded as unverified with the reason, never as proof; a read-back that differs is a mismatch', async () => {
+      await setArticlePolicy(['write']);
+      const unverified = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_unverified',
+          variant: variant(siteId),
+        }),
+      );
+      expect(unverified).toMatchObject({
+        outcome: 'accepted',
+        readback: { status: 'draft' },
+        readbackVerification: {
+          outcome: 'unverified',
+          matched: [],
+          mismatched: [],
+          reason: 'read_not_allowed',
+        },
+      });
+      await setArticlePolicy(['read', 'write']);
+      // The site rewrote the title on save (a filter): the read-back names the field that did not match.
+      const titled = new FixtureCmsAdapter();
+      const original = titled.createArticle.bind(titled);
+      titled.createArticle = async (...args) => {
+        const created = await original(...args);
+        if (created.outcome === 'done') {
+          const stored = titled.articles.get(created.article.remoteId)!;
+          titled.articles.set(stored.remoteId, { ...stored, title: `${stored.title} (filtered)` });
+        }
+        return created;
+      };
+      configureDestinationCms({ registry: new CmsRegistry().register(titled) });
+      try {
+        const mismatch = await inTenant(tenantA, () =>
+          destinationArticles.publish({
+            tenantId: tenantA,
+            destinationId: siteId,
+            publicationId: newId('publication'),
+            attemptId: newId('publicationAttempt'),
+            idempotencyKey: 'idem_mismatch',
+            variant: variant(siteId),
+          }),
+        );
+        expect(mismatch).toMatchObject({
+          outcome: 'accepted',
+          readbackVerification: {
+            outcome: 'mismatch',
+            matched: ['content', 'slug', 'status', 'modifiedAt'],
+            mismatched: ['title'],
+          },
+        });
+      } finally {
+        configureDestinationCms({ registry: new CmsRegistry().register(cms) });
+      }
+    });
+
+    it("publish (RA-08): every image is released through the assets module, uploaded by the adapter before the article, referenced by the site's address in the body, and the featured image travels with the post", async () => {
+      await setArticlePolicy(['read', 'write']);
+      const storage = new MemoryStorageProvider();
+      configureStorage(storage);
+      const assetId = newId('asset');
+      const versionId = newId('assetVersion');
+      const key = storageKeys.original(tenantA, brandA, assetId, versionId);
+      await tdb.db.insert(assets).values({
+        id: assetId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'photo',
+        name: 'weighbridge',
+        currentVersionId: versionId,
+        state: 'approved',
+        rightsState: 'recorded',
+      });
+      await tdb.db.insert(assetVersions).values({
+        id: versionId,
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        number: 1,
+        storageKey: key,
+        contentHash: sha256Hex('png'),
+        mime: 'image/png',
+        bytes: 3,
+        width: 64,
+        height: 48,
+        provenance: { kind: 'upload', uploadedByUserId: USER, originalFilename: 'w.png' },
+      });
+      await tdb.db.insert(usageRights).values({
+        id: newId('usageRights'),
+        tenantId: tenantA,
+        brandId: brandA,
+        assetId,
+        owner: 'owner',
+        permittedChannels: 'all',
+        territories: 'all',
+        expiresAt: null,
+        releases: [],
+        restrictions: [],
+      });
+      await inTenant(tenantA, () => storage.putObject(key, Buffer.from('png'), { contentType: 'image/png' }));
+      const rich: ArticleDocumentV1 = {
+        ...article,
+        v: 2,
+        featuredImage: { assetVersionId: versionId, alt: 'A weighbridge at dawn' },
+        blocks: [
+          { type: 'paragraph', text: 'Ore is heavy.' },
+          { type: 'image', assetVersionId: versionId, alt: 'The weighbridge', caption: 'North gate' },
+          { type: 'link', href: 'https://acme.example/scales', text: 'Our scales' },
+        ],
+      };
+      cms.calls.length = 0;
+      const page = {
+        status: 200,
+        html: '<html><head><title>Why ore and tar last</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><figure><img src="x" alt="The weighbridge"><figcaption>North gate</figcaption></figure><p><a href="https://acme.example/scales">Our scales</a></p></body></html>',
+      };
+      for (const id of [102, 103, 104, 105, 106]) cms.pages.set(`${SITE}/?p=${id}`, page);
+      const result = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(result).toMatchObject({ outcome: 'accepted' });
+      if (result.outcome !== 'accepted') return;
+      const remoteId = result.remotePostId;
+      // One upload for the one asset version (featured and in the body), before the create, then the read-back.
+      expect(cms.calls.map((c) => c.op)).toEqual(['upload', 'create', 'read']);
+      const uploaded = [...cms.media.values()][0]!;
+      expect(uploaded).toMatchObject({
+        mime: 'image/png',
+        alt: 'A weighbridge at dawn',
+        filename: 'why-ore-and-tar-last-1.png',
+      });
+      // The adapter fetched a signed release URL minted for the publishing window, never a storage key or bytes.
+      expect(uploaded.sourceUrl).toMatch(/^memory:\/\/download\/releases\//);
+      expect(
+        storage.keys().some((k) => k.startsWith(`releases/${tenantA}/${brandA}/${versionId}/original/`)),
+      ).toBe(true);
+      const remote = cms.articles.get(remoteId)!;
+      expect(remote.html).toBe(renderArticleHtml(rich, { imageUrl: () => uploaded.url }));
+      expect(remote.html).toContain(`<img src="${uploaded.url}" alt="The weighbridge">`);
+      expect(cms.featured.get(remoteId)).toBe([...cms.media.keys()][0]);
+      expect(result.readbackVerification).toMatchObject({ outcome: 'verified', mismatched: [] });
+      expect(result.validation?.ok).toBe(true);
+      // An upload the site refuses stops the publish before any article is written.
+      cms.uploadBehaviour = 'forbidden';
+      cms.calls.length = 0;
+      const refused = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_2',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(refused).toMatchObject({ outcome: 'rejected', code: 'reconnect_required' });
+      expect(cms.calls.map((c) => c.op)).toEqual(['upload']);
+      cms.uploadBehaviour = 'ok';
+      // A version that is not a raster image (an SVG) is refused before the adapter is asked anything.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      cms.calls.length = 0;
+      const svg = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_3',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(svg).toMatchObject({ outcome: 'rejected', code: 'article_image_not_raster' });
+      expect(cms.calls).toEqual([]);
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
     });
 
     it('an edit reads the remote first: with the read-back hash it writes; after the site moved it refuses as a conflict and overwrites nothing', async () => {
@@ -1292,33 +1694,92 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           remoteId: '100',
           expectedHash: current.contentHash,
+          expectedModifiedAt: current.modifiedAt,
           html: '<p>Ore is heavy and tar is sticky.</p><script>alert(1)</script>',
           idempotencyKey: 'idem_edit_1',
         }),
       );
       expect(edited).toMatchObject({
         outcome: 'done',
-        readback: { remoteId: '100', contentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>') },
+        readback: { remoteId: '100', contentHash: cms.articles.get('100')?.contentHash },
+        // RA-04 / RA-12: the read-back after the write matches the HTML sent and the write's own modified instant.
+        readbackVerification: {
+          outcome: 'verified',
+          matched: ['content', 'modifiedAt'],
+          mismatched: [],
+          sentHash: textFingerprint('<p>Ore is heavy and tar is sticky.</p>'),
+        },
       });
+      expect(edited.outcome === 'done' && edited.overwritten).toBeUndefined();
       expect(cms.articles.get('100')?.html).toBe('<p>Ore is heavy and tar is sticky.</p>'); // sanitised at send
-      // Someone edited the article on the site since: the stored hash no longer matches.
-      cms.articles.set('100', {
-        ...cms.articles.get('100')!,
-        html: '<p>Changed on the site.</p>',
-        contentHash: textFingerprint('<p>Changed on the site.</p>'),
-      });
+      // RA-12: the modified instant is a precondition of its own: the same content touched later is a conflict.
+      const touched = cms.articles.get('100')!;
+      cms.articles.set('100', { ...touched, modifiedAt: new Date(Date.now() + 60_000).toISOString() });
+      expect(
+        await inTenant(tenantA, () =>
+          destinationArticles.edit({
+            tenantId: tenantA,
+            destinationId: siteId,
+            remoteId: '100',
+            expectedHash: touched.contentHash,
+            expectedModifiedAt: touched.modifiedAt,
+            html: '<p>Another edit.</p>',
+            idempotencyKey: 'idem_edit_touched',
+          }),
+        ),
+      ).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      cms.articles.set('100', touched);
+      // Someone edited the article on the site since: the stored hash no longer matches; the refusal carries the
+      // current remote so the stored read-back is refreshed (RA-12).
+      const changed = { ...cms.articles.get('100')!, html: '<p>Changed on the site.</p>' };
+      cms.articles.set('100', { ...changed, contentHash: fixtureArticleHash(changed) });
       const conflict = await inTenant(tenantA, () =>
         destinationArticles.edit({
           tenantId: tenantA,
           destinationId: siteId,
           remoteId: '100',
           expectedHash: edited.outcome === 'done' ? (edited.readback?.contentHash ?? null) : null,
+          expectedModifiedAt: edited.outcome === 'done' ? (edited.readback?.modifiedAt ?? null) : null,
           html: '<p>Another edit.</p>',
           idempotencyKey: 'idem_edit_2',
         }),
       );
-      expect(conflict).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(conflict).toMatchObject({
+        outcome: 'rejected',
+        code: 'conflict',
+        readback: { remoteId: '100', contentHash: cms.articles.get('100')?.contentHash },
+      });
       expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+    });
+
+    it('an edit (RA-12): a site change that lands between the pre-write read and the write is replaced, detected after the write and returned as what was overwritten', async () => {
+      const current = cms.articles.get('100')!;
+      cms.editInWindow = () => ({ html: '<p>Edited on the site in the window.</p>' });
+      const edited = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: current.contentHash,
+          expectedModifiedAt: current.modifiedAt,
+          html: '<p>Written over the window.</p>',
+          idempotencyKey: 'idem_edit_window',
+        }),
+      );
+      expect(edited).toMatchObject({
+        outcome: 'done',
+        readback: { remoteId: '100' },
+        readbackVerification: { outcome: 'verified' },
+        overwritten: {
+          previous: { remoteId: '100', contentHash: current.contentHash, modifiedAt: current.modifiedAt },
+          replaced: {
+            remoteId: '100',
+            contentHash: fixtureArticleHash({ ...current, html: '<p>Edited on the site in the window.</p>' }),
+          },
+        },
+      });
+      expect(cms.editInWindow).toBeNull();
+      expect(cms.articles.get('100')?.html).toBe('<p>Written over the window.</p>');
     });
 
     it('an edit with no read-back to compare against is refused before any call: never an overwrite (D-16)', async () => {
@@ -1329,13 +1790,14 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           remoteId: '100',
           expectedHash: null,
+          expectedModifiedAt: null,
           html: '<p>Blind edit.</p>',
           idempotencyKey: 'idem_edit_3',
         }),
       );
       expect(refused).toMatchObject({ outcome: 'rejected', code: 'no_readback' });
       expect(cms.calls).toEqual([]);
-      expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
+      expect(cms.articles.get('100')?.html).toBe('<p>Written over the window.</p>');
     });
 
     it('unpublish sets the article back to a draft and reads it back; a rendered validation runs without the secret; a disconnected site is refused', async () => {
@@ -1343,7 +1805,13 @@ describe('destinations module against MySQL 8', () => {
       const reverted = await inTenant(tenantA, () =>
         destinationArticles.unpublish({ tenantId: tenantA, destinationId: siteId, remoteId: '100' }),
       );
-      expect(reverted).toMatchObject({ outcome: 'done', readback: { status: 'draft' } });
+      // RA-02: the revert is proven by reading the article back as a draft, not by the write's own answer.
+      expect(reverted).toMatchObject({
+        outcome: 'done',
+        readback: { status: 'draft' },
+        readbackVerification: { outcome: 'verified', matched: ['status', 'modifiedAt'], mismatched: [] },
+      });
+      expect(cms.calls.map((c) => c.op).slice(-2)).toEqual(['update', 'read']);
       cms.calls.length = 0;
       const validation = await inTenant(tenantA, () =>
         destinationArticles.validateRendered({
@@ -1351,7 +1819,9 @@ describe('destinations module against MySQL 8', () => {
           destinationId: siteId,
           url: `${SITE}/missing`,
           title: article.title,
+          slug: article.slug,
           firstParagraph: 'Ore is heavy.',
+          lastParagraph: 'Yes, mostly.',
           draft: false,
         }),
       );

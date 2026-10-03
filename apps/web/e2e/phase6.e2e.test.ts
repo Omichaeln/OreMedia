@@ -114,7 +114,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   it('What to do next ranks recommendations with exactly their actions; accepting creates the brief', async () => {
     await page.getByRole('tab', { name: 'What to do next' }).click();
-    await expect.poll(() => count('recommendation'), { timeout: 15_000 }).toBe(3);
+    await expect.poll(() => count('recommendation'), { timeout: 15_000 }).toBe(4);
     const next = await text('what-to-do-next');
     expect(next).toContain('Ranking policy: baseline.');
     expect(next).toContain('Fetched');
@@ -135,6 +135,40 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => text('brief-state'), { timeout: 15_000 }).toContain('Awaiting acceptance');
     expect(await text('brief-detail')).toContain(P6.recommendations.brief);
     expect(await text('brief-detail')).toContain('Suggested plan');
+  }, 45_000);
+
+  it('accepting Prepare test designs the experiment through fields: packages by title, metrics from the dictionary (RA-07: no JSON)', async () => {
+    await open('intelligence?view=next');
+    const card = page.getByTestId('recommendation').filter({ hasText: 'Test a question hook on carousels' });
+    await expect.poll(() => card.count(), { timeout: 15_000 }).toBe(1);
+    await card.getByRole('button', { name: 'Prepare test' }).click();
+    const formId = `rec-${P6.recommendations.test2}`;
+    // The hypothesis starts from the recommendation; no JSON editor is on the page.
+    expect(await page.locator(`#${formId}-design-hypothesis`).inputValue()).toMatch(/price|question hook/);
+    expect(await page.locator('textarea.font-mono').count()).toBe(0);
+    await page.locator(`#${formId}-design-primary`).click();
+    await page.getByRole('option', { name: /^clicks/ }).click();
+    await page.locator(`#${formId}-design-v0-revision`).click();
+    await page.getByRole('option', { name: /Autumn offer post/ }).click();
+    // A second arm left unchosen is named on the field before any request is sent.
+    const acceptsBefore = requestsTo('intelligence.recommendations.accept').length;
+    await card.getByRole('button', { name: 'Accept: Prepare test' }).click();
+    await expect.poll(() => count('design-issues'), { timeout: 15_000 }).toBe(1);
+    expect(requestsTo('intelligence.recommendations.accept')).toHaveLength(acceptsBefore);
+    await page.locator(`#${formId}-design-v1-revision`).click();
+    await page.getByRole('option', { name: /Meet the team/ }).click();
+    await card.getByRole('button', { name: 'Accept: Prepare test' }).click();
+    await expect.poll(() => card.getByTestId('recommendation-accepted').count(), { timeout: 15_000 }).toBe(1);
+    const experimentId = p6.recommendations.get(P6.recommendations.test2)?.downstreamId ?? '';
+    expect(experimentId).toMatch(/^exp_/);
+    expect(p6.experiment(experimentId).design).toMatchObject({
+      primaryMetricKey: 'clicks',
+      variants: [
+        { label: 'A', contentRevisionId: P5.revisions.one },
+        { label: 'B', contentRevisionId: P5.revisions.two },
+      ],
+    });
+    expect(p6.experiment(experimentId).design.hypothesis).toMatch(/price|question hook/);
   }, 45_000);
 
   it('dismiss needs a reason, which is sent with the decision', async () => {
@@ -179,11 +213,16 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await open('intelligence');
     await expect.poll(() => count('what-changed'), { timeout: 15_000 }).toBe(1);
     await page.getByRole('button', { name: 'Run brand analyst' }).click();
-    await page.getByLabel('Analyst principal').fill(P6.principalId);
+    // RA-07: the principal is picked by name and the run's limits are shown; no id is typed.
+    await page.locator('#analyse-principal').click();
+    await page.getByRole('option', { name: /Brand analyst/ }).click();
+    await expect.poll(() => count('effective-limits'), { timeout: 15_000 }).toBe(1);
+    expect(await text('effective-budget')).toContain('$1.50');
+    expect(await text('denied-actions')).toContain('None');
     await page.getByRole('button', { name: 'Analyse now' }).click();
     await expect.poll(() => count('analysis-running'), { timeout: 15_000 }).toBe(1);
     expect(await text('analysis-running')).toContain('brand-analyst:');
-    expect(p6.pendingAnalysis).not.toBeNull();
+    expect(p6.pendingAnalysis).toMatchObject({ servicePrincipalId: P6.principalId });
     p6.completeAnalysis();
     await expect.poll(() => count('analysis-running'), { timeout: 20_000 }).toBe(0);
     expect(await text('what-changed')).toContain('Saves rose 18%');
@@ -272,7 +311,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   it('lists experiments with state chips and the mode label as text', async () => {
     await open('experiments');
-    await expect.poll(() => page.getByTestId(/^experiment-exp_/).count(), { timeout: 15_000 }).toBe(5);
+    // The five seeded experiments and the one prepared from a recommendation above.
+    await expect.poll(() => page.getByTestId(/^experiment-exp_/).count(), { timeout: 15_000 }).toBe(6);
     const list = await text('experiments');
     for (const label of ['Designed', 'Running', 'Analysed', 'Structured comparison', 'Randomised'])
       expect(list).toContain(label);
@@ -283,11 +323,26 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   it('create, pre-register (frozen hash shown), start and stop', async () => {
     await page.getByRole('button', { name: 'New experiment' }).click();
     await page.getByLabel('Hypothesis').fill('A question hook lifts enquiries');
-    await page.getByLabel('Primary metric key').fill('qualified_enquiries');
-    await page.locator('#x-v0-revision').fill(P5.revisions.one);
-    await page.locator('#x-v1-revision').fill(P5.revisions.two);
+    // RA-07: the metric comes from the dictionary and each arm is a content package picked by title; no key or
+    // id is typed. A guardrail is a checkbox from the same dictionary.
+    await page.locator('#x-primary').click();
+    await page.getByRole('option', { name: /^clicks/ }).click();
+    await page.getByRole('checkbox', { name: 'engagement_rate' }).check();
+    await page.locator('#x-v0-revision').click();
+    await page.getByRole('option', { name: /Autumn offer post/ }).click();
+    await page.locator('#x-v1-revision').click();
+    await page.getByRole('option', { name: /Meet the team/ }).click();
     await page.getByRole('button', { name: 'Create draft' }).click();
     await expect.poll(() => page.url(), { timeout: 15_000 }).toMatch(/experiment=exp_/);
+    const createdId = new URL(page.url()).searchParams.get('experiment') ?? '';
+    expect(p6.experiment(createdId).design).toMatchObject({
+      primaryMetricKey: 'clicks',
+      guardrailMetricKeys: ['engagement_rate'],
+      variants: [
+        { label: 'A', contentRevisionId: P5.revisions.one },
+        { label: 'B', contentRevisionId: P5.revisions.two },
+      ],
+    });
     await expect.poll(() => text('experiment-state'), { timeout: 15_000 }).toContain('Designed');
     expect(await text('design-hash')).toContain('not frozen yet');
     await page.getByRole('button', { name: 'Pre-register (freeze design)' }).click();
@@ -532,8 +587,19 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await editor.getByLabel('Caption').fill('Workshop dates for October.');
     await editor.getByLabel(/Launch poster · square_1080/).check();
     await editor.getByLabel('Alt texts').fill('Launch poster');
+    // RA-07: the channel's settings are the fields its capability describes, never a JSON box.
+    expect(await editor.locator('input[placeholder^="{"]').count()).toBe(0);
+    expect(await editor.getByTestId('variant-settings').textContent()).toContain('Channel settings');
+    await editor.getByLabel('Reply Settings (optional)').click();
+    await page.getByRole('option', { name: 'following' }).click();
+    await editor.getByLabel('Require Alt Text (optional)').click();
+    await page.getByRole('option', { name: 'Yes' }).click();
     await editor.getByRole('button', { name: 'Save variant' }).click();
     await expect.poll(() => requestsTo('content.variants.update').length, { timeout: 15_000 }).toBe(1);
+    const saved = [...backend.phase5.variants.values()].find(
+      (v) => v.channelConnectionId !== null && v.version > 1,
+    );
+    expect(saved?.settings).toEqual({ replySettings: 'following', requireAltText: true });
     await expect
       .poll(() => detail.locator('[data-testid="variant"][data-variant-valid="true"]').count(), {
         timeout: 15_000,
@@ -557,14 +623,55 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('an uncertified provider is shown unavailable with the reason', async () => {
+    // RA-01: the providers list says so before any click (the server's refusal path is covered below, for a
+    // publisher who cannot read the list).
     const row = page.getByTestId('provider-facebook_page');
-    await row.getByRole('button', { name: 'Connect Facebook Page' }).click();
     await expect.poll(() => row.getByTestId('unavailable-reason').count(), { timeout: 15_000 }).toBe(1);
     expect(await row.textContent()).toContain('Unavailable');
     expect(await row.getByTestId('unavailable-reason').textContent()).toContain('Not certified');
     expect(
       await row.getByRole('button', { name: 'Connect Facebook Page' }).getAttribute('aria-disabled'),
     ).toBe('true');
+  }, 30_000);
+
+  it('RA-01: every channel provider is listed with its activation state and the reason it cannot be connected, credential references by name only', async () => {
+    const ready = page.getByTestId('provider-linkedin_page');
+    expect(await ready.getAttribute('data-provider-state')).toBe('ready');
+    expect(await ready.textContent()).toContain('Ready');
+    expect(await ready.getByTestId('credential-refs').textContent()).toContain(
+      'PROVIDER_LINKEDIN_PAGE_SECRET_REF (set)',
+    );
+    const disabled = page.getByTestId('provider-x');
+    expect(await disabled.getAttribute('data-provider-state')).toBe('disabled');
+    expect(await disabled.getByTestId('unavailable-reason').textContent()).toContain(
+      'Not enabled on this deployment',
+    );
+    expect(await disabled.getByRole('button', { name: 'Connect X' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    const missing = page.getByTestId('provider-instagram_business');
+    expect(await missing.getAttribute('data-provider-state')).toBe('credentials_missing');
+    expect(await missing.textContent()).toContain('Unavailable: credentials missing');
+    expect(await missing.getByTestId('unavailable-reason').textContent()).toContain(
+      'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF is not set',
+    );
+    expect(await missing.getByTestId('credential-refs').textContent()).toContain(
+      'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF (not set)',
+    );
+    // Never a value: the names of the references only.
+    expect(await page.getByTestId('providers').textContent()).not.toMatch(/secret-value|cid|csecret/);
+    expect(await noHorizontalOverflow()).toBe(true);
+  }, 30_000);
+
+  it('RA-01: a channel shows its health as text beside its status, with the time of the last check', async () => {
+    const ok = page.getByTestId(`channel-${P5.channels.ok}`);
+    expect(await ok.getAttribute('data-channel-health')).toBe('ok');
+    expect(await ok.textContent()).toContain('Healthy');
+    expect(await ok.textContent()).toContain('Checked ');
+    const expired = page.getByTestId(`channel-${P5.channels.expired}`);
+    expect(await expired.getAttribute('data-channel-health')).toBe('revoked');
+    expect(await expired.textContent()).toContain('Access revoked');
+    expect(await expired.getByRole('button', { name: 'Reconnect' }).count()).toBe(1);
   }, 30_000);
 
   it('connect start gives the authorisation URL as a new-tab link (never an iframe); completion connects', async () => {
@@ -676,6 +783,20 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => row.getAttribute('data-channel-status'), { timeout: 15_000 }).toBe('disabled');
     expect(await row.textContent()).toContain('Disconnected');
     expect(await row.getByRole('button', { name: 'Connect again' }).count()).toBe(1);
+    // RA-01: what happened on the remote side is said in words (X has no remote revoke in the mock).
+    expect(await row.getByTestId('remote-revoke').textContent()).toContain('no remote revoke');
+  }, 45_000);
+
+  it('RA-01: a publisher, who cannot read the providers list, still gets the Release 1 list and the server’s refusal', async () => {
+    backend.denied.add('operations.providers.list');
+    await open('settings');
+    const row = page.getByTestId('provider-facebook_page');
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    expect(await row.getAttribute('data-provider-state')).toBe('unknown');
+    await row.getByRole('button', { name: 'Connect Facebook Page' }).click();
+    await expect.poll(() => row.getByTestId('unavailable-reason').count(), { timeout: 15_000 }).toBe(1);
+    expect(await row.getByTestId('unavailable-reason').textContent()).toContain('Not certified');
+    backend.denied.delete('operations.providers.list');
   }, 45_000);
 
   it('permission denied: the list and a connect attempt say so', async () => {

@@ -1,6 +1,64 @@
+import type { ProviderCredentialRefV1 } from '@oremedia/contracts/providers';
+import type { ResolvedActor } from '@oremedia/contracts/policy';
+import type { SeoAuditCheckKey, SeoAuditSeverity } from '@oremedia/contracts/seo-audit';
+import type { Tx } from '@oremedia/db';
 import type { CapabilityCheck } from '@oremedia/observability';
 import { providerClientSettings } from '@oremedia/module-publishing';
 import { cmsRegistry, sourceRegistry } from '@oremedia/providers';
+
+/**
+ * RA-11: how an SEO finding becomes tracked work. The intelligence module owns the work object (a recommendation,
+ * spec 16.4) and registers its create and its read here through the composition root, as the publishing module's
+ * hooks.ts does: this module never imports another module's tables. The defaults are loud so a composition
+ * mistake cannot pass silently.
+ */
+export interface FindingWorkInput {
+  brandId: string;
+  title: string;
+  rationale: string;
+  /** What the work is evidence of: the finding, its run, its rule, the website and the example pages. */
+  provenance: {
+    findingId: string;
+    runId: string;
+    check: SeoAuditCheckKey;
+    severity: SeoAuditSeverity;
+    destinationId: string;
+    origin: string;
+    pageCount: number;
+    pages: string[];
+  };
+}
+export interface FindingWorkRef {
+  workType: string;
+  workId: string;
+  title: string;
+  state: string;
+}
+export interface FindingWorkHooks {
+  /** Creates the work in the caller's transaction; the work module asserts its own policy on the brand. */
+  create(actor: ResolvedActor, input: FindingWorkInput, tx: Tx): Promise<FindingWorkRef>;
+  /** The work items by id within the brand (tenant-scoped; an id of another brand is left out), for the list. */
+  describe(brandId: string, workIds: readonly string[], tx?: Tx): Promise<FindingWorkRef[]>;
+}
+const unregisteredFindingWork: FindingWorkHooks = {
+  create: async () => {
+    throw new Error('finding work not registered (composition root must call registerFindingWork)');
+  },
+  describe: async () => {
+    throw new Error('finding work not registered (composition root must call registerFindingWork)');
+  },
+};
+let findingWorkHooks: FindingWorkHooks = unregisteredFindingWork;
+export const registerFindingWork = (hooks: FindingWorkHooks): void => {
+  findingWorkHooks = hooks;
+};
+export const resetFindingWork = (): void => {
+  findingWorkHooks = unregisteredFindingWork;
+};
+export const findingWork: FindingWorkHooks = {
+  create: (actor, input, tx) => findingWorkHooks.create(actor, input, tx),
+  describe: (brandId, workIds, tx) => findingWorkHooks.describe(brandId, workIds, tx),
+};
 
 /**
  * Which source kinds this deployment connects (ledger R2-1). A source needs its app credentials
@@ -13,11 +71,29 @@ import { cmsRegistry, sourceRegistry } from '@oremedia/providers';
  * only the disabled list applies to it.
  */
 export type SourceAvailability = (kind: string) => boolean;
-let availability: SourceAvailability = () => true;
-export const configureSourceAvailability = (fn: SourceAvailability | null): void => {
-  availability = fn ?? (() => true);
+/**
+ * RA-01: the facts behind the availability, as the providers listing shows them: listed as disabled (or behind
+ * an opt-in that is off) and which app credential references are set (names only). A CMS kind has none to set.
+ */
+export interface SourceActivation {
+  disabled: boolean;
+  credentialRefs: ProviderCredentialRefV1[];
+}
+export type SourceActivationSource = (kind: string) => SourceActivation;
+const everySourceEnabled: SourceActivationSource = () => ({ disabled: false, credentialRefs: [] });
+let activation: SourceActivationSource = everySourceEnabled;
+export const configureSourceActivation = (fn: SourceActivationSource | null): void => {
+  activation = fn ?? everySourceEnabled;
 };
-export const sourceAvailable = (kind: string): boolean => availability(kind);
+export const sourceActivationOf = (kind: string): SourceActivation => activation(kind);
+const available = (a: SourceActivation): boolean => !a.disabled && a.credentialRefs.every((c) => c.present);
+export const sourceAvailable = (kind: string): boolean => available(activation(kind));
+/** The yes/no form (tests keep every source enabled with `() => true`); a `false` reads as disabled. */
+export const configureSourceAvailability = (fn: SourceAvailability | null): void => {
+  configureSourceActivation(
+    fn ? (kind) => (fn(kind) ? everySourceEnabled(kind) : { disabled: true, credentialRefs: [] }) : null,
+  );
+};
 
 const disabledSourceKinds = (env: NodeJS.ProcessEnv): ReadonlySet<string> =>
   new Set(
@@ -33,13 +109,20 @@ const optedIn = (env: NodeJS.ProcessEnv, kind: string): boolean => {
   return setting === undefined || env[setting] === '1';
 };
 
-export const sourceAvailabilityFromEnv =
-  (env: NodeJS.ProcessEnv = process.env): SourceAvailability =>
-  (kind) =>
-    !disabledSourceKinds(env).has(kind) &&
-    optedIn(env, kind) &&
-    (cmsRegistry.capability(kind) !== undefined ||
-      Object.values(providerClientSettings(kind)).every((name) => Boolean(env[name])));
+export const sourceActivationFromEnv =
+  (env: NodeJS.ProcessEnv = process.env): SourceActivationSource =>
+  (kind) => ({
+    disabled: disabledSourceKinds(env).has(kind) || !optedIn(env, kind),
+    credentialRefs:
+      cmsRegistry.capability(kind) !== undefined
+        ? []
+        : Object.values(providerClientSettings(kind)).map((name) => ({ name, present: Boolean(env[name]) })),
+  });
+
+export const sourceAvailabilityFromEnv = (env: NodeJS.ProcessEnv = process.env): SourceAvailability => {
+  const of = sourceActivationFromEnv(env);
+  return (kind) => available(of(kind));
+};
 
 /**
  * Configuration report capabilities `source:<kind>`, one per registered source adapter: the app credentials the

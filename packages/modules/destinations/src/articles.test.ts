@@ -20,12 +20,15 @@ describe('articleTextIssues (an edit override is the HTML the site receives)', (
     expect(articleTextIssues({ article: null, text: '' })).toEqual([]);
   });
 
-  it('an override that sanitises to nothing, or exceeds the article limit, is an issue', () => {
+  it('an override that sanitises to nothing, or exceeds the article limit measured as text (RA-03), is an issue', () => {
     expect(articleTextIssues({ article, text: '<script>alert(1)</script>  ' })).toEqual([
       { path: 'text', issue: 'body_empty' },
     ]);
-    const issues = articleTextIssues({ article, text: `<p>${'x'.repeat(ARTICLE_BODY_MAX_CHARS)}</p>` });
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.issue).toMatch(/^body_too_long:/);
+    // Exactly the body cap of text, wrapped in markup whose length alone would exceed it: allowed.
+    expect(articleTextIssues({ article, text: `<p>${'x'.repeat(ARTICLE_BODY_MAX_CHARS)}</p>` })).toEqual([]);
+    const issues = articleTextIssues({ article, text: `<p>${'x'.repeat(ARTICLE_BODY_MAX_CHARS + 1)}</p>` });
+    expect(issues).toEqual([
+      { path: 'text', issue: `body_too_long:${ARTICLE_BODY_MAX_CHARS + 1}>${ARTICLE_BODY_MAX_CHARS}` },
+    ]);
   });
 });

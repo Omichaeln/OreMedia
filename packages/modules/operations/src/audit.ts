@@ -45,6 +45,11 @@ const METADATA_ALLOWLIST = new Set([
   'toVersion',
   // Website articles (R2-3): the destination a publication, a verification or a remote change names
   'destinationId',
+  // RA-01: what a disconnect found on the remote side (requested / revoked / not_supported / failed), never a token
+  'remoteRevoke',
+  // The object a decision created downstream (a recommendation's brief, RA-11 a finding's work): type and id only
+  'downstreamType',
+  'downstreamId',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

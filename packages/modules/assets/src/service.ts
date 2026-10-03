@@ -160,6 +160,9 @@ const versionView = (v: AssetVersionRow) => ({
 export interface AuthoriseUseOptions {
   /** The brand the asset is being used for (its own brand, or a grantee brand). */
   brandId: string;
+  /** RA-08: the asset kinds and types the use accepts (a website page takes raster images only); any when absent. */
+  kinds?: readonly AssetKind[];
+  mimes?: readonly string[];
   channelConnectionIds?: readonly string[];
   territory?: string;
   scheduledFor?: Date;
@@ -594,6 +597,10 @@ export const assetService = {
     if (!asset) throw new NotFoundError('Asset', version.assetId);
     if (asset.currentVersionId !== version.id)
       throw new RightsIneligibleError(version.id, 'version_not_current');
+    if (opts.kinds && !opts.kinds.includes(asset.kind))
+      throw new RightsIneligibleError(version.id, 'kind_not_allowed');
+    if (opts.mimes && !opts.mimes.includes(version.mime.toLowerCase()))
+      throw new RightsIneligibleError(version.id, 'mime_not_allowed');
     const now = opts.now ?? new Date();
     const grant =
       asset.brandId === opts.brandId
@@ -783,6 +790,28 @@ export const assetService = {
   async signStorageKey(storageKey: string) {
     const signed = await storage().signDownloadUrl(storageKey, { expiresInSec: SIGNED_URL_TTL_SEC });
     return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
+  },
+
+  /**
+   * RA-09: a 5-minute signed GET of an asset version's preview (the original when none was derived) for a caller
+   * that authorised the read itself (the review module shows a frozen article's images to whoever may see the
+   * request, an external reviewer included); null for a version this tenant does not hold. Versions are immutable,
+   * so the bytes are the ones the article was frozen with.
+   */
+  async signVersionPreview(assetVersionId: string, tx?: Tx) {
+    const v = await versionsRepo.findInTenant(assetVersionId, tx);
+    if (!v) return null;
+    const preview = await derivativesRepo.find(v.id, 'preview', tx);
+    const source = preview ?? v;
+    const signed = await storage().signDownloadUrl(source.storageKey, { expiresInSec: SIGNED_URL_TTL_SEC });
+    return {
+      url: signed.url,
+      expiresAt: signed.expiresAt.toISOString(),
+      mime: source.mime,
+      contentHash: v.contentHash,
+      width: source.width,
+      height: source.height,
+    };
   },
 
   /** Spec 9.3: the media endpoint re-checks authorisation and returns a 5-minute signed GET. */

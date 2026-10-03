@@ -11,6 +11,7 @@ import { destinationLabel, type DestinationDto } from '../destinations/use-desti
 import { CHANNEL_CHIP } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
 import { ArticleEditor, ArticleSummary, articleToDraft, parseArticleDraft } from './article-editor';
+import { ArticlePreviewLive } from './article-preview';
 import { packageChip, revisionChip, sameIdSet, variantFindings } from './content-helpers';
 import { DocumentPicker } from './document-picker';
 import { RequestReview } from './request-review';
@@ -136,6 +137,7 @@ function VariantRow({
           key={variant.version}
           variant={variant}
           documents={documents}
+          settingsSchema={channel?.settingsSchema ?? null}
           onDone={() => setEditing(false)}
         />
       ) : variant.destinationId ? (
@@ -355,7 +357,13 @@ function ReviseForm({ pkg }: { pkg: PackageDto }) {
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
       {draft ? (
-        <ArticleEditor draft={draft} onChange={setDraft} idPrefix={`revise-${pkg.id}`} issues={issues} />
+        <ArticleEditor
+          brandId={pkg.brandId}
+          draft={draft}
+          onChange={setDraft}
+          idPrefix={`revise-${pkg.id}`}
+          issues={issues}
+        />
       ) : (
         <Field label="Master copy" htmlFor={`revise-${pkg.id}-copy`}>
           <Textarea
@@ -446,7 +454,17 @@ export function PackageDetail({
               </p>
             )}
             {p.revision.copy.article ? (
-              <ArticleSummary article={p.revision.copy.article} />
+              <>
+                <ArticleSummary article={p.revision.copy.article} />
+                <details className="text-sm" data-testid="article-preview-toggle">
+                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                    Preview as it will publish
+                  </summary>
+                  <div className="mt-2">
+                    <ArticlePreviewLive article={p.revision.copy.article} />
+                  </div>
+                </details>
+              </>
             ) : (
               <p className="whitespace-pre-wrap break-words text-sm">{p.revision.copy.master.text}</p>
             )}

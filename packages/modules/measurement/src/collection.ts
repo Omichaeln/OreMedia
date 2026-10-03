@@ -9,7 +9,7 @@ import type { RawMetricPoint } from '@oremedia/contracts/providers';
 import { withTransaction } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { logger } from '@oremedia/observability';
-import { adapterFor, credentialBroker, providerIO } from '@oremedia/module-publishing';
+import { adapterFor, channelHealth, credentialBroker, providerIO } from '@oremedia/module-publishing';
 import { collectionPlan, loadPublication, sourceOf } from './common';
 import { definitionService } from './definitions';
 import { comparableGroupFor, deriveRates, type RateInput } from './normalise';
@@ -47,8 +47,10 @@ export function createMetricCollectionRuntime(opts: MetricCollectionOptions = {}
     async pullMetrics(input: PullMetricsInputV1, hooks?: ActivityHooks): Promise<PullMetricsResultV1> {
       const { tenantId, publicationId } = input;
       const { row, connection, brandTimezone } = await loadPublication(publicationId);
-      // Deleted from the channel through the product: nothing left to measure; what was collected stays.
-      if (row.state === 'removed') return { written: 0, skipped: 0, unavailable: 0 };
+      // Deleted from the channel through the product: nothing left to measure; what was collected stays. A
+      // disconnected channel's credential is unusable from the disconnect (RA-01): nothing is pulled either.
+      if (row.state === 'removed' || connection.status === 'disabled')
+        return { written: 0, skipped: 0, unavailable: 0 };
       const adapter = adapterFor(connection.providerKey);
       const window = { start: input.windowStart, end: input.windowEnd };
       const windowStart = new Date(window.start);
@@ -76,12 +78,15 @@ export function createMetricCollectionRuntime(opts: MetricCollectionOptions = {}
               providerIO(adapter.key, tenantId, hooks),
             );
           });
+          await channelHealth.recordRead(connection.id, now()); // RA-01: the access works
         } catch (err) {
           // A permission or scoping failure is the caller's problem (non-retryable at the activity host);
           // anything the platform did is recorded as unavailable, never as zero.
           if (err instanceof PolicyDeniedError || err instanceof NotFoundError) throw err;
+          // RA-01: a refused token or an unreachable platform is a health fact for the channel (generic mapping).
+          const health = await channelHealth.recordReadFailure(connection.id, err, now());
           log.warn(
-            { publicationId, errorMessage: err instanceof Error ? err.message : String(err) },
+            { publicationId, health, errorMessage: err instanceof Error ? err.message : String(err) },
             'metric pull failed; window recorded as unavailable',
           );
           points = expected.map((n) => unavailablePoint(n, window));

@@ -638,6 +638,117 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
         ),
       ).rejects.toBeInstanceOf(ValidationFailedError);
     });
+
+    it('RA-11: an SEO finding becomes a create_brief recommendation whose chain starts from an insight carrying the provenance; people with insight.manage only', async () => {
+      const provenance = {
+        findingId: 'sar_run1:title',
+        runId: 'sar_run1',
+        check: 'title',
+        severity: 'minor',
+        destinationId: 'dst_site',
+        origin: 'https://site.example',
+        pageCount: 2,
+        pages: ['https://site.example/', 'https://site.example/about'],
+      };
+      const input = {
+        brandId: brandA1,
+        title: 'Missing or long titles on https://site.example',
+        rationale:
+          'Write a unique title of 60 characters or fewer for 2 pages whose title is missing or too long.',
+        provenance,
+      };
+      const created = await runA((tx) =>
+        intelligenceService.recommendations.createFromFinding(manager.actor, input, tx),
+      );
+      expect(created).toEqual({
+        recommendationId: expect.stringMatching(/^rec_/),
+        title: input.title,
+        state: 'proposed',
+      });
+      const row = await recRow(created.recommendationId);
+      expect(row).toMatchObject({
+        brandId: brandA1,
+        state: 'proposed',
+        proposedAction: 'create_brief',
+        title: input.title,
+        rationale: input.rationale,
+        effort: 'medium',
+        uncertainty: 'low',
+        agentRunId: null,
+      });
+      const observed = (await tdb.db.select().from(insights).where(eq(insights.id, row.insightIds[0]!)))[0]!;
+      expect(observed).toMatchObject({ kind: 'association', strength: 'observed', agentRunId: null });
+      expect(observed.statement).toBe(
+        'SEO audit of https://site.example: Missing or long titles on https://site.example (2 pages, minor)',
+      );
+      expect(observed.evidence).toEqual([
+        { kind: 'seo_finding', ref: 'sar_run1:title' },
+        { kind: 'seo_audit_run', ref: 'sar_run1' },
+        { kind: 'seo_check', ref: 'title', note: 'minor' },
+        { kind: 'brand_destination', ref: 'dst_site' },
+        { kind: 'page', ref: 'https://site.example/' },
+        { kind: 'page', ref: 'https://site.example/about' },
+      ]);
+      expect(await learningRow(created.recommendationId)).toMatchObject({
+        contextRef: 'seo_finding:sar_run1:title',
+        action: 'create_brief',
+        humanDecision: 'pending',
+        verdict: 'pending',
+      });
+      // Read back for another module's list: only this brand's ids answer; a foreign or other-brand id is left out.
+      expect(
+        await runA((tx) =>
+          intelligenceService.recommendations.describeForBrand(
+            brandA1,
+            [created.recommendationId, 'rec_nope'],
+            tx,
+          ),
+        ),
+      ).toEqual([{ id: created.recommendationId, title: input.title, state: 'proposed' }]);
+      expect(
+        await runA((tx) =>
+          intelligenceService.recommendations.describeForBrand(brandA2, [created.recommendationId], tx),
+        ),
+      ).toEqual([]);
+      // It is ordinary work from here: accepting it creates the brief with the back-reference.
+      const accepted = await runA((tx) =>
+        intelligenceService.recommendations.accept(
+          manager.actor,
+          {
+            recommendationId: created.recommendationId,
+            expectedVersion: 0,
+            action: 'create_brief',
+            brief: {
+              audience: 'Site visitors',
+              message: 'Clear titles',
+              offerFactIds: [],
+              channelConnectionIds: [],
+            },
+          },
+          tx,
+        ),
+      );
+      expect(accepted).toMatchObject({ state: 'accepted', downstreamType: 'brief' });
+      expect(
+        (await tdb.db.select().from(briefs).where(eq(briefs.id, accepted.downstreamId!)))[0],
+      ).toMatchObject({ recommendationId: created.recommendationId });
+      // A creator holds no insight.manage; an agent never decides what becomes work; a foreign brand is NOT_FOUND.
+      await expect(
+        run(tenantA, { kind: 'user', id: creator.id }, (tx) =>
+          intelligenceService.recommendations.createFromFinding(creator.actor, input, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        runSp((tx) =>
+          intelligenceService.recommendations.createFromFinding(principal(tenantA, spA), input, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantB, { kind: 'user', id: managerB.id }, (tx) =>
+          intelligenceService.recommendations.createFromFinding(managerB.actor, input, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
   });
 
   describe('playbook (spec 16.8)', () => {

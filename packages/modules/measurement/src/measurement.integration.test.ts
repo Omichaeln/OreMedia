@@ -17,8 +17,8 @@ import {
   metricSnapshots,
   trackedLinks,
 } from '@oremedia/db/schema/measurement';
-import { outboxEvents } from '@oremedia/db/schema/operations';
-import { publications, remoteEvidence } from '@oremedia/db/schema/publishing';
+import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
+import { channelConnections, publications, remoteEvidence } from '@oremedia/db/schema/publishing';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { outboundAuthorHash } from '@oremedia/module-community';
@@ -31,12 +31,13 @@ import {
   configureCredentialBroker,
   configurePublishingProviders,
   fixtureCapability,
+  configureChannelActivation,
   registerProviderClients,
   registerPublishingBrandChecker,
   connectedChannel,
   publicationService,
 } from '@oremedia/module-publishing';
-import { ProviderRegistry } from '@oremedia/providers';
+import { ProviderRegistry, ProviderTransportError, SourceReadError } from '@oremedia/providers';
 import { attributeService } from './attributes';
 import { createCommentIngestionRuntime, authorHash } from './comments';
 import { createMetricCollectionRuntime } from './collection';
@@ -90,15 +91,23 @@ const HOUR = 3_600_000;
 
 /** The fixture platform with a measurement surface: scripted metric points and comment pages. */
 class MeasuringFixture extends FixtureProviderAdapter {
-  metricsBehaviour: 'ok' | 'partial' | 'fail' | 'missing_scope' = 'ok';
+  metricsBehaviour: 'ok' | 'partial' | 'fail' | 'missing_scope' | 'unauthorised' | 'unreachable' = 'ok';
   commentPages: CommentPage[] = [];
   readonly metricCalls: Array<{ remotePostId: string; window: { start: string; end: string } }> = [];
-  async fetchPostMetrics(
+  override async fetchPostMetrics(
     req: { remotePostId: string; window: { start: string; end: string } },
     _creds: DecryptedCredentials,
   ): Promise<RawMetricPoint[]> {
     this.metricCalls.push(req);
     if (this.metricsBehaviour === 'fail') throw new Error('platform 500');
+    // RA-01: what a real adapter raises for a refused token (401, its own classification) and a platform out of reach.
+    if (this.metricsBehaviour === 'unauthorised')
+      throw new SourceReadError(this.key, 401, { kind: 'refresh_token' }, 'token expired');
+    if (this.metricsBehaviour === 'unreachable')
+      throw new ProviderTransportError(
+        Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+        'before_send',
+      );
     const w = { windowStart: req.window.start, windowEnd: req.window.end };
     if (this.metricsBehaviour === 'missing_scope')
       return this.capability.analytics.post.map((n) => ({
@@ -132,7 +141,7 @@ class MeasuringFixture extends FixtureProviderAdapter {
   }
   /** Called as the adapter's network call starts (the transaction probe of the comment test). */
   onFetchComments: (() => void) | null = null;
-  async fetchComments(req: { cursor?: string }): Promise<CommentPage> {
+  override async fetchComments(req: { remotePostId: string; cursor?: string }): Promise<CommentPage> {
     this.onFetchComments?.();
     const page = Number(req.cursor ?? '0');
     return this.commentPages[page] ?? { items: [] };
@@ -257,6 +266,7 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
     configurePublishingProviders({ registry });
     configureCredentialBroker({ kms: new LocalKms('measurement-test-master-secret-0123456789') });
     registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     // What brandService.assertExist does: a brand of another tenant does not exist (spec 5.3).
     const checker = {
       assertExist: async (ids: string[]) => {
@@ -445,6 +455,57 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
       const rows = (await snapshotsOf(pubA)).filter((r) => r.windowEnd.getTime() === now.getTime());
       expect(rows.every((r) => r.value === null && r.completeness === 'unavailable')).toBe(true);
       expect(rows.some((r) => r.value === 0)).toBe(false);
+    });
+    it('RA-01: a refused token or an unreachable platform at a pull is recorded as the channel’s health (the adapter’s classification, mapped generically); a read that works records ok; a plain failure says nothing', async () => {
+      const health = async () =>
+        (await tdb.db.select().from(channelConnections).where(eq(channelConnections.id, connA)))[0]!;
+      fixture.metricsBehaviour = 'unauthorised';
+      now = new Date(T0.getTime() + 96 * HOUR);
+      expect((await pull(pubA, 3, 96)).unavailable).toBe(9);
+      expect(await health()).toMatchObject({ health: 'token_expired', status: 'active' });
+      expect((await health()).healthCheckedAt).not.toBeNull();
+      fixture.metricsBehaviour = 'unreachable';
+      now = new Date(T0.getTime() + 120 * HOUR);
+      await pull(pubA, 4, 120);
+      expect((await health()).health).toBe('unreachable');
+      fixture.metricsBehaviour = 'fail'; // an unclassified failure is not a health fact
+      now = new Date(T0.getTime() + 144 * HOUR);
+      await pull(pubA, 5, 144);
+      expect((await health()).health).toBe('unreachable');
+      fixture.metricsBehaviour = 'ok';
+      now = new Date(T0.getTime() + 168 * HOUR);
+      await pull(pubA, 6, 168);
+      expect((await health()).health).toBe('ok');
+      const audits = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.health')));
+      // The first pull that worked recorded ok once (unknown → ok); then every change of health, never a repeat.
+      expect(audits.map((a) => `${a.decision}:${(a.metadata as { toState?: string })?.toState}`)).toEqual([
+        'allowed:ok',
+        'denied:token_expired',
+        'denied:unreachable',
+        'allowed:ok',
+      ]);
+    });
+    it('RA-01: a disconnected channel is never pulled from (its credential is unusable from the disconnect)', async () => {
+      await tdb.db
+        .update(channelConnections)
+        .set({ status: 'disabled' })
+        .where(eq(channelConnections.id, connA));
+      const calls = fixture.metricCalls.length;
+      now = new Date(T0.getTime() + 192 * HOUR);
+      expect(await pull(pubA, 7, 192)).toEqual({ written: 0, skipped: 0, unavailable: 0 });
+      expect(
+        await inTenant(tenantA, () =>
+          ingestion.pullComments({ ...wfInput(pubA), pullIndex: 0, since: null, cursor: null }),
+        ),
+      ).toEqual({ ingested: 0, duplicates: 0, nextCursor: null });
+      expect(fixture.metricCalls.length).toBe(calls);
+      await tdb.db
+        .update(channelConnections)
+        .set({ status: 'active' })
+        .where(eq(channelConnections.id, connA));
     });
     it('a post deleted from its channel is not pulled again; what was collected stays', async () => {
       const removed = await publishedPublication(tenantA, brandA, connA);
@@ -659,6 +720,45 @@ describe('measurement module (spec 15, 16.2, 16.5) against MySQL 8', () => {
             windowStart: T0.toISOString(),
             windowEnd: now.toISOString(),
           }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it('the per-publication values page through every released publication newest first, the population named on each page', async () => {
+      now = new Date(T0.getTime() + 25 * HOUR);
+      const input = {
+        brandId: brandA,
+        metricKeys: ['impressionCount'],
+        windowStart: new Date(T0.getTime() - HOUR).toISOString(),
+        windowEnd: new Date(T0.getTime() + 24 * HOUR).toISOString(),
+      };
+      // Two released publications (pubA and the removed one), one per page: two pages, then the end.
+      const first = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 1 } }),
+      );
+      expect(first.subjectsTotal).toBe(2);
+      expect(first.nextCursor).not.toBeNull();
+      const second = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 1, cursor: first.nextCursor ?? undefined } }),
+      );
+      expect(second).toMatchObject({ subjectsTotal: 2, nextCursor: null });
+      // The removed post has no number: only pubA's value comes back, from whichever page holds it.
+      const values = [...first.items, ...second.items];
+      expect(values.map((v) => v.subjectId)).toEqual([pubA]);
+      expect(values[0]).toMatchObject({ metricKey: 'impressionCount', value: 1000 });
+      // One page holds both when the limit allows; a channel with nothing released holds none.
+      const whole = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, page: { limit: 50 } }),
+      );
+      expect(whole).toMatchObject({ subjectsTotal: 2, nextCursor: null });
+      expect(whole.items.map((v) => v.subjectId)).toEqual([pubA]);
+      const none = await inTenant(tenantA, () =>
+        metrics.publicationValues(A, { ...input, channelConnectionId: 'cc_none', page: { limit: 50 } }),
+      );
+      expect(none).toMatchObject({ items: [], subjectsTotal: 0, nextCursor: null });
+      await expect(
+        inTenant(tenantA, () =>
+          metrics.publicationValues(A, { ...input, brandId: brandB, page: { limit: 50 } }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
     });

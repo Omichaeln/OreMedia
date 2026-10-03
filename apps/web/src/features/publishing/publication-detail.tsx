@@ -15,6 +15,7 @@ import { Dialog, DialogActions, DialogClose, DialogContent } from '../../compone
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
+import { renderArticleHtml } from '@oremedia/contracts/article';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
 import { useTRPC } from '../../lib/trpc';
@@ -30,6 +31,7 @@ import {
   publicationChip,
   remoteChangeNoun,
   remoteChangeStatus,
+  remoteVerificationChip,
   CHANNEL_CHIP,
 } from './publication-state';
 import {
@@ -112,7 +114,8 @@ function Loaded({
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const chip = publicationChip(p.state);
+  const chip = publicationChip(p.state, p.remoteStatus);
+  const verification = p.destinationId ? remoteVerificationChip(p.remoteVerification) : null;
   const actions = actionsFor(p.state);
   const channel = p.channelConnectionId ? channels.get(p.channelConnectionId) : undefined;
   const website = p.destinationId
@@ -124,6 +127,11 @@ function Loaded({
   const remote = remoteChangeStatus(p.remote.changes);
   const deletedAt =
     p.remote.changes.find((c) => c.kind === 'delete' && c.state === 'succeeded')?.finishedAt ?? null;
+  // RA-12: the latest change went through but replaced a change made on the website in the write's window.
+  const overwritten =
+    p.remote.changes[0]?.state === 'succeeded' && p.remote.changes[0].errorCode === 'conflict_overwritten'
+      ? p.remote.changes[0]
+      : null;
 
   const refresh = () => {
     void queryClient.invalidateQueries(trpc.publishing.publications.pathFilter());
@@ -173,6 +181,11 @@ function Loaded({
         {website && (
           <Badge tone="info" glyph={false} data-testid="publication-target-website">
             {website}
+          </Badge>
+        )}
+        {verification && p.state === 'published' && (
+          <Badge tone={verification.tone} data-testid="publication-verification">
+            {verification.label}
           </Badge>
         )}
       </div>
@@ -306,6 +319,23 @@ function Loaded({
           }
         />
       )}
+      {overwritten && (
+        <StatusBanner
+          tone="warning"
+          title="The edit went through, but it replaced a change made on the website"
+          data-testid="remote-change-overwritten"
+          description={
+            <>
+              <p>
+                The website changed the article between the read before the write and the write itself; the
+                website offers no way to refuse a write in that window, so it was detected afterwards. The
+                revision that was replaced is recorded as evidence.
+              </p>
+              {overwritten.errorDetail && <p className="mt-1">{overwritten.errorDetail}</p>}
+            </>
+          }
+        />
+      )}
       {p.state === 'removed' && (
         <StatusBanner
           tone="neutral"
@@ -351,9 +381,13 @@ function Loaded({
         {actions.deleteRemote && p.remote.delete && p.remote.allowed.delete && !remote.open && (
           <DeleteRemoteAction publication={p} onDone={refresh} onError={fail('Delete request failed')} />
         )}
-        {actions.deleteRemote && p.remote.unpublish && p.remote.allowed.unpublish && !remote.open && (
-          <RevertToDraftAction publication={p} onDone={refresh} onError={fail('Revert request failed')} />
-        )}
+        {actions.deleteRemote &&
+          p.remote.unpublish &&
+          p.remote.allowed.unpublish &&
+          p.remoteStatus === 'live' &&
+          !remote.open && (
+            <RevertToDraftAction publication={p} onDone={refresh} onError={fail('Revert request failed')} />
+          )}
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -447,7 +481,7 @@ function Loaded({
             )}
             <ul className="mt-2 flex flex-col gap-1 text-xs" aria-label="Per-channel outcomes">
               {siblings.data.items.map((s) => {
-                const c = publicationChip(s.state);
+                const c = publicationChip(s.state, s.remoteStatus);
                 return (
                   <li key={s.id} className="flex flex-wrap items-center gap-2">
                     <Badge tone={c.tone}>{c.label}</Badge>
@@ -495,7 +529,27 @@ const RENDERED_CHECK_TEXT: Record<string, string> = {
   canonical_present: 'A canonical link is present',
   indexable: 'No noindex (a draft is allowed one)',
   body_present: 'The first paragraph is in the page',
+  canonical_matches: 'The canonical link names this page (its address or its slug)',
+  last_paragraph_present: 'The last paragraph is in the page',
 };
+
+/** RA-04: what the read-back proved, as the server recorded it in the read-back evidence (read as data). */
+function readbackVerificationOf(payload: Record<string, unknown>): string | null {
+  const v = payload['verification'];
+  if (typeof v !== 'object' || v === null) return null;
+  const outcome = (v as { outcome?: unknown }).outcome;
+  const list = (key: string) => {
+    const value = (v as Record<string, unknown>)[key];
+    return Array.isArray(value) ? value.map(String).join(', ') : '';
+  };
+  if (outcome === 'verified') return `The read-back matched what was sent (${list('matched')}).`;
+  if (outcome === 'mismatch') return `The read-back differs from what was sent on: ${list('mismatched')}.`;
+  if (outcome === 'unverified') {
+    const reason = (v as { reason?: unknown }).reason;
+    return `Nothing could be compared${typeof reason === 'string' ? ` (${reason})` : ''}: the write is unproven.`;
+  }
+  return null;
+}
 
 /** What the evidence payload of a rendered validation carries (recorded by the server, read as data). */
 function renderedChecks(payload: Record<string, unknown>): Array<{ key: string; ok: boolean }> {
@@ -548,6 +602,9 @@ function ArticlePanel({
   const validation = article.validation?.payload ?? null;
   const checks = validation ? renderedChecks(validation) : [];
   const ok = validation ? validation['ok'] === true : null;
+  const remoteStatus = publicationChip(p.state, p.remoteStatus);
+  const verification = remoteVerificationChip(p.remoteVerification);
+  const readbackVerification = readback ? readbackVerificationOf(readback) : null;
   return (
     <section
       aria-labelledby={`article-${p.id}`}
@@ -558,6 +615,16 @@ function ArticlePanel({
         Website article
       </h3>
       <div className="flex flex-wrap items-center gap-2 text-xs">
+        {p.remoteStatus && (
+          <Badge tone={remoteStatus.tone} data-testid="article-remote-status">
+            {remoteStatus.label}
+          </Badge>
+        )}
+        {verification && (
+          <Badge tone={verification.tone} data-testid="article-verification">
+            {verification.label}
+          </Badge>
+        )}
         {readback ? (
           <Badge tone={readback['status'] === 'publish' ? 'good' : 'info'} data-testid="article-readback">
             Read back: {String(readback['status'])}
@@ -582,12 +649,22 @@ function ArticlePanel({
           </Badge>
         )}
       </div>
+      {p.remoteStatus && (
+        <p className="text-xs text-muted-foreground" data-testid="article-remote-status-detail">
+          {remoteStatus.detail}
+          {verification ? ` ${verification.detail}` : ''}
+          {p.remoteVerifiedAt ? ` Verified ${when(p.remoteVerifiedAt)}.` : ''}
+        </p>
+      )}
       {readback && (
         <p className="text-xs text-muted-foreground">
           Remote revision <code>{String(readback['remoteId'])}</code>
           {typeof readback['modifiedAt'] === 'string' ? ` modified ${when(readback['modifiedAt'])}` : ''} ·
           content hash <code>{String(readback['contentHash']).slice(0, 12)}…</code>. An edit from here is
           refused when the website moved past this hash; nothing is overwritten.
+          {readbackVerification && (
+            <span data-testid="article-readback-verification"> {readbackVerification}</span>
+          )}
         </p>
       )}
       {validation && (
@@ -1092,7 +1169,16 @@ function EditRemoteAction({
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const variant = useChannelVariant(open && p.remote.currentText === null ? p.channelVariantId : null);
-  const live = p.remote.currentText ?? variant.data?.text ?? null;
+  // RA-12: a website article is edited as the HTML the site holds (rendered from its blocks), never as the plain
+  // text the variant carries for captions; a channel post is edited as its text.
+  const website = p.destinationId !== null;
+  const live =
+    p.remote.currentText ??
+    (variant.data
+      ? website && variant.data.article
+        ? renderArticleHtml(variant.data.article)
+        : variant.data.text
+      : null);
   const [draft, setDraft] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -1149,8 +1235,12 @@ function EditRemoteAction({
         Edit text
       </Button>
       <DialogContent
-        title="Edit the live post’s text"
-        description="The new text replaces the post’s text on the channel; its media and link stay as they are. It is checked against the channel’s rules and the change is recorded with its evidence."
+        title={website ? 'Edit the article’s body' : 'Edit the live post’s text'}
+        description={
+          website
+            ? 'The HTML replaces the article’s body on the website after it is read back and found unchanged since; the title, slug and terms stay as they are. The change is recorded with its evidence.'
+            : 'The new text replaces the post’s text on the channel; its media and link stay as they are. It is checked against the channel’s rules and the change is recorded with its evidence.'
+        }
       >
         <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
           {live === null && variant.isPending && <Skeleton label="Loading the current text" lines={3} />}
@@ -1159,7 +1249,7 @@ function EditRemoteAction({
           )}
           {(live !== null || variant.isError) && (
             <Field
-              label="Text"
+              label={website ? 'Body (HTML)' : 'Text'}
               htmlFor={`edit-text-${p.id}`}
               hint={count}
               error={

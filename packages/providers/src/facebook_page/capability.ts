@@ -65,5 +65,14 @@ export const facebookPageCapability: ProviderCapabilityV1 = {
     'read_insights',
     'business_management',
   ],
+  settings: {
+    type: 'object',
+    properties: {
+      link: { type: 'string', format: 'uri', description: 'A link the post attaches as a preview card.' },
+      requireAltText: { type: 'boolean', description: 'Refuse the variant unless every image has alt text.' },
+    },
+    additionalProperties: false,
+  },
+  vendor: 'Meta',
   certifiedAt: null,
 };

@@ -13,6 +13,7 @@ import {
   seoAuditPages,
   seoAuditRuns,
   sourceUsePolicies,
+  seoFindingWork,
 } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
@@ -35,6 +36,7 @@ const LATER_TABLES: MySqlTable[] = [
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,
+  seoFindingWork,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
@@ -77,18 +79,10 @@ describe('migration 0012 rolls forward on a populated database (ledger 1.g4)', (
       authTag: 'fixture-authtag',
       aad: `${tenantId}:${connectionId}`,
     });
-    await tdb.db.insert(channelConnections).values({
-      id: connectionId,
-      tenantId,
-      brandId,
-      providerKey: 'linkedin_page',
-      remoteAccountId: 'urn:li:organization:1',
-      displayName: 'Acme',
-      credentialRefId,
-      grantedScopes: [],
-      status: 'active',
-      capabilityVersion: 1,
-    });
+    // Raw sql: health and health_checked_at (0022) are not there at this head.
+    await tdb.db.execute(
+      sql`insert into ${channelConnections} (id, tenant_id, brand_id, provider_key, remote_account_id, display_name, credential_ref_id, granted_scopes, missing_scopes, status, token_expires_at, capability_version, created_at, updated_at) values (${connectionId}, ${tenantId}, ${brandId}, 'linkedin_page', 'urn:li:organization:1', 'Acme', ${credentialRefId}, '[]', '[]', 'active', null, 1, ${new Date()}, ${new Date()})`,
+    );
     await tdb.db.execute(
       sql`insert into ${conversations} (id, tenant_id, brand_id, channel_connection_id, remote_thread_id, state, last_message_at, created_at, updated_at, version) values (${conversationId}, ${tenantId}, ${brandId}, ${connectionId}, 'urn:li:share:1', 'open', ${new Date('2026-09-20T10:00:00.000Z')}, ${new Date()}, ${new Date()}, 0)`,
     );

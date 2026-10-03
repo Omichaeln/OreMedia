@@ -65,6 +65,9 @@ export interface DestinationV1 {
   healthCheckedAt: string | null;
   capabilityVersion: number;
   status: DestinationStatus;
+  /** RA-10: the zone the source reports its days in and its currency, once the sweep has learnt them; else null. */
+  reportingTimeZone: string | null;
+  currencyCode: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -269,6 +272,38 @@ export interface SourceReportMetricV1 {
   denominator?: string;
   weight?: string;
 }
+
+/**
+ * RA-10: what a fetched report says about its own completeness, as the source adapter exposes it (never inferred):
+ * `sampled` (the platform answered from a sample), `thresholded` (rows withheld below a privacy threshold),
+ * `data_loss` (rows folded into an "other" row), `not_final` (the platform marks the data as not yet final); the
+ * sweep adds `partial_day` to a day that had not ended in the reporting zone when it was read.
+ */
+export const SourceReportQualityFlag = z.enum([
+  'sampled',
+  'thresholded',
+  'data_loss',
+  'not_final',
+  'partial_day',
+]);
+export type SourceReportQualityFlag = z.infer<typeof SourceReportQualityFlag>;
+/** The zone and currency of a report target, as its adapter reads them from the platform (null: not exposed). */
+export interface SourceTargetMetadataV1 {
+  reportingTimeZone: string | null;
+  currencyCode: string | null;
+}
+/**
+ * The quality of a report's stored window as the read model states it: the zone its days are keyed in (null for
+ * UTC days stored before the zone was known), the latest local day it reads "as of", whether that day may still
+ * move (inside the report's latency, flagged partial, or not final) and the flags the window carries.
+ */
+export interface DestinationReportQualityV1 {
+  timeZone: string | null;
+  asOfLocalDate: string | null;
+  provisional: boolean;
+  flags: SourceReportQualityFlag[];
+}
+
 /** A report's descriptor by name, among its fetched metrics and the rates derived from them. */
 export const webMetricByName = (
   metrics: readonly SourceReportMetricV1[],
@@ -402,6 +437,8 @@ export interface DestinationReportSummaryEntryV1 {
   /** Rates derived from the report's flows (reported in `metrics` values under their own name). */
   derived: SourceReportMetricV1[];
   freshness: DestinationReportFreshnessV1;
+  /** RA-10: the zone the days are keyed in and whether the latest day is still provisional. */
+  quality: DestinationReportQualityV1;
   current: DestinationReportWindowV1;
   previous: DestinationReportWindowV1;
   comparison: DestinationReportComparisonV1[];
@@ -543,6 +580,20 @@ export const CMS_SCOPE_PUBLISH = 'articles:publish';
 /** A destination variant's `settings.publishMode`: `draft` unless the person asks for `publish` and the grant allows it. */
 export const CmsPublishMode = z.enum(['draft', 'publish']);
 export type CmsPublishMode = z.infer<typeof CmsPublishMode>;
+/**
+ * The effective publish mode of a website variant: `publish` only when the variant asks for it and the destination
+ * was granted live publishing at connect time (D-16); otherwise a draft. Pure, so the publisher, the review
+ * manifest (RA-09) and the web app read the same answer from the same settings and grant.
+ */
+export function effectivePublishMode(
+  settings: Record<string, unknown>,
+  grantedScopes: readonly string[],
+): CmsPublishMode {
+  const asked = CmsPublishMode.safeParse(settings['publishMode']);
+  return asked.success && asked.data === 'publish' && grantedScopes.includes(CMS_SCOPE_PUBLISH)
+    ? 'publish'
+    : 'draft';
+}
 
 /**
  * `connect.withSecret`: a website connected with an integration identity and its secret (an application
@@ -574,6 +625,27 @@ export interface DestinationVerifyActivitiesV1 {
 /** The module-side implementation the activity wraps (tenant context is established by the activity host). */
 export type DestinationVerifyRuntimeV1 = DestinationVerifyActivitiesV1;
 
+// ---- destinationRevokeWorkflowV1 (RA-01, task queue `core`): the remote revoke of a disconnected destination ----
+
+/**
+ * A disconnect of a destination whose adapter can revoke the grant remotely (a Google source's `/revoke`, the
+ * WordPress application password) leaves the credential to this workflow, started by the outbox from
+ * `destination.disconnected` with `remoteRevoke: 'requested'`: the worker opens it (the API never can), asks the
+ * platform, records the outcome and destroys the row whatever the platform answered. The credential is unusable
+ * from the disconnect on: every other opener refuses a disconnected destination's credential.
+ */
+export const DestinationRevokeInputV1 = TenantContextInput.extend({ destinationId: z.string() });
+export type DestinationRevokeInputV1 = z.infer<typeof DestinationRevokeInputV1>;
+export type DestinationRevokeResultV1 =
+  | { outcome: 'revoked' }
+  | { outcome: 'not_supported' }
+  | { outcome: 'failed'; reason: string }
+  | { outcome: 'already_destroyed' };
+export interface DestinationRevokeActivitiesV1 {
+  revokeDestinationAccess(input: DestinationRevokeInputV1): Promise<DestinationRevokeResultV1>;
+}
+export type DestinationRevokeRuntimeV1 = DestinationRevokeActivitiesV1;
+
 // ---- article read-back (R2-3): the remote revision as evidence ----
 
 /** The remote article as read back after a write: identity, state, and the hash of its content (never the body). */
@@ -584,6 +656,29 @@ export interface ArticleReadbackV1 {
   slug: string;
   status: string;
   modifiedAt: string | null;
-  /** The adapter's hash of the remote content; an edit refuses when the current remote hash differs. */
+  /**
+   * The adapter's hash of the remote revision (RA-12: title, slug, status, terms and content); an edit refuses when
+   * the current remote hash differs.
+   */
   contentHash: string;
+}
+
+/**
+ * The fields a read-back is compared on (RA-04): the content, title, slug and status against what was sent, and
+ * the modified instant against the write's own response (RA-12: a remote touched again since the write differs).
+ */
+export const ArticleReadbackField = z.enum(['content', 'title', 'slug', 'status', 'modifiedAt']);
+export type ArticleReadbackField = z.infer<typeof ArticleReadbackField>;
+/**
+ * RA-04: what the read-back after a write proved. `verified` when every field matched what was sent, `mismatch`
+ * when at least one differed (named), `unverified` when nothing could be compared (the source-use policy allows no
+ * read, or the read-back was missing) with the reason; never silently the write's own response.
+ */
+export interface ArticleReadbackVerificationV1 {
+  outcome: 'verified' | 'mismatch' | 'unverified';
+  matched: ArticleReadbackField[];
+  mismatched: ArticleReadbackField[];
+  reason: string | null;
+  /** The fingerprint of the exact HTML sent (what `content` was compared on). */
+  sentHash: string;
 }

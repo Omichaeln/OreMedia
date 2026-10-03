@@ -1,10 +1,12 @@
-import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
+import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import {
   classifyByStatus,
   textFingerprint,
   type CmsAdapter,
   type CmsArticleInput,
   type CmsCapabilityV1,
+  type CmsMediaInput,
+  type CmsMediaResult,
   type CmsReadResult,
   type CmsRemoteArticle,
   type CmsRemoveResult,
@@ -38,11 +40,24 @@ export const fixtureCmsCapability = (over: Partial<CmsCapabilityV1> = {}): CmsCa
 export type VerifyBehaviour =
   { kind: 'ok'; canPublish: boolean } | { kind: 'unauthorised' } | { kind: 'transient' };
 
+/** The fixture's revision hash, as the WordPress adapter's (RA-12): identity and state beside the content. */
+export const fixtureArticleHash = (a: Pick<CmsRemoteArticle, 'title' | 'slug' | 'status' | 'html'>): string =>
+  textFingerprint(JSON.stringify({ title: a.title, slug: a.slug, status: a.status, content: a.html }));
+
 export class FixtureCmsAdapter implements CmsAdapter {
   readonly key = 'cms_site' as const;
   readonly capability: CmsCapabilityV1;
   /** The remote articles by id, as the site holds them. */
   readonly articles = new Map<string, CmsRemoteArticle>();
+  /** RA-08: the media library, by id: what was uploaded (the release URL it was fetched from, its alt text). */
+  readonly media = new Map<
+    string,
+    { url: string; sourceUrl: string; mime: string; alt: string; filename: string }
+  >();
+  /** What the next upload does: succeed, or fail as the platform would. */
+  uploadBehaviour: 'ok' | 'forbidden' = 'ok';
+  /** The featured media id each article was created with (RA-08). */
+  readonly featured = new Map<string, string>();
   /** Every call with the secret it was handed (a test proves the sealed secret was opened in the worker). */
   readonly calls: Array<{ op: string; secret: string; username: string; siteUrl: string }> = [];
   verifyBehaviour: VerifyBehaviour = { kind: 'ok', canPublish: true };
@@ -50,6 +65,12 @@ export class FixtureCmsAdapter implements CmsAdapter {
   writeBehaviour: 'ok' | 'forbidden' | 'outage' = 'ok';
   /** The rendered page the site serves for an article's URL (status and HTML); absent: a 404. */
   readonly pages = new Map<string, { status: number; html: string }>();
+  /**
+   * RA-12 test hook: a change someone makes on the site between an update's pre-write read and its write (the
+   * window no compare-and-swap closes). Applied once, then cleared; the write then replaces it and reports it as
+   * `overwritten`, as the WordPress adapter reads it from the revisions.
+   */
+  editInWindow: ((current: CmsRemoteArticle) => Partial<CmsRemoteArticle>) | null = null;
   private nextId = 100;
 
   constructor(capability?: CmsCapabilityV1) {
@@ -72,6 +93,19 @@ export class FixtureCmsAdapter implements CmsAdapter {
     }
   }
 
+  /** RA-01: what the site answers a remote revoke with; a revoked secret refuses the verifies that follow. */
+  revokeBehaviour: RevokeResult | null = { outcome: 'revoked' };
+  async revokeAccess(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    _io: ProviderIO,
+  ): Promise<RevokeResult> {
+    this.record('revoke', site, credentials);
+    const result = this.revokeBehaviour ?? { outcome: 'not_supported' };
+    if (result.outcome === 'revoked') this.verifyBehaviour = { kind: 'unauthorised' };
+    return result;
+  }
+
   async readArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -81,6 +115,27 @@ export class FixtureCmsAdapter implements CmsAdapter {
     this.record('read', site, credentials);
     const article = this.articles.get(remoteId);
     return article ? { outcome: 'found', article: { ...article } } : { outcome: 'absent' };
+  }
+
+  async uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    _io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult> {
+    this.record('upload', site, credentials);
+    if (this.uploadBehaviour === 'forbidden')
+      return { outcome: 'rejected', code: 'reconnect_required', message: 'HTTP 403' };
+    const remoteId = String(this.nextId++);
+    const url = `${site.siteUrl}/wp-content/uploads/${media.filename}`;
+    this.media.set(remoteId, {
+      url,
+      sourceUrl: media.url,
+      mime: media.mime,
+      alt: media.alt,
+      filename: media.filename,
+    });
+    return { outcome: 'done', media: { remoteId, url } };
   }
 
   async createArticle(
@@ -95,15 +150,14 @@ export class FixtureCmsAdapter implements CmsAdapter {
     if (this.writeBehaviour === 'outage')
       return { outcome: 'unknown', code: 'http_502', message: 'HTTP 502' };
     const remoteId = String(this.nextId++);
+    if (input.featuredMedia) this.featured.set(remoteId, input.featuredMedia.remoteId);
+    const fields = { title: input.title, slug: input.slug, status: input.status, html: input.html };
     const article: CmsRemoteArticle = {
       remoteId,
       remoteUrl: `${site.siteUrl}/${input.status === 'publish' ? input.slug : `?p=${remoteId}`}`,
-      title: input.title,
-      slug: input.slug,
-      status: input.status,
+      ...fields,
       modifiedAt: new Date().toISOString(),
-      contentHash: textFingerprint(input.html),
-      html: input.html,
+      contentHash: fixtureArticleHash(fields),
     };
     this.articles.set(remoteId, article);
     return { outcome: 'done', article: { ...article } };
@@ -118,21 +172,46 @@ export class FixtureCmsAdapter implements CmsAdapter {
     precondition: CmsUpdatePrecondition,
   ): Promise<CmsWriteResult> {
     this.record('update', site, credentials);
-    const current = this.articles.get(remoteId);
-    if (!current) return { outcome: 'rejected', code: 'remote_absent', message: 'gone' };
-    if (precondition.expectedHash !== undefined && precondition.expectedHash !== current.contentHash)
-      return { outcome: 'conflict', current: { ...current } };
-    const html = input.html ?? current.html;
+    const previous = this.articles.get(remoteId);
+    if (!previous) return { outcome: 'rejected', code: 'remote_absent', message: 'gone' };
+    if (
+      (precondition.expectedHash !== undefined && precondition.expectedHash !== previous.contentHash) ||
+      (precondition.expectedModifiedAt !== undefined &&
+        precondition.expectedModifiedAt !== previous.modifiedAt)
+    )
+      return { outcome: 'conflict', current: { ...previous } };
+    // The window between the read and the write: a site edit lands here and the write replaces it (RA-12).
+    let replaced: CmsRemoteArticle | null = null;
+    if (this.editInWindow) {
+      const edited = { ...previous, ...this.editInWindow(previous) };
+      replaced = {
+        ...edited,
+        contentHash: fixtureArticleHash(edited),
+        modifiedAt: new Date(Date.now() + 500).toISOString(),
+      };
+      this.articles.set(remoteId, replaced);
+      this.editInWindow = null;
+    }
+    const current = replaced ?? previous;
+    const fields = {
+      title: input.title ?? current.title,
+      slug: input.slug ?? current.slug,
+      status: input.status ?? current.status,
+      html: input.html ?? current.html,
+    };
     const next: CmsRemoteArticle = {
       ...current,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.status !== undefined ? { status: input.status } : {}),
-      html,
-      contentHash: textFingerprint(html),
+      ...fields,
+      contentHash: fixtureArticleHash(fields),
       modifiedAt: new Date(Date.now() + 1000).toISOString(),
     };
     this.articles.set(remoteId, next);
-    return { outcome: 'done', article: { ...next } };
+    return {
+      outcome: 'done',
+      article: { ...next },
+      previous: { ...previous },
+      ...(replaced ? { overwritten: { ...replaced } } : {}),
+    };
   }
 
   async unpublishArticle(
@@ -144,7 +223,14 @@ export class FixtureCmsAdapter implements CmsAdapter {
     this.record('unpublish', site, credentials);
     const current = this.articles.get(remoteId);
     if (!current) return { outcome: 'already_absent' };
-    const written = await this.updateArticle(site, credentials, io, remoteId, { status: 'draft' }, {});
+    const written = await this.updateArticle(
+      site,
+      credentials,
+      io,
+      remoteId,
+      { status: 'draft' },
+      { expectedHash: current.contentHash, expectedModifiedAt: current.modifiedAt },
+    );
     return written.outcome === 'done'
       ? written
       : { outcome: 'retryable_error', code: 'fixture', message: 'fixture' };

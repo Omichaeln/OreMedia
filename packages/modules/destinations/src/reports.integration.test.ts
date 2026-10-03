@@ -3,7 +3,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
-import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
+import { runAsPlatform, runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
 import { brands } from '@oremedia/db/schema/brand';
@@ -15,7 +15,8 @@ import { LocalKms, configureCredentialBroker, registerProviderClients } from '@o
 import { SourceRegistry, type SourceReportRow } from '@oremedia/providers';
 import { configureSourceAvailability } from './hooks';
 import { createDestinationReportService } from './reports';
-import { MAX_REPORT_PAGES } from './report-runtime';
+import { MAX_REPORT_PAGES, REPORTING_ZONE_RECHECK_DAYS } from './report-runtime';
+import { DestinationReportTargetRepository } from './repositories';
 import { createDestinationRuntime } from './runtime';
 import { destinationService, sourceUsePolicyService } from './service';
 import { configureDestinationSources } from './sources';
@@ -190,6 +191,26 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
       ]),
     );
     expect(Object.keys(targets[0] ?? {})).toEqual(['tenantId', 'destinationId']);
+  });
+
+  it('the target listing pages past its batch with a cursor, so a deployment beyond one batch is read whole', async () => {
+    const repo = new DestinationReportTargetRepository();
+    const kinds = ['search_console_site', 'ga4_property'];
+    const seen: string[] = [];
+    let pages = 0;
+    await runAsPlatform('destination-report-sweep', 'c', async () => {
+      for (let cursor: string | undefined; ;) {
+        const page = await repo.listTargets(kinds, { limit: 1, cursor });
+        pages += 1;
+        seen.push(...page.items.map((t) => t.destinationId));
+        expect(page.items.length).toBeLessThanOrEqual(1);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      expect(await repo.listTargets([], { limit: 1 })).toEqual({ items: [], nextCursor: null });
+    });
+    expect(pages).toBe(2);
+    expect(seen.sort()).toEqual([siteId, propertyId].sort());
   });
 
   it('without a policy allowing reads the plan is skipped with an audit and nothing is read (D-17)', async () => {
@@ -581,6 +602,156 @@ describe('destination reports against MySQL 8 (R2-1 part B)', () => {
         benchmark: { metric: 'engagementRate', value: 224 / 468 },
       }),
     ]); // "/tiny" has too few sessions to mean anything
+  });
+
+  it('RA-10: a property in a non-UTC zone plans its days in that zone, remembers it, and keys the stored rows by it', async () => {
+    // 04:00 UTC on 29 September is 21:00 on the 28th in Los Angeles: the 28th is still running there, so the
+    // plan ends on the 27th (UTC "yesterday" would have read a partial day); the zone comes from the target
+    // metadata the adapter reads, never from a guess.
+    ga4.targetMetadata = { reportingTimeZone: 'America/Los_Angeles', currencyCode: 'usd' };
+    ga4.describeCalls.length = 0;
+    const plan = await asPlatformJob(tenantA, () =>
+      runtime.reports.planDestinationReports({ ...ctx(tenantA), destinationId: propertyId, now: NOW }),
+    );
+    expect(ga4.describeCalls).toEqual([{ externalId: 'properties/1001', accessToken: 'at_fixture_src' }]);
+    expect(plan).toEqual({
+      outcome: 'planned',
+      reports: [
+        { reportKey: 'ga4.acquisition', start: '2026-08-31', end: '2026-09-27' },
+        // the landing pages are stored to the 28th (as UTC days): re-read from the 26th, to the zone's yesterday
+        { reportKey: 'ga4.landing_pages', start: '2026-09-26', end: '2026-09-27' },
+        { reportKey: 'ga4.engagement', start: '2026-08-31', end: '2026-09-27' },
+      ],
+    });
+    await lock.reset(`lock:destination-report-sweep:${tenantA}:${propertyId}`);
+    const remembered = await inTenant(tenantA, () =>
+      destinationService.get(owner(), { brandId: brandA, destinationId: propertyId }),
+    );
+    expect(remembered).toMatchObject({ reportingTimeZone: 'America/Los_Angeles', currencyCode: 'USD' });
+    expect(
+      (await tdb.db.select().from(brandDestinations).where(eq(brandDestinations.id, propertyId)))[0]
+        ?.reportingZoneCheckedAt,
+    ).toEqual(new Date(NOW));
+    // The rows stored before the zone was known are UTC days (time zone null) and still read as before; a row
+    // from before migration 0021 carries no quality at all (null), one the sweep stored without a zone, none ([]).
+    const legacy = await storedRows(propertyId, 'ga4.landing_pages');
+    expect(legacy).toHaveLength(12);
+    expect(
+      legacy.every((r) => r.timeZone === null && Array.isArray(r.quality) && r.quality.length === 0),
+    ).toBe(true);
+    await tdb.db.insert(destinationReportRows).values({
+      id: newId('destinationReportRow'),
+      tenantId: tenantA,
+      brandId: brandA,
+      destinationId: propertyId,
+      reportKey: 'ga4.acquisition',
+      date: '2026-09-27',
+      dimensions: { sessionDefaultChannelGroup: 'Direct' },
+      dimensionKey: 'legacy',
+      metrics: { sessions: 10, totalUsers: 8, engagedSessions: 5, keyEvents: 0 },
+      fetchedAt: new Date('2026-09-28T05:00:00.000Z'),
+      source: 'provider',
+      timeZone: null,
+      quality: null,
+    });
+
+    // A fetch that (as a GA4 answer does) states the zone and its quality beside the rows, read while the 28th
+    // is still running in that zone: the 28th is flagged a partial day, the rest carry the platform's flags.
+    ga4.reportTimeZone = 'America/Los_Angeles';
+    ga4.reportQuality = ['sampled'];
+    ga4.reportRows = {
+      ...ga4.reportRows,
+      'ga4.engagement': [-2, -1, 0].map((i) => ({
+        date: day(i),
+        dimensions: {},
+        metrics: { sessions: 100, engagedSessions: 60, averageSessionDuration: 70, keyEvents: 1 },
+      })),
+    };
+    expect(
+      await asPlatformJob(tenantA, () =>
+        runtime.reports.fetchDestinationReport({
+          ...ctx(tenantA),
+          destinationId: propertyId,
+          now: NOW,
+          reportKey: 'ga4.engagement',
+          start: '2026-09-26',
+          end: '2026-09-28',
+        }),
+      ),
+    ).toEqual({ outcome: 'fetched', rows: 3, days: 3 });
+    const engagement = await storedRows(propertyId, 'ga4.engagement');
+    expect(engagement.map((r) => [r.date, r.timeZone, r.quality])).toEqual([
+      ['2026-09-26', 'America/Los_Angeles', ['sampled']],
+      ['2026-09-27', 'America/Los_Angeles', ['sampled']],
+      ['2026-09-28', 'America/Los_Angeles', ['sampled', 'partial_day']],
+    ]);
+
+    // The read model: the engagement window reads as of the 28th in Los Angeles, provisional (a partial day,
+    // and within the 48 h latency), sampled; the legacy landing pages read as UTC days without flags, provisional
+    // only because their latest day is still inside the latency; a report never read carries nothing.
+    const summary = await inTenant(tenantA, () =>
+      reports.summary(owner(), { brandId: brandA, destinationId: propertyId, ...window }),
+    );
+    expect(summary.reports.find((r) => r.reportKey === 'ga4.engagement')?.quality).toEqual({
+      timeZone: 'America/Los_Angeles',
+      asOfLocalDate: '2026-09-28',
+      provisional: true,
+      flags: ['sampled', 'partial_day'],
+    });
+    expect(summary.reports.find((r) => r.reportKey === 'ga4.engagement')?.freshness).toMatchObject({
+      latestDate: '2026-09-28',
+      ageHours: 0, // the 28th ends at 06:59:59.999Z on the 29th in Los Angeles, after `now`
+      stale: false,
+    });
+    expect(summary.reports.find((r) => r.reportKey === 'ga4.landing_pages')?.quality).toEqual({
+      timeZone: null,
+      asOfLocalDate: '2026-09-28',
+      provisional: true,
+      flags: [],
+    });
+    expect(summary.reports.find((r) => r.reportKey === 'ga4.landing_pages')?.current).toMatchObject({
+      days: 4,
+      rows: 12,
+    });
+    const acquisition = summary.reports.find((r) => r.reportKey === 'ga4.acquisition')!;
+    expect(acquisition.quality).toEqual({
+      timeZone: null,
+      asOfLocalDate: '2026-09-27',
+      provisional: true, // a UTC day that ended 28 hours ago, inside the 48 h latency
+      flags: [],
+    });
+    expect(acquisition.current).toMatchObject({ days: 1, rows: 1, metrics: { sessions: 10 } });
+    expect(acquisition.freshness).toMatchObject({ latestDate: '2026-09-27', ageHours: 28.0, stale: false });
+
+    // A remembered zone read within the last REPORTING_ZONE_RECHECK_DAYS is not asked for again.
+    ga4.describeCalls.length = 0;
+    await asPlatformJob(tenantA, () =>
+      runtime.reports.planDestinationReports({ ...ctx(tenantA), destinationId: propertyId, now: NOW }),
+    );
+    expect(ga4.describeCalls).toEqual([]);
+    await lock.reset(`lock:destination-report-sweep:${tenantA}:${propertyId}`);
+    // Past the window, a refused metadata read keeps the remembered zone: the plan still ends on its yesterday.
+    await tdb.db
+      .update(brandDestinations)
+      .set({
+        reportingZoneCheckedAt: new Date(Date.parse(NOW) - (REPORTING_ZONE_RECHECK_DAYS + 1) * 86_400_000),
+      })
+      .where(eq(brandDestinations.id, propertyId));
+    ga4.targetMetadata = { kind: 'forbidden' };
+    const again = await asPlatformJob(tenantA, () =>
+      runtime.reports.planDestinationReports({ ...ctx(tenantA), destinationId: propertyId, now: NOW }),
+    );
+    expect(ga4.describeCalls).toHaveLength(1);
+    expect(again).toMatchObject({
+      outcome: 'planned',
+      reports: expect.arrayContaining([
+        { reportKey: 'ga4.engagement', start: '2026-09-26', end: '2026-09-27' },
+      ]),
+    });
+    await lock.reset(`lock:destination-report-sweep:${tenantA}:${propertyId}`);
+    ga4.targetMetadata = null;
+    ga4.reportTimeZone = null;
+    ga4.reportQuality = [];
   });
 
   it("prune: the operational cache keeps 7 days without `retain`; with `retain` the policy's retention applies", async () => {

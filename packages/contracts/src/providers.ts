@@ -42,6 +42,13 @@ export const ProviderCapabilityV1 = z.object({
   ),
   requiredScopes: z.array(z.string()),
   certifiedAt: z.string().datetime().nullable(), // null = not certified; cannot be enabled for tenants
+  /** RA-01: the platform the person authorises at ("Meta", "LinkedIn", "X"), as the settings screens name it. */
+  vendor: z.string().optional(),
+  /**
+   * RA-07: the per-variant provider settings a person may set (ChannelVariantInput.settings), as a JSON Schema
+   * object the UI renders as fields; absent when the channel takes none. The adapter reads exactly these keys.
+   */
+  settings: z.record(z.unknown()).optional(),
 });
 export type ProviderCapabilityV1 = z.infer<typeof ProviderCapabilityV1>;
 
@@ -168,3 +175,81 @@ export interface CommentPage {
 
 export const ChannelConnectionStatus = z.enum(['active', 'refresh_needed', 'reconnect_needed', 'disabled']);
 export type ChannelConnectionStatus = z.infer<typeof ChannelConnectionStatus>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// RA-01 provider activation (appended; additive only): channel health, remote revoke and the activation state of
+// every registered provider (channel, source and CMS adapters alike).
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * What the last check found about a channel connection's remote access (beside `status`, which says what the
+ * product does with it): `unknown` until a refresh or a read ran; `ok`; `token_expiring` when a refresh due before
+ * expiry failed transiently; `token_expired` when the platform refused a read for an expired token (401 class);
+ * `revoked` when the grant itself is gone (403 class, or a refresh refused for good); `unreachable` when the
+ * platform could not be reached at all. Set by the token refresh workflow and by the comment and metrics pulls
+ * through the adapter's own error classification, never by a provider-specific branch.
+ */
+export const ChannelHealth = z.enum([
+  'unknown',
+  'ok',
+  'token_expiring',
+  'token_expired',
+  'revoked',
+  'unreachable',
+]);
+export type ChannelHealth = z.infer<typeof ChannelHealth>;
+
+/** The result of asking the platform to revoke the grant (ProviderAdapter.revokeAccess). */
+export type RevokeResult =
+  { outcome: 'revoked' } | { outcome: 'not_supported' } | { outcome: 'failed'; reason: string };
+
+/** What the disconnect recorded about the remote side, as the audit event and `channel.disconnected` carry it. */
+export const RemoteRevokeOutcome = z.enum(['requested', 'revoked', 'not_supported', 'failed']);
+export type RemoteRevokeOutcome = z.infer<typeof RemoteRevokeOutcome>;
+
+/** The three adapter families the registries hold (packages/providers). */
+export const ProviderKind = z.enum(['channel', 'source', 'cms']);
+export type ProviderKind = z.infer<typeof ProviderKind>;
+
+/**
+ * Whether a registered provider can be connected on this deployment, in the order the reasons are checked:
+ * `uncertified` (capability.certifiedAt is null: the registry refuses it for tenants, spec 14.6), `disabled`
+ * (listed in OREMEDIA_DISABLED_CHANNELS / OREMEDIA_DISABLED_SOURCES, or its opt-in setting is off),
+ * `credentials_missing` (an app credential reference the process reads is not set), else `ready`.
+ */
+export const ProviderActivationState = z.enum(['uncertified', 'disabled', 'credentials_missing', 'ready']);
+export type ProviderActivationState = z.infer<typeof ProviderActivationState>;
+
+/** A credential reference the deployment must set for the provider: its variable name and whether it is set. Never a value. */
+export interface ProviderCredentialRefV1 {
+  name: string;
+  present: boolean;
+}
+
+/** One registered provider as `operations.providers.list` reports it (tenant owners and admins): the facts the settings chips use, nothing of the capability register itself. */
+export interface ProviderActivationV1 {
+  key: string;
+  kind: ProviderKind;
+  /** The platform the person authorises at or the site runs (as the settings screens name it). */
+  vendor: string;
+  capabilityVersion: number;
+  certifiedAt: string | null;
+  /** Listed in the disabled-* configuration of this environment, or behind an opt-in setting that is off. */
+  disabled: boolean;
+  credentialRefs: ProviderCredentialRefV1[];
+  state: ProviderActivationState;
+  /** The machine-readable reason behind `state` (`provider_not_certified:<key>`, ...); null when ready. */
+  reason: string | null;
+}
+
+/** The activation state from its facts, in the order the reasons are checked (uncertified first). */
+export function providerActivationState(
+  p: Pick<ProviderActivationV1, 'key' | 'certifiedAt' | 'disabled' | 'credentialRefs'>,
+): { state: ProviderActivationState; reason: string | null } {
+  if (!p.certifiedAt) return { state: 'uncertified', reason: `provider_not_certified:${p.key}` };
+  if (p.disabled) return { state: 'disabled', reason: `provider_disabled:${p.key}` };
+  const missing = p.credentialRefs.filter((c) => !c.present).map((c) => c.name);
+  if (missing.length > 0)
+    return { state: 'credentials_missing', reason: `credentials_missing:${missing.join(',')}` };
+  return { state: 'ready', reason: null };
+}

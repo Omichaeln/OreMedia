@@ -21,6 +21,7 @@ import {
   configureCredentialBroker,
   configurePublishingProviders,
   fixtureCapability,
+  configureChannelActivation,
   registerProviderClients,
   connectedChannel,
 } from '@oremedia/module-publishing';
@@ -39,7 +40,7 @@ const T0 = new Date('2026-09-24T10:00:00.000Z');
 class CommentingFixture extends FixtureProviderAdapter {
   page: CommentPage = { items: [] };
   onFetch: (() => void) | null = null;
-  async fetchComments(): Promise<CommentPage> {
+  override async fetchComments(): Promise<CommentPage> {
     this.onFetch?.();
     return this.page;
   }
@@ -94,6 +95,7 @@ describe('worker-ingest composition: comment ingestion feeds the customer-voice 
     // The test platform and key stand in for the provider clients and KMS the worker reads from its environment.
     configurePublishingProviders({ registry });
     registerProviderClients(() => ({ clientId: 'fixture-client', clientSecret: 'fixture-secret' }));
+    configureChannelActivation(null); // the composition root read an env with no PROVIDER_FIXTURE_PROVIDER_* refs
     configureCredentialBroker({ kms: new LocalKms('ingest-voice-test-master-secret-0123456789') });
     // A scripted model behind the classifier seam (the worker reads its adapter from the environment).
     configureVoiceClassifier({

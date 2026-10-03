@@ -4,13 +4,18 @@ export {
   reviewService,
   registerReviewMediaSigner,
   resetReviewMediaSigner,
+  registerReviewImageSigner,
+  resetReviewImageSigner,
   type ActorOptions,
   type DecisionMeta,
   type ReviewMediaSigner,
+  type ReviewImageSigner,
 } from './service';
+export { comparableManifest, manifestChanges } from './manifest';
 export { reviewToolSource } from './tools';
 export {
   evaluateRelease,
+  articleRenderingMatches,
   buildLiveBinding,
   bindingForRevision,
   hasNoBlockingFindings,

@@ -1,6 +1,26 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
-import type { SourceReportMetricV1, WebMetricSums } from '@oremedia/contracts/destinations';
+import {
+  SourceReportQualityFlag,
+  type SourceReportMetricV1,
+  type WebMetricSums,
+} from '@oremedia/contracts/destinations';
 import {
   BrandScopedRepository,
   PlatformRepository,
@@ -14,6 +34,7 @@ import {
   pendingDestinationGrants,
   seoAuditPages,
   seoAuditRuns,
+  seoFindingWork,
   sourceUsePolicies,
 } from '@oremedia/db/schema/destinations';
 import { decodeCursor, encodeCursor } from '@oremedia/module-operations';
@@ -69,6 +90,18 @@ export class BrandDestinationRepository extends BrandScopedRepository<typeof bra
       .orderBy(asc(brandDestinations.kind), asc(brandDestinations.displayName), asc(brandDestinations.id))
       .limit(LIST_MAX);
   }
+  /**
+   * Every destination of the tenant whatever its brand, status, kind or credential, in id order after `afterId`
+   * (the retention sweep's walk: a disconnected or disabled destination still owns rows to expire).
+   */
+  async listForTenant(afterId: string | null, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(brandDestinations)
+      .where(this.scope(afterId ? gt(brandDestinations.id, afterId) : undefined))
+      .orderBy(asc(brandDestinations.id))
+      .limit(limit);
+  }
 }
 
 /** Rows the daily refresh visits per run (spec 17.4 bounded work); the rest wait for the next day. */
@@ -92,6 +125,35 @@ export class DestinationRefreshDueRepository extends PlatformRepository {
         ),
       )
       .orderBy(asc(brandDestinations.tokenExpiresAt), asc(brandDestinations.id))
+      .limit(limit);
+  }
+}
+
+/** Rows the publication sweeper's shred floor visits per run (RA-01, bounded work); the rest wait for the next run. */
+export const SHRED_FLOOR_BATCH = 200;
+
+/**
+ * RA-01: the floor under destinationRevokeWorkflowV1 spans tenants like the daily refresh and runs inside the
+ * publication sweeper's platform job; it returns references only (tenant, destination and credential ids).
+ */
+export class DisconnectedDestinationRepository extends PlatformRepository {
+  /** Disconnected destinations still pointing at a credential, disconnected before `before`, oldest first. */
+  async listUnshredded(before: Date, tx?: Tx, limit = SHRED_FLOOR_BATCH) {
+    return this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        credentialRefId: brandDestinations.credentialRefId,
+      })
+      .from(brandDestinations)
+      .where(
+        and(
+          eq(brandDestinations.status, 'disconnected'),
+          isNotNull(brandDestinations.credentialRefId),
+          lt(brandDestinations.updatedAt, before),
+        ),
+      )
+      .orderBy(asc(brandDestinations.updatedAt), asc(brandDestinations.id))
       .limit(limit);
   }
 }
@@ -196,29 +258,78 @@ export class SourceUsePolicyRepository extends BrandScopedRepository<typeof sour
   }
 }
 
-/** Rows the daily report sweep visits per run (spec 17.4 bounded work); the rest wait for the next day. */
+/** Rows a sweep's target listing reads per page (spec 17.4 bounded statements); the runtime pages to the end. */
 export const REPORT_SWEEP_BATCH = 1000;
+
+/** A page of sweep targets: references only (tenant and destination ids), oldest first, with the next cursor. */
+export interface SweepTargetPage {
+  items: Array<{ tenantId: string; destinationId: string }>;
+  nextCursor: string | null;
+}
+
+/** `limit + 1` rows are read to know whether a next page exists; the cursor is the last row's (createdAt, id). */
+function sweepTargetPage(
+  rows: Array<{ tenantId: string; destinationId: string; createdAt: Date }>,
+  limit: number,
+): SweepTargetPage {
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+  return {
+    items: items.map(({ tenantId, destinationId }) => ({ tenantId, destinationId })),
+    nextCursor:
+      rows.length > limit && last
+        ? encodeCursor({ id: last.destinationId, sort: last.createdAt.getTime() })
+        : null,
+  };
+}
+
+/**
+ * The keyset after a sweep target cursor over (createdAt, id): undefined for the first page, `null` for a cursor
+ * that does not decode (the listing ends there rather than starting over, so a page-to-end loop never repeats).
+ */
+function sweepTargetAfter(cursor: string | undefined): SQL | undefined | null {
+  if (!cursor) return undefined;
+  const c = decodeCursor(cursor);
+  if (!c || typeof c.sort !== 'number') return null;
+  const at = new Date(c.sort);
+  return or(
+    gt(brandDestinations.createdAt, at),
+    and(eq(brandDestinations.createdAt, at), gt(brandDestinations.id, c.id)),
+  ) as SQL;
+}
 
 /**
  * The daily report sweep (destinationReportSweepWorkflowV1) spans tenants like the token refresh and runs as a
  * declared platform job (spec 5.3); it returns references only (tenant and destination ids), never a row.
  */
 export class DestinationReportTargetRepository extends PlatformRepository {
-  /** Active destinations of the kinds with reports that hold a credential, oldest first. */
-  async listTargets(kinds: readonly string[], tx?: Tx, limit = REPORT_SWEEP_BATCH) {
-    if (kinds.length === 0) return [];
-    return this.conn(tx)
-      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+  /** Active destinations of the kinds with reports that hold a credential, oldest first, paged by cursor. */
+  async listTargets(
+    kinds: readonly string[],
+    page: { limit?: number; cursor?: string | undefined } = {},
+    tx?: Tx,
+  ): Promise<SweepTargetPage> {
+    const limit = page.limit ?? REPORT_SWEEP_BATCH;
+    const after = sweepTargetAfter(page.cursor);
+    if (kinds.length === 0 || after === null) return { items: [], nextCursor: null };
+    const rows = await this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        createdAt: brandDestinations.createdAt,
+      })
       .from(brandDestinations)
       .where(
         and(
           eq(brandDestinations.status, 'active'),
           isNotNull(brandDestinations.credentialRefId),
           inArray(brandDestinations.kind, [...kinds]),
+          after,
         ),
       )
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
-      .limit(limit);
+      .limit(limit + 1);
+    return sweepTargetPage(rows, limit);
   }
 }
 
@@ -349,24 +460,37 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
         .values(rows.slice(i, i + INSERT_CHUNK).map((r) => ({ ...r, tenantId })));
   }
 
-  /** Deletes the destination's rows of days before the cut-off (every report); returns how many went. */
-  async deleteBefore(brandId: string, destinationId: string, cutoffDate: string, tx: Tx): Promise<number> {
-    return affectedRows(
-      await tx
-        .delete(destinationReportRows)
-        .where(
-          this.brandScope(
-            brandId,
-            and(
-              eq(destinationReportRows.destinationId, destinationId),
-              lt(destinationReportRows.date, cutoffDate),
-            ) as SQL,
-          ),
-        ),
+  private beforeScope(brandId: string, destinationId: string, cutoffDate: string): SQL {
+    return this.brandScope(
+      brandId,
+      and(
+        eq(destinationReportRows.destinationId, destinationId),
+        lt(destinationReportRows.date, cutoffDate),
+      ) as SQL,
     );
   }
 
-  /** Days with rows, rows, the latest day and when it was fetched, inside the window. */
+  /** The destination's rows of days before the cut-off (every report): what a dry run of the prune would remove. */
+  async countBefore(brandId: string, destinationId: string, cutoffDate: string, tx?: Tx): Promise<number> {
+    const rows = await this.conn(tx)
+      .select({ c: sql<number>`count(*)` })
+      .from(destinationReportRows)
+      .where(this.beforeScope(brandId, destinationId, cutoffDate));
+    return Number(rows[0]?.c ?? 0);
+  }
+
+  /** Deletes the destination's rows of days before the cut-off (every report); returns how many went. */
+  async deleteBefore(brandId: string, destinationId: string, cutoffDate: string, tx: Tx): Promise<number> {
+    return affectedRows(
+      await tx.delete(destinationReportRows).where(this.beforeScope(brandId, destinationId, cutoffDate)),
+    );
+  }
+
+  /**
+   * Days with rows, rows, the latest day and when it was fetched, inside the window; with (RA-10) the zone the
+   * days are keyed in (the latest row's; null for UTC days) and every quality flag any row of the window carries
+   * (a row without flags, stored before they existed, contributes none).
+   */
   async coverage(
     brandId: string,
     destinationId: string,
@@ -375,21 +499,33 @@ export class DestinationReportRowRepository extends BrandScopedRepository<typeof
     end: string,
     tx?: Tx,
   ) {
+    const flagColumns = Object.fromEntries(
+      SourceReportQualityFlag.options.map((flag) => [
+        `f_${flag}`,
+        sql<number>`max(case when json_contains(${destinationReportRows.quality}, ${JSON.stringify(flag)}) then 1 else 0 end)`,
+      ]),
+    ) as Record<`f_${SourceReportQualityFlag}`, SQL<number>>;
     const rows = await this.conn(tx)
       .select({
         days: sql<number>`count(distinct ${destinationReportRows.date})`,
         rows: sql<number>`count(*)`,
         latestDate: sql<string | null>`max(${destinationReportRows.date})`,
         fetchedAt: sql<Date | null>`max(${destinationReportRows.fetchedAt})`,
+        timeZone: sql<
+          string | null
+        >`substring_index(max(concat(${destinationReportRows.date}, '|', coalesce(${destinationReportRows.timeZone}, ''))), '|', -1)`,
+        ...flagColumns,
       })
       .from(destinationReportRows)
       .where(this.windowScope(brandId, destinationId, reportKey, start, end));
-    const r = rows[0];
+    const r = rows[0] as (typeof rows)[number] | undefined;
     return {
       days: Number(r?.days ?? 0),
       rows: Number(r?.rows ?? 0),
       latestDate: r?.latestDate ?? null,
       fetchedAt: r?.fetchedAt ? new Date(r.fetchedAt) : null,
+      timeZone: r?.timeZone ? r.timeZone : null,
+      flags: SourceReportQualityFlag.options.filter((flag) => Number(r?.[`f_${flag}`] ?? 0) > 0),
     };
   }
 
@@ -485,14 +621,26 @@ function parseDimensions(value: unknown): Record<string, string> {
  * it returns references only (tenant and destination ids), never a row.
  */
 export class SeoAuditTargetRepository extends PlatformRepository {
-  /** Active destinations of the website kind (a credential is not needed: public pages only), oldest first. */
-  async listTargets(kind: string, tx?: Tx, limit = REPORT_SWEEP_BATCH) {
-    return this.conn(tx)
-      .select({ tenantId: brandDestinations.tenantId, destinationId: brandDestinations.id })
+  /** Active destinations of the website kind (a credential is not needed: public pages only), oldest first, paged. */
+  async listTargets(
+    kind: string,
+    page: { limit?: number; cursor?: string | undefined } = {},
+    tx?: Tx,
+  ): Promise<SweepTargetPage> {
+    const limit = page.limit ?? REPORT_SWEEP_BATCH;
+    const after = sweepTargetAfter(page.cursor);
+    if (after === null) return { items: [], nextCursor: null };
+    const rows = await this.conn(tx)
+      .select({
+        tenantId: brandDestinations.tenantId,
+        destinationId: brandDestinations.id,
+        createdAt: brandDestinations.createdAt,
+      })
       .from(brandDestinations)
-      .where(and(eq(brandDestinations.status, 'active'), eq(brandDestinations.kind, kind)))
+      .where(and(eq(brandDestinations.status, 'active'), eq(brandDestinations.kind, kind), after))
       .orderBy(asc(brandDestinations.createdAt), asc(brandDestinations.id))
-      .limit(limit);
+      .limit(limit + 1);
+    return sweepTargetPage(rows, limit);
   }
 }
 
@@ -563,6 +711,19 @@ export class SeoAuditRunRepository extends BrandScopedRepository<typeof seoAudit
       .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id))
       .limit(1);
     return rows[0] ?? null;
+  }
+  /** Every run started before the cut-off (the policy's retention): what the prune removes, running runs aside. */
+  async listStartedBefore(
+    brandId: string,
+    destinationId: string,
+    cutoff: Date,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(this.destinationScope(brandId, destinationId, lt(seoAuditRuns.startedAt, cutoff)))
+      .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id));
   }
   /** Runs started inside [from, to): the on-demand idempotency per day and the "already ran this week" check. */
   async startedBetween(
@@ -681,6 +842,106 @@ export class SeoAuditPageRepository extends BrandScopedRepository<typeof seoAudi
       await tx
         .delete(seoAuditPages)
         .where(this.brandScope(brandId, inArray(seoAuditPages.runId, [...runIds]))),
+    );
+  }
+}
+
+type SeoFindingWorkRow = typeof seoFindingWork.$inferSelect;
+
+/**
+ * RA-11: the work an SEO finding became, one open row per (destination, check). The service creates rows and reads
+ * them beside the findings; the audit finish resolves the rows a later completed run no longer reports.
+ */
+export class SeoFindingWorkRepository extends BrandScopedRepository<typeof seoFindingWork> {
+  constructor() {
+    super(seoFindingWork);
+  }
+  async create(values: Omit<typeof seoFindingWork.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  private destinationScope(brandId: string, destinationId: string, extra?: SQL): SQL {
+    return this.brandScope(brandId, and(eq(seoFindingWork.destinationId, destinationId), extra) as SQL);
+  }
+  /**
+   * The open (unresolved) row for a check of the destination, whatever run created it: at most one exists, since
+   * the service creates under the destination's row lock (a lock on a row that is not there would hold nothing).
+   * Inside that write transaction the read is a locking one (`current`, not the transaction's earlier snapshot),
+   * so a caller that waited on the destination lock sees the row the first caller committed.
+   */
+  async findOpen(
+    brandId: string,
+    destinationId: string,
+    check: string,
+    tx: Tx | undefined,
+    current = false,
+  ): Promise<SeoFindingWorkRow | null> {
+    const query = this.conn(tx)
+      .select()
+      .from(seoFindingWork)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          and(eq(seoFindingWork.check, check), isNull(seoFindingWork.resolvedAt)) as SQL,
+        ),
+      )
+      .limit(1);
+    const rows = await (current && tx ? query.for('update') : query);
+    return rows[0] ?? null;
+  }
+  /**
+   * The rows the findings of one run are read beside: the destination's open rows, the rows created from that run
+   * (an earlier run's work stays visible on it after a later run resolved it) and the rows that run resolved.
+   */
+  async listForRun(
+    brandId: string,
+    destinationId: string,
+    runId: string,
+    tx?: Tx,
+  ): Promise<SeoFindingWorkRow[]> {
+    return this.conn(tx)
+      .select()
+      .from(seoFindingWork)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          or(
+            isNull(seoFindingWork.resolvedAt),
+            eq(seoFindingWork.runId, runId),
+            eq(seoFindingWork.resolvedRunId, runId),
+          ) as SQL,
+        ),
+      )
+      .orderBy(asc(seoFindingWork.check), asc(seoFindingWork.id))
+      .limit(LIST_MAX);
+  }
+  /**
+   * Resolves every open row of the destination whose check a completed run no longer reports: the finding went
+   * away, so its work is marked resolved by that run (the work itself stays whatever its own module says).
+   */
+  async resolveMissing(
+    brandId: string,
+    destinationId: string,
+    runId: string,
+    reportedChecks: readonly string[],
+    now: Date,
+    tx: Tx,
+  ): Promise<number> {
+    return affectedRows(
+      await tx
+        .update(seoFindingWork)
+        .set({ resolvedAt: now, resolvedRunId: runId })
+        .where(
+          this.destinationScope(
+            brandId,
+            destinationId,
+            and(
+              isNull(seoFindingWork.resolvedAt),
+              reportedChecks.length ? notInArray(seoFindingWork.check, [...reportedChecks]) : undefined,
+            ) as SQL,
+          ),
+        ),
     );
   }
 }

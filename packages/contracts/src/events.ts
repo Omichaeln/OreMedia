@@ -66,5 +66,8 @@ export const EVENT_TYPES = {
   'destination.disconnected': 1,
   // Technical SEO audit (R2-4; appended; additive only): a person asked for a run; seoAuditWorkflowV1 crawls
   'destination.audit_requested': 1,
+  // RA-04 (appended; additive only): a live article's rendered page is due for a delayed re-validation; emitted
+  // with `availableAt` at publish, renderedValidationWorkflowV1 re-runs the checks
+  'publication.rendered_validation_due': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

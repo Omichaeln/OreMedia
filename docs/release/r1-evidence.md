@@ -69,7 +69,7 @@ to 2 October 2026; run 12 on the WP-8 commit, run 13 on the WP-10 commit, run 16
 | X                  | `packages/providers/src/x`                  | null          | no               | Release 2 (D-04); disabled by `OREMEDIA_DISABLED_CHANNELS=x`         |
 
 The registry refuses an uncertified adapter; production therefore publishes to no real channel until a row above
-carries a date. The certification harness (`pnpm certify`) and the runbook (`docs/runbooks/certify-a-channel.md`)
+carries a date. The certification harness (`pnpm certify`) and the runbook (`docs/runbooks/certify-a-provider.md`)
 are ready to run once the apps are approved.
 
 ## 5. Railway inventory (production project `ae355f37-5289-4eee-a691-d12c18d83890`, environment `production`)

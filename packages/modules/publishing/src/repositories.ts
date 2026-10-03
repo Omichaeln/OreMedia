@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import type { PublicationState } from '@oremedia/contracts/publishing';
@@ -295,14 +295,31 @@ export class PublicationRepository extends BrandScopedRepository<typeof publicat
     return Number(rows[0]?.c ?? 0);
   }
   /** The brand's publications scheduled inside [from, to], newest first, bounded (the calendar and the rollups). */
-  async listScheduledBetween(brandId: string, from: Date, to: Date, limit: number, tx?: Tx) {
+  async listScheduledBetween(
+    brandId: string,
+    from: Date,
+    to: Date,
+    limit: number,
+    tx?: Tx,
+    /** The last row of the previous page (newest first): the page continues after its (scheduledFor, id). */
+    after?: { scheduledFor: Date; id: string },
+  ) {
     return this.conn(tx)
       .select()
       .from(publications)
       .where(
         this.brandScope(
           brandId,
-          and(gte(publications.scheduledFor, from), lte(publications.scheduledFor, to)) as SQL,
+          and(
+            gte(publications.scheduledFor, from),
+            lte(publications.scheduledFor, to),
+            after
+              ? or(
+                  lt(publications.scheduledFor, after.scheduledFor),
+                  and(eq(publications.scheduledFor, after.scheduledFor), lt(publications.id, after.id)),
+                )
+              : undefined,
+          ) as SQL,
         ),
       )
       .orderBy(desc(publications.scheduledFor), desc(publications.id))
@@ -715,7 +732,36 @@ export interface StuckPublicationRef {
  * The sweeper legitimately spans tenants (like the outbox dispatcher, spec 14.2) and runs as a declared platform
  * job. It reads references only; every write happens afterwards inside the row's own tenant context.
  */
+/** A disconnected connection whose credential row is still intact (RA-01 shred floor): references only. */
+export interface UnshreddedConnectionRef {
+  tenantId: string;
+  channelConnectionId: string;
+}
+
 export class PublicationSweepRepository extends PlatformRepository {
+  /** Connections disabled before `before` whose credential_refs row was never destroyed, oldest first. */
+  async findDisabledWithLiveCredential(before: Date, limit = 200): Promise<UnshreddedConnectionRef[]> {
+    return this.conn()
+      .select({ tenantId: channelConnections.tenantId, channelConnectionId: channelConnections.id })
+      .from(channelConnections)
+      .innerJoin(
+        credentialRefs,
+        and(
+          eq(credentialRefs.tenantId, channelConnections.tenantId),
+          eq(credentialRefs.id, channelConnections.credentialRefId),
+        ),
+      )
+      .where(
+        and(
+          eq(channelConnections.status, 'disabled'),
+          lt(channelConnections.updatedAt, before),
+          isNull(credentialRefs.destroyedAt),
+        ),
+      )
+      .orderBy(asc(channelConnections.updatedAt))
+      .limit(limit);
+  }
+
   async findStuck(
     now: Date,
     graceSeconds: number,

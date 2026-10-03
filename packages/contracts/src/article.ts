@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import type { ArticleBlockV1, ArticleDocumentV1 } from './content';
+import {
+  articleBlockText,
+  faqAnswerText,
+  type ArticleBlockV1,
+  type ArticleDocumentV1,
+  type ArticleFaqAnswerBlockV1,
+  type ArticleImageV1,
+} from './content';
 
 /*
  * Ledger R2-3 (D-16): the one place an article becomes HTML and the one place HTML from outside (a remote
@@ -67,6 +74,8 @@ const escapeText = (text: string): string =>
     .replace(/&(?!(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});)/gi, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+/** An attribute value taken from markup: as `escapeText`, with the quote escaped too (entities kept, never doubled). */
+const escapeAttr = (value: string): string => escapeText(value).replace(/"/g, '&quot;');
 
 /** A URL an article may link to or embed: http(s), mailto, a relative path or a fragment; never a script. */
 export function safeArticleUrl(value: string): string | null {
@@ -120,8 +129,8 @@ export function sanitizeArticleHtml(html: string): string {
         if (URL_ATTRS.has(attr)) {
           const url = safeArticleUrl(value);
           if (!url) continue;
-          kept.push(`${attr}="${escapeHtml(url)}"`);
-        } else kept.push(`${attr}="${escapeHtml(value)}"`);
+          kept.push(`${attr}="${escapeAttr(url)}"`);
+        } else kept.push(`${attr}="${escapeAttr(value)}"`);
       }
       if (name === 'a' && kept.some((k) => k.startsWith('href='))) kept.push('rel="noopener"');
       const head = `<${name}${kept.length ? ` ${kept.join(' ')}` : ''}`;
@@ -139,8 +148,21 @@ export function sanitizeArticleHtml(html: string): string {
   return out.join('');
 }
 
+/**
+ * RA-08: how an image block finds its address. The web app resolves asset versions to signed preview URLs; the
+ * publisher resolves them to the addresses the website gave the uploaded media; without a resolver (the hash a
+ * review manifest freezes) the image carries its alt text and no address. The markup is otherwise identical, so
+ * the three renderings differ in the `src` attributes only.
+ */
+export interface ArticleRenderOptions {
+  imageUrl?: (image: ArticleImageV1) => string | null;
+}
+
 /** One block as HTML (text escaped; a FAQ is a section with the question as a heading). */
-export function renderArticleBlock(block: ArticleBlockV1): string {
+export function renderArticleBlock(
+  block: ArticleBlockV1 | ArticleFaqAnswerBlockV1,
+  opts: ArticleRenderOptions = {},
+): string {
   switch (block.type) {
     case 'paragraph':
       return `<p>${escapeHtml(block.text)}</p>`;
@@ -150,48 +172,113 @@ export function renderArticleBlock(block: ArticleBlockV1): string {
       const tag = block.ordered ? 'ol' : 'ul';
       return `<${tag}>${block.items.map((i) => `<li>${escapeHtml(i)}</li>`).join('')}</${tag}>`;
     }
-    case 'faq':
-      return `<section class="faq"><h3>${escapeHtml(block.question)}</h3><p>${escapeHtml(block.answer)}</p></section>`;
+    case 'faq': {
+      const answer =
+        block.answerBlocks && block.answerBlocks.length > 0
+          ? block.answerBlocks.map((b) => renderArticleBlock(b, opts)).join('')
+          : `<p>${escapeHtml(block.answer)}</p>`;
+      return `<section class="faq"><h3>${escapeHtml(block.question)}</h3>${answer}</section>`;
+    }
+    case 'link':
+      return `<p><a href="${escapeHtml(block.href)}">${escapeHtml(articleBlockText(block))}</a></p>`;
+    case 'quote':
+      return `<blockquote><p>${escapeHtml(block.text)}</p>${
+        block.cite ? `<p><em>${escapeHtml(block.cite)}</em></p>` : ''
+      }</blockquote>`;
+    case 'image': {
+      const url = opts.imageUrl?.({ assetVersionId: block.assetVersionId, alt: block.alt }) ?? null;
+      const src = url ? ` src="${escapeHtml(url)}"` : '';
+      const caption = block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : '';
+      return `<figure><img${src} alt="${escapeHtml(block.alt)}">${caption}</figure>`;
+    }
   }
 }
 
-/** The article body as HTML: every block in order, then the sanitiser once more (defence in depth). */
-export const renderArticleHtml = (article: Pick<ArticleDocumentV1, 'blocks'>): string =>
-  sanitizeArticleHtml(article.blocks.map(renderArticleBlock).join('\n'));
+/**
+ * The article body as HTML: every block in order, then the sanitiser once more (defence in depth). Pure and
+ * deterministic: the same document and resolver always give the same bytes, so the hash a review manifest
+ * freezes, the fingerprint a read-back is compared with and the body a site receives are one rendering.
+ */
+export const renderArticleHtml = (
+  article: Pick<ArticleDocumentV1, 'blocks'>,
+  opts: ArticleRenderOptions = {},
+): string => sanitizeArticleHtml(article.blocks.map((b) => renderArticleBlock(b, opts)).join('\n'));
+
+/** The text a block leads with on the page: a list's first item, a FAQ's question, an image's caption (alt text is not page text). */
+const blockLeadText = (b: ArticleBlockV1): string => {
+  switch (b.type) {
+    case 'list':
+      return b.items[0] ?? '';
+    case 'faq':
+      return b.question;
+    case 'image':
+      return b.caption ?? '';
+    default:
+      return articleBlockText(b);
+  }
+};
+
+/** The text a block ends with on the page: a list's last item, a FAQ's answer's last line, a quote's text. */
+const blockTailText = (b: ArticleBlockV1 | ArticleFaqAnswerBlockV1): string => {
+  switch (b.type) {
+    case 'list':
+      return b.items[b.items.length - 1] ?? '';
+    case 'faq': {
+      const last = b.answerBlocks?.[b.answerBlocks.length - 1];
+      return last ? blockTailText(last) : faqAnswerText(b);
+    }
+    case 'image':
+      return b.caption ?? '';
+    case 'quote':
+      return b.cite ?? b.text;
+    default:
+      return articleBlockText(b);
+  }
+};
 
 /** The first paragraph's text (what a rendered page must contain), or the first block's text. */
 export function articleFirstParagraph(article: Pick<ArticleDocumentV1, 'blocks'>): string {
   const p = article.blocks.find((b) => b.type === 'paragraph' && b.text.trim() !== '');
   if (p && p.type === 'paragraph') return p.text.trim();
   const first = article.blocks[0];
-  if (!first) return '';
-  return first.type === 'list'
-    ? (first.items[0] ?? '').trim()
-    : first.type === 'faq'
-      ? first.question.trim()
-      : first.text.trim();
+  return first ? blockLeadText(first).trim() : '';
+}
+
+/** The last block's text (a list's last item, a FAQ's answer): what a page must still show at its end. */
+export function articleLastParagraph(article: Pick<ArticleDocumentV1, 'blocks'>): string {
+  for (let i = article.blocks.length - 1; i >= 0; i--) {
+    const text = blockTailText(article.blocks[i] as ArticleBlockV1);
+    if (text.trim() !== '') return text.trim();
+  }
+  return '';
 }
 
 /** The article's plain text (title, excerpt and body), for a caption or a length check. */
 export const articlePlainText = (article: ArticleDocumentV1): string =>
-  [
-    article.title,
-    article.excerpt,
-    ...article.blocks.map((b) =>
-      b.type === 'list' ? b.items.join('\n') : b.type === 'faq' ? `${b.question}\n${b.answer}` : b.text,
-    ),
-  ]
+  [article.title, article.excerpt, ...article.blocks.map(articleBlockText)]
     .filter((t) => t.trim() !== '')
     .join('\n\n');
 
+/**
+ * RA-03: the characters a body given as HTML carries once rendered (tags removed, entities decoded): the measure
+ * ARTICLE_BODY_MAX_CHARS bounds, never the HTML's own length.
+ */
+export const articleHtmlChars = (html: string): number => decodeEntities(html.replace(/<[^>]+>/g, '')).length;
+
 // ---- rendered-page validation (R2-3): what a published page must show ----
 
+/**
+ * RA-04 (appended keys): the canonical names this page (the remote URL or the slug's path), and the last block's
+ * text is present too, so a page changed after its first paragraph fails.
+ */
 export const RenderedCheckKey = z.enum([
   'status_ok',
   'title_present',
   'canonical_present',
   'indexable',
   'body_present',
+  'canonical_matches',
+  'last_paragraph_present',
 ]);
 export type RenderedCheckKey = z.infer<typeof RenderedCheckKey>;
 export interface RenderedCheck {
@@ -236,14 +323,39 @@ const hasMeta = (html: string, name: string, content: RegExp): boolean =>
     const tag = m[0];
     return new RegExp(`name\\s*=\\s*["']?${name}["']?`, 'i').test(tag) && content.test(tag);
   });
-const hasCanonical = (html: string): boolean =>
-  [...html.matchAll(/<link\b[^>]*>/gi)].some(
-    (m) => /rel\s*=\s*["']?canonical["']?/i.test(m[0]) && /href\s*=\s*["'][^"']+["']/i.test(m[0]),
-  );
+/** The canonical link's href, or null when the page carries none. */
+const canonicalHref = (html: string): string | null => {
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/rel\s*=\s*["']?canonical["']?/i.test(m[0])) continue;
+    const href = /href\s*=\s*["']([^"']+)["']/i.exec(m[0]);
+    if (href) return decodeEntities(href[1] as string);
+  }
+  return null;
+};
+/** A URL as compared: lower-case origin, the path without its trailing slash, no query or fragment. */
+const foldUrl = (value: string): string | null => {
+  try {
+    const u = new URL(value);
+    return `${u.origin.toLowerCase()}${u.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return null;
+  }
+};
+/** RA-04: the canonical is the remote URL itself, or a path on the same site ending in the slug's segment. */
+export function canonicalMatches(canonical: string | null, remoteUrl: string, slug: string): boolean {
+  if (!canonical) return false;
+  const c = foldUrl(canonical);
+  const r = foldUrl(remoteUrl);
+  if (!c || !r) return false;
+  if (c === r) return true;
+  const sameSite = c.startsWith(`${new URL(r).origin.toLowerCase()}/`);
+  return sameSite && slug !== '' && c.endsWith(`/${slug.toLowerCase()}`);
+}
 
 /**
- * The checks over a fetched page: 200, the title in <title> or an <h1>, a canonical link, no `noindex` unless the
- * article is a draft (a draft is expected to be hidden), and the first paragraph in the page's text. Pure.
+ * The checks over a fetched page: 200, the title in <title> or an <h1>, a canonical link that names this page
+ * (RA-04: the remote URL or the slug's path), no `noindex` unless the article is a draft (a draft is expected to be
+ * hidden), and the first and the last paragraph in the page's text. Pure.
  */
 export function validateRenderedPage(input: {
   status: number | null;
@@ -251,18 +363,27 @@ export function validateRenderedPage(input: {
   title: string;
   firstParagraph: string;
   draft: boolean;
+  /** The page address the article was read back with and its slug; both empty when unknown (an old record). */
+  remoteUrl?: string;
+  slug?: string;
+  lastParagraph?: string;
 }): RenderedCheck[] {
   const html = input.html;
   const title = fold(input.title);
   const titles = [...tagText(html, 'title'), ...tagText(html, 'h1')];
   const noindex = hasMeta(html, 'robots', /noindex/i) || hasMeta(html, 'googlebot', /noindex/i);
   const paragraph = fold(input.firstParagraph);
+  const last = fold(input.lastParagraph ?? '');
+  const canonical = canonicalHref(html);
+  const text = pageText(html);
   return [
     { key: 'status_ok', ok: input.status === 200 },
     { key: 'title_present', ok: title !== '' && titles.some((t) => t.includes(title)) },
-    { key: 'canonical_present', ok: hasCanonical(html) },
+    { key: 'canonical_present', ok: canonical !== null },
     { key: 'indexable', ok: input.draft || !noindex },
-    { key: 'body_present', ok: paragraph !== '' && pageText(html).includes(paragraph) },
+    { key: 'body_present', ok: paragraph !== '' && text.includes(paragraph) },
+    { key: 'canonical_matches', ok: canonicalMatches(canonical, input.remoteUrl ?? '', input.slug ?? '') },
+    { key: 'last_paragraph_present', ok: last !== '' && text.includes(last) },
   ];
 }
 

@@ -1,6 +1,13 @@
 import type { Tone } from '@oremedia/ui';
-import { PublicationState, type PublicationState as PublicationStateT } from '@oremedia/contracts/publishing';
-import type { ChannelConnectionStatus } from '@oremedia/contracts/providers';
+import {
+  PublicationRemoteStatus,
+  PublicationRemoteVerification,
+  PublicationState,
+  type PublicationRemoteStatus as PublicationRemoteStatusT,
+  type PublicationRemoteVerification as PublicationRemoteVerificationT,
+  type PublicationState as PublicationStateT,
+} from '@oremedia/contracts/publishing';
+import type { ChannelConnectionStatus, ChannelHealth } from '@oremedia/contracts/providers';
 
 export interface StateChip {
   tone: Tone;
@@ -60,8 +67,63 @@ const UNKNOWN_CHIP: StateChip = {
   detail: 'The server reported a state this screen does not know.',
 };
 
-/** The calendar source types `state` as a string; anything outside the enum is shown as such, never guessed. */
-export function publicationChip(state: string): StateChip {
+/**
+ * RA-02: what the website holds for a published article, shown in place of a bare "Published" so a draft or a
+ * reverted article is never read as live. The publication state stays what it is (the approval's binding).
+ */
+export const REMOTE_STATUS_CHIP: Record<PublicationRemoteStatusT, StateChip> = {
+  draft: {
+    tone: 'info',
+    label: 'Draft saved',
+    detail: 'The website holds the article as a draft; it is not public. Publishing live is a separate step.',
+  },
+  live: { tone: 'good', label: 'Live', detail: 'The website confirmed the article is published and public.' },
+  reverted: {
+    tone: 'warning',
+    label: 'Reverted',
+    detail:
+      'The article was set back to a draft on the website after it went live; the page is no longer public.',
+  },
+};
+
+/** RA-04: whether the write was proven (the read-back matched what was sent and the rendered page passed). */
+export const REMOTE_VERIFICATION_CHIP: Record<PublicationRemoteVerificationT, StateChip> = {
+  unverified: {
+    tone: 'neutral',
+    label: 'Unverified',
+    detail:
+      'The website did not let the article be read back after the write, so nothing proves what it holds.',
+  },
+  verified: {
+    tone: 'good',
+    label: 'Verified',
+    detail: 'The article read back matches what was sent and the rendered page passed its checks.',
+  },
+  failed: {
+    tone: 'critical',
+    label: 'Verification failed',
+    detail: 'The article read back differs from what was sent, or the rendered page failed a check.',
+  },
+};
+
+export function remoteStatusChip(remoteStatus: string | null | undefined): StateChip | null {
+  const parsed = PublicationRemoteStatus.safeParse(remoteStatus);
+  return parsed.success ? REMOTE_STATUS_CHIP[parsed.data] : null;
+}
+export function remoteVerificationChip(remoteVerification: string | null | undefined): StateChip | null {
+  const parsed = PublicationRemoteVerification.safeParse(remoteVerification);
+  return parsed.success ? REMOTE_VERIFICATION_CHIP[parsed.data] : null;
+}
+
+/**
+ * The calendar source types `state` as a string; anything outside the enum is shown as such, never guessed. A
+ * published article shows what the website holds (RA-02) when the server says it.
+ */
+export function publicationChip(state: string, remoteStatus?: string | null): StateChip {
+  if (state === 'published') {
+    const remote = remoteStatusChip(remoteStatus);
+    if (remote) return remote;
+  }
   const parsed = PublicationState.safeParse(state);
   return parsed.success
     ? PUBLICATION_CHIP[parsed.data]
@@ -88,6 +150,8 @@ export const HOLD_REASON_TEXT: Record<string, string> = {
   assets_rights_valid: 'An asset in the package lost its usage rights.',
   facts_valid: 'A fact the copy relies on is no longer valid (an expired offer, for example).',
   capability_valid: 'The variant no longer passes the channel capability check.',
+  article_rendering_matches:
+    'The article no longer renders to the HTML the approved review request froze; ask for a new review.',
   // Spec 17.6 restore rule (publishing.publications.holdRestored), not a release check: it was never sent.
   restored_from_backup:
     'The data was restored from a backup while this was waiting to be sent; it was never sent. Release it again or cancel it.',
@@ -112,6 +176,54 @@ export interface ChannelChip extends StateChip {
   /** True when the channel cannot publish until someone acts (spec 21.2 token expiry). */
   needsAction: boolean;
 }
+
+/**
+ * RA-01: what the last refresh or read found about the channel's remote access, beside its status. A dead or
+ * unreachable grant needs a person (reconnect); an expiring token is the refresh workflow's to renew.
+ */
+export const CHANNEL_HEALTH_CHIP: Record<ChannelHealth, ChannelChip> = {
+  unknown: {
+    tone: 'neutral',
+    label: 'Not checked',
+    detail: 'No refresh or read has run yet.',
+    needsAction: false,
+  },
+  ok: {
+    tone: 'good',
+    label: 'Healthy',
+    detail: 'The last refresh or read went through.',
+    needsAction: false,
+  },
+  token_expiring: {
+    tone: 'warning',
+    label: 'Token expiring',
+    detail: 'The refresh due before the token expires did not go through; it is retried.',
+    needsAction: false,
+  },
+  token_expired: {
+    tone: 'critical',
+    label: 'Token expired',
+    detail: 'The platform refused the last read for an expired token.',
+    needsAction: true,
+  },
+  revoked: {
+    tone: 'critical',
+    label: 'Access revoked',
+    detail: 'The platform reports the grant as revoked; reconnect the channel before publishing.',
+    needsAction: true,
+  },
+  unreachable: {
+    tone: 'warning',
+    label: 'Unreachable',
+    detail: 'The platform could not be reached at the last read.',
+    needsAction: true,
+  },
+};
+
+/** A channel needs a person when its status or its health says so (spec 21.2 token expiry, RA-01 health). */
+export const channelNeedsAction = (c: { status: ChannelConnectionStatus; health: ChannelHealth }): boolean =>
+  CHANNEL_CHIP[c.status].needsAction ||
+  (c.status !== 'disabled' && CHANNEL_HEALTH_CHIP[c.health].needsAction);
 
 export const CHANNEL_CHIP: Record<ChannelConnectionStatus, ChannelChip> = {
   active: { tone: 'good', label: 'Connected', detail: 'The channel can publish.', needsAction: false },
@@ -356,15 +468,28 @@ export interface ChannelOutcomeSummary {
   cancelled: number;
   /** Deleted from the channel through the product after publishing (a deliberate removal, not a failure). */
   removed: number;
+  /** RA-02: articles the website holds as a draft (published to it, not public), never counted as live. */
+  drafts: number;
+  /** RA-02: articles set back to a draft after going live, never counted as live. */
+  reverted: number;
   /** True when at least one channel published and at least one did not succeed (spec 14.4 partial success). */
   partial: boolean;
   text: string;
 }
 
-/** Spec 14.4: each channel is its own publication; the summary names every non-success explicitly. */
-export function channelOutcomeSummary(publications: ReadonlyArray<{ state: string }>): ChannelOutcomeSummary {
+/**
+ * Spec 14.4: each channel is its own publication; the summary names every non-success explicitly. A published
+ * article counts as published only when the website holds it live (RA-02): a draft and a reverted one are named.
+ */
+export function channelOutcomeSummary(
+  publications: ReadonlyArray<{ state: string; remoteStatus?: string | null }>,
+): ChannelOutcomeSummary {
   const count = (states: string[]) => publications.filter((p) => states.includes(p.state)).length;
-  const published = count(['published']);
+  const drafts = publications.filter((p) => p.state === 'published' && p.remoteStatus === 'draft').length;
+  const reverted = publications.filter(
+    (p) => p.state === 'published' && p.remoteStatus === 'reverted',
+  ).length;
+  const published = count(['published']) - drafts - reverted;
   const failed = count(['failed']);
   const held = count(['held']);
   const unknown = count(['outcome_unknown', 'retry_eligible']);
@@ -374,16 +499,31 @@ export function channelOutcomeSummary(publications: ReadonlyArray<{ state: strin
   const total = publications.length;
   const parts: string[] = [];
   if (published) parts.push(`${published} published`);
+  if (drafts) parts.push(`${drafts} saved as a draft on the website`);
+  if (reverted) parts.push(`${reverted} reverted to a draft`);
   if (failed) parts.push(`${failed} failed`);
   if (held) parts.push(`${held} held`);
   if (unknown) parts.push(`${unknown} with an unknown outcome`);
   if (pending) parts.push(`${pending} pending`);
   if (cancelled) parts.push(`${cancelled} cancelled`);
   if (removed) parts.push(`${removed} deleted from the channel`);
-  const partial = published > 0 && published < total - cancelled - removed;
+  const partial = published > 0 && published < total - cancelled - removed - drafts - reverted;
   const text =
     total === 0 ? 'No channels.' : `${parts.join(', ')} of ${total} channel${total === 1 ? '' : 's'}.`;
-  return { total, published, failed, held, unknown, pending, cancelled, removed, partial, text };
+  return {
+    total,
+    published,
+    failed,
+    held,
+    unknown,
+    pending,
+    cancelled,
+    removed,
+    drafts,
+    reverted,
+    partial,
+    text,
+  };
 }
 
 /** `datetime-local` value (local wall clock) → ISO instant; empty or invalid → null. */

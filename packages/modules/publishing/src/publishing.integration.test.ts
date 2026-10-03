@@ -27,6 +27,10 @@ import {
   publications,
   remoteEvidence,
 } from '@oremedia/db/schema/publishing';
+import { brandDestinations } from '@oremedia/db/schema/destinations';
+import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
+import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
+import type { RenderedValidationV1 } from '@oremedia/contracts/article';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { idempotent } from '@oremedia/module-operations';
@@ -34,10 +38,13 @@ import { createLogger } from '@oremedia/observability';
 import { ProviderRegistry, ProviderTransportError } from '@oremedia/providers';
 import { configureCredentialBroker, credentialBroker } from './broker';
 import { channelService, configureConnectCallback, type ChannelConnectResult } from './channels';
+import { channelHealth } from './health';
 import { publicationWorkflowId } from './common';
 import {
+  configureChannelActivation,
   registerBrandChecker,
   registerApprovalConsumer,
+  registerDestinationPublisher,
   registerProviderClients,
   registerPublishMediaSource,
   registerReleaseEvaluator,
@@ -45,9 +52,15 @@ import {
   registerVariantSource,
   registerWorkflowProbe,
   resetApprovalConsumer,
+  resetDestinationPublisher,
   resetReleaseEvaluator,
   resetRevisionVariantSource,
   resetVariantSource,
+  type DestinationEditInput,
+  type DestinationMutationResult,
+  type DestinationPublishResult,
+  type DestinationPublisher,
+  type DestinationValidateInput,
   type ReleaseEvaluator,
   type RevisionWithVariants,
 } from './hooks';
@@ -2082,6 +2095,596 @@ describe('publishing module (spec 14) against MySQL 8', () => {
     });
   });
 
+  describe('website articles (RA-02, RA-04, RA-12): what the runtime records behind a destination publication', () => {
+    const destinationId = newId('destination');
+    const article: NonNullable<ChannelVariantForPublishing['article']> = {
+      kind: 'article',
+      title: 'Why ore and tar last',
+      slug: 'why-ore-and-tar-last',
+      excerpt: 'A short answer.',
+      blocks: [
+        { type: 'paragraph', text: 'Ore is heavy.' },
+        { type: 'faq', question: 'Is it safe?', answer: 'Yes, mostly.' },
+      ],
+      categories: [],
+      tags: [],
+    };
+    const readbackOf = (
+      status: 'draft' | 'publish',
+      over: Partial<ArticleReadbackV1> = {},
+    ): ArticleReadbackV1 => ({
+      remoteId: '42',
+      remoteUrl:
+        status === 'publish'
+          ? 'https://blog.acme.example/why-ore-and-tar-last/'
+          : 'https://blog.acme.example/?p=42',
+      title: article.title,
+      slug: article.slug,
+      status,
+      modifiedAt: '2026-10-02T10:00:00.000Z',
+      contentHash: 'a'.repeat(64),
+      ...over,
+    });
+    const verified: ArticleReadbackVerificationV1 = {
+      outcome: 'verified',
+      matched: ['content', 'title', 'slug', 'status', 'modifiedAt'],
+      mismatched: [],
+      reason: null,
+      sentHash: 'b'.repeat(64),
+    };
+    const validationOf = (ok: boolean): RenderedValidationV1 => ({
+      url: 'https://blog.acme.example/why-ore-and-tar-last/',
+      fetchedAt: '2026-10-02T10:00:01.000Z',
+      status: 200,
+      bytes: 1024,
+      truncated: false,
+      ok,
+      checks: [
+        { key: 'status_ok', ok: true },
+        { key: 'title_present', ok: true },
+        { key: 'canonical_present', ok: true },
+        { key: 'indexable', ok },
+        { key: 'body_present', ok: true },
+        { key: 'canonical_matches', ok: true },
+        { key: 'last_paragraph_present', ok },
+      ],
+      error: null,
+    });
+    /** What the (stubbed) destinations module answers next; the runtime under test records it. */
+    let publishResult: DestinationPublishResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let editResult: DestinationMutationResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let unpublishResult: DestinationMutationResult = { outcome: 'rejected', code: 'unset', message: 'unset' };
+    let validateResult: RenderedValidationV1 = validationOf(true);
+    const editInputs: DestinationEditInput[] = [];
+    const validateInputs: DestinationValidateInput[] = [];
+    const stub: DestinationPublisher = {
+      describe: async (id) =>
+        id === destinationId
+          ? {
+              id,
+              brandId: brandA,
+              kind: 'cms_site',
+              displayName: 'blog.acme.example',
+              capabilityVersion: 1,
+              usable: true,
+              actions: { edit: true, delete: true, unpublish: true },
+            }
+          : null,
+      validateVariant: async () => ({ ok: true, issues: [] }),
+      useAllowed: async () => true,
+      publish: async (_input, _hooks, beforeSend) => {
+        await beforeSend?.();
+        return publishResult;
+      },
+      edit: async (input) => {
+        editInputs.push(input);
+        return editResult;
+      },
+      unpublish: async () => unpublishResult,
+      delete: async () => ({ outcome: 'done' }),
+      validateRendered: async (input) => {
+        validateInputs.push(input);
+        return validateResult;
+      },
+    };
+    const newArticleVariant = (settings: Record<string, unknown> = { publishMode: 'draft' }) => {
+      const v: ChannelVariantForPublishing = {
+        ...newVariant(tenantA, brandA, connA),
+        channelConnectionId: null,
+        destinationId,
+        text: 'Why ore and tar last',
+        settings,
+        article,
+      };
+      variantsById.set(v.id, v);
+      return v;
+    };
+    /** A destination publication taken through dispatch and publishOnce; markPublished when asked. */
+    const publishArticle = async (result: DestinationPublishResult, settings?: Record<string, unknown>) => {
+      publishResult = result;
+      const v = newArticleVariant(settings);
+      const pub = await schedule(tenantA, v.id);
+      const { attemptId } = await dispatch(pub.id);
+      const attempt = await inTenant(tenantA, () =>
+        runtime.provider.publishOnce({ ...wfInput(pub.id), attemptId, fencingToken: 1 }),
+      );
+      await inTenant(tenantA, () => runtime.control.markPublished({ ...wfInput(pub.id), attempt }));
+      return { pub, attemptId, attempt };
+    };
+    const changesOf = (publicationId: string) =>
+      tdb.db
+        .select()
+        .from(publicationRemoteChanges)
+        .where(eq(publicationRemoteChanges.publicationId, publicationId));
+    const changeInput = (publicationId: string, changeId: string) => ({
+      ...wfInput(publicationId),
+      changeId,
+      providerKey: 'cms_site',
+    });
+
+    beforeAll(async () => {
+      await tdb.db.insert(brandDestinations).values({
+        id: destinationId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'cms_site',
+        externalId: 'https://blog.acme.example',
+        displayName: 'blog.acme.example',
+        ownerUserId: USER,
+        grantedScopes: ['articles:write', 'articles:publish'],
+        health: 'healthy',
+        capabilityVersion: 1,
+      });
+      registerDestinationPublisher(stub);
+    });
+    afterAll(() => {
+      resetDestinationPublisher();
+    });
+    beforeEach(() => {
+      editInputs.length = 0;
+      validateInputs.length = 0;
+      validateResult = validationOf(true);
+    });
+
+    it('a draft write: the read-back and what it proved are evidence, the status is draft (never live), the page is not re-validated and the article cannot be reverted', async () => {
+      const { pub, attemptId } = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/?p=42',
+        readback: readbackOf('draft'),
+        readbackVerification: verified,
+        validation: validationOf(true),
+      });
+      const stored = await row(pub.id);
+      expect(stored).toMatchObject({
+        state: 'published',
+        remotePostId: '42',
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      expect(stored.remoteVerifiedAt).not.toBeNull();
+      const evidence = await evidenceOf(pub.id);
+      expect(evidence.map((e) => e.kind).sort()).toEqual([
+        'accepted_response',
+        'remote_readback',
+        'rendered_validation',
+      ]);
+      expect(evidence.find((e) => e.kind === 'remote_readback')?.payload).toMatchObject({
+        ...readbackOf('draft'),
+        attemptId,
+        verification: verified,
+      });
+      expect(await eventsOf(tenantA, 'publication.rendered_validation_due')).toEqual([]);
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto).toMatchObject({ remoteStatus: 'draft', remoteVerification: 'verified' });
+      expect(dto.remoteVerifiedAt).toBe(stored.remoteVerifiedAt?.toISOString());
+      const calendar = await inTenant(tenantA, () =>
+        publicationService.calendarRange(
+          brandA,
+          new Date(Date.now() - 86_400_000),
+          new Date(Date.now() + 86_400_000),
+        ),
+      );
+      expect(calendar.find((c) => c.publicationId === pub.id)).toMatchObject({
+        destinationId,
+        state: 'published',
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'publicationId', issue: 'not_live:draft' }] });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.renderedValidation.validateRenderedPublication({
+            ...wfInput(pub.id),
+            publishedAt: new Date().toISOString(),
+          }),
+        ),
+      ).toEqual({ outcome: 'skipped', reason: 'remote_draft' });
+    });
+
+    it('a publish mode whose read-back is not live is a draft; a read-back that could not be compared leaves the write unverified; a mismatch fails it', async () => {
+      const draftDespiteMode = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/?p=42',
+          readback: readbackOf('draft'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      expect(await row(draftDespiteMode.pub.id)).toMatchObject({
+        remoteStatus: 'draft',
+        remoteVerification: 'verified',
+      });
+      const unverified = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+        readback: readbackOf('publish'),
+        readbackVerification: {
+          outcome: 'unverified',
+          matched: [],
+          mismatched: [],
+          reason: 'read_not_allowed',
+          sentHash: 'b'.repeat(64),
+        },
+        validation: validationOf(true),
+      });
+      expect(await row(unverified.pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'unverified',
+        remoteVerifiedAt: null,
+      });
+      expect(
+        (await evidenceOf(unverified.pub.id)).find((e) => e.kind === 'remote_readback')?.payload,
+      ).toMatchObject({
+        verification: { outcome: 'unverified', reason: 'read_not_allowed' },
+      });
+      const mismatch = await publishArticle({
+        outcome: 'accepted',
+        remotePostId: '42',
+        remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+        readback: readbackOf('publish', { title: 'Why ore and tar last (filtered)' }),
+        readbackVerification: {
+          ...verified,
+          outcome: 'mismatch',
+          matched: ['content', 'slug', 'status', 'modifiedAt'],
+          mismatched: ['title'],
+        },
+        validation: validationOf(true),
+      });
+      expect(await row(mismatch.pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'failed',
+        remoteVerifiedAt: null,
+      });
+    });
+
+    it('a live write: verified when the page passes, the delayed re-validation is queued with availableAt and re-runs set the verification from each result', async () => {
+      const before = Date.now();
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      expect(await row(pub.id)).toMatchObject({ remoteStatus: 'live', remoteVerification: 'verified' });
+      const [due] = (await eventsOf(tenantA, 'publication.rendered_validation_due')).filter(
+        (e) => e.payload['publicationId'] === pub.id,
+      );
+      expect(due?.payload).toMatchObject({
+        publicationId: pub.id,
+        actorKind: 'user',
+        actorId: USER,
+        workflowId: `pub:${pub.id}:rendered-validation:${(await row(pub.id)).version}`,
+      });
+      expect(typeof due?.payload['publishedAt']).toBe('string');
+      expect(due!.availableAt.getTime()).toBeGreaterThanOrEqual(before + RENDERED_VALIDATION_DELAYS_MS[0]);
+      expect(due!.availableAt.getTime()).toBeLessThanOrEqual(Date.now() + RENDERED_VALIDATION_DELAYS_MS[0]);
+      // The re-validation: a page that changed after its first paragraph fails and the verification says so.
+      validateResult = validationOf(false);
+      const input = { ...wfInput(pub.id), publishedAt: String(due!.payload['publishedAt']) };
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({
+        outcome: 'validated',
+        ok: false,
+        verification: 'failed',
+      });
+      expect(validateInputs.at(-1)).toMatchObject({
+        destinationId,
+        url: 'https://blog.acme.example/why-ore-and-tar-last/',
+        title: article.title,
+        slug: article.slug,
+        firstParagraph: 'Ore is heavy.',
+        lastParagraph: 'Yes, mostly.',
+        draft: false, // a live article must be indexable
+      });
+      expect(await row(pub.id)).toMatchObject({ remoteVerification: 'failed', remoteVerifiedAt: null });
+      validateResult = validationOf(true);
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({
+        outcome: 'validated',
+        ok: true,
+        verification: 'verified',
+      });
+      expect((await row(pub.id)).remoteVerification).toBe('verified');
+      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(3);
+      // The on-demand validation records the same way.
+      validateResult = validationOf(false);
+      await run(tenantA, (tx) => publicationService.validateRendered(A, { publicationId: pub.id }, tx));
+      expect((await row(pub.id)).remoteVerification).toBe('failed');
+      // A foreign tenant's publication is NOT_FOUND before any page is fetched.
+      const fetches = validateInputs.length;
+      await expect(
+        inTenant(tenantB, () =>
+          runtime.renderedValidation.validateRenderedPublication({ ...input, tenantId: tenantB }),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(validateInputs.length).toBe(fetches);
+    });
+
+    it('revert: the website confirms the draft, a fresh read-back is recorded, the status is reverted and a second revert is refused', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const revert = await run(tenantA, (tx) =>
+        publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'wrong launch date' }, tx),
+      );
+      unpublishResult = {
+        outcome: 'done',
+        readback: readbackOf('draft', { modifiedAt: '2026-10-02T11:00:00.000Z' }),
+      };
+      const input = changeInput(pub.id, revert.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A));
+      expect(result).toMatchObject({ outcome: 'done', readback: { status: 'draft' } });
+      if (result.outcome !== 'done') throw new Error('expected done');
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'published', changed: true });
+      expect(await row(pub.id)).toMatchObject({ state: 'published', remoteStatus: 'reverted' });
+      const readbacks = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback');
+      expect(readbacks).toHaveLength(2);
+      expect(readbacks.at(-1)?.payload).toMatchObject({
+        status: 'draft',
+        changeId: revert.changeId,
+        modifiedAt: '2026-10-02T11:00:00.000Z',
+      });
+      expect((await evidenceOf(pub.id)).find((e) => e.kind === 'remote_unpublish')?.payload).toMatchObject({
+        changeId: revert.changeId,
+        readback: { status: 'draft' },
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'again' }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ path: 'publicationId', issue: 'not_live:reverted' }] });
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.renderedValidation.validateRenderedPublication({
+            ...wfInput(pub.id),
+            publishedAt: new Date().toISOString(),
+          }),
+        ),
+      ).toEqual({ outcome: 'skipped', reason: 'remote_reverted' });
+      const calendar = await inTenant(tenantA, () =>
+        publicationService.calendarRange(
+          brandA,
+          new Date(Date.now() - 86_400_000),
+          new Date(Date.now() + 86_400_000),
+        ),
+      );
+      expect(calendar.find((c) => c.publicationId === pub.id)?.remoteStatus).toBe('reverted');
+    });
+
+    it('revert (RA-02): when the site confirms the write but the article still reads back live, the status stays live and the mismatch is recorded', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const revert = await run(tenantA, (tx) =>
+        publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'still live?' }, tx),
+      );
+      unpublishResult = {
+        outcome: 'done',
+        readback: readbackOf('publish', { modifiedAt: '2026-10-02T11:30:00.000Z' }),
+        readbackVerification: {
+          outcome: 'mismatch',
+          matched: ['modifiedAt'],
+          mismatched: ['status'],
+          reason: null,
+          sentHash: 'b'.repeat(64),
+        },
+      };
+      const input = changeInput(pub.id, revert.changeId);
+      const result = await inTenant(tenantA, () => runtime.remoteChangeProvider.deleteRemotePost(input, A));
+      if (result.outcome !== 'done') throw new Error('expected done');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+      );
+      expect(await row(pub.id)).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'failed',
+        remoteVerifiedAt: null,
+      });
+      const latest = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(latest?.payload).toMatchObject({
+        status: 'publish',
+        changeId: revert.changeId,
+        verification: { outcome: 'mismatch', mismatched: ['status'] },
+      });
+      expect((await changesOf(pub.id)).find((c) => c.id === revert.changeId)?.state).toBe('succeeded');
+      // Still live: another revert may be asked for.
+      await expect(
+        run(tenantA, (tx) =>
+          publicationService.unpublishRemote(A, { publicationId: pub.id, reason: 'again' }, tx),
+        ),
+      ).resolves.toMatchObject({ accepted: true });
+    });
+
+    it('edit (RA-12): the stored hash and modified instant are the precondition; a conflict refreshes the read-back; a write that replaced a site change is succeeded as conflict_overwritten with the lost revision as evidence', async () => {
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish'),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      // 1. A conflict: nothing written; the current remote travels back and becomes the stored read-back.
+      const first = await run(tenantA, (tx) =>
+        publicationService.editRemote(
+          A,
+          { publicationId: pub.id, text: '<p>Ore is heavy and tar is sticky.</p>' },
+          tx,
+        ),
+      );
+      const current = readbackOf('publish', {
+        contentHash: 'c'.repeat(64),
+        modifiedAt: '2026-10-02T12:00:00.000Z',
+      });
+      editResult = {
+        outcome: 'rejected',
+        code: 'conflict',
+        message: 'the article changed on the site',
+        readback: current,
+      };
+      const conflictInput = changeInput(pub.id, first.changeId);
+      const conflict = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(conflictInput, A),
+      );
+      expect(conflict).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(editInputs.at(-1)).toMatchObject({
+        destinationId,
+        remoteId: '42',
+        expectedHash: 'a'.repeat(64),
+        expectedModifiedAt: '2026-10-02T10:00:00.000Z',
+        html: '<p>Ore is heavy and tar is sticky.</p>',
+      });
+      if (conflict.outcome === 'skipped') throw new Error('unexpected skip');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...conflictInput, result: conflict }),
+      );
+      expect((await changesOf(pub.id)).find((c) => c.id === first.changeId)).toMatchObject({
+        state: 'failed',
+        errorCode: 'conflict',
+      });
+      const refreshed = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(refreshed?.payload).toMatchObject({
+        ...current,
+        changeId: first.changeId,
+        refreshedAfter: 'conflict',
+      });
+      // 2. The next edit compares against what the site holds now, not the stale hash.
+      const second = await run(tenantA, (tx) =>
+        publicationService.editRemote(
+          A,
+          { publicationId: pub.id, text: '<p>Written over the window.</p>' },
+          tx,
+        ),
+      );
+      const previous = current;
+      const replaced = readbackOf('publish', {
+        contentHash: 'd'.repeat(64),
+        modifiedAt: '2026-10-02T12:30:00.000Z',
+      });
+      const after = readbackOf('publish', {
+        contentHash: 'e'.repeat(64),
+        modifiedAt: '2026-10-02T13:00:00.000Z',
+      });
+      editResult = {
+        outcome: 'done',
+        readback: after,
+        readbackVerification: { ...verified, matched: ['content', 'modifiedAt'] },
+        overwritten: { previous, replaced },
+      };
+      const writeInput = changeInput(pub.id, second.changeId);
+      const written = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(writeInput, A),
+      );
+      expect(editInputs.at(-1)).toMatchObject({
+        expectedHash: 'c'.repeat(64),
+        expectedModifiedAt: '2026-10-02T12:00:00.000Z',
+      });
+      if (written.outcome === 'skipped') throw new Error('unexpected skip');
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...writeInput, result: written }),
+        ),
+      ).toEqual({ state: 'succeeded', publicationState: 'published', changed: true });
+      const change = (await changesOf(pub.id)).find((c) => c.id === second.changeId);
+      expect(change).toMatchObject({ state: 'succeeded', errorCode: 'conflict_overwritten' });
+      expect(change?.errorDetail).toContain('replaced a change made on the site');
+      expect((await evidenceOf(pub.id)).find((e) => e.kind === 'remote_edit')?.payload).toMatchObject({
+        changeId: second.changeId,
+        readback: after,
+        overwritten: { previous, replaced },
+      });
+      expect(
+        (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1)?.payload,
+      ).toMatchObject({
+        contentHash: 'e'.repeat(64),
+        changeId: second.changeId,
+      });
+      // RA-04: the read-back proved the article, not the page: unverified until the queued page check runs.
+      const edited = await row(pub.id);
+      expect(edited).toMatchObject({
+        remoteStatus: 'live',
+        remoteVerification: 'unverified',
+        remoteVerifiedAt: null,
+      });
+      const queued = (await eventsOf(tenantA, 'publication.rendered_validation_due')).filter(
+        (e) => e.payload['publicationId'] === pub.id,
+      );
+      expect(queued).toHaveLength(2); // one at publish, one for the edit
+      expect(queued.at(-1)?.payload['workflowId']).toBe(
+        `pub:${pub.id}:rendered-validation:${edited.version}`,
+      );
+      expect(queued.at(-1)!.availableAt.getTime()).toBeGreaterThan(
+        Date.now() + RENDERED_VALIDATION_DELAYS_MS[0] - 60_000,
+      );
+      const dto = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(dto.remote.changes[0]).toMatchObject({
+        id: second.changeId,
+        state: 'succeeded',
+        errorCode: 'conflict_overwritten',
+      });
+      expect(dto.remote.currentText).toBe('<p>Written over the window.</p>');
+    });
+  });
+
   describe('disconnect, token refresh and the sweeper (spec 14.7, 14.2)', () => {
     it('disconnect destroys the credential (data key gone), disables the connection and holds its scheduled publications', async () => {
       fixture.grant.remoteAccountId = 'acct_A_second';
@@ -2090,18 +2693,30 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       const v = newVariant(tenantA, brandA, conn2.id);
       const pub = await schedule(tenantA, v.id, new Date(Date.now() + 3600_000));
       const before = await connectionRow(conn2.id);
+      const revokeAccess = fixture.revokeAccess;
+      fixture.revokeAccess = undefined; // RA-01: an adapter without a remote revoke shreds the credential here
       const res = await run(tenantA, (tx) =>
         channelService.disconnect(A, { channelConnectionId: conn2.id, expectedVersion: before.version }, tx),
       );
+      fixture.revokeAccess = revokeAccess;
       expect(res.status).toBe('disabled');
+      expect(res.remoteRevoke).toBe('not_supported');
       expect(res.heldPublicationIds).toEqual([pub.id]);
       expect(await row(pub.id)).toMatchObject({ state: 'held', holdReasons: ['channel_active'] });
       const cred = await credentialRow(before.credentialRefId);
       expect(cred.destroyedAt).not.toBeNull();
       expect(cred.ciphertext).toBe('');
       expect(cred.wrappedDataKey).toBe('');
+      // RA-01: a disconnected channel is refused before its (shredded) credential is even read.
       await expect(
         inTenant(tenantA, () => credentialBroker.withCredentials(tenantA, conn2.id, async () => 'x')),
+      ).rejects.toMatchObject({ reason: 'credential_owner_disconnected' });
+      await expect(
+        inTenant(tenantA, () =>
+          credentialBroker.withCredentials(tenantA, conn2.id, async () => 'x', undefined, {
+            purpose: 'revoke',
+          }),
+        ),
       ).rejects.toMatchObject({ reason: 'credential_destroyed' });
       expect(await inTenant(tenantA, () => channelService.channelUsable(conn2.id))).toBe(false);
       expect(
@@ -2116,6 +2731,271 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect(again.id).toBe(conn2.id);
       expect(again.status).toBe('active');
       expect((await connectionRow(conn2.id)).credentialRefId).not.toBe(before.credentialRefId);
+    });
+
+    it('RA-01: a disconnect whose adapter can revoke remotely leaves the credential to the worker, which revokes it at the platform, records the outcome and destroys it', async () => {
+      fixture.grant.remoteAccountId = 'acct_A_revoke';
+      const conn = await connect(tenantA, brandA);
+      fixture.grant.remoteAccountId = 'acct_A';
+      const before = await connectionRow(conn.id);
+      const res = await run(tenantA, (tx) =>
+        channelService.disconnect(A, { channelConnectionId: conn.id, expectedVersion: before.version }, tx),
+      );
+      expect(res).toMatchObject({ status: 'disabled', remoteRevoke: 'requested' });
+      // The API cannot open the credential: it stays intact, disabled with the connection, for the worker.
+      expect((await credentialRow(before.credentialRefId)).destroyedAt).toBeNull();
+      const event = (await eventsOf(tenantA, 'channel.disconnected')).find(
+        (e) => e.payload['channelConnectionId'] === conn.id,
+      );
+      expect(event?.payload).toMatchObject({ remoteRevoke: 'requested', actorKind: 'user', actorId: USER });
+      const disconnectAudit = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.disconnect')))
+      ).find((e) => e.resourceId === conn.id);
+      expect(disconnectAudit?.metadata).toMatchObject({ remoteRevoke: 'requested' });
+      // channelRevokeWorkflowV1's activity: the platform revokes, the outcome is audited, the row is shredded.
+      const input = {
+        tenantId: tenantA,
+        actor: { kind: 'user' as const, id: USER },
+        correlationId: 'c',
+        channelConnectionId: conn.id,
+      };
+      expect(await inTenant(tenantA, () => runtime.channelRevoke.revokeChannelAccess(input))).toEqual({
+        outcome: 'revoked',
+      });
+      expect(fixture.calls.at(-1)).toBe('revokeAccess:rt_fixture_secret');
+      const cred = await credentialRow(before.credentialRefId);
+      expect(cred.destroyedAt).not.toBeNull();
+      expect(cred.ciphertext).toBe('');
+      expect((await connectionRow(conn.id)).health).toBe('revoked');
+      const revokeAudit = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+      ).find((e) => e.resourceId === conn.id);
+      expect(revokeAudit).toMatchObject({
+        decision: 'allowed',
+        metadata: { remoteRevoke: 'revoked', channelConnectionId: conn.id },
+      });
+      // A repeat (the activity retried, the event replayed) has nothing left to do and opens nothing.
+      const calls = fixture.calls.length;
+      expect(await inTenant(tenantA, () => runtime.channelRevoke.revokeChannelAccess(input))).toEqual({
+        outcome: 'already_destroyed',
+      });
+      expect(fixture.calls.length).toBe(calls);
+      // A refused remote revoke never keeps the token: the credential is destroyed and the refusal audited.
+      fixture.grant.remoteAccountId = 'acct_A_revoke_fails';
+      const failing = await connect(tenantA, brandA);
+      fixture.grant.remoteAccountId = 'acct_A';
+      const failingBefore = await connectionRow(failing.id);
+      await run(tenantA, (tx) =>
+        channelService.disconnect(
+          A,
+          { channelConnectionId: failing.id, expectedVersion: failingBefore.version },
+          tx,
+        ),
+      );
+      fixture.revokeBehaviour = { outcome: 'failed', reason: 'http_500:platform down' };
+      expect(
+        await inTenant(tenantA, () =>
+          runtime.channelRevoke.revokeChannelAccess({ ...input, channelConnectionId: failing.id }),
+        ),
+      ).toEqual({ outcome: 'failed', reason: 'http_500:platform down' });
+      fixture.revokeBehaviour = { outcome: 'revoked' };
+      expect((await credentialRow(failingBefore.credentialRefId)).destroyedAt).not.toBeNull();
+      const failedAudit = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+      ).find((e) => e.resourceId === failing.id);
+      // The activity result carries the adapter's reason; the audit trail only a code (`http_<status>`, a
+      // transport phase), never a platform's text.
+      expect(failedAudit).toMatchObject({
+        decision: 'denied',
+        metadata: { remoteRevoke: 'failed', reason: 'provider_error' },
+      });
+      await expect(
+        inTenant(tenantA, () =>
+          credentialBroker.withCredentials(tenantA, failing.id, async () => 'x', undefined, {
+            purpose: 'revoke',
+          }),
+        ),
+      ).rejects.toMatchObject({ reason: 'credential_destroyed' });
+      fixture.revokedTokens.clear(); // the fixture's grant is shared by every connection of these tests
+    });
+
+    it('RA-01: a disconnected channel’s credential is unusable at once (only the revoke may open it) and the sweeper shreds it an hour later if the remote revoke never ran', async () => {
+      fixture.grant.remoteAccountId = 'acct_A_floor';
+      const conn = await connect(tenantA, brandA);
+      fixture.grant.remoteAccountId = 'acct_A';
+      const before = await connectionRow(conn.id);
+      await run(tenantA, (tx) =>
+        channelService.disconnect(A, { channelConnectionId: conn.id, expectedVersion: before.version }, tx),
+      );
+      expect((await credentialRow(before.credentialRefId)).destroyedAt).toBeNull();
+      // Every ordinary opener is refused from the disconnect on; the revoke says what it is for.
+      await expect(
+        inTenant(tenantA, () => credentialBroker.withCredentials(tenantA, conn.id, async () => 'x')),
+      ).rejects.toMatchObject({ reason: 'credential_owner_disconnected' });
+      expect(
+        await inTenant(tenantA, () =>
+          credentialBroker.withCredentials(tenantA, conn.id, async () => 'opened', undefined, {
+            purpose: 'revoke',
+          }),
+        ),
+      ).toBe('opened');
+      const sweepInput = {
+        correlationId: 'sweep',
+        now: new Date().toISOString(),
+        claimLeaseSeconds: 20 * 60,
+        graceSeconds: 60,
+      };
+      // Within the hour the sweeper leaves it to the workflow.
+      expect((await runtime.sweep.sweepPublications(sweepInput)).credentialsShredded).toBe(0);
+      await tdb.db
+        .update(channelConnections)
+        .set({ updatedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(eq(channelConnections.id, conn.id));
+      expect((await runtime.sweep.sweepPublications(sweepInput)).credentialsShredded).toBe(1);
+      const cred = await credentialRow(before.credentialRefId);
+      expect(cred.destroyedAt).not.toBeNull();
+      expect(cred.ciphertext).toBe('');
+      const shredAudit = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(
+            and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.credential_shredded')),
+          )
+      ).find((e) => e.resourceId === conn.id);
+      expect(shredAudit?.metadata).toMatchObject({
+        reason: 'disconnect_shred_floor',
+        channelConnectionId: conn.id,
+      });
+      // Nothing left for the revoke, and a second sweep finds nothing.
+      const input = {
+        tenantId: tenantA,
+        actor: { kind: 'user' as const, id: USER },
+        correlationId: 'c',
+        channelConnectionId: conn.id,
+      };
+      expect(await inTenant(tenantA, () => runtime.channelRevoke.revokeChannelAccess(input))).toEqual({
+        outcome: 'already_destroyed',
+      });
+      expect((await runtime.sweep.sweepPublications(sweepInput)).credentialsShredded).toBe(0);
+    });
+
+    it('RA-01: a reconnect between the revoke’s read and its destroy keeps the new credential (status re-checked under the lock)', async () => {
+      fixture.grant.remoteAccountId = 'acct_A_race';
+      const conn = await connect(tenantA, brandA);
+      const before = await connectionRow(conn.id);
+      await run(tenantA, (tx) =>
+        channelService.disconnect(A, { channelConnectionId: conn.id, expectedVersion: before.version }, tx),
+      );
+      const revokeAudits = (
+        await tdb.db
+          .select()
+          .from(auditEvents)
+          .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+      ).length;
+      // The platform call takes long enough for a person to reconnect the same account: the row is active again
+      // with a new credential (the old one rotated away) by the time the revoke's transaction opens.
+      const revokeAccess = fixture.revokeAccess;
+      fixture.revokeAccess = async (creds) => {
+        await connect(tenantA, brandA);
+        return revokeAccess!.call(fixture, creds);
+      };
+      try {
+        expect(
+          await inTenant(tenantA, () =>
+            runtime.channelRevoke.revokeChannelAccess({
+              tenantId: tenantA,
+              actor: { kind: 'user' as const, id: USER },
+              correlationId: 'c',
+              channelConnectionId: conn.id,
+            }),
+          ),
+        ).toEqual({ outcome: 'already_destroyed' });
+      } finally {
+        fixture.revokeAccess = revokeAccess;
+        fixture.grant.remoteAccountId = 'acct_A';
+        fixture.revokedTokens.clear();
+      }
+      const after = await connectionRow(conn.id);
+      expect(after.status).toBe('active');
+      expect(after.credentialRefId).not.toBe(before.credentialRefId);
+      expect((await credentialRow(after.credentialRefId)).destroyedAt).toBeNull();
+      expect((await credentialRow(before.credentialRefId)).rotatedAt).not.toBeNull(); // the reconnect rotated it
+      expect(
+        (
+          await tdb.db
+            .select()
+            .from(auditEvents)
+            .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'channel.remote_revoke')))
+        ).length,
+      ).toBe(revokeAudits); // nothing recorded for a row that is no longer disconnected
+      expect(
+        await inTenant(tenantA, () => credentialBroker.withCredentials(tenantA, conn.id, async () => 'x')),
+      ).toBe('x');
+    });
+
+    it('RA-01: channel health is written only for an active or refresh_needed row, and never by a stamp older than the last check', async () => {
+      fixture.grant.remoteAccountId = 'acct_A_health';
+      const conn = await connect(tenantA, brandA);
+      fixture.grant.remoteAccountId = 'acct_A';
+      const now = new Date();
+      await inTenant(tenantA, () => channelHealth.record(conn.id, 'token_expired', now));
+      expect((await connectionRow(conn.id)).health).toBe('token_expired');
+      // A slow pull that started before the newer stamp cannot overwrite it with a stale ok.
+      await inTenant(tenantA, () => channelHealth.record(conn.id, 'ok', new Date(now.getTime() - 60_000)));
+      expect((await connectionRow(conn.id)).health).toBe('token_expired');
+      await inTenant(tenantA, () => channelHealth.record(conn.id, 'ok', new Date(now.getTime() + 60_000)));
+      expect((await connectionRow(conn.id)).health).toBe('ok');
+      // The refresh workflow's revoked (reconnect_needed) stands until a person reconnects: a read cannot flip it.
+      await tdb.db
+        .update(channelConnections)
+        .set({ status: 'reconnect_needed', health: 'revoked', healthCheckedAt: now })
+        .where(eq(channelConnections.id, conn.id));
+      await inTenant(tenantA, () => channelHealth.record(conn.id, 'ok', new Date(now.getTime() + 120_000)));
+      expect(await connectionRow(conn.id)).toMatchObject({ status: 'reconnect_needed', health: 'revoked' });
+      await tdb.db
+        .update(channelConnections)
+        .set({ status: 'refresh_needed' })
+        .where(eq(channelConnections.id, conn.id));
+      await inTenant(tenantA, () => channelHealth.record(conn.id, 'ok', new Date(now.getTime() + 180_000)));
+      expect((await connectionRow(conn.id)).health).toBe('ok');
+    });
+
+    it('RA-01: connect.start refuses a certified provider this environment disabled, or whose app credentials are not set, with the reason the providers listing shows', async () => {
+      const start = () =>
+        run(tenantA, (tx) =>
+          channelService.connect.start(
+            A,
+            { brandId: brandA, providerKey: FIXTURE_PROVIDER_KEY, redirectUri: 'https://app.example/cb' },
+            tx,
+          ),
+        );
+      configureChannelActivation(() => ({ disabled: true, credentialRefs: [] }));
+      await expect(start()).rejects.toMatchObject({
+        code: 'CAPABILITY_UNSUPPORTED',
+        details: [{ path: 'providerKey', issue: `provider_disabled:${FIXTURE_PROVIDER_KEY}` }],
+      });
+      configureChannelActivation(() => ({
+        disabled: false,
+        credentialRefs: [
+          { name: 'PROVIDER_FIXTURE_PROVIDER_CLIENT_ID_REF', present: true },
+          { name: 'PROVIDER_FIXTURE_PROVIDER_SECRET_REF', present: false },
+        ],
+      }));
+      await expect(start()).rejects.toMatchObject({
+        details: [{ path: 'providerKey', issue: 'credentials_missing:PROVIDER_FIXTURE_PROVIDER_SECRET_REF' }],
+      });
+      configureChannelActivation(null);
+      expect((await start()).url).toContain('https://fixture.example/oauth');
     });
 
     it('a transient refresh failure is logged by error name and code only: never a message that can carry a secret URL', async () => {
@@ -2186,6 +3066,8 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect(res).toMatchObject({ ok: true });
       const after = await connectionRow(connA);
       expect(after.credentialRefId).not.toBe(before.credentialRefId);
+      expect(after.health).toBe('ok'); // RA-01: a refresh that went through is the health check
+      expect(after.healthCheckedAt).not.toBeNull();
       expect((await credentialRow(before.credentialRefId)).rotatedAt).not.toBeNull();
       expect((await credentialRow(before.credentialRefId)).ciphertext).toBe('');
       expect(
@@ -2206,6 +3088,7 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         reason: 'reconnect_required',
       });
       expect((await connectionRow(connA)).status).toBe('reconnect_needed');
+      expect((await connectionRow(connA)).health).toBe('revoked'); // RA-01: a grant refused for good
       expect(
         (await eventsOf(tenantA, 'channel.reconnect_needed')).some(
           (e) => e.payload['channelConnectionId'] === connA,
@@ -2242,7 +3125,7 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         graceSeconds: 60,
       };
       const summary = await runtime.sweep.sweepPublications(sweepInput);
-      expect(summary).toEqual({ scheduledReemitted: 1, dispatchingExpired: 1 });
+      expect(summary).toEqual({ scheduledReemitted: 1, dispatchingExpired: 1, credentialsShredded: 0 });
       expect(
         (await eventsOf(tenantA, 'publication.scheduled')).filter(
           (e) => e.payload['publicationId'] === overdue.id,

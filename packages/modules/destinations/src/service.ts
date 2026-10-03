@@ -34,6 +34,7 @@ import {
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
+import type { DecryptedCredentials, RemoteRevokeOutcome } from '@oremedia/contracts/providers';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
@@ -42,10 +43,12 @@ import { audit, outbox } from '@oremedia/module-operations';
 import {
   CONNECT_STATE_TTL_MS,
   MemoryConnectStateStore,
+  aadFor,
   connectCallbackUriInUse,
   credentialBroker,
   providerClientFor,
   type ConnectStateStore,
+  type CredentialOpenOptions,
   type EnvelopeRow,
 } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
@@ -133,6 +136,29 @@ export function enabledCmsAdapter(kind: DestinationKind): CmsAdapter {
   if (!sourceAvailable(kind))
     throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
   return adapter;
+}
+
+/**
+ * RA-01: the one way the module opens a destination's sealed credential. A disconnected destination's credential is
+ * unusable from the moment of the disconnect: only the remote revoke (destinationRevokeWorkflowV1, which destroys
+ * it right after) may open it, by saying so; every other caller is refused with `credential_owner_disconnected`,
+ * the same rule the broker applies to a disconnected channel.
+ */
+export async function openDestinationCredential<T>(
+  tenantId: string,
+  row: Pick<DestinationRow, 'id' | 'status' | 'credentialRefId'> & { credentialRefId: string },
+  fn: (credentials: DecryptedCredentials) => Promise<T>,
+  opts: CredentialOpenOptions = {},
+): Promise<T> {
+  if (row.status === 'disconnected' && opts.purpose !== 'revoke')
+    throw new PolicyDeniedError(
+      'credential_owner_disconnected',
+      'The destination is disconnected; its credential is no longer usable',
+    );
+  return credentialBroker.withCredentialRef(
+    { tenantId, credentialRefId: row.credentialRefId, aad: aadFor(tenantId, row.id) },
+    fn,
+  );
 }
 
 /** Whether a CMS kind can be written to here: registered, certified and enabled (the gate reads false, never throws). */
@@ -284,6 +310,8 @@ const toDestinationDto = (d: DestinationRow): DestinationV1 => ({
   healthCheckedAt: d.healthCheckedAt ? d.healthCheckedAt.toISOString() : null,
   capabilityVersion: d.capabilityVersion,
   status: d.status,
+  reportingTimeZone: d.reportingTimeZone,
+  currencyCode: d.currencyCode,
   version: d.version,
   createdAt: d.createdAt.toISOString(),
   updatedAt: d.updatedAt.toISOString(),
@@ -603,7 +631,8 @@ export const destinationService = {
 
   /**
    * R2-3: a description for the content module's destination resolver (spec 4.2: never the row); null for a
-   * foreign or unknown id. `writable` says whether the kind can be published to on this deployment.
+   * foreign or unknown id. `writable` says whether the kind can be published to on this deployment; the name, the
+   * remote identity (a website's origin) and the granted scopes are what a frozen manifest shows (RA-09).
    */
   async describe(destinationId: string, tx?: Tx) {
     const row = await destinationsRepo.findById(destinationId, tx);
@@ -615,6 +644,10 @@ export const destinationService = {
       writable:
         DESTINATION_KIND_CAPABILITIES[StoredKind.parse(row.kind)].uses.includes('write') &&
         cmsWritable(row.kind),
+      // RA-09: what a review manifest names for a website target and the grant its publish mode depends on.
+      displayName: row.displayName,
+      externalId: row.externalId,
+      grantedScopes: [...row.grantedScopes],
     };
   },
 
@@ -667,9 +700,24 @@ export const destinationService = {
       );
     if (row.version !== parsed.expectedVersion)
       throw new ConflictError('Destination', row.id, parsed.expectedVersion);
-    await destinationsRepo.update(row.id, row.version, { status: 'disconnected', tokenExpiresAt: null }, tx);
-    // As channels on disconnect: the credential row is destroyed (data key discarded) with the destination.
-    if (row.credentialRefId)
+    // RA-01, as channels on disconnect: where the kind's adapter can revoke the grant remotely the credential is
+    // left (unusable from here on: openDestinationCredential refuses it) to destinationRevokeWorkflowV1, which
+    // revokes it at the platform and destroys it; otherwise the row is destroyed here (data key discarded) and
+    // the destination stops pointing at it (the sweeper's floor visits only a disconnected row with a credential).
+    const adapter = cmsRegistryInUse().lookup(row.kind) ?? registry().lookup(row.kind);
+    const remoteRevoke: RemoteRevokeOutcome =
+      row.credentialRefId && adapter?.revokeAccess ? 'requested' : 'not_supported';
+    await destinationsRepo.update(
+      row.id,
+      row.version,
+      {
+        status: 'disconnected',
+        tokenExpiresAt: null,
+        ...(remoteRevoke === 'not_supported' ? { credentialRefId: null } : {}),
+      },
+      tx,
+    );
+    if (row.credentialRefId && remoteRevoke === 'not_supported')
       await credentialBroker.destroyCredentialRef(row.credentialRefId, 'disconnected', tx);
     await audit.record(
       actorRef(actor),
@@ -677,16 +725,16 @@ export const destinationService = {
       { type: 'brand_destination', id: row.id },
       'allowed',
       tx,
-      { brandId: row.brandId, fromState: row.status, toState: 'disconnected' },
+      { brandId: row.brandId, fromState: row.status, toState: 'disconnected', remoteRevoke },
     );
     await outbox.add(
       'destination.disconnected',
       { type: 'brand_destination', id: row.id, version: row.version + 1 },
-      { destinationId: row.id, kind: row.kind, actorKind: actor.kind, actorId: actor.id },
+      { destinationId: row.id, kind: row.kind, actorKind: actor.kind, actorId: actor.id, remoteRevoke },
       tx,
       { brandId: row.brandId },
     );
-    return toDestinationDto(await destinationsRepo.getById(row.id, tx));
+    return { ...toDestinationDto(await destinationsRepo.getById(row.id, tx)), remoteRevoke };
   },
 };
 

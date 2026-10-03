@@ -25,7 +25,12 @@ import {
   type PublicationForRelease,
   type PublicationState,
 } from '@oremedia/contracts/publishing';
-import { articleFirstParagraph, renderedValidationOk } from '@oremedia/contracts/article';
+import {
+  articleFirstParagraph,
+  articleLastParagraph,
+  renderedValidationOk,
+  type RenderedValidationV1,
+} from '@oremedia/contracts/article';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
@@ -61,8 +66,8 @@ import {
   RemoteEvidenceRepository,
 } from './repositories';
 
-/** A window's bound (UX-14): the calendar pages by day and the rollups cap their own subjects at 200. */
-const CALENDAR_RANGE_MAX = 1000;
+/** A window's bound (UX-14): the calendar pages by day; the rollups read the window whole (calendarRangeAll). */
+export const CALENDAR_RANGE_MAX = 1000;
 const publicationsRepo = new PublicationRepository();
 const attemptsRepo = new PublicationAttemptRepository();
 const evidenceRepo = new RemoteEvidenceRepository();
@@ -378,6 +383,78 @@ async function requestRemoval(
   );
   return { accepted: true, publicationId: row.id, remotePostId, changeId };
 }
+
+/**
+ * R2-3 / RA-04: the published page fetched again without a credential and checked against the article (title,
+ * slug, canonical, first and last paragraph; indexable when the article is live). The caller records the result.
+ */
+export async function fetchRenderedValidation(row: PublicationRow, tx?: Tx): Promise<RenderedValidationV1> {
+  if (!row.destinationId || row.state !== 'published' || !row.remoteUrl)
+    throw new ValidationFailedError(
+      [{ path: 'publicationId', issue: 'not_a_published_article' }],
+      'Only a published article with a page address can be validated',
+    );
+  const variant = await variants.get(row.channelVariantId, tx);
+  if (!variant.article)
+    throw new ValidationFailedError([{ path: 'publicationId', issue: 'article_missing' }]);
+  return destinations.validateRendered({
+    tenantId: row.tenantId,
+    destinationId: row.destinationId,
+    url: row.remoteUrl,
+    title: variant.article.title,
+    slug: variant.article.slug,
+    firstParagraph: articleFirstParagraph(variant.article),
+    lastParagraph: articleLastParagraph(variant.article),
+    // A draft (or a reverted article) is expected to be hidden; only a live page must be indexable (RA-02). A row
+    // published before the status column existed (null) is read from its latest read-back, never assumed a draft.
+    draft: row.remoteStatus ? row.remoteStatus !== 'live' : await readbackSaysDraft(row.id, tx),
+  });
+}
+
+const readbackSaysDraft = async (publicationId: string, tx?: Tx): Promise<boolean> =>
+  (await evidenceRepo.latestOfKind(publicationId, 'remote_readback', tx))?.payload['status'] !== 'publish';
+
+/**
+ * Records what the page showed as insert-only `rendered_validation` evidence and sets the publication's
+ * verification from it: `verified` with the instant when every check passed, `failed` otherwise (RA-04). The
+ * caller holds the row lock.
+ */
+export async function recordRenderedValidation(
+  row: PublicationRow,
+  result: RenderedValidationV1,
+  tx: Tx,
+): Promise<void> {
+  const at = new Date();
+  const payload = { ...result, checks: result.checks };
+  await evidenceRepo.create(
+    {
+      id: newId('remoteEvidence'),
+      publicationId: row.id,
+      attemptId: null,
+      kind: 'rendered_validation',
+      remotePostId: row.remotePostId,
+      remoteUrl: row.remoteUrl,
+      payload,
+      payloadHash: hashCanonical(payload),
+      capturedAt: at,
+    },
+    tx,
+  );
+  const ok = renderedValidationOk(result.checks);
+  await publicationsRepo.update(
+    row.id,
+    row.version,
+    { remoteVerification: ok ? 'verified' : 'failed', remoteVerifiedAt: ok ? at : null },
+    tx,
+  );
+}
+
+/** The failed check keys as the audit reason, or null when every check passed. */
+export const failedChecksReason = (result: RenderedValidationV1): string | null =>
+  result.checks
+    .filter((c) => !c.ok)
+    .map((c) => c.key)
+    .join(',') || null;
 
 export const publicationService = {
   /**
@@ -1011,6 +1088,12 @@ export const publicationService = {
     const cmd = PublicationUnpublishRemote.parse(input);
     const row = await publicationsRepo.lock(cmd.publicationId, tx);
     await policy.assert(actor, 'publication.delete_remote', publicationResource(row), {}, tx);
+    // RA-02: only a live article is reverted; a draft, or one reverted already, has nothing to set back.
+    if (row.remoteStatus !== 'live')
+      throw new ValidationFailedError(
+        [{ path: 'publicationId', issue: `not_live:${row.remoteStatus ?? 'unknown'}` }],
+        'Only a live article can be reverted to a draft',
+      );
     return requestRemoval(actor, row, 'unpublish', cmd.reason, tx);
   },
 
@@ -1022,39 +1105,11 @@ export const publicationService = {
     const parsed = PublicationValidateRendered.parse(input);
     const row = await publicationsRepo.getById(parsed.publicationId, tx);
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
-    if (!row.destinationId || row.state !== 'published' || !row.remoteUrl)
-      throw new ValidationFailedError(
-        [{ path: 'publicationId', issue: 'not_a_published_article' }],
-        'Only a published article with a page address can be validated',
-      );
-    const variant = await variants.get(row.channelVariantId, tx);
-    if (!variant.article)
-      throw new ValidationFailedError([{ path: 'publicationId', issue: 'article_missing' }]);
-    const readback = await evidenceRepo.latestOfKind(row.id, 'remote_readback', tx);
-    const draft = readback ? readback.payload['status'] !== 'publish' : true;
-    const result = await destinations.validateRendered({
-      tenantId: row.tenantId,
-      destinationId: row.destinationId,
-      url: row.remoteUrl,
-      title: variant.article.title,
-      firstParagraph: articleFirstParagraph(variant.article),
-      draft,
-    });
-    const payload = { ...result, checks: result.checks };
-    await evidenceRepo.create(
-      {
-        id: newId('remoteEvidence'),
-        publicationId: row.id,
-        attemptId: null,
-        kind: 'rendered_validation',
-        remotePostId: row.remotePostId,
-        remoteUrl: row.remoteUrl,
-        payload,
-        payloadHash: hashCanonical(payload),
-        capturedAt: new Date(),
-      },
-      tx,
-    );
+    // The public fetch runs before the row lock is taken (as the delayed workflow's activity does), so a slow
+    // page never holds the row for other commands.
+    const result = await fetchRenderedValidation(row, tx);
+    const locked = await publicationsRepo.lock(row.id, tx);
+    await recordRenderedValidation(locked, result, tx);
     await audit.record(
       actorRef(actor),
       'publication.validate_rendered',
@@ -1065,11 +1120,7 @@ export const publicationService = {
         brandId: row.brandId,
         publicationId: row.id,
         destinationId: row.destinationId,
-        reason:
-          result.checks
-            .filter((c) => !c.ok)
-            .map((c) => c.key)
-            .join(',') || null,
+        reason: failedChecksReason(result),
       },
     );
     return result;
@@ -1172,16 +1223,44 @@ export const publicationService = {
    * first, the window applied in the query so an old window is read as it was (never the newest rows filtered).
    */
   async calendarRange(brandId: string, from: Date, to: Date, tx?: Tx) {
-    const rows = await publicationsRepo.listScheduledBetween(brandId, from, to, CALENDAR_RANGE_MAX, tx);
-    return rows.map((p) => ({
-      publicationId: p.id,
-      contentPackageId: p.contentPackageId,
-      contentRevisionId: p.contentRevisionId,
-      channelVariantId: p.channelVariantId,
-      channelConnectionId: p.channelConnectionId,
-      destinationId: p.destinationId,
-      scheduledFor: p.scheduledFor.toISOString(),
-      state: p.state,
-    }));
+    return toCalendar(await publicationsRepo.listScheduledBetween(brandId, from, to, CALENDAR_RANGE_MAX, tx));
+  },
+
+  /**
+   * Every publication of the window, newest first, read page by page to the end (the measurement rollups and the
+   * overview aggregate a window's whole population, so the calendar's bound never cuts them).
+   */
+  async calendarRangeAll(brandId: string, from: Date, to: Date, tx?: Tx) {
+    const rows: Awaited<ReturnType<PublicationRepository['listScheduledBetween']>> = [];
+    for (let after: { scheduledFor: Date; id: string } | undefined; ;) {
+      const page = await publicationsRepo.listScheduledBetween(
+        brandId,
+        from,
+        to,
+        CALENDAR_RANGE_MAX,
+        tx,
+        after,
+      );
+      rows.push(...page);
+      const last = page[page.length - 1];
+      if (page.length < CALENDAR_RANGE_MAX || !last) return toCalendar(rows);
+      after = { scheduledFor: last.scheduledFor, id: last.id };
+    }
   },
 };
+
+/** What a calendar shows for a publication row (the content module's calendar source hook). */
+function toCalendar(rows: Awaited<ReturnType<PublicationRepository['listScheduledBetween']>>) {
+  return rows.map((p) => ({
+    publicationId: p.id,
+    contentPackageId: p.contentPackageId,
+    contentRevisionId: p.contentRevisionId,
+    channelVariantId: p.channelVariantId,
+    channelConnectionId: p.channelConnectionId,
+    destinationId: p.destinationId,
+    scheduledFor: p.scheduledFor.toISOString(),
+    state: p.state,
+    remoteStatus: p.remoteStatus,
+    remoteVerification: p.remoteVerification,
+  }));
+}

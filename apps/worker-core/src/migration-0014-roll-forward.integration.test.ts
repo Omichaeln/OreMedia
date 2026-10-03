@@ -12,6 +12,7 @@ import {
   seoAuditPages,
   seoAuditRuns,
   sourceUsePolicies,
+  seoFindingWork,
 } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { contentService, registerChannelResolver, resetChannelResolver } from '@oremedia/module-content';
@@ -32,6 +33,7 @@ const LATER_TABLES: MySqlTable[] = [
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,
+  seoFindingWork,
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

@@ -5,6 +5,7 @@ import {
   index,
   int,
   json,
+  mediumtext,
   mysqlEnum,
   mysqlTable,
   text,
@@ -150,7 +151,7 @@ export const channelVariants = mysqlTable(
     contentRevisionId: ref('content_revision_id').notNull(),
     channelConnectionId: ref('channel_connection_id'),
     destinationId: ref('destination_id'),
-    text: text('text').notNull(),
+    text: mediumtext('text').notNull(), // a destination variant's text is the article (RA-03), beyond TEXT's 64 KiB
     altTexts: json('alt_texts').$type<string[]>().notNull(),
     settings: json('settings').$type<Record<string, unknown>>().notNull(),
     exportIds: json('export_ids').$type<string[]>().notNull(),

@@ -17,6 +17,7 @@ import type { ResolvedActor, ResolvedActorServicePrincipal } from '@oremedia/con
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { tenants } from '@oremedia/db/schema/access';
+import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
 import { brands } from '@oremedia/db/schema/brand';
 import {
   briefs,
@@ -25,6 +26,14 @@ import {
   contentRevisions,
   planItems,
 } from '@oremedia/db/schema/content';
+import { brandDestinations } from '@oremedia/db/schema/destinations';
+import {
+  ARTICLE_BODY_MAX_CHARS,
+  ARTICLE_TEXT_MAX_CHARS,
+  CHANNEL_VARIANT_TEXT_MAX_CHARS,
+  type ArticleDocumentV1,
+} from '@oremedia/contracts/content';
+import { articlePlainText } from '@oremedia/contracts/article';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newElementId, newId } from '@oremedia/domain/ids';
@@ -35,8 +44,10 @@ import {
   hashesForVariant,
   registerCalendarSource,
   registerChannelResolver,
+  registerDestinationResolver,
   registerRevisionChangeListener,
   registerVariantValidator,
+  resetDestinationResolver,
   resetVariantValidator,
   resetChannelResolver,
   type RevisionChange,
@@ -967,6 +978,8 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           destinationId: null,
           scheduledFor: '2026-06-01T09:00:00.000Z',
           state: `scheduled:${brandId}`,
+          remoteStatus: null,
+          remoteVerification: null,
         },
       ]);
       const filled = await run(tenantA, () => contentService.calendar.range(A, range));
@@ -1293,6 +1306,311 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ),
       ).rejects.toMatchObject({ details: [{ path: 'briefId', issue: 'brief is in_progress' }] });
       expect((await auditOf(tenantA, 'content.plan_item.propose')).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('website article packages at the text cap (RA-03): one cap, create → generate → mode change → persistence', () => {
+    const destinationId = newId('destination');
+    /** A body exactly at ARTICLE_BODY_MAX_CHARS over its blocks, with the title and the excerpt at their caps. */
+    const maxArticle: ArticleDocumentV1 = {
+      kind: 'article',
+      title: 't'.repeat(200),
+      slug: 'why-ore-and-tar-last',
+      excerpt: 'e'.repeat(1000),
+      blocks: Array.from({ length: 5 }, (_, i) => ({
+        type: 'paragraph' as const,
+        text: `${i}`.padEnd(10_000, 'x'),
+      })),
+      categories: ['Guides'],
+      tags: ['ore'],
+    };
+    const text = articlePlainText(maxArticle);
+
+    beforeAll(async () => {
+      await tdb.db.insert(brandDestinations).values({
+        id: destinationId,
+        tenantId: tenantA,
+        brandId: brandA,
+        kind: 'cms_site',
+        externalId: 'https://blog.acme.example',
+        displayName: 'blog.acme.example',
+        ownerUserId: USER,
+        grantedScopes: ['articles:write', 'articles:publish'],
+        health: 'healthy',
+        capabilityVersion: 1,
+      });
+      registerDestinationResolver(async (id) =>
+        id === destinationId
+          ? {
+              brandId: brandA,
+              kind: 'cms_site',
+              capabilityVersion: 1,
+              writable: true,
+              displayName: 'blog.acme.example',
+              externalId: 'https://blog.acme.example',
+              grantedScopes: ['articles:write'],
+            }
+          : null,
+      );
+    });
+    afterAll(() => {
+      resetDestinationResolver();
+    });
+
+    it('a body over the cap fails at the initial input; one exactly at it is accepted', async () => {
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            {
+              brandId: brandA,
+              title: 'Too long',
+              copy: {
+                ...copy('Caption'),
+                article: {
+                  ...maxArticle,
+                  blocks: [...maxArticle.blocks, { type: 'paragraph', text: 'x' }],
+                },
+              },
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toThrow(`body_too_long:${ARTICLE_BODY_MAX_CHARS + 1}>${ARTICLE_BODY_MAX_CHARS}`);
+      expect(text.length).toBeGreaterThan(CHANNEL_VARIANT_TEXT_MAX_CHARS);
+      expect(text.length).toBeLessThanOrEqual(ARTICLE_TEXT_MAX_CHARS);
+    });
+
+    it("RA-08: an article's images must be asset versions this brand may use; an unknown or ineligible one is refused by name, an eligible one is kept and sent with the variant", async () => {
+      const assetId = newId('asset');
+      const versionId = newId('assetVersion');
+      const seed = async (state: 'approved' | 'retired') => {
+        await tdb.db.insert(assets).values({
+          id: assetId,
+          tenantId: tenantA,
+          brandId: brandA,
+          kind: 'photo',
+          name: 'weighbridge',
+          currentVersionId: versionId,
+          state,
+          rightsState: 'recorded',
+        });
+        await tdb.db.insert(assetVersions).values({
+          id: versionId,
+          tenantId: tenantA,
+          brandId: brandA,
+          assetId,
+          number: 1,
+          storageKey: `assets/${tenantA}/${brandA}/${assetId}/${versionId}/original`,
+          contentHash: hashText('png'),
+          mime: 'image/png',
+          bytes: 3,
+          provenance: { kind: 'upload', uploadedByUserId: USER, originalFilename: 'w.png' },
+        });
+        await tdb.db.insert(usageRights).values({
+          id: newId('usageRights'),
+          tenantId: tenantA,
+          brandId: brandA,
+          assetId,
+          owner: 'owner',
+          permittedChannels: 'all',
+          territories: 'all',
+          expiresAt: null,
+          releases: [],
+          restrictions: [],
+        });
+      };
+      const rich = (assetVersionId: string): ArticleDocumentV1 => ({
+        kind: 'article',
+        v: 2,
+        title: 'How ore is weighed',
+        slug: 'how-ore-is-weighed',
+        excerpt: 'Scales.',
+        featuredImage: { assetVersionId, alt: 'A weighbridge' },
+        blocks: [
+          { type: 'paragraph', text: 'Every load is weighed twice.' },
+          { type: 'image', assetVersionId, alt: 'The weighbridge' },
+          {
+            type: 'faq',
+            question: 'What is tare?',
+            answer: 'The empty weight.',
+            answerBlocks: [{ type: 'paragraph', text: 'The empty weight.' }],
+          },
+        ],
+        categories: [],
+        tags: [],
+      });
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich('av_missing') } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_not_found' },
+          { path: 'copy.article.images.1', issue: 'asset_not_found' },
+        ],
+      });
+      await seed('retired');
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: expect.stringMatching(/^asset_ineligible:/) },
+          { path: 'copy.article.images.1', issue: expect.stringMatching(/^asset_ineligible:/) },
+        ],
+      });
+      await tdb.db.update(assets).set({ state: 'approved' }).where(eq(assets.id, assetId));
+      // Raster images of an image kind only: an SVG (stored-XSS surface on the site) or a video is refused.
+      await tdb.db
+        .update(assetVersions)
+        .set({ mime: 'image/svg+xml' })
+        .where(eq(assetVersions.id, versionId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:mime_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
+      await tdb.db.update(assets).set({ kind: 'video' }).where(eq(assets.id, assetId));
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [
+          { path: 'copy.article.images.0', issue: 'asset_ineligible:kind_not_allowed' },
+          expect.anything(),
+        ],
+      });
+      await tdb.db.update(assets).set({ kind: 'photo' }).where(eq(assets.id, assetId));
+      const pkg = await run(tenantA, (tx) =>
+        contentService.packages.create(
+          A,
+          { brandId: brandA, title: 'Images', copy: { ...copy('Scales.'), article: rich(versionId) } },
+          tx,
+        ),
+      );
+      const generated = await run(tenantA, (tx) =>
+        contentService.variants.generate(
+          A,
+          { contentRevisionId: pkg.contentRevisionId, destinationIds: [destinationId] },
+          tx,
+        ),
+      );
+      const website = generated.variants[0]!;
+      expect(website.article).toEqual(rich(versionId));
+      expect(website.article?.featuredImage).toEqual({ assetVersionId: versionId, alt: 'A weighbridge' });
+      expect(website.text).toBe(articlePlainText(rich(versionId)));
+      // Revising keeps the check: the same document with a foreign version is refused.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.revise(
+            A,
+            {
+              contentPackageId: pkg.contentPackageId,
+              expectedVersion: pkg.version,
+              copy: { ...copy('Scales.'), article: rich('av_other') },
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'copy.article.images.0', issue: 'asset_not_found' }, expect.anything()],
+      });
+    });
+
+    it('the article at the cap is created, its website variant carries the whole text, survives a mode change and is persisted whole', async () => {
+      const pkg = await run(tenantA, (tx) =>
+        contentService.packages.create(
+          A,
+          { brandId: brandA, title: 'At the cap', copy: { ...copy('Caption'), article: maxArticle } },
+          tx,
+        ),
+      );
+      const generated = await run(tenantA, (tx) =>
+        contentService.variants.generate(
+          A,
+          {
+            contentRevisionId: pkg.contentRevisionId,
+            channelConnectionIds: [channelA],
+            destinationIds: [destinationId],
+          },
+          tx,
+        ),
+      );
+      const website = generated.variants.find((v) => v.destinationId === destinationId)!;
+      const channel = generated.variants.find((v) => v.channelConnectionId === channelA)!;
+      expect(website.text).toBe(text);
+      expect(website.article).toEqual(maxArticle);
+      expect(channel.text).toBe(maxArticle.excerpt); // the caption is the excerpt, under the social cap
+      // The website editor re-sends the variant's text when the publish mode changes: the article cap applies.
+      const switched = await run(tenantA, (tx) =>
+        contentService.variants.update(
+          A,
+          {
+            channelVariantId: website.id,
+            expectedVersion: website.version,
+            text: website.text,
+            altTexts: [],
+            settings: { publishMode: 'publish' },
+            exportIds: [],
+          },
+          tx,
+        ),
+      );
+      expect(switched).toMatchObject({ settings: { publishMode: 'publish' }, version: website.version + 1 });
+      expect(switched.text).toBe(text);
+      // A channel caption stays under the social cap once the variant's target is known.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.variants.update(
+            A,
+            {
+              channelVariantId: channel.id,
+              expectedVersion: channel.version,
+              text,
+              altTexts: [],
+              settings: {},
+              exportIds: [],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        details: [{ path: 'text', issue: `text_too_long:${text.length}>${CHANNEL_VARIANT_TEXT_MAX_CHARS}` }],
+      });
+      // Persisted whole (MEDIUMTEXT, migration 0020), as the variant reads back.
+      const stored = (
+        await tdb.db.select().from(channelVariants).where(eq(channelVariants.id, website.id))
+      )[0]!;
+      expect(stored.text).toHaveLength(text.length);
+      expect(stored.text).toBe(text);
+      const read = await run(tenantA, () => contentService.variants.get(A, { variantId: website.id }));
+      expect(read.text).toBe(text);
+      expect(read.settings).toEqual({ publishMode: 'publish' });
     });
   });
 

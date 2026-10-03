@@ -1,24 +1,31 @@
-import type { DecryptedCredentials, ProviderErrorClass } from '@oremedia/contracts/providers';
+import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import { classifyByStatus, retryAfterMs, truncateForTemporal } from '../../base';
-import type {
-  CmsAdapter,
-  CmsArticleInput,
-  CmsReadResult,
-  CmsRemoteArticle,
-  CmsRemoveResult,
-  CmsRenderedPage,
-  CmsSite,
-  CmsUpdatePrecondition,
-  CmsVerifyResult,
-  CmsWriteResult,
+import {
+  CMS_MEDIA_MAX_BYTES,
+  type CmsAdapter,
+  type CmsArticleInput,
+  type CmsMediaInput,
+  type CmsMediaResult,
+  type CmsReadResult,
+  type CmsRemoteArticle,
+  type CmsRemoveResult,
+  type CmsRenderedPage,
+  type CmsSite,
+  type CmsUpdatePrecondition,
+  type CmsVerifyResult,
+  type CmsWriteResult,
 } from '../../cms-contract';
 import { ProviderTransportError, type ProviderIO } from '../../io';
 import {
   EffectBoundary,
+  MediaFetchError,
   arr,
+  fetchBytes,
   get,
   num,
   readResponse,
+  revokeFromError,
+  revokeFromResponse,
   str,
   summarise,
   textFingerprint,
@@ -53,23 +60,72 @@ async function request(
   return readResponse(res);
 }
 
+/**
+ * RA-12: the hash of a remote revision covers its identity and state beside the content (title, slug, status, the
+ * term ids and the raw content), so a change to any of them on the site moves the hash an edit must match.
+ */
+export const remoteArticleFingerprint = (fields: {
+  title: string;
+  slug: string;
+  status: string;
+  categories: number[];
+  tags: number[];
+  html: string;
+}): string =>
+  textFingerprint(
+    JSON.stringify({
+      title: fields.title,
+      slug: fields.slug,
+      status: fields.status,
+      categories: [...fields.categories].sort((a, b) => a - b),
+      tags: [...fields.tags].sort((a, b) => a - b),
+      content: fields.html,
+    }),
+  );
+
+/** modified_gmt is UTC without a zone designator; stored as an ISO instant. */
+const instantOf = (modified: string | undefined): string | null =>
+  modified ? (modified.endsWith('Z') ? modified : `${modified}Z`) : null;
+const termIds = (json: unknown, taxonomy: 'categories' | 'tags'): number[] =>
+  arr(get(json, taxonomy))
+    .map((t) => num(t))
+    .filter((t): t is number => t !== undefined);
+
 /** The post object as the API returns it with `context=edit` (raw title and content); never the rendered HTML only. */
 function toArticle(json: unknown): CmsRemoteArticle | null {
   const id = num(get(json, 'id'));
   if (id === undefined) return null;
   const html = str(get(json, 'content', 'raw')) ?? str(get(json, 'content', 'rendered')) ?? '';
-  const modified = str(get(json, 'modified_gmt'));
+  const title = str(get(json, 'title', 'raw')) ?? str(get(json, 'title', 'rendered')) ?? '';
+  const slug = str(get(json, 'slug')) ?? '';
+  const status = str(get(json, 'status')) ?? 'unknown';
   return {
     remoteId: String(id),
     remoteUrl: str(get(json, 'link')) ?? '',
-    title: str(get(json, 'title', 'raw')) ?? str(get(json, 'title', 'rendered')) ?? '',
-    slug: str(get(json, 'slug')) ?? '',
-    status: str(get(json, 'status')) ?? 'unknown',
-    // modified_gmt is UTC without a zone designator; stored as an ISO instant.
-    modifiedAt: modified ? (modified.endsWith('Z') ? modified : `${modified}Z`) : null,
-    contentHash: textFingerprint(html),
+    title,
+    slug,
+    status,
+    modifiedAt: instantOf(str(get(json, 'modified_gmt'))),
+    contentHash: remoteArticleFingerprint({
+      title,
+      slug,
+      status,
+      categories: termIds(json, 'categories'),
+      tags: termIds(json, 'tags'),
+      html,
+    }),
     html,
   };
+}
+
+/**
+ * A revision object (`/posts/<id>/revisions`, context=edit): the parent's fields as they were when it was saved.
+ * The remote id is the parent's; the hash leaves the terms out (a revision carries none), so it is never compared
+ * with a post's hash, only recorded as what the write replaced.
+ */
+function toRevisionArticle(json: unknown, parentId: string, link: string): CmsRemoteArticle | null {
+  const article = toArticle(json);
+  return article && { ...article, remoteId: parentId, remoteUrl: link };
 }
 
 /**
@@ -111,6 +167,40 @@ export class WordPressCmsAdapter implements CmsAdapter {
     };
   }
 
+  /**
+   * RA-01: revokes the application password the connection authenticates with. WordPress names the password in use
+   * at `GET /users/me/application-passwords/introspect` (its uuid) and deletes it at
+   * `DELETE /users/me/application-passwords/<uuid>` (`{"deleted": true}`); a password the site no longer accepts
+   * (401 / 403 on introspect) is already revoked.
+   */
+  async revokeAccess(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<RevokeResult> {
+    try {
+      const headers = { ...basic(site, credentials), accept: 'application/json' };
+      const current = await request(
+        io,
+        api(site, '/users/me/application-passwords/introspect'),
+        { method: 'GET', headers },
+        false,
+      );
+      if (current.status === 401 || current.status === 403) return { outcome: 'revoked' };
+      const uuid = str(get(current.json, 'uuid'));
+      if (current.status !== 200 || !uuid) return revokeFromResponse(current, () => false);
+      const deleted = await request(
+        io,
+        api(site, `/users/me/application-passwords/${encodeURIComponent(uuid)}`),
+        { method: 'DELETE', headers },
+        true,
+      );
+      return revokeFromResponse(deleted, (r) => r.status === 200 && get(r.json, 'deleted') === true);
+    } catch (err) {
+      return revokeFromError(err);
+    }
+  }
+
   async readArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -139,6 +229,72 @@ export class WordPressCmsAdapter implements CmsAdapter {
     const article = toArticle(res.json);
     if (!article) return { outcome: 'rejected', code: 'malformed_response', message: summarise(res, 300) };
     return { outcome: 'found', article };
+  }
+
+  /**
+   * RA-08: the media endpoint takes the file as the request body with its type and a Content-Disposition file
+   * name (`POST /media`); the alt text is a field of the created attachment, set with a second call. The bytes are
+   * read from the signed release URL through ProviderIO (spec 9.3), never from storage directly.
+   */
+  async uploadMedia(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    media: CmsMediaInput,
+  ): Promise<CmsMediaResult> {
+    const boundary = new EffectBoundary();
+    try {
+      // The release is read bounded and must be an image: the site never receives what the release did not describe.
+      const bytes = await fetchBytes(io, media.url, { maxBytes: CMS_MEDIA_MAX_BYTES, expectType: 'image/' });
+      boundary.cross();
+      const { res } = await io.request(
+        api(site, '/media'),
+        {
+          method: 'POST',
+          headers: {
+            ...basic(site, credentials),
+            accept: 'application/json',
+            'content-type': media.mime,
+            'content-disposition': `attachment; filename="${media.filename.replace(/["\\\r\n]/g, '')}"`,
+          },
+          body: bytes,
+        },
+        { mutation: true },
+      );
+      const created = await readResponse(res);
+      if (created.status !== 201 && created.status !== 200) return mediaFailure(created, boundary);
+      const id = num(get(created.json, 'id'));
+      const url = str(get(created.json, 'source_url'));
+      if (id === undefined || !url)
+        return { outcome: 'unknown', code: 'malformed_response', message: summarise(created, 300) };
+      if (media.alt.trim() !== '') {
+        const named = await request(
+          io,
+          api(site, `/media/${encodeURIComponent(String(id))}`),
+          {
+            method: 'POST',
+            headers: {
+              ...basic(site, credentials),
+              accept: 'application/json',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ alt_text: media.alt }),
+          },
+          true,
+        );
+        if (named.status !== 200) return mediaFailure(named, boundary);
+      }
+      return { outcome: 'done', media: { remoteId: String(id), url } };
+    } catch (err) {
+      if (err instanceof MediaFetchError)
+        return err.reason === 'status'
+          ? { outcome: 'retryable_error', code: 'media_fetch_failed', message: err.message }
+          : { outcome: 'rejected', code: `media_${err.reason}`, message: err.message };
+      const failed = writeTransportFailure(err, boundary);
+      return failed.outcome === 'done' || failed.outcome === 'conflict'
+        ? { outcome: 'unknown', code: 'transport_after_send', message: 'unreachable' }
+        : failed;
+    }
   }
 
   async createArticle(
@@ -172,6 +328,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
             status: input.status,
             categories,
             tags,
+            ...featuredMediaField(input.featuredMedia),
           }),
         },
         true,
@@ -205,6 +362,9 @@ export class WordPressCmsAdapter implements CmsAdapter {
         };
       if (current.outcome !== 'found') return current;
       // The precondition is the caller's read-back: a remote that moved since is never overwritten.
+      // RA-12: WordPress core REST offers no compare-and-swap (no If-Match / ETag on POST /posts/<id>), so this
+      // read-then-write only narrows the window in which the site can change under the write; the revisions read
+      // after the write detects a change that slipped into it (`overwritten`), it cannot prevent one.
       if (
         (precondition.expectedHash !== undefined &&
           precondition.expectedHash !== current.article.contentHash) ||
@@ -218,6 +378,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
       if (input.excerpt !== undefined) body['excerpt'] = input.excerpt;
       if (input.html !== undefined) body['content'] = input.html;
       if (input.status !== undefined) body['status'] = input.status;
+      Object.assign(body, featuredMediaField(input.featuredMedia));
       if (input.categories)
         body['categories'] = await this.resolveTerms(site, credentials, io, 'categories', input.categories);
       if (input.tags) body['tags'] = await this.resolveTerms(site, credentials, io, 'tags', input.tags);
@@ -239,10 +400,45 @@ export class WordPressCmsAdapter implements CmsAdapter {
       if (res.status !== 200) return writeFailure(this.classifyError.bind(this), res, boundary);
       const article = toArticle(res.json);
       if (!article) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
-      return { outcome: 'done', article };
+      const overwritten = await this.replacedRevision(site, credentials, io, current.article);
+      return { outcome: 'done', article, previous: current.article, ...(overwritten ? { overwritten } : {}) };
     } catch (err) {
       return writeTransportFailure(err, boundary);
     }
+  }
+
+  /**
+   * RA-12: after an update, the revision the write replaced. WordPress saves a revision of a post on every update
+   * (the original too, when the first update is made), newest first; the second-newest after the write is the
+   * state the write replaced. When its modified instant is not the pre-write read's, the site changed between the
+   * read and the write and that revision is what was lost. A listing that cannot be read (revisions off, refused)
+   * proves nothing: null, never a claim either way. modified_gmt is second-granular, so a site save within the same
+   * second as the pre-write read is not told apart from it: the window is narrowed and detected, not closed.
+   */
+  private async replacedRevision(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+    previous: CmsRemoteArticle,
+  ): Promise<CmsRemoteArticle | null> {
+    let res: ProviderResponse;
+    try {
+      res = await request(
+        io,
+        `${api(site, `/posts/${encodeURIComponent(previous.remoteId)}/revisions`)}?context=edit&per_page=2`,
+        { method: 'GET', headers: { ...basic(site, credentials), accept: 'application/json' } },
+        false,
+      );
+    } catch (err) {
+      if (err instanceof ProviderTransportError) return null;
+      throw err;
+    }
+    if (res.status !== 200) return null;
+    const replaced = arr(res.json)[1];
+    if (replaced === undefined) return null;
+    const article = toRevisionArticle(replaced, previous.remoteId, previous.remoteUrl);
+    if (!article || article.modifiedAt === null || article.modifiedAt === previous.modifiedAt) return null;
+    return article;
   }
 
   async unpublishArticle(
@@ -255,7 +451,15 @@ export class WordPressCmsAdapter implements CmsAdapter {
     if (current.outcome === 'absent') return { outcome: 'already_absent' };
     if (current.outcome !== 'found') return current;
     if (current.article.status === 'draft') return { outcome: 'done', article: current.article };
-    const written = await this.updateArticle(site, credentials, io, remoteId, { status: 'draft' }, {});
+    // RA-12: the revert matches what it just read, never a remote that moved in between.
+    const written = await this.updateArticle(
+      site,
+      credentials,
+      io,
+      remoteId,
+      { status: 'draft' },
+      { expectedHash: current.article.contentHash, expectedModifiedAt: current.article.modifiedAt },
+    );
     if (written.outcome === 'done') return written;
     if (written.outcome === 'conflict')
       return {
@@ -390,6 +594,18 @@ export class WordPressCmsAdapter implements CmsAdapter {
     }
     return ids;
   }
+}
+
+/** The post field naming the featured attachment (its numeric id as the media endpoint returned it). */
+const featuredMediaField = (media: CmsArticleInput['featuredMedia']): Record<string, number> =>
+  media && /^\d+$/.test(media.remoteId) ? { featured_media: Number(media.remoteId) } : {};
+
+/** A refused media upload, classified as a write: the upload is the effect, so a failure after it is ambiguous. */
+function mediaFailure(res: ProviderResponse, boundary: EffectBoundary): CmsMediaResult {
+  const failed = writeFailure(classifyByStatus, res, boundary);
+  return failed.outcome === 'done' || failed.outcome === 'conflict'
+    ? { outcome: 'unknown', code: `http_${res.status}`, message: summarise(res, 300) }
+    : failed;
 }
 
 /** A term listing or creation the site refused: carries the response so the write maps it like its own failure. */

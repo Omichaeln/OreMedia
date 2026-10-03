@@ -4,6 +4,8 @@ import {
   RENDERED_PAGE_TIMEOUT_MS,
   RenderedCheckKey,
   articleFirstParagraph,
+  articleHtmlChars,
+  articleLastParagraph,
   articlePlainText,
   renderArticleHtml,
   renderedValidationOk,
@@ -16,10 +18,19 @@ import {
   CMS_SCOPE_PUBLISH,
   CmsPublishMode,
   DESTINATION_KIND_CAPABILITIES,
+  effectivePublishMode,
+  type ArticleReadbackField,
   type ArticleReadbackV1,
+  type ArticleReadbackVerificationV1,
 } from '@oremedia/contracts/destinations';
-import { ARTICLE_BODY_MAX_CHARS } from '@oremedia/contracts/content';
-import { CapabilityUnsupportedError, PolicyDeniedError } from '@oremedia/contracts/errors';
+import {
+  ARTICLE_BODY_MAX_CHARS,
+  ARTICLE_IMAGE_MIMES,
+  articleImages,
+  type ArticleDocumentV1,
+  type ArticleImageV1,
+} from '@oremedia/contracts/content';
+import { CapabilityUnsupportedError, OremediaError, PolicyDeniedError } from '@oremedia/contracts/errors';
 import type {
   DecryptedCredentials,
   RemoteMutationOutcome,
@@ -28,8 +39,6 @@ import type {
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { Tx } from '@oremedia/db';
 import {
-  aadFor,
-  credentialBroker,
   type DestinationEditInput,
   type DestinationMutationResult,
   type DestinationPublishInput,
@@ -38,19 +47,30 @@ import {
   type DestinationTargetDescription,
   type DestinationValidateInput,
 } from '@oremedia/module-publishing';
+import { assetService } from '@oremedia/module-assets';
 import { logger } from '@oremedia/observability';
 import {
   BlockedAddressError,
   ProviderTransportError,
   RenderedPageError,
+  textFingerprint,
   truncateForTemporal,
   type CmsAdapter,
+  type CmsArticleInput,
+  type CmsMediaRef,
+  type CmsReadResult,
   type CmsRemoteArticle,
   type CmsSite,
 } from '@oremedia/providers';
 import { cmsAdapterFor, cmsIO } from './cms';
 import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
-import { StoredKind, cmsWritable, enabledCmsAdapter, sourceUseDecision } from './service';
+import {
+  StoredKind,
+  cmsWritable,
+  enabledCmsAdapter,
+  openDestinationCredential,
+  sourceUseDecision,
+} from './service';
 
 const destinationsRepo = new BrandDestinationRepository();
 const policiesRepo = new SourceUsePolicyRepository();
@@ -71,15 +91,84 @@ const usable = (row: DestinationRow): boolean =>
   row.health !== 'unreachable' &&
   cmsWritable(row.kind);
 
-/** The effective publish mode: `publish` only when asked for and granted at connect time; otherwise a draft. */
-export function effectivePublishMode(
-  settings: Record<string, unknown>,
-  grantedScopes: readonly string[],
-): 'draft' | 'publish' {
-  const asked = CmsPublishMode.safeParse(settings['publishMode']);
-  return asked.success && asked.data === 'publish' && grantedScopes.includes(CMS_SCOPE_PUBLISH)
-    ? 'publish'
-    : 'draft';
+/** The effective publish mode (contracts/destinations): `publish` only when asked for and granted; else a draft. */
+export { effectivePublishMode };
+
+/**
+ * RA-08: how long the signed release URL of an article's image must stay readable: the site fetches the bytes as
+ * the adapter uploads them, one image at a time, before the article is written.
+ */
+export const ARTICLE_MEDIA_RELEASE_WINDOW_SEC = 15 * 60;
+
+/** The file name the site keeps for an image: the article's slug, the image's position and the type's extension. */
+const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+};
+const mediaFilename = (slug: string, index: number, mime: string): string =>
+  `${slug}-${index + 1}.${EXTENSION_BY_MIME[mime.toLowerCase()] ?? 'bin'}`;
+
+/**
+ * RA-08: every image the article carries, released and uploaded before the article is written. Each asset version
+ * is released once (a signed URL for the publishing window, minted by the assets module: spec 9.3, never raw
+ * bytes), handed to the adapter, and the site's own address for it is what the rendered markup references. The
+ * first failure stops the publish with the adapter's classification; nothing was written as an article yet.
+ */
+async function uploadArticleMedia(
+  adapter: CmsAdapter,
+  site: CmsSite,
+  creds: DecryptedCredentials,
+  io: ReturnType<typeof cmsIO>,
+  article: ArticleDocumentV1,
+): Promise<{ media: Map<string, CmsMediaRef> } | { failed: DestinationPublishResult }> {
+  const media = new Map<string, CmsMediaRef>();
+  const images: ArticleImageV1[] = [];
+  for (const image of articleImages(article))
+    if (!images.some((i) => i.assetVersionId === image.assetVersionId)) images.push(image);
+  for (const [index, image] of images.entries()) {
+    let release: Awaited<ReturnType<typeof assetService.releaseDerivative>>;
+    try {
+      release = await assetService.releaseDerivative(image.assetVersionId, ARTICLE_MEDIA_RELEASE_WINDOW_SEC);
+    } catch (err) {
+      // A version gone since the revision was written (the release check holds this earlier; never a throw here).
+      if (!(err instanceof OremediaError)) throw err;
+      return {
+        failed: {
+          outcome: 'rejected',
+          code: 'article_image_unavailable',
+          message: `the image ${image.assetVersionId} cannot be released: ${err.code}`,
+        },
+      };
+    }
+    // Raster images only (contracts ARTICLE_IMAGE_MIMES): an SVG or a video never lands on a website's page.
+    if (!(ARTICLE_IMAGE_MIMES as readonly string[]).includes(release.mime.toLowerCase()))
+      return {
+        failed: {
+          outcome: 'rejected',
+          code: 'article_image_not_raster',
+          message: `the image ${image.assetVersionId} is ${release.mime}, not a raster image`,
+        },
+      };
+    const uploaded = await adapter.uploadMedia(site, creds, io, {
+      url: release.url,
+      mime: release.mime,
+      contentHash: release.contentHash,
+      alt: image.alt,
+      filename: mediaFilename(article.slug, index, release.mime),
+    });
+    if (uploaded.outcome !== 'done')
+      return {
+        failed:
+          uploaded.outcome === 'unknown'
+            ? { outcome: 'retryable_error', code: uploaded.code, message: uploaded.message }
+            : uploaded,
+      };
+    media.set(image.assetVersionId, uploaded.media);
+  }
+  return { media };
 }
 
 const toReadback = (a: CmsRemoteArticle): ArticleReadbackV1 => ({
@@ -91,6 +180,65 @@ const toReadback = (a: CmsRemoteArticle): ArticleReadbackV1 => ({
   modifiedAt: a.modifiedAt,
   contentHash: a.contentHash,
 });
+
+/**
+ * RA-04: what the read-back proved. Each field of `sent` that is given is compared with the remote revision read
+ * back; `modifiedAt` is compared with the write's own response (RA-12: the remote was touched again since the
+ * write when they differ). Nothing is assumed from the write response alone.
+ */
+export function verifyReadback(
+  remote: CmsRemoteArticle,
+  sent: Partial<Pick<CmsArticleInput, 'html' | 'title' | 'slug' | 'status'>>,
+  written: Pick<CmsRemoteArticle, 'modifiedAt'>,
+): ArticleReadbackVerificationV1 {
+  const sentHash = textFingerprint(sent.html ?? '');
+  const checks: Array<[ArticleReadbackField, boolean | null]> = [
+    ['content', sent.html === undefined ? null : textFingerprint(remote.html) === sentHash],
+    ['title', sent.title === undefined ? null : remote.title === sent.title],
+    ['slug', sent.slug === undefined ? null : remote.slug === sent.slug],
+    ['status', sent.status === undefined ? null : remote.status === sent.status],
+    ['modifiedAt', written.modifiedAt === null ? null : remote.modifiedAt === written.modifiedAt],
+  ];
+  const matched = checks.filter(([, ok]) => ok === true).map(([field]) => field);
+  const mismatched = checks.filter(([, ok]) => ok === false).map(([field]) => field);
+  return {
+    outcome: mismatched.length === 0 ? 'verified' : 'mismatch',
+    matched,
+    mismatched,
+    reason: null,
+    sentHash,
+  };
+}
+
+/** Nothing could be compared: the policy allows no read, or the read-back came back other than `found`. */
+const unverifiedReadback = (sentHtml: string | undefined, reason: string): ArticleReadbackVerificationV1 => ({
+  outcome: 'unverified',
+  matched: [],
+  mismatched: [],
+  reason,
+  sentHash: textFingerprint(sentHtml ?? ''),
+});
+
+/**
+ * The remote revision after a write with what the read-back proved: the read when the policy allows one and it
+ * found the article, else the write's own response marked `unverified` with the reason (never silently as proof).
+ */
+async function readBackAfterWrite(
+  adapter: CmsAdapter,
+  site: CmsSite,
+  creds: DecryptedCredentials,
+  io: ReturnType<typeof cmsIO>,
+  readAllowed: boolean,
+  written: CmsRemoteArticle,
+  sent: Partial<Pick<CmsArticleInput, 'html' | 'title' | 'slug' | 'status'>>,
+): Promise<{ remote: CmsRemoteArticle; verification: ArticleReadbackVerificationV1 }> {
+  if (!readAllowed)
+    return { remote: written, verification: unverifiedReadback(sent.html, 'read_not_allowed') };
+  const read: CmsReadResult = await adapter.readArticle(site, creds, io, written.remoteId);
+  if (read.outcome !== 'found')
+    return { remote: written, verification: unverifiedReadback(sent.html, `readback_${read.outcome}`) };
+  return { remote: read.article, verification: verifyReadback(read.article, sent, written) };
+}
 
 /** The site an adapter addresses, from the destination row and the opened credential (never the row's secret). */
 const siteOf = (row: DestinationRow, creds: DecryptedCredentials): CmsSite => ({
@@ -114,7 +262,10 @@ async function validateWith(
   adapter: CmsAdapter,
   site: CmsSite,
   tenantId: string,
-  input: Pick<DestinationValidateInput, 'url' | 'title' | 'firstParagraph' | 'draft'>,
+  input: Pick<
+    DestinationValidateInput,
+    'url' | 'title' | 'slug' | 'firstParagraph' | 'lastParagraph' | 'draft'
+  >,
   hooks?: ActivityHooks,
 ): Promise<RenderedValidationV1> {
   const io = cmsIO(adapter.key, tenantId, {
@@ -127,7 +278,10 @@ async function validateWith(
       status: page.status,
       html: page.html,
       title: input.title,
+      slug: input.slug,
+      remoteUrl: input.url,
       firstParagraph: input.firstParagraph,
+      lastParagraph: input.lastParagraph,
       draft: input.draft,
     });
     return {
@@ -158,8 +312,9 @@ async function withSite<T>(
   if (!row.credentialRefId) return onReconnect();
   const adapter = enabledCmsAdapter(StoredKind.parse(row.kind));
   try {
-    return await credentialBroker.withCredentialRef(
-      { tenantId, credentialRefId: row.credentialRefId, aad: aadFor(tenantId, row.id) },
+    return await openDestinationCredential(
+      tenantId,
+      { ...row, credentialRefId: row.credentialRefId },
       (creds) => fn(adapter, siteOf(row, creds), creds),
     );
   } catch (err) {
@@ -171,7 +326,8 @@ async function withSite<T>(
 /**
  * An edit's `text` override (publications.editRemote → validateVariantDetailed) is the HTML the site receives; the
  * variant's own text is the article's plain text and needs no check here. The override must still sanitise to a
- * body and stay under the article limit, or an edit would land an empty or oversized article.
+ * body and stay under the article limit measured as the article is (RA-03: the characters the body carries once
+ * rendered, never the HTML's own length), or an edit would land an empty or oversized article.
  */
 export const articleTextIssues = (
   variant: Pick<ChannelVariantForPublishing, 'text' | 'article'>,
@@ -179,8 +335,9 @@ export const articleTextIssues = (
   if (!variant.article || variant.text === articlePlainText(variant.article)) return [];
   const html = sanitizeArticleHtml(variant.text);
   if (html.trim() === '') return [{ path: 'text', issue: 'body_empty' }];
-  if (html.length > ARTICLE_BODY_MAX_CHARS)
-    return [{ path: 'text', issue: `body_too_long:${html.length}>${ARTICLE_BODY_MAX_CHARS}` }];
+  const chars = articleHtmlChars(html);
+  if (chars > ARTICLE_BODY_MAX_CHARS)
+    return [{ path: 'text', issue: `body_too_long:${chars}>${ARTICLE_BODY_MAX_CHARS}` }];
   return [];
 };
 
@@ -262,21 +419,26 @@ export const destinationArticles: DestinationPublisher = {
           ...(hooks ? { hooks } : {}),
           ...(beforeSend ? { beforeSend } : {}),
         });
-        const written = await adapter.createArticle(
-          site,
-          creds,
-          io,
-          {
-            title: article.title,
-            slug: article.slug,
-            excerpt: article.excerpt,
-            html: renderArticleHtml(article),
-            categories: article.categories,
-            tags: article.tags,
-            status,
-          },
-          input.idempotencyKey,
-        );
+        // RA-08: the images go up first (released through the assets module, uploaded by the adapter); the body
+        // then references the site's copies, and the featured image is the site's media item for it.
+        const uploaded = await uploadArticleMedia(adapter, site, creds, io, article);
+        if ('failed' in uploaded) return uploaded.failed;
+        const featured = article.featuredImage
+          ? uploaded.media.get(article.featuredImage.assetVersionId)
+          : undefined;
+        const sent: CmsArticleInput = {
+          title: article.title,
+          slug: article.slug,
+          excerpt: article.excerpt,
+          html: renderArticleHtml(article, {
+            imageUrl: (image) => uploaded.media.get(image.assetVersionId)?.url ?? null,
+          }),
+          categories: article.categories,
+          tags: article.tags,
+          status,
+          ...(featured ? { featuredMedia: featured } : {}),
+        };
+        const written = await adapter.createArticle(site, creds, io, sent, input.idempotencyKey);
         if (written.outcome === 'conflict')
           return {
             outcome: 'rejected',
@@ -284,12 +446,17 @@ export const destinationArticles: DestinationPublisher = {
             message: 'the site refused the new article as a conflict',
           };
         if (written.outcome !== 'done') return written;
-        // Read-back (D-16): the remote revision as evidence, when the policy allows a read; else what the write returned.
-        let remote = written.article;
-        if (readAllowed) {
-          const read = await adapter.readArticle(site, creds, io, written.article.remoteId);
-          if (read.outcome === 'found') remote = read.article;
-        }
+        // Read-back (D-16, RA-04): the remote revision as evidence, compared with what was sent; when the policy
+        // allows no read (or the read-back is missing) the write's response is recorded as unverified, never as proof.
+        const { remote, verification } = await readBackAfterWrite(
+          adapter,
+          site,
+          creds,
+          io,
+          readAllowed,
+          written.article,
+          sent,
+        );
         const readback = toReadback(remote);
         const validation = await validateWith(
           adapter,
@@ -298,7 +465,9 @@ export const destinationArticles: DestinationPublisher = {
           {
             url: remote.remoteUrl,
             title: article.title,
+            slug: article.slug,
             firstParagraph: articleFirstParagraph(article),
+            lastParagraph: articleLastParagraph(article),
             draft: remote.status !== 'publish',
           },
           hooks,
@@ -308,6 +477,7 @@ export const destinationArticles: DestinationPublisher = {
           remotePostId: remote.remoteId,
           remoteUrl: remote.remoteUrl,
           readback,
+          readbackVerification: verification,
           validation,
         };
       },
@@ -341,22 +511,44 @@ export const destinationArticles: DestinationPublisher = {
         message: 'the article was never read back from the site; reconcile it before editing',
       };
     const expectedHash = input.expectedHash;
+    const readAllowed = await destinationArticles.useAllowed(row.brandId, row.kind, 'read');
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
         const io = cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {});
-        const result = await adapter.updateArticle(
-          site,
-          creds,
-          io,
-          input.remoteId,
-          { html: sanitizeArticleHtml(input.html) },
-          { expectedHash },
-        );
+        const sent = { html: sanitizeArticleHtml(input.html) };
+        // RA-12: both halves of the read-back are the precondition; the adapter reads, compares and only then writes.
+        const result = await adapter.updateArticle(site, creds, io, input.remoteId, sent, {
+          expectedHash,
+          ...(input.expectedModifiedAt !== null ? { expectedModifiedAt: input.expectedModifiedAt } : {}),
+        });
         switch (result.outcome) {
-          case 'done':
-            return { outcome: 'done', readback: toReadback(result.article) };
+          case 'done': {
+            const { remote, verification } = await readBackAfterWrite(
+              adapter,
+              site,
+              creds,
+              io,
+              readAllowed,
+              result.article,
+              sent,
+            );
+            return {
+              outcome: 'done',
+              readback: toReadback(remote),
+              readbackVerification: verification,
+              // The site changed between the adapter's read and its write: what was read and what was lost.
+              ...(result.overwritten && result.previous
+                ? {
+                    overwritten: {
+                      previous: toReadback(result.previous),
+                      replaced: toReadback(result.overwritten),
+                    },
+                  }
+                : {}),
+            };
+          }
           case 'conflict':
             logger()
               .child('destinations')
@@ -364,10 +556,12 @@ export const destinationArticles: DestinationPublisher = {
                 { destinationId: row.id, reason: 'remote_changed_since_readback' },
                 'article edit refused: the remote moved',
               );
+            // The current remote travels with the refusal, so the stored read-back is refreshed (RA-12).
             return {
               outcome: 'rejected',
               code: 'conflict',
               message: `the article changed on the site since it was last read back (now ${result.current.modifiedAt ?? 'unknown'})`,
+              readback: toReadback(result.current),
             };
           case 'unknown':
             return { outcome: 'retryable_error', code: result.code, message: result.message };
@@ -397,19 +591,26 @@ export const destinationArticles: DestinationPublisher = {
         code: 'source_use_denied',
         message: 'the source-use policy does not allow a write',
       };
+    const readAllowed = await destinationArticles.useAllowed(row.brandId, row.kind, 'read');
     return withSite(
       input.tenantId,
       row,
       async (adapter, site, creds) => {
-        const result = await adapter.unpublishArticle(
+        const io = cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {});
+        const result = await adapter.unpublishArticle(site, creds, io, input.remoteId);
+        if (result.outcome !== 'done') return result;
+        if (!result.article) return { outcome: 'done' };
+        // RA-02: the revert is proven by reading the article back as a draft, never by the write's own answer.
+        const { remote, verification } = await readBackAfterWrite(
+          adapter,
           site,
           creds,
-          cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {}),
-          input.remoteId,
+          io,
+          readAllowed,
+          result.article,
+          { status: 'draft' },
         );
-        return result.outcome === 'done'
-          ? { outcome: 'done', ...(result.article ? { readback: toReadback(result.article) } : {}) }
-          : result;
+        return { outcome: 'done', readback: toReadback(remote), readbackVerification: verification };
       },
       () => ({
         outcome: 'rejected',
