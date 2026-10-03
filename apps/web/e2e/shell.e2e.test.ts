@@ -102,7 +102,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.waitForURL('**/studio', { timeout: 15_000 });
     const documents = page.getByTestId('documents');
     await documents.waitFor({ timeout: 15_000 });
-    expect(await documents.getByRole('link', { name: 'Studio index document' }).count()).toBe(1);
+    await expect
+      .poll(() => documents.getByRole('link', { name: 'Studio index document' }).count(), { timeout: 15_000 })
+      .toBe(1);
     expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(1);
     await page.close();
   }, 45_000);
