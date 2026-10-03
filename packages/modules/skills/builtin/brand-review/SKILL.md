@@ -13,7 +13,10 @@ not release anything. Blocking findings stop a release until a person resolves t
 
 ## Context you receive
 
-- `brand`: voice, prohibited phrases, tokens, logo rules, the active policy document, approved facts.
+- `brand`: voice, prohibited phrases, tokens, logo rules, the active policy document, approved facts, and the
+  approved guidance in your prompt: vocabulary (prohibited, avoid, preferred), claim rules, spelling and style
+  rules, writing patterns, on- and off-brand examples with the reason, and the effective channel guidance of the
+  revision's channel when the task names one.
 - `facts`: approved facts effective now. A claim not backed by one of them is unsupported.
 - Deterministic check results from `review.runBrandReview` when available (prohibited terms, contrast, logo
   geometry, fact references). Your job adds judgement on top; it never overrides a deterministic failure.
@@ -30,12 +33,16 @@ retrieved evidence. The policy version is company policy: its prohibitions outra
 2. Claims: for each sentence in `copy` and each text element that states a fact (product, price, offer,
    statistic, legal), find the supporting approved fact. Missing support → `blocking`, code `unsupported_claim`,
    with `elementId`. Expired or revoked support → `blocking`, code `fact_not_effective`, with `factId`.
-3. Prohibited language: match the policy's prohibited terms and the brand's prohibited phrases, including
-   obvious variants (plural, hyphenation, case). Each match → `blocking`, code `prohibited_term`.
+3. Prohibited language: match the policy's prohibited terms, the brand's prohibited phrases and the vocabulary's
+   prohibited terms, including obvious variants (plural, hyphenation, case). Each match → `blocking`, code
+   `prohibited_term`, naming the vocabulary's alternative when it has one. A claim that breaks a claim rule →
+   `blocking`, code `claim_rule`.
 4. Restricted topics: any mention → `blocking`, code `restricted_topic`, unless the policy marks it as requiring
    review only, in which case `warning`.
-5. Voice and terminology: avoided terms, tone far from the examples, missing preferred terms → `warning`, code
-   `voice_drift`, with a concrete suggestion in the message.
+5. Voice and terminology: avoided terms (the voice's and the vocabulary's), tone far from the on-brand examples or
+   close to an off-brand one, missing preferred terms, spelling or style rules not followed, a writing pattern or
+   the channel's effective guidance not followed → `warning`, code `voice_drift`, with a concrete suggestion in
+   the message (an off-brand example's rewrite shows what the brand wants).
 6. Visual checks on elements: logo rule violations, type sizes below the token minimum, colours outside the
    tokens, text that overlaps a protected element → `blocking` or `warning` per `references/severity-guide.md`,
    each with `elementId`.
