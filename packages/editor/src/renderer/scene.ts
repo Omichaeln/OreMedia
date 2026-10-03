@@ -26,8 +26,10 @@ import type { SceneElementMetrics, SceneMetrics } from './metrics';
  *  - tracking is in em (so reflow's size scaling keeps it proportional); line height is a multiplier;
  *  - text with a strong right-to-left first character is laid out right-to-left;
  *  - images: an explicit crop selects the source region, then `fit` places it (cover keeps aspect and crops towards
- *    the focal point; contain letterboxes; fill stretches). Logos are drawn into their box as-is (stretched if the
- *    box aspect differs) so the logo-distortion check can see what a designer did.
+ *    the focal point; contain letterboxes; fill stretches). Logos are contain-fitted (renderer 1.1.0, BSC-2): a logo
+ *    is never stretched, a box whose aspect differs from the artwork letterboxes it, centred. The logo-distortion
+ *    check still measures what was drawn. Before 1.1.0 logos were stretched to their box.
+ *  - an SVG logo is drawn from its original vector file in both the studio and the export, so both draw the same bytes.
  *  - a missing asset draws a neutral placeholder and reports missingAsset; a font family that is not loaded
  *    renders with the fallback and reports missingFont; an unknown colour token draws black and reports missingColour.
  */
@@ -401,7 +403,7 @@ export function buildScene(layer: Konva.Layer, page: CreativePage, ctx: SceneCon
         );
         break;
       case 'logo':
-        image(el, el.assetVersionId, box, { fit: 'stretch' }, f);
+        image(el, el.assetVersionId, box, { fit: 'contain' }, f);
         break;
       case 'shape':
         shape(el, f);
