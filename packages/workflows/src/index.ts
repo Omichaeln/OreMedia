@@ -27,6 +27,7 @@ export {
   destinationReportsWorkflowV1,
 } from './destination-report-sweep.workflow.v1';
 export { seoAuditSweepWorkflowV1, seoAuditWorkflowV1 } from './seo-audit.workflow.v1';
+export { seoAuditSweepWorkflowV2, seoAuditWorkflowV2 } from './seo-audit.workflow.v2';
 export { brandChangeImpactWorkflowV1 } from './brand-change-impact.workflow.v1';
 export { brandFactSweepWorkflowV1 } from './brand-fact-sweep.workflow.v1';
 export { metricCollectionWorkflowV1 } from './metric-collection.workflow.v1';
