@@ -20,6 +20,7 @@ import {
 } from '@oremedia/contracts/errors';
 import {
   CancelCommand,
+  ChannelLimitsList,
   ChannelList,
   PublicationDeleteRemote,
   PublicationUnpublishRemote,
@@ -1470,6 +1471,11 @@ export function phase5Routers(
         brandOf(input.brandId);
         return [...b.channels.values()];
       }),
+      /** BSC-1: the channel providers' platform limits, as the capability register states them. */
+      limits: query.input(ChannelLimitsList).query(({ input }) => {
+        brandOf(input.brandId);
+        return { items: CHANNEL_LIMITS };
+      }),
       ...extensions.channels,
     }),
     publications: router({
@@ -1968,3 +1974,63 @@ export function phase5Routers(
 
   return { content, publishing, review };
 }
+
+/** BSC-1: what publishing.channels.limits answers in the smokes (the Release 1 capability values). */
+const CHANNEL_LIMITS = [
+  {
+    providerKey: 'linkedin_page',
+    vendor: 'LinkedIn',
+    maxLength: 3000,
+    weighted: false,
+    images: 9,
+    videoSec: 600,
+    carousel: null,
+    threading: 'comments',
+  },
+  {
+    providerKey: 'instagram_business',
+    vendor: 'Meta',
+    maxLength: 2200,
+    weighted: false,
+    images: 10,
+    videoSec: 900,
+    carousel: { min: 2, max: 10 },
+    threading: 'comments',
+  },
+  {
+    providerKey: 'facebook_page',
+    vendor: 'Meta',
+    maxLength: 63206,
+    weighted: false,
+    images: 10,
+    videoSec: 600,
+    carousel: null,
+    threading: 'comments',
+  },
+  {
+    providerKey: 'x',
+    vendor: 'X',
+    maxLength: 280,
+    weighted: true,
+    images: 4,
+    videoSec: 140,
+    carousel: null,
+    threading: 'thread',
+  },
+].map((l) => ({
+  providerKey: l.providerKey,
+  vendor: l.vendor,
+  capabilityVersion: 1,
+  text: {
+    maxLength: l.maxLength,
+    weighted: l.weighted,
+    supportsLinks: true,
+    supportsMentions: true,
+    supportsHashtags: true,
+  },
+  image: { maxCount: l.images, aspectRatios: [] },
+  video: { maxDurationSec: l.videoSec },
+  carousel: l.carousel,
+  altText: true,
+  threading: l.threading as 'comments' | 'thread',
+}));

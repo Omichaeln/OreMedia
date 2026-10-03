@@ -9,7 +9,7 @@ import type { BrandChangeImpactInputV1 } from '@oremedia/contracts/brand-change-
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { memberships, tenants, users } from '@oremedia/db/schema/access';
-import { brands } from '@oremedia/db/schema/brand';
+import { approvedFacts, brands } from '@oremedia/db/schema/brand';
 import { auditEvents, outboxEvents } from '@oremedia/db/schema/operations';
 import { publications } from '@oremedia/db/schema/publishing';
 import { releaseApprovals } from '@oremedia/db/schema/review';
@@ -35,6 +35,7 @@ import { BRAND_CHANGE_IMPACT_WORKFLOW_TYPE, reviewService } from '@oremedia/modu
 import { ProviderRegistry } from '@oremedia/providers';
 import { runBrandChangeImpact } from '@oremedia/workflows/brand-change-impact.workflow.v1';
 import { createBrandChangeImpactRuntime } from './brand-change-runtime';
+import { createBrandFactSweepRuntime } from './brand-fact-sweep-runtime';
 import { composeModules } from './composition';
 
 /**
@@ -123,7 +124,7 @@ describe('brand change impact end to end (worker-core composition, real activiti
       );
 
   /** The workflow input the review module's outbox route builds from the newest event of a type. */
-  async function routedInput(type: 'brand.version_published' | 'brand.fact_revoked') {
+  async function routedInput(type: 'brand.version_published' | 'brand.fact_revoked' | 'brand.fact_expired') {
     const events = await eventsOf(type);
     const evt = events[events.length - 1]!;
     const req = outboxRouteFor(evt.eventType)!({ ...evt, payload: evt.payload })!;
@@ -384,6 +385,73 @@ describe('brand change impact end to end (worker-core composition, real activiti
 
     const again = await runBrandChangeImpact(acts, input);
     expect(again).toMatchObject({ approvalsInvalidated: 0, publicationsHeld: 0, publicationsFlagged: 0 });
+    expect(await row(citing.publicationId)).toMatchObject({ state: 'held', version: held.version });
+  });
+
+  it('BSC-3: approving a correction supersedes the cited fact and holds the scheduled publication like a revocation', async () => {
+    const fact = await approvedFact('Two for one in August');
+    const citing = await scheduledPublication('Cites the corrected fact', [fact]);
+    const correction = await run((tx) =>
+      brandService.facts.correct(
+        actor,
+        {
+          brandId: brandA,
+          factId: fact,
+          expectedVersion: 1,
+          statement: 'Two for one in August, members only',
+        },
+        tx,
+      ),
+    );
+    // The original still applies while the correction waits: nothing is routed yet.
+    expect((await eventsOf('brand.fact_revoked')).some((e) => e.aggregateId === fact)).toBe(false);
+    await run((tx) =>
+      brandService.facts.approve(
+        actor,
+        { brandId: brandA, factId: correction.factId, expectedVersion: 0 },
+        tx,
+      ),
+    );
+    const input = await routedInput('brand.fact_revoked');
+    expect(input).toMatchObject({ brandId: brandA, change: { kind: 'fact_revoked', factId: fact } });
+    const result = await runBrandChangeImpact(acts, input);
+    expect(result).toMatchObject({ publicationsHeld: 1, publicationsFlagged: 0 });
+    const held = await row(citing.publicationId);
+    expect(held.state).toBe('held');
+    expect(held.holdReasons).toEqual(expect.arrayContaining(['facts_valid']));
+  });
+
+  it('BSC-3: the daily fact sweep holds the scheduled publication citing an expired fact, as the platform job, once', async () => {
+    const fact = await approvedFact('Back to school: 15% off');
+    const citing = await scheduledPublication('Cites the expiring offer', [fact]);
+    await tdb.db
+      .update(approvedFacts)
+      .set({ validUntil: new Date(Date.now() - 60_000) })
+      .where(eq(approvedFacts.id, fact));
+    const sweepActor = { kind: 'platform_operator' as const, id: 'brand-fact-sweep' };
+    const sweep = () =>
+      runInTenant(
+        { tenantId: tenantA, actor: sweepActor, brandIds: 'all', correlationId: 'corr_fact_sweep' },
+        () =>
+          createBrandFactSweepRuntime().sweepBrandFacts({
+            tenantId: tenantA,
+            brandId: brandA,
+            actor: sweepActor,
+            correlationId: 'corr_fact_sweep',
+            now: new Date().toISOString(),
+          }),
+      );
+    expect((await sweep()).expired).toBeGreaterThanOrEqual(1);
+    const held = await row(citing.publicationId);
+    expect(held.state).toBe('held');
+    expect(held.holdReasons).toEqual(expect.arrayContaining(['facts_valid']));
+    expect(held.stateReason).toBe(`fact_expired:${fact}`);
+    const holds = await auditOf('publication.hold', citing.publicationId);
+    expect(holds).toHaveLength(1);
+    expect(holds[0]).toMatchObject({ actorKind: 'platform_operator', actorId: 'brand-fact-sweep' });
+    // brand.fact_expired is informational: nothing routes it, and a second sweep changes nothing.
+    expect(outboxRouteFor('brand.fact_expired')).toBeUndefined();
+    expect(await sweep()).toMatchObject({ expired: 0 });
     expect(await row(citing.publicationId)).toMatchObject({ state: 'held', version: held.version });
   });
 

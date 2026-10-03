@@ -76,7 +76,6 @@ import {
   BrandVersionList,
   BrandVersionUpdate,
   emptyBrandSystemDocument,
-  FactList,
   ObjectiveList,
   OnboardingStart,
   PolicyGet,
@@ -128,6 +127,7 @@ import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
 import { DestinationsBackend, destinationsRouters } from './mock-destinations';
+import { FactsBackend, factsRouter } from './mock-facts';
 import { overviewRouters } from './mock-overview';
 
 /**
@@ -229,6 +229,22 @@ function seedBrandVersions(brandId: string): MockBrandVersion[] {
   };
   const proposed = BrandSystemDocumentV1.parse({
     ...document,
+    // BSC-1: a term inferred from supplied examples, with its provenance, as an assisted import proposes one.
+    vocabulary: [
+      {
+        term: 'small-batch',
+        usage: 'preferred',
+        alternatives: [],
+        provenance: {
+          origin: 'inferred',
+          evidence: [
+            { kind: 'document', ref: 'guidelines:SKILL.md' },
+            { kind: 'document', ref: 'guidelines:references/tone.md' },
+          ],
+          confidence: 'medium',
+        },
+      },
+    ],
     patterns: [
       {
         key: 'reference-imagery',
@@ -659,6 +675,8 @@ export class MockBackend {
   readonly community: CommunityBackend;
   /** Brand destinations and the source-use policy (mock-destinations.ts). */
   readonly destinations: DestinationsBackend;
+  /** BSC-3 brand facts (mock-facts.ts); empty unless a suite seeds the workspace fixtures. */
+  readonly facts: FactsBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
@@ -913,6 +931,7 @@ export class MockBackend {
     };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
+    this.facts = new FactsBackend(company.brandId, () => this.role);
     // R2-3: a website is a variant target (content).
     this.phase6.destinationOf = (destinationId) => {
       const d = this.destinations.destinations.find((x) => x.id === destinationId && x.kind === 'cms_site');
@@ -2385,7 +2404,7 @@ export function createMockRouter(backend: MockBackend) {
           };
         }),
       }),
-      facts: t.router({ list: query.input(FactList).query(() => ({ items: [], nextCursor: null })) }),
+      facts: factsRouter(backend.facts, { router: t.router, query, mutation }),
       objectives: t.router({
         list: query.input(ObjectiveList).query(() => ({ items: [], nextCursor: null })),
       }),

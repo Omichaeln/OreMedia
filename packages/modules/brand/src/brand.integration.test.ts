@@ -4,7 +4,7 @@ import {
   BrandCreate,
   defaultPolicyDocument,
   emptyBrandSystemDocument,
-  type BrandSystemDocumentV1,
+  BrandSystemDocumentV1,
 } from '@oremedia/contracts/brand';
 import {
   ConflictError,
@@ -31,6 +31,7 @@ import { newId } from '@oremedia/domain/ids';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerChannelKeySource,
   registerBrandAssetVersionSource,
   registerEligibleTemplateSource,
   registerOnboardingRunSource,
@@ -38,6 +39,7 @@ import {
   resetBrandAssetKindSource,
   resetBrandAssetVersionSource,
   resetBrandChangeImpactSource,
+  resetChannelKeySource,
   resetEligibleTemplateSource,
   resetOnboardingRunSource,
   type OnboardingRunSource,
@@ -1051,6 +1053,213 @@ describe('brand module (spec 8) against MySQL 8', () => {
     });
   });
 
+  describe('guidance references (BSC-1)', () => {
+    const brandG = newId('brand');
+    let approved = '';
+    let proposed = '';
+    let applied: string | null = null;
+    const guided = (over: Partial<BrandSystemDocumentV1> = {}): BrandSystemDocumentV1 => ({
+      ...emptyBrandSystemDocument(),
+      voice: {
+        ...emptyBrandSystemDocument().voice,
+        examples: [
+          {
+            text: 'Best coffee ever',
+            verdict: 'off_brand',
+            note: '',
+            channelKey: 'x',
+            rationale: 'An unprovable superlative',
+            rewrite: 'Roasted this morning',
+          },
+        ],
+        principles: [
+          { statement: 'Say what we can prove', rationale: 'Trust', provenance: { origin: 'user' } },
+        ],
+      },
+      messaging: {
+        positioning: 'The roaster for owners',
+        valueProposition: 'Fresh beans every week',
+        pillars: [{ key: 'fresh', title: 'Fresh', statement: 'Roasted weekly', proofFactIds: [approved] }],
+        keyMessages: [{ text: 'Roasted this week', pillarKey: 'fresh' }],
+      },
+      vocabulary: [
+        { term: 'Roast', usage: 'preferred', alternatives: [] },
+        { term: 'blend', usage: 'avoid', alternatives: ['roast'] },
+      ],
+      copyTemplates: [
+        {
+          key: 'proof-post',
+          name: 'Proof post',
+          contentType: 'social_post',
+          channelKeys: ['linkedin_page'],
+          purpose: 'Show a fact',
+          structure: [{ slot: 'hook', guidance: 'A number', maxLength: 80 }],
+        },
+      ],
+      channelBaseline: { cta: 'Invite a reply' },
+      channelGuidance: [
+        { providerKey: 'linkedin_page', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+      ],
+      ...over,
+    });
+    const save = (document: BrandSystemDocumentV1) =>
+      run(tenantA, (tx) =>
+        brandService.system.save(A, { brandId: brandG, basedOnVersionId: applied, document }, tx),
+      );
+    const issuesOf = async (document: BrandSystemDocumentV1) => {
+      const err = await save(document).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(ValidationFailedError);
+      return (err as ValidationFailedError).details;
+    };
+
+    beforeAll(async () => {
+      await tdb.db.insert(brands).values({
+        id: brandG,
+        tenantId: tenantA,
+        name: 'G1',
+        timezone: 'UTC',
+        defaultLocale: 'en',
+        status: 'active',
+      });
+      approved = (
+        await run(tenantA, (tx) =>
+          brandService.facts.propose(
+            A,
+            { brandId: brandG, kind: 'claim', statement: 'Roasted every week', evidence },
+            tx,
+          ),
+        )
+      ).factId;
+      await run(tenantA, (tx) =>
+        brandService.facts.approve(A, { brandId: brandG, factId: approved, expectedVersion: 0 }, tx),
+      );
+      proposed = (
+        await run(tenantA, (tx) =>
+          brandService.facts.propose(
+            A,
+            { brandId: brandG, kind: 'claim', statement: 'Best in Harare', evidence },
+            tx,
+          ),
+        )
+      ).factId;
+    });
+
+    it('a document with valid guidance saves, round-trips and its snapshot carries the guidance', async () => {
+      const document = guided();
+      const saved = await save(document);
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
+      const row = (await tdb.db.select().from(brandVersions).where(eq(brandVersions.id, applied!)))[0]!;
+      expect(BrandSystemDocumentV1.parse(row.document)).toEqual(document);
+      const snapshot = await runInTenant(ctx(tenantA), () =>
+        brandService.resolveBrandSnapshot(A, { brandId: brandG }),
+      );
+      expect(snapshot.document.messaging?.pillars[0]?.proofFactIds).toEqual([approved]);
+      expect(snapshot.document.channelBaseline).toEqual({ cta: 'Invite a reply' });
+    });
+
+    it('a pillar cites facts of this brand only, and a newly cited fact must be approved', async () => {
+      const pillars = (ids: string[]) => ({
+        messaging: {
+          ...guided().messaging!,
+          pillars: [{ ...guided().messaging!.pillars[0]!, proofFactIds: ids }],
+        },
+      });
+      expect(await issuesOf(guided(pillars([approved, factBOfB, 'fact_missing'])))).toEqual([
+        { path: 'messaging.pillars.0.proofFactIds.1', issue: 'not_a_fact_of_this_brand' },
+        { path: 'messaging.pillars.0.proofFactIds.2', issue: 'not_a_fact_of_this_brand' },
+      ]);
+      expect(await issuesOf(guided(pillars([proposed])))).toEqual([
+        { path: 'messaging.pillars.0.proofFactIds.0', issue: 'fact_not_in_effect' },
+      ]);
+    });
+
+    it('channel keys must name known channels; keys, pillars and vocabulary terms are unique', async () => {
+      const base = guided();
+      const details = await issuesOf({
+        ...base,
+        voice: { ...base.voice, examples: [{ ...base.voice.examples[0]!, channelKey: 'myspace' }] },
+        channelGuidance: [
+          ...base.channelGuidance,
+          { providerKey: 'linkedin_page', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+          { providerKey: 'friendster', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+        ],
+        copyTemplates: [base.copyTemplates![0]!, { ...base.copyTemplates![0]!, channelKeys: ['bebo'] }],
+        vocabulary: [...base.vocabulary!, { term: ' roast ', usage: 'allowed', alternatives: [] }],
+        messaging: {
+          ...base.messaging!,
+          pillars: [...base.messaging!.pillars, base.messaging!.pillars[0]!],
+          keyMessages: [{ text: 'Orphan', pillarKey: 'gone' }],
+        },
+      });
+      expect(details).toEqual(
+        expect.arrayContaining([
+          { path: 'channelGuidance.2.providerKey', issue: 'unknown_channel' },
+          { path: 'channelGuidance.1.providerKey', issue: 'duplicate_key' },
+          { path: 'copyTemplates.1.channelKeys.0', issue: 'unknown_channel' },
+          { path: 'copyTemplates.1.key', issue: 'duplicate_key' },
+          { path: 'voice.examples.0.channelKey', issue: 'unknown_channel' },
+          { path: 'vocabulary.2.term', issue: 'duplicate_key' },
+          { path: 'messaging.pillars.1.key', issue: 'duplicate_key' },
+          { path: 'messaging.keyMessages.0.pillarKey', issue: 'unknown_pillar' },
+        ]),
+      );
+      expect(details).toHaveLength(8);
+    });
+
+    it('channel keys come from the registered channel source', async () => {
+      registerChannelKeySource(() => ['linkedin_page']);
+      try {
+        // A channel the source does not list (and the applied document does not hold) is refused.
+        const base = guided();
+        expect(
+          await issuesOf({
+            ...base,
+            copyTemplates: [{ ...base.copyTemplates![0]!, channelKeys: ['facebook_page'] }],
+          }),
+        ).toEqual([{ path: 'copyTemplates.0.channelKeys.0', issue: 'unknown_channel' }]);
+      } finally {
+        resetChannelKeySource();
+      }
+    });
+
+    it('repeats and unresolvable facts the applied document already holds are not re-checked; new ones are', async () => {
+      // An applied document written before the checks, holding a repeated term and a fact id that is not this brand's.
+      const legacy = guided({
+        vocabulary: [
+          { term: 'roast', usage: 'preferred', alternatives: [] },
+          { term: 'Roast', usage: 'allowed', alternatives: [] },
+        ],
+        messaging: {
+          ...guided().messaging!,
+          pillars: [{ ...guided().messaging!.pillars[0]!, proofFactIds: [approved, 'fact_gone'] }],
+        },
+      });
+      await tdb.db.update(brandVersions).set({ document: legacy }).where(eq(brandVersions.id, applied!));
+      const saved = await save({ ...legacy, channelBaseline: { cta: 'Reply' } });
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
+      expect(
+        await issuesOf({
+          ...legacy,
+          copyTemplates: [legacy.copyTemplates![0]!, legacy.copyTemplates![0]!],
+        }),
+      ).toEqual([{ path: 'copyTemplates.1.key', issue: 'duplicate_key' }]);
+    });
+
+    it('a fact the applied brand system already cites still saves after it is revoked', async () => {
+      await run(tenantA, (tx) =>
+        brandService.facts.revoke(A, { brandId: brandG, factId: approved, expectedVersion: 1 }, tx),
+      );
+      const saved = await save(guided({ channelBaseline: { cta: 'Invite a reply', links: 'One link' } }));
+      expect(saved.changed).toBe(true);
+      applied = saved.versionId;
+    });
+  });
+
   describe('brand kit references (logos, palette, reference imagery)', () => {
     const brandKit = newId('brand');
     let draft = '';
@@ -1547,7 +1756,12 @@ describe('brand module (spec 8) against MySQL 8', () => {
       expect(written).toMatchObject({ versionId: draftId, version: before.version + 1 });
       const after = await versionOf(draftId);
       expect(after.state).toBe('draft');
-      expect(after.document.voice).toEqual(proposal);
+      // What the agent adds is marked as its suggestion.
+      expect(after.document.voice).toEqual({
+        ...proposal,
+        audiences: proposal.audiences.map((a) => ({ ...a, provenance: { origin: 'suggested' } })),
+        examples: proposal.examples.map((e) => ({ ...e, provenance: { origin: 'suggested' } })),
+      });
       expect(after.document.guidelines).toEqual(before.document.guidelines);
       expect(after.document.tokens).toEqual(before.document.tokens);
       // The voice is no longer the one the run started from: a repeat never overwrites.
@@ -1587,6 +1801,85 @@ describe('brand module (spec 8) against MySQL 8', () => {
         reason: 'not_an_onboarding_run',
       });
       await expect(propose('run_2', { ...proposal, tone: Array(13).fill('x') })).rejects.toThrow();
+    });
+
+    it("a proposal merges audiences and examples: a person's items are kept as they are, matched items keep their guidance fields", async () => {
+      const current = await versionOf(draftId);
+      const voice = current.document.voice;
+      await run(tenantA, (tx) =>
+        brandService.versions.update(
+          person,
+          {
+            brandId: brandOnb,
+            versionId: draftId,
+            expectedVersion: current.version,
+            document: {
+              ...current.document,
+              voice: {
+                ...voice,
+                personality: [{ trait: 'Warm', provenance: { origin: 'user' } }],
+                audiences: [
+                  {
+                    key: 'regulars',
+                    description: 'Weekly buyers',
+                    needs: ['Fresh stock'],
+                    provenance: { origin: 'user' },
+                  },
+                  { key: 'cafes', description: 'Cafe owners', objections: ['Price'] },
+                ],
+                examples: [
+                  {
+                    text: 'This week: a Chipinge roast.',
+                    verdict: 'on_brand',
+                    note: 'plain',
+                    channelKey: 'x',
+                    rationale: 'Concrete',
+                  },
+                ],
+              },
+            },
+          },
+          tx,
+        ),
+      );
+      const { runId } = await start(draftId);
+      await propose(runId, {
+        ...proposal,
+        summary: 'Edited by a person.', // the later case reads the summary the person left
+        audiences: [
+          { key: 'regulars', description: 'Overwritten by the agent' },
+          { key: 'cafes', description: 'Independent cafes' },
+          { key: 'offices', description: 'Office managers' },
+        ],
+      });
+      const merged = (await versionOf(draftId)).document.voice;
+      expect(merged.personality).toEqual([{ trait: 'Warm', provenance: { origin: 'user' } }]);
+      expect(merged.audiences).toEqual([
+        {
+          key: 'regulars',
+          description: 'Weekly buyers',
+          needs: ['Fresh stock'],
+          provenance: { origin: 'user' },
+        },
+        {
+          key: 'cafes',
+          description: 'Independent cafes',
+          objections: ['Price'],
+          provenance: { origin: 'suggested' },
+        },
+        { key: 'offices', description: 'Office managers', provenance: { origin: 'suggested' } },
+      ]);
+      // Same text and values: the example keeps its channel and rationale.
+      expect(merged.examples).toEqual([
+        {
+          text: 'This week: a Chipinge roast.',
+          verdict: 'on_brand',
+          note: 'plain',
+          channelKey: 'x',
+          rationale: 'Concrete',
+          provenance: { origin: 'suggested' },
+        },
+      ]);
     });
 
     it('a draft that went to review takes no proposal, even from a run that started on it', async () => {

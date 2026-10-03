@@ -1133,13 +1133,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     // The mock proposal adds reference imagery and guidelines; nothing else differs.
     await expect
       .poll(() => proposed.textContent(), { timeout: 15_000 })
-      .toContain('It changes Imagery, Guidelines.');
+      .toContain('It changes Vocabulary, Imagery, Guidelines.');
     expect(await proposed.textContent()).toContain('Imported from the brand skill e2e-brand.');
     await proposed.getByRole('button', { name: 'Review' }).click();
     const review = page.getByTestId('proposal-review');
     await expect
       .poll(() => review.textContent(), { timeout: 15_000 })
-      .toContain('Changes Imagery, Guidelines.');
+      .toContain('Changes Vocabulary, Imagery, Guidelines.');
     await review.getByRole('button', { name: 'Save', exact: true }).click();
     // UX-20: the confirmation names what the save reaches, from the review and publishing stores. Whether the
     // settings test above recorded a choice or not, the policy line names today's behaviour.

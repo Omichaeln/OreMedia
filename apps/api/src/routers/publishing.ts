@@ -5,6 +5,7 @@ import {
   ChannelConnectSelect,
   ChannelConnectStart,
   ChannelDisconnect,
+  ChannelLimitsList,
   ChannelList,
   PublicationDeleteRemote,
   PublicationEditRemote,
@@ -57,6 +58,10 @@ export const publishingRouter = router({
     list: tenantQuery
       .input(ChannelList)
       .query(({ ctx, input }) => channelService.list(ctx.tenant.actor, input)),
+    /** BSC-1: the channel providers' platform limits, read-only beside the brand's channel guidance. */
+    limits: tenantQuery
+      .input(ChannelLimitsList)
+      .query(({ ctx, input }) => channelService.limits(ctx.tenant.actor, input)),
     disconnect: tenantMutation
       .input(ChannelDisconnect)
       .mutation(({ ctx, input }) =>

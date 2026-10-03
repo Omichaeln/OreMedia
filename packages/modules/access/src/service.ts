@@ -831,6 +831,26 @@ export const accessService = {
   },
 
   /**
+   * BSC-3: the names of the company's members among `userIds`, for showing who reviewed or approved something to the
+   * people who can see it (never an email; a person who is not an active member of this company is left out, as is
+   * one without a name). The caller has already authorised reading the record that names them.
+   */
+  async memberNames(userIds: readonly string[], tx?: Tx): Promise<Map<string, string>> {
+    const wanted = new Set(userIds);
+    if (wanted.size === 0) return new Map();
+    const rows = (await membershipsRepo.list(tx)).filter(
+      (m) => m.status === 'active' && wanted.has(m.userId),
+    );
+    const people = await runAsPlatform('member-names', requireTenant().correlationId, () =>
+      directory.usersByIds(
+        rows.map((m) => m.userId),
+        tx,
+      ),
+    );
+    return new Map(people.flatMap((u) => (u.name ? [[u.id, u.name] as const] : [])));
+  },
+
+  /**
    * The company's members (Settings → Members): each membership with the person's name and email, role, status,
    * whether it covers every brand and the brands granted otherwise. Names and emails are personal data, so this is
    * membership.manage (owners and admins), the same people who invite and change roles.
