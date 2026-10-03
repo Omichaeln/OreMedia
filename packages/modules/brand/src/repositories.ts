@@ -294,6 +294,15 @@ export class ApprovedFactRepository extends BrandScopedRepository<typeof approve
       .limit(page.limit + 1);
     return pageOf(rows, page);
   }
+  /** The state of each listed fact of the brand; ids that are missing, foreign or of another brand are absent. */
+  async statesOf(brandId: string, ids: string[], tx?: Tx): Promise<Map<string, FactState>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.conn(tx)
+      .select({ id: approvedFacts.id, state: approvedFacts.state })
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, inArray(approvedFacts.id, ids)));
+    return new Map(rows.map((r) => [r.id, r.state]));
+  }
   /** The brand's live facts (proposed or approved), id and statement only, for duplicate detection (bounded). */
   async listLiveStatements(brandId: string, tx?: Tx) {
     return this.conn(tx)

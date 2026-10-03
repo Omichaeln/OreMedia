@@ -108,6 +108,29 @@ import type {
 
 // ---- router DTOs (spec 7.5 publishing router) ----
 export const ChannelList = z.object({ brandId: z.string() });
+/** BSC-1: the platform limits of the channel providers, shown read-only beside the brand's channel guidance. */
+export const ChannelLimitsList = z.object({ brandId: z.string() });
+export const ChannelLimitsV1 = z.object({
+  providerKey: z.string(),
+  /** The platform the person knows ("LinkedIn", "X"); the provider key when the capability names none. */
+  vendor: z.string(),
+  capabilityVersion: z.number().int(),
+  text: z.object({
+    maxLength: z.number(),
+    weighted: z.boolean(),
+    supportsLinks: z.boolean(),
+    supportsMentions: z.boolean(),
+    supportsHashtags: z.boolean(),
+  }),
+  image: z
+    .object({ maxCount: z.number(), aspectRatios: z.array(z.object({ min: z.number(), max: z.number() })) })
+    .nullable(),
+  video: z.object({ maxDurationSec: z.number() }).nullable(),
+  carousel: z.object({ min: z.number(), max: z.number() }).nullable(),
+  altText: z.boolean(),
+  threading: z.enum(['none', 'comments', 'thread']),
+});
+export type ChannelLimitsV1 = z.infer<typeof ChannelLimitsV1>;
 export const ChannelDisconnect = z.object({
   channelConnectionId: z.string(),
   expectedVersion: z.number().int(),

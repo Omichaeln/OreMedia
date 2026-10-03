@@ -3,6 +3,7 @@ export * from './canonical-json';
 export * from './hash';
 export * from './approval-binding';
 export * from './brand-snapshot';
+export * from './channel-guidance';
 export * from './occurrence';
 export * from './autonomy';
 export * from './role-grants';

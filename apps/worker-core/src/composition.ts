@@ -37,6 +37,7 @@ import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerChannelKeySource,
   registerBrandAssetVersionSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
@@ -127,6 +128,7 @@ import {
   registerPublishingBrandChecker,
   registerDestinationPublisher,
   type WorkflowProbe,
+  providerRegistryInUse,
 } from '@oremedia/module-publishing';
 
 /**
@@ -271,6 +273,12 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
+  // BSC-1: guidance names the channels of the registry publishing uses (the one channels.limits reads).
+  registerChannelKeySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.key),
+  );
   registerBrandAssetVersionSource((brandId, ids, tx) => assetService.assetsOfVersions(brandId, ids, tx));
   // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
   registerOnboardingRunSource(onboardingRunSource);

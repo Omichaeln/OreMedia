@@ -216,6 +216,22 @@ function seedBrandVersions(brandId: string): MockBrandVersion[] {
   };
   const proposed = BrandSystemDocumentV1.parse({
     ...document,
+    // BSC-1: a term inferred from supplied examples, with its provenance, as an assisted import proposes one.
+    vocabulary: [
+      {
+        term: 'small-batch',
+        usage: 'preferred',
+        alternatives: [],
+        provenance: {
+          origin: 'inferred',
+          evidence: [
+            { kind: 'document', ref: 'guidelines:SKILL.md' },
+            { kind: 'document', ref: 'guidelines:references/tone.md' },
+          ],
+          confidence: 'medium',
+        },
+      },
+    ],
     patterns: [
       {
         key: 'reference-imagery',
