@@ -4,27 +4,20 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { studioVideoJobs } from '@oremedia/db/schema/creative';
+import { creativeRevisions } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { creativeService } from '@oremedia/module-creative';
-import {
-  LATER_TABLE_NAMES,
-  seedTwoTenants,
-  snapshotColumns,
-  type SeededTenant,
-} from '../../../tooling/test-fixtures/src/seed';
+import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0026 (STU-3 studio video AI): on a database populated at the previous head the migration
- * creates studio_video_jobs (empty); every existing row is unchanged and the seeded document still reads through the
- * new code. The table is in LATER_TABLE_NAMES (seed.ts). creative_revisions.generation_inputs is STU-1b's (0027).
+ * Ledger 1.g4 for migration 0027 (the stand-in for STU-1b's generation_inputs column until #59 lands): on a populated
+ * database it adds the nullable creative_revisions.generation_inputs; every existing row is unchanged and every
+ * existing revision has none. The column is in LATER_COLUMNS (seed.ts).
  */
-const PREVIOUS_HEAD = '0025_video_projects';
-const TABLES = (Object.values(schema) as unknown[])
-  .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
+const PREVIOUS_HEAD = '0026_studio_video_jobs';
+const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
 
-describe('migration 0026 rolls forward on a populated database (ledger 1.g4)', () => {
+describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
   let tenantA: SeededTenant;
   let before = '';
@@ -42,17 +35,19 @@ describe('migration 0026 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(studioVideoJobs)).rejects.toThrow(); // not there yet
+    await expect(tdb.db.select().from(creativeRevisions)).rejects.toThrow(); // generation_inputs not there yet
     before = await snapshot();
   });
   afterAll(async () => {
     await tdb?.drop();
   });
 
-  it('creates studio_video_jobs, leaving every existing row unchanged', async () => {
+  it('adds generation_inputs (null on every existing revision), leaving every existing row unchanged', async () => {
     await tdb.migrateToHead();
     expect(await snapshot()).toBe(before);
-    expect(await tdb.db.select().from(studioVideoJobs)).toEqual([]);
+    const revisions = await tdb.db.select().from(creativeRevisions);
+    expect(revisions.length).toBeGreaterThan(0);
+    expect(revisions.every((r) => r.generationInputs === null)).toBe(true);
   });
 
   it('the seeded document reads through the new code', async () => {
@@ -71,7 +66,7 @@ describe('migration 0026 rolls forward on a populated database (ledger 1.g4)', (
       tenantId: tenantA.tenantId,
       actor: { kind: 'user' as const, id: tenantA.ownerUserId },
       brandIds: 'all' as const,
-      correlationId: 'corr_roll_forward_0026',
+      correlationId: 'corr_roll_forward_0027',
     };
     const documentId = tenantA.ids['creativeDocumentId'] as string;
     const got = await runInTenant(ctx, () => creativeService.documents.get(owner, { documentId }));

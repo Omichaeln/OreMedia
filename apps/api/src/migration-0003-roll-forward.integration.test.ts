@@ -20,7 +20,12 @@ import {
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { accessService } from '@oremedia/module-access';
 // Relative import: a workspace dependency here would create an api ↔ test-fixtures cycle (test-fixtures imports the router).
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0003 (D-03 Google sign-in): on a database populated at the previous head (0002) the
@@ -48,7 +53,8 @@ const LATER_TABLES: MySqlTable[] = [
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0003 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

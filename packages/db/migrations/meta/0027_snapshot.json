@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "85851c30-ec63-4b90-a4f7-d324514b125a",
-  "prevId": "503b2558-6512-474d-8f53-9f2969dba663",
+  "id": "e185d261-1ccd-4716-bf18-34b58e191487",
+  "prevId": "85851c30-ec63-4b90-a4f7-d324514b125a",
   "tables": {
     "api_clients": {
       "name": "api_clients",
@@ -3724,6 +3724,13 @@
           "type": "char(64)",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "generation_inputs": {
+          "name": "generation_inputs",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "created_at": {

@@ -283,7 +283,7 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   render_jobs: ['progress'], // 0024
   rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key', 'dedupe_key'], // 0024, 0025
   creative_documents: ['kind'], // 0025
-  creative_revisions: ['generation_inputs'], // 0026
+  creative_revisions: ['generation_inputs'], // STU-1b 0027 (#59)
 };
 
 /** Tables created after every head the older roll-forward suites seed; their snapshots leave them out. */

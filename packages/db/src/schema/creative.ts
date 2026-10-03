@@ -68,7 +68,13 @@ export const creativeRevisions = mysqlTable(
     operations: json('operations').$type<OperationBatch | VideoOperationBatch>().notNull(), // what changed from parent
     snapshot: json('snapshot').$type<CreativeDocumentV1 | VideoProjectV1>().notNull(), // full document at this revision
     contentHash: hash('content_hash').notNull(),
-    /** STU-3 (principle 8): what produced an AI-assisted revision; null for people's own edits and older rows. */
+    /**
+     * Principle 8: what produced an AI-assisted revision; null for people's own edits and older rows. The column is
+     * STU-1b's (#59, migration 0027_studio_generation, GenerationInputs); STU-3 writes its video variant
+     * (VideoGenerationInputs, `documentKind: 'video'`). Until #59 lands, the stand-in migration
+     * 0027_generation_inputs_stand_in_for_stu1b adds the same column; it is dropped when this branch is rebased onto
+     * #59, and the column's type becomes the union of the two.
+     */
     generationInputs: json('generation_inputs').$type<VideoGenerationInputs>(),
     createdAt: createdAt(),
   },
@@ -333,6 +339,12 @@ export const studioVideoJobs = mysqlTable(
     progress: int('progress').notNull().default(0),
     request: json('request').$type<VideoAiRequest>().notNull(),
     inputsHash: hash('inputs_hash').notNull(),
+    /**
+     * Idempotent start while the job is live: `<requester>:<base revision>:<inputs hash>`, cleared when it finishes
+     * (completed, failed, cancelled), so the same person's repeated start joins the live job and a finished job can
+     * be asked for again. Unique per document; MySQL lets any number of rows hold null.
+     */
+    liveKey: varchar('live_key', { length: 160 }),
     attempt: int('attempt').notNull().default(1),
     /** The current attempt's budget reservation key (budget_reservations.run_id). */
     budgetRunId: ref('budget_run_id'),
@@ -352,7 +364,7 @@ export const studioVideoJobs = mysqlTable(
     version: version(),
   },
   (t) => [
-    uniqueIndex('uq_video_job_inputs').on(t.tenantId, t.documentId, t.baseRevisionId, t.inputsHash),
+    uniqueIndex('uq_video_job_live').on(t.tenantId, t.documentId, t.liveKey),
     index('ix_video_job_document').on(t.tenantId, t.documentId, t.state),
     uniqueIndex('uq_video_job_tbi').on(t.tenantId, t.brandId, t.id),
     foreignKey({

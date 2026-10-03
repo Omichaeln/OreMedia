@@ -9,6 +9,7 @@ CREATE TABLE `studio_video_jobs` (
 	`progress` int NOT NULL DEFAULT 0,
 	`request` json NOT NULL,
 	`inputs_hash` char(64) NOT NULL,
+	`live_key` varchar(160),
 	`attempt` int NOT NULL DEFAULT 1,
 	`budget_run_id` varchar(32),
 	`budget_reservation_id` varchar(32),
@@ -25,10 +26,9 @@ CREATE TABLE `studio_video_jobs` (
 	`updated_at` datetime(3) NOT NULL,
 	`version` int NOT NULL DEFAULT 0,
 	CONSTRAINT `studio_video_jobs_id` PRIMARY KEY(`id`),
-	CONSTRAINT `uq_video_job_inputs` UNIQUE(`tenant_id`,`document_id`,`base_revision_id`,`inputs_hash`),
+	CONSTRAINT `uq_video_job_live` UNIQUE(`tenant_id`,`document_id`,`live_key`),
 	CONSTRAINT `uq_video_job_tbi` UNIQUE(`tenant_id`,`brand_id`,`id`)
 );
 --> statement-breakpoint
-ALTER TABLE `creative_revisions` ADD `generation_inputs` json;--> statement-breakpoint
 ALTER TABLE `studio_video_jobs` ADD CONSTRAINT `fk_video_job_document` FOREIGN KEY (`tenant_id`,`brand_id`,`document_id`) REFERENCES `creative_documents`(`tenant_id`,`brand_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `ix_video_job_document` ON `studio_video_jobs` (`tenant_id`,`document_id`,`state`);

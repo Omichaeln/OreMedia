@@ -54,7 +54,7 @@ export function seedCreativeDocument(brandVersionId: string, elementId = newElem
 }
 
 /**
- * sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0026), which the roll-forward
+ * sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (STU-1b 0027), which the roll-forward
  * suites' earlier heads do not have; at 0026 and later the column is null.
  */
 async function insertRevision(
