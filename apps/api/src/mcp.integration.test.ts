@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { and, eq } from 'drizzle-orm';
+import { registerSkillResolver, type ResolvedSkill } from '@oremedia/ai';
 import { defaultPolicyDocument } from '@oremedia/contracts/brand';
 import { agentRuns } from '@oremedia/db/schema/agents';
 import { brands } from '@oremedia/db/schema/brand';
@@ -40,6 +41,35 @@ describe('MCP server (spec 7.6, 12.4)', () => {
   let base: string;
   /** Every MCP action granted on every brand, every MCP scope. */
   let full: { key: string; servicePrincipalId: string; apiClientId: string };
+  /** A start needs a published skill for the task kind (RA-07): stood in as the agents suite does. */
+  const copywritingSkill: ResolvedSkill = {
+    skillVersionId: 'sv_01HMCPTESTSKILL000000000000',
+    skillId: 'skl_01HMCPTESTSKILL00000000000',
+    key: 'mcp-copywriting',
+    versionNumber: 1,
+    manifest: {
+      schemaVersion: 1,
+      key: 'mcp-copywriting',
+      title: 'MCP copywriting',
+      description: 'test',
+      taskKinds: ['copywriting'],
+      inputSchema: {},
+      outputSchema: { type: 'object' },
+      requiredContext: ['brand_snapshot'],
+      allowedTools: ['brand.getSnapshot', 'facts.list'],
+      budgets: {
+        maxSteps: 6,
+        maxTokens: 100_000,
+        maxCostMicros: 2_000_000,
+        maxVariants: 3,
+        deadlineSeconds: 900,
+      },
+      modelCompatibility: [],
+      instructionsPath: 'SKILL.md',
+    },
+    instructions: 'Write on-brand copy citing approved facts.',
+    references: [],
+  };
 
   const ALL_ACTIONS = [
     'brand.read',
@@ -55,6 +85,7 @@ describe('MCP server (spec 7.6, 12.4)', () => {
     tdb = await createTestDatabase();
     configureRateLimiter();
     ({ tenantA, tenantB } = await seedTwoTenants(tdb.db));
+    registerSkillResolver(async () => [copywritingSkill]);
     full = await seedApiClient(tdb.db, tenantA, {
       grants: ALL_ACTIONS.map((action) => ({ action, brandIds: 'all' as const })),
       scopes: MCP_TOOLS.map((t) => t.scope),

@@ -169,6 +169,21 @@ async function startRun(
   );
   const cfg = currentModelConfig();
   await assertRoutingAllowed(tenantId, cfg.provider, cfg.model);
+  // RA-07: effectiveLimits names a missing skill as a blocker (after the principal, kill switch, routing and
+  // entitlement ones, the order kept here), so the start refuses the same condition rather than creating a run
+  // the workflow would resolve to no skill, no tools and the platform's default budget. A command-only kind
+  // (onboarding) starts from its own command with its own skill handling.
+  if (!COMMAND_ONLY_TASK_KINDS.has(taskKind.data)) {
+    const skills = await resolveSkills(
+      { tenantId, brandId: parsed.brandId, taskKind: taskKind.data, actor },
+      tx,
+    );
+    if (skills.length === 0)
+      throw new ValidationFailedError(
+        [{ path: 'taskKind', issue: 'no_skill' }],
+        'No published skill serves this task kind for the brand',
+      );
+  }
   const id = newId('agentRun');
   const workflowId = runWorkflowId(id);
   await runsRepo.create(

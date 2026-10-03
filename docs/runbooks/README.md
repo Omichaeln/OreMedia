@@ -18,6 +18,7 @@ Every runbook must be exercised once before pilot publication. Status is tracked
 | [Roll back a workflow version safely](rollback-workflow-version.md)                                | `packages/workflows/test/workflow-versions.test.ts` (7.13)                                                                                                       |
 | [Process a deletion request](process-deletion-request.md)                                          | `apps/worker-core/src/deletion.integration.test.ts` (7.16)                                                                                                       |
 | [Certify a provider (channel, source, CMS)](certify-a-provider.md)                                 | `apps/worker-core/src/certify-harness.integration.test.ts` (the harness end to end against the fixture adapters); the live runs need each platform's app or site |
+| [Staging acceptance job](staging-acceptance.md)                                                    | `apps/api/src/acceptance.integration.test.ts` (fixtures, password sign-in, api checks, teardown); the deployed run needs the staging project                     |
 | [UAT journeys](uat-journeys.md)                                                                    | The automated half runs in CI (13 browser suites, 14 with PR #10); the staging half needs the staging credentials                                                |
 
 ## Platform on-call access (spec 5.7)

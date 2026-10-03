@@ -10,6 +10,7 @@ import type {
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
 import type { ModelAdapter } from './model-adapter';
+import { rejectionDetail } from './openrouter-adapter';
 
 type ClientOptions = NonNullable<ConstructorParameters<typeof Anthropic>[0]>;
 
@@ -116,9 +117,11 @@ function mapError(err: unknown): Error {
         Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined,
       );
     }
+    const detail = rejectionDetail(err.message, status);
+    logger().warn({ errorMessage: `anthropic ${detail}` }, 'model provider rejected the request');
     return new ValidationFailedError(
-      [{ path: 'model', issue: `provider rejected the request (${status})` }],
-      'The model provider rejected the request',
+      [{ path: 'model', issue: `provider rejected the request (${detail})` }],
+      `The model provider rejected the request (${detail})`,
     );
   }
   if (err instanceof Anthropic.APIConnectionError) return new ProviderUnavailableError('anthropic');

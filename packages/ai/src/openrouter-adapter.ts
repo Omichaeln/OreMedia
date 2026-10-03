@@ -88,12 +88,14 @@ export class OpenRouterModelAdapter implements ModelAdapter {
       const retryAfter = Number(res.headers.get('retry-after'));
       throw unavailable(`status ${res.status}`, Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined);
     }
-    if (!res.ok) throw rejected(res.status);
+    if (!res.ok) throw rejected(res.status, await errorDetail(res));
     const json = (await res.json()) as ChatResponse;
     // OpenRouter can report an upstream failure inside a 200 body.
     if (json.error) {
       const code = json.error.code ?? 500;
-      throw code === 429 || code >= 500 ? unavailable(`upstream ${code}`) : rejected(code);
+      throw code === 429 || code >= 500
+        ? unavailable(`upstream ${code}`)
+        : rejected(code, json.error.message);
     }
     return toCompletion(json);
   }
@@ -176,10 +178,31 @@ function unavailable(detail: string, retryAfterMs?: number): ProviderUnavailable
   return new ProviderUnavailableError('openrouter', retryAfterMs);
 }
 
-function rejected(status: number): ValidationFailedError {
+/**
+ * The provider's own error message, bounded and on one line, so the operator sees why (an unknown model id, an
+ * invalid key, a malformed request) rather than only the status. It is the provider's text about the request,
+ * never the prompt; the key never appears in it.
+ */
+export function rejectionDetail(message: string | undefined, status: number): string {
+  const detail = (message ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return detail ? `${status}: ${detail}` : String(status);
+}
+
+async function errorDetail(res: Response): Promise<string | undefined> {
+  try {
+    const json = (await res.json()) as ChatResponse;
+    return json.error?.message;
+  } catch {
+    return undefined;
+  }
+}
+
+function rejected(status: number, message?: string): ValidationFailedError {
+  const detail = rejectionDetail(message, status);
+  logger().warn({ errorMessage: `openrouter ${detail}` }, 'model provider rejected the request');
   return new ValidationFailedError(
-    [{ path: 'model', issue: `provider rejected the request (${status})` }],
-    'The model provider rejected the request',
+    [{ path: 'model', issue: `provider rejected the request (${detail})` }],
+    `The model provider rejected the request (${detail})`,
   );
 }
 

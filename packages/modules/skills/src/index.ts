@@ -25,6 +25,7 @@ export {
   type SkillPackageContent,
 } from './package-format';
 export {
+  loadBuiltinPackage,
   loadBuiltinSkills,
   seedBuiltinSkills,
   builtinSkillsDir,

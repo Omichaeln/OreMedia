@@ -38,6 +38,7 @@
     "ioredis": "^5.9.1",
     "openid-client": "^6.8.8",
     "superjson": "^2.2.2",
+    "undici": "^8.11.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

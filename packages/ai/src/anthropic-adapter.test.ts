@@ -143,7 +143,9 @@ describe('AnthropicModelAdapter (spec 12.7, tool-use API)', () => {
       baseURL: 'https://anthropic.invalid',
       fetch: bad.fetch as never,
     });
-    await expect(adapter2.complete(request)).rejects.toBeInstanceOf(ValidationFailedError);
+    const rejected = (await adapter2.complete(request).catch((e: unknown) => e)) as ValidationFailedError;
+    expect(rejected).toBeInstanceOf(ValidationFailedError);
+    expect(rejected.message).toMatch(/^The model provider rejected the request \(400: .*bad.*\)$/);
   });
 });
 

@@ -32,6 +32,8 @@ import {
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { BUILTIN_SKILL_KEYS, builtinSkillsDir, loadBuiltinSkills, seedBuiltinSkills } from './builtin';
+import { outboxRouteFor } from '@oremedia/module-operations';
+import { registerSkillOutboxRoutes } from './outbox-routes';
 import { loadMaliciousPackages } from './package-fixtures';
 import { manifestJson, toPackage } from './package-format';
 import {
@@ -715,6 +717,23 @@ describe('skills module (spec 10) against MySQL 8', () => {
       );
       expect(retried.requested.suiteId).toBe(requested.suiteId);
       expect(retried.recorded).toMatchObject({ outcome: 'recorded', passed: true, state: 'in_review' });
+      // The retry is a new workflow: the same version and suite, but the request's row version in the id, so the
+      // worker's ALLOW_DUPLICATE_FAILED_ONLY policy does not refuse it as the completed first run.
+      registerSkillOutboxRoutes();
+      const requests = (await eventsOf('skill.evaluation_requested'))
+        .filter((e) => e.aggregateId === created.skillVersionId)
+        .sort((a, b) => a.aggregateVersion - b.aggregateVersion)
+        .map((e) =>
+          outboxRouteFor('skill.evaluation_requested')!({
+            ...e,
+            payload: e.payload as Record<string, unknown>,
+          }),
+        );
+      expect(requests.map((r) => r?.workflowId)).toEqual([
+        `skill-evaluation:${created.skillVersionId}:${requested.suiteId}:1`,
+        `skill-evaluation:${created.skillVersionId}:${requested.suiteId}:3`,
+      ]);
+      expect(requests[1]).toMatchObject({ workflowType: 'skillEvaluationWorkflowV1', taskQueue: 'agents' });
     });
 
     it('agents never publish (propose_only); a brand manager lacks skill.publish; an admin publishes and the skill activates the version', async () => {

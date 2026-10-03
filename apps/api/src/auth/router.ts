@@ -8,6 +8,7 @@ import express, {
   type Router,
 } from 'express';
 import * as oidc from 'openid-client';
+import { fetch as undiciFetch } from 'undici';
 import {
   PasswordPolicyIssue,
   PasswordSetup,
@@ -70,10 +71,13 @@ const GOOGLE_SERVER_METADATA: oidc.ServerMetadata = {
  * Railway's outbound proxy can preserve a JSON response body while rewriting its content type. oauth4webapi
  * correctly rejects that response by default; only normalize responses whose body is demonstrably a JSON object.
  * Non-JSON responses and all status codes are returned unchanged, so protocol and signature validation remain strict.
+ * The request goes through undici's own fetch, as the provider adapters' does: on Railway, Node's built-in global
+ * fetch answers with empty Headers (the staging acceptance probe records it), which made every Google response look
+ * content-type-less here; undici's fetch sees the real headers, and the normalization below stays as the fallback.
  */
 const googleFetch: oidc.CustomFetch = async (url, options) => {
   // openid-client passes a plain RequestInit-shaped object; its body type (Uint8Array included) is fetch-compatible.
-  const response = await fetch(url, options as RequestInit);
+  const response = (await undiciFetch(url, options as never)) as unknown as globalThis.Response;
   const isGoogleJsonEndpoint =
     url.startsWith('https://www.googleapis.com/oauth2/v4/token') ||
     url.startsWith('https://oauth2.googleapis.com/revoke') ||

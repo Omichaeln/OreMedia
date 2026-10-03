@@ -5,12 +5,21 @@ import { registerOutboxRoute } from '@oremedia/module-operations';
 export const SKILL_EVALUATION_TASK_QUEUE = 'agents';
 export const SKILL_EVALUATION_WORKFLOW_TYPE = 'skillEvaluationWorkflowV1';
 
-export const skillEvaluationWorkflowId = (skillVersionId: string, suiteId: string): string =>
-  `skill-evaluation:${skillVersionId}:${suiteId}`;
+/**
+ * One workflow per evaluation request: the row version the request moved the skill version to (the event's
+ * aggregate version), as destination-verify does. A redelivered event joins the running workflow (USE_EXISTING);
+ * a later request for the same version and suite (after a failed grading returned it to draft) is a new workflow,
+ * which the ALLOW_DUPLICATE_FAILED_ONLY reuse policy would otherwise refuse as "already started" for ever.
+ */
+export const skillEvaluationWorkflowId = (
+  skillVersionId: string,
+  suiteId: string,
+  requestVersion: number,
+): string => `skill-evaluation:${skillVersionId}:${suiteId}:${requestVersion}`;
 
 /**
- * Spec 10.2 / 19.6: skills.versions.evaluate → skillEvaluationWorkflowV1. The workflow id is stable per version and
- * suite so a redelivered event joins the running workflow; the outbox row is the dedupe authority (spec 14.2).
+ * Spec 10.2 / 19.6: skills.versions.evaluate → skillEvaluationWorkflowV1. The workflow id is stable per request
+ * so a redelivered event joins the running workflow; the outbox row is the dedupe authority (spec 14.2).
  */
 export function registerSkillOutboxRoutes(): void {
   registerOutboxRoute('skill.evaluation_requested', (evt) => {
@@ -28,7 +37,7 @@ export function registerSkillOutboxRoutes(): void {
     return {
       workflowType: SKILL_EVALUATION_WORKFLOW_TYPE,
       taskQueue: SKILL_EVALUATION_TASK_QUEUE,
-      workflowId: skillEvaluationWorkflowId(input.skillVersionId, input.suiteId),
+      workflowId: skillEvaluationWorkflowId(input.skillVersionId, input.suiteId, evt.aggregateVersion),
       args: [input],
     };
   });
