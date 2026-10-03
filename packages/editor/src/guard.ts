@@ -1,8 +1,7 @@
 import type { CreativeDocumentV1, CreativePage, Element, Operation } from '@oremedia/contracts/creative';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { GenerationScope } from '@oremedia/contracts/generation';
-import { ancestryOf } from './generation';
-import { allElementIds, findElement, isLockedDeep, reflow } from './reduce';
+import { findWithAncestors, isLockedInContext, reflow } from './reduce';
 
 /** Spec 11.2/11.4: protected elements (e.g. logos) cannot be moved, resized, recoloured, replaced or removed by agents. */
 const MUTATING_ON_ELEMENT = new Set<Operation['op']>([
@@ -27,47 +26,60 @@ function pageIdOf(op: Operation): string | null {
   return null;
 }
 
+interface Target {
+  element: Element;
+  ancestors: Element[];
+}
+
 /**
- * The elements an operation changes, as they are in `page` before it applies: the element it names, the members
- * of a group/align/distribute, every element of the page for a page replacement or removal.
+ * The elements an operation changes, as they are in `page` before it applies, each with the groups that contain it:
+ * the element it names, the members of a group/align/distribute, every element of the page (top level) for a page
+ * replacement or removal.
  */
-function targetsOf(page: CreativePage, op: Operation): Element[] {
+function targetsOf(page: CreativePage, op: Operation): Target[] {
+  if (op.op === 'applyTemplate' || op.op === 'removePage')
+    return page.elements.map((element) => ({ element, ancestors: [] }));
   const ids: string[] = [];
   if ('elementId' in op) ids.push(op.elementId);
   if ('elementIds' in op) ids.push(...op.elementIds);
-  if (op.op === 'applyTemplate' || op.op === 'removePage')
-    ids.push(...allElementIds({ schemaVersion: 1, brandVersionId: '', pages: [page], variants: [] }));
-  return ids.map((id) => findElement(page, id)).filter((e): e is Element => e !== null);
+  return ids.map((id) => findWithAncestors(page, id)).filter((t): t is Target => t !== null);
 }
 
-/** Inside a group, an element is as protected as anything that contains it. */
+const isProtected = (el: Element): boolean => el.protected || el.type === 'logo';
+/** Protected: the element, anything inside it, or a group containing it is protected (a logo always is). */
 const isProtectedDeep = (el: Element): boolean =>
-  el.protected || el.type === 'logo' || (el.type === 'group' && el.children.some(isProtectedDeep));
+  isProtected(el) || (el.type === 'group' && el.children.some(isProtectedDeep));
+const isProtectedInContext = (t: Target): boolean =>
+  isProtectedDeep(t.element) || t.ancestors.some(isProtected);
+
+const deny = (el: Element) => {
+  throw new PolicyDeniedError('protected_element', `Agents cannot change protected element ${el.id}`);
+};
 
 export function guardProtected(doc: CreativeDocumentV1, op: Operation, origin: 'user' | 'agent'): void {
   if (origin !== 'agent') return;
   const pageId = pageIdOf(op);
   const page = pageId ? doc.pages.find((p) => p.id === pageId) : undefined;
   if (!page) return; // the reducer reports page_not_found
-  if ('elementId' in op && MUTATING_ON_ELEMENT.has(op.op)) {
-    const el = findElement(page, op.elementId);
-    if (!el) return; // the reducer reports element_not_found
-    if (isProtectedDeep(el))
-      throw new PolicyDeniedError('protected_element', `Agents cannot change protected element ${el.id}`);
-    return;
-  }
-  if (op.op === 'groupElements' || op.op === 'alignElements' || op.op === 'distributeElements') {
-    const el = targetsOf(page, op).find(isProtectedDeep);
-    if (el)
-      throw new PolicyDeniedError('protected_element', `Agents cannot change protected element ${el.id}`);
-  }
+  const checked =
+    ('elementId' in op && MUTATING_ON_ELEMENT.has(op.op)) ||
+    op.op === 'groupElements' ||
+    op.op === 'alignElements' ||
+    op.op === 'distributeElements' ||
+    // A page replacement or removal would take a protected element (a logo) with it.
+    op.op === 'applyTemplate' ||
+    op.op === 'removePage';
+  if (!checked) return;
+  const hit = targetsOf(page, op).find(isProtectedInContext);
+  if (hit) deny(hit.element);
 }
 
 /**
  * STU-1a, architecture principle 2 (locks are binding): an agent operation is refused when it acts on a locked page
- * (anything on it, the page itself, a copy or variant made from it) or on a locked element (text, style, asset,
- * transform, crop, mask, order, grouping, removal; a page replacement or removal that would take it with it). A
- * person's operations are not refused here: the reducer stops manual move, resize and rotation of locked items.
+ * (anything on it, the page itself, a copy or variant made from it) or on a locked element: the element itself,
+ * anything inside it or a group that contains it (text, style, asset, transform, crop, mask, order, grouping,
+ * removal; a page replacement or removal that would take it with it). A person's operations are checked by the
+ * reducer (locked elements are not moved, resized, rotated or removed; templates do not replace locked pages).
  */
 export function guardLocks(doc: CreativeDocumentV1, op: Operation, origin: 'user' | 'agent'): void {
   if (origin !== 'agent') return;
@@ -75,15 +87,38 @@ export function guardLocks(doc: CreativeDocumentV1, op: Operation, origin: 'user
   const page = pageId ? doc.pages.find((p) => p.id === pageId) : undefined;
   if (!page) return; // addPage carries its own page; the reducer reports page_not_found
   if (page.locked) throw new PolicyDeniedError('page_locked', `Agents cannot change locked page ${page.id}`);
-  const locked = targetsOf(page, op).find(isLockedDeep);
+  const locked = targetsOf(page, op).find((t) => isLockedInContext(t.element, t.ancestors));
   if (locked)
-    throw new PolicyDeniedError('element_locked', `Agents cannot change locked element ${locked.id}`);
+    throw new PolicyDeniedError('element_locked', `Agents cannot change locked element ${locked.element.id}`);
 }
 
-/** Logos are always approved original asset files (spec 2.2): agents may not insert logo elements or generated logos. */
-export function guardLogoInsertion(op: Operation, origin: 'user' | 'agent'): void {
+const hasLogo = (elements: readonly Element[]): boolean =>
+  elements.some((e) => e.type === 'logo' || (e.type === 'group' && hasLogo(e.children)));
+
+/**
+ * Logos are always approved original asset files (spec 2.2): agents may not bring logo elements into a document,
+ * whether inserted, carried by a new page, copied with a duplicated page or a format variant, or brought in by a
+ * template. `doc` is the document the operation applies to; `templateElements` the template page applyTemplate uses.
+ */
+export function guardLogoInsertion(
+  op: Operation,
+  origin: 'user' | 'agent',
+  doc?: CreativeDocumentV1,
+  templateElements?: readonly Element[],
+): void {
   if (origin !== 'agent') return;
-  if (op.op === 'insertElement' && op.element.type === 'logo')
+  const source =
+    op.op === 'duplicatePage'
+      ? doc?.pages.find((p) => p.id === op.pageId)
+      : op.op === 'createFormatVariant'
+        ? doc?.pages.find((p) => p.id === op.sourcePageId)
+        : undefined;
+  const introduces =
+    (op.op === 'insertElement' && hasLogo([op.element])) ||
+    (op.op === 'addPage' && hasLogo(op.page.elements)) ||
+    (source !== undefined && hasLogo(source.elements)) ||
+    (op.op === 'applyTemplate' && templateElements !== undefined && hasLogo(templateElements));
+  if (introduces)
     throw new PolicyDeniedError(
       'agent_logo_insert',
       'Agents cannot add logo elements; logos are placed from approved assets by a person',
@@ -152,9 +187,10 @@ export function guardScope(doc: CreativeDocumentV1, op: Operation, state: ScopeS
   const ids = [...('elementId' in op ? [op.elementId] : []), ...('elementIds' in op ? op.elementIds : [])];
   for (const id of ids) {
     if (state.insertedIds.has(id)) continue;
-    const path = ancestryOf(page, id);
-    if (!path) continue; // the reducer reports element_not_found
-    if (!path.some((el) => scope.elementIds.includes(el.id))) throw scopeDenied(`element ${id}`);
+    const found = findWithAncestors(page, id); // the same ancestor-aware lookup the lock and protection guards use
+    if (!found) continue; // the reducer reports element_not_found
+    if (![...found.ancestors, found.element].some((el) => scope.elementIds.includes(el.id)))
+      throw scopeDenied(`element ${id}`);
   }
   if (op.op === 'removeElement') state.replacements += 1;
 }

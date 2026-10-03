@@ -19,7 +19,14 @@ import type {
 } from '@oremedia/contracts/generation';
 import type { ProviderCapabilityV1 } from '@oremedia/contracts/providers';
 import { formatFor } from './formats';
-import { allElementIds, findElement, isLockedDeep, reflow, type TemplateDocument } from './reduce';
+import {
+  allElementIds,
+  findElement,
+  findWithAncestors,
+  isLockedDeep,
+  reflow,
+  type TemplateDocument,
+} from './reduce';
 
 /**
  * STU-1b generation, the pure part shared by the server (preflight, compile, guard) and the studio (panel defaults,
@@ -57,17 +64,8 @@ export function imageForArea(area: Element, assetVersionId: string, name: string
 
 /** The element and its containing groups, outermost first; null when the element is not on the page. */
 export function ancestryOf(page: CreativePage, elementId: string): Element[] | null {
-  const walk = (els: Element[], path: Element[]): Element[] | null => {
-    for (const el of els) {
-      if (el.id === elementId) return [...path, el];
-      if (el.type === 'group') {
-        const found = walk(el.children, [...path, el]);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-  return walk(page.elements, []);
+  const found = findWithAncestors(page, elementId);
+  return found ? [...found.ancestors, found.element] : null;
 }
 
 /** In scope: the page is the scope's (or one the batch created) and, with selected ids, the element or a group containing it is selected. */

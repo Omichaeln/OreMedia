@@ -9675,6 +9675,39 @@
         }
       }
     },
+    "/trpc/creative.templates.listCurrent": {
+      "get": {
+        "operationId": "creative.templates.listCurrent",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/creative.templates.retire": {
       "post": {
         "operationId": "creative.templates.retire",
@@ -23673,6 +23706,30 @@
         }
       },
       "creative.templates.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "creative.templates.listCurrent": {
         "type": "query",
         "input": {
           "type": "object",

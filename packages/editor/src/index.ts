@@ -8,6 +8,8 @@ export {
   allElementIds,
   findElement,
   isLockedDeep,
+  isLockedInContext,
+  findWithAncestors,
   footprintOf,
   boundsOf,
   OperationError,

@@ -54,6 +54,8 @@ const METADATA_ALLOWLIST = new Set([
   'sourceType',
   'sourceId',
   'sourceRevisionId',
+  'sourceBrandVersionId',
+  'sourceClaimed',
   'contentType',
 ]);
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { changedElementIds, findElement } from '@oremedia/editor';
+import { changedElementIds, findElement, findWithAncestors, isLockedInContext } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Panel, StatusBanner } from '@oremedia/ui';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { useBrandVersion } from '../brand/use-brand';
@@ -142,9 +142,11 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   };
   const deleteSelected = () => {
     if (!page) return;
+    // Locked elements (or ones in a locked group, or groups holding one) are not removed (STU-1a).
     const removable = state.selection
-      .map((id) => findElement(page, id))
-      .filter((el): el is NonNullable<typeof el> => el !== null && !el.locked);
+      .map((id) => findWithAncestors(page, id))
+      .filter((f): f is NonNullable<typeof f> => f !== null && !isLockedInContext(f.element, f.ancestors))
+      .map((f) => f.element);
     if (removable.length === 0) return;
     studio.applyIntent({
       operations: removable.map((el) => ({

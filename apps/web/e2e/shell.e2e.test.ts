@@ -102,6 +102,11 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.waitForURL('**/studio', { timeout: 15_000 });
     const documents = page.getByTestId('documents');
     await documents.waitFor({ timeout: 15_000 });
+    // The creation dialog closed before the studio opened, so nothing of the index stays hidden from assistive
+    // technology (aria-hidden / inert left behind by a modal that the route change unmounted).
+    expect(await documents.evaluate((el) => Boolean(el.closest('[aria-hidden="true"], [inert]')))).toBe(
+      false,
+    );
     await expect
       .poll(() => documents.getByRole('link', { name: 'Studio index document' }).count(), { timeout: 15_000 })
       .toBe(1);

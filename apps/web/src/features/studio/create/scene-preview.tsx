@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Konva from 'konva';
 import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
 import { formatForPage } from '@oremedia/editor';
@@ -72,9 +72,27 @@ export function ScenePreview({
   latest.current = resolvers;
   const scale = width / page.width;
   const height = Math.round(page.height * scale);
+  // Lazy: a preview builds its scene (and loads fonts and images) only once it scrolls near the viewport.
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || visible) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setVisible(true);
+      },
+      { rootMargin: '200px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
   useLayoutEffect(() => {
     const container = ref.current;
-    if (!container) return;
+    if (!container || !visible) return;
     const stage = new Konva.Stage({
       container: container as HTMLDivElement,
       width,
@@ -100,7 +118,7 @@ export function ScenePreview({
       scene.destroy();
       stage.destroy();
     };
-  }, [page, width, height, scale, resolvers.version]);
+  }, [page, width, height, scale, resolvers.version, visible]);
   return (
     <div
       ref={ref}

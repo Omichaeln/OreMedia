@@ -26,6 +26,7 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
   TemplateRetire,
   TemplateSlot,
   TemplateSlotKind,
@@ -442,12 +443,18 @@ async function evaluateBatch(
     try {
       guardProtected(next, op, batch.origin); // agents cannot touch protected elements
       guardLocks(next, op, batch.origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
-      guardLogoInsertion(op, batch.origin); // agents cannot add logos
       if (scoped) guardScope(next, op, scoped);
       if (op.op === 'applyTemplate') {
         templates[op.templateVersionId] ??= await resolveTemplate(doc, op, next, index, tx);
         for (const id of elementIdsOfPage(next, op.pageId)) changed.add(id); // every element of the page is replaced
       }
+      // Agents cannot add logos: inserted, on a new or copied page, in a variant or from a template.
+      guardLogoInsertion(
+        op,
+        batch.origin,
+        next,
+        op.op === 'applyTemplate' ? templates[op.templateVersionId]?.page.elements : undefined,
+      );
       if (op.op === 'removePage') for (const id of elementIdsOfPage(next, op.pageId)) changed.add(id);
       const template = op.op === 'applyTemplate' ? templates[op.templateVersionId] : undefined;
       const refs = [...referencedAssetRefs(op, template), ...duplicatedAssetRefs(next, op)];
@@ -1010,7 +1017,9 @@ export const creativeService = {
           auditAction: 'creative.document.create',
           auditMeta: {
             ...(source ? { sourceType: source.kind } : {}),
-            ...(source?.kind === 'starter' ? { sourceId: source.starterKey } : {}),
+            // The client instantiated the starter with the brand system; the server checks the key, the formats, the
+            // assets and the brand rules but does not rebuild it, so the provenance is recorded as claimed.
+            ...(source?.kind === 'starter' ? { sourceId: source.starterKey, sourceClaimed: true } : {}),
             ...(source?.kind === 'template' ? { sourceId: source.templateVersionId } : {}),
             ...(document.contentType ? { contentType: document.contentType } : {}),
           },
@@ -1021,9 +1030,9 @@ export const creativeService = {
     },
 
     /**
-     * STU-1a: a new document whose revision 1 is the source's current revision snapshot, unchanged (same brand
-     * version, same content hash); the audit records which document and revision it came from. Reading the source
-     * needs creative.read, creating needs creative.edit on its brand; every asset is authorised again.
+     * STU-1a: a new document whose revision 1 is the source's current revision snapshot, pinned (like create) to the
+     * brand's published version; the audit records the source document, revision and brand version. Reading the
+     * source needs creative.read, creating needs creative.edit on its brand; every asset is authorised again.
      */
     async duplicate(
       actor: ResolvedActor,
@@ -1036,8 +1045,11 @@ export const creativeService = {
       await policy.assert(actor, 'creative.read', documentResource(source), {}, tx);
       await policy.assert(actor, 'creative.edit', brandResource(source.brandId), opts, tx);
       const revision = await loadCurrentRevision(source, tx);
-      const document = CreativeDocumentV1.parse(revision.snapshot);
-      const snapshot = await resolveSnapshot(actor, source.brandId, document.brandVersionId, tx);
+      const original = CreativeDocumentV1.parse(revision.snapshot);
+      // Like create, a copy is designed against the brand's published version (validated against it); the source
+      // revision and the brand version it was made against are recorded in the audit.
+      const snapshot = await resolveSnapshot(actor, source.brandId, undefined, tx);
+      const document = CreativeDocumentV1.parse({ ...original, brandVersionId: snapshot.brandVersionId });
       return insertDocument(
         actor,
         {
@@ -1051,6 +1063,7 @@ export const creativeService = {
             sourceType: 'creative_document',
             sourceId: source.id,
             sourceRevisionId: revision.id,
+            sourceBrandVersionId: original.brandVersionId,
             ...(document.contentType ? { contentType: document.contentType } : {}),
           },
         },
@@ -1663,6 +1676,30 @@ export const creativeService = {
       await policy.assert(actor, 'creative.read', brandResource(brand.id), {}, tx);
       const page = await templatesRepo.list(brand.id, parsed.page, tx);
       return { items: page.items.map(toTemplateDto), nextCursor: page.nextCursor };
+    },
+
+    /** STU-1a: a page of the brand's templates, each active one with its current version document (one read). */
+    async listCurrent(actor: ResolvedActor, input: z.infer<typeof TemplateListCurrent>, tx?: Tx) {
+      const parsed = TemplateListCurrent.parse(input);
+      const brand = await brandService.get(actor, parsed.brandId, tx);
+      await policy.assert(actor, 'creative.read', brandResource(brand.id), {}, tx);
+      const page = await templatesRepo.list(brand.id, parsed.page, tx);
+      const active = page.items.filter((t) => t.state === 'active' && t.currentVersionId);
+      const versions = await templateVersionsRepo.listByIds(
+        brand.id,
+        active.map((t) => t.currentVersionId as string),
+        tx,
+      );
+      const byId = new Map(versions.map((v) => [v.id, v]));
+      return {
+        items: active.flatMap((t) => {
+          const v = byId.get(t.currentVersionId as string);
+          return v && v.state === 'approved'
+            ? [{ ...toTemplateDto(t), currentVersion: toTemplateVersionDto(v) }]
+            : [];
+        }),
+        nextCursor: page.nextCursor,
+      };
     },
 
     /** The template, its versions (summaries, newest first) and one full version (selectedVersion): the requested one, else the current one. */

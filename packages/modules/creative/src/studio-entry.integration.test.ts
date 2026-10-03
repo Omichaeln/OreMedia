@@ -439,7 +439,9 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
         sourceType: 'creative_document',
         sourceId: source.documentId,
         sourceRevisionId: edited.revision.id,
+        sourceBrandVersionId: versionA,
       });
+      expect(got.revision.snapshot.brandVersionId).toBe(versionA); // the published version, as create pins it
       const named = await run(tenantA, (tx) =>
         creativeService.documents.duplicate(A, { documentId: source.documentId, title: 'Named copy' }, tx),
       );
@@ -491,6 +493,29 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
       await expect(
         run(tenantA, (tx) =>
           creativeService.templates.retire(A, { ...foreignTemplate, expectedVersion: 1 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('templates with their current version (gallery read)', () => {
+    it('lists active templates with their approved current version document; drafts are left out', async () => {
+      const draft = await run(tenantA, (tx) =>
+        creativeService.templates.create(A, { brandId: brandA, name: 'Draft only' }, tx),
+      );
+      const list = await run(tenantA, () =>
+        creativeService.templates.listCurrent(A, { brandId: brandA, page: { limit: 50 } }),
+      );
+      expect(list.items.length).toBeGreaterThan(0);
+      for (const t of list.items) {
+        expect(t.state).toBe('active');
+        expect(t.currentVersion).toMatchObject({ id: t.currentVersionId, state: 'approved' });
+        expect(t.currentVersion.document.pages.length).toBeGreaterThan(0);
+      }
+      expect(list.items.some((t) => t.id === draft.templateId)).toBe(false);
+      await expect(
+        run(tenantA, () =>
+          creativeService.templates.listCurrent(A, { brandId: brandB, page: { limit: 50 } }),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
     });
@@ -682,6 +707,42 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
           .catch((e: unknown) => e),
       );
       expect((proposed as PolicyDeniedError).reason).toBe('page_locked');
+    });
+
+    it('a person cannot remove a locked element; an agent cannot remove a page holding a protected logo', async () => {
+      const err = await run(tenantA, (tx) =>
+        creativeService.operations.apply(
+          A,
+          {
+            documentId,
+            baseRevisionId: head,
+            operations: [{ op: 'removeElement', pageId: 'page_1', elementId: lockedId }],
+            summary: 'rm',
+            origin: 'user',
+          },
+          tx,
+        ),
+      ).catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: 'VALIDATION_FAILED', details: [{ issue: 'element_locked' }] });
+      const { document } = instantiateStarter(starterByKey('carousel-3-steps')!, starterBrand(versionA));
+      const withLogo = await run(tenantA, (tx) =>
+        creativeService.documents.create(A, { brandId: brandA, title: 'Logo pages', document }, tx),
+      );
+      const denied = await run(tenantA, (tx) =>
+        creativeService.operations.apply(
+          agent(tenantA),
+          {
+            documentId: withLogo.documentId,
+            baseRevisionId: withLogo.revisionId,
+            operations: [{ op: 'removePage', pageId: 'page_2' }],
+            summary: 'rm page',
+            origin: 'agent',
+          },
+          tx,
+          AGENT_OPTS,
+        ),
+      ).catch((e: unknown) => e);
+      expect((denied as PolicyDeniedError).reason).toBe('protected_element');
     });
 
     it('page operations commit for a person and undo through their inverses', async () => {

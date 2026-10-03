@@ -334,6 +334,14 @@ export class TemplateVersionRepository extends BrandScopedRepository<typeof temp
       .where(this.brandScope(brandId, eq(templateVersions.templateId, templateId)));
     return Number(rows[0]?.max ?? 0) + 1;
   }
+  /** Versions by id (current versions of a page of templates), bounded by the id-list maximum (spec 7.4). */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(templateVersions)
+      .where(this.brandScope(brandId, inArray(templateVersions.id, ids.slice(0, ID_LIST_MAX))));
+  }
   async listForTemplate(brandId: string, templateId: string, tx?: Tx) {
     return this.conn(tx)
       .select()

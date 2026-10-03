@@ -47,9 +47,23 @@ function styleBefore(el: Element, patch: Record<string, unknown>): Record<string
   return out;
 }
 
+/**
+ * Removes a top-level element even when it (or something inside it) is locked: the reducer refuses to remove locked
+ * elements, so the inverse unlocks them first (STU-1a). What is re-inserted afterwards carries its locks again.
+ */
+function removalOf(pageId: string, element: Element): Operation[] {
+  const unlock: Operation[] = [];
+  const walk = (el: Element) => {
+    if (el.locked) unlock.push({ op: 'setLock', pageId, elementId: el.id, locked: false });
+    if (el.type === 'group') el.children.forEach(walk);
+  };
+  walk(element);
+  return [...unlock, { op: 'removeElement', pageId, elementId: element.id }];
+}
+
 /** Restores one top-level element in place: remove whatever is there now, insert the old element at its old index. */
 const restoreSequence = (pageId: string, element: Element, index: number): Operation[] => [
-  { op: 'removeElement', pageId, elementId: element.id },
+  ...removalOf(pageId, element),
   { op: 'insertElement', pageId, element: structuredClone(element), index },
 ];
 
@@ -152,18 +166,14 @@ function invertOne(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContext): 
       if (!afterPage) return notInvertible(op.op, 'page_not_found');
       // Elements are restored; the page's layoutConstraints and the document's templateVersionId are template
       // metadata with no operation of their own and stay as the template left them.
-      const ops: Operation[] = afterPage.elements.map((e) => ({
-        op: 'removeElement',
-        pageId: op.pageId,
-        elementId: e.id,
-      }));
+      const ops: Operation[] = afterPage.elements.flatMap((e) => removalOf(op.pageId, e));
       page.elements.forEach((e, index) =>
         ops.push({ op: 'insertElement', pageId: op.pageId, element: structuredClone(e), index }),
       );
       return ops;
     }
     case 'insertElement':
-      return [{ op: 'removeElement', pageId: op.pageId, elementId: op.element.id }];
+      return removalOf(op.pageId, op.element);
     default: {
       const page = pageOf(doc, op.pageId);
       if (!page) return notInvertible(op.op, 'page_not_found');

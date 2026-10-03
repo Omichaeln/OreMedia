@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
-import { applyBatch, type IntentBatch, type TemplateDocument } from '@oremedia/editor';
+import { applyBatch, isLockedDeep, type IntentBatch, type TemplateDocument } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Field, Skeleton, StatusBanner } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { Select } from '../../components/select';
@@ -37,6 +37,12 @@ export function TemplatesPanel({
 }: TemplatesPanelProps) {
   const list = useTemplates(brandId);
   const [saving, setSaving] = useState(false);
+  // STU-1a: a template replaces every element of the page, so it never replaces a locked page or locked elements.
+  const lockedReason = page.locked
+    ? 'This page is locked: unlock it in the page strip to apply a template'
+    : page.elements.some(isLockedDeep)
+      ? 'This page holds locked elements: a template would replace them, so unlock them first'
+      : undefined;
   const [open, setOpen] = useState<string | null>(null);
   const [applying, setApplying] = useState<{ template: TemplateDto; doc: TemplateDocument } | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
@@ -66,6 +72,11 @@ export function TemplatesPanel({
           document={saveSource.document}
           onClose={() => setSaving(false)}
         />
+      )}
+      {lockedReason && (
+        <p className="text-xs text-muted-foreground" data-testid="template-lock-note">
+          {lockedReason}.
+        </p>
       )}
       {list.isPending && <Skeleton label="Loading templates" lines={2} />}
       {list.isError && <RequestError error={list.error} onRetry={() => void list.refetch()} />}
@@ -104,7 +115,7 @@ export function TemplatesPanel({
                   disabledReason={
                     t.state !== 'active' || !t.currentVersionId
                       ? 'Only templates with an approved version can be applied'
-                      : undefined
+                      : lockedReason
                   }
                   onClick={() => void start(t)}
                 >

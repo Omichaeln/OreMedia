@@ -9,7 +9,8 @@ import {
 } from '@oremedia/contracts/creative';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import { applyBatch, changedElementIds, findElement, OperationError, reduce } from './reduce';
-import { guardLocks, guardProtected } from './guard';
+import { guardLocks, guardLogoInsertion, guardProtected } from './guard';
+import { invertBatch } from './invert';
 import { rebaseBatch } from './rebase';
 import { eid, fixtureDocument, ids } from './fixtures';
 import { aspectLabel, customFormatIssue, customFormatKey, formatFor } from './formats';
@@ -546,5 +547,155 @@ describe('operation contract', () => {
       false,
     );
     expect(Operation.safeParse({ ...group, elementIds: [ids.bg] }).success).toBe(false);
+  });
+});
+
+describe('review fixes: protection and locks through groups and page operations', () => {
+  const lockedGroup = () => run([group, { op: 'setLock', pageId: P, elementId: G, locked: true }]);
+
+  it('a locked group covers its children: agents are refused, people cannot move or remove them', () => {
+    const doc = lockedGroup();
+    for (const op of [
+      { op: 'setText', pageId: P, elementId: ids.body, text: 'x' },
+      { op: 'removeElement', pageId: P, elementId: ids.body },
+      { op: 'moveElement', pageId: P, elementId: ids.body, x: 0, y: 0 },
+    ] as Operation[])
+      expect(
+        codeOf(() => guardLocks(doc, op, 'agent')),
+        op.op,
+      ).toBe('element_locked');
+    expect(codeOf(() => reduce(doc, { op: 'moveElement', pageId: P, elementId: ids.body, x: 0, y: 0 }))).toBe(
+      'element_locked',
+    );
+    expect(codeOf(() => reduce(doc, { op: 'removeElement', pageId: P, elementId: ids.body }))).toBe(
+      'element_locked',
+    );
+    expect(codeOf(() => reduce(doc, { op: 'removeElement', pageId: P, elementId: G }))).toBe(
+      'element_locked',
+    );
+    // A person may still edit the text of a child of a locked group.
+    expect(() =>
+      reduce(doc, { op: 'setText', pageId: P, elementId: ids.body, text: 'Person' }),
+    ).not.toThrow();
+  });
+
+  it('a protected group covers its children for agents', () => {
+    const doc = run([group, { op: 'setStyle', pageId: P, elementId: G, patch: { opacity: 0.9 } }]);
+    const prot = structuredClone(doc);
+    const g = prot.pages[0]!.elements.find((e) => e.id === G)!;
+    g.protected = true;
+    expect(
+      codeOf(() =>
+        guardProtected(prot, { op: 'setText', pageId: P, elementId: ids.body, text: 'x' }, 'agent'),
+      ),
+    ).toBe('protected_element');
+  });
+
+  it('agents cannot remove or replace a page holding a protected logo', () => {
+    const two = run([
+      {
+        op: 'duplicatePage',
+        pageId: P,
+        newPageId: 'page_2',
+        elementIdMap: copyMap(fixtureDocument().pages[0]!),
+      },
+    ]);
+    expect(codeOf(() => guardProtected(two, { op: 'removePage', pageId: P }, 'agent'))).toBe(
+      'protected_element',
+    );
+    expect(
+      codeOf(() =>
+        guardProtected(
+          two,
+          { op: 'applyTemplate', pageId: P, templateVersionId: 'tv', slotBindings: {} },
+          'agent',
+        ),
+      ),
+    ).toBe('protected_element');
+    expect(() => guardProtected(two, { op: 'removePage', pageId: P }, 'user')).not.toThrow();
+  });
+
+  it('agents cannot bring logos in through new, copied, variant or template pages', () => {
+    const doc = fixtureDocument();
+    const logoPage = { ...doc.pages[0]!, id: 'page_2' };
+    const cases: Array<[Operation, Element[] | undefined]> = [
+      [{ op: 'addPage', page: logoPage }, undefined],
+      [{ op: 'duplicatePage', pageId: P, newPageId: 'p2', elementIdMap: copyMap(doc.pages[0]!) }, undefined],
+      [{ op: 'createFormatVariant', sourcePageId: P, formatKey: 'ig_story_9x16' }, undefined],
+      [{ op: 'applyTemplate', pageId: P, templateVersionId: 'tv', slotBindings: {} }, doc.pages[0]!.elements],
+    ];
+    for (const [op, template] of cases) {
+      expect(
+        codeOf(() => guardLogoInsertion(op, 'agent', doc, template)),
+        op.op,
+      ).toBe('agent_logo_insert');
+      expect(() => guardLogoInsertion(op, 'user', doc, template)).not.toThrow();
+    }
+    const noLogo = {
+      ...doc.pages[0]!,
+      id: 'page_3',
+      elements: doc.pages[0]!.elements.filter((e) => e.type !== 'logo'),
+    };
+    expect(() => guardLogoInsertion({ op: 'addPage', page: noLogo }, 'agent', doc)).not.toThrow();
+  });
+
+  it('people: a template does not replace a locked page or a page holding locked elements', () => {
+    const page = { ...fixtureDocument().pages[0]!, elements: [] };
+    const templates = { tv: { page, slots: [] } };
+    const op: Operation = { op: 'applyTemplate', pageId: P, templateVersionId: 'tv', slotBindings: {} };
+    expect(codeOf(() => reduce(fixtureDocument(), op, { templates }))).toBe('element_locked');
+    const unlocked = run([{ op: 'setLock', pageId: P, elementId: ids.bg, locked: false }]);
+    expect(() => reduce(unlocked, op, { templates })).not.toThrow();
+    const lockedPage = run([{ op: 'setPageLock', pageId: P, locked: true }], unlocked);
+    expect(codeOf(() => reduce(lockedPage, op, { templates }))).toBe('page_locked');
+  });
+
+  it('undo of an insert or crop on a locked element unlocks before removing, then restores the lock', () => {
+    const doc = fixtureDocument();
+    const locked = { ...(doc.pages[0]!.elements[1] as Element), id: eid('01HKCK'), locked: true };
+    const ops: Operation[] = [{ op: 'insertElement', pageId: P, element: locked }];
+    const after = run(ops, doc);
+    const inv = invertBatch(doc, { operations: ops });
+    if (!inv.ok) throw new Error(inv.reason);
+    expect(hashCanonical(applyBatch(after, { operations: inv.operations }))).toBe(hashCanonical(doc));
+    const lockedImage = run([{ op: 'setLock', pageId: P, elementId: ids.image, locked: true }]);
+    const crop: Operation[] = [
+      { op: 'setCrop', pageId: P, elementId: ids.image, crop: { x: 0, y: 0, width: 1, height: 1 } },
+    ];
+    const cropped = run(crop, lockedImage);
+    const undo = invertBatch(lockedImage, { operations: crop });
+    if (!undo.ok) throw new Error(undo.reason);
+    expect(hashCanonical(applyBatch(cropped, { operations: undo.operations }))).toBe(
+      hashCanonical(lockedImage),
+    );
+  });
+
+  it('a local duplicate conflicts with remote edits or the removal of its source page', () => {
+    const local: Operation[] = [
+      {
+        op: 'duplicatePage',
+        pageId: P,
+        newPageId: 'page_2',
+        elementIdMap: copyMap(fixtureDocument().pages[0]!),
+      },
+    ];
+    expect(rebaseBatch(local, [[{ op: 'setText', pageId: P, elementId: ids.headline, text: 'x' }]]).ok).toBe(
+      false,
+    );
+    expect(rebaseBatch(local, [[{ op: 'removePage', pageId: P }]]).ok).toBe(false);
+    expect(
+      rebaseBatch(local, [[{ op: 'setText', pageId: 'other', elementId: eid('01HXTH'), text: 'x' }]]).ok,
+    ).toBe(true);
+  });
+
+  it('align and distribute use rotated footprints', () => {
+    const rotated = run([{ op: 'setRotation', pageId: P, elementId: ids.headline, rotation: 90 }]);
+    const left = run(
+      [{ op: 'alignElements', pageId: P, elementIds: [ids.headline], align: 'left', relativeTo: 'page' }],
+      rotated,
+    );
+    const t = el(left, ids.headline).transform;
+    // A 920×120 box turned 90° covers 120 px horizontally around its centre: that footprint's left edge is at 0.
+    expect(t.x + t.width / 2 - t.height / 2).toBeCloseTo(0, 1);
   });
 });

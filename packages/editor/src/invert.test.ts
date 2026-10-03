@@ -129,7 +129,9 @@ describe('invertBatch (spec 11.4: undo is a new revision whose snapshot equals a
   });
 
   it('applyTemplate inverts to the remove+insert sequence that restores the page elements', () => {
-    const doc = fixtureDocument();
+    const doc = applyBatch(fixtureDocument(), {
+      operations: [{ op: 'setLock', pageId: P, elementId: ids.bg, locked: false }],
+    });
     const templatePage = structuredClone(doc.pages[0]!);
     templatePage.elements = [
       { ...(templatePage.elements[0] as Element), id: eid('01HTBG') },

@@ -24,6 +24,7 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
   TemplateRetire,
   TemplateVersionCreate,
   type TemplateSlot,
@@ -2953,6 +2954,15 @@ export function createMockRouter(backend: MockBackend) {
       templates: t.router({
         list: query.input(TemplateList).query(() => ({
           items: backend.templates.map(({ versions: _v, ...t }) => ({ ...t, brandId: backend.brandId })),
+          nextCursor: null,
+        })),
+        listCurrent: query.input(TemplateListCurrent).query(() => ({
+          items: backend.templates.flatMap(({ versions, ...t }) => {
+            const current = versions.find((v) => v.id === t.currentVersionId && v.state === 'approved');
+            return t.state === 'active' && current
+              ? [{ ...t, brandId: backend.brandId, currentVersion: current }]
+              : [];
+          }),
           nextCursor: null,
         })),
         get: query.input(TemplateGet).query(({ input }) => {

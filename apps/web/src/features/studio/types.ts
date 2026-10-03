@@ -14,6 +14,9 @@ export type CommentDto = inferOutput<Trpc['creative']['comments']['list']>['item
 export type RenderJobDto = inferOutput<Trpc['creative']['renders']['get']>;
 export type TemplateDto = inferOutput<Trpc['creative']['templates']['list']>['items'][number];
 export type TemplateDetailDto = inferOutput<Trpc['creative']['templates']['get']>;
+export type TemplateWithCurrentDto = inferOutput<
+  Trpc['creative']['templates']['listCurrent']
+>['items'][number];
 
 /** The committed revision the canvas renders from (spec 21.4); the app owns it, the stage only draws it. */
 export interface Committed {
