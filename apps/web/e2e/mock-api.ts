@@ -39,6 +39,9 @@ import {
 } from '@oremedia/contracts/agents';
 import {
   AssetApprove,
+  AssetDownloadRequest,
+  AssetVersionsList,
+  INGEST_REJECTION_MESSAGES,
   AssetGet,
   AssetList,
   AssetRetire,
@@ -66,7 +69,6 @@ import {
   BrandVersionList,
   BrandVersionUpdate,
   emptyBrandSystemDocument,
-  FactList,
   ObjectiveList,
   OnboardingStart,
   PolicyGet,
@@ -112,6 +114,7 @@ import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
 import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
 import { DestinationsBackend, destinationsRouters } from './mock-destinations';
+import { FactsBackend, factsRouter } from './mock-facts';
 import { overviewRouters } from './mock-overview';
 
 /**
@@ -405,6 +408,8 @@ interface MockAsset {
   rights: { owner: string; licenceRef: string | null; expiresAt: string | null } | null;
   version: number;
   createdAt: string;
+  /** BSC-2: an uploaded logo's own version (an SVG served as vector); absent for the seeded sample assets. */
+  file?: { versionId: string; mime: string; width: number; height: number; previousVersionIds?: string[] };
 }
 const mockAsset = (
   id: string,
@@ -433,13 +438,13 @@ const assetIssues = (a: MockAsset): string[] => {
   return out;
 };
 const assetVersionOf = (a: MockAsset) => ({
-  id: 'av_photo',
+  id: a.file?.versionId ?? 'av_photo',
   assetId: a.id,
   number: 1,
-  mime: 'image/png',
+  mime: a.file?.mime ?? 'image/png',
   bytes: 68,
-  width: 2,
-  height: 2,
+  width: a.file?.width ?? 2,
+  height: a.file?.height ?? 2,
   altText: a.kind === 'photo' ? 'Sample photo' : null,
   contentHash: hash(a.id),
   provenance: { kind: 'upload' as const },
@@ -548,27 +553,16 @@ export class MockBackend {
    * a save appends a published version and retires the previous one; imports and agents land drafts (proposals).
    */
   brandVersions: MockBrandVersion[];
-  /** BSC-1: the brand's facts (brand.facts.list): two approved, for pillars to cite as proof. */
-  readonly brandFacts = [
-    { id: 'fact_e2e_roasted', statement: 'Roasted in Harare every week', state: 'approved' as const },
-    { id: 'fact_e2e_farms', statement: 'Beans from three Chimanimani farms', state: 'approved' as const },
-  ].map((f) => ({
-    ...f,
-    brandId: E2E.brandId,
-    kind: 'claim' as const,
-    evidence: [{ kind: 'other' as const, ref: 'e2e' }],
-    validFrom: null,
-    validUntil: null,
-    proposedByKind: 'user' as const,
-    proposedById: 'usr_e2e',
-    approvedByUserId: 'usr_e2e',
-    revokedByUserId: null,
-    createdAt: '2026-09-01T00:00:00.000Z',
-    updatedAt: '2026-09-01T00:00:00.000Z',
-    version: 1,
-  }));
   /** Every brand.system.save received, in order (tests read what the editor sent). */
   readonly brandSystemSaves: Array<z.infer<typeof BrandSystemSave>> = [];
+  /** BSC-2: downloads asked for through assets.media.download, in order. */
+  readonly downloads: Array<z.infer<typeof AssetDownloadRequest>> = [];
+  /** BSC-2: the asset whose version this is (an uploaded logo's own version), if any. */
+  assetOfVersion(assetVersionId: string): MockAsset | undefined {
+    return this.assets.find(
+      (a) => a.file?.versionId === assetVersionId || a.file?.previousVersionIds?.includes(assetVersionId),
+    );
+  }
   /** The last brand system document saved (brand.system.save, or brand.versions.update by an import or agent). */
   savedBrandDocument: BrandSystemDocumentV1 | null = null;
   lastSavedBrandVoice(): unknown {
@@ -645,6 +639,8 @@ export class MockBackend {
   readonly community: CommunityBackend;
   /** Brand destinations and the source-use policy (mock-destinations.ts). */
   readonly destinations: DestinationsBackend;
+  /** BSC-3 brand facts (mock-facts.ts); empty unless a suite seeds the workspace fixtures. */
+  readonly facts: FactsBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
@@ -857,6 +853,7 @@ export class MockBackend {
     };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
+    this.facts = new FactsBackend(company.brandId, () => this.role);
     // R2-3: a website is a variant target (content).
     this.phase6.destinationOf = (destinationId) => {
       const d = this.destinations.destinations.find((x) => x.id === destinationId && x.kind === 'cms_site');
@@ -2328,34 +2325,44 @@ export function createMockRouter(backend: MockBackend) {
           };
         }),
       }),
-      facts: t.router({
-        list: query.input(FactList).query(({ input }) => ({
-          items: backend.brandFacts.filter(
-            (f) => f.brandId === input.brandId && (!input.state || f.state === input.state),
-          ),
-          nextCursor: null,
-        })),
-      }),
+      facts: factsRouter(backend.facts, { router: t.router, query, mutation }),
       objectives: t.router({
         list: query.input(ObjectiveList).query(() => ({ items: [], nextCursor: null })),
       }),
     }),
     assets: t.router({
-      search: query.input(AssetSearch).query(() => ({
-        items: [
-          {
-            assetId: 'ast_e2e',
-            assetVersionId: 'av_photo',
-            kind: 'photo' as const,
+      search: query.input(AssetSearch).query(({ input }) => {
+        const photo = {
+          assetId: 'ast_e2e',
+          assetVersionId: 'av_photo',
+          kind: 'photo' as const,
+          semanticRole: null,
+          altText: 'Sample photo',
+          contentHash: hash('photo'),
+          width: 2,
+          height: 2,
+        };
+        // BSC-2: uploaded logos (with their own versions) are offered where logos are: approved ones as the brand
+        // kit's reference, and with rights recorded for creative and logo use (spec 9.2).
+        const { purpose, kinds } = input.query;
+        const logos = backend.assets
+          .filter((a) => a.kind === 'logo' && a.file && a.state === 'approved')
+          .filter((a) => purpose === 'reference' || a.rights !== null)
+          .filter(() => purpose !== 'reference' || kinds?.includes('logo'))
+          .filter(() => purpose !== 'font')
+          .map((a) => ({
+            assetId: a.id,
+            assetVersionId: a.file?.versionId ?? '',
+            kind: 'logo' as const,
             semanticRole: null,
-            altText: 'Sample photo',
-            contentHash: hash('photo'),
-            width: 2,
-            height: 2,
-          },
-        ],
-        nextCursor: null,
-      })),
+            altText: a.name,
+            contentHash: hash(a.id),
+            width: a.file?.width ?? null,
+            height: a.file?.height ?? null,
+          }));
+        const onlyLogos = purpose === 'logo' || (kinds !== undefined && kinds.every((k) => k === 'logo'));
+        return { items: onlyLogos && logos.length ? logos : [photo, ...logos], nextCursor: null };
+      }),
       /** Every asset of the brand with its issues (spec 21.2), filtered as assets.list is. */
       list: query.input(AssetList).query(({ input }) => {
         const items = backend.assets
@@ -2386,6 +2393,17 @@ export function createMockRouter(backend: MockBackend) {
             issues: assetIssues(a),
           }));
         return paged(items, input.page);
+      }),
+      /** BSC-2: an asset's versions, newest first (an uploaded logo's current and earlier versions). */
+      versions: t.router({
+        list: query.input(AssetVersionsList).query(({ input }) => {
+          const a = backend.asset(input.assetId);
+          const ids = a.file ? [a.file.versionId, ...(a.file.previousVersionIds ?? [])] : ['av_photo'];
+          return {
+            items: ids.map((id, i) => ({ ...assetVersionOf(a), id, number: ids.length - i })),
+            nextCursor: null,
+          };
+        }),
       }),
       /** The asset as the inspector and the brand kit editor read it. */
       get: query.input(AssetGet).query(({ input }) => {
@@ -2475,6 +2493,28 @@ export function createMockRouter(backend: MockBackend) {
           const intent = backend.fontIntents.get(input.intentId);
           if (!intent) throw new NotFoundError('UploadIntent', input.intentId);
           intent.polls += 1;
+          // BSC-2: a file named "unsafe…" stands for an SVG carrying a script: ingest refuses it and says why.
+          if (intent.polls >= 2 && /unsafe/i.test(intent.originalFilename))
+            return {
+              intentId: input.intentId,
+              state: 'rejected' as const,
+              assetId: null,
+              rejectionReason: 'svg_script',
+              rejectionMessage: INGEST_REJECTION_MESSAGES.svg_script,
+            };
+          if (intent.polls >= 2 && !intent.assetId && intent.kind === 'logo') {
+            // An uploaded logo is catalogued approved (the uploader holds asset.approve) with its own version.
+            intent.assetId = rid('ast');
+            backend.assets.unshift({
+              ...mockAsset(intent.assetId, 'logo', intent.originalFilename, 'approved', null),
+              file: {
+                versionId: `av_logo_${intent.assetId}`,
+                mime: intent.declaredMime,
+                width: 300,
+                height: 100,
+              },
+            });
+          }
           if (intent.polls >= 2 && !intent.assetId) {
             intent.assetId = rid('ast');
             if (intent.kind !== 'font')
@@ -2493,6 +2533,7 @@ export function createMockRouter(backend: MockBackend) {
             state: intent.assetId ? ('accepted' as const) : ('uploaded' as const),
             assetId: intent.assetId,
             rejectionReason: null,
+            rejectionMessage: null,
           };
         }),
       }),
@@ -2544,6 +2585,20 @@ export function createMockRouter(backend: MockBackend) {
               expiresAt: new Date(Date.now() + 300_000),
               mime: 'font/ttf',
             };
+          const logo = backend.assetOfVersion(input.assetVersionId);
+          // BSC-2: an SVG logo's original is the vector file; its renditions are rasters.
+          if (logo?.file)
+            return logo.file.mime === 'image/svg+xml' && input.derivative === 'original'
+              ? {
+                  url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.svg`,
+                  expiresAt: new Date(Date.now() + 300_000),
+                  mime: 'image/svg+xml',
+                }
+              : {
+                  url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
+                  expiresAt: new Date(Date.now() + 300_000),
+                  mime: 'image/png',
+                };
           if (input.assetVersionId !== 'av_photo')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
           // A signed GET on the store (an https address in production): the renderer keeps http(s) sources only.
@@ -2551,6 +2606,26 @@ export function createMockRouter(backend: MockBackend) {
             url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
             expiresAt: new Date(Date.now() + 300_000),
             mime: 'image/png',
+          };
+        }),
+        /** BSC-2: a file to save; the fake store answers it as an attachment (static-server ?download=). */
+        download: mutation.input(AssetDownloadRequest).mutation(({ input }) => {
+          const logo = backend.assetOfVersion(input.assetVersionId);
+          if (!logo?.file) throw new NotFoundError('AssetVersion', input.assetVersionId);
+          backend.downloads.push(input);
+          const base = logo.name.replace(/\.[a-z0-9]+$/i, '');
+          const png = input.format === 'png';
+          const filename = png ? `${base}-${input.width ?? 1024}px.png` : logo.name;
+          const ext = png ? 'png' : logo.file.mime === 'image/svg+xml' ? 'svg' : 'png';
+          return {
+            url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.${ext}?download=${encodeURIComponent(filename)}`,
+            expiresAt: new Date(Date.now() + 300_000),
+            mime: png ? 'image/png' : logo.file.mime,
+            filename,
+            width: png ? (input.width ?? 1024) : logo.file.width,
+            height: png
+              ? Math.round(((input.width ?? 1024) * logo.file.height) / logo.file.width)
+              : logo.file.height,
           };
         }),
       }),

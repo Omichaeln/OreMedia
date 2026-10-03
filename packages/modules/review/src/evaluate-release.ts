@@ -2,7 +2,7 @@ import { renderArticleHtml } from '@oremedia/contracts/article';
 import { PolicyDocumentV1, defaultPolicyDocument } from '@oremedia/contracts/brand';
 import {
   ARTICLE_IMAGE_KINDS,
-  ARTICLE_IMAGE_MIMES,
+  ARTICLE_IMAGE_SOURCE_MIMES,
   articleImages,
   type ContentClass,
 } from '@oremedia/contracts/content';
@@ -381,7 +381,7 @@ async function assetsUsable(
       for (const image of articleImages(variant.article))
         await assetAuthoriser(
           image.assetVersionId,
-          { ...ctx, purpose: 'creative', kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_MIMES },
+          { ...ctx, purpose: 'creative', kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_SOURCE_MIMES },
           tx,
         );
     return true;

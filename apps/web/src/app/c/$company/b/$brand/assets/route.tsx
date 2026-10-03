@@ -19,6 +19,7 @@ import {
   type AssetListFilter,
 } from '../../../../../../features/assets/use-assets';
 import { useAssetUpload } from '../../../../../../features/assets/use-upload';
+import { UploadRejected } from '../../../../../../features/assets/upload-status';
 import { toUiError } from '../../../../../../lib/errors';
 
 const PURPOSE_LABEL: Record<AssetPurposeT, string> = {
@@ -517,14 +518,7 @@ function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
             data-testid="upload-unsettled"
           />
         )}
-        {step.kind === 'rejected' && (
-          <StatusBanner
-            tone="critical"
-            title="Rejected at ingest"
-            description={`The file was not catalogued: ${step.reason}. A duplicate of an existing asset names that asset; an unsafe or unrecognised file names the check that failed.`}
-            data-testid="upload-rejected"
-          />
-        )}
+        {step.kind === 'rejected' && <UploadRejected step={step} />}
         {step.kind === 'failed' && (
           <StatusBanner
             tone="critical"

@@ -68,6 +68,7 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
   beforeAll(async () => {
     if (!existsSync(`${dist}/index.html`))
       throw new Error(`build first: pnpm --filter @oremedia/web build (missing ${dist}/index.html)`);
+    backend.facts.seedProofFacts(); // BSC-1: facts in effect for pillars to cite
     const served = await startStaticServer({ dist, trpcHandler: createMockHandler(backend) });
     origin = served.origin;
     close = served.close;

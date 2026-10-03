@@ -1,27 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  emptyBrandSystemDocument,
-  FactKind,
-  type BrandSystemDocumentV1,
-  type FactState,
-} from '@oremedia/contracts/brand';
-import {
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  Input,
-  Panel,
-  Skeleton,
-  StatusBanner,
-  Textarea,
-  cn,
-  type Tone,
-} from '@oremedia/ui';
+import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
+import { Badge, Button, EmptyState, Field, Input, Panel, Skeleton, StatusBanner, cn } from '@oremedia/ui';
 import { RequestError } from '../../../../../../components/request-state';
-import { Select } from '../../../../../../components/select';
 import { useToast } from '../../../../../../components/toast';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
@@ -44,6 +26,7 @@ import {
   WritingView,
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
+import { FactsWorkspace } from '../../../../../../features/brand/facts-workspace';
 import { VoiceExtraction } from '../../../../../../features/brand/voice-extraction';
 import {
   pendingProposal,
@@ -56,7 +39,7 @@ import {
 } from '../../../../../../features/brand/use-brand';
 import { useTRPC } from '../../../../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../../../../lib/intent-key';
-import { toUiError, type UiError } from '../../../../../../lib/errors';
+import { toUiError } from '../../../../../../lib/errors';
 
 type Doc = BrandSystemDocumentV1;
 
@@ -168,7 +151,8 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   {
     key: 'facts',
     label: 'Facts',
-    description: 'What copy may state: proposed with evidence, approved by a brand manager.',
+    description:
+      'What copy may state, by category, with sources and review dates: proposed by anyone, approved by a brand manager.',
   },
   {
     key: 'objectives',
@@ -195,7 +179,7 @@ export function BrandSystemRoute() {
   const [params, setParams] = useSearchParams();
   const canSave = useCanSaveBrandSystem(companyId);
   const versions = useBrandVersions(brandId);
-  const approvedFacts = useFacts(brandId, 'approved');
+  const effectiveFacts = useFacts(brandId, { effective: true });
   const proposedFacts = useFacts(brandId, 'proposed');
   const section = SECTIONS.find((x) => x.key === params.get('section')) ?? OVERVIEW;
   const appliedId = brand.publishedVersionId ?? null;
@@ -251,6 +235,7 @@ export function BrandSystemRoute() {
                 aria-current={x.key === section.key ? 'page' : undefined}
                 onClick={() => open(x.key)}
                 className={cn(
+                  // relative: the sr-only count is positioned inside the scrolling strip, not past the page edge
                   'relative flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   x.key === section.key
@@ -308,7 +293,7 @@ export function BrandSystemRoute() {
                   </Button>
                 )}
               </div>
-              {section.key === 'facts' && <Facts />}
+              {section.key === 'facts' && <FactsWorkspace />}
               {section.key === 'objectives' && <Objectives />}
               {contentSection && (
                 <>
@@ -354,7 +339,7 @@ export function BrandSystemRoute() {
                       section={section.key}
                       doc={appliedDoc}
                       brandName={brand.name}
-                      facts={approvedFacts.data?.items}
+                      facts={effectiveFacts.data?.items}
                       onOpen={open}
                     />
                   )}
@@ -577,209 +562,6 @@ function ProposalReview({
         />
       )}
     </section>
-  );
-}
-
-/** A CONFLICT from an optimistic-concurrency check is the "conflict" state: shown with the reload action. */
-function useConflict() {
-  const [conflict, setConflict] = useState<UiError | null>(null);
-  const onError = (err: unknown) => {
-    const ui = toUiError(err);
-    setConflict(ui.kind === 'conflict' ? ui : null);
-    return ui;
-  };
-  return { conflict, onError, clear: () => setConflict(null) };
-}
-
-const FACT_TONE: Record<FactState, Tone> = { proposed: 'warning', approved: 'good', revoked: 'neutral' };
-
-function Facts() {
-  const { brandId } = useBrandContext();
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [state, setState] = useState<FactState | 'all'>('all');
-  const facts = useFacts(brandId, state === 'all' ? undefined : state);
-  const { conflict, onError, clear } = useConflict();
-  const invalidate = () => {
-    clear();
-    void queryClient.invalidateQueries(trpc.brand.facts.pathFilter());
-  };
-  const fail = (err: unknown) => {
-    const ui = onError(err);
-    if (ui.kind !== 'conflict')
-      toast({ tone: 'critical', title: 'Fact change failed', description: ui.message });
-  };
-  const approveIntent = useIntentKey();
-  const approve = useMutation(
-    trpc.brand.facts.approve.mutationOptions({
-      ...mutationIntent(approveIntent.key),
-      onSuccess: () => {
-        approveIntent.renew();
-        invalidate();
-      },
-      onError: fail,
-    }),
-  );
-  const revokeIntent = useIntentKey();
-  const revoke = useMutation(
-    trpc.brand.facts.revoke.mutationOptions({
-      ...mutationIntent(revokeIntent.key),
-      onSuccess: () => {
-        revokeIntent.renew();
-        invalidate();
-      },
-      onError: fail,
-    }),
-  );
-  const proposeIntent = useIntentKey();
-  const [kind, setKind] = useState<string>('claim');
-  const [statement, setStatement] = useState('');
-  const [evidence, setEvidence] = useState('');
-  const propose = useMutation(
-    trpc.brand.facts.propose.mutationOptions({
-      ...mutationIntent(proposeIntent.key),
-      onSuccess: () => {
-        proposeIntent.renew();
-        setStatement('');
-        setEvidence('');
-        invalidate();
-      },
-      onError: fail,
-    }),
-  );
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!statement.trim() || !evidence.trim()) return;
-    propose.mutate({
-      brandId,
-      kind: FactKind.parse(kind),
-      statement: statement.trim(),
-      evidence: [{ kind: 'other', ref: evidence.trim() }],
-    });
-  };
-
-  return (
-    <Panel
-      title="Approved facts"
-      id="facts"
-      actions={
-        <label className="flex items-center gap-2 text-xs">
-          <span>Show</span>
-          <Select
-            size="sm"
-            value={state}
-            onValueChange={(v) => setState(v as FactState | 'all')}
-            aria-label="Filter facts by state"
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'proposed', label: 'Proposed' },
-              { value: 'approved', label: 'Approved' },
-              { value: 'revoked', label: 'Revoked' },
-            ]}
-          />
-        </label>
-      }
-    >
-      {conflict && (
-        <StatusBanner
-          tone="warning"
-          title="Conflict: this fact changed since you loaded it"
-          description={conflict.message}
-          actions={
-            <Button size="sm" onClick={invalidate}>
-              Reload
-            </Button>
-          }
-          className="mb-3"
-        />
-      )}
-      {facts.isPending && <Skeleton label="Loading facts" />}
-      {facts.isError && <RequestError error={facts.error} onRetry={() => void facts.refetch()} />}
-      {facts.isSuccess && facts.data.items.length === 0 && (
-        <EmptyState
-          title="No facts"
-          description="Facts a text can assert (offers, prices, claims) are proposed with evidence and approved by a brand manager."
-        />
-      )}
-      {facts.isSuccess && facts.data.items.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border">
-          {facts.data.items.map((f) => (
-            <li key={f.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-              <div className="min-w-0 flex-1">
-                <Badge tone={FACT_TONE[f.state]}>{f.state}</Badge> <Badge glyph={false}>{f.kind}</Badge>{' '}
-                <span>{f.statement}</span>
-              </div>
-              <div className="flex gap-1">
-                {f.state === 'proposed' && (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => approve.mutate({ brandId, factId: f.id, expectedVersion: f.version })}
-                  >
-                    Approve
-                  </Button>
-                )}
-                {f.state !== 'revoked' && (
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => revoke.mutate({ brandId, factId: f.id, expectedVersion: f.version })}
-                  >
-                    Revoke
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      <form
-        onSubmit={submit}
-        className="mt-4 grid gap-3 border-t border-border pt-3 sm:grid-cols-[10rem_1fr]"
-        noValidate
-      >
-        <Field label="Kind" htmlFor="fact-kind">
-          <Select
-            id="fact-kind"
-            value={kind}
-            onValueChange={setKind}
-            options={FactKind.options.map((k) => ({ value: k, label: k }))}
-          />
-        </Field>
-        <Field
-          label="Statement"
-          htmlFor="fact-statement"
-          error={propose.isError ? toUiError(propose.error).message : undefined}
-        >
-          <Textarea
-            id="fact-statement"
-            value={statement}
-            onChange={(e) => setStatement(e.target.value)}
-            maxLength={4000}
-            rows={2}
-          />
-        </Field>
-        <Field
-          label="Evidence reference"
-          htmlFor="fact-evidence"
-          className="sm:col-span-2"
-          hint="A URL, document or asset reference that supports the statement."
-        >
-          <Input
-            id="fact-evidence"
-            value={evidence}
-            onChange={(e) => setEvidence(e.target.value)}
-            maxLength={1000}
-          />
-        </Field>
-        <div className="sm:col-span-2">
-          <Button type="submit" disabled={propose.isPending || !statement.trim() || !evidence.trim()}>
-            Propose fact
-          </Button>
-        </div>
-      </form>
-    </Panel>
   );
 }
 

@@ -12,9 +12,15 @@ import {
   BrandVersionSubmit,
   BrandVersionUpdate,
   FactApprove,
+  FactCorrect,
   FactList,
+  FactMarkReviewed,
+  FactMerge,
   FactPropose,
+  FactResolveConflict,
   FactRevoke,
+  FactUpdate,
+  FactWithdraw,
   ObjectiveList,
   ObjectiveSet,
   OnboardingStart,
@@ -146,6 +152,40 @@ export const brandRouter = router({
       .input(FactRevoke)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => brandService.facts.revoke(ctx.tenant.actor, input, tx)),
+      ),
+    /** BSC-3: edit a proposed fact. */
+    update: tenantMutation
+      .input(FactUpdate)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.update(ctx.tenant.actor, input, tx)),
+      ),
+    /** BSC-3: revoke with a required reason. */
+    withdraw: tenantMutation
+      .input(FactWithdraw)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.withdraw(ctx.tenant.actor, input, tx)),
+      ),
+    /** BSC-3: a proposed correction that supersedes the approved fact once approved. */
+    correct: tenantMutation
+      .input(FactCorrect)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.correct(ctx.tenant.actor, input, tx)),
+      ),
+    /** BSC-3: keep one fact; the others become superseded by it. */
+    merge: tenantMutation
+      .input(FactMerge)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.merge(ctx.tenant.actor, input, tx)),
+      ),
+    markReviewed: tenantMutation
+      .input(FactMarkReviewed)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.markReviewed(ctx.tenant.actor, input, tx)),
+      ),
+    resolveConflict: tenantMutation
+      .input(FactResolveConflict)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.facts.resolveConflict(ctx.tenant.actor, input, tx)),
       ),
     list: tenantQuery
       .input(FactList)

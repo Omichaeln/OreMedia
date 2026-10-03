@@ -102,4 +102,5 @@ source can never be approved as-is: approval requires a source or an explicit re
 - Platform limits reach the UI through `publishing.channels.limits` (certified providers' capability values, gated by
   `brand.read`); the UI never writes them.
 - The prompt renders guidance within a 12,000-character budget in a fixed order, the run's channel only, and cites a
-  pillar's proof facts only while they are approved facts of the snapshot.
+  pillar's proof facts only while they are effective facts of the snapshot (BSC-3: approved, in their validity
+  window, not superseded); a save refuses newly cited facts that are not in effect.

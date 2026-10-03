@@ -19,6 +19,7 @@ import {
   GoogleFontImport,
   KIND_MIME_GROUPS,
   KINDS_NOT_PROCESSABLE,
+  AssetDownloadRequest,
   MediaSignedUrlRequest,
   RIGHTS_ATTENTION_DAYS,
   SIGNED_URL_TTL_SEC,
@@ -33,6 +34,7 @@ import {
   type AssetRef,
   type BrandFontFace,
   type DerivativePurpose,
+  ingestRejectionMessage,
   type GoogleFontImportFile,
   type GoogleFontImportResult,
   type Provenance,
@@ -53,6 +55,7 @@ import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
+import { logger } from '@oremedia/observability';
 import { compatibleKinds, evaluateEligibility, rightsExpiryThreshold, rightsRequired } from './eligibility';
 import { fontFileIdentity, groupFontFaces, isFaceFile, type FontFileRow } from './fonts';
 import { fetchGoogleFontFiles, type GoogleFontFile } from './google-fonts';
@@ -70,6 +73,7 @@ import {
   type UploadIntentRow,
   type UsageRightsRow,
 } from './repositories';
+import { PNG_RENDITION_MAX_SIDE, rasterPngRendition, svgPngRendition } from './ingest/steps';
 import { storage, storageKeys } from './storage';
 
 const assetsRepo = new AssetRepository();
@@ -157,6 +161,110 @@ const versionView = (v: AssetVersionRow) => ({
   createdAt: v.createdAt,
 });
 
+const SVG_MIME = 'image/svg+xml';
+const FILE_EXTENSIONS: Readonly<Record<string, string>> = {
+  'image/svg+xml': 'svg',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/avif': 'avif',
+  'font/otf': 'otf',
+  'font/ttf': 'ttf',
+  'font/woff': 'woff',
+  'font/woff2': 'woff2',
+  'application/pdf': 'pdf',
+};
+/** A file name people recognise: the asset's name without its old extension, a suffix, the type's extension. */
+function downloadFilename(name: string, mime: string, suffix = ''): string {
+  const base =
+    name
+      .replace(/\.[a-z0-9]{1,5}$/i, '')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\p{Cc}+/gu, '')
+      .trim()
+      .slice(0, 120) || 'asset';
+  return `${base}${suffix}.${FILE_EXTENSIONS[mime] ?? 'bin'}`;
+}
+/** Versions a PNG can be drawn from: an SVG, or a raster image ingest re-encoded. */
+const drawable = (mime: string): boolean =>
+  mime === SVG_MIME || (ACCEPTED_MIMES['image'] ?? []).includes(mime);
+
+interface StoredRendition {
+  key: string;
+  mime: string;
+  contentHash: string;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+}
+
+/**
+ * BSC-2: a PNG rendition of a version, transparency kept: `png` (the one ingest keeps for an SVG, longer side 2048) or
+ * `png-<width>` for a download. One already recorded is reused; otherwise it is drawn from the original now, written
+ * under the version's immutable prefix and recorded as a derivative row (tenant and brand deletion find objects by
+ * their rows). Null when the original cannot be drawn.
+ */
+async function pngRendition(
+  v: AssetVersionRow,
+  width: number | null,
+  tx?: Tx,
+): Promise<StoredRendition | null> {
+  if (!tx) return withTransaction((t) => pngRendition(v, width, t));
+  // Concurrent requests for the same rendition wait here, then find the row the first one recorded.
+  await versionsRepo.lockInTenant(v.id, tx);
+  const purpose = width ? `png-${width}` : 'png';
+  const existing = await derivativesRepo.find(v.id, purpose, tx);
+  if (existing)
+    return {
+      key: existing.storageKey,
+      mime: existing.mime,
+      contentHash: existing.contentHash,
+      width: existing.width,
+      height: existing.height,
+      bytes: existing.bytes,
+    };
+  const original = await storage().getObject(v.storageKey);
+  if (!original) throw new NotFoundError('AssetObject', v.storageKey);
+  const drawn =
+    v.mime === SVG_MIME
+      ? await svgPngRendition(
+          original,
+          width ?? PNG_RENDITION_MAX_SIDE,
+          undefined,
+          width ? { side: 'width' } : {},
+        )
+      : await rasterPngRendition(original, width ?? v.width ?? PNG_RENDITION_MAX_SIDE);
+  if (!drawn) return null;
+  const { tenantId } = requireTenant();
+  const key = storageKeys.derivative(tenantId, v.brandId, v.assetId, v.id, purpose);
+  await storage().putObject(key, drawn.bytes, { contentType: drawn.mime });
+  const rendition = {
+    key,
+    mime: drawn.mime,
+    contentHash: sha256(drawn.bytes),
+    width: drawn.width,
+    height: drawn.height,
+    bytes: drawn.bytes.length,
+  };
+  await derivativesRepo.createRelease(
+    {
+      id: newId('assetDerivative'),
+      brandId: v.brandId,
+      assetVersionId: v.id,
+      purpose,
+      transform: drawn.transform,
+      storageKey: key,
+      contentHash: rendition.contentHash,
+      mime: rendition.mime,
+      width: rendition.width,
+      height: rendition.height,
+      bytes: rendition.bytes,
+    },
+    tx,
+  );
+  return rendition;
+}
+
 export interface AuthoriseUseOptions {
   /** The brand the asset is being used for (its own brand, or a grantee brand). */
   brandId: string;
@@ -209,6 +317,8 @@ export const assetService = {
       state: intent.state,
       assetId: intent.resultAssetId ?? null,
       rejectionReason: intent.rejectionReason ?? null,
+      /** BSC-2: what the uploader is told, and what to do about it (null while not rejected). */
+      rejectionMessage: ingestRejectionMessage(intent.rejectionReason),
     };
   },
 
@@ -408,6 +518,25 @@ export const assetService = {
     for (const id of assetIds.slice(0, ID_LIST_MAX)) {
       const a = await assetsRepo.findInTenant(id, tx);
       if (a && a.brandId === brandId && a.state !== 'retired') out.set(a.id, a.kind);
+    }
+    return out;
+  },
+
+  /**
+   * The brand module's check of a logo rule's pinned version (registered as its BrandAssetVersionSource): the asset
+   * each listed version belongs to, for versions of this brand's assets that are not retired. Anything else is absent.
+   */
+  async assetsOfVersions(
+    brandId: string,
+    assetVersionIds: readonly string[],
+    tx?: Tx,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const id of assetVersionIds.slice(0, ID_LIST_MAX)) {
+      const v = await versionsRepo.findInTenant(id, tx);
+      if (!v || v.brandId !== brandId) continue;
+      const a = await assetsRepo.findInTenant(v.assetId, tx);
+      if (a && a.brandId === brandId && a.state !== 'retired') out.set(v.id, a.id);
     }
     return out;
   },
@@ -833,13 +962,65 @@ export const assetService = {
   },
 
   /**
+   * BSC-2: a file to save (spec 9.3 rules as for the media endpoint: asset.read re-checked, 5-minute signed GET). The
+   * store answers with `Content-Disposition: attachment` and the file's type, so an SVG is saved, never rendered as a
+   * page, and nothing is served from the API's origin. `png` draws the version at the chosen width (an SVG from its
+   * vector; a raster never enlarged) and keeps that rendition for the next download.
+   */
+  async downloadUrl(actor: ResolvedActor, input: z.infer<typeof AssetDownloadRequest>, tx: Tx) {
+    const parsed = AssetDownloadRequest.parse(input);
+    const v = await versionsRepo.getById(parsed.assetVersionId, tx);
+    const a = await assetsRepo.getById(v.assetId, tx);
+    await policy.assert(actor, 'asset.read', assetResource(a), {}, tx);
+    let source: { key: string; mime: string; width: number | null; height: number | null };
+    let filename: string;
+    if (parsed.format === 'original') {
+      source = { key: v.storageKey, mime: v.mime, width: v.width, height: v.height };
+      filename = downloadFilename(a.name, v.mime);
+    } else {
+      if (!drawable(v.mime))
+        throw new ValidationFailedError(
+          [{ path: 'format', issue: 'not_an_image' }],
+          'Only images download as PNG',
+        );
+      const r = await pngRendition(v, parsed.width ?? 1024, tx);
+      if (!r)
+        throw new ValidationFailedError(
+          [{ path: 'format', issue: 'not_drawable' }],
+          'The file cannot be drawn',
+        );
+      source = r;
+      filename = downloadFilename(a.name, r.mime, r.width ? `-${r.width}px` : '');
+    }
+    const signed = await storage().signDownloadUrl(source.key, {
+      expiresInSec: SIGNED_URL_TTL_SEC,
+      download: { filename, contentType: source.mime },
+    });
+    return {
+      url: signed.url,
+      expiresAt: signed.expiresAt,
+      mime: source.mime,
+      filename,
+      width: source.width,
+      height: source.height,
+    };
+  },
+
+  /**
    * Spec 9.3: providers that fetch public URLs get a release derivative copied to the releases/ path with a signed
    * URL covering the provider's processing window. Minted at dispatch (after authoriseUse), never at scheduling.
    */
   async releaseDerivative(
     assetVersionId: string,
     providerProcessingWindowSec: number,
-    opts: { derivative?: 'original' | DerivativePurpose } = {},
+    opts: {
+      derivative?: 'original' | DerivativePurpose;
+      /**
+       * BSC-2: the destination takes rasters only (a website article): an SVG version is released as its PNG
+       * rendition (transparency kept), drawn now when the version predates the rendition. Rasters release as asked.
+       */
+      raster?: boolean;
+    } = {},
     tx?: Tx,
   ) {
     const v = await versionsRepo.findInTenant(assetVersionId, tx);
@@ -852,8 +1033,19 @@ export const assetService = {
       height: v.height,
       bytes: v.bytes,
     };
-    const which = opts.derivative ?? 'original';
-    if (which !== 'original') {
+    let which: string = opts.derivative ?? 'original';
+    if (opts.raster && v.mime === SVG_MIME && which === 'original') {
+      const png = await pngRendition(v, null, tx);
+      if (png) {
+        source = png;
+        which = 'png';
+      } else
+        // The original is released as it is; a raster-only destination then refuses it (article_image_not_raster).
+        logger().warn(
+          { assetVersionId: v.id, brandId: v.brandId },
+          'svg could not be drawn as a png rendition for a raster-only destination',
+        );
+    } else if (which !== 'original') {
       const d = await derivativesRepo.find(v.id, which, tx);
       if (!d) throw new NotFoundError('AssetDerivative', `${v.id}/${which}`);
       source = {

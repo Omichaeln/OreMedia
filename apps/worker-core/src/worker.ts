@@ -18,6 +18,7 @@ import {
   ensureRemoteChangeSweepScheduled,
   ensureConnectChoicePurgeScheduleRunning,
   ensureDestinationTokenRefreshScheduled,
+  ensureBrandFactSweepScheduled,
   ensureSweeperRunning,
   startPublishingWorkers,
 } from './publishing-worker';
@@ -80,6 +81,7 @@ try {
   await ensureRemoteChangeSweepScheduled(client); // closes remote edits/deletes whose workflow was lost
   await ensureConnectChoicePurgeScheduleRunning(client); // spec 14.7 expired account choices, every 15 minutes
   await ensureDestinationTokenRefreshScheduled(client); // ledger R2-1 daily refresh of destinations' source grants
+  await ensureBrandFactSweepScheduled(client); // BSC-3 daily fact expiry events and review-due flags
   await ensureIntelligenceSchedulesRunning(client); // spec 16.3 weekly analyst, 16.8 monthly baseline comparison
   await ensureRetentionScheduleRunning(client); // spec 17.5 daily TTL sweep (dry run unless RETENTION_SWEEP_APPLY)
 } catch (err) {

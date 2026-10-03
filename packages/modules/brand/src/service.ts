@@ -18,10 +18,24 @@ import {
   BrandVoiceProposal,
   DesignTokenSetV1,
   EvidenceRef,
+  FACT_EVIDENCE_SOURCE_KINDS,
   FactApprove,
+  FactConflict,
+  FactCorrect,
   FactList,
+  FactMarkReviewed,
+  FactMerge,
   FactPropose,
+  FactResolveConflict,
   FactRevoke,
+  FactSource,
+  FactUpdate,
+  FactWithdraw,
+  factKindOf,
+  type FactCategory,
+  type FactConflictInput,
+  type FactOrigin,
+  type FactState,
   ObjectiveList,
   ObjectiveSet,
   OnboardingStart,
@@ -32,7 +46,6 @@ import {
   defaultPolicyDocument,
   emptyBrandSystemDocument,
   type BrandSnapshot,
-  type FactState,
 } from '@oremedia/contracts/brand';
 import type { EvidenceItem } from '@oremedia/contracts/agents';
 import type { AssetKind } from '@oremedia/contracts/assets';
@@ -48,12 +61,13 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, runAsPlatform, type Tx } from '@oremedia/db';
 import { buildBrandSnapshot } from '@oremedia/domain/brand-snapshot';
 import { hashCanonical } from '@oremedia/domain/hash';
+import { factDedupeKey, possibleDuplicates } from '@oremedia/domain/facts';
 import { newId } from '@oremedia/domain/ids';
 import { approvedFactMachine } from '@oremedia/domain/state-machines/approved-fact';
 import { brandVersionMachine } from '@oremedia/domain/state-machines/brand-version';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
 import { policyVersionMachine } from '@oremedia/domain/state-machines/policy-version';
-import { policy } from '@oremedia/module-access';
+import { accessService, policy } from '@oremedia/module-access';
 import { entitlements } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import { providerRegistry } from '@oremedia/providers';
@@ -128,6 +142,25 @@ export const registerChannelKeySource = (fn: ChannelKeySource): void => {
 };
 export const resetChannelKeySource = (): void => {
   channelKeySource = builtinChannelKeys;
+};
+
+/**
+ * BSC-2: the asset each listed version belongs to, for versions of this brand's live assets (composition wires
+ * `assetService.assetsOfVersions`). Versions that are missing, foreign or of another brand are absent. Only a logo rule
+ * that pins a version is checked against it; until registered a pinned version is refused, as an asset reference is.
+ */
+export type BrandAssetVersionSource = (
+  brandId: string,
+  assetVersionIds: string[],
+  tx?: Tx,
+) => Promise<Map<string, string>>;
+const noBrandVersions: BrandAssetVersionSource = async () => new Map();
+let brandAssetVersionSource: BrandAssetVersionSource = noBrandVersions;
+export const registerBrandAssetVersionSource = (fn: BrandAssetVersionSource): void => {
+  brandAssetVersionSource = fn;
+};
+export const resetBrandAssetVersionSource = (): void => {
+  brandAssetVersionSource = noBrandVersions;
 };
 
 /**
@@ -252,9 +285,26 @@ async function assertDocumentReferences(
   const fontIds = changedRoles.map(({ r }) => r.fontAssetId);
   const ids = [...new Set([...logoIds, ...exampleIds, ...fontIds])];
   const kinds = ids.length ? await brandAssetKindSource(brandId, ids, tx) : new Map<string, AssetKind>();
+  const pinned = document.logoRules.flatMap((r) => (r.assetVersionId ? [r.assetVersionId] : []));
+  const versionAssets = pinned.length
+    ? await brandAssetVersionSource(brandId, [...new Set(pinned)], tx)
+    : new Map<string, string>();
+  const variants = new Set<string>();
+  // A variant named twice is refused only when the save introduces it: stored documents may already hold one.
+  const heldTwice = new Set(
+    (previous?.logoRules ?? []).map((r) => r.variant).filter((v, i, all) => all.indexOf(v) !== i),
+  );
   document.logoRules.forEach((r, i) => {
     if (kinds.get(r.assetId) !== 'logo')
       issues.push({ path: `logoRules.${i}.assetId`, issue: 'not_a_logo_of_this_brand' });
+    if (variants.has(r.variant) && !heldTwice.has(r.variant))
+      issues.push({ path: `logoRules.${i}.variant`, issue: 'duplicate_variant' });
+    variants.add(r.variant);
+    if (r.assetVersionId && versionAssets.get(r.assetVersionId) !== r.assetId)
+      issues.push({ path: `logoRules.${i}.assetVersionId`, issue: 'not_a_version_of_this_logo' });
+    r.usage?.donts.forEach((d, j) => {
+      if (!d.trim()) issues.push({ path: `logoRules.${i}.usage.donts.${j}`, issue: 'empty' });
+    });
     r.allowedBackgroundColourKeys.forEach((k, j) => {
       if (!keys.has(k))
         issues.push({ path: `logoRules.${i}.allowedBackgroundColourKeys.${j}`, issue: 'unknown_colour_key' });
@@ -312,7 +362,7 @@ function duplicates<T>(
 /**
  * BSC-1 guidance references: channel keys name known channel providers, one guidance entry per channel; copy
  * template keys, messaging pillar keys and vocabulary terms (case-insensitively) are unique; a pillar's proof facts
- * are facts of this brand, and a fact a pillar newly cites is approved. As with type roles, what the applied document
+ * are facts of this brand, and a fact a pillar newly cites is in effect (approved, within its validity window). As with type roles, what the applied document
  * already held (channel keys, repeated keys, cited facts) is not re-checked, so an older save still saves (a held fact
  * that was since revoked stays cited until a person removes it; snapshots and prompts use approved facts only).
  */
@@ -378,18 +428,24 @@ async function guidanceIssues(
       issues.push({ path: `messaging.keyMessages.${i}.pillarKey`, issue: 'unknown_pillar' });
   });
   const cited = new Set(previous?.messaging?.pillars.flatMap((p) => p.proofFactIds) ?? []);
-  const factIds = [...new Set(pillars.flatMap((p) => p.proofFactIds))];
+  const factIds = [...new Set(pillars.flatMap((p) => p.proofFactIds))].filter((id) => !cited.has(id));
   const states = factIds.length
     ? await factsRepo.statesOf(brandId, factIds, tx)
     : new Map<string, FactState>();
+  // Spec 8.3 as the snapshot applies it: approved, its validity window open now (a superseded fact is not).
+  const effective = new Set(
+    (await factsRepo.listEffectiveByIds(brandId, factIds, new Date(), tx)).map((f) => f.id),
+  );
   pillars.forEach((p, i) =>
     p.proofFactIds.forEach((id, j) => {
-      const state = states.get(id);
       const path = `messaging.pillars.${i}.proofFactIds.${j}`;
-      // A fact the applied document already cites is not re-checked (it may since have been revoked or removed).
-      if (cited.has(id)) return;
-      if (state === undefined) issues.push({ path, issue: 'not_a_fact_of_this_brand' });
-      else if (state !== 'approved') issues.push({ path, issue: 'fact_not_approved' });
+      // A fact the applied document already cites is not re-checked (it may since have been revoked or superseded;
+      // snapshots and prompts cite effective facts only).
+      if (cited.has(id) || effective.has(id)) return;
+      issues.push({
+        path,
+        issue: states.get(id) === undefined ? 'not_a_fact_of_this_brand' : 'fact_not_in_effect',
+      });
     }),
   );
   return issues;
@@ -665,23 +721,245 @@ const toVersionSummary = (v: Awaited<ReturnType<typeof loadVersion>>) => {
   const { document: _document, ...summary } = toVersionDto(v);
   return summary;
 };
-const toFactDto = (f: Awaited<ReturnType<typeof loadFact>>) => ({
-  id: f.id,
-  brandId: f.brandId,
-  kind: f.kind,
-  statement: f.statement,
-  evidence: EvidenceRef.array().parse(f.evidence),
-  validFrom: iso(f.validFrom),
-  validUntil: iso(f.validUntil),
-  state: f.state,
-  proposedByKind: f.proposedByKind,
-  proposedById: f.proposedById,
-  approvedByUserId: f.approvedByUserId,
-  revokedByUserId: f.revokedByUserId,
-  createdAt: f.createdAt.toISOString(),
-  updatedAt: f.updatedAt.toISOString(),
-  version: f.version,
+type FactRow = Awaited<ReturnType<typeof loadFact>>;
+
+/** Facts that still apply or may apply: the ones a merge, a correction or a conflict decision can act on. */
+const LIVE_FACT_STATES: ReadonlyArray<FactState> = ['proposed', 'approved'];
+/** Without a date of its own, an approved or reviewed fact is next due for review a year later. */
+const DEFAULT_FACT_REVIEW_DAYS = 365;
+const DAY_MS = 86_400_000;
+
+const dateOrNull = (v: string | null | undefined): Date | null => (v ? new Date(v) : null);
+const pairKey = (a: string, b: string) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+function assertValidity(validFrom: Date | null, validUntil: Date | null): void {
+  if (validFrom && validUntil && validUntil.getTime() <= validFrom.getTime())
+    throw new ValidationFailedError([{ path: 'validUntil', issue: 'must be after validFrom' }]);
+}
+
+/** Rows written before 0023 (or by the previous release mid-deploy) read as the category of the same name as kind. */
+const factCategory = (f: FactRow): FactCategory => f.category ?? f.kind;
+const factOrigin = (f: FactRow): FactOrigin =>
+  f.origin ?? (f.proposedByKind === 'agent' ? 'suggested' : 'user');
+const factSources = (f: FactRow): FactSource[] => FactSource.array().parse(f.sources ?? f.evidence);
+/** The evidence column keeps the plain references (titles and excerpts live in sources only). */
+const evidenceOf = (sources: readonly FactSource[]): EvidenceRef[] =>
+  sources.map(({ title: _title, excerpt: _excerpt, ...ref }) => ref);
+const hasEvidenceSource = (sources: readonly FactSource[]) =>
+  sources.some((s) => FACT_EVIDENCE_SOURCE_KINDS.includes(s.kind));
+const isEffective = (f: FactRow, at: Date) =>
+  f.state === 'approved' &&
+  (f.validFrom === null || f.validFrom <= at) &&
+  (f.validUntil === null || f.validUntil > at);
+
+/** A person's fact is `user` unless they say otherwise; an agent never claims `user` (it is then `suggested`). */
+function originFor(actor: ResolvedActor, requested: FactOrigin | undefined): FactOrigin {
+  if (actor.kind === 'user') return requested ?? 'user';
+  return requested && requested !== 'user' ? requested : 'suggested';
+}
+
+function withReviewerNote(
+  sources: FactSource[],
+  actor: ResolvedActor,
+  note: string | undefined,
+  at: Date,
+): FactSource[] {
+  return note
+    ? [...sources, { kind: 'reviewer', ref: actor.id, note, capturedAt: at.toISOString() }]
+    : sources;
+}
+
+const factResource = (brand: BrandRow, fact: FactRow) => ({
+  type: 'approved_fact',
+  tenantId: brand.tenantId,
+  brandId: brand.id,
+  id: fact.id,
 });
+
+/**
+ * The live fact of the brand with this dedupe key: by the stored key, or, for a fact stored before 0023 whose key
+ * the daily sweep has not filled yet, by computing its key here (so existing facts are duplicates from day one).
+ */
+async function findLiveDuplicate(brandId: string, dedupeKey: string, tx: Tx) {
+  const keyed = await factsRepo.findLiveByDedupeKey(brandId, dedupeKey, tx);
+  if (keyed) return keyed;
+  const unkeyed = await factsRepo.listLiveUnkeyed(brandId, tx);
+  return unkeyed.find((f) => factDedupeKey(f.statement) === dedupeKey) ?? null;
+}
+
+/** Another live fact of the brand with the same normalised statement is a duplicate (typed for the workspace). */
+async function assertNotDuplicate(brandId: string, dedupeKey: string, except: string[], tx: Tx) {
+  const existing = await findLiveDuplicate(brandId, dedupeKey, tx);
+  if (existing && !except.includes(existing.id))
+    throw new ValidationFailedError(
+      [{ path: 'statement', issue: 'duplicate_fact' }],
+      `The brand already has this fact: "${existing.statement.slice(0, 200)}"`,
+    );
+}
+
+/** Conflicts named when a fact is proposed; a conflicting fact must be the brand's (another is NOT_FOUND). */
+async function conflictsOf(
+  brandId: string,
+  inputs: readonly FactConflictInput[],
+  at: Date,
+  tx: Tx,
+): Promise<FactConflict[]> {
+  const out: FactConflict[] = [];
+  for (const [i, c] of inputs.entries()) {
+    if (!c.factId && !c.source && !c.note)
+      throw new ValidationFailedError([{ path: `conflicts.${i}`, issue: 'empty_conflict' }]);
+    if (c.factId) await loadFact(brandId, c.factId, tx);
+    out.push({ ...c, id: `c${i + 1}`, raisedAt: at.toISOString(), status: 'open' });
+  }
+  return out;
+}
+
+/**
+ * A fact that stopped applying (revoked, withdrawn or superseded while approved) announces it the way a revocation
+ * always has (`brand.fact_revoked`, schema 1; `cause` and `supersededByFactId` are additive), so the impact
+ * workflow holds or flags the scheduled work citing it.
+ */
+async function emitFactRevoked(
+  actor: ResolvedActor,
+  brand: BrandRow,
+  fact: FactRow,
+  version: number,
+  extra: { reason: string | null; cause: string; supersededByFactId?: string },
+  tx: Tx,
+) {
+  await outbox.add(
+    'brand.fact_revoked',
+    { type: 'approved_fact', id: fact.id, version },
+    {
+      factId: fact.id,
+      kind: fact.kind,
+      previousState: fact.state,
+      reason: extra.reason,
+      cause: extra.cause,
+      ...(extra.supersededByFactId ? { supersededByFactId: extra.supersededByFactId } : {}),
+      actorKind: actor.kind,
+      actorId: actor.id,
+    },
+    tx,
+    { brandId: brand.id },
+  );
+}
+
+/** proposed | approved → superseded by `byFactId`; an approved fact's dependants are held through the event. */
+async function supersedeFact(
+  actor: ResolvedActor,
+  brand: BrandRow,
+  fact: FactRow,
+  expectedVersion: number,
+  byFactId: string,
+  cause: 'corrected' | 'merged' | 'conflict',
+  tx: Tx,
+): Promise<FactState> {
+  const toState = transition(approvedFactMachine, fact.state, 'supersede', 'factId');
+  await factsRepo.update(fact.id, expectedVersion, { state: toState, supersededByFactId: byFactId }, tx);
+  await audit.record(
+    actorRef(actor),
+    'brand.fact.supersede',
+    { type: 'approved_fact', id: fact.id },
+    'allowed',
+    tx,
+    { brandId: brand.id, fromState: fact.state, toState, supersededByFactId: byFactId, cause },
+  );
+  if (fact.state === 'approved')
+    await emitFactRevoked(
+      actor,
+      brand,
+      fact,
+      expectedVersion + 1,
+      { reason: null, cause, supersededByFactId: byFactId },
+      tx,
+    );
+  return toState;
+}
+
+async function revokeFact(
+  actor: ResolvedActor,
+  input: { brandId: string; factId: string; expectedVersion: number; reason?: string },
+  cause: 'revoked' | 'withdrawn',
+  tx: Tx,
+) {
+  const brand = await brandsRepo.getById(input.brandId, tx);
+  const fact = await loadFact(brand.id, input.factId, tx);
+  const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+  assertMayDecide(decision);
+  const toState = transition(approvedFactMachine, fact.state, 'revoke', 'factId');
+  const reason = input.reason ?? null;
+  await factsRepo.update(
+    fact.id,
+    input.expectedVersion,
+    { state: toState, revokedByUserId: actor.kind === 'user' ? actor.id : null, revokeReason: reason },
+    tx,
+  );
+  await audit.record(
+    actorRef(actor),
+    cause === 'withdrawn' ? 'brand.fact.withdraw' : 'brand.fact.revoke',
+    { type: 'approved_fact', id: fact.id },
+    'allowed',
+    tx,
+    { brandId: brand.id, fromState: fact.state, toState, reason },
+  );
+  await emitFactRevoked(actor, brand, fact, input.expectedVersion + 1, { reason, cause }, tx);
+  return { factId: fact.id, state: toState, version: input.expectedVersion + 1 };
+}
+
+const toFactDto = (
+  f: FactRow,
+  ctx: {
+    at: Date;
+    names: ReadonlyMap<string, string>;
+    statements: ReadonlyMap<string, string>;
+    duplicates: ReadonlyMap<string, readonly string[]>;
+  },
+) => {
+  const name = (id: string | null) => (id ? (ctx.names.get(id) ?? null) : null);
+  return {
+    id: f.id,
+    brandId: f.brandId,
+    kind: f.kind,
+    category: factCategory(f),
+    scope: f.scope,
+    origin: factOrigin(f),
+    statement: f.statement,
+    evidence: EvidenceRef.array().parse(f.evidence),
+    sources: factSources(f),
+    validFrom: iso(f.validFrom),
+    validUntil: iso(f.validUntil),
+    state: f.state,
+    proposedByKind: f.proposedByKind,
+    proposedById: f.proposedById,
+    proposedByName: f.proposedByKind === 'user' ? name(f.proposedById) : null,
+    approvedByUserId: f.approvedByUserId,
+    approvedByName: name(f.approvedByUserId),
+    revokedByUserId: f.revokedByUserId,
+    revokedByName: name(f.revokedByUserId),
+    revokeReason: f.revokeReason,
+    reviewDueAt: iso(f.reviewDueAt),
+    reviewedAt: iso(f.reviewedAt),
+    reviewedByUserId: f.reviewedByUserId,
+    reviewedByName: name(f.reviewedByUserId),
+    supersededByFactId: f.supersededByFactId,
+    supersedesFactId: f.supersedesFactId,
+    conflicts: FactConflict.array()
+      .parse(f.conflicts ?? [])
+      .map((c) => ({ ...c, factStatement: c.factId ? (ctx.statements.get(c.factId) ?? null) : null })),
+    possibleDuplicates: (ctx.duplicates.get(f.id) ?? []).map((id) => ({
+      id,
+      statement: ctx.statements.get(id) ?? '',
+    })),
+    /** Approved and inside its validity window now: what generation and release checks use. */
+    effective: isEffective(f, ctx.at),
+    expired: f.validUntil !== null && f.validUntil <= ctx.at,
+    reviewDue: f.state === 'approved' && f.reviewDueAt !== null && f.reviewDueAt <= ctx.at,
+    createdAt: f.createdAt.toISOString(),
+    updatedAt: f.updatedAt.toISOString(),
+    version: f.version,
+  };
+};
 const toObjectiveDto = (o: Awaited<ReturnType<typeof objectivesRepo.getById>>) => ({
   id: o.id,
   brandId: o.brandId,
@@ -1096,26 +1374,49 @@ export const brandService = {
     },
   },
 
-  /** Spec 8.2: facts land as proposed (by a person or an agent); a brand manager approves; revocation is evented. */
+  /**
+   * Spec 8.2 / BSC-3: facts land as proposed (by a person or an agent, with category, scope, origin and sources); a
+   * person approves, corrects, merges, resolves conflicts, marks them reviewed and withdraws them. Every decision is
+   * a person's (agents propose only, assertMayDecide). A fact that stops applying (revoked, withdrawn, superseded)
+   * emits brand.fact_revoked so the impact workflow holds the scheduled work citing it; expiry is the daily sweep's.
+   */
   facts: {
-    async propose(actor: ResolvedActor, input: z.infer<typeof FactPropose>, tx: Tx) {
+    /**
+     * The same normalised statement already live in the brand (proposed or approved) is not proposed twice: the
+     * existing fact is returned with `duplicate: true` and nothing is written.
+     */
+    async propose(actor: ResolvedActor, input: z.input<typeof FactPropose>, tx: Tx) {
       const parsed = FactPropose.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
-      const validFrom = parsed.validFrom ? new Date(parsed.validFrom) : null;
-      const validUntil = parsed.validUntil ? new Date(parsed.validUntil) : null;
-      if (validFrom && validUntil && validUntil.getTime() <= validFrom.getTime())
-        throw new ValidationFailedError([{ path: 'validUntil', issue: 'must be after validFrom' }]);
+      const category = parsed.category ?? parsed.kind;
+      if (!category)
+        throw new ValidationFailedError([{ path: 'category', issue: 'required' }], 'Choose a category');
+      const validFrom = dateOrNull(parsed.validFrom);
+      const validUntil = dateOrNull(parsed.validUntil);
+      assertValidity(validFrom, validUntil);
+      const dedupeKey = factDedupeKey(parsed.statement);
+      const existing = await findLiveDuplicate(brand.id, dedupeKey, tx);
+      if (existing) return { factId: existing.id, version: existing.version, duplicate: true };
+      const conflicts = await conflictsOf(brand.id, parsed.conflicts ?? [], new Date(), tx);
+      const sources: FactSource[] = parsed.sources ?? parsed.evidence ?? [];
       const id = newId('approvedFact');
       await factsRepo.create(
         {
           id,
           brandId: brand.id,
-          kind: parsed.kind,
+          kind: parsed.category ? factKindOf(parsed.category) : (parsed.kind ?? 'claim'),
+          category,
+          scope: parsed.scope?.trim() || null,
+          origin: originFor(actor, parsed.origin),
           statement: parsed.statement,
-          evidence: parsed.evidence,
+          evidence: evidenceOf(sources),
+          sources,
           validFrom,
           validUntil,
+          reviewDueAt: dateOrNull(parsed.reviewDueAt),
+          conflicts: conflicts.length ? conflicts : null,
+          dedupeKey,
           state: 'proposed',
           proposedByKind: actor.kind === 'service_principal' ? 'agent' : 'user',
           proposedById: actor.id,
@@ -1128,28 +1429,112 @@ export const brandService = {
         { type: 'approved_fact', id },
         'allowed',
         tx,
-        { brandId: brand.id },
+        { brandId: brand.id, category },
       );
-      return { factId: id, version: 0 };
+      return { factId: id, version: 0, duplicate: false };
     },
 
-    async approve(actor: ResolvedActor, input: z.infer<typeof FactApprove>, tx: Tx) {
-      const parsed = FactApprove.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+    /** Edit a proposed fact. An agent edits only its own proposals; a person any proposal of the brand. */
+    async update(actor: ResolvedActor, input: z.input<typeof FactUpdate>, tx: Tx) {
+      const parsed = FactUpdate.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
-      const decision = await policy.assert(
-        actor,
-        'brand.edit_standards',
-        { type: 'approved_fact', tenantId: brand.tenantId, brandId: brand.id, id: fact.id },
-        {},
-        tx,
-      );
-      assertMayDecide(decision);
-      const toState = transition(approvedFactMachine, fact.state, 'approve', 'factId');
+      await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+      if (fact.state !== 'proposed')
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'not_proposed' }],
+          'Only a proposed fact can be edited; correct an approved fact instead',
+        );
+      if (actor.kind !== 'user' && !(fact.proposedByKind === 'agent' && fact.proposedById === actor.id))
+        throw new PolicyDeniedError('propose_only', 'Agents may only edit their own proposals');
+      const validFrom = parsed.validFrom === undefined ? fact.validFrom : dateOrNull(parsed.validFrom);
+      const validUntil = parsed.validUntil === undefined ? fact.validUntil : dateOrNull(parsed.validUntil);
+      assertValidity(validFrom, validUntil);
+      const statement = parsed.statement ?? fact.statement;
+      const dedupeKey = factDedupeKey(statement);
+      await assertNotDuplicate(brand.id, dedupeKey, [fact.id], tx);
+      const sources = parsed.sources ?? factSources(fact);
+      const category = parsed.category ?? factCategory(fact);
       await factsRepo.update(
         fact.id,
         parsed.expectedVersion,
-        { state: toState, approvedByUserId: actor.kind === 'user' ? actor.id : null },
+        {
+          statement,
+          dedupeKey,
+          category,
+          kind: factKindOf(category),
+          scope: parsed.scope === undefined ? fact.scope : parsed.scope?.trim() || null,
+          sources,
+          evidence: evidenceOf(sources),
+          validFrom,
+          validUntil,
+          reviewDueAt: parsed.reviewDueAt === undefined ? fact.reviewDueAt : dateOrNull(parsed.reviewDueAt),
+        },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'brand.fact.update',
+        { type: 'approved_fact', id: fact.id },
+        'allowed',
+        tx,
+        { brandId: brand.id },
+      );
+      return { factId: fact.id, version: parsed.expectedVersion + 1 };
+    },
+
+    /**
+     * A suggested or inferred fact without a source is approved only with a reviewer note, kept as a reviewer source
+     * (BSC-3: AI cannot promote an assumption). Approval is a review: the next review falls due a year later unless
+     * the fact or the input names a date. Approving a correction supersedes the fact it corrects.
+     */
+    async approve(actor: ResolvedActor, input: z.input<typeof FactApprove>, tx: Tx) {
+      const parsed = FactApprove.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
+      const fact = await loadFact(brand.id, parsed.factId, tx);
+      const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+      assertMayDecide(decision);
+      const toState = transition(approvedFactMachine, fact.state, 'approve', 'factId');
+      // A correction replaces a fact that still applies; one whose original was withdrawn or merged meanwhile is
+      // refused (propose it as a new fact instead), so approving it never silently stands alone.
+      const corrected = fact.supersedesFactId ? await factsRepo.findById(fact.supersedesFactId, tx) : null;
+      if (
+        fact.supersedesFactId &&
+        !(corrected && corrected.brandId === brand.id && LIVE_FACT_STATES.includes(corrected.state))
+      )
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'corrects_not_live' }],
+          'The fact this corrects no longer applies; propose the statement as a new fact instead',
+        );
+      const origin = factOrigin(fact);
+      const sources = factSources(fact);
+      if (
+        (origin === 'suggested' || origin === 'inferred') &&
+        !hasEvidenceSource(sources) &&
+        !parsed.reviewerNote
+      )
+        throw new ValidationFailedError(
+          [{ path: 'reviewerNote', issue: 'reviewer_note_required' }],
+          'This fact has no source: say why it holds before approving it',
+        );
+      const now = new Date();
+      const nextSources = withReviewerNote(sources, actor, parsed.reviewerNote, now);
+      await factsRepo.update(
+        fact.id,
+        parsed.expectedVersion,
+        {
+          state: toState,
+          approvedByUserId: actor.kind === 'user' ? actor.id : null,
+          reviewedAt: now,
+          reviewedByUserId: actor.kind === 'user' ? actor.id : null,
+          reviewDueAt: parsed.reviewDueAt
+            ? new Date(parsed.reviewDueAt)
+            : (fact.reviewDueAt ?? new Date(now.getTime() + DEFAULT_FACT_REVIEW_DAYS * DAY_MS)),
+          reviewFlaggedAt: null,
+          sources: nextSources,
+          evidence: evidenceOf(nextSources),
+          dedupeKey: fact.dedupeKey ?? factDedupeKey(fact.statement),
+        },
         tx,
       );
       await audit.record(
@@ -1158,69 +1543,393 @@ export const brandService = {
         { type: 'approved_fact', id: fact.id },
         'allowed',
         tx,
-        { brandId: brand.id, fromState: fact.state, toState },
+        {
+          brandId: brand.id,
+          fromState: fact.state,
+          toState,
+          reviewerNote: parsed.reviewerNote !== undefined,
+        },
       );
-      return { factId: fact.id, state: toState, version: parsed.expectedVersion + 1 };
+      const supersededFactIds: string[] = [];
+      if (corrected) {
+        await supersedeFact(actor, brand, corrected, corrected.version, fact.id, 'corrected', tx);
+        supersededFactIds.push(corrected.id);
+      }
+      return { factId: fact.id, state: toState, version: parsed.expectedVersion + 1, supersededFactIds };
     },
 
     /**
      * Event contract `brand.fact_revoked` (schema 1), aggregate approved_fact: data { factId, kind, previousState,
-     * reason, actorKind, actorId }, brandId in the payload. Consumer (brandChangeImpactWorkflowV1, started by the
-     * review module's outbox route): for every *scheduled* publication whose content references factId, apply the
-     * brand's active policy — holdOnDependencyRevocation true (spec 8.2 default) moves it to `held` with the failed
-     * checks as reasons; false only flags it (publication.needs_attention). `previousState` lets the consumer
-     * ignore withdrawn proposals, which no content can reference.
+     * reason, actorKind, actorId, cause }, brandId in the payload; `cause` (BSC-3, additive) is revoked, withdrawn,
+     * corrected, merged or conflict. Consumer (brandChangeImpactWorkflowV1, started by the review module's outbox
+     * route): for every *scheduled* publication whose content references factId, apply the brand's active policy —
+     * holdOnDependencyRevocation true (spec 8.2 default) moves it to `held` with the failed checks as reasons; false
+     * only flags it (publication.needs_attention). `previousState` lets the consumer ignore withdrawn proposals,
+     * which no content can reference.
      */
-    async revoke(actor: ResolvedActor, input: z.infer<typeof FactRevoke>, tx: Tx) {
+    async revoke(actor: ResolvedActor, input: z.input<typeof FactRevoke>, tx: Tx) {
       const parsed = FactRevoke.parse(input);
-      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      return revokeFact(actor, parsed, 'revoked', tx);
+    },
+
+    /** BSC-3: revoke with a required reason (kept on the fact and shown in the workspace). */
+    async withdraw(actor: ResolvedActor, input: z.input<typeof FactWithdraw>, tx: Tx) {
+      const parsed = FactWithdraw.parse(input);
+      return revokeFact(actor, parsed, 'withdrawn', tx);
+    },
+
+    /**
+     * Correct an approved fact: a new proposed fact that supersedes it once approved. Agents may propose a
+     * correction; one correction is open per fact at a time. Omitted fields are copied from the approved fact.
+     */
+    async correct(actor: ResolvedActor, input: z.input<typeof FactCorrect>, tx: Tx) {
+      const parsed = FactCorrect.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
       const fact = await loadFact(brand.id, parsed.factId, tx);
-      const decision = await policy.assert(
-        actor,
-        'brand.edit_standards',
-        { type: 'approved_fact', tenantId: brand.tenantId, brandId: brand.id, id: fact.id },
-        {},
-        tx,
-      );
-      assertMayDecide(decision);
-      const toState = transition(approvedFactMachine, fact.state, 'revoke', 'factId');
-      await factsRepo.update(
-        fact.id,
-        parsed.expectedVersion,
-        { state: toState, revokedByUserId: actor.kind === 'user' ? actor.id : null },
+      await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+      if (fact.state !== 'approved')
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'not_approved' }],
+          'Only an approved fact can be corrected; edit a proposed fact instead',
+        );
+      if (fact.version !== parsed.expectedVersion)
+        throw new ConflictError('ApprovedFact', fact.id, parsed.expectedVersion);
+      if ((await factsRepo.listOpenCorrections(brand.id, fact.id, tx)).length)
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'correction_pending' }],
+          'A correction of this fact is already waiting for approval',
+        );
+      const validFrom = parsed.validFrom === undefined ? fact.validFrom : dateOrNull(parsed.validFrom);
+      const validUntil = parsed.validUntil === undefined ? fact.validUntil : dateOrNull(parsed.validUntil);
+      assertValidity(validFrom, validUntil);
+      const dedupeKey = factDedupeKey(parsed.statement);
+      await assertNotDuplicate(brand.id, dedupeKey, [fact.id], tx);
+      const category = parsed.category ?? factCategory(fact);
+      const sources = parsed.sources ?? factSources(fact).filter((s) => s.kind !== 'reviewer');
+      const id = newId('approvedFact');
+      await factsRepo.create(
+        {
+          id,
+          brandId: brand.id,
+          kind: factKindOf(category),
+          category,
+          scope: parsed.scope === undefined ? fact.scope : parsed.scope?.trim() || null,
+          origin: originFor(actor, undefined),
+          statement: parsed.statement,
+          evidence: evidenceOf(sources),
+          sources,
+          validFrom,
+          validUntil,
+          reviewDueAt: parsed.reviewDueAt === undefined ? null : dateOrNull(parsed.reviewDueAt),
+          dedupeKey,
+          supersedesFactId: fact.id,
+          state: 'proposed',
+          proposedByKind: actor.kind === 'service_principal' ? 'agent' : 'user',
+          proposedById: actor.id,
+        },
         tx,
       );
       await audit.record(
         actorRef(actor),
-        'brand.fact.revoke',
+        'brand.fact.correct',
+        { type: 'approved_fact', id },
+        'allowed',
+        tx,
+        { brandId: brand.id, correctsFactId: fact.id },
+      );
+      return { factId: id, version: 0, supersedesFactId: fact.id };
+    },
+
+    /** Keep one live fact; the others become superseded by it and their sources (deduplicated) join it. */
+    async merge(actor: ResolvedActor, input: z.input<typeof FactMerge>, tx: Tx) {
+      const parsed = FactMerge.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
+      const ids = [parsed.keep.factId, ...parsed.merge.map((m) => m.factId)];
+      if (new Set(ids).size !== ids.length)
+        throw new ValidationFailedError([{ path: 'merge', issue: 'duplicate_fact_ids' }]);
+      const keep = await loadFact(brand.id, parsed.keep.factId, tx);
+      const others: Array<{ fact: FactRow; expectedVersion: number }> = [];
+      for (const m of parsed.merge)
+        others.push({ fact: await loadFact(brand.id, m.factId, tx), expectedVersion: m.expectedVersion });
+      const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, keep), {}, tx);
+      assertMayDecide(decision);
+      const all = [{ fact: keep, expectedVersion: parsed.keep.expectedVersion }, ...others];
+      for (const [i, { fact }] of all.entries())
+        if (!LIVE_FACT_STATES.includes(fact.state))
+          throw new ValidationFailedError(
+            [{ path: i === 0 ? 'keep.factId' : `merge.${i - 1}.factId`, issue: 'not_live' }],
+            'Only proposed or approved facts can be merged',
+          );
+      for (const { fact, expectedVersion } of all)
+        if (fact.version !== expectedVersion)
+          throw new ConflictError('ApprovedFact', fact.id, expectedVersion);
+      // An approved fact is never superseded by one nobody approved (it would stop applying with nothing in its place).
+      if (keep.state !== 'approved' && others.some(({ fact }) => fact.state === 'approved'))
+        throw new ValidationFailedError(
+          [{ path: 'keep.factId', issue: 'keep_not_approved' }],
+          'Keep an approved fact when an approved fact is merged into it',
+        );
+      const seen = new Set<string>();
+      const sources: FactSource[] = [];
+      for (const s of all.flatMap(({ fact }) => factSources(fact))) {
+        const key = `${s.kind}\u0000${s.ref}\u0000${s.note ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        sources.push(s);
+      }
+      await factsRepo.update(
+        keep.id,
+        parsed.keep.expectedVersion,
+        { sources, evidence: evidenceOf(sources) },
+        tx,
+      );
+      for (const { fact, expectedVersion } of others)
+        await supersedeFact(actor, brand, fact, expectedVersion, keep.id, 'merged', tx);
+      await audit.record(
+        actorRef(actor),
+        'brand.fact.merge',
+        { type: 'approved_fact', id: keep.id },
+        'allowed',
+        tx,
+        { brandId: brand.id, mergedFactIds: others.map(({ fact }) => fact.id) },
+      );
+      return {
+        factId: keep.id,
+        version: parsed.keep.expectedVersion + 1,
+        supersededFactIds: others.map(({ fact }) => fact.id),
+      };
+    },
+
+    /** A person confirms an approved fact still holds; the next review is due at the given date or in a year. */
+    async markReviewed(actor: ResolvedActor, input: z.input<typeof FactMarkReviewed>, tx: Tx) {
+      const parsed = FactMarkReviewed.parse(input);
+      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const fact = await loadFact(brand.id, parsed.factId, tx);
+      const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+      assertMayDecide(decision);
+      if (fact.state !== 'approved')
+        throw new ValidationFailedError(
+          [{ path: 'factId', issue: 'not_approved' }],
+          'Only an approved fact is reviewed',
+        );
+      const now = new Date();
+      const next = parsed.nextReviewDueAt
+        ? new Date(parsed.nextReviewDueAt)
+        : new Date(now.getTime() + DEFAULT_FACT_REVIEW_DAYS * DAY_MS);
+      if (next.getTime() <= now.getTime())
+        throw new ValidationFailedError([{ path: 'nextReviewDueAt', issue: 'must be in the future' }]);
+      const sources = withReviewerNote(factSources(fact), actor, parsed.note, now);
+      await factsRepo.update(
+        fact.id,
+        parsed.expectedVersion,
+        {
+          reviewedAt: now,
+          reviewedByUserId: actor.id,
+          reviewDueAt: next,
+          reviewFlaggedAt: null,
+          sources,
+          evidence: evidenceOf(sources),
+        },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'brand.fact.mark_reviewed',
         { type: 'approved_fact', id: fact.id },
         'allowed',
         tx,
-        { brandId: brand.id, fromState: fact.state, toState, reason: parsed.reason ?? null },
+        { brandId: brand.id, nextReviewDueAt: next.toISOString() },
       );
-      await outbox.add(
-        'brand.fact_revoked',
-        { type: 'approved_fact', id: fact.id, version: parsed.expectedVersion + 1 },
-        {
-          factId: fact.id,
-          kind: fact.kind,
-          previousState: fact.state,
-          reason: parsed.reason ?? null,
-          actorKind: actor.kind,
-          actorId: actor.id,
-        },
-        tx,
-        { brandId: brand.id },
-      );
-      return { factId: fact.id, state: toState, version: parsed.expectedVersion + 1 };
+      return { factId: fact.id, version: parsed.expectedVersion + 1, reviewDueAt: next.toISOString() };
     },
 
-    async list(actor: ResolvedActor, input: z.infer<typeof FactList>, tx?: Tx) {
+    /**
+     * Decide a recorded conflict. kept_this: the fact stands and a conflicting live fact of the brand is superseded
+     * by it; kept_other: this fact is superseded by the conflicting fact; annotated: both stand, with the note.
+     */
+    async resolveConflict(actor: ResolvedActor, input: z.input<typeof FactResolveConflict>, tx: Tx) {
+      const parsed = FactResolveConflict.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
+      const fact = await loadFact(brand.id, parsed.factId, tx);
+      const decision = await policy.assert(actor, 'brand.edit_standards', factResource(brand, fact), {}, tx);
+      assertMayDecide(decision);
+      if (!LIVE_FACT_STATES.includes(fact.state))
+        throw new ValidationFailedError([{ path: 'factId', issue: 'not_live' }]);
+      const conflicts = FactConflict.array().parse(fact.conflicts ?? []);
+      const conflict = conflicts.find((c) => c.id === parsed.conflictId);
+      if (!conflict) throw new ValidationFailedError([{ path: 'conflictId', issue: 'unknown_conflict' }]);
+      if (conflict.status === 'resolved')
+        throw new ValidationFailedError([{ path: 'conflictId', issue: 'already_resolved' }]);
+      if (parsed.outcome === 'annotated' && !parsed.note)
+        throw new ValidationFailedError([{ path: 'note', issue: 'required' }], 'Say why both stand');
+      const other = conflict.factId ? await factsRepo.findById(conflict.factId, tx) : null;
+      const otherLive = other && other.brandId === brand.id && LIVE_FACT_STATES.includes(other.state);
+      if (parsed.outcome === 'kept_other' && !otherLive)
+        throw new ValidationFailedError(
+          [{ path: 'outcome', issue: 'no_live_conflicting_fact' }],
+          'The conflicting source is not a fact of the brand; keep this fact or annotate the conflict',
+        );
+      // As for merge: an approved fact is superseded only by an approved one.
+      const kept = parsed.outcome === 'kept_other' ? other : fact;
+      const dropped = parsed.outcome === 'kept_other' ? fact : otherLive ? other : null;
+      if (parsed.outcome !== 'annotated' && dropped?.state === 'approved' && kept?.state !== 'approved')
+        throw new ValidationFailedError(
+          [{ path: 'outcome', issue: 'kept_fact_not_approved' }],
+          'The fact you keep must be approved, because the other one is: approve it first or annotate the conflict',
+        );
+      const now = new Date();
+      const resolved = conflicts.map((c) =>
+        c.id === conflict.id
+          ? {
+              ...c,
+              status: 'resolved' as const,
+              resolution: {
+                outcome: parsed.outcome,
+                ...(parsed.note ? { note: parsed.note } : {}),
+                byUserId: actor.id,
+                at: now.toISOString(),
+              },
+            }
+          : c,
+      );
+      await factsRepo.update(fact.id, parsed.expectedVersion, { conflicts: resolved }, tx);
+      let version = parsed.expectedVersion + 1;
+      let state = fact.state;
+      if (parsed.outcome === 'kept_other' && other) {
+        state = await supersedeFact(actor, brand, { ...fact, version }, version, other.id, 'conflict', tx);
+        version += 1;
+      }
+      if (parsed.outcome === 'kept_this' && other && otherLive)
+        await supersedeFact(actor, brand, other, other.version, fact.id, 'conflict', tx);
+      await audit.record(
+        actorRef(actor),
+        'brand.fact.resolve_conflict',
+        { type: 'approved_fact', id: fact.id },
+        'allowed',
+        tx,
+        { brandId: brand.id, conflictId: conflict.id, outcome: parsed.outcome },
+      );
+      return { factId: fact.id, state, version };
+    },
+
+    /**
+     * The workspace listing with its filters. Each fact carries what the workspace shows: category and origin (also
+     * for rows written before BSC-3), sources, review and validity status, the names of the people who approved and
+     * reviewed it, its conflicts with the conflicting fact's statement, and the live facts it may duplicate.
+     */
+    async list(actor: ResolvedActor, input: z.input<typeof FactList>, tx?: Tx) {
       const parsed = FactList.parse(input);
       const brand = await brandsRepo.getById(parsed.brandId, tx);
       await policy.assert(actor, 'brand.read', brandResource(brand), {}, tx);
-      const page = await factsRepo.list(brand.id, parsed.state, parsed.page, tx);
-      return { items: page.items.map(toFactDto), nextCursor: page.nextCursor };
+      const at = new Date();
+      const live = await factsRepo.listLiveStatements(brand.id, tx);
+      const statements = new Map(live.map((f) => [f.id, f.statement]));
+      const corrections = new Set(
+        live.flatMap((f) => (f.supersedesFactId ? [pairKey(f.id, f.supersedesFactId)] : [])),
+      );
+      const duplicates = new Map(
+        [...possibleDuplicates(live)].flatMap(([id, others]) => {
+          const kept = others.filter((o) => !corrections.has(pairKey(id, o)));
+          return kept.length ? [[id, kept] as const] : [];
+        }),
+      );
+      const { page, ids, ...filters } = parsed;
+      const duplicateIds = parsed.possibleDuplicates ? [...duplicates.keys()] : undefined;
+      const only = ids && duplicateIds ? ids.filter((id) => duplicates.has(id)) : (ids ?? duplicateIds);
+      const rows = await factsRepo.list(
+        brand.id,
+        { ...filters, at, ...(only ? { ids: only } : {}) },
+        page,
+        tx,
+      );
+      const people = rows.items.flatMap((f) =>
+        [
+          f.approvedByUserId,
+          f.reviewedByUserId,
+          f.revokedByUserId,
+          f.proposedByKind === 'user' ? f.proposedById : null,
+        ].filter((x): x is string => x !== null),
+      );
+      const names = await accessService.memberNames(people, tx);
+      const conflictIds = rows.items.flatMap((f) =>
+        FactConflict.array()
+          .parse(f.conflicts ?? [])
+          .flatMap((c) => (c.factId && !statements.has(c.factId) ? [c.factId] : [])),
+      );
+      for (const f of await factsRepo.listByIds(brand.id, [...new Set(conflictIds)], tx))
+        statements.set(f.id, f.statement);
+      return {
+        items: rows.items.map((f) => toFactDto(f, { at, names, statements, duplicates })),
+        nextCursor: rows.nextCursor,
+      };
+    },
+
+    /**
+     * BSC-3 daily sweep for one brand (the caller is the sweep runtime in the brand's tenant, as the platform job):
+     * marks each approved fact whose validity ended exactly once, audits it and emits the informational
+     * `brand.fact_expired` (data { factId, kind, previousState, validUntil, cause: 'expired', actorKind, actorId },
+     * brandId in the payload; no route), and returns those ids so the runtime holds the scheduled work citing them
+     * in the same transaction. Flags approved facts past their review date once and keys facts stored before
+     * duplicate detection. The markers make a re-run a no-op.
+     */
+    async sweep(brandId: string, at: Date, tx: Tx) {
+      const { actor } = requireTenant();
+      await brandsRepo.getById(brandId, tx); // a foreign or unknown brand is NOT_FOUND
+      const result = { expired: 0, reviewDue: 0, keyed: 0, expiredFactIds: [] as string[] };
+      for (const f of await factsRepo.listSweepDue(brandId, at, tx)) {
+        const approved = f.state === 'approved';
+        const expiring =
+          approved && f.validUntil !== null && f.validUntil <= at && f.expiryNotifiedAt === null;
+        const due = approved && f.reviewDueAt !== null && f.reviewDueAt <= at && f.reviewFlaggedAt === null;
+        await factsRepo.update(
+          f.id,
+          f.version,
+          {
+            ...(expiring ? { expiryNotifiedAt: at } : {}),
+            ...(due ? { reviewFlaggedAt: at } : {}),
+            ...(f.dedupeKey === null ? { dedupeKey: factDedupeKey(f.statement) } : {}),
+          },
+          tx,
+        );
+        if (f.dedupeKey === null) result.keyed += 1;
+        if (due) {
+          result.reviewDue += 1;
+          await audit.record(
+            actor,
+            'brand.fact.review_due',
+            { type: 'approved_fact', id: f.id },
+            'allowed',
+            tx,
+            {
+              brandId,
+              reviewDueAt: f.reviewDueAt?.toISOString() ?? null,
+            },
+          );
+        }
+        if (!expiring) continue;
+        result.expired += 1;
+        await audit.record(actor, 'brand.fact.expire', { type: 'approved_fact', id: f.id }, 'allowed', tx, {
+          brandId,
+          validUntil: f.validUntil?.toISOString() ?? null,
+        });
+        result.expiredFactIds.push(f.id);
+        await outbox.add(
+          'brand.fact_expired',
+          { type: 'approved_fact', id: f.id, version: f.version + 1 },
+          {
+            factId: f.id,
+            kind: f.kind,
+            previousState: f.state,
+            validUntil: f.validUntil?.toISOString() ?? null,
+            cause: 'expired',
+            actorKind: actor.kind,
+            actorId: actor.id,
+          },
+          tx,
+          { brandId },
+        );
+      }
+      return result;
     },
   },
 

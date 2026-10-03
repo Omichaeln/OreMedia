@@ -1,5 +1,6 @@
 import {
   AssetApprove,
+  AssetDownloadRequest,
   AssetGet,
   AssetGrantCreate,
   AssetList,
@@ -99,5 +100,11 @@ export const assetsRouter = router({
     signedUrl: tenantQuery
       .input(MediaSignedUrlRequest)
       .query(({ ctx, input }) => assetService.signedUrl(ctx.tenant.actor, input)),
+    /** BSC-2: a file to save (attachment, correct type): the original, or a PNG at a chosen width kept as a rendition. */
+    download: tenantMutation
+      .input(AssetDownloadRequest)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => assetService.downloadUrl(ctx.tenant.actor, input, tx)),
+      ),
   }),
 });

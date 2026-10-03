@@ -19,6 +19,11 @@ export interface SceneElementMetrics {
   /** Source aspect (width / height) of the drawn image region and the aspect it was drawn at. */
   naturalAspect?: number;
   renderedAspect?: number;
+  /**
+   * BSC-2 (renderer 1.1.0): the rectangle an image or logo was actually drawn into, in page pixels before rotation. A
+   * contain-fitted logo can be narrower than its box; the logo minimum width is checked against this.
+   */
+  drawn?: { x: number; y: number; width: number; height: number };
 }
 
 export interface SceneMetrics {

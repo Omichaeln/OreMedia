@@ -172,6 +172,17 @@ export function runRenderChecks(input: RenderCheckInput): RenderValidationResult
         message: `${el.name} uses a colour token the brand does not define`,
         ...at,
       });
+    // BSC-2: a contain-fitted logo can be narrower than its box; the minimum width holds for what was drawn.
+    if (el.type === 'logo' && m.drawn && !has(el.id, 'logo_min_width')) {
+      const rule = snapshot.document.logoRules.find((r) => r.variant === el.variant);
+      if (rule && m.drawn.width < rule.minWidthPx)
+        findings.push({
+          code: 'logo_min_width',
+          severity: 'blocking',
+          message: `Logo drawn ${Math.round(m.drawn.width)}px wide, narrower than the minimum ${rule.minWidthPx}px (its box is wider than the artwork's proportions allow)`,
+          ...at,
+        });
+    }
     if (el.type === 'logo' && m.naturalAspect && m.renderedAspect) {
       const change = Math.abs(m.renderedAspect / m.naturalAspect - 1);
       if (change > LOGO_DISTORTION_TOLERANCE)

@@ -197,6 +197,36 @@ export const ChannelExample = z.object({
   note: z.string().max(500).optional(),
 });
 
+/** The lock-ups a brand system names (BSC-2 adds `secondary`, an alternative lock-up such as a stacked version). */
+export const LogoVariant = z.enum(['primary', 'secondary', 'reversed', 'mono', 'mark_only']);
+export type LogoVariant = z.infer<typeof LogoVariant>;
+export const LOGO_USAGE_NOTE_MAX = 500;
+export const LOGO_DONTS_MAX = 10;
+export const LOGO_DONT_MAX = 200;
+
+/**
+ * One logo rule: which logo asset is the variant, the grounds it may sit on, its clear space (a multiple of the mark
+ * height) and minimum width. BSC-2 additions are optional with no defaults, so stored documents parse and hash as
+ * they did: `assetVersionId` pins the logo's version (the studio checks a logo element against it), `usage` is the
+ * written guidance (backgrounds, don'ts) and `preferredFormat` says whether the brand supplies the logo as vector.
+ */
+export const LogoRuleV1 = z.object({
+  assetId: z.string(),
+  assetVersionId: z.string().optional(),
+  variant: LogoVariant,
+  allowedBackgroundColourKeys: z.array(z.string()),
+  clearSpaceRatio: z.number(), // multiple of mark height
+  minWidthPx: z.number(),
+  usage: z
+    .object({
+      backgroundsNote: z.string().max(LOGO_USAGE_NOTE_MAX),
+      donts: z.array(z.string().max(LOGO_DONT_MAX)).max(LOGO_DONTS_MAX),
+    })
+    .optional(),
+  preferredFormat: z.enum(['svg', 'raster']).optional(),
+});
+export type LogoRuleV1 = z.infer<typeof LogoRuleV1>;
+
 /** Spec 8.1: the brand system document, versioned. */
 export const BrandSystemDocumentV1 = z.object({
   schemaVersion: z.literal(1),
@@ -256,15 +286,7 @@ export const BrandSystemDocumentV1 = z.object({
     radii: z.array(z.number()),
     contrastTarget: z.enum(['AA', 'AAA']).default('AA'),
   }),
-  logoRules: z.array(
-    z.object({
-      assetId: z.string(),
-      variant: z.enum(['primary', 'reversed', 'mono', 'mark_only']),
-      allowedBackgroundColourKeys: z.array(z.string()),
-      clearSpaceRatio: z.number(), // multiple of mark height
-      minWidthPx: z.number(),
-    }),
-  ),
+  logoRules: z.array(LogoRuleV1),
   patterns: z.array(
     z.object({
       key: z.string(),
@@ -361,14 +383,111 @@ export type BrandStatus = z.infer<typeof BrandStatus>;
 export const FactKind = z.enum(['product', 'claim', 'offer', 'contact', 'price', 'statistic', 'legal']);
 export type FactKind = z.infer<typeof FactKind>;
 
-export const FactState = z.enum(['proposed', 'approved', 'revoked']);
+/** BSC-3: superseded (terminal) is a fact replaced by its approved correction or merged into another fact. */
+export const FactState = z.enum(['proposed', 'approved', 'revoked', 'superseded']);
 export type FactState = z.infer<typeof FactState>;
+
+/**
+ * BSC-3: what a fact is about. Wider than FactKind, which stays the stored, release-relevant classification (an
+ * offer or a price makes content an offer, spec 8.2): every category maps to one kind (factKindOf), and every kind
+ * is also a category, so facts stored before the categories read as the category of the same name.
+ */
+export const FactCategory = z.enum([
+  'company',
+  'product',
+  'service',
+  'location',
+  'contact',
+  'differentiator',
+  'audience',
+  'terminology',
+  'claim',
+  'faq',
+  'offer',
+  'price',
+  'statistic',
+  'legal',
+]);
+export type FactCategory = z.infer<typeof FactCategory>;
+
+const FACT_KIND_OF: Record<FactCategory, FactKind> = {
+  company: 'claim',
+  product: 'product',
+  service: 'product',
+  location: 'contact',
+  contact: 'contact',
+  differentiator: 'claim',
+  audience: 'claim',
+  terminology: 'claim',
+  claim: 'claim',
+  faq: 'claim',
+  offer: 'offer',
+  price: 'price',
+  statistic: 'statistic',
+  legal: 'legal',
+};
+/** The stored kind a category implies (snapshots, content classes and agents' facts.list still read kinds). */
+export const factKindOf = (category: FactCategory): FactKind => FACT_KIND_OF[category];
+
+/**
+ * BSC-3 provenance of a fact: typed by a person (user), taken verbatim from a supplied source (extracted), a
+ * pattern drawn from supplied material (inferred), or an AI proposal with no direct source (suggested).
+ */
+export const FactOrigin = z.enum(['user', 'extracted', 'inferred', 'suggested']);
+export type FactOrigin = z.infer<typeof FactOrigin>;
 
 export const FactProposedByKind = z.enum(['user', 'agent']);
 export type FactProposedByKind = z.infer<typeof FactProposedByKind>;
 
 export const PolicyVersionState = z.enum(['draft', 'active', 'retired']);
 export type PolicyVersionState = z.infer<typeof PolicyVersionState>;
+
+/**
+ * BSC-3: a source behind a fact: an evidence reference with an optional title and the excerpt that supports the
+ * statement. A URL source names its URL in `ref`; an asset source its asset id; a note is kind `other` with the
+ * note in `ref`; a reviewer's note at approval is kind `reviewer` (ref = the reviewer's user id, note = the note).
+ */
+export const FactSource = EvidenceRef.extend({
+  title: z.string().max(200).optional(),
+  excerpt: z.string().max(1000).optional(),
+});
+export type FactSource = z.infer<typeof FactSource>;
+
+/** Source kinds that count as a source for the approval rule (a note or a comment is not evidence on its own). */
+export const FACT_EVIDENCE_SOURCE_KINDS: ReadonlyArray<EvidenceRef['kind']> = [
+  'asset',
+  'document',
+  'url',
+  'metric_snapshot',
+  'experiment_result',
+];
+
+/** BSC-3: something that disagrees with a fact: another fact of the brand, a source, or a note saying why. */
+export const FactConflictInput = z.object({
+  factId: z.string().max(32).optional(),
+  source: FactSource.optional(),
+  note: z.string().max(500).optional(),
+});
+export type FactConflictInput = z.infer<typeof FactConflictInput>;
+
+export const FactConflictOutcome = z.enum(['kept_this', 'kept_other', 'annotated']);
+export type FactConflictOutcome = z.infer<typeof FactConflictOutcome>;
+
+/** A recorded conflict (stored in approved_facts.conflicts) and, once a person decided, how it was resolved. */
+export const FactConflict = FactConflictInput.extend({
+  id: z.string().max(40),
+  raisedAt: z.string().datetime(),
+  status: z.enum(['open', 'resolved']),
+  resolution: z
+    .object({
+      outcome: FactConflictOutcome,
+      note: z.string().max(500).optional(),
+      byUserId: z.string(),
+      at: z.string().datetime(),
+    })
+    .optional(),
+});
+export type FactConflict = z.infer<typeof FactConflict>;
 
 /**
  * ADR-11 (5), ledger 4.27: which underlying providers may process this brand's generated content, applied to every
@@ -525,18 +644,37 @@ export const BrandVersionGet = z.object({ brandId: z.string(), versionId: z.stri
 /** UX-20: what publishing any version of the brand would reach now (open requests, valid approvals, scheduled posts). */
 export const BrandVersionImpact = z.object({ brandId: z.string() });
 export const BrandVersionList = z.object({ brandId: z.string(), page: PageRequest });
+/**
+ * Spec 8.2 / BSC-3: a fact lands as proposed. `category` (preferred) or the legacy `kind` names what it is about;
+ * `sources` (preferred) or the legacy `evidence` say where it comes from. A person's fact is origin `user` unless
+ * they say otherwise; an agent's is `suggested` unless it was `extracted` or `inferred` from supplied material. The
+ * same statement (normalised) already live in the brand is not proposed twice: the existing fact is returned with
+ * `duplicate: true`.
+ */
 export const FactPropose = z.object({
   brandId: z.string(),
-  kind: FactKind,
+  kind: FactKind.optional(),
+  category: FactCategory.optional(),
+  scope: z.string().max(200).optional(),
+  origin: FactOrigin.optional(),
   statement: z.string().min(1).max(4000),
-  evidence: z.array(EvidenceRef).min(1).max(20),
+  evidence: z.array(EvidenceRef).min(1).max(20).optional(),
+  sources: z.array(FactSource).max(20).optional(),
   validFrom: z.string().datetime().optional(),
   validUntil: z.string().datetime().optional(),
+  reviewDueAt: z.string().datetime().optional(),
+  conflicts: z.array(FactConflictInput).max(10).optional(),
 });
+/**
+ * A suggested or inferred fact without a source is approved only with a reviewer note (BSC-3: AI cannot promote an
+ * assumption); the note is kept as a reviewer source. `reviewDueAt` sets when it is next due for review.
+ */
 export const FactApprove = z.object({
   brandId: z.string(),
   factId: z.string(),
   expectedVersion: z.number().int(),
+  reviewerNote: z.string().min(1).max(500).optional(),
+  reviewDueAt: z.string().datetime().optional(),
 });
 export const FactRevoke = z.object({
   brandId: z.string(),
@@ -544,7 +682,90 @@ export const FactRevoke = z.object({
   expectedVersion: z.number().int(),
   reason: z.string().max(500).optional(),
 });
-export const FactList = z.object({ brandId: z.string(), state: FactState.optional(), page: PageRequest });
+/** BSC-3: withdraw is a revoke whose reason is required (kept on the fact). */
+export const FactWithdraw = z.object({
+  brandId: z.string(),
+  factId: z.string(),
+  expectedVersion: z.number().int(),
+  reason: z.string().trim().min(1).max(500),
+});
+/** BSC-3: edit a proposed fact. Omitted fields are kept; null clears an optional one. */
+export const FactUpdate = z.object({
+  brandId: z.string(),
+  factId: z.string(),
+  expectedVersion: z.number().int(),
+  category: FactCategory.optional(),
+  scope: z.string().max(200).nullable().optional(),
+  statement: z.string().min(1).max(4000).optional(),
+  sources: z.array(FactSource).max(20).optional(),
+  validFrom: z.string().datetime().nullable().optional(),
+  validUntil: z.string().datetime().nullable().optional(),
+  reviewDueAt: z.string().datetime().nullable().optional(),
+});
+/**
+ * BSC-3: correct an approved fact. A new proposed fact is made that supersedes it; the approved one keeps applying
+ * until the correction is approved, and then becomes superseded. Omitted fields are copied from the approved fact.
+ */
+export const FactCorrect = z.object({
+  brandId: z.string(),
+  factId: z.string(),
+  expectedVersion: z.number().int(),
+  statement: z.string().min(1).max(4000),
+  category: FactCategory.optional(),
+  scope: z.string().max(200).nullable().optional(),
+  sources: z.array(FactSource).max(20).optional(),
+  validFrom: z.string().datetime().nullable().optional(),
+  validUntil: z.string().datetime().nullable().optional(),
+  reviewDueAt: z.string().datetime().nullable().optional(),
+});
+const FactRefVersion = z.object({ factId: z.string(), expectedVersion: z.number().int() });
+/** BSC-3: keep one fact; the others become superseded by it and their sources join it. */
+export const FactMerge = z.object({
+  brandId: z.string(),
+  keep: FactRefVersion,
+  merge: z.array(FactRefVersion).min(1).max(20),
+});
+/** BSC-3: a person confirms an approved fact still holds; the next review is due at `nextReviewDueAt` (default a year). */
+export const FactMarkReviewed = z.object({
+  brandId: z.string(),
+  factId: z.string(),
+  expectedVersion: z.number().int(),
+  nextReviewDueAt: z.string().datetime().optional(),
+  note: z.string().min(1).max(500).optional(),
+});
+/**
+ * BSC-3: decide a recorded conflict. kept_this: the fact stands (a conflicting fact of the brand is superseded by it);
+ * kept_other: the conflicting fact stands and this one is superseded by it; annotated: both stand, the note says why.
+ */
+export const FactResolveConflict = z.object({
+  brandId: z.string(),
+  factId: z.string(),
+  expectedVersion: z.number().int(),
+  conflictId: z.string().max(40),
+  outcome: FactConflictOutcome,
+  note: z.string().min(1).max(500).optional(),
+});
+/**
+ * BSC-3 workspace filters, all optional and combined with AND. `effective`: approved and inside the validity window
+ * now (what generation uses). `reviewDue`: approved and past its review date. `expiringWithinDays`: approved and its
+ * validity ends within that many days. `possibleDuplicates`: live facts whose statement matches or closely resembles
+ * another live fact's. `search`: statement or scope contains the text.
+ */
+export const FactList = z.object({
+  brandId: z.string(),
+  state: FactState.optional(),
+  category: FactCategory.optional(),
+  origin: FactOrigin.optional(),
+  effective: z.boolean().optional(),
+  reviewDue: z.boolean().optional(),
+  expiringWithinDays: z.number().int().min(1).max(366).optional(),
+  hasConflicts: z.boolean().optional(),
+  possibleDuplicates: z.boolean().optional(),
+  search: z.string().trim().min(1).max(200).optional(),
+  /** Only these facts of the brand (a brief's offer facts, for example); another brand's ids are left out. */
+  ids: z.array(z.string().max(32)).min(1).max(100).optional(),
+  page: PageRequest,
+});
 export const ObjectiveSet = z.object({
   brandId: z.string(),
   name: z.string().min(1).max(160),

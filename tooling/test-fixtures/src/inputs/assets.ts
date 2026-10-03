@@ -45,6 +45,10 @@ export const ASSETS_INPUTS: Record<string, CrossTenantFixture> = {
   'assets.media.signedUrl': {
     buildInput: (f) => ({ assetVersionId: f['assetVersionId'], derivative: 'original' }),
   },
+  // BSC-2: a foreign version is NOT_FOUND before any rendition is drawn or URL signed.
+  'assets.media.download': {
+    buildInput: (f) => ({ assetVersionId: f['assetVersionId'], format: 'png', width: 512 }),
+  },
 };
 
 /**

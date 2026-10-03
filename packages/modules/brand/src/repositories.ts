@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
-import type { FactState } from '@oremedia/contracts/brand';
+import { and, asc, desc, eq, gt, inArray, isNull, like, lte, or, sql, type SQL } from 'drizzle-orm';
+import { FactKind, type FactCategory, type FactOrigin, type FactState } from '@oremedia/contracts/brand';
 import { NotFoundError } from '@oremedia/contracts/errors';
 import type { Page, PageRequest } from '@oremedia/contracts/pagination';
 import {
@@ -172,6 +172,95 @@ export class DesignTokenRepository extends BrandScopedRepository<typeof designTo
   }
 }
 
+/** Upper bound on the live facts one brand's duplicate scan reads. */
+const LIVE_FACT_SCAN = 2000;
+/** Facts one sweep run handles per brand; the rest wait for the next run. */
+const SWEEP_BATCH = 500;
+const DAY_MS = 86_400_000;
+
+/** BSC-3 workspace filters (contracts FactList), with the clock and the duplicate scan's ids resolved. */
+export interface FactListFilters {
+  state?: FactState;
+  category?: FactCategory;
+  origin?: FactOrigin;
+  effective?: boolean;
+  reviewDue?: boolean;
+  expiringWithinDays?: number;
+  hasConflicts?: boolean;
+  search?: string;
+  ids?: readonly string[];
+  at: Date;
+}
+
+const LIKE_SPECIALS = /[\\%_]/g;
+
+function factFilterClauses(f: FactListFilters): SQL[] {
+  const clauses: SQL[] = [];
+  const approved = eq(approvedFacts.state, 'approved');
+  if (f.state) clauses.push(eq(approvedFacts.state, f.state));
+  if (f.category) {
+    // Rows written by the previous release during a rolling deploy carry no category: their kind names it.
+    const legacy = FactKind.safeParse(f.category);
+    clauses.push(
+      legacy.success
+        ? (or(
+            eq(approvedFacts.category, f.category),
+            and(isNull(approvedFacts.category), eq(approvedFacts.kind, legacy.data)),
+          ) as SQL)
+        : eq(approvedFacts.category, f.category),
+    );
+  }
+  if (f.origin) {
+    const legacyKind = f.origin === 'user' ? 'user' : f.origin === 'suggested' ? 'agent' : null;
+    clauses.push(
+      legacyKind
+        ? (or(
+            eq(approvedFacts.origin, f.origin),
+            and(isNull(approvedFacts.origin), eq(approvedFacts.proposedByKind, legacyKind)),
+          ) as SQL)
+        : eq(approvedFacts.origin, f.origin),
+    );
+  }
+  if (f.effective) clauses.push(effectiveAt(f.at));
+  if (f.reviewDue) clauses.push(approved, lte(approvedFacts.reviewDueAt, f.at));
+  if (f.expiringWithinDays !== undefined)
+    clauses.push(
+      approved,
+      gt(approvedFacts.validUntil, f.at),
+      lte(approvedFacts.validUntil, new Date(f.at.getTime() + f.expiringWithinDays * DAY_MS)),
+    );
+  if (f.hasConflicts) clauses.push(sql`json_contains(${approvedFacts.conflicts}, ${'{"status":"open"}'})`);
+  if (f.search) {
+    const pattern = `%${f.search.replace(LIKE_SPECIALS, (c) => `\\${c}`)}%`;
+    clauses.push(or(like(approvedFacts.statement, pattern), like(approvedFacts.scope, pattern)) as SQL);
+  }
+  if (f.ids) clauses.push(f.ids.length ? inArray(approvedFacts.id, [...f.ids]) : sql`false`);
+  return clauses;
+}
+
+/** Spec 8.3 "approved non-expired": approved and with a validity window containing `at`. */
+const effectiveAt = (at: Date): SQL =>
+  and(
+    eq(approvedFacts.state, 'approved'),
+    or(isNull(approvedFacts.validFrom), lte(approvedFacts.validFrom, at)),
+    or(isNull(approvedFacts.validUntil), gt(approvedFacts.validUntil, at)),
+  ) as SQL;
+
+const sweepDueClause = (at: Date): SQL =>
+  or(
+    and(
+      eq(approvedFacts.state, 'approved'),
+      lte(approvedFacts.validUntil, at),
+      isNull(approvedFacts.expiryNotifiedAt),
+    ),
+    and(
+      eq(approvedFacts.state, 'approved'),
+      lte(approvedFacts.reviewDueAt, at),
+      isNull(approvedFacts.reviewFlaggedAt),
+    ),
+    and(isNull(approvedFacts.dedupeKey), inArray(approvedFacts.state, ['proposed', 'approved'])),
+  ) as SQL;
+
 export class ApprovedFactRepository extends BrandScopedRepository<typeof approvedFacts> {
   constructor() {
     super(approvedFacts);
@@ -187,14 +276,14 @@ export class ApprovedFactRepository extends BrandScopedRepository<typeof approve
   ) {
     await this.updateScoped(id, expectedVersion, values, tx);
   }
+  /** BSC-3 workspace listing: every filter optional, newest first, cursor by id. `ids` narrows to those facts. */
   async list(
     brandId: string,
-    state: FactState | undefined,
+    filters: FactListFilters,
     page: PageRequest,
     tx?: Tx,
   ): Promise<Page<typeof approvedFacts.$inferSelect>> {
-    const clauses: SQL[] = [];
-    if (state) clauses.push(eq(approvedFacts.state, state));
+    const clauses: SQL[] = factFilterClauses(filters);
     const cursor = page.cursor ? decodeCursor(page.cursor) : null;
     if (cursor) clauses.push(lte(approvedFacts.id, cursor.id));
     const rows = await this.conn(tx)
@@ -214,21 +303,97 @@ export class ApprovedFactRepository extends BrandScopedRepository<typeof approve
       .where(this.brandScope(brandId, inArray(approvedFacts.id, ids)));
     return new Map(rows.map((r) => [r.id, r.state]));
   }
-  /** Spec 8.3 "approved non-expired": approved and with a validity window containing `at`, ordered by id. */
-  async listEffective(brandId: string, at: Date, tx?: Tx) {
+  /** The brand's live facts (proposed or approved), id and statement only, for duplicate detection (bounded). */
+  async listLiveStatements(brandId: string, tx?: Tx) {
     return this.conn(tx)
+      .select({
+        id: approvedFacts.id,
+        statement: approvedFacts.statement,
+        supersedesFactId: approvedFacts.supersedesFactId,
+      })
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, inArray(approvedFacts.state, ['proposed', 'approved'])))
+      .orderBy(asc(approvedFacts.id))
+      .limit(LIVE_FACT_SCAN);
+  }
+  /** A live fact of the brand with this dedupe key (the oldest), or null. */
+  async findLiveByDedupeKey(brandId: string, dedupeKey: string, tx?: Tx) {
+    const rows = await this.conn(tx)
       .select()
       .from(approvedFacts)
       .where(
         this.brandScope(
           brandId,
           and(
-            eq(approvedFacts.state, 'approved'),
-            or(isNull(approvedFacts.validFrom), lte(approvedFacts.validFrom, at)),
-            or(isNull(approvedFacts.validUntil), gt(approvedFacts.validUntil, at)),
+            eq(approvedFacts.dedupeKey, dedupeKey),
+            inArray(approvedFacts.state, ['proposed', 'approved']),
           ) as SQL,
         ),
       )
+      .orderBy(asc(approvedFacts.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /** Live facts stored without a dedupe key (before 0023, until the sweep keys them), bounded. */
+  async listLiveUnkeyed(brandId: string, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(
+        this.brandScope(
+          brandId,
+          and(isNull(approvedFacts.dedupeKey), inArray(approvedFacts.state, ['proposed', 'approved'])) as SQL,
+        ),
+      )
+      .orderBy(asc(approvedFacts.id))
+      .limit(LIVE_FACT_SCAN);
+  }
+  /** Of these facts of the brand, the ones in effect at `at` (spec 8.3: approved, validity window contains it). */
+  async listEffectiveByIds(brandId: string, ids: readonly string[], at: Date, tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select({ id: approvedFacts.id })
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, and(effectiveAt(at), inArray(approvedFacts.id, [...ids])) as SQL));
+  }
+  /** Proposed corrections of an approved fact (at most one is allowed open at a time). */
+  async listOpenCorrections(brandId: string, factId: string, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(
+        this.brandScope(
+          brandId,
+          and(eq(approvedFacts.supersedesFactId, factId), eq(approvedFacts.state, 'proposed')) as SQL,
+        ),
+      );
+  }
+  /** Names of facts by id within the brand (statements for briefs and conflict labels). */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, inArray(approvedFacts.id, [...ids])));
+  }
+  /**
+   * The daily sweep's work for one brand at `at`: approved facts whose validity ended and whose expiry event was not
+   * yet emitted, approved facts past their review date not yet flagged, and facts without a dedupe key (bounded).
+   */
+  async listSweepDue(brandId: string, at: Date, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, sweepDueClause(at)))
+      .orderBy(asc(approvedFacts.id))
+      .limit(SWEEP_BATCH);
+  }
+  /** Spec 8.3 "approved non-expired": approved and with a validity window containing `at`, ordered by id. */
+  async listEffective(brandId: string, at: Date, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(approvedFacts)
+      .where(this.brandScope(brandId, effectiveAt(at)))
       .orderBy(asc(approvedFacts.id));
   }
 }
@@ -346,5 +511,20 @@ export class PlatformBrandRepository extends PlatformRepository {
       .orderBy(asc(brands.id))
       .limit(10_000);
     return rows;
+  }
+}
+
+/**
+ * BSC-3 daily fact sweep (spec 5.3 PlatformRepository, as the destination refresh's): the brands with fact work due
+ * at `at`, as references only (tenant id, brand id). Runs only under runAsPlatform; never returns fact content.
+ */
+export class PlatformFactSweepRepository extends PlatformRepository {
+  async listDue(at: Date, tx?: Tx, limit = 1000): Promise<Array<{ tenantId: string; brandId: string }>> {
+    return this.conn(tx)
+      .selectDistinct({ tenantId: approvedFacts.tenantId, brandId: approvedFacts.brandId })
+      .from(approvedFacts)
+      .where(sweepDueClause(at))
+      .orderBy(asc(approvedFacts.tenantId), asc(approvedFacts.brandId))
+      .limit(limit);
   }
 }

@@ -1106,6 +1106,47 @@
         }
       }
     },
+    "/trpc/assets.media.download": {
+      "post": {
+        "operationId": "assets.media.download",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assetVersionId": {
+                    "type": "string"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": ["original", "png"]
+                  },
+                  "width": {
+                    "anyOf": [
+                      {
+                        "const": 256
+                      },
+                      {
+                        "const": 512
+                      },
+                      {
+                        "const": 1024
+                      },
+                      {
+                        "const": 2048
+                      }
+                    ]
+                  }
+                },
+                "required": ["assetVersionId", "format"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/assets.media.signedUrl": {
       "get": {
         "operationId": "assets.media.signedUrl",
@@ -1126,7 +1167,7 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["thumbnail", "preview", "web"]
+                        "enum": ["thumbnail", "preview", "web", "png"]
                       }
                     ]
                   }
@@ -1571,9 +1612,113 @@
                   },
                   "expectedVersion": {
                     "type": "number"
+                  },
+                  "reviewerNote": {
+                    "type": "string"
+                  },
+                  "reviewDueAt": {
+                    "type": "string"
                   }
                 },
                 "required": ["brandId", "factId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.correct": {
+      "post": {
+        "operationId": "brand.facts.correct",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "statement": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "company",
+                      "product",
+                      "service",
+                      "location",
+                      "contact",
+                      "differentiator",
+                      "audience",
+                      "terminology",
+                      "claim",
+                      "faq",
+                      "offer",
+                      "price",
+                      "statistic",
+                      "legal"
+                    ]
+                  },
+                  "scope": {
+                    "type": "string"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "asset",
+                            "document",
+                            "url",
+                            "reviewer",
+                            "metric_snapshot",
+                            "experiment_result",
+                            "comment",
+                            "other"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "note": {
+                          "type": "string"
+                        },
+                        "capturedAt": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "excerpt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "ref"]
+                    }
+                  },
+                  "validFrom": {
+                    "type": "string"
+                  },
+                  "validUntil": {
+                    "type": "string"
+                  },
+                  "reviewDueAt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "factId", "expectedVersion", "statement"]
               }
             }
           }
@@ -1595,7 +1740,54 @@
                   },
                   "state": {
                     "type": "string",
-                    "enum": ["proposed", "approved", "revoked"]
+                    "enum": ["proposed", "approved", "revoked", "superseded"]
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "company",
+                      "product",
+                      "service",
+                      "location",
+                      "contact",
+                      "differentiator",
+                      "audience",
+                      "terminology",
+                      "claim",
+                      "faq",
+                      "offer",
+                      "price",
+                      "statistic",
+                      "legal"
+                    ]
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": ["user", "extracted", "inferred", "suggested"]
+                  },
+                  "effective": {
+                    "type": "boolean"
+                  },
+                  "reviewDue": {
+                    "type": "boolean"
+                  },
+                  "expiringWithinDays": {
+                    "type": "number"
+                  },
+                  "hasConflicts": {
+                    "type": "boolean"
+                  },
+                  "possibleDuplicates": {
+                    "type": "boolean"
+                  },
+                  "search": {
+                    "type": "string"
+                  },
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   },
                   "page": {
                     "type": "object",
@@ -1611,6 +1803,87 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.markReviewed": {
+      "post": {
+        "operationId": "brand.facts.markReviewed",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "nextReviewDueAt": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "factId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.merge": {
+      "post": {
+        "operationId": "brand.facts.merge",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "keep": {
+                    "type": "object",
+                    "properties": {
+                      "factId": {
+                        "type": "string"
+                      },
+                      "expectedVersion": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["factId", "expectedVersion"]
+                  },
+                  "merge": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "factId": {
+                          "type": "string"
+                        },
+                        "expectedVersion": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["factId", "expectedVersion"]
+                    }
+                  }
+                },
+                "required": ["brandId", "keep", "merge"]
               }
             }
           }
@@ -1633,6 +1906,32 @@
                   "kind": {
                     "type": "string",
                     "enum": ["product", "claim", "offer", "contact", "price", "statistic", "legal"]
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "company",
+                      "product",
+                      "service",
+                      "location",
+                      "contact",
+                      "differentiator",
+                      "audience",
+                      "terminology",
+                      "claim",
+                      "faq",
+                      "offer",
+                      "price",
+                      "statistic",
+                      "legal"
+                    ]
+                  },
+                  "scope": {
+                    "type": "string"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": ["user", "extracted", "inferred", "suggested"]
                   },
                   "statement": {
                     "type": "string"
@@ -1668,14 +1967,140 @@
                       "required": ["kind", "ref"]
                     }
                   },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "asset",
+                            "document",
+                            "url",
+                            "reviewer",
+                            "metric_snapshot",
+                            "experiment_result",
+                            "comment",
+                            "other"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "note": {
+                          "type": "string"
+                        },
+                        "capturedAt": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "excerpt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "ref"]
+                    }
+                  },
                   "validFrom": {
                     "type": "string"
                   },
                   "validUntil": {
                     "type": "string"
+                  },
+                  "reviewDueAt": {
+                    "type": "string"
+                  },
+                  "conflicts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "factId": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "asset",
+                                "document",
+                                "url",
+                                "reviewer",
+                                "metric_snapshot",
+                                "experiment_result",
+                                "comment",
+                                "other"
+                              ]
+                            },
+                            "ref": {
+                              "type": "string"
+                            },
+                            "note": {
+                              "type": "string"
+                            },
+                            "capturedAt": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "excerpt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "ref"]
+                        },
+                        "note": {
+                          "type": "string"
+                        }
+                      },
+                      "required": []
+                    }
                   }
                 },
-                "required": ["brandId", "kind", "statement", "evidence"]
+                "required": ["brandId", "statement"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.resolveConflict": {
+      "post": {
+        "operationId": "brand.facts.resolveConflict",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "conflictId": {
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": ["kept_this", "kept_other", "annotated"]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "factId", "expectedVersion", "conflictId", "outcome"]
               }
             }
           }
@@ -1706,6 +2131,134 @@
                   }
                 },
                 "required": ["brandId", "factId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.update": {
+      "post": {
+        "operationId": "brand.facts.update",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "company",
+                      "product",
+                      "service",
+                      "location",
+                      "contact",
+                      "differentiator",
+                      "audience",
+                      "terminology",
+                      "claim",
+                      "faq",
+                      "offer",
+                      "price",
+                      "statistic",
+                      "legal"
+                    ]
+                  },
+                  "scope": {
+                    "type": "string"
+                  },
+                  "statement": {
+                    "type": "string"
+                  },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "asset",
+                            "document",
+                            "url",
+                            "reviewer",
+                            "metric_snapshot",
+                            "experiment_result",
+                            "comment",
+                            "other"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "note": {
+                          "type": "string"
+                        },
+                        "capturedAt": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "excerpt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "ref"]
+                    }
+                  },
+                  "validFrom": {
+                    "type": "string"
+                  },
+                  "validUntil": {
+                    "type": "string"
+                  },
+                  "reviewDueAt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "factId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.facts.withdraw": {
+      "post": {
+        "operationId": "brand.facts.withdraw",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "factId", "expectedVersion", "reason"]
               }
             }
           }
@@ -2662,9 +3215,12 @@
                             "assetId": {
                               "type": "string"
                             },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
                             "variant": {
                               "type": "string",
-                              "enum": ["primary", "reversed", "mono", "mark_only"]
+                              "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                             },
                             "allowedBackgroundColourKeys": {
                               "type": "array",
@@ -2677,6 +3233,25 @@
                             },
                             "minWidthPx": {
                               "type": "number"
+                            },
+                            "usage": {
+                              "type": "object",
+                              "properties": {
+                                "backgroundsNote": {
+                                  "type": "string"
+                                },
+                                "donts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": ["backgroundsNote", "donts"]
+                            },
+                            "preferredFormat": {
+                              "type": "string",
+                              "enum": ["svg", "raster"]
                             }
                           },
                           "required": [
@@ -4373,9 +4948,12 @@
                             "assetId": {
                               "type": "string"
                             },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
                             "variant": {
                               "type": "string",
-                              "enum": ["primary", "reversed", "mono", "mark_only"]
+                              "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                             },
                             "allowedBackgroundColourKeys": {
                               "type": "array",
@@ -4388,6 +4966,25 @@
                             },
                             "minWidthPx": {
                               "type": "number"
+                            },
+                            "usage": {
+                              "type": "object",
+                              "properties": {
+                                "backgroundsNote": {
+                                  "type": "string"
+                                },
+                                "donts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": ["backgroundsNote", "donts"]
+                            },
+                            "preferredFormat": {
+                              "type": "string",
+                              "enum": ["svg", "raster"]
                             }
                           },
                           "required": [
@@ -14244,6 +14841,38 @@
           "required": ["brandId", "page"]
         }
       },
+      "assets.media.download": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "assetVersionId": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string",
+              "enum": ["original", "png"]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "const": 256
+                },
+                {
+                  "const": 512
+                },
+                {
+                  "const": 1024
+                },
+                {
+                  "const": 2048
+                }
+              ]
+            }
+          },
+          "required": ["assetVersionId", "format"]
+        }
+      },
       "assets.media.signedUrl": {
         "type": "query",
         "input": {
@@ -14259,7 +14888,7 @@
                 },
                 {
                   "type": "string",
-                  "enum": ["thumbnail", "preview", "web"]
+                  "enum": ["thumbnail", "preview", "web", "png"]
                 }
               ]
             }
@@ -14596,9 +15225,104 @@
             },
             "expectedVersion": {
               "type": "number"
+            },
+            "reviewerNote": {
+              "type": "string"
+            },
+            "reviewDueAt": {
+              "type": "string"
             }
           },
           "required": ["brandId", "factId", "expectedVersion"]
+        }
+      },
+      "brand.facts.correct": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "factId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "company",
+                "product",
+                "service",
+                "location",
+                "contact",
+                "differentiator",
+                "audience",
+                "terminology",
+                "claim",
+                "faq",
+                "offer",
+                "price",
+                "statistic",
+                "legal"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "asset",
+                      "document",
+                      "url",
+                      "reviewer",
+                      "metric_snapshot",
+                      "experiment_result",
+                      "comment",
+                      "other"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "excerpt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "ref"]
+              }
+            },
+            "validFrom": {
+              "type": "string"
+            },
+            "validUntil": {
+              "type": "string"
+            },
+            "reviewDueAt": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "factId", "expectedVersion", "statement"]
         }
       },
       "brand.facts.list": {
@@ -14611,7 +15335,54 @@
             },
             "state": {
               "type": "string",
-              "enum": ["proposed", "approved", "revoked"]
+              "enum": ["proposed", "approved", "revoked", "superseded"]
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "company",
+                "product",
+                "service",
+                "location",
+                "contact",
+                "differentiator",
+                "audience",
+                "terminology",
+                "claim",
+                "faq",
+                "offer",
+                "price",
+                "statistic",
+                "legal"
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "enum": ["user", "extracted", "inferred", "suggested"]
+            },
+            "effective": {
+              "type": "boolean"
+            },
+            "reviewDue": {
+              "type": "boolean"
+            },
+            "expiringWithinDays": {
+              "type": "number"
+            },
+            "hasConflicts": {
+              "type": "boolean"
+            },
+            "possibleDuplicates": {
+              "type": "boolean"
+            },
+            "search": {
+              "type": "string"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "page": {
               "type": "object",
@@ -14629,6 +15400,69 @@
           "required": ["brandId", "page"]
         }
       },
+      "brand.facts.markReviewed": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "factId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "nextReviewDueAt": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "factId", "expectedVersion"]
+        }
+      },
+      "brand.facts.merge": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "keep": {
+              "type": "object",
+              "properties": {
+                "factId": {
+                  "type": "string"
+                },
+                "expectedVersion": {
+                  "type": "number"
+                }
+              },
+              "required": ["factId", "expectedVersion"]
+            },
+            "merge": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "factId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["factId", "expectedVersion"]
+              }
+            }
+          },
+          "required": ["brandId", "keep", "merge"]
+        }
+      },
       "brand.facts.propose": {
         "type": "mutation",
         "input": {
@@ -14640,6 +15474,32 @@
             "kind": {
               "type": "string",
               "enum": ["product", "claim", "offer", "contact", "price", "statistic", "legal"]
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "company",
+                "product",
+                "service",
+                "location",
+                "contact",
+                "differentiator",
+                "audience",
+                "terminology",
+                "claim",
+                "faq",
+                "offer",
+                "price",
+                "statistic",
+                "legal"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "origin": {
+              "type": "string",
+              "enum": ["user", "extracted", "inferred", "suggested"]
             },
             "statement": {
               "type": "string"
@@ -14675,14 +15535,131 @@
                 "required": ["kind", "ref"]
               }
             },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "asset",
+                      "document",
+                      "url",
+                      "reviewer",
+                      "metric_snapshot",
+                      "experiment_result",
+                      "comment",
+                      "other"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "excerpt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "ref"]
+              }
+            },
             "validFrom": {
               "type": "string"
             },
             "validUntil": {
               "type": "string"
+            },
+            "reviewDueAt": {
+              "type": "string"
+            },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "factId": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "asset",
+                          "document",
+                          "url",
+                          "reviewer",
+                          "metric_snapshot",
+                          "experiment_result",
+                          "comment",
+                          "other"
+                        ]
+                      },
+                      "ref": {
+                        "type": "string"
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "capturedAt": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "excerpt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "ref"]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": []
+              }
             }
           },
-          "required": ["brandId", "kind", "statement", "evidence"]
+          "required": ["brandId", "statement"]
+        }
+      },
+      "brand.facts.resolveConflict": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "factId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "conflictId": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": ["kept_this", "kept_other", "annotated"]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "factId", "expectedVersion", "conflictId", "outcome"]
         }
       },
       "brand.facts.revoke": {
@@ -14704,6 +15681,116 @@
             }
           },
           "required": ["brandId", "factId", "expectedVersion"]
+        }
+      },
+      "brand.facts.update": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "factId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "company",
+                "product",
+                "service",
+                "location",
+                "contact",
+                "differentiator",
+                "audience",
+                "terminology",
+                "claim",
+                "faq",
+                "offer",
+                "price",
+                "statistic",
+                "legal"
+              ]
+            },
+            "scope": {
+              "type": "string"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "asset",
+                      "document",
+                      "url",
+                      "reviewer",
+                      "metric_snapshot",
+                      "experiment_result",
+                      "comment",
+                      "other"
+                    ]
+                  },
+                  "ref": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "capturedAt": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "excerpt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "ref"]
+              }
+            },
+            "validFrom": {
+              "type": "string"
+            },
+            "validUntil": {
+              "type": "string"
+            },
+            "reviewDueAt": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "factId", "expectedVersion"]
+        }
+      },
+      "brand.facts.withdraw": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "factId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "factId", "expectedVersion", "reason"]
         }
       },
       "brand.get": {
@@ -15559,9 +16646,12 @@
                       "assetId": {
                         "type": "string"
                       },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
                       "variant": {
                         "type": "string",
-                        "enum": ["primary", "reversed", "mono", "mark_only"]
+                        "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                       },
                       "allowedBackgroundColourKeys": {
                         "type": "array",
@@ -15574,6 +16664,25 @@
                       },
                       "minWidthPx": {
                         "type": "number"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "backgroundsNote": {
+                            "type": "string"
+                          },
+                          "donts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["backgroundsNote", "donts"]
+                      },
+                      "preferredFormat": {
+                        "type": "string",
+                        "enum": ["svg", "raster"]
                       }
                     },
                     "required": [
@@ -17193,9 +18302,12 @@
                       "assetId": {
                         "type": "string"
                       },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
                       "variant": {
                         "type": "string",
-                        "enum": ["primary", "reversed", "mono", "mark_only"]
+                        "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                       },
                       "allowedBackgroundColourKeys": {
                         "type": "array",
@@ -17208,6 +18320,25 @@
                       },
                       "minWidthPx": {
                         "type": "number"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "backgroundsNote": {
+                            "type": "string"
+                          },
+                          "donts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["backgroundsNote", "donts"]
+                      },
+                      "preferredFormat": {
+                        "type": "string",
+                        "enum": ["svg", "raster"]
                       }
                     },
                     "required": [

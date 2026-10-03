@@ -20,6 +20,7 @@ import {
   brandService,
   registerBrandAssetKindSource,
   registerChannelKeySource,
+  registerBrandAssetVersionSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
@@ -330,6 +331,7 @@ export function composeModules(): void {
       .list()
       .map((p) => p.key),
   );
+  registerBrandAssetVersionSource((brandId, ids, tx) => assetService.assetsOfVersions(brandId, ids, tx));
   // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
   registerOnboardingRunSource(onboardingRunSource);
   // UX-20 (D-13): what publishing a brand version reaches, from the review and publishing modules.

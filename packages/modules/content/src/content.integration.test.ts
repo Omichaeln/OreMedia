@@ -412,6 +412,65 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
     });
+
+    it('a new brief offers only facts in effect: a revoked, an expired or a proposed offer fact is refused', async () => {
+      const offer = async (statement: string, validUntil?: string) => {
+        const p = await run(tenantA, (tx) =>
+          brandService.facts.propose(
+            A,
+            {
+              brandId: brandA,
+              category: 'offer',
+              statement,
+              sources: [{ kind: 'url', ref: 'https://example.test/offers' }],
+              ...(validUntil ? { validUntil } : {}),
+            },
+            tx,
+          ),
+        );
+        return p.factId;
+      };
+      const approve = (factId: string) =>
+        run(tenantA, (tx) =>
+          brandService.facts.approve(A, { brandId: brandA, factId, expectedVersion: 0 }, tx),
+        );
+      const revoked = await offer('Brief test: revoked offer');
+      await approve(revoked);
+      await run(tenantA, (tx) =>
+        brandService.facts.withdraw(
+          A,
+          { brandId: brandA, factId: revoked, expectedVersion: 1, reason: 'Ended early' },
+          tx,
+        ),
+      );
+      const expired = await offer('Brief test: expired offer', new Date(Date.now() + 1500).toISOString());
+      await approve(expired);
+      const proposed = await offer('Brief test: proposed offer');
+      const live = await offer('Brief test: live offer');
+      await approve(live);
+      await new Promise((r) => setTimeout(r, 1600)); // the expired offer's window ends
+      const brief = (offerFactIds: string[]) =>
+        run(tenantA, (tx) =>
+          contentService.briefs.create(
+            A,
+            {
+              brandId: brandA,
+              audience: 'Repeat buyers',
+              message: 'Offers',
+              offerFactIds,
+              channelConnectionIds: [],
+              constraints: [],
+            },
+            tx,
+          ),
+        );
+      for (const factId of [revoked, expired, proposed])
+        await expect(brief([live, factId])).rejects.toMatchObject({
+          code: 'VALIDATION_FAILED',
+          details: [{ path: 'offerFactIds.1', issue: 'fact_not_effective' }],
+        });
+      expect((await brief([live])).state).toBe('draft');
+    });
   });
 
   describe('packages and content revisions (content.edit, spec 13.1 machine)', () => {
@@ -1470,11 +1529,8 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ],
       });
       await tdb.db.update(assets).set({ state: 'approved' }).where(eq(assets.id, assetId));
-      // Raster images of an image kind only: an SVG (stored-XSS surface on the site) or a video is refused.
-      await tdb.db
-        .update(assetVersions)
-        .set({ mime: 'image/svg+xml' })
-        .where(eq(assetVersions.id, versionId));
+      // Images of an image kind only: a video is refused. (BSC-2: an SVG is accepted; it is sent as its PNG.)
+      await tdb.db.update(assetVersions).set({ mime: 'video/mp4' }).where(eq(assetVersions.id, versionId));
       await expect(
         run(tenantA, (tx) =>
           contentService.packages.create(

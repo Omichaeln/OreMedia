@@ -407,7 +407,7 @@ const emptyMessaging = (): Messaging => ({
 
 export function MessagingSection({ doc, onChange }: Props) {
   const { brandId } = useBrandContext();
-  const facts = useFacts(brandId, 'approved');
+  const facts = useFacts(brandId, { effective: true });
   const approved = facts.data?.items ?? [];
   const m = doc.messaging ?? emptyMessaging();
   const setM = (patch: Partial<Messaging>) => onChange({ ...doc, messaging: { ...m, ...patch } });
@@ -645,7 +645,7 @@ export function MessagingSection({ doc, onChange }: Props) {
   );
 }
 
-/** A pillar's proof: approved facts picked by their statement; a cited fact that is no longer approved is flagged. */
+/** A pillar's proof: facts in effect picked by their statement; a cited fact no longer in effect is flagged. */
 function ProofFacts({
   index,
   cited,
@@ -671,7 +671,7 @@ function ProofFacts({
       {error !== null && <RequestError error={error} onRetry={onRetry} />}
       {!loading && error === null && approved.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          No approved facts yet. Propose and approve facts under Facts to prove a pillar.
+          No facts are in effect yet. Propose and approve facts under Facts to prove a pillar.
         </p>
       )}
       <ul className="flex flex-col gap-1">
@@ -694,8 +694,10 @@ function ProofFacts({
         {!loading &&
           stale.map((id, j) => (
             <li key={id} className="flex flex-wrap items-center gap-2 text-sm">
-              <Badge tone="warning">No longer approved</Badge>
-              <span className="text-muted-foreground">A cited fact is no longer approved.</span>
+              <Badge tone="warning">No longer in effect</Badge>
+              <span className="text-muted-foreground">
+                A cited fact is no longer in effect (revoked, superseded or expired).
+              </span>
               <Button size="sm" variant="ghost" onClick={() => onChange(cited.filter((x) => x !== id))}>
                 Remove<span className="sr-only"> {`stale proof ${j + 1} of pillar ${index + 1}`}</span>
               </Button>

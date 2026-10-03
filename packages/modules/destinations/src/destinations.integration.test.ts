@@ -1683,6 +1683,36 @@ describe('destinations module against MySQL 8', () => {
       );
       expect(svg).toMatchObject({ outcome: 'rejected', code: 'article_image_not_raster' });
       expect(cms.calls).toEqual([]);
+      // BSC-2: a real SVG (a vector logo) is sent as its PNG rendition, drawn from the vector, transparency kept.
+      await inTenant(tenantA, () =>
+        storage.putObject(
+          key,
+          Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40"><circle cx="20" cy="20" r="18" fill="#e94e1b"/></svg>',
+          ),
+          { contentType: 'image/svg+xml' },
+        ),
+      );
+      cms.media.clear();
+      const vector = await inTenant(tenantA, () =>
+        destinationArticles.publish({
+          tenantId: tenantA,
+          destinationId: siteId,
+          publicationId: newId('publication'),
+          attemptId: newId('publicationAttempt'),
+          idempotencyKey: 'idem_images_svg',
+          variant: variant(siteId, { article: rich }),
+        }),
+      );
+      expect(vector).toMatchObject({ outcome: 'accepted' });
+      expect([...cms.media.values()][0]).toMatchObject({
+        mime: 'image/png',
+        filename: 'why-ore-and-tar-last-1.png',
+      });
+      expect(
+        storage.keys().some((k) => k.startsWith(`releases/${tenantA}/${brandA}/${versionId}/png/`)),
+      ).toBe(true);
+      await inTenant(tenantA, () => storage.putObject(key, Buffer.from('png'), { contentType: 'image/png' }));
       await tdb.db.update(assetVersions).set({ mime: 'image/png' }).where(eq(assetVersions.id, versionId));
     });
 
