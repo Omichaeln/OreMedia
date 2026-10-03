@@ -106,10 +106,15 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
     },
     {
       name: 'brand kit editor',
-      path: () => brandPath('system?section=versions'),
+      path: () => brandPath('system'),
+      // The proposed update opens the full editor: every section, patterns and channel guidance included.
       ready: async (page) => {
-        await page.getByRole('button', { name: 'Edit brand kit' }).first().click({ timeout: 15_000 });
+        await page
+          .getByTestId('proposed-update')
+          .getByRole('button', { name: 'Review' })
+          .click({ timeout: 15_000 });
         await page.getByRole('heading', { name: 'Reference imagery' }).waitFor({ timeout: 15_000 });
+        await page.getByRole('heading', { name: 'Channel guidance' }).waitFor({ timeout: 15_000 });
       },
     },
     {

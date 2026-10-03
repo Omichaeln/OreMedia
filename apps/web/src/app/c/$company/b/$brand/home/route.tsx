@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { Button, StatusBanner } from '@oremedia/ui';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
 import { SetupChecklist } from '../../../../../../features/brand/setup-checklist';
-import { useBrandVersions } from '../../../../../../features/brand/use-brand';
+import { pendingProposal, useBrandVersions } from '../../../../../../features/brand/use-brand';
 import { AgentActivity } from '../../../../../../features/home/agent-activity';
 import { NeedsYou } from '../../../../../../features/home/needs-you';
 import { Section } from '../../../../../../components/section';
@@ -23,11 +23,7 @@ export function BrandHomeRoute() {
   const { companyId, brandId, brand } = useBrandContext();
   const user = useSessionUser(hasCredential());
   const versions = useBrandVersions(brandId);
-  const published = versions.data?.items.find((v) => v.id === brand.publishedVersionId) ?? null;
-  const newerDraft =
-    published && versions.data
-      ? versions.data.items.find((v) => v.number > published.number && v.state !== 'retired')
-      : null;
+  const proposal = pendingProposal(versions.data?.items ?? [], brand.publishedVersionId);
   const system = brandPath(companyId, brandId, 'system');
   const timeZone = brand.timezone || 'UTC';
   const now = new Date();
@@ -56,13 +52,13 @@ export function BrandHomeRoute() {
           {brand.name}: what needs you, and where to start.
         </p>
       </header>
-      {((brand.status !== 'setup' && !brand.publishedVersionId) || newerDraft) && (
+      {((brand.status !== 'setup' && !brand.publishedVersionId) || proposal) && (
         <div className="flex flex-col gap-2">
           {brand.status !== 'setup' && !brand.publishedVersionId && (
             <StatusBanner
               tone="warning"
-              title="No published standards"
-              description="No brand standards have been published. Documents cannot be created until a brand version is published."
+              title="No brand system yet"
+              description="The brand has no saved brand system. Documents cannot be created until the brand system is saved."
               actions={
                 <Button asChild size="sm">
                   <Link to={system}>Open brand system</Link>
@@ -70,14 +66,14 @@ export function BrandHomeRoute() {
               }
             />
           )}
-          {newerDraft && (
+          {proposal && (
             <StatusBanner
               tone="info"
-              title="Outdated standards"
-              description={`Version ${newerDraft.number} (${newerDraft.state === 'in_review' ? 'in review' : 'proposed'}) is newer than the published version ${published?.number}. Documents keep the published version until the new one is published.`}
+              title="A proposed update to the brand system is waiting"
+              description="Documents keep using the saved brand system until someone reviews the update and saves it."
               actions={
                 <Button asChild size="sm">
-                  <Link to={`${system}?section=versions`}>Review</Link>
+                  <Link to={system}>Review</Link>
                 </Button>
               }
             />
@@ -92,7 +88,7 @@ export function BrandHomeRoute() {
         <Section id="documents" title="Documents">
           <Documents />
           <NewDocument
-            disabledReason={brand.publishedVersionId ? undefined : 'Publish brand standards first'}
+            disabledReason={brand.publishedVersionId ? undefined : 'Save the brand system first'}
           />
         </Section>
       </div>

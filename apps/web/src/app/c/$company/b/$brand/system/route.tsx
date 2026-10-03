@@ -1,7 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { FactKind, type FactState } from '@oremedia/contracts/brand';
+import {
+  emptyBrandSystemDocument,
+  FactKind,
+  type BrandSystemDocumentV1,
+  type FactState,
+} from '@oremedia/contracts/brand';
 import {
   Badge,
   Button,
@@ -18,6 +23,7 @@ import {
 import { RequestError } from '../../../../../../components/request-state';
 import { Select } from '../../../../../../components/select';
 import { useToast } from '../../../../../../components/toast';
+import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
 import { BrandKitEditor, type KitSection } from '../../../../../../features/brand/brand-kit-editor';
 import {
@@ -33,28 +39,21 @@ import {
   VoiceView,
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
-import { PublishImpact } from '../../../../../../features/brand/publish-impact';
-import { useBrandVersionImpact } from '../../../../../../features/brand/use-brand';
-import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
+import { VoiceExtraction } from '../../../../../../features/brand/voice-extraction';
 import {
+  pendingProposal,
   useBrandVersion,
   useBrandVersions,
+  useCanSaveBrandSystem,
   useFacts,
   useObjectives,
-  versionStateLabel,
-  type BrandVersionDto,
   type BrandVersionSummary,
 } from '../../../../../../features/brand/use-brand';
 import { useTRPC } from '../../../../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../../../../lib/intent-key';
 import { toUiError, type UiError } from '../../../../../../lib/errors';
 
-const VERSION_TONE: Record<BrandVersionSummary['state'], Tone> = {
-  draft: 'info',
-  in_review: 'warning',
-  published: 'good',
-  retired: 'neutral',
-};
+type Doc = BrandSystemDocumentV1;
 
 type SectionKey =
   | 'overview'
@@ -67,8 +66,7 @@ type SectionKey =
   | 'channels'
   | 'guidelines'
   | 'facts'
-  | 'objectives'
-  | 'versions';
+  | 'objectives';
 
 /** The system's parts in the order the prototype reads them; each lives at `?section=`. */
 const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit?: KitSection }> = [
@@ -111,16 +109,18 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
     key: 'patterns',
     label: 'Patterns & templates',
     description: 'Named layouts and the templates that implement them.',
+    kit: 'patterns',
   },
   {
     key: 'channels',
     label: 'Channel guidance',
     description: 'Caption style, formats and calls to action per channel.',
+    kit: 'channels',
   },
   {
     key: 'guidelines',
     label: 'Guidelines',
-    description: 'The brand skill text agents read with the published version.',
+    description: 'The brand skill text agents read with the brand system.',
     kit: 'guidelines',
   },
   {
@@ -133,54 +133,67 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
     label: 'Objectives',
     description: 'The metric the brand is steering by, with its guardrails.',
   },
-  {
-    key: 'versions',
-    label: 'Versions',
-    description:
-      'Draft → in review → published → retired. Publishing never edits approved content; it invalidates the brand’s approvals and re-checks scheduled posts.',
-  },
 ];
 
 const OVERVIEW = SECTIONS[0] as (typeof SECTIONS)[number];
 
+/** What is open in the editor: one section of the brand system, or a proposed update with every section. */
+type Editing = { kind: 'section'; section: SectionKey } | { kind: 'proposal' } | null;
+
 /**
- * Spec 21.2 brand system (proposed extraction; published; conflict; retired version) in the prototype's layout: the
- * parts of the system in a side list, the version being read in the header. The published version reads; a draft or
- * a version in review opens the same part in the kit editor. Facts, objectives and versions are their own panels.
+ * Spec 21.2 brand system, D-22: one brand system per brand, edited in place. The parts of the system in a side list,
+ * the applied brand system read section by section; a person who may save it edits a section in place and the save
+ * applies at once. A proposed update (an imported brand skill, an agent's suggestion) waits at the top until a person
+ * reviews and saves it, or discards it. Facts and objectives are their own panels.
  */
 export function BrandSystemRoute() {
-  const { brand, brandId } = useBrandContext();
+  const { companyId, brand, brandId } = useBrandContext();
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
+  const canSave = useCanSaveBrandSystem(companyId);
   const versions = useBrandVersions(brandId);
   const approvedFacts = useFacts(brandId, 'approved');
   const proposedFacts = useFacts(brandId, 'proposed');
   const section = SECTIONS.find((x) => x.key === params.get('section')) ?? OVERVIEW;
-  const items = versions.data?.items ?? [];
-  const published = items.find((v) => v.id === brand.publishedVersionId) ?? null;
-  const working =
-    items.find(
-      (v) => (v.state === 'draft' || v.state === 'in_review') && (!published || v.number > published.number),
-    ) ?? null;
-  const viewingId = params.get('version') ?? published?.id ?? working?.id ?? null;
-  const viewing = useBrandVersion(
-    brandId,
-    section.key === 'facts' || section.key === 'objectives' || section.key === 'versions' ? null : viewingId,
-  );
+  const appliedId = brand.publishedVersionId ?? null;
+  const applied = useBrandVersion(brandId, appliedId);
+  const proposal = pendingProposal(versions.data?.items ?? [], appliedId);
+  const proposed = useBrandVersion(brandId, proposal?.id ?? null);
+  const [editing, setEditing] = useState<Editing>(null);
+  // Bumped by a conflict's Reload so the editor reopens on the brand system as it is now.
+  const [generation, setGeneration] = useState(0);
   const set = (key: string, value: string | null) => {
     const p = new URLSearchParams(params);
     if (value === null) p.delete(key);
     else p.set(key, value);
     setParams(p, { replace: true });
   };
+  const open = (key: string) => {
+    setEditing(null);
+    set('section', key === 'overview' ? null : key);
+  };
+  const reload = () => {
+    void queryClient.invalidateQueries(trpc.brand.pathFilter()).then(() => setGeneration((g) => g + 1));
+  };
   const proposedCount = proposedFacts.data?.items.length ?? 0;
-  const editable = viewing.data && (viewing.data.state === 'draft' || viewing.data.state === 'in_review');
-  // A draft or a version in review is read against the published version it would replace.
-  const base = useBrandVersion(brandId, editable && published ? published.id : null);
-  const changed = new Set(
-    viewing.data && editable && base.data
-      ? changedSections(viewing.data.document, base.data.document).map((c) => c.key)
-      : [],
-  );
+  const appliedDoc: Doc | null = applied.data?.document ?? null;
+  // The editor starts from the applied brand system, or an empty one before the first save.
+  const startDoc = appliedId === null ? emptyBrandSystemDocument() : appliedDoc;
+  const contentSection = section.key !== 'facts' && section.key !== 'objectives';
+  const editingSection = editing?.kind === 'section' && editing.section === section.key;
+  const reviewing = editing?.kind === 'proposal' && proposal !== null;
+  // Guidelines are imported, not written here: the section is editable (to remove them) once there are some.
+  const editable =
+    canSave &&
+    section.kit !== undefined &&
+    (section.kit !== 'guidelines' || appliedDoc?.guidelines !== undefined);
+  const editorKey = `${appliedId ?? 'none'}:${generation}`;
+  // The agent writes into the pending proposal when there is one, so it reads that proposal's guidelines. While that
+  // proposal loads the extraction stays (it may have just made the proposal and be starting the run on it).
+  const extractable = proposal
+    ? proposed.isPending || proposed.data?.document.guidelines !== undefined
+    : appliedDoc?.guidelines !== undefined;
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -194,7 +207,7 @@ export function BrandSystemRoute() {
               <button
                 type="button"
                 aria-current={x.key === section.key ? 'page' : undefined}
-                onClick={() => set('section', x.key === 'overview' ? null : x.key)}
+                onClick={() => open(x.key)}
                 className={cn(
                   'flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -204,11 +217,6 @@ export function BrandSystemRoute() {
                 )}
               >
                 {x.label}
-                {changed.has(x.key) && (
-                  <span className="text-xs text-accent">
-                    Changed<span className="sr-only"> in this version</span>
-                  </span>
-                )}
                 {x.key === 'facts' && proposedCount > 0 && (
                   <span className="text-xs tabular-nums text-status-critical">
                     {proposedCount}
@@ -222,109 +230,99 @@ export function BrandSystemRoute() {
       </nav>
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-8">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold">{brand.name}</h1>
-            {viewing.data && (
-              <>
-                <Badge tone={VERSION_TONE[viewing.data.state]}>
-                  Version {viewing.data.number} · {versionStateLabel[viewing.data.state]}
-                </Badge>
-                <code className="text-xs text-muted-foreground">{viewing.data.contentHash.slice(0, 12)}</code>
-              </>
-            )}
-          </div>
-          {(published || working) && (
-            <div role="group" aria-label="Version shown" className="flex gap-1">
-              {[published, working].flatMap((v) =>
-                v
-                  ? [
-                      <Button
-                        key={v.id}
-                        size="sm"
-                        variant={v.id === viewingId ? 'secondary' : 'ghost'}
-                        aria-pressed={v.id === viewingId}
-                        onClick={() => set('version', v.id === published?.id ? null : v.id)}
-                      >
-                        v{v.number} · {versionStateLabel[v.state].toLowerCase()}
-                      </Button>,
-                    ]
-                  : [],
-              )}
-            </div>
-          )}
+          <h1 className="text-xl font-semibold">{brand.name}</h1>
         </header>
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
-          {viewing.data && editable && (
-            <StatusBanner
-              tone="info"
-              title={`You’re viewing version ${viewing.data.number}, ${versionStateLabel[viewing.data.state].toLowerCase()}`}
-              description={
-                published
-                  ? `Sections that differ from published version ${published.number} are marked Changed. Nothing applies until a brand manager publishes it.`
-                  : 'Nothing is published yet. Nothing applies until a brand manager publishes this version.'
-              }
-              actions={
-                section.key !== 'versions' && (
-                  <Button size="sm" onClick={() => set('section', 'versions')}>
-                    Review changes
-                  </Button>
-                )
-              }
-              data-testid="viewing-draft"
+          {proposal && !reviewing && (
+            <ProposalBanner
+              brandId={brandId}
+              proposal={proposal}
+              appliedDoc={appliedId === null ? emptyBrandSystemDocument() : appliedDoc}
+              canSave={canSave}
+              onReview={() => setEditing({ kind: 'proposal' })}
             />
           )}
-          <div>
-            <h2 className="text-lg font-semibold">{section.label}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
-          </div>
-          {section.key === 'versions' && (
-            <>
-              <BrandSkillImport />
-              <Versions publishedVersionId={brand.publishedVersionId} />
-              {working && published && (
-                <VersionChanges
-                  brandId={brandId}
-                  version={working}
-                  published={published}
-                  onOpen={(key) => {
-                    const p = new URLSearchParams(params);
-                    p.set('section', key);
-                    p.set('version', working.id);
-                    setParams(p, { replace: true });
-                  }}
-                />
-              )}
-            </>
+          {reviewing && proposal && (
+            <ProposalReview
+              key={`${proposal.id}:${editorKey}`}
+              brandId={brandId}
+              proposal={proposal}
+              basedOnVersionId={appliedId}
+              appliedDoc={appliedId === null ? emptyBrandSystemDocument() : appliedDoc}
+              onClose={() => setEditing(null)}
+              onReload={reload}
+            />
           )}
-          {section.key === 'facts' && <Facts />}
-          {section.key === 'objectives' && <Objectives />}
-          {section.key !== 'versions' && section.key !== 'facts' && section.key !== 'objectives' && (
+          {!reviewing && (
             <>
-              {versions.isSuccess && !viewingId && (
-                <EmptyState
-                  title="No brand version yet"
-                  description="Create a draft or import a brand skill in Versions; nothing is published until a brand manager publishes it."
-                />
-              )}
-              {viewingId && viewing.isPending && <Skeleton label="Loading brand version" lines={4} />}
-              {viewing.isError && (
-                <RequestError error={viewing.error} onRetry={() => void viewing.refetch()} />
-              )}
-              {viewing.data && editable && section.kit && (
-                <BrandKitEditor
-                  key={`${viewing.data.id}:${viewing.data.version}`}
-                  version={viewing.data}
-                  only={section.kit}
-                />
-              )}
-              {viewing.data && !(editable && section.kit) && (
-                <SectionView
-                  section={section.key}
-                  doc={viewing.data.document}
-                  brandName={brand.name}
-                  factCount={approvedFacts.data?.items.length}
-                  onOpen={(key) => set('section', key)}
-                />
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">{section.label}</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
+                </div>
+                {editable && !editingSection && startDoc && (
+                  <Button size="sm" onClick={() => setEditing({ kind: 'section', section: section.key })}>
+                    Edit<span className="sr-only"> {section.label}</span>
+                  </Button>
+                )}
+              </div>
+              {section.key === 'facts' && <Facts />}
+              {section.key === 'objectives' && <Objectives />}
+              {contentSection && (
+                <>
+                  {appliedId === null && !editingSection && (
+                    <EmptyState
+                      title="Set up your brand system"
+                      description={
+                        canSave
+                          ? 'Set the palette, typography, voice, logos and imagery, or import a brand skill under Guidelines. Saving applies it at once.'
+                          : 'Nothing has been saved yet. A brand manager, admin or owner sets it up.'
+                      }
+                      action={
+                        canSave && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => setEditing({ kind: 'section', section: section.key })}
+                          >
+                            Set up the brand system
+                          </Button>
+                        )
+                      }
+                    />
+                  )}
+                  {appliedId !== null && applied.isPending && (
+                    <Skeleton label="Loading the brand system" lines={4} />
+                  )}
+                  {applied.isError && (
+                    <RequestError error={applied.error} onRetry={() => void applied.refetch()} />
+                  )}
+                  {editingSection && startDoc && (
+                    <BrandKitEditor
+                      key={editorKey}
+                      document={startDoc}
+                      basedOnVersionId={appliedId}
+                      only={section.kit}
+                      onClose={() => setEditing(null)}
+                      onReload={reload}
+                    />
+                  )}
+                  {appliedDoc && !editingSection && (
+                    <SectionView
+                      section={section.key}
+                      doc={appliedDoc}
+                      brandName={brand.name}
+                      factCount={approvedFacts.data?.items.length}
+                      onOpen={open}
+                    />
+                  )}
+                  {section.key === 'guidelines' && canSave && !editingSection && (
+                    <>
+                      {extractable && <VoiceExtraction proposal={proposal} />}
+                      <BrandSkillImport />
+                    </>
+                  )}
+                </>
               )}
             </>
           )}
@@ -342,7 +340,7 @@ function SectionView({
   onOpen,
 }: {
   section: SectionKey;
-  doc: BrandVersionDto['document'];
+  doc: Doc;
   brandName: string;
   factCount: number | undefined;
   onOpen: (key: string) => void;
@@ -371,61 +369,161 @@ function SectionView({
   }
 }
 
+/** Where a proposed update came from, when its document says: a brand skill whose guidelines differ from the applied ones. */
+const proposalOrigin = (next: Doc, applied: Doc | null): string | null =>
+  next.guidelines && next.guidelines.source.packageHash !== applied?.guidelines?.source.packageHash
+    ? `Imported from the brand skill ${next.guidelines.source.name}.`
+    : null;
+
 /**
- * "Changes in version N": the sections the newer version changes against the published one, each opening that
- * section of the newer version, and what publishing it does to approved and scheduled work (spec 8.2).
+ * D-22: the one banner for a pending proposal: what it changes against the applied brand system and where it came
+ * from, with Review (the full editor on the proposal) and Discard (confirmed first) for those who may save.
  */
-function VersionChanges({
+function ProposalBanner({
   brandId,
-  version,
-  published,
-  onOpen,
+  proposal,
+  appliedDoc,
+  canSave,
+  onReview,
 }: {
   brandId: string;
-  version: BrandVersionSummary;
-  published: BrandVersionSummary;
-  onOpen: (key: string) => void;
+  proposal: BrandVersionSummary;
+  appliedDoc: Doc | null;
+  canSave: boolean;
+  onReview: () => void;
 }) {
-  const next = useBrandVersion(brandId, version.id);
-  const base = useBrandVersion(brandId, published.id);
-  const changes = next.data && base.data ? changedSections(next.data.document, base.data.document) : null;
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const next = useBrandVersion(brandId, proposal.id);
+  const [discarding, setDiscarding] = useState(false);
+  const intent = useIntentKey();
+  const discard = useMutation(
+    trpc.brand.system.discardProposal.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setDiscarding(false);
+        void queryClient.invalidateQueries(trpc.brand.pathFilter());
+        toast({ tone: 'good', title: 'Proposed update discarded' });
+      },
+      onError: (err) => {
+        intent.renew();
+        setDiscarding(false);
+        void queryClient.invalidateQueries(trpc.brand.pathFilter());
+        toast({ tone: 'critical', title: 'Not discarded', description: toUiError(err).message });
+      },
+    }),
+  );
+  const doc = next.data?.document ?? null;
+  const changes = doc && appliedDoc ? changedSections(doc, appliedDoc) : null;
+  const origin = doc ? proposalOrigin(doc, appliedDoc) : null;
   return (
-    <section aria-labelledby="version-changes" className="flex flex-col gap-2" data-testid="version-changes">
-      <h3
-        id="version-changes"
-        className="border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-      >
-        Changes in version {version.number}
-      </h3>
-      {(next.isPending || base.isPending) && <Skeleton label="Comparing versions" lines={2} />}
-      {next.isError && <RequestError error={next.error} onRetry={() => void next.refetch()} />}
-      {base.isError && <RequestError error={base.error} onRetry={() => void base.refetch()} />}
-      {changes && changes.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          Version {version.number} has the same content as published version {published.number}.
-        </p>
-      )}
-      {changes && changes.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border text-sm">
-          {changes.map((c) => (
-            <li key={c.key} className="flex items-center justify-between gap-3 py-2">
-              <span>{c.label}</span>
-              <button
-                type="button"
-                onClick={() => onOpen(c.key)}
-                className="text-sm font-medium underline-offset-2 hover:underline"
+    <>
+      <StatusBanner
+        tone="info"
+        title="A proposed update is waiting"
+        description={
+          <>
+            {origin && <span className="block">{origin}</span>}
+            {changes && changes.length > 0 && (
+              <span className="block">It changes {changes.map((c) => c.label).join(', ')}.</span>
+            )}
+            {changes && changes.length === 0 && (
+              <span className="block">It has the same content as the brand system.</span>
+            )}
+            <span className="block">
+              {canSave
+                ? 'Nothing applies until you review and save it.'
+                : 'Nothing applies until a brand manager, admin or owner saves it.'}
+            </span>
+          </>
+        }
+        actions={
+          canSave && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="primary" onClick={onReview}>
+                Review
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setDiscarding(true)}>
+                Discard
+              </Button>
+            </div>
+          )
+        }
+        data-testid="proposed-update"
+      />
+      <Dialog open={discarding} onOpenChange={(o) => !o && setDiscarding(false)}>
+        {discarding && (
+          <DialogContent
+            role="alertdialog"
+            title="Discard the proposed update?"
+            description="The brand system stays as it is. The proposal is closed and cannot be applied later."
+          >
+            <DialogActions>
+              <DialogClose asChild>
+                <Button size="sm" variant="ghost">
+                  Keep it
+                </Button>
+              </DialogClose>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={discard.isPending}
+                onClick={() =>
+                  discard.mutate({ brandId, versionId: proposal.id, expectedVersion: proposal.version })
+                }
               >
-                Open <span aria-hidden="true">→</span>
-                <span className="sr-only">
-                  {' '}
-                  {c.label} in version {version.number}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+                {discard.isPending ? 'Discarding…' : 'Discard'}
+              </Button>
+            </DialogActions>
+          </DialogContent>
+        )}
+      </Dialog>
+    </>
+  );
+}
+
+/** D-22: a proposed update opened in the full editor; saving applies it (with any edits) and closes the proposal. */
+function ProposalReview({
+  brandId,
+  proposal,
+  basedOnVersionId,
+  appliedDoc,
+  onClose,
+  onReload,
+}: {
+  brandId: string;
+  proposal: BrandVersionSummary;
+  basedOnVersionId: string | null;
+  appliedDoc: Doc | null;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  const next = useBrandVersion(brandId, proposal.id);
+  const changes = next.data && appliedDoc ? changedSections(next.data.document, appliedDoc) : null;
+  return (
+    <section aria-labelledby="proposal-review" className="flex flex-col gap-3" data-testid="proposal-review">
+      <div>
+        <h2 id="proposal-review" className="text-lg font-semibold">
+          Proposed update
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {changes && changes.length > 0 ? `Changes ${changes.map((c) => c.label).join(', ')}. ` : ''}
+          Review every section, edit what is not right, then save to apply it.
+        </p>
+      </div>
+      {next.isPending && <Skeleton label="Loading the proposed update" lines={4} />}
+      {next.isError && <RequestError error={next.error} onRetry={() => void next.refetch()} />}
+      {next.data && (
+        <BrandKitEditor
+          document={next.data.document}
+          basedOnVersionId={basedOnVersionId}
+          proposal={{ versionId: next.data.id, expectedVersion: next.data.version }}
+          onClose={onClose}
+          onReload={onReload}
+        />
       )}
-      <PublishImpact brandId={brandId} versionNumber={version.number} />
     </section>
   );
 }
@@ -439,261 +537,6 @@ function useConflict() {
     return ui;
   };
   return { conflict, onError, clear: () => setConflict(null) };
-}
-
-function Versions({ publishedVersionId }: { publishedVersionId: string | null }) {
-  const { brandId } = useBrandContext();
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const versions = useBrandVersions(brandId);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // UX-20: the publish is confirmed over what it reaches; the confirmation waits for that read.
-  const [publishing, setPublishing] = useState<BrandVersionSummary | null>(null);
-  const impact = useBrandVersionImpact(brandId, publishing !== null);
-  const impactKnown = impact.data?.available === true;
-  const selected = useBrandVersion(brandId, selectedId);
-  const { conflict, onError, clear } = useConflict();
-  const invalidate = () => {
-    clear();
-    void queryClient.invalidateQueries(trpc.brand.pathFilter());
-  };
-  const fail = (err: unknown) => {
-    const ui = onError(err);
-    if (ui.kind !== 'conflict')
-      toast({ tone: 'critical', title: 'Version change failed', description: ui.message });
-  };
-  const draftIntent = useIntentKey();
-  const createDraft = useMutation(
-    trpc.brand.versions.createDraft.mutationOptions({
-      ...mutationIntent(draftIntent.key),
-      onSuccess: () => {
-        draftIntent.renew();
-        invalidate();
-      },
-      onError: fail,
-    }),
-  );
-  const submitIntent = useIntentKey();
-  const submitForReview = useMutation(
-    trpc.brand.versions.submitForReview.mutationOptions({
-      ...mutationIntent(submitIntent.key),
-      onSuccess: () => {
-        submitIntent.renew();
-        invalidate();
-      },
-      onError: fail,
-    }),
-  );
-  const publishIntent = useIntentKey();
-  const publish = useMutation(
-    trpc.brand.versions.publish.mutationOptions({
-      ...mutationIntent(publishIntent.key),
-      onSuccess: () => {
-        publishIntent.renew();
-        setPublishing(null);
-        invalidate();
-        toast({ tone: 'good', title: 'Version published' });
-      },
-      onError: fail,
-    }),
-  );
-
-  return (
-    <Panel
-      title="Versions"
-      actions={
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={() => createDraft.mutate({ brandId })}
-          disabled={createDraft.isPending}
-        >
-          New draft
-        </Button>
-      }
-    >
-      {conflict && (
-        <StatusBanner
-          tone="warning"
-          title="Conflict: this version changed since you loaded it"
-          description={conflict.message}
-          actions={
-            <Button size="sm" onClick={invalidate}>
-              Reload
-            </Button>
-          }
-          className="mb-3"
-        />
-      )}
-      {versions.isPending && <Skeleton label="Loading versions" />}
-      {versions.isError && <RequestError error={versions.error} onRetry={() => void versions.refetch()} />}
-      {versions.isSuccess && versions.data.items.length === 0 && (
-        <EmptyState
-          title="No brand versions yet"
-          description="Create a draft, then open it to set the palette, voice, logos and reference imagery. Submit it for review and publish it when it is right."
-        />
-      )}
-      {versions.isSuccess && versions.data.items.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground">
-                <th scope="col" className="py-1 pr-3">
-                  Version
-                </th>
-                <th scope="col" className="py-1 pr-3">
-                  State
-                </th>
-                <th scope="col" className="py-1 pr-3">
-                  Updated
-                </th>
-                <th scope="col" className="py-1">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {versions.data.items.map((v) => (
-                <tr key={v.id} className="border-t border-border">
-                  <td className="py-2 pr-3">
-                    <button
-                      type="button"
-                      className="underline-offset-2 hover:underline"
-                      onClick={() => setSelectedId(v.id)}
-                      aria-expanded={selectedId === v.id}
-                    >
-                      Version {v.number}
-                    </button>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <Badge tone={VERSION_TONE[v.state]}>{versionStateLabel[v.state]}</Badge>{' '}
-                    {v.id === publishedVersionId && <Badge tone="good">Current</Badge>}
-                  </td>
-                  <td className="py-2 pr-3 text-muted-foreground">
-                    {new Date(v.updatedAt).toLocaleString()}
-                  </td>
-                  <td className="py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {(v.state === 'draft' || v.state === 'in_review') && (
-                        <Button size="sm" onClick={() => setSelectedId(v.id)}>
-                          Edit brand kit
-                        </Button>
-                      )}
-                      {v.state === 'draft' && (
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            submitForReview.mutate({ brandId, versionId: v.id, expectedVersion: v.version })
-                          }
-                          disabled={submitForReview.isPending}
-                        >
-                          Submit for review
-                        </Button>
-                      )}
-                      {v.state === 'in_review' && (
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={() => setPublishing(v)}
-                          disabled={publish.isPending}
-                        >
-                          Publish
-                        </Button>
-                      )}
-                      {v.state === 'retired' && (
-                        <span className="text-xs text-muted-foreground">Read only</span>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <Dialog open={publishing !== null} onOpenChange={(open) => !open && setPublishing(null)}>
-            {publishing && (
-              <DialogContent
-                role="alertdialog"
-                title={`Publish version ${publishing.number}?`}
-                description="What publishing this version reaches, before it happens."
-              >
-                <PublishImpact brandId={brandId} versionNumber={publishing.number} />
-                <DialogActions>
-                  <DialogClose asChild>
-                    <Button size="sm" variant="ghost">
-                      Cancel
-                    </Button>
-                  </DialogClose>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() =>
-                      publish.mutate({
-                        brandId,
-                        versionId: publishing.id,
-                        expectedVersion: publishing.version,
-                      })
-                    }
-                    disabled={publish.isPending || !impactKnown}
-                    disabledReason={impactKnown ? undefined : 'Wait for what the publish reaches to load'}
-                  >
-                    {publish.isPending ? 'Publishing…' : `Publish version ${publishing.number}`}
-                  </Button>
-                </DialogActions>
-              </DialogContent>
-            )}
-          </Dialog>
-        </div>
-      )}
-      {selectedId && (
-        <div className="mt-3 rounded-md border border-border bg-muted p-3" aria-live="polite">
-          {selected.isPending && <Skeleton label="Loading version" lines={2} />}
-          {selected.isError && <RequestError error={selected.error} />}
-          {selected.isSuccess && (selected.data.state === 'draft' || selected.data.state === 'in_review') && (
-            <BrandKitEditor key={`${selected.data.id}:${selected.data.version}`} version={selected.data} />
-          )}
-          {selected.isSuccess &&
-            (selected.data.state === 'published' || selected.data.state === 'retired') && (
-              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
-                <dt className="text-muted-foreground">Voice</dt>
-                <dd>{selected.data.document.voice.summary || <em>not written</em>}</dd>
-                <dt className="text-muted-foreground">Colours</dt>
-                <dd>
-                  {selected.data.document.tokens.colours.length === 0 ? (
-                    <em>none</em>
-                  ) : (
-                    <ul className="flex flex-wrap gap-2">
-                      {selected.data.document.tokens.colours.map((c) => (
-                        <li key={c.key} className="flex items-center gap-1">
-                          <span
-                            aria-hidden="true"
-                            className="inline-block h-3 w-3 rounded-sm border border-border"
-                            style={{ background: c.value }}
-                          />
-                          <code className="text-xs">
-                            {c.key} {c.value}
-                          </code>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </dd>
-                <dt className="text-muted-foreground">Type roles</dt>
-                <dd>
-                  {selected.data.document.tokens.typeRoles
-                    .map((t) => `${t.role} ≥ ${t.minSizePx}px`)
-                    .join(', ') || <em>none</em>}
-                </dd>
-                <dt className="text-muted-foreground">Content hash</dt>
-                <dd>
-                  <code className="text-xs">{selected.data.contentHash}</code>
-                </dd>
-              </dl>
-            )}
-        </div>
-      )}
-    </Panel>
-  );
 }
 
 const FACT_TONE: Record<FactState, Tone> = { proposed: 'warning', approved: 'good', revoked: 'neutral' };

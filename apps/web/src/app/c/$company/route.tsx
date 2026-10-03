@@ -63,7 +63,7 @@ export function CompanyRoute() {
                       >
                         {b.status === 'setup' ? 'Setup incomplete' : b.status}
                       </Badge>
-                      {!b.publishedVersionId && <Badge tone="warning">No published standards</Badge>}
+                      {!b.publishedVersionId && <Badge tone="warning">No brand system yet</Badge>}
                     </p>
                     {summary.data && (
                       <BrandCounts

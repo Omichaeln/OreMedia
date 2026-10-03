@@ -127,7 +127,7 @@ export const MANIFEST_CHANGE_TEXT: Record<ManifestChange, string> = {
   exports: 'the rendered files',
   targets: 'the targets',
   websites: 'a website target or its publish mode',
-  brand: 'the brand version or policy',
+  brand: 'the brand system or policy',
 };
 export const manifestChangeText = (changes: readonly ManifestChange[]): string =>
   changes.map((c) => MANIFEST_CHANGE_TEXT[c] ?? c).join(', ');

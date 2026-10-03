@@ -35,9 +35,9 @@ interface Step {
 }
 
 /**
- * R1-D: the onboarding journey as a checklist on the brand home while the brand is in setup: publish the standards
+ * R1-D: the onboarding journey as a checklist on the brand home while the brand is in setup: save the brand system
  * (the one gate), connect a channel or skip it, upload an asset, create the first package, ask for its review.
- * Every row reads the same data its screen does; "Finish setup" marks the brand active once the standards exist.
+ * Every row reads the same data its screen does; "Finish setup" marks the brand active once the brand system is saved.
  */
 export function SetupChecklist() {
   const { companyId, brandId, brand } = useBrandContext();
@@ -70,12 +70,12 @@ export function SetupChecklist() {
   const at = (rest: string) => brandPath(companyId, brandId, rest);
   const standards: Step = {
     key: 'standards',
-    title: 'Publish the brand standards',
+    title: 'Save the brand system',
     detail:
-      'Documents, variants and reviews all read the published version; nothing can be created before it.',
+      'Documents, variants and reviews all read the saved brand system; nothing can be created before it.',
     done: brand.publishedVersionId !== null,
     known: true,
-    href: at('system?section=versions'),
+    href: at('system'),
     action: 'Open brand system',
     optional: false,
   };
@@ -184,7 +184,7 @@ export function SetupChecklist() {
           variant="primary"
           onClick={() => complete.mutate({ brandId, expectedVersion: brand.version })}
           disabled={!standards.done || complete.isPending}
-          disabledReason={standards.done ? undefined : 'Publish the brand standards first'}
+          disabledReason={standards.done ? undefined : 'Save the brand system first'}
         >
           {complete.isPending ? 'Finishing…' : 'Finish setup'}
         </Button>

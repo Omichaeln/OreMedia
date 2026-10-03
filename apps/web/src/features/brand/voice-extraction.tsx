@@ -5,6 +5,7 @@ import { Button, Field, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { brandPath, useBrandContext } from './brand-context';
+import type { BrandVersionSummary } from './use-brand';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { denialOf, toUiError } from '../../lib/errors';
@@ -15,16 +16,19 @@ import { useAgentPrincipals } from '../agents/use-agent-runs';
 const NEEDED_ACTION = 'brand.edit_standards';
 
 /**
- * Spec 8.2 onboarding: an agent reads the imported guidelines and proposes this draft's voice and vocabulary (tone,
- * audiences, preferred and avoided terms, prohibited phrases, examples). The proposal replaces the saved voice only
- * if nobody has changed it since the run started; people review, edit and publish. The principal is picked from
- * those granted the brand (UX-08, as the run form), never typed as an id (RA-07).
+ * Spec 8.2 onboarding, D-22: an agent reads the imported guidelines and suggests the brand's voice and vocabulary
+ * (tone, audiences, preferred and avoided terms, prohibited phrases, examples) as a proposed update. It writes into
+ * the pending proposal when there is one, otherwise into a new one copied from the brand system; the suggestion
+ * replaces the proposal's voice only if nobody has changed it since the run started, and nothing applies until a
+ * person reviews and saves it. The principal is picked from those granted the brand (UX-08, as the run form), never
+ * typed as an id (RA-07).
  */
-export function VoiceExtraction({ versionId, unsaved }: { versionId: string; unsaved: boolean }) {
+export function VoiceExtraction({ proposal }: { proposal: BrandVersionSummary | null }) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
+  const draftIntent = useIntentKey();
   const principals = useAgentPrincipals(brandId);
   const [principalId, setPrincipalId] = useState('');
   const start = useMutation(
@@ -36,13 +40,32 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
       },
     }),
   );
+  // With no proposal waiting, the agent's suggestion needs one to land in: a copy of the brand system.
+  const createProposal = useMutation(
+    trpc.brand.versions.createDraft.mutationOptions({
+      ...mutationIntent(draftIntent.key),
+      onSuccess: () => {
+        draftIntent.renew();
+        void queryClient.invalidateQueries(trpc.brand.pathFilter());
+      },
+    }),
+  );
   const principal = principals.items.find((p) => p.id === principalId) ?? null;
+  // Onboarding writes into a draft; a proposal already submitted for review is applied or discarded first.
+  const blocked = proposal !== null && proposal.state !== 'draft';
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (!principal) return;
-    start.mutate({ brandId, versionId, servicePrincipalId: principal.id });
+    if (!principal || blocked) return;
+    const servicePrincipalId = principal.id;
+    if (proposal) start.mutate({ brandId, versionId: proposal.id, servicePrincipalId });
+    else
+      createProposal.mutate(
+        { brandId },
+        { onSuccess: (res) => start.mutate({ brandId, versionId: res.versionId, servicePrincipalId }) },
+      );
   };
-  const ui = start.isError ? toUiError(start.error) : null;
+  const failed = start.error ?? createProposal.error;
+  const ui = failed ? toUiError(failed) : null;
   const denial = ui ? denialOf(ui) : null;
   const fieldIssue = (path: string) => ui?.details.find((d) => d.path === path)?.issue;
   const forbidden = principals.isError && toUiError(principals.error).kind === 'forbidden';
@@ -51,9 +74,9 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
       <div>
         <h4 className="text-sm font-medium">Extract voice and vocabulary</h4>
         <p className="text-xs text-muted-foreground">
-          An agent reads these guidelines and proposes this draft&apos;s voice: summary, tone, audiences,
-          terms to use and avoid, banned phrases and examples. If anyone edits the voice while it works, their
-          edit is kept and the proposal is dropped.
+          An agent reads the imported guidelines and suggests the brand&apos;s voice: summary, tone,
+          audiences, terms to use and avoid, banned phrases and examples. The suggestion appears as a proposed
+          update to review; nothing changes until someone saves it.
         </p>
       </div>
       {principals.isPending && <Skeleton label="Loading agent principals" lines={1} />}
@@ -105,16 +128,16 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
             type="submit"
             size="sm"
             variant="primary"
-            disabled={start.isPending}
+            disabled={start.isPending || createProposal.isPending}
             disabledReason={
-              unsaved
-                ? 'Save or discard your changes first'
+              blocked
+                ? 'Apply or discard the proposed update first'
                 : principal
                   ? undefined
                   : 'Choose an agent principal first'
             }
           >
-            {start.isPending ? 'Starting…' : 'Extract voice and vocabulary'}
+            {start.isPending || createProposal.isPending ? 'Starting…' : 'Extract voice and vocabulary'}
           </Button>
         </div>
       )}
@@ -147,8 +170,8 @@ export function VoiceExtraction({ versionId, unsaved }: { versionId: string; uns
           title="The agent is reading the guidelines"
           description={
             <>
-              Its proposal replaces this draft&apos;s voice when the run finishes; reopen the version to see
-              it.{' '}
+              Its suggestion appears as a proposed update to review at the top of the brand system when the
+              run finishes.{' '}
               <Link
                 className="underline"
                 to={`${brandPath(companyId, brandId, 'agents')}?run=${encodeURIComponent(start.data.runId)}`}

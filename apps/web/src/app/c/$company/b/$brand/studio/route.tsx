@@ -21,8 +21,8 @@ export function StudioIndexRoute() {
       {brand.status !== 'setup' && !brand.publishedVersionId && (
         <StatusBanner
           tone="warning"
-          title="No published standards"
-          description="No brand standards have been published. Documents cannot be created until a brand version is published."
+          title="No brand system yet"
+          description="The brand has no saved brand system. Documents cannot be created until the brand system is saved."
           actions={
             <Button asChild size="sm">
               <Link to={brandPath(companyId, brandId, 'system')}>Open brand system</Link>
@@ -32,9 +32,7 @@ export function StudioIndexRoute() {
       )}
       <Section id="documents" title="Documents">
         <Documents />
-        <NewDocument
-          disabledReason={brand.publishedVersionId ? undefined : 'Publish brand standards first'}
-        />
+        <NewDocument disabledReason={brand.publishedVersionId ? undefined : 'Save the brand system first'} />
       </Section>
     </main>
   );
