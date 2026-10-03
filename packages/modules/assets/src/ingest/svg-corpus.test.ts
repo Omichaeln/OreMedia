@@ -62,6 +62,11 @@ const SAFE: Array<{ name: string; file: string; keeps: string[] }> = [
     file: svg(`<image width="20" height="20" href="data:image/png;base64,${PNG_1PX}"/>`),
     keeps: ['data:image/png;base64,'],
   },
+  {
+    name: 'the public SVG 1.1 DOCTYPE a design tool writes (dropped; nothing fetches the DTD)',
+    file: `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">${svg('<rect width="9" height="9"/>')}`,
+    keeps: ['<rect'],
+  },
 ];
 
 const UNSAFE: Array<{ name: string; file: string; reason: IngestRejectionReason }> = [
@@ -130,8 +135,8 @@ const UNSAFE: Array<{ name: string; file: string; reason: IngestRejectionReason 
     reason: 'svg_entity_declaration',
   },
   {
-    name: 'a DOCTYPE with an external DTD',
-    file: `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">${svg('<rect width="9" height="9"/>')}`,
+    name: 'an external entity in the DOCTYPE (XXE)',
+    file: `<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]>${svg('<text>&x;</text>')}`,
     reason: 'svg_entity_declaration',
   },
   // Review hardening: bypasses through backslashes, CSS escapes, image-set, namespaced scripts and SMIL.

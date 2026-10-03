@@ -402,7 +402,7 @@ export const INGEST_REJECTION_MESSAGES: Readonly<Record<IngestRejectionReason, s
   svg_remote_image:
     'The SVG shows an image fetched from another address. Embed the image in the file (or convert it to vector) and upload it again.',
   svg_entity_declaration:
-    'The SVG declares a DOCTYPE or XML entities, which are not allowed. Re-export it without the DOCTYPE and upload it again.',
+    'The SVG declares XML entities that point to other files or expand into other entities, which are not allowed. Re-export it as plain SVG (for example Illustrator: Export As > SVG) and upload it again.',
   svg_no_size:
     'The SVG has no size: give the root <svg> a width and height, or a viewBox, and upload it again.',
   font_unparsable: 'The font file could not be read. Upload an OTF, TTF, WOFF or WOFF2 file.',

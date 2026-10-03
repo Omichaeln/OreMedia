@@ -249,11 +249,47 @@ interface SkillVersionSummary {
   state: string;
   version: number;
 }
+/** A graded evaluation as skills.get returns it (insert-only results, newest last). */
+interface SkillEvaluationSummary {
+  skillVersionId: string;
+  modelVersion: string;
+  scores: Record<string, number>;
+  deterministicChecks: Record<string, boolean>;
+  passed: boolean;
+  createdAt: string;
+}
 interface SkillSummary {
   id: string;
   key: string;
   state: string;
   activeVersionId: string | null;
+}
+
+const NO_ERROR = 'no error recorded';
+
+/**
+ * The newest graded result of a version since the request, as one line: the model that graded it, the
+ * deterministic checks that failed and every rubric score (the pass bar is the suite's, applied by the server).
+ */
+export function gradingSummary(
+  evaluations: readonly SkillEvaluationSummary[],
+  versionId: string,
+  since: string,
+): string | null {
+  const latest = evaluations
+    .filter((e) => e.skillVersionId === versionId && e.createdAt >= since)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .at(-1);
+  if (!latest) return null;
+  const failing = Object.entries(latest.deterministicChecks)
+    .filter(([, ok]) => !ok)
+    .map(([check]) => check);
+  const scores = Object.entries(latest.scores).map(([dim, score]) => `${dim}=${score}`);
+  return [
+    `graded below the bar by ${latest.modelVersion}`,
+    `failing checks: ${failing.length ? failing.join(', ') : 'none'}`,
+    `scores: ${scores.length ? scores.join(', ') : 'none'}`,
+  ].join('; ');
 }
 
 /**
@@ -297,12 +333,16 @@ export async function ensureTaskKindSkill(
   }
   /** An id as a failure line prints it: prefix and length only (ids are not secrets, but tokens share the look). */
   const shape = (id: string) => `${id.slice(0, id.indexOf('_') + 1)}… (${id.length} chars)`;
-  const versionsOf = async (): Promise<{ versions: SkillVersionSummary[] } | { error: string }> => {
-    const got = await query<SkillSummary & { versions: SkillVersionSummary[] }>(api, 'skills.get', {
+  const versionsOf = async (): Promise<
+    { versions: SkillVersionSummary[]; evaluations: SkillEvaluationSummary[] } | { error: string }
+  > => {
+    const got = await query<
+      SkillSummary & { versions: SkillVersionSummary[]; evaluations?: SkillEvaluationSummary[] }
+    >(api, 'skills.get', {
       skillId,
     });
     return got.data
-      ? { versions: got.data.versions }
+      ? { versions: got.data.versions, evaluations: got.data.evaluations ?? [] }
       : {
           error: `skills.get for the ${source} tenant-scope skill ${shape(skillId)}: ${got.error || 'HTTP 200 without a skill'}`,
         };
@@ -317,7 +357,7 @@ export async function ensureTaskKindSkill(
     const failed = trail.data?.items.find(
       (a) => a.action === 'skill.version.evaluate' && a.metadata?.['reason'] === 'failed',
     );
-    return failed ? String(failed.metadata?.['error'] ?? 'no error recorded') : null;
+    return failed ? String(failed.metadata?.['error'] ?? NO_ERROR) : null;
   };
   const deadline = Date.now() + opts.timeoutMs;
   let requestedAt: string | null = null;
@@ -333,8 +373,12 @@ export async function ensureTaskKindSkill(
       // Our own request ran and worker-core returned the version to draft: the grading failed. Report why rather
       // than requesting again (every run burns model budget) and timing out without a cause.
       const error = await failureOf(version.id, requestedAt);
-      if (error !== null)
-        return { ok: false, reason: `the ${key} evaluation failed (version ${version.number}): ${error}` };
+      if (error !== null) {
+        // A grading that ran but scored below the bar records no error: name what failed from its result.
+        const graded = gradingSummary(read.evaluations, version.id, requestedAt);
+        const why = error === NO_ERROR && graded ? graded : error;
+        return { ok: false, reason: `the ${key} evaluation failed (version ${version.number}): ${why}` };
+      }
     }
     if (version.state === 'in_review') {
       const done = await mutate(api, 'skills.versions.publish', {
