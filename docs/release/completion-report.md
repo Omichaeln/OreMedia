@@ -161,7 +161,7 @@ in Railway or the platform consoles and never pass through engineering or this r
        is why the acceptance job runs inside the staging project rather than from engineering's side. Where: the network access setting of the engineering sandbox environment. Engineering then runs
        smoke and acceptance checks against staging directly.
 7. [ ] **Staging OpenRouter key.** Every staging grading fails with `The model provider rejected the request
-    (401: Missing Authentication header)`, before and after the OpenRouter adapters moved to undici's fetch, so
+ (401: Missing Authentication header)`, before and after the OpenRouter adapters moved to undici's fetch, so
        the staging key value is not a working OpenRouter key. It blocks the passing model evaluation, the last open
        part of RA-14. Where: Railway, `OreMedia Staging`, worker-core, `OPENROUTER_API_KEY_REF`: set a valid
        OpenRouter API key, ideally one scoped to staging with a spend limit. Engineering then redeploys the
