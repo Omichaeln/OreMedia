@@ -5,6 +5,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import {
   channelConnections,
@@ -57,6 +58,11 @@ const hashCanonical = (v: unknown) => createHash('sha256').update(JSON.stringify
 const NEW_TABLES: MySqlTable[] = [publicationRemoteChanges];
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   passwordSetupTokens,
   planItems,
   brandDestinations,

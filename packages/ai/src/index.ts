@@ -107,6 +107,14 @@ export {
 } from './tool-dispatcher';
 export { redactForRecord } from './redact';
 export {
+  buildBrandAssistPrompt,
+  createBrandAssistModel,
+  brandAssistModelGate,
+  parseModelJson,
+  SECTION_EXAMPLES,
+  type BrandAssistPrompt,
+} from './brand-assist';
+export {
   MemoryProviderJobStore,
   registerProviderJobStore,
   providerJobs,

@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { contentPackages, planItems } from '@oremedia/db/schema/content';
 import {
   brandDestinations,
@@ -27,6 +28,11 @@ const PREVIOUS_HEAD = '0013_password_setup_tokens';
 const NEW_TABLES: MySqlTable[] = [planItems];
 /** Added after 0014 (R2-0): absent at both heads this suite runs at, so never snapshotted. */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   brandDestinations,
   sourceUsePolicies,
   pendingDestinationGrants,

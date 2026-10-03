@@ -5,7 +5,12 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
-import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
+import {
+  brandAssistJobs,
+  brandGuidelineAuthors,
+  brandSources,
+  brandSuggestions,
+} from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
 import {
@@ -30,6 +35,11 @@ const PREVIOUS_HEAD = '0005_lazy_redwing';
 const NEW_TABLES: MySqlTable[] = [brandGuidelineAuthors];
 /** Added by later migrations (0010 to 0013: their migration-*-roll-forward tests). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   pendingChannelGrants,
   publicationRemoteChanges,
   passwordSetupTokens,

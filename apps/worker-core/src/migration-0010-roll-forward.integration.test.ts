@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import {
   channelConnections,
@@ -45,6 +46,11 @@ const PREVIOUS_HEAD = '0009_brand_classification';
 const NEW_TABLES: MySqlTable[] = [pendingChannelGrants];
 /** Added by later migrations (0011 and 0013: their migration-*-roll-forward tests). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   publicationRemoteChanges,
   passwordSetupTokens,
   planItems,

@@ -1,6 +1,14 @@
 import { sql } from 'drizzle-orm';
 import { defaultPolicyDocument, emptyBrandSystemDocument } from '@oremedia/contracts/brand';
-import { approvedFacts, brandObjectives, brandVersions, policyVersions } from '@oremedia/db/schema/brand';
+import {
+  approvedFacts,
+  brandAssistJobs,
+  brandObjectives,
+  brandSources,
+  brandSuggestions,
+  brandVersions,
+  policyVersions,
+} from '@oremedia/db/schema/brand';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { SeedExtension } from '../cross-tenant-inputs';
@@ -52,5 +60,73 @@ export const BRAND_SEED: SeedExtension = async (db, { tenantId, brandIds, ownerU
     state: 'draft',
     createdByUserId: ownerUserId,
   });
-  return { brandVersionId, factId, factId2, objectiveId, policyVersionId };
+  // BSC-4 (migration 0026): a source, an assist job over it and one suggestion, so a foreign caller has their ids.
+  const brandSourceId = newId('brandSource');
+  const brandAssistJobId = newId('brandAssistJob');
+  const brandSuggestionId = newId('brandSuggestion');
+  const assistAtHead = await db.execute(
+    sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'brand_sources'`,
+  );
+  if (Array.isArray(assistAtHead[0]) && assistAtHead[0].length > 0) {
+    await db.insert(brandSources).values({
+      id: brandSourceId,
+      tenantId,
+      brandId,
+      kind: 'text',
+      title: 'Seeded notes',
+      status: 'captured',
+      text: 'Seeded source text.',
+      charCount: 19,
+      createdByKind: 'user',
+      createdById: ownerUserId,
+    });
+    await db.insert(brandAssistJobs).values({
+      id: brandAssistJobId,
+      tenantId,
+      brandId,
+      kind: 'setup',
+      sections: ['voice'],
+      sourceIds: [brandSourceId],
+      preserve: [],
+      state: 'ready',
+      progress: {
+        stages: {
+          capturing: { status: 'skipped', done: 0, total: 0 },
+          extracting: { status: 'skipped', done: 0, total: 0 },
+          proposing: { status: 'done', done: 1, total: 1 },
+        },
+        sections: { voice: { status: 'ready', suggestions: 1, reason: null } },
+      },
+      questions: [{ id: 'q1', section: 'voice', question: 'Seeded question?', why: 'Seed.', answer: null }],
+      requestKey: hashCanonical({ seed: brandAssistJobId }),
+      createdByKind: 'user',
+      createdById: ownerUserId,
+    });
+    await db.insert(brandSuggestions).values({
+      id: brandSuggestionId,
+      tenantId,
+      brandId,
+      jobId: brandAssistJobId,
+      section: 'voice',
+      path: 'voice.summary',
+      op: 'replace',
+      payload: 'Seeded summary.',
+      provenance: { origin: 'suggested' },
+      rationale: 'Seed.',
+      conflicts: [],
+      evidence: [],
+      fingerprint: hashCanonical({ seed: brandSuggestionId }),
+      status: 'pending',
+    });
+  }
+  return {
+    brandVersionId,
+    factId,
+    factId2,
+    objectiveId,
+    policyVersionId,
+    brandSourceId,
+    brandAssistJobId,
+    brandSuggestionId,
+  };
 };

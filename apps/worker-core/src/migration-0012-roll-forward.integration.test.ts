@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { conversations, messages, responseDrafts } from '@oremedia/db/schema/community';
 import { channelConnections, credentialRefs } from '@oremedia/db/schema/publishing';
@@ -28,6 +29,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0011_remote_post_changes';
 /** Added by later migrations (0013: migration-0013-roll-forward.integration.test.ts). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   passwordSetupTokens,
   planItems,
   brandDestinations,

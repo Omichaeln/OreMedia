@@ -14,7 +14,8 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
-import { assetService, uploadsCapability } from '@oremedia/module-assets';
+import { assetService, storage, uploadsCapability } from '@oremedia/module-assets';
+import { UPLOAD_INTENT_TTL_SEC } from '@oremedia/contracts/assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
@@ -24,6 +25,9 @@ import {
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
+  registerAssistModelGate,
+  registerSourceAssetResolver,
+  registerSourceUploadStore,
 } from '@oremedia/module-brand';
 import {
   creativeService,
@@ -90,6 +94,7 @@ import {
 } from '@oremedia/module-review';
 import { registerBrandChecker as registerSkillBrandChecker, skillsService } from '@oremedia/module-skills';
 import {
+  brandAssistModelGate,
   registerContentToolSource,
   registerIntelligenceToolSource,
   registerPublishingToolSource,
@@ -340,6 +345,17 @@ export function composeModules(): void {
     const publications = await publicationService.scheduledForBrand(brandId, tx);
     return { ...scope, truncated: scope.truncated || publications.length >= 200, publications };
   });
+  // BSC-4: an assist estimate and start read the deployment's model and the tenant's routing policy; documents are
+  // uploaded to the assets module's store (quarantine prefix, deleted once read) and assets are described by it.
+  registerAssistModelGate(brandAssistModelGate());
+  registerSourceUploadStore({
+    signUpload: (key, { contentType }) =>
+      storage().signUploadUrl(key, { contentType, expiresInSec: UPLOAD_INTENT_TTL_SEC }),
+    delete: (key) => storage().deleteObject(key),
+  });
+  registerSourceAssetResolver((brandId, assetVersionId, tx) =>
+    assetService.describeForSource(brandId, assetVersionId, tx),
+  );
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }

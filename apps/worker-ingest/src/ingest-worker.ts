@@ -9,7 +9,9 @@ import {
   createDestinationReportActivities,
   createMetricCollectionActivities,
   createSeoAuditActivities,
+  createBrandSourceCaptureActivities,
 } from '@oremedia/activities';
+import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import {
   DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
   DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
@@ -71,6 +73,8 @@ export async function startIngestWorkers(
       ...createMetricCollectionActivities(createMetricCollectionRuntime()),
       ...createDestinationReportActivities(destinationRuntime.reports),
       ...createSeoAuditActivities(destinationRuntime.audit),
+      // BSC-4: website sources of brand assist jobs are read here (the workers with outbound fetch).
+      ...createBrandSourceCaptureActivities(createBrandAssistRuntime()),
     },
     maxConcurrentActivityTaskExecutions: Number(env['INGEST_METRICS_CONCURRENCY'] ?? 8),
   });

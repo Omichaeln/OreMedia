@@ -9,7 +9,12 @@ import {
   type NativeConnectionOptions,
   type WorkerOptions,
 } from '@temporalio/worker';
-import { createAssetIngestActivities, createRenderJobActivities } from '@oremedia/activities';
+import {
+  createAssetIngestActivities,
+  createBrandSourceExtractActivities,
+  createRenderJobActivities,
+} from '@oremedia/activities';
+import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
 import { configureStorage, createStorageFromEnv, storage, uploadsCapability } from '@oremedia/module-assets';
@@ -27,7 +32,8 @@ import { creativeRenderJobStore } from './creative-store';
 /**
  * worker-render (spec 4.4, 11.5): the isolated worker pool for CPU/memory-heavy and untrusted-input work. Two
  * Temporal workers share one connection: task queue `render` (renderJobWorkflowV1: headless Chromium) and task
- * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads). No credential
+ * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads; BSC-4 document
+ * text extraction for brand assist jobs). No credential
  * broker access; egress is restricted to the object store at the network layer. Workflow code is pre-bundled at
  * build time (tsup.config.ts → dist/workflows.<queue>.js) because production images carry no sources. The process
  * entry is main.ts, which checks the configuration before this module (and its dependencies) load.
@@ -109,7 +115,15 @@ const mediaWorker = await Worker.create({
   namespace,
   taskQueue: 'media',
   ...workflowsFor('media'),
-  activities: createAssetIngestActivities({ storage: storage() }),
+  activities: {
+    ...createAssetIngestActivities({ storage: storage() }),
+    // BSC-4: the text of documents supplied to brand assist jobs, read with the other untrusted-input parsers.
+    ...createBrandSourceExtractActivities(
+      createBrandAssistRuntime({
+        objects: { get: (key) => storage().getObject(key), delete: (key) => storage().deleteObject(key) },
+      }),
+    ),
+  },
   maxConcurrentActivityTaskExecutions: Number(process.env['MEDIA_CONCURRENCY'] ?? 4),
 });
 log.info({ status: RENDERER_VERSION }, 'worker-render polling task queues render and media');

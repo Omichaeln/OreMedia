@@ -1,0 +1,105 @@
+CREATE TABLE `brand_assist_jobs` (
+	`id` varchar(32) NOT NULL,
+	`tenant_id` varchar(32) NOT NULL,
+	`brand_id` varchar(32) NOT NULL,
+	`kind` enum('setup','section') NOT NULL,
+	`sections` json NOT NULL,
+	`instruction` text,
+	`source_ids` json NOT NULL,
+	`preserve` json NOT NULL,
+	`answers` json,
+	`parent_job_id` varchar(32),
+	`alternatives_for_job_id` varchar(32),
+	`state` enum('queued','capturing','extracting','proposing','ready','partially_ready','failed','cancelled') NOT NULL,
+	`progress` json NOT NULL,
+	`questions` json NOT NULL,
+	`estimate_micros` bigint NOT NULL DEFAULT 0,
+	`reserved_micros` bigint NOT NULL DEFAULT 0,
+	`spent_micros` bigint NOT NULL DEFAULT 0,
+	`budget_reservation_id` varchar(32),
+	`error` varchar(500),
+	`request_key` char(64) NOT NULL,
+	`cancel_requested_at` datetime(3),
+	`created_by_kind` enum('user','service_principal') NOT NULL,
+	`created_by_id` varchar(32) NOT NULL,
+	`started_at` datetime(3),
+	`finished_at` datetime(3),
+	`created_at` datetime(3) NOT NULL,
+	`updated_at` datetime(3) NOT NULL,
+	`version` int NOT NULL DEFAULT 0,
+	CONSTRAINT `brand_assist_jobs_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_brand_assist_job_tbi` UNIQUE(`tenant_id`,`brand_id`,`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `brand_sources` (
+	`id` varchar(32) NOT NULL,
+	`tenant_id` varchar(32) NOT NULL,
+	`brand_id` varchar(32) NOT NULL,
+	`kind` enum('url','document','text','brand_asset') NOT NULL,
+	`title` varchar(200) NOT NULL,
+	`url` varchar(1000),
+	`file_name` varchar(255),
+	`mime` varchar(120),
+	`asset_id` varchar(32),
+	`asset_version_id` varchar(32),
+	`storage_key` varchar(300),
+	`status` enum('pending','captured','unsupported','inaccessible','failed') NOT NULL,
+	`reason` varchar(40),
+	`detail` varchar(300),
+	`content_hash` char(64),
+	`duplicate_of_source_id` varchar(32),
+	`byte_size` int,
+	`char_count` int,
+	`truncated` enum('yes','no') NOT NULL DEFAULT 'no',
+	`text` mediumtext,
+	`pages` json,
+	`captured_at` datetime(3),
+	`removed_at` datetime(3),
+	`created_by_kind` enum('user','service_principal') NOT NULL,
+	`created_by_id` varchar(32) NOT NULL,
+	`created_at` datetime(3) NOT NULL,
+	`updated_at` datetime(3) NOT NULL,
+	`version` int NOT NULL DEFAULT 0,
+	CONSTRAINT `brand_sources_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_brand_source_tbi` UNIQUE(`tenant_id`,`brand_id`,`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `brand_suggestions` (
+	`id` varchar(32) NOT NULL,
+	`tenant_id` varchar(32) NOT NULL,
+	`brand_id` varchar(32) NOT NULL,
+	`job_id` varchar(32) NOT NULL,
+	`section` enum('voice','messaging','vocabulary','writing','examples','templates','channels','facts') NOT NULL,
+	`path` varchar(400) NOT NULL,
+	`op` enum('add','replace','remove') NOT NULL,
+	`payload` json,
+	`provenance` json NOT NULL,
+	`rationale` varchar(1000) NOT NULL,
+	`uncertainty` varchar(500),
+	`conflicts` json NOT NULL,
+	`evidence` json NOT NULL,
+	`fingerprint` char(64) NOT NULL,
+	`against_user_item` enum('yes','no') NOT NULL DEFAULT 'no',
+	`status` enum('pending','accepted','edited','rejected','superseded') NOT NULL,
+	`decided_by_id` varchar(32),
+	`decided_at` datetime(3),
+	`batch_id` varchar(32),
+	`applied_proposal_version_id` varchar(32),
+	`applied_before` json,
+	`applied_value` json,
+	`fact_id` varchar(32),
+	`created_at` datetime(3) NOT NULL,
+	`updated_at` datetime(3) NOT NULL,
+	`version` int NOT NULL DEFAULT 0,
+	CONSTRAINT `brand_suggestions_id` PRIMARY KEY(`id`),
+	CONSTRAINT `uq_brand_suggestion_tbi` UNIQUE(`tenant_id`,`brand_id`,`id`)
+);
+--> statement-breakpoint
+ALTER TABLE `brand_assist_jobs` ADD CONSTRAINT `fk_brand_assist_job_brand` FOREIGN KEY (`tenant_id`,`brand_id`) REFERENCES `brands`(`tenant_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `brand_sources` ADD CONSTRAINT `fk_brand_source_brand` FOREIGN KEY (`tenant_id`,`brand_id`) REFERENCES `brands`(`tenant_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `brand_suggestions` ADD CONSTRAINT `fk_brand_suggestion_job` FOREIGN KEY (`tenant_id`,`brand_id`,`job_id`) REFERENCES `brand_assist_jobs`(`tenant_id`,`brand_id`,`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX `ix_brand_assist_job_request` ON `brand_assist_jobs` (`tenant_id`,`brand_id`,`request_key`,`state`);--> statement-breakpoint
+CREATE INDEX `ix_brand_source_hash` ON `brand_sources` (`tenant_id`,`brand_id`,`content_hash`);--> statement-breakpoint
+CREATE INDEX `ix_brand_suggestion_job` ON `brand_suggestions` (`tenant_id`,`brand_id`,`job_id`,`section`);--> statement-breakpoint
+CREATE INDEX `ix_brand_suggestion_fingerprint` ON `brand_suggestions` (`tenant_id`,`brand_id`,`fingerprint`,`status`);--> statement-breakpoint
+CREATE INDEX `ix_brand_suggestion_batch` ON `brand_suggestions` (`tenant_id`,`brand_id`,`batch_id`);

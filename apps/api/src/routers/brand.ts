@@ -30,7 +30,27 @@ import {
   BrandSystemSave,
   BrandProposalDiscard,
 } from '@oremedia/contracts/brand';
-import { brandService } from '@oremedia/module-brand';
+import {
+  BrandAssistAnswer,
+  BrandAssistCancel,
+  BrandAssistGet,
+  BrandAssistList,
+  BrandAssistRequest,
+  BrandHistoryCompare,
+  BrandHistoryList,
+  BrandHistoryRestore,
+  BrandSourceAdd,
+  BrandSourceGet,
+  BrandSourceList,
+  BrandSourceRemove,
+  BrandSuggestionAccept,
+  BrandSuggestionAcceptAll,
+  BrandSuggestionEdit,
+  BrandSuggestionList,
+  BrandSuggestionReject,
+  BrandSuggestionUndo,
+} from '@oremedia/contracts/brand-assist';
+import { brandAssistService, brandService } from '@oremedia/module-brand';
 import { idempotent } from '@oremedia/module-operations';
 import { publicationService } from '@oremedia/module-publishing';
 import { reviewService } from '@oremedia/module-review';
@@ -225,6 +245,111 @@ export const brandRouter = router({
       .input(BrandGuidelinesImport)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => brandService.guidelines.import(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+
+  /** BSC-4: material supplied for AI-assisted setup (websites, documents, pasted text, the brand's own assets). */
+  sources: router({
+    add: tenantMutation
+      .input(BrandSourceAdd)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.sources.add(ctx.tenant.actor, input, tx)),
+      ),
+    list: tenantQuery
+      .input(BrandSourceList)
+      .query(({ ctx, input }) => brandAssistService.sources.list(ctx.tenant.actor, input)),
+    get: tenantQuery
+      .input(BrandSourceGet)
+      .query(({ ctx, input }) => brandAssistService.sources.get(ctx.tenant.actor, input)),
+    remove: tenantMutation
+      .input(BrandSourceRemove)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.sources.remove(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+
+  /** BSC-4 / BSC-5: AI assist jobs (guided setup, the section and overall assistants); they only ever suggest. */
+  assist: router({
+    estimate: tenantQuery
+      .input(BrandAssistRequest)
+      .query(({ ctx, input }) => brandAssistService.assist.estimate(ctx.tenant.actor, input)),
+    start: tenantMutation
+      .input(BrandAssistRequest)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.assist.start(ctx.tenant.actor, input, tx)),
+      ),
+    get: tenantQuery
+      .input(BrandAssistGet)
+      .query(({ ctx, input }) => brandAssistService.assist.get(ctx.tenant.actor, input)),
+    list: tenantQuery
+      .input(BrandAssistList)
+      .query(({ ctx, input }) => brandAssistService.assist.list(ctx.tenant.actor, input)),
+    cancel: tenantMutation
+      .input(BrandAssistCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.assist.cancel(ctx.tenant.actor, input, tx)),
+      ),
+    answer: tenantMutation
+      .input(BrandAssistAnswer)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.assist.answer(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+
+  /** BSC-4: a person accepts, edits or rejects each suggestion; accepted ones land in the pending proposal. */
+  suggestions: router({
+    list: tenantQuery
+      .input(BrandSuggestionList)
+      .query(({ ctx, input }) => brandAssistService.suggestions.list(ctx.tenant.actor, input)),
+    accept: tenantMutation
+      .input(BrandSuggestionAccept)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandAssistService.suggestions.accept(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    edit: tenantMutation
+      .input(BrandSuggestionEdit)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandAssistService.suggestions.edit(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    reject: tenantMutation
+      .input(BrandSuggestionReject)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandAssistService.suggestions.reject(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    acceptAll: tenantMutation
+      .input(BrandSuggestionAcceptAll)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandAssistService.suggestions.acceptAll(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    undo: tenantMutation
+      .input(BrandSuggestionUndo)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandAssistService.suggestions.undo(ctx.tenant.actor, input, tx),
+        ),
+      ),
+  }),
+
+  /** BSC-5: the applied versions, compared with the brand system now and restored through a normal save. */
+  history: router({
+    list: tenantQuery
+      .input(BrandHistoryList)
+      .query(({ ctx, input }) => brandAssistService.history.list(ctx.tenant.actor, input)),
+    compare: tenantQuery
+      .input(BrandHistoryCompare)
+      .query(({ ctx, input }) => brandAssistService.history.compare(ctx.tenant.actor, input)),
+    restore: tenantMutation
+      .input(BrandHistoryRestore)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandAssistService.history.restore(ctx.tenant.actor, input, tx)),
       ),
   }),
 

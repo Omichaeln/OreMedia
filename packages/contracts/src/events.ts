@@ -72,5 +72,9 @@ export const EVENT_TYPES = {
   // BSC-3 (appended; additive only): an approved fact's validity ended; emitted once by the daily fact sweep, which
   // holds the scheduled work citing it itself (informational: no route)
   'brand.fact_expired': 1,
+  // BSC-4 (appended; additive only): a person asked for an assist job (brandAssistWorkflowV1 reads the sources and
+  // proposes suggestions), and asked to cancel one (relayed to the running workflow as a signal)
+  'brand.assist_requested': 1,
+  'brand.assist_cancel_requested': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

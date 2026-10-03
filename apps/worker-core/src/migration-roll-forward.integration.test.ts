@@ -10,7 +10,12 @@ import { usageLedger } from '@oremedia/db/schema/billing';
 import { featureFlags } from '@oremedia/db/schema/operations';
 import { authEvents, externalIdentities, passwordSetupTokens } from '@oremedia/db/schema/access';
 import { generatedUploads } from '@oremedia/db/schema/assets';
-import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
+import {
+  brandAssistJobs,
+  brandGuidelineAuthors,
+  brandSources,
+  brandSuggestions,
+} from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
@@ -45,6 +50,11 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
 
 /** Added by later migrations (0003 to 0016). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0026)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   externalIdentities,
   authEvents,
   generatedUploads,
