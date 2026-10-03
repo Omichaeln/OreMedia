@@ -35,9 +35,29 @@ export interface ByteRange {
   end: number;
 }
 
+/**
+ * BSC-2: a signed GET that the browser saves rather than shows: the store answers with `Content-Disposition:
+ * attachment` and this content type, whatever the object was stored with.
+ */
+export interface DownloadDisposition {
+  filename: string;
+  contentType: string;
+}
+
+export interface SignedDownloadOptions {
+  expiresInSec: number;
+  download?: DownloadDisposition;
+}
+
+/** RFC 6266 attachment header: an ASCII fallback name and the UTF-8 name. */
+export function attachmentDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 export interface StorageProvider {
   signUploadUrl(key: string, opts: { contentType: string; expiresInSec: number }): Promise<SignedUrl>;
-  signDownloadUrl(key: string, opts: { expiresInSec: number }): Promise<SignedUrl>;
+  signDownloadUrl(key: string, opts: SignedDownloadOptions): Promise<SignedUrl>;
   headObject(key: string): Promise<StorageObjectHead | null>;
   getObject(key: string, range?: ByteRange): Promise<Buffer | null>;
   putObject(key: string, body: Buffer, opts: { contentType: string }): Promise<void>;
@@ -88,7 +108,7 @@ abstract class TenantPrefixedStorage implements StorageProvider {
     assertTenantKey(key);
     return this.doSignUploadUrl(key, opts);
   }
-  async signDownloadUrl(key: string, opts: { expiresInSec: number }): Promise<SignedUrl> {
+  async signDownloadUrl(key: string, opts: SignedDownloadOptions): Promise<SignedUrl> {
     assertTenantKey(key);
     return this.doSignDownloadUrl(key, opts);
   }
@@ -118,7 +138,7 @@ abstract class TenantPrefixedStorage implements StorageProvider {
     key: string,
     opts: { contentType: string; expiresInSec: number },
   ): Promise<SignedUrl>;
-  protected abstract doSignDownloadUrl(key: string, opts: { expiresInSec: number }): Promise<SignedUrl>;
+  protected abstract doSignDownloadUrl(key: string, opts: SignedDownloadOptions): Promise<SignedUrl>;
   protected abstract doHeadObject(key: string): Promise<StorageObjectHead | null>;
   protected abstract doGetObject(key: string, range?: ByteRange): Promise<Buffer | null>;
   protected abstract doPutObject(key: string, body: Buffer, opts: { contentType: string }): Promise<void>;
@@ -174,10 +194,19 @@ export class S3StorageProvider extends TenantPrefixedStorage {
     );
     return { url, expiresAt: new Date(Date.now() + opts.expiresInSec * 1000) };
   }
-  protected async doSignDownloadUrl(key: string, opts: { expiresInSec: number }) {
+  protected async doSignDownloadUrl(key: string, opts: SignedDownloadOptions) {
     const url = await getSignedUrl(
       this.client,
-      new GetObjectCommand({ Bucket: this.bucketForKey(key), Key: key }),
+      new GetObjectCommand({
+        Bucket: this.bucketForKey(key),
+        Key: key,
+        ...(opts.download
+          ? {
+              ResponseContentDisposition: attachmentDisposition(opts.download.filename),
+              ResponseContentType: opts.download.contentType,
+            }
+          : {}),
+      }),
       { expiresIn: opts.expiresInSec },
     );
     return { url, expiresAt: new Date(Date.now() + opts.expiresInSec * 1000) };
@@ -247,9 +276,12 @@ export class MemoryStorageProvider extends TenantPrefixedStorage {
     const expiresAt = new Date(Date.now() + opts.expiresInSec * 1000);
     return { url: `memory://upload/${key}?expires=${expiresAt.getTime()}`, expiresAt };
   }
-  protected async doSignDownloadUrl(key: string, opts: { expiresInSec: number }) {
+  protected async doSignDownloadUrl(key: string, opts: SignedDownloadOptions) {
     const expiresAt = new Date(Date.now() + opts.expiresInSec * 1000);
-    return { url: `memory://download/${key}?expires=${expiresAt.getTime()}`, expiresAt };
+    const download = opts.download
+      ? `&response-content-disposition=${encodeURIComponent(attachmentDisposition(opts.download.filename))}&response-content-type=${encodeURIComponent(opts.download.contentType)}`
+      : '';
+    return { url: `memory://download/${key}?expires=${expiresAt.getTime()}${download}`, expiresAt };
   }
   protected async doHeadObject(key: string) {
     const o = this.objects.get(key);

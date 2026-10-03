@@ -232,7 +232,11 @@ export const PURPOSE_KINDS: Readonly<Record<AssetPurpose, readonly AssetKind[]>>
 /** Purposes that require recorded usage rights; 'unknown' rights make an asset ineligible for them. */
 export const PURPOSES_REQUIRING_RIGHTS: readonly AssetPurpose[] = ['creative', 'logo'];
 
-export const DerivativePurpose = z.enum(['thumbnail', 'preview', 'web']);
+/**
+ * Renditions kept for a version at ingest. `png` (BSC-2) is a transparent PNG of an SVG, for destinations that accept
+ * rasters only (website articles); raster uploads have none, their original already is one.
+ */
+export const DerivativePurpose = z.enum(['thumbnail', 'preview', 'web', 'png']);
 export type DerivativePurpose = z.infer<typeof DerivativePurpose>;
 
 export const UploadIntentComplete = z.object({ intentId: z.string() });
@@ -303,6 +307,22 @@ export const MediaSignedUrlRequest = z.object({
   derivative: z.union([z.literal('original'), DerivativePurpose]).default('preview'),
 });
 
+/** The widths a PNG download of a logo (or any image) is offered at, in pixels. */
+export const DOWNLOAD_PNG_WIDTHS = [256, 512, 1024, 2048] as const;
+export type DownloadPngWidth = (typeof DOWNLOAD_PNG_WIDTHS)[number];
+
+/**
+ * BSC-2: a file to save, not to show. A 5-minute signed GET whose response is an attachment with the right type and a
+ * file name from the asset's name: the original as uploaded (an SVG stays vector), or a PNG at one of the offered
+ * widths drawn from it (transparency kept). Never served inline from the API's origin.
+ */
+export const AssetDownloadRequest = z.object({
+  assetVersionId: z.string(),
+  format: z.enum(['original', 'png']),
+  width: z.union([z.literal(256), z.literal(512), z.literal(1024), z.literal(2048)]).optional(),
+});
+export type AssetDownloadRequest = z.infer<typeof AssetDownloadRequest>;
+
 /** Spec 9.2 reasons an asset is not eligible; `authoriseUse` surfaces them in RIGHTS_INELIGIBLE. */
 export const EligibilityReason = z.enum([
   'state_not_approved',
@@ -328,6 +348,15 @@ export const IngestRejectionReason = z.enum([
   'svg_unparsable',
   'svg_unsafe_content',
   'svg_unrenderable',
+  // BSC-2: the specific reason an SVG is refused, so the uploader is told what to remove (svg_unsafe_content remains
+  // for any other active content and for intents rejected before these existed).
+  'svg_script',
+  'svg_event_handler',
+  'svg_external_reference',
+  'svg_embedded_content',
+  'svg_remote_image',
+  'svg_entity_declaration',
+  'svg_no_size',
   'font_unparsable',
   'font_collection_unsupported',
   'pixel_limit_exceeded',
@@ -338,6 +367,60 @@ export const IngestRejectionReason = z.enum([
   'duration_exceeds_cap',
 ]);
 export type IngestRejectionReason = z.infer<typeof IngestRejectionReason>;
+
+/**
+ * What the uploader is told when ingest refuses a file (BSC-2): the problem and what to do about it, in words a
+ * designer acts on. Shown in place of the reason code wherever an upload's outcome is shown.
+ */
+export const INGEST_REJECTION_MESSAGES: Readonly<Record<IngestRejectionReason, string>> = {
+  object_missing: 'The upload did not arrive. Try uploading the file again.',
+  exceeds_cap:
+    'The file is larger than allowed for its type (2 MB for SVG, 50 MB for images, 10 MB for fonts). Export a smaller file and upload it again.',
+  type_unrecognised: 'The file type could not be recognised. Upload SVG, PNG, WebP or JPEG.',
+  type_mismatch:
+    'This type of file cannot be used here. Logos and icons take SVG, PNG or WebP; photos take PNG, JPEG or WebP.',
+  declared_mime_mismatch:
+    'The file’s contents do not match its name or type. Re-export it from your design tool and upload it again.',
+  archive_rejected: 'Archives (zip and similar) cannot be uploaded. Upload the files inside one by one.',
+  malware_detected: 'The virus scanner flagged this file. It was deleted and not catalogued.',
+  scanner_unavailable:
+    'The virus scanner could not check the file yet. It is held and checked again shortly; nothing is needed from you.',
+  svg_unparsable:
+    'The SVG could not be read. Re-export it from your design tool as plain SVG and upload it again.',
+  svg_unsafe_content:
+    'The SVG contains active content that is not allowed in brand files. Re-export it as plain SVG (outlines, fills, gradients) and upload it again.',
+  svg_unrenderable:
+    'The SVG could not be drawn. Re-export it from your design tool as plain SVG (convert text to outlines) and upload it again.',
+  svg_script:
+    'The SVG contains a script (a <script> element or a javascript: link). Remove it, or re-export as plain SVG, and upload it again.',
+  svg_event_handler:
+    'The SVG contains event handler attributes (onload, onclick and similar), which run code. Remove them, or re-export as plain SVG, and upload it again.',
+  svg_external_reference:
+    'The SVG loads something from another address (an external link, url(http…) or @import in its styles). Embed or remove what it points to so the file is self-contained, and upload it again.',
+  svg_embedded_content:
+    'The SVG embeds another document or player (foreignObject, iframe, object, or a data: address that is not an image). Remove it, or re-export as plain SVG, and upload it again.',
+  svg_remote_image:
+    'The SVG shows an image fetched from another address. Embed the image in the file (or convert it to vector) and upload it again.',
+  svg_entity_declaration:
+    'The SVG declares a DOCTYPE or XML entities, which are not allowed. Re-export it without the DOCTYPE and upload it again.',
+  svg_no_size:
+    'The SVG has no size: give the root <svg> a width and height, or a viewBox, and upload it again.',
+  font_unparsable: 'The font file could not be read. Upload an OTF, TTF, WOFF or WOFF2 file.',
+  font_collection_unsupported: 'Font collections (.ttc) are not supported. Upload each face as its own file.',
+  pixel_limit_exceeded:
+    'The image is too large in pixels (more than 64 megapixels). Export it at a smaller size and upload it again.',
+  image_undecodable: 'The image could not be decoded. Re-export it and upload it again.',
+  format_unsupported: 'This file format is not supported here.',
+  duplicate_of: 'This file is already in the brand’s assets. Use the existing asset instead.',
+  media_malformed: 'The media file is damaged or incomplete.',
+  duration_exceeds_cap: 'The media is longer than allowed.',
+};
+
+/** The message for a stored rejection reason, or null when the stored value is not a known reason. */
+export const ingestRejectionMessage = (reason: string | null | undefined): string | null => {
+  const parsed = IngestRejectionReason.safeParse(reason);
+  return parsed.success ? INGEST_REJECTION_MESSAGES[parsed.data] : null;
+};
 
 export interface IngestStepRejection {
   ok: false;

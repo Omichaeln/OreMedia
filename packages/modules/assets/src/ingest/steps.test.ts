@@ -198,19 +198,19 @@ describe('ingest step 3: scan', () => {
 
 describe('ingest step 4: sanitise SVG', () => {
   it.each([
-    ['script element', svgWithScript, 'element:script'],
-    ['event handler', svgWithHandler, 'handler:onload'],
-    ['external xlink:href', svgWithExternalRef, 'external_ref:xlink:href'],
-    ['external stylesheet import', svgWithExternalStyle, 'style:external_url'],
-  ])('rejects an SVG carrying %s', async (_label, svg, expectedDetail) => {
+    ['script element', svgWithScript, 'element:script', 'svg_script'],
+    ['event handler', svgWithHandler, 'handler:onload', 'svg_event_handler'],
+    ['external xlink:href', svgWithExternalRef, 'external_ref:xlink:href', 'svg_remote_image'],
+    ['external stylesheet import', svgWithExternalStyle, 'style:external_url', 'svg_external_reference'],
+  ])('rejects an SVG carrying %s', async (_label, svg, expectedDetail, reason) => {
     const r = await sanitise(Buffer.from(svg), 'image/svg+xml', 'svg');
-    expect(r).toMatchObject({ ok: false, reason: 'svg_unsafe_content' });
+    expect(r).toMatchObject({ ok: false, reason });
     expect((r as { detail?: string }).detail).toContain(expectedDetail);
   });
   it('rejects entity declarations before any parsing', async () => {
     expect(await sanitise(Buffer.from(svgWithEntity), 'image/svg+xml', 'svg')).toMatchObject({
       ok: false,
-      reason: 'svg_unsafe_content',
+      reason: 'svg_entity_declaration',
       detail: 'entity_declaration',
     });
   });

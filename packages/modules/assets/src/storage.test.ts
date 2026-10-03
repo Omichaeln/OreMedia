@@ -148,6 +148,17 @@ describe('createStorageFromEnv (spec 9.1: no local storage in production)', () =
       await expect(
         s3.signDownloadUrl(`assets/${B}/x/y/z/original`, { expiresInSec: 300 }),
       ).rejects.toBeInstanceOf(PolicyDeniedError);
+      // BSC-2: a download is an attachment with its type, whatever the object was stored with.
+      expect(get.url).not.toContain('response-content-disposition');
+      const file = await s3.signDownloadUrl(`assets/${A}/brd/ast/av/original`, {
+        expiresInSec: 300,
+        download: { filename: 'Oré logo.svg', contentType: 'image/svg+xml' },
+      });
+      const q = new URL(file.url).searchParams;
+      expect(q.get('response-content-disposition')).toBe(
+        `attachment; filename="Or_ logo.svg"; filename*=UTF-8''Or%C3%A9%20logo.svg`,
+      );
+      expect(q.get('response-content-type')).toBe('image/svg+xml');
     });
   });
   it('falls back to memory outside production', () => {

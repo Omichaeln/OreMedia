@@ -1106,6 +1106,47 @@
         }
       }
     },
+    "/trpc/assets.media.download": {
+      "post": {
+        "operationId": "assets.media.download",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assetVersionId": {
+                    "type": "string"
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": ["original", "png"]
+                  },
+                  "width": {
+                    "anyOf": [
+                      {
+                        "const": 256
+                      },
+                      {
+                        "const": 512
+                      },
+                      {
+                        "const": 1024
+                      },
+                      {
+                        "const": 2048
+                      }
+                    ]
+                  }
+                },
+                "required": ["assetVersionId", "format"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/assets.media.signedUrl": {
       "get": {
         "operationId": "assets.media.signedUrl",
@@ -1126,7 +1167,7 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["thumbnail", "preview", "web"]
+                        "enum": ["thumbnail", "preview", "web", "png"]
                       }
                     ]
                   }
@@ -2265,9 +2306,12 @@
                             "assetId": {
                               "type": "string"
                             },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
                             "variant": {
                               "type": "string",
-                              "enum": ["primary", "reversed", "mono", "mark_only"]
+                              "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                             },
                             "allowedBackgroundColourKeys": {
                               "type": "array",
@@ -2280,6 +2324,25 @@
                             },
                             "minWidthPx": {
                               "type": "number"
+                            },
+                            "usage": {
+                              "type": "object",
+                              "properties": {
+                                "backgroundsNote": {
+                                  "type": "string"
+                                },
+                                "donts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": ["backgroundsNote", "donts"]
+                            },
+                            "preferredFormat": {
+                              "type": "string",
+                              "enum": ["svg", "raster"]
                             }
                           },
                           "required": [
@@ -2755,9 +2818,12 @@
                             "assetId": {
                               "type": "string"
                             },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
                             "variant": {
                               "type": "string",
-                              "enum": ["primary", "reversed", "mono", "mark_only"]
+                              "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                             },
                             "allowedBackgroundColourKeys": {
                               "type": "array",
@@ -2770,6 +2836,25 @@
                             },
                             "minWidthPx": {
                               "type": "number"
+                            },
+                            "usage": {
+                              "type": "object",
+                              "properties": {
+                                "backgroundsNote": {
+                                  "type": "string"
+                                },
+                                "donts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": ["backgroundsNote", "donts"]
+                            },
+                            "preferredFormat": {
+                              "type": "string",
+                              "enum": ["svg", "raster"]
                             }
                           },
                           "required": [
@@ -11781,6 +11866,38 @@
           "required": ["brandId", "page"]
         }
       },
+      "assets.media.download": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "assetVersionId": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string",
+              "enum": ["original", "png"]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "const": 256
+                },
+                {
+                  "const": 512
+                },
+                {
+                  "const": 1024
+                },
+                {
+                  "const": 2048
+                }
+              ]
+            }
+          },
+          "required": ["assetVersionId", "format"]
+        }
+      },
       "assets.media.signedUrl": {
         "type": "query",
         "input": {
@@ -11796,7 +11913,7 @@
                 },
                 {
                   "type": "string",
-                  "enum": ["thumbnail", "preview", "web"]
+                  "enum": ["thumbnail", "preview", "web", "png"]
                 }
               ]
             }
@@ -12706,9 +12823,12 @@
                       "assetId": {
                         "type": "string"
                       },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
                       "variant": {
                         "type": "string",
-                        "enum": ["primary", "reversed", "mono", "mark_only"]
+                        "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                       },
                       "allowedBackgroundColourKeys": {
                         "type": "array",
@@ -12721,6 +12841,25 @@
                       },
                       "minWidthPx": {
                         "type": "number"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "backgroundsNote": {
+                            "type": "string"
+                          },
+                          "donts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["backgroundsNote", "donts"]
+                      },
+                      "preferredFormat": {
+                        "type": "string",
+                        "enum": ["svg", "raster"]
                       }
                     },
                     "required": [
@@ -13126,9 +13265,12 @@
                       "assetId": {
                         "type": "string"
                       },
+                      "assetVersionId": {
+                        "type": "string"
+                      },
                       "variant": {
                         "type": "string",
-                        "enum": ["primary", "reversed", "mono", "mark_only"]
+                        "enum": ["primary", "secondary", "reversed", "mono", "mark_only"]
                       },
                       "allowedBackgroundColourKeys": {
                         "type": "array",
@@ -13141,6 +13283,25 @@
                       },
                       "minWidthPx": {
                         "type": "number"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "properties": {
+                          "backgroundsNote": {
+                            "type": "string"
+                          },
+                          "donts": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["backgroundsNote", "donts"]
+                      },
+                      "preferredFormat": {
+                        "type": "string",
+                        "enum": ["svg", "raster"]
                       }
                     },
                     "required": [
