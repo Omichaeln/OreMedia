@@ -7,7 +7,7 @@ import { deployedPeople, deployedWebOrigin, signInWithPasswordForm, type Deploye
  * The deployed origin in Chromium (docs/runbooks/staging-acceptance.md): the UAT journeys a browser proves against
  * a real deployment with the acceptance fixtures, without a mock. U1: the fixture owner signs in with email and
  * password, lands on the portfolio, opens the company and the brand. The shell: the brand sections navigate.
- * U2: the brand system reads the published version. Isolation: company B's owner opening company A's brand sees
+ * U2: the brand system reads the saved brand system. Isolation: company B's owner opening company A's brand sees
  * only the restricted-access state. The audit of apps/web/e2e/a11y.ts runs on the real home and brand system.
  * Runs only with OREMEDIA_E2E_WEB_ORIGIN (the acceptance job sets it); never on plain `pnpm test`.
  */
@@ -91,14 +91,17 @@ describe.skipIf(!webOrigin)('deployed origin (real web, api and fixtures in Chro
     await page.getByRole('button', { name: 'Create and open' }).waitFor({ timeout: 30_000 });
   }, 90_000);
 
-  it('U2: the brand system shows the published version of the fixture brand', async () => {
+  it('U2: the brand system shows the saved brand system of the fixture brand', async () => {
     await page.goto(`${origin}${brandPath(people.a, 'system')}`);
     await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 30_000 });
-    const shown = page.getByRole('group', { name: 'Version shown' });
-    await shown.waitFor({ timeout: 30_000 });
-    const published = shown.getByRole('button', { name: /published/ });
-    expect(await published.count()).toBe(1);
-    expect(await published.getAttribute('aria-pressed')).toBe('true');
+    // D-22: the overview reads the applied brand system; there are no versions to choose between.
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: /^Colour/ })
+      .first()
+      .waitFor({ timeout: 30_000 });
+    expect(await page.getByText('Set up your brand system').count()).toBe(0);
+    expect(await page.getByRole('group', { name: 'Version shown' }).count()).toBe(0);
     await page.waitForFunction(() => !document.querySelector('[aria-busy="true"]'), undefined, {
       timeout: 30_000,
     });

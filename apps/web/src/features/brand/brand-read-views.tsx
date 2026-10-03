@@ -45,7 +45,7 @@ function AssetById({ assetId, className }: { assetId: string; className?: string
   );
 }
 
-const nothing = (what: string) => <p className="text-sm text-muted-foreground">No {what} in this version.</p>;
+const nothing = (what: string) => <p className="text-sm text-muted-foreground">No {what} yet.</p>;
 
 /** Swatch text in whichever of near-black or near-white reads better on the colour. */
 const inkOn = (hex: string) =>
@@ -283,7 +283,7 @@ function DraftCheck({ voice }: { voice: Doc['voice'] }) {
   );
 }
 
-/** The parts of the document each brand system section reads; used to say what a draft changes. */
+/** The parts of the document each brand system section reads; used to say what a proposed update changes. */
 const SECTION_PARTS: Array<{ key: string; label: string; parts: (d: Doc) => unknown }> = [
   { key: 'logo', label: 'Logo', parts: (d) => d.logoRules },
   { key: 'colour', label: 'Colour', parts: (d) => [d.tokens.colours, d.tokens.contrastTarget] },
@@ -307,7 +307,7 @@ const SECTION_PARTS: Array<{ key: string; label: string; parts: (d: Doc) => unkn
   { key: 'guidelines', label: 'Guidelines', parts: (d) => d.guidelines ?? null },
 ];
 
-/** The sections whose content differs between a version and the one it would replace (none when both are equal). */
+/** The sections whose content differs between a proposed update and the brand system (none when both are equal). */
 export function changedSections(next: Doc, base: Doc): Array<{ key: string; label: string }> {
   return SECTION_PARTS.filter((s) => JSON.stringify(s.parts(next)) !== JSON.stringify(s.parts(base))).map(
     ({ key, label }) => ({ key, label }),
@@ -538,10 +538,10 @@ export function OverviewView({
       </ul>
       <ReadSection title="How this is used">
         <p className="max-w-prose text-sm text-muted-foreground">
-          Every document revision records the brand version it was designed against. Agents read an immutable
-          snapshot of the published version, the approved facts and the active objective; imported guideline
-          text is evidence, never permission. These tokens style creative documents only, never this
-          application.
+          Every save of the brand system is kept as a record, and every document revision records the one it
+          was designed against. Agents read an immutable snapshot of the brand system, the approved facts and
+          the active objective; imported guideline text is evidence, never permission. These tokens style
+          creative documents only, never this application.
         </p>
       </ReadSection>
     </div>

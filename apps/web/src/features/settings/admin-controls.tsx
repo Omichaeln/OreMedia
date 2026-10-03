@@ -45,8 +45,8 @@ function policyRows(p: PolicyDocumentV1): Array<[label: string, hint: string, va
       yesNo(p.holdOnDependencyRevocation),
     ],
     [
-      'On brand version published',
-      'What publishing a brand version does to approved and scheduled work (D-13).',
+      'When the brand system is saved',
+      'What saving the brand system does to approved and scheduled work (D-13).',
       p.onBrandVersionPublished
         ? ON_PUBLISHED_LABEL[p.onBrandVersionPublished]
         : `${ON_PUBLISHED_LABEL.invalidate_and_hold} (default)`,
@@ -209,7 +209,7 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
           }}
         >
           <Field
-            label="On brand version published"
+            label="When the brand system is saved"
             htmlFor="on-published-select"
             hint="Recorded as a new policy version and activated at once. Keeping approvals needs approval binding v2, so that choice is not offered yet (D-13)."
             className="min-w-72"

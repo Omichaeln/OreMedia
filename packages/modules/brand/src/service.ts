@@ -12,6 +12,8 @@ import {
   BrandVersionPublish,
   BrandVersionSubmit,
   BrandVersionUpdate,
+  BrandSystemSave,
+  BrandProposalDiscard,
   BrandGuidelinesImport,
   BrandVoiceProposal,
   DesignTokenSetV1,
@@ -365,6 +367,75 @@ async function snapshotOf(
 }
 
 /** Brand-owned rows are loaded through the scoped repository and bound to the brand in the input: a foreign or mismatched id is NOT_FOUND. */
+/**
+ * Makes `v` the brand's applied version: retires the previously published one in the same transaction, points the
+ * brand at `v`, writes its design tokens and emits brand.version_published (with the acting principal, so the
+ * consumer re-establishes tenant context as it: spec 5.2). It never mutates approved work: the impact workflow
+ * that consumes the event (brandChangeImpactWorkflowV1) invalidates approvals and re-evaluates scheduled
+ * publications (spec 8.2). The caller has locked the brand and checked brand.publish_version.
+ */
+async function applyVersion(
+  actor: ResolvedActor,
+  brand: BrandRow,
+  v: Awaited<ReturnType<typeof loadVersion>>,
+  expectedVersion: number,
+  tx: Tx,
+) {
+  const toState = transition(brandVersionMachine, v.state, 'publish', 'versionId');
+  const document = BrandSystemDocumentV1.parse(v.document);
+  const previous = await versionsRepo.findPublished(brand.id, tx);
+  if (previous && previous.id !== v.id)
+    await versionsRepo.update(
+      previous.id,
+      previous.version,
+      { state: transition(brandVersionMachine, previous.state, 'retire', 'versionId') },
+      tx,
+    );
+  await versionsRepo.update(
+    v.id,
+    expectedVersion,
+    {
+      state: toState,
+      publishedAt: new Date(),
+      publishedByUserId: actor.kind === 'user' ? actor.id : null,
+    },
+    tx,
+  );
+  await brandsRepo.update(brand.id, brand.version, { publishedVersionId: v.id }, tx);
+  await tokensRepo.create(
+    {
+      id: newId('designTokenSet'),
+      brandId: brand.id,
+      brandVersionId: v.id,
+      tokenSet: tokenSetFrom(document),
+    },
+    tx,
+  );
+  await audit.record(
+    actorRef(actor),
+    'brand.version.publish',
+    { type: 'brand_version', id: v.id },
+    'allowed',
+    tx,
+    { brandId: brand.id, fromState: v.state, toState },
+  );
+  await outbox.add(
+    'brand.version_published',
+    { type: 'brand_version', id: v.id, version: expectedVersion + 1 },
+    {
+      brandVersionId: v.id,
+      number: v.number,
+      contentHash: v.contentHash,
+      previousVersionId: previous && previous.id !== v.id ? previous.id : null,
+      actorKind: actor.kind,
+      actorId: actor.id,
+    },
+    tx,
+    { brandId: brand.id },
+  );
+  return { versionId: v.id, number: v.number, state: toState, version: expectedVersion + 1 };
+}
+
 async function loadVersion(brandId: string, versionId: string, tx?: Tx) {
   const v = await versionsRepo.getById(versionId, tx);
   if (v.brandId !== brandId) throw new NotFoundError('BrandVersion', versionId);
@@ -686,59 +757,7 @@ export const brandService = {
         tx,
       );
       assertMayDecide(decision);
-      const toState = transition(brandVersionMachine, v.state, 'publish', 'versionId');
-      const document = BrandSystemDocumentV1.parse(v.document);
-      const previous = await versionsRepo.findPublished(brand.id, tx);
-      if (previous && previous.id !== v.id)
-        await versionsRepo.update(
-          previous.id,
-          previous.version,
-          { state: transition(brandVersionMachine, previous.state, 'retire', 'versionId') },
-          tx,
-        );
-      await versionsRepo.update(
-        v.id,
-        parsed.expectedVersion,
-        {
-          state: toState,
-          publishedAt: new Date(),
-          publishedByUserId: actor.kind === 'user' ? actor.id : null,
-        },
-        tx,
-      );
-      await brandsRepo.update(brand.id, brand.version, { publishedVersionId: v.id }, tx);
-      await tokensRepo.create(
-        {
-          id: newId('designTokenSet'),
-          brandId: brand.id,
-          brandVersionId: v.id,
-          tokenSet: tokenSetFrom(document),
-        },
-        tx,
-      );
-      await audit.record(
-        actorRef(actor),
-        'brand.version.publish',
-        { type: 'brand_version', id: v.id },
-        'allowed',
-        tx,
-        { brandId: brand.id, fromState: v.state, toState },
-      );
-      await outbox.add(
-        'brand.version_published',
-        { type: 'brand_version', id: v.id, version: parsed.expectedVersion + 1 },
-        {
-          brandVersionId: v.id,
-          number: v.number,
-          contentHash: v.contentHash,
-          previousVersionId: previous && previous.id !== v.id ? previous.id : null,
-          actorKind: actor.kind,
-          actorId: actor.id,
-        },
-        tx,
-        { brandId: brand.id },
-      );
-      return { versionId: v.id, number: v.number, state: toState, version: parsed.expectedVersion + 1 };
+      return applyVersion(actor, brand, v, parsed.expectedVersion, tx);
     },
 
     async list(actor: ResolvedActor, input: z.infer<typeof BrandVersionList>, tx?: Tx) {
@@ -781,6 +800,106 @@ export const brandService = {
         publications: scope?.publications ?? [],
         computedAt: new Date().toISOString(),
       };
+    },
+  },
+
+  /**
+   * D-22: one brand system per brand, edited and saved by a person; a save applies at once. Each save is recorded
+   * internally as an immutable version (approvals, reviews and agent runs keep pointing at what they were checked
+   * against), but no one creates, chooses or publishes versions: imports and agents land proposals that a person
+   * applies (save) or discards.
+   */
+  system: {
+    async save(actor: ResolvedActor, input: z.infer<typeof BrandSystemSave>, tx: Tx) {
+      const parsed = BrandSystemSave.parse(input);
+      const brand = await brandsRepo.lock(parsed.brandId, tx);
+      await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+      assertMayDecide(await policy.assert(actor, 'brand.publish_version', brandResource(brand), {}, tx));
+      if ((brand.publishedVersionId ?? null) !== parsed.basedOnVersionId)
+        throw new ConflictError('BrandSystem', brand.id, brand.version);
+      const published = await versionsRepo.findPublished(brand.id, tx);
+      const previous = published ? BrandSystemDocumentV1.parse(published.document) : null;
+      const document = BrandSystemDocumentV1.parse(parsed.document);
+      await assertDocumentReferences(brand.id, document, previous, tx);
+      const proposal = parsed.proposal ? await loadVersion(brand.id, parsed.proposal.versionId, tx) : null;
+      if (proposal && proposal.state !== 'draft' && proposal.state !== 'in_review')
+        throw new ValidationFailedError(
+          [{ path: 'proposal.versionId', issue: 'proposal_closed' }],
+          'This proposal was already applied or discarded',
+        );
+      const contentHash = hashCanonical(document);
+      // Saving what is already applied changes nothing: no new version, and no approval is invalidated.
+      const unchanged = published !== null && published.contentHash === contentHash;
+      let applied: { versionId: string; number: number } | null = null;
+      if (!unchanged) {
+        const id = newId('brandVersion');
+        const number = await versionsRepo.nextNumber(brand.id, tx);
+        await versionsRepo.create(
+          { id, brandId: brand.id, number, state: 'draft', document, contentHash },
+          tx,
+        );
+        await versionsRepo.update(
+          id,
+          0,
+          { state: transition(brandVersionMachine, 'draft', 'submit', 'versionId') },
+          tx,
+        );
+        if (guidelinesKey(previous ?? emptyBrandSystemDocument()) !== guidelinesKey(document))
+          await recordGuidelineAuthor(actor, brand.id, id, null, tx);
+        const result = await applyVersion(actor, brand, await loadVersion(brand.id, id, tx), 1, tx);
+        applied = { versionId: result.versionId, number: result.number };
+      }
+      if (proposal && parsed.proposal)
+        await versionsRepo.update(
+          proposal.id,
+          parsed.proposal.expectedVersion,
+          { state: transition(brandVersionMachine, proposal.state, 'retire', 'versionId') },
+          tx,
+        );
+      await audit.record(
+        actorRef(actor),
+        'brand.system.save',
+        { type: 'brand', id: brand.id },
+        'allowed',
+        tx,
+        {
+          brandId: brand.id,
+          ...(applied ? { versionId: applied.versionId } : {}),
+          ...(proposal ? { proposalVersionId: proposal.id } : {}),
+          changed: !unchanged,
+        },
+      );
+      return {
+        brandId: brand.id,
+        changed: !unchanged,
+        versionId: applied?.versionId ?? published?.id ?? null,
+        contentHash,
+      };
+    },
+
+    /** D-22: a proposal is dismissed by retiring it; nothing applied changes. */
+    async discardProposal(actor: ResolvedActor, input: z.infer<typeof BrandProposalDiscard>, tx: Tx) {
+      const parsed = BrandProposalDiscard.parse(input);
+      const brand = await brandsRepo.getById(parsed.brandId, tx);
+      const v = await loadVersion(brand.id, parsed.versionId, tx);
+      await policy.assert(
+        actor,
+        'brand.edit_standards',
+        { type: 'brand_version', tenantId: brand.tenantId, brandId: brand.id, id: v.id, state: v.state },
+        {},
+        tx,
+      );
+      const toState = transition(brandVersionMachine, v.state, 'retire', 'versionId');
+      await versionsRepo.update(v.id, parsed.expectedVersion, { state: toState }, tx);
+      await audit.record(
+        actorRef(actor),
+        'brand.system.discard_proposal',
+        { type: 'brand_version', id: v.id },
+        'allowed',
+        tx,
+        { brandId: brand.id, fromState: v.state, toState },
+      );
+      return { versionId: v.id, state: toState, version: parsed.expectedVersion + 1 };
     },
   },
 

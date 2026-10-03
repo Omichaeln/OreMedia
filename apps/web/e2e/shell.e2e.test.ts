@@ -997,16 +997,16 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await brandType.getByRole('button', { name: 'Save' }).click();
     await expect.poll(() => brandType.textContent(), { timeout: 15_000 }).toContain('Internal brand.');
     await expect.poll(() => policy.textContent(), { timeout: 15_000 }).toMatch(/Distinct approver.*No/);
-    // UX-20 (D-13): the brand-version choice is recorded as a new policy version; `flag` is offered but not enabled.
-    expect(await policy.textContent()).toMatch(/On brand version published.*\(default\)/);
-    await page.getByLabel('On brand version published').click();
+    // UX-20 (D-13): what a brand system save does is recorded as a new policy version; `flag` is offered but not enabled.
+    expect(await policy.textContent()).toMatch(/When the brand system is saved.*\(default\)/);
+    await page.getByLabel('When the brand system is saved').click();
     const flag = page.getByRole('option', { name: /Keep approvals and flag/ });
     expect(await flag.getAttribute('data-disabled')).not.toBeNull();
     await page.keyboard.press('Escape');
     await policy.getByRole('button', { name: 'Save as a new policy version' }).click();
     await expect.poll(() => policy.textContent(), { timeout: 15_000 }).toContain('Policy version 1.');
     expect(await policy.textContent()).toMatch(
-      /On brand version published.*Invalidate approvals and hold scheduled posts(?! \(default\))/,
+      /When the brand system is saved.*Invalidate approvals and hold scheduled posts(?! \(default\))/,
     );
     expect(backend.brands.find((b) => b.id === E2E.brandId)?.classification).toBe('internal');
     await page.getByLabel('Change the type').click();
@@ -1120,28 +1120,31 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
-  it('brand system: a draft is read against the published version, and a draft check blocks prohibited phrases', async () => {
+  it('brand system: a proposed update is read against the brand system, saving it confirms what it reaches, and a draft check blocks prohibited phrases', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/system')}`);
-    await page
-      .getByRole('group', { name: 'Version shown' })
-      .getByRole('button', { name: /proposed/ })
-      .click();
-    await page.getByTestId('viewing-draft').waitFor({ timeout: 15_000 });
-    const nav = page.getByRole('navigation', { name: 'Brand system sections' });
-    // The mock draft adds reference imagery and guidelines; nothing else differs.
+    // D-22: one banner for the proposal, naming what it came from and what it changes; no versions to choose.
+    const proposed = page.getByTestId('proposed-update');
+    await proposed.waitFor({ timeout: 15_000 });
+    expect(await page.getByRole('group', { name: 'Version shown' }).count()).toBe(0);
+    // The mock proposal adds reference imagery and guidelines; nothing else differs.
     await expect
-      .poll(() => nav.getByRole('button', { name: /Changed/ }).allTextContents(), { timeout: 15_000 })
-      .toEqual(['ImageryChanged in this version', 'GuidelinesChanged in this version']);
-    await page.getByRole('button', { name: 'Review changes' }).click();
-    const changes = page.getByTestId('version-changes');
-    await expect.poll(() => changes.textContent(), { timeout: 15_000 }).toContain('Imagery');
-    // UX-20: the preview names what the publish reaches, from the review and publishing stores. Whether the
+      .poll(() => proposed.textContent(), { timeout: 15_000 })
+      .toContain('It changes Imagery, Guidelines.');
+    expect(await proposed.textContent()).toContain('Imported from the brand skill e2e-brand.');
+    await proposed.getByRole('button', { name: 'Review' }).click();
+    const review = page.getByTestId('proposal-review');
+    await expect
+      .poll(() => review.textContent(), { timeout: 15_000 })
+      .toContain('Changes Imagery, Guidelines.');
+    await review.getByRole('button', { name: 'Save', exact: true }).click();
+    // UX-20: the confirmation names what the save reaches, from the review and publishing stores. Whether the
     // settings test above recorded a choice or not, the policy line names today's behaviour.
+    const changes = page.getByRole('alertdialog', { name: 'Save and apply the brand system?' });
     const impact = changes.getByTestId('publish-impact');
     await expect
       .poll(() => impact.textContent(), { timeout: 15_000 })
-      .toMatch(/Publishing version 2 reaches/);
+      .toMatch(/Saving the brand system reaches/);
     const openRequests = [...backend.phase5.requests.values()].filter((r) => r.state === 'open').length;
     const scheduled = [...backend.phase5.publications.values()].filter((p) => p.state === 'scheduled').length;
     expect(await impact.textContent()).toContain(
@@ -1156,6 +1159,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const recorded = backend.policyVersions.some((p) => p.state === 'active');
     const policyLine = (await impact.getByTestId('publish-impact-policy').textContent()) ?? '';
     expect(policyLine.includes('(no choice recorded; this is the default)')).toBe(!recorded);
+    // Cancelling applies nothing: the proposal is still waiting.
+    await changes.getByRole('button', { name: 'Cancel' }).click();
+    await expect.poll(() => changes.count(), { timeout: 15_000 }).toBe(0);
+    expect(backend.brandSystemSaves).toHaveLength(0);
     await page.goto(`${origin}${home.replace('/home', '/system?section=voice')}`);
     await page.getByLabel('Draft copy').fill('A cheap and cheerful roast');
     const findings = page.getByTestId('draft-findings');

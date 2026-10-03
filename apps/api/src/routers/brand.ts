@@ -21,6 +21,8 @@ import {
   PolicyGet,
   PolicyVersionActivate,
   PolicyVersionCreate,
+  BrandSystemSave,
+  BrandProposalDiscard,
 } from '@oremedia/contracts/brand';
 import { brandService } from '@oremedia/module-brand';
 import { idempotent } from '@oremedia/module-operations';
@@ -111,6 +113,22 @@ export const brandRouter = router({
     impact: tenantQuery
       .input(BrandVersionImpact)
       .query(({ ctx, input }) => brandService.versions.impact(ctx.tenant.actor, input)),
+  }),
+
+  /** D-22: one brand system, edited and saved in place; proposals are applied by a save or discarded. */
+  system: router({
+    save: tenantMutation
+      .input(BrandSystemSave)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => brandService.system.save(ctx.tenant.actor, input, tx)),
+      ),
+    discardProposal: tenantMutation
+      .input(BrandProposalDiscard)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          brandService.system.discardProposal(ctx.tenant.actor, input, tx),
+        ),
+      ),
   }),
 
   facts: router({

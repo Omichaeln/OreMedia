@@ -9,16 +9,16 @@ export const ON_PUBLISHED_LABEL = {
 } as const;
 
 /**
- * UX-20 (D-13): before a brand version is published, what it reaches: the open review requests and valid approvals
- * the workflow invalidates, and the scheduled publications it re-checks and holds when their release check fails.
- * Every row names the record; the policy line says what the publish does to them today.
+ * UX-20 (D-13, D-22): before the brand system is saved, what applying it reaches: the open review requests and valid
+ * approvals the workflow invalidates, and the scheduled publications it re-checks and holds when their release check
+ * fails. Every row names the record; the policy line says what the save does to them today.
  */
-export function PublishImpact({ brandId, versionNumber }: { brandId: string; versionNumber: number }) {
+export function PublishImpact({ brandId }: { brandId: string }) {
   const impact = useBrandVersionImpact(brandId);
   const data = impact.data;
   return (
     <div className="flex flex-col gap-2 text-sm" data-testid="publish-impact">
-      {impact.isPending && <Skeleton label="Reading what the publish reaches" lines={2} />}
+      {impact.isPending && <Skeleton label="Reading what saving reaches" lines={2} />}
       {impact.isError && (
         <RequestError
           error={impact.error}
@@ -28,13 +28,13 @@ export function PublishImpact({ brandId, versionNumber }: { brandId: string; ver
       )}
       {data && !data.available && (
         <p className="text-muted-foreground">
-          What this publish reaches could not be computed, so nothing here says the work is unaffected.
+          What saving reaches could not be computed, so nothing here says the work is unaffected.
         </p>
       )}
       {data && data.available && (
         <>
           <p>
-            Publishing version {versionNumber} reaches{' '}
+            Saving the brand system reaches{' '}
             <span className="font-medium tabular-nums">{data.requests.length}</span> open review{' '}
             {data.requests.length === 1 ? 'request' : 'requests'},{' '}
             <span className="font-medium tabular-nums">{data.approvals}</span> valid{' '}
@@ -49,7 +49,7 @@ export function PublishImpact({ brandId, versionNumber }: { brandId: string; ver
             against the release policy and those that fail are held with the failed checks. Published work is
             never edited.{' '}
             {data.truncated &&
-              'The counts stop at the first 200 of each kind, so the publish may reach more than is listed.'}
+              'The counts stop at the first 200 of each kind, so the save may reach more than is listed.'}
           </p>
           {data.publications.length > 0 && (
             <ul className="flex flex-col divide-y divide-border" aria-label="Scheduled posts reached">

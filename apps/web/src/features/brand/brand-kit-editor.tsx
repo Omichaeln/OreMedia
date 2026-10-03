@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
@@ -11,8 +11,10 @@ import { useAsset, useBrandAssetsOfKind, useBrandFonts, type BrandFontFaceDto } 
 import { useFontFaces } from '../assets/use-font-faces';
 import { useAssetUpload, type UploadStep } from '../assets/use-upload';
 import { useBrandContext } from './brand-context';
-import type { BrandVersionDto } from './use-brand';
-import { VoiceExtraction } from './voice-extraction';
+import { useBrandVersionImpact } from './use-brand';
+import { PublishImpact } from './publish-impact';
+import { RELEASE_1_PROVIDERS } from '../publishing/channel-connect';
+import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError, type UiError } from '../../lib/errors';
@@ -74,79 +76,142 @@ export const contrast = (a: string, b: string): number | null => {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 };
 
-/**
- * Spec 8.1 brand kit: palette, typography, voice, logo variants and reference imagery of a draft (or in-review) brand version,
- * edited locally and saved as one document through brand.versions.update. The server checks every reference (hex
- * colours, unique keys, logos and images of this brand) and reports all problems at once; publishing stays a
- * separate, reviewed step.
- */
-/** The kit's editable sections; the brand system shows one at a time, the versions list shows them all. */
-export type KitSection = 'guidelines' | 'palette' | 'typography' | 'voice' | 'logos' | 'imagery';
+/** The kit's editable sections; the brand system edits one at a time, a proposed update is reviewed with all of them. */
+export type KitSection =
+  'guidelines' | 'palette' | 'typography' | 'voice' | 'logos' | 'imagery' | 'patterns' | 'channels';
 
-export function BrandKitEditor({ version, only }: { version: BrandVersionDto; only?: KitSection }) {
+/**
+ * Spec 8.1 brand kit, D-22: one brand system, edited in place. The document (the applied brand system, or a proposed
+ * update under review) is edited locally and saved through brand.system.save, which applies it at once. Before the
+ * save, what applying reaches is read (UX-20): approvals, open review requests or scheduled posts it would reach are
+ * confirmed first. The server checks every reference (hex colours, unique keys, logos and images of this brand) and
+ * reports all problems at once; a save over a brand system someone else saved since is a conflict.
+ */
+export function BrandKitEditor({
+  document,
+  basedOnVersionId,
+  proposal,
+  only,
+  onClose,
+  onReload,
+}: {
+  document: Doc;
+  /** The applied version the edit starts from (null before the first save); a newer one makes the save a conflict. */
+  basedOnVersionId: string | null;
+  /** The proposed update this save applies and closes. */
+  proposal?: { versionId: string; expectedVersion: number };
+  only?: KitSection;
+  onClose: () => void;
+  /** After a conflict: drop the local edits and reopen on the brand system as it is now. */
+  onReload: () => void;
+}) {
   const { brandId } = useBrandContext();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [doc, setDoc] = useState<Doc>(version.document);
-  const [dirty, setDirty] = useState(false);
+  const [doc, setDoc] = useState<Doc>(document);
   const [error, setError] = useState<UiError | null>(null);
-  const change = (next: Doc) => {
-    setDoc(next);
-    setDirty(true);
-  };
+  const [checking, setChecking] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const impact = useBrandVersionImpact(brandId, confirming);
+  const impactKnown = impact.data?.available === true;
   const show = (section: KitSection) => only === undefined || only === section;
+  const invalid =
+    (show('patterns') && patternIssues(doc).length > 0) ||
+    (show('channels') && channelIssues(doc).length > 0);
   const intent = useIntentKey();
   const save = useMutation(
-    trpc.brand.versions.update.mutationOptions({
+    trpc.brand.system.save.mutationOptions({
       ...mutationIntent(intent.key),
-      onSuccess: () => {
+      onSuccess: (res) => {
         intent.renew();
-        setDirty(false);
+        setConfirming(false);
         setError(null);
         void queryClient.invalidateQueries(trpc.brand.pathFilter());
-        toast({ tone: 'good', title: 'Brand kit saved' });
+        toast(
+          res.changed
+            ? { tone: 'good', title: 'Brand system saved' }
+            : { tone: 'info', title: 'No changes to save' },
+        );
+        onClose();
       },
-      onError: (err) => setError(toUiError(err)),
+      onError: (err) => {
+        setConfirming(false);
+        setError(toUiError(err));
+      },
     }),
   );
+  const commit = () =>
+    save.mutate({ brandId, basedOnVersionId, document: doc, ...(proposal ? { proposal } : {}) });
+  // UX-20: what applying reaches is read fresh; anything reached (or a reach that cannot be computed) is confirmed.
+  const requestSave = async () => {
+    setError(null);
+    setChecking(true);
+    try {
+      const reach = await queryClient.fetchQuery({
+        ...trpc.brand.versions.impact.queryOptions({ brandId }),
+        staleTime: 0,
+      });
+      if (
+        !reach.available ||
+        reach.requests.length > 0 ||
+        reach.approvals > 0 ||
+        reach.publications.length > 0
+      )
+        setConfirming(true);
+      else commit();
+    } catch (err) {
+      setError(toUiError(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+  const busy = checking || save.isPending;
 
   return (
-    <div className="mt-3 flex flex-col gap-4 rounded-md border border-border p-3" aria-live="polite">
+    <div
+      className="flex flex-col gap-4 rounded-md border border-border p-3"
+      aria-live="polite"
+      data-testid="brand-kit-editor"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm">
-          Editing <strong>version {version.number}</strong>. Changes are saved to this draft; publish it when
-          it has been reviewed.
+          {proposal
+            ? 'Saving applies the proposed update, with any edits you make here, to the brand system.'
+            : 'Saving applies your changes to the brand system at once.'}
         </p>
         <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!dirty || save.isPending}
-            onClick={() => {
-              setDoc(version.document);
-              setDirty(false);
-              setError(null);
-            }}
-          >
-            Discard changes
+          <Button size="sm" variant="ghost" disabled={save.isPending} onClick={onClose}>
+            Cancel
           </Button>
           <Button
             size="sm"
             variant="primary"
-            disabled={!dirty || save.isPending}
-            onClick={() =>
-              save.mutate({ brandId, versionId: version.id, expectedVersion: version.version, document: doc })
-            }
+            disabled={busy || invalid}
+            disabledReason={invalid ? 'Fix the highlighted rows first' : undefined}
+            onClick={() => void requestSave()}
           >
-            {save.isPending ? 'Saving…' : 'Save brand kit'}
+            {save.isPending ? 'Saving…' : checking ? 'Checking…' : 'Save'}
           </Button>
         </div>
       </div>
-      {error && (
+      {error && error.code === 'CONFLICT' && (
         <StatusBanner
-          tone={error.kind === 'conflict' ? 'warning' : 'critical'}
-          title={error.kind === 'conflict' ? 'This version changed since you opened it' : 'Not saved'}
+          tone="warning"
+          title="Someone saved the brand system since you opened it"
+          description="Reload to start again from the brand system as it is now. Your edits here are discarded."
+          actions={
+            <Button size="sm" onClick={onReload}>
+              Reload
+            </Button>
+          }
+          data-testid="brand-system-conflict"
+        />
+      )}
+      {error && error.code !== 'CONFLICT' && (
+        <StatusBanner
+          tone="critical"
+          title="Not saved"
           description={
             <>
               {error.message}
@@ -163,18 +228,41 @@ export function BrandKitEditor({ version, only }: { version: BrandVersionDto; on
           }
         />
       )}
-      {show('guidelines') && doc.guidelines && (
-        <GuidelinesSection doc={doc} onChange={change}>
-          {version.state === 'draft' && version.document.guidelines && (
-            <VoiceExtraction versionId={version.id} unsaved={dirty} />
-          )}
-        </GuidelinesSection>
-      )}
-      {show('palette') && <PaletteSection doc={doc} onChange={change} />}
-      {show('typography') && <TypographySection doc={doc} onChange={change} />}
-      {show('voice') && <VoiceSection doc={doc} onChange={change} />}
-      {show('logos') && <LogosSection doc={doc} onChange={change} />}
-      {show('imagery') && <ReferenceImagerySection doc={doc} onChange={change} />}
+      {show('guidelines') && <GuidelinesSection doc={doc} onChange={setDoc} />}
+      {show('palette') && <PaletteSection doc={doc} onChange={setDoc} />}
+      {show('typography') && <TypographySection doc={doc} onChange={setDoc} />}
+      {show('voice') && <VoiceSection doc={doc} onChange={setDoc} />}
+      {show('logos') && <LogosSection doc={doc} onChange={setDoc} />}
+      {show('imagery') && <ReferenceImagerySection doc={doc} onChange={setDoc} />}
+      {show('patterns') && <PatternsSection doc={doc} onChange={setDoc} />}
+      {show('channels') && <ChannelsSection doc={doc} onChange={setDoc} />}
+      <Dialog open={confirming} onOpenChange={(open) => !open && setConfirming(false)}>
+        {confirming && (
+          <DialogContent
+            role="alertdialog"
+            title="Save and apply the brand system?"
+            description="What saving reaches, before it happens."
+          >
+            <PublishImpact brandId={brandId} />
+            <DialogActions>
+              <DialogClose asChild>
+                <Button size="sm" variant="ghost">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={commit}
+                disabled={save.isPending || !impactKnown}
+                disabledReason={impactKnown ? undefined : 'Wait for what the save reaches to load'}
+              >
+                {save.isPending ? 'Saving…' : 'Save and apply'}
+              </Button>
+            </DialogActions>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }
@@ -191,47 +279,48 @@ function Section({ title, hint, children }: { title: string; hint: string; child
   );
 }
 
-function GuidelinesSection({
-  doc,
-  onChange,
-  children,
-}: {
-  doc: Doc;
-  onChange: (d: Doc) => void;
-  children?: ReactNode;
-}) {
+function GuidelinesSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
   const g = doc.guidelines;
-  if (!g) return null;
   const { guidelines: _removed, ...withoutGuidelines } = doc;
   return (
     <Section
       title="Brand guidelines"
-      hint="Imported from a brand skill. Agents receive this text with the brand constraints once the version is published."
+      hint="Imported from a brand skill. Agents receive this text with the brand constraints once the brand system is saved."
     >
-      <div className="flex flex-wrap items-start justify-between gap-2 text-sm">
-        <div className="min-w-0">
-          <p className="font-medium">{g.source.name}</p>
-          {g.source.description && <p className="text-xs text-muted-foreground">{g.source.description}</p>}
-        </div>
-        <Button size="sm" variant="danger" onClick={() => onChange(withoutGuidelines)}>
-          Remove guidelines
-        </Button>
-      </div>
-      <ul className="flex flex-col gap-1">
-        {g.documents.map((d) => (
-          <li key={d.path}>
-            <details className="rounded-md border border-border">
-              <summary className="cursor-pointer px-2 py-1.5 text-sm">
-                <code className="text-xs">{d.path}</code>
-              </summary>
-              <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-border p-2 text-xs">
-                {d.content}
-              </pre>
-            </details>
-          </li>
-        ))}
-      </ul>
-      {children}
+      {!g && (
+        <p className="text-sm text-muted-foreground">
+          No imported guidelines. Saving applies the brand system without them.
+        </p>
+      )}
+      {g && (
+        <>
+          <div className="flex flex-wrap items-start justify-between gap-2 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium">{g.source.name}</p>
+              {g.source.description && (
+                <p className="text-xs text-muted-foreground">{g.source.description}</p>
+              )}
+            </div>
+            <Button size="sm" variant="danger" onClick={() => onChange(withoutGuidelines)}>
+              Remove guidelines
+            </Button>
+          </div>
+          <ul className="flex flex-col gap-1">
+            {g.documents.map((d) => (
+              <li key={d.path}>
+                <details className="rounded-md border border-border">
+                  <summary className="cursor-pointer px-2 py-1.5 text-sm">
+                    <code className="text-xs">{d.path}</code>
+                  </summary>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-border p-2 text-xs">
+                    {d.content}
+                  </pre>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </Section>
   );
 }
@@ -615,7 +704,7 @@ const weightsFor = (f: BrandFontFaceDto | undefined) => {
 /**
  * Typography (spec 8.1 type roles): the brand's fonts (uploaded files, or a family imported from Google Fonts,
  * each file an asset with its provenance and licence) and, per type role, the face, weight and minimum size, with a
- * preview line drawn in the chosen font loaded from its pinned files. Saved with the rest of the draft.
+ * preview line drawn in the chosen font loaded from its pinned files. Saved with the rest of the brand system.
  */
 function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
   const { brandId } = useBrandContext();
@@ -1222,5 +1311,257 @@ function ReferenceImagerySection({ doc, onChange }: { doc: Doc; onChange: (d: Do
         </ul>
       )}
     </Section>
+  );
+}
+
+type Pattern = Doc['patterns'][number];
+type ChannelGuidance = Doc['channelGuidance'][number];
+
+/** The pattern the Imagery section edits (the first with the reference key); the Patterns section lists the rest. */
+const referenceIndex = (doc: Doc) => doc.patterns.findIndex((p) => p.key === REFERENCE_PATTERN);
+
+/** Per pattern of the document (reference imagery excluded): what is wrong with its key, if anything. */
+function patternIssues(doc: Doc): Array<{ index: number; issue: string }> {
+  const reference = referenceIndex(doc);
+  const seen = new Set<string>();
+  return doc.patterns.flatMap((p, index) => {
+    if (index === reference) return [];
+    const issue = !p.key
+      ? 'Give the pattern a key.'
+      : p.key === REFERENCE_PATTERN
+        ? 'This key is the reference imagery; choose another.'
+        : seen.has(p.key)
+          ? 'Another pattern has this key.'
+          : null;
+    seen.add(p.key);
+    return issue ? [{ index, issue }] : [];
+  });
+}
+
+/** Per channel row: what is wrong with its channel, if anything (one row per channel). */
+function channelIssues(doc: Doc): Array<{ index: number; issue: string }> {
+  const seen = new Set<string>();
+  return doc.channelGuidance.flatMap((c, index) => {
+    const issue = !c.providerKey
+      ? 'Choose the channel.'
+      : seen.has(c.providerKey)
+        ? 'Another row has this channel.'
+        : null;
+    seen.add(c.providerKey);
+    return issue ? [{ index, issue }] : [];
+  });
+}
+
+/**
+ * Patterns: named layouts a brief or template refers to by key, each with what it is for. Example images and the
+ * templates that implement a pattern are attached elsewhere and kept as they are; reference imagery is edited under
+ * Imagery and is not listed here.
+ */
+function PatternsSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
+  const issues = patternIssues(doc);
+  const update = (i: number, patch: Partial<Pattern>) =>
+    onChange({ ...doc, patterns: doc.patterns.map((p, j) => (j === i ? { ...p, ...patch } : p)) });
+  const reference = referenceIndex(doc);
+  const rows = doc.patterns.flatMap((p, i) => (i === reference ? [] : [{ p, i }]));
+  return (
+    <Section
+      title="Patterns"
+      hint="Named layouts agents and templates refer to by key, each with what it is for. Examples and templates attached to a pattern are kept as they are."
+    >
+      {rows.length === 0 && <p className="text-sm text-muted-foreground">No patterns yet.</p>}
+      <ul className="flex flex-col gap-3" aria-label="Patterns">
+        {rows.map(({ p, i }) => {
+          const issue = issues.find((x) => x.index === i)?.issue;
+          return (
+            <li key={i} className="flex flex-col gap-2 rounded-md border border-border p-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <Field label="Key" htmlFor={`kit-pattern-${i}-key`} error={issue} className="min-w-48 flex-1">
+                  <Input
+                    id={`kit-pattern-${i}-key`}
+                    placeholder="e.g. quote-card"
+                    value={p.key}
+                    aria-invalid={issue ? true : undefined}
+                    className={issue ? 'border-status-critical' : undefined}
+                    onChange={(e) => update(i, { key: e.target.value.toLowerCase().replace(/\s+/g, '-') })}
+                    maxLength={60}
+                  />
+                </Field>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onChange({ ...doc, patterns: doc.patterns.filter((_, j) => j !== i) })}
+                >
+                  Remove<span className="sr-only"> pattern {p.key || i + 1}</span>
+                </Button>
+              </div>
+              <Field label="What it is for" htmlFor={`kit-pattern-${i}-description`}>
+                <Textarea
+                  id={`kit-pattern-${i}-description`}
+                  rows={2}
+                  maxLength={1000}
+                  value={p.description}
+                  onChange={(e) => update(i, { description: e.target.value })}
+                />
+              </Field>
+              {(p.exampleAssetIds.length > 0 || p.templateVersionIds.length > 0) && (
+                <p className="font-mono text-xs text-muted-foreground">
+                  {p.exampleAssetIds.length} examples · {p.templateVersionIds.length} templates (kept as they
+                  are)
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <div>
+        <Button
+          size="sm"
+          onClick={() =>
+            onChange({
+              ...doc,
+              patterns: [
+                ...doc.patterns,
+                { key: '', description: '', exampleAssetIds: [], templateVersionIds: [] },
+              ],
+            })
+          }
+          disabled={doc.patterns.length >= 40}
+        >
+          Add pattern
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Channel guidance: per channel, the caption style, preferred formats and call-to-action conventions agents follow
+ * when they write for it. A channel the document names that is not a Release 1 provider is kept and offered as is.
+ */
+function ChannelsSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
+  const rows = doc.channelGuidance;
+  const issues = channelIssues(doc);
+  // Rows have no id of their own; a local one keeps each row's typed formats with it when another is removed.
+  const next = useRef(0);
+  const [ids, setIds] = useState(() => rows.map(() => next.current++));
+  const update = (i: number, patch: Partial<ChannelGuidance>) =>
+    onChange({ ...doc, channelGuidance: rows.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+  return (
+    <Section
+      title="Channel guidance"
+      hint="How the brand writes for each channel: caption style, preferred formats and calls to action."
+    >
+      {rows.length === 0 && <p className="text-sm text-muted-foreground">No channel guidance yet.</p>}
+      <ul className="flex flex-col gap-3" aria-label="Channel guidance">
+        {rows.map((c, i) => (
+          <ChannelRow
+            key={ids[i] ?? `row-${i}`}
+            index={i}
+            value={c}
+            issue={issues.find((x) => x.index === i)?.issue}
+            used={rows.filter((_, j) => j !== i).map((x) => x.providerKey)}
+            onChange={(patch) => update(i, patch)}
+            onRemove={() => {
+              setIds(ids.filter((_, j) => j !== i));
+              onChange({ ...doc, channelGuidance: rows.filter((_, j) => j !== i) });
+            }}
+          />
+        ))}
+      </ul>
+      <div>
+        <Button
+          size="sm"
+          onClick={() => {
+            setIds([...ids, next.current++]);
+            onChange({
+              ...doc,
+              channelGuidance: [
+                ...rows,
+                { providerKey: '', captionStyle: '', preferredFormats: [], ctaConventions: '' },
+              ],
+            });
+          }}
+          disabled={rows.length >= 20}
+        >
+          Add channel
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+function ChannelRow({
+  index,
+  value,
+  issue,
+  used,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  value: ChannelGuidance;
+  issue: string | undefined;
+  used: string[];
+  onChange: (patch: Partial<ChannelGuidance>) => void;
+  onRemove: () => void;
+}) {
+  const [formats, setFormats] = useState(value.preferredFormats.join(', '));
+  const id = `kit-channel-${index}`;
+  const known = RELEASE_1_PROVIDERS.some((p) => p.key === value.providerKey);
+  const options = [
+    ...RELEASE_1_PROVIDERS.map((p) => ({ value: p.key, label: p.label, disabled: used.includes(p.key) })),
+    ...(value.providerKey && !known ? [{ value: value.providerKey, label: value.providerKey }] : []),
+  ];
+  const label = RELEASE_1_PROVIDERS.find((p) => p.key === value.providerKey)?.label ?? value.providerKey;
+  return (
+    <li className="flex flex-col gap-2 rounded-md border border-border p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label="Channel" htmlFor={`${id}-provider`} error={issue} className="min-w-48 flex-1">
+          <Select
+            id={`${id}-provider`}
+            placeholder="Choose a channel"
+            value={value.providerKey}
+            onValueChange={(providerKey) => onChange({ providerKey })}
+            options={options}
+          />
+        </Field>
+        <Button size="sm" variant="ghost" onClick={onRemove}>
+          Remove<span className="sr-only"> guidance for {label || `row ${index + 1}`}</span>
+        </Button>
+      </div>
+      <Field label="Caption style" htmlFor={`${id}-caption`}>
+        <Textarea
+          id={`${id}-caption`}
+          rows={2}
+          maxLength={2000}
+          value={value.captionStyle}
+          onChange={(e) => onChange({ captionStyle: e.target.value })}
+        />
+      </Field>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field
+          label="Preferred formats"
+          htmlFor={`${id}-formats`}
+          hint="Separated by commas, for example carousel, short video."
+        >
+          <Input
+            id={`${id}-formats`}
+            value={formats}
+            onChange={(e) => {
+              setFormats(e.target.value);
+              onChange({ preferredFormats: commas(e.target.value, 12) });
+            }}
+          />
+        </Field>
+        <Field label="Calls to action" htmlFor={`${id}-cta`}>
+          <Input
+            id={`${id}-cta`}
+            value={value.ctaConventions}
+            maxLength={1000}
+            onChange={(e) => onChange({ ctaConventions: e.target.value })}
+          />
+        </Field>
+      </div>
+    </li>
   );
 }

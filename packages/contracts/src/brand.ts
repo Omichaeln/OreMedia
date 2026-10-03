@@ -277,6 +277,23 @@ export const BrandVersionPublish = z.object({
   versionId: z.string(),
   expectedVersion: z.number().int(),
 });
+/**
+ * D-22: the brand has one brand system that a person edits and saves; the save applies at once. `basedOnVersionId`
+ * is the applied version the edit started from (null before the first save): a save over a newer one is a conflict.
+ * `proposal` names a pending proposal (an imported brand skill or an agent's suggestion) the save applies and closes.
+ */
+export const BrandSystemSave = z.object({
+  brandId: z.string(),
+  basedOnVersionId: z.string().nullable(),
+  document: BrandSystemDocumentV1,
+  proposal: z.object({ versionId: z.string(), expectedVersion: z.number().int() }).optional(),
+});
+/** D-22: dismiss a pending proposal without applying it. */
+export const BrandProposalDiscard = z.object({
+  brandId: z.string(),
+  versionId: z.string(),
+  expectedVersion: z.number().int(),
+});
 export const BrandVersionGet = z.object({ brandId: z.string(), versionId: z.string() });
 /** UX-20: what publishing any version of the brand would reach now (open requests, valid approvals, scheduled posts). */
 export const BrandVersionImpact = z.object({ brandId: z.string() });

@@ -57,10 +57,15 @@ import {
   BrandClassify,
   BrandCompleteSetup,
   BrandGuidelinesImport,
+  BrandProposalDiscard,
+  BrandSystemDocumentV1,
+  BrandSystemSave,
+  BrandVersionCreateDraft,
   BrandVersionGet,
   BrandVersionImpact,
   BrandVersionList,
   BrandVersionUpdate,
+  emptyBrandSystemDocument,
   FactList,
   ObjectiveList,
   OnboardingStart,
@@ -163,6 +168,81 @@ interface BrandRow {
   version?: number;
   /** R1-D: a brand starts in `setup` until a person completes it; absent means active. */
   status?: 'setup' | 'active';
+}
+
+/** A brand version as brand.versions.get returns it; D-22: internal, immutable records of each save and proposal. */
+export interface MockBrandVersion {
+  id: string;
+  brandId: string;
+  number: number;
+  state: 'draft' | 'in_review' | 'published' | 'retired';
+  document: BrandSystemDocumentV1;
+  contentHash: string;
+  publishedAt: string | null;
+  publishedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+/** Roles holding brand.edit_standards and brand.publish_version (packages/domain role-grants MANAGERS). */
+const BRAND_SYSTEM_ROLES = new Set<string>(['owner', 'admin', 'brand_manager']);
+
+/** A brand system document's hash over its parsed form, so a document sent back unchanged hashes the same. */
+const documentHash = (document: unknown) => hash(BrandSystemDocumentV1.parse(document));
+
+/**
+ * The fixture brand's versions: the applied brand system (the fixture snapshot) and one pending proposal, a draft
+ * that adds reference imagery and imported guidelines (as a brand skill import leaves one).
+ */
+function seedBrandVersions(brandId: string): MockBrandVersion[] {
+  const document = BrandSystemDocumentV1.parse(fixtureSnapshot().document);
+  const at = now();
+  const applied: MockBrandVersion = {
+    id: E2E.brandVersionId,
+    brandId,
+    number: 1,
+    state: 'published',
+    document,
+    contentHash: documentHash(document),
+    publishedAt: at,
+    publishedByUserId: 'usr_e2e',
+    createdAt: at,
+    updatedAt: at,
+    version: 1,
+  };
+  const proposed = BrandSystemDocumentV1.parse({
+    ...document,
+    patterns: [
+      {
+        key: 'reference-imagery',
+        description: 'Natural light on raw materials.',
+        exampleAssetIds: ['ast_e2e'],
+        templateVersionIds: [],
+      },
+    ],
+    guidelines: {
+      source: { name: 'e2e-brand', description: 'The E2E brand system.', packageHash: hash('e2e-brand') },
+      documents: [
+        { path: 'SKILL.md', content: '# E2E brand\nDirect and precise.' },
+        { path: 'references/tone.md', content: '# Tone\nNever loud.' },
+      ],
+    },
+  });
+  return [
+    applied,
+    {
+      ...applied,
+      id: 'bv_e2e_draft',
+      number: 2,
+      state: 'draft',
+      document: proposed,
+      contentHash: documentHash(proposed),
+      publishedAt: null,
+      publishedByUserId: null,
+      version: 0,
+    },
+  ];
 }
 
 /** Agent runs as agents.runs.get returns them (the steps are served by agents.runs.steps). */
@@ -445,15 +525,78 @@ export class MockBackend {
   /** Google Fonts imports received (tests read what the editor asked for). */
   readonly googleImports: unknown[] = [];
   readonly guidelineImports: Array<{ brandId: string; paths: string[] }> = [];
-  /** The last brand draft document saved through brand.versions.update (tests read what the editor sent). */
-  brandDraftDocument: { voice?: unknown } | null = null;
-  lastBrandDraftVoice(): unknown {
-    return this.brandDraftDocument?.voice ?? null;
+  /** Onboarding runs started (brand.onboarding.start): the version each run writes its suggestion into. */
+  readonly onboardingStarts: Array<{ brandId: string; versionId: string }> = [];
+  /**
+   * The brand's versions (brand.versions.* and brand.system.*): every save and proposal, as the API keeps them. D-22:
+   * a save appends a published version and retires the previous one; imports and agents land drafts (proposals).
+   */
+  brandVersions: MockBrandVersion[];
+  /** Every brand.system.save received, in order (tests read what the editor sent). */
+  readonly brandSystemSaves: Array<z.infer<typeof BrandSystemSave>> = [];
+  /** The last brand system document saved (brand.system.save, or brand.versions.update by an import or agent). */
+  savedBrandDocument: BrandSystemDocumentV1 | null = null;
+  lastSavedBrandVoice(): unknown {
+    return this.savedBrandDocument?.voice ?? null;
   }
-  lastBrandDraftTypeRoles(): unknown {
-    return (
-      (this.brandDraftDocument as { tokens?: { typeRoles?: unknown } } | null)?.tokens?.typeRoles ?? null
+  lastSavedBrandTypeRoles(): unknown {
+    return this.savedBrandDocument?.tokens.typeRoles ?? null;
+  }
+  /** One brand's versions, newest first (brand.versions.list). */
+  brandVersionsOf(brandId: string): MockBrandVersion[] {
+    return this.brandVersions.filter((v) => v.brandId === brandId).sort((a, b) => b.number - a.number);
+  }
+  private nextBrandVersion(
+    brandId: string,
+    state: MockBrandVersion['state'],
+    document: BrandSystemDocumentV1,
+  ) {
+    const at = now();
+    const v: MockBrandVersion = {
+      id: `bv_e2e_${this.brandVersions.length + 1}`,
+      brandId,
+      number:
+        Math.max(0, ...this.brandVersions.filter((x) => x.brandId === brandId).map((x) => x.number)) + 1,
+      state,
+      document,
+      contentHash: documentHash(document),
+      publishedAt: state === 'published' ? at : null,
+      publishedByUserId: state === 'published' ? 'usr_e2e' : null,
+      createdAt: at,
+      updatedAt: at,
+      version: 0,
+    };
+    this.brandVersions.push(v);
+    return v;
+  }
+  /**
+   * D-22 as brand.system.save applies a document: a new version published at once, the one applied before retired and
+   * the brand pointed at the new one. Tests call it to have someone else save in the meantime. Approvals are not
+   * invalidated here (the API does that in the brand change workflow).
+   */
+  applyBrandSystem(brandId: string, document: BrandSystemDocumentV1): MockBrandVersion {
+    const brand = this.brands.find((b) => b.id === brandId);
+    if (!brand) throw new NotFoundError('Brand', brandId);
+    const previous = this.brandVersions.find(
+      (v) => v.id === brand.publishedVersionId && v.state === 'published',
     );
+    if (previous)
+      Object.assign(previous, { state: 'retired', version: previous.version + 1, updatedAt: now() });
+    const v = this.nextBrandVersion(brandId, 'published', document);
+    v.version = 2;
+    brand.publishedVersionId = v.id;
+    brand.version = (brand.version ?? 1) + 1;
+    return v;
+  }
+  /** A proposed update (a draft newer than the applied brand system), as an import, an agent or createDraft lands one. */
+  proposeBrandUpdate(brandId: string, document: BrandSystemDocumentV1): MockBrandVersion {
+    return this.nextBrandVersion(brandId, 'draft', document);
+  }
+  /** The document the brand has applied now (the empty document before the first save). */
+  appliedBrandDocument(brandId: string): BrandSystemDocumentV1 {
+    const brand = this.brands.find((b) => b.id === brandId);
+    const v = this.brandVersions.find((x) => x.id === brand?.publishedVersionId);
+    return v ? v.document : emptyBrandSystemDocument();
   }
   readonly tenantId: string;
   readonly brandId: string;
@@ -685,6 +828,7 @@ export class MockBackend {
       return d ? { brandId: d.brandId, displayName: d.displayName, usable: d.status === 'active' } : null;
     };
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
+    this.brandVersions = seedBrandVersions(company.brandId);
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
 
@@ -1036,51 +1180,7 @@ export type MockBuilders = ReturnType<typeof createBuilders>;
 
 export function createMockRouter(backend: MockBackend) {
   const { query, mutation, authedOnly } = createBuilders(backend);
-  const brandDoc = fixtureSnapshot().document;
-  const brandVersion = {
-    id: E2E.brandVersionId,
-    brandId: backend.brandId,
-    number: 1,
-    state: 'published' as const,
-    document: brandDoc,
-    contentHash: hash(brandDoc),
-    publishedAt: now(),
-    publishedByUserId: 'usr_e2e',
-    createdAt: now(),
-    updatedAt: now(),
-    version: 1,
-  };
-  const { document: _d, ...brandVersionSummary } = brandVersion;
-  /** A draft with a palette and selected reference imagery, so the brand kit editor opens with content. */
-  const brandDraftDoc = {
-    ...brandDoc,
-    patterns: [
-      {
-        key: 'reference-imagery',
-        description: 'Natural light on raw materials.',
-        exampleAssetIds: ['ast_e2e'],
-        templateVersionIds: [],
-      },
-    ],
-    guidelines: {
-      source: { name: 'e2e-brand', description: 'The E2E brand system.', packageHash: hash('e2e-brand') },
-      documents: [
-        { path: 'SKILL.md', content: '# E2E brand\nDirect and precise.' },
-        { path: 'references/tone.md', content: '# Tone\nNever loud.' },
-      ],
-    },
-  };
-  let brandDraft = {
-    ...brandVersion,
-    id: 'bv_e2e_draft',
-    number: 2,
-    state: 'draft' as const,
-    document: brandDraftDoc,
-    contentHash: hash(brandDraftDoc),
-    publishedAt: null,
-    publishedByUserId: null,
-  };
-  const summaryOf = ({ document: _doc, ...rest }: typeof brandDraft) => rest;
+  const summaryOf = ({ document: _doc, ...rest }: MockBrandVersion) => rest;
 
   const p6 = phase6Routers(backend.phase6, { router: t.router, query, mutation });
   const p5 = phase5Routers(
@@ -2021,11 +2121,18 @@ export function createMockRouter(backend: MockBackend) {
           // Approximations against the real parser: colours are any six-digit hex in the text (the server reads table
           // rows, case-folded), documents keep input order, source.description is empty.
           backend.guidelineImports.push({ brandId: input.brandId, paths: input.files.map((f) => f.path) });
+          // As the API, the import lands a proposed update: the applied brand system with these guidelines (the mock
+          // does not add the colours to the palette).
+          const source = { name, description: '', packageHash: hash(files) };
+          const proposal = backend.proposeBrandUpdate(input.brandId, {
+            ...backend.appliedBrandDocument(input.brandId),
+            guidelines: { source, documents: documents.map((d) => ({ path: d.path, content: d.content })) },
+          });
           return {
-            versionId: `bv_e2e_${backend.guidelineImports.length + 2}`,
-            number: backend.guidelineImports.length + 2,
-            version: 0,
-            source: { name, description: '', packageHash: hash(files) },
+            versionId: proposal.id,
+            number: proposal.number,
+            version: proposal.version,
+            source,
             documents: documents.map((d) => d.path),
             coloursAdded: colours.size,
             skipped: files
@@ -2035,12 +2142,20 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       versions: t.router({
-        list: query
-          .input(BrandVersionList)
-          .query(() => ({ items: [summaryOf(brandDraft), brandVersionSummary], nextCursor: null })),
-        get: query
-          .input(BrandVersionGet)
-          .query(({ input }) => (input.versionId === brandDraft.id ? brandDraft : brandVersion)),
+        list: query.input(BrandVersionList).query(({ input }) => ({
+          items: backend.brandVersionsOf(input.brandId).map(summaryOf),
+          nextCursor: null,
+        })),
+        get: query.input(BrandVersionGet).query(({ input }) => {
+          const v = backend.brandVersions.find((x) => x.id === input.versionId);
+          if (!v) throw new NotFoundError('BrandVersion', input.versionId);
+          return v;
+        }),
+        /** Imports and agents still start proposals this way (the screen offers no "new draft"). */
+        createDraft: mutation.input(BrandVersionCreateDraft).mutation(({ input }) => {
+          const v = backend.proposeBrandUpdate(input.brandId, backend.appliedBrandDocument(input.brandId));
+          return { versionId: v.id, number: v.number, version: v.version };
+        }),
         /** UX-20: what a publish reaches now, from the review and publishing stores as the API composes them. */
         impact: query.input(BrandVersionImpact).query(({ input }) => {
           const requests = [...backend.phase5.requests.values()].filter(
@@ -2077,19 +2192,84 @@ export function createMockRouter(backend: MockBackend) {
             computedAt: now(),
           };
         }),
+        /** An import's or agent's edit of a proposal; applied and retired versions are never edited. */
         update: mutation.input(BrandVersionUpdate).mutation(({ input }) => {
-          backend.brandDraftDocument = input.document as { voice?: unknown };
-          brandDraft = {
-            ...brandDraft,
-            document: input.document as typeof brandDraftDoc,
-            contentHash: hash(input.document),
-            version: brandDraft.version + 1,
-          };
+          const v = backend.brandVersions.find(
+            (x) => x.id === input.versionId && x.brandId === input.brandId,
+          );
+          if (!v) throw new NotFoundError('BrandVersion', input.versionId);
+          if (v.state !== 'draft' && v.state !== 'in_review')
+            throw new PolicyDeniedError('version_not_editable', 'Only a proposed update can be edited');
+          if (input.expectedVersion !== v.version)
+            throw new ConflictError('BrandVersion', v.id, input.expectedVersion);
+          backend.savedBrandDocument = input.document;
+          Object.assign(v, {
+            document: input.document,
+            contentHash: documentHash(input.document),
+            version: v.version + 1,
+            updatedAt: now(),
+          });
+          return { versionId: v.id, version: v.version, contentHash: v.contentHash };
+        }),
+      }),
+      /** D-22 as the API: one brand system, saved in place (applied at once); proposals applied by a save or discarded. */
+      system: t.router({
+        save: mutation.input(BrandSystemSave).mutation(({ ctx, input }) => {
+          if (!BRAND_SYSTEM_ROLES.has(ctx.member?.role ?? ''))
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include brand.publish_version for this brand',
+            );
+          const brand = backend.brands.find((b) => b.id === input.brandId);
+          if (!brand) throw new NotFoundError('Brand', input.brandId);
+          if ((brand.publishedVersionId ?? null) !== input.basedOnVersionId)
+            throw new ConflictError('BrandSystem', brand.id, brand.version ?? 1);
+          const proposal = input.proposal
+            ? backend.brandVersions.find((v) => v.id === input.proposal?.versionId && v.brandId === brand.id)
+            : null;
+          if (input.proposal && !proposal) throw new NotFoundError('BrandVersion', input.proposal.versionId);
+          if (proposal && proposal.state !== 'draft' && proposal.state !== 'in_review')
+            throw new ValidationFailedError(
+              [{ path: 'proposal.versionId', issue: 'proposal_closed' }],
+              'This proposal was already applied or discarded',
+            );
+          if (proposal && input.proposal && input.proposal.expectedVersion !== proposal.version)
+            throw new ConflictError('BrandVersion', proposal.id, input.proposal.expectedVersion);
+          backend.brandSystemSaves.push(input);
+          backend.savedBrandDocument = input.document;
+          const published = backend.brandVersions.find((v) => v.id === brand.publishedVersionId);
+          const contentHash = documentHash(input.document);
+          // Saving what is already applied changes nothing: no new version.
+          const unchanged = published !== undefined && published.contentHash === contentHash;
+          const applied = unchanged ? null : backend.applyBrandSystem(brand.id, input.document);
+          if (proposal)
+            Object.assign(proposal, { state: 'retired', version: proposal.version + 1, updatedAt: now() });
           return {
-            versionId: brandDraft.id,
-            version: brandDraft.version,
-            contentHash: brandDraft.contentHash,
+            brandId: brand.id,
+            changed: !unchanged,
+            versionId: applied?.id ?? published?.id ?? null,
+            contentHash,
           };
+        }),
+        discardProposal: mutation.input(BrandProposalDiscard).mutation(({ ctx, input }) => {
+          if (!BRAND_SYSTEM_ROLES.has(ctx.member?.role ?? ''))
+            throw new PolicyDeniedError(
+              'role_missing',
+              'Your role does not include brand.edit_standards for this brand',
+            );
+          const v = backend.brandVersions.find(
+            (x) => x.id === input.versionId && x.brandId === input.brandId,
+          );
+          if (!v) throw new NotFoundError('BrandVersion', input.versionId);
+          if (v.state !== 'draft' && v.state !== 'in_review')
+            throw new ValidationFailedError(
+              [{ path: 'versionId', issue: 'proposal_closed' }],
+              'This proposal was already applied or discarded',
+            );
+          if (input.expectedVersion !== v.version)
+            throw new ConflictError('BrandVersion', v.id, input.expectedVersion);
+          Object.assign(v, { state: 'retired', version: v.version + 1, updatedAt: now() });
+          return { versionId: v.id, state: 'retired' as const, version: v.version };
         }),
       }),
       onboarding: t.router({
@@ -2097,16 +2277,19 @@ export function createMockRouter(backend: MockBackend) {
         start: mutation.input(OnboardingStart).mutation(({ input }) => {
           if (input.servicePrincipalId !== 'sp_e2e_onboarding')
             throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
-          if (input.versionId !== brandDraft.id)
+          const target = backend.brandVersions.find((v) => v.id === input.versionId);
+          if (!target) throw new NotFoundError('BrandVersion', input.versionId);
+          if (target.state !== 'draft')
             throw new ValidationFailedError([
               { path: 'versionId', issue: 'onboarding proposes into a draft only' },
             ]);
+          backend.onboardingStarts.push({ brandId: input.brandId, versionId: target.id });
           return {
             runId: 'run_e2e_onboarding',
             state: 'planned',
             autonomyMode: 'create',
             workflowId: 'run:run_e2e_onboarding',
-            versionId: brandDraft.id,
+            versionId: target.id,
           };
         }),
       }),

@@ -75,10 +75,7 @@ describe.skipIf(!enabled)(
       await page.getByRole('button', { name: 'Continue' }).click();
       await page.waitForURL('**/portfolio*', { timeout: 15_000 });
       await page.goto(`${d.origin}${typography}`);
-      await page
-        .getByRole('group', { name: 'Version shown' })
-        .getByRole('button', { name: /proposed/ })
-        .click({ timeout: 15_000 });
+      await page.getByRole('button', { name: /^Edit / }).click({ timeout: 15_000 });
       await page.getByRole('list', { name: 'Brand fonts' }).getByText('Karla').waitFor({ timeout: 15_000 });
       return { context, page, violations };
     };
