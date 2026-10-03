@@ -89,7 +89,7 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     currentRevisionId: creativeRevisionId,
     schemaVersion: 1,
   });
-  // sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0027), which the
+  // sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0025), which the
   // roll-forward suites' earlier heads do not have; the columns named here exist at every head, later ones are null.
   const initialBatch = {
     baseRevisionId: '',
@@ -149,7 +149,7 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     requestedByKind: 'user',
     requestedById: ownerUserId,
   });
-  // STU-1b (migration 0027): a failed generation job of the document (retry and cancel need a job id to try).
+  // STU-1b (migration 0025): a failed generation job of the document (retry and cancel need a job id to try).
   const generationJobId = newId('studioGenerationJob');
   const generationAtHead = await db.execute(
     sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'studio_generation_jobs'`,

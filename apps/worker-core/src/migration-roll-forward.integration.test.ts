@@ -61,7 +61,7 @@ const LATER_TABLES: MySqlTable[] = [
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
-  studioGenerationJobs, // 0027
+  studioGenerationJobs, // 0025
 ];
 
 const TABLES = (Object.values(schema) as unknown[])

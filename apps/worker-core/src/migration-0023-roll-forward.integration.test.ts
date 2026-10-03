@@ -20,7 +20,7 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * supersedes it. Additive and roll-forward safe: the new columns are in LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0022_channel_health';
-/** Added by later migrations (0027). */
+/** Added by later migrations (0025). */
 const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

@@ -132,8 +132,8 @@ Graphic documents keep schemaVersion 1 and change only additively; video is a ne
 - Contracts: `packages/contracts/src/generation.ts` (brief, refine request with explicit scope and action
   `edit | alternatives | adapt`, preflight, job DTO states, the model's strict output `ModelGenerationOutput`, proposal
   groups, `GenerationInputs`, workflow input and activity interfaces). Job ids use the prefix `sgj`.
-- Migration `0027_studio_generation` (self-contained, drizzle-kit output renumbered; 0024-0026 are reserved
-  elsewhere): table `studio_generation_jobs` (one row per document, base revision and inputs hash; attempts update it
+- Migration `0025_studio_generation` (self-contained, drizzle-kit output renamed; 0024 is reserved elsewhere, and the
+  journal idx follows the latest migration on main): table `studio_generation_jobs` (one row per document, base revision and inputs hash; attempts update it
   in place) and nullable `creative_revisions.generation_inputs`. Rows written before it read as null.
 - Pure parts in `packages/editor/src/generation.ts`: slots of a page (template slots or the element's role; locked,
   protected, logo, hidden, locked-page and out-of-scope elements listed as fixed), the structural operations a request

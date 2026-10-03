@@ -7,7 +7,7 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0027 (STU-1b studio generation): on a database populated at the previous head (0023)
+ * Ledger 1.g4 for migration 0025 (STU-1b studio generation): on a database populated at the previous head (0023)
  * the migration adds the nullable creative_revisions.generation_inputs (null on every existing revision) and the
  * empty studio_generation_jobs table; every existing column of every row is unchanged. Additive and roll-forward
  * safe: a revision written by the previous release has no generation inputs, which reads as a person's or an agent
@@ -19,7 +19,7 @@ const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));
 
-describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', () => {
+describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
   let before = '';
 
