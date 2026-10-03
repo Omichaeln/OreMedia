@@ -36,3 +36,14 @@ export {
   type KonvaAdapterOptions,
   type KonvaEditorHandle,
 } from './konva-adapter';
+export {
+  STARTERS,
+  starterByKey,
+  instantiateStarter,
+  starterBrandIssue,
+  blankDocument,
+  type StarterSpec,
+  type StarterBrand,
+  type StarterSlot,
+  type InstantiatedStarter,
+} from './starters';
