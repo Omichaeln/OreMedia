@@ -13,14 +13,17 @@ The programme released all fourteen remediation items, RA-01 to RA-14, to produc
 every production service now runs `main` at `726a92b`, confirmed by production smoke run 35 at 19:20 UTC on
 2 October 2026. Production takes a database backup every 15 minutes and a timed restore drill passed on staging.
 The staging acceptance job proved sign-in, isolation, the deployed browser journeys, accessibility audits of the
-public screens and the skill-evaluation dispatch path on the deployed environment. Five pull requests remain open and are not released: #40 makes the model adapters name the provider's status and message on a rejected request,
-#41 makes the responsive e2e test wait for focus to return to Menu, #42 sends Google OIDC requests through undici's
-fetch, #43 adds a scoped `pnpm audit` exception for an unpatched dev-only advisory, and #31 holds the Brand Kit Agent architecture docs awaiting the entry-point approval. What remains blocked sits with the owner. No channel, source or CMS
+public screens and the skill-evaluation dispatch path on the deployed environment. Follow-ups #40 to #43 and #45
+are released too: model rejections name the provider's status and message, the responsive e2e focus race is fixed,
+Google OIDC and every OpenRouter call go through undici's fetch, and a scoped `pnpm audit` exception covers an
+unpatched dev-only advisory; production runs `3220166`. #31 holds the Brand Kit Agent architecture docs awaiting the
+entry-point approval. What remains blocked sits with the owner. No channel, source or CMS
 provider is certified, so production publishes to no real channel and reads no real source until the platform apps
 are approved and each adapter is certified with real accounts. Staging cannot prove uploads, renders or releases
 while its object store is a placeholder. The staging approval monitor crashes on sample Gmail credentials. Railway
-has no alert destination. The real-model evaluation on staging fails because the model provider rejects the
-request, and PR #40 is the change that will name the cause.
+has no alert destination. The real-model evaluation on staging fails because OpenRouter rejects the staging key with
+`401: Missing Authentication header`; the same answer after the transport change rules the transport out, so a valid
+staging key is an owner action.
 
 ## 2. Capability matrix
 
@@ -101,7 +104,7 @@ Names and states only, as recorded in section 1 of the ledger and corrected by i
 | -------------------------------------------------------- | ------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
 | Google sign-in, `AUTH_*`                                 | set                                               | set                  | usable and verified                                                                            |
 | Object store R2, `OBJECT_STORE_*`                        | set on api, worker-core, worker-render            | placeholder endpoint | production usable and verified by smoke; staging not usable                                    |
-| Model provider                                           | set on worker-core and worker-ingest, sealed      | set                  | configured; staging evaluation rejected by the provider, cause pending PR #40                  |
+| Model provider                                           | set on worker-core and worker-ingest, sealed      | set                  | configured; staging key rejected by OpenRouter, `401: Missing Authentication header`           |
 | Meta `facebook_page`, `instagram_business`               | set on api and workers                            | samples              | configured but uncertified; Meta app unpublished, App Review and Business Verification pending |
 | LinkedIn `linkedin_page`                                 | set                                               | sample               | configured but uncertified; Community Management API review in progress                        |
 | X `x`                                                    | disabled by `OREMEDIA_DISABLED_CHANNELS`          | disabled             | deliberately disabled; D-04 open, no app                                                       |
@@ -157,12 +160,12 @@ in Railway or the platform consoles and never pass through engineering or this r
 6. [ ] **Sandbox network access to `*.railway.app`.** The engineering sandbox cannot reach the Railway origins, which
        is why the acceptance job runs inside the staging project rather than from engineering's side. Where: the network access setting of the engineering sandbox environment. Engineering then runs
        smoke and acceptance checks against staging directly.
-7. [ ] **Staging model-provider rejection.** Both staging gradings failed with `The model provider rejected the
- request`. Candidates recorded in the ledger are an invalid key, an unknown model id or a malformed request.
-       It blocks the passing model evaluation, the last open part of RA-14. Where: Railway, `OreMedia Staging`,
-       worker-core, `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID`. Engineering first merges PR #40 so the error
-       carries the provider's status and message, re-runs the acceptance job, then tells the owner which value to
-       correct; after the fix engineering re-runs and records `MODEL_EVAL_PASS`.
+7. [ ] **Staging OpenRouter key.** Every staging grading fails with `The model provider rejected the request
+    (401: Missing Authentication header)`, before and after the OpenRouter adapters moved to undici's fetch, so
+       the staging key value is not a working OpenRouter key. It blocks the passing model evaluation, the last open
+       part of RA-14. Where: Railway, `OreMedia Staging`, worker-core, `OPENROUTER_API_KEY_REF`: set a valid
+       OpenRouter API key, ideally one scoped to staging with a spend limit. Engineering then redeploys the
+       `acceptance` service and records `MODEL_EVAL_PASS` or the grading result.
 
 Carried forward from `docs/release/r2-handover.md` and still open: delete the leftover hello-world services
 `alluring-bravery` and `function-bun` behind two-factor confirmation; approve the deletion of staging
@@ -193,7 +196,7 @@ with `bootstrap-owner`.
 | Staging object store is a placeholder                                      | Staging cannot prove uploads, renders, releases or the Studio suite                                               | Certain until fixed                                 | Production store verified by every smoke run                                                                                                                         | Owner action 1                                                                                                               |
 | No alert destination                                                       | Failed backups, crashed workers and failed deploys reach nobody                                                   | High until configured                               | Smoke every six hours; backup failures mark the Railway deployment failed                                                                                            | Owner action 3; on-call rota per residual risk R16                                                                           |
 | Uncertified providers                                                      | No real publication or source read; first real runs may surface behaviour the fixtures do not model               | Certain until certified                             | The registry refuses uncertified adapters; failures are classified and never retried tightly                                                                         | Owner action 4, then the certification runbook                                                                               |
-| Model evaluation not passing on staging                                    | Skill gradings on staging fail; production behaviour not recorded                                                 | Certain on staging until the cause is fixed         | The failure is now named instead of timing out; the workflow-id defect is fixed on `726a92b`                                                                         | PR #40 names the cause; owner action 7                                                                                       |
+| Model evaluation not passing on staging                                    | Skill gradings on staging fail; production behaviour not recorded                                                 | Certain on staging until the key is replaced        | The failure names its cause; the workflow-id defect is fixed on `726a92b`; the transport is ruled out on `3220166`                                                   | Owner action 7: a valid staging OpenRouter key                                                                               |
 | `pnpm audit` exception for GHSA-vfj7-8cjw-p6xm, braces, no patched release | Lint tooling only: eslint-plugin-boundaries > micromatch > braces; no production package depends on braces        | Low                                                 | CI still fails on every other high or critical advisory; Trivy scans the images; residual risk R18                                                                   | Remove the entry once a patched braces, micromatch or eslint-plugin-boundaries ships; the owner may reject it by closing #43 |
 | Retention sweep apply state                                                | Data kept longer than policy while the sweep runs dry, or deleted early once applied                              | Not recorded                                        | The sweep is a dry run unless `RETENTION_SWEEP_APPLY=true`; retention role PASS in production                                                                        | Confirm D-09 retention periods, then record the worker-core mode in the ledger                                               |
 | One-hour credential shred floor                                            | A disconnected credential may remain intact, though unusable, for up to an hour if the revoke workflow is delayed | Low                                                 | The broker refuses a disconnected credential for anything but the remote revoke; the publication sweeper shreds any credential still intact an hour after disconnect | Accept as designed, or shorten the sweeper floor if the owner requires it                                                    |
