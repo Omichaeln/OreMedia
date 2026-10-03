@@ -41,6 +41,8 @@ export const ID_PREFIXES = {
   template: 'tpl',
   templateVersion: 'tv',
   renderJob: 'rj',
+  /** STU-3: a durable studio video AI job (storyboard or recut). */
+  studioVideoJob: 'svj',
   renderPreview: 'rpv',
   previewExport: 'pvx',
   campaign: 'cmp',
