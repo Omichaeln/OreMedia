@@ -9,7 +9,7 @@ supersedes the staged-job design in draft PR #31 where they differ; that note's 
 1. **One brand system, internal versions.** Every applied change is still an immutable `brand_versions` row (D-22).
    The UI gains a read-only history with compare and restore; restore is a normal `brand.system.save` of an earlier
    document, so impact, approvals and audit behave exactly as for any save. No version management is exposed.
-2. **Nothing reaches the brand system without a person.** AI output lands as *suggestions*. A person accepts, edits or
+2. **Nothing reaches the brand system without a person.** AI output lands as _suggestions_. A person accepts, edits or
    rejects each one; accepted items are written into the pending proposal (a draft version); the proposal is applied
    with `brand.system.save` (`brand.edit_standards` + `brand.publish_version`, agents refused by `assertMayDecide`).
    Facts follow the same rule: agents and jobs can only propose; approval is a person's act.
@@ -31,7 +31,7 @@ supersedes the staged-job design in draft PR #31 where they differ; that note's 
 All additions are `.optional()` with no zod defaults, so stored documents parse and hash unchanged.
 
 - `Provenance = { origin: 'user'|'imported'|'inferred'|'suggested', evidence?: EvidenceRef[] (<=10),
-  confidence?: 'high'|'medium'|'low', suggestionId?: string }`, optional on every list item below.
+confidence?: 'high'|'medium'|'low', suggestionId?: string }`, optional on every list item below.
 - `voice` gains `personality[]`, `principles[]` ({statement, rationale}), `spelling` ({locale e.g. en-GB, notes}),
   `styleRules[]` (numbers, dates, capitalisation, punctuation), `claimRules[]`; `examples[]` gain optional
   `channelKey`, `contentType`, `rationale`, `rewrite`.
@@ -83,11 +83,11 @@ source can never be approved as-is: approval requires a source or an explicit re
 
 ## Increments
 
-| Inc | Scope |
-| --- | ----- |
-| BSC-1 | Guidance model: document additions, editors and read views per section, provenance display, snapshot and prompt rendering, skills cite guidance, channel baseline and overrides, generation integration |
+| Inc   | Scope                                                                                                                                                                                                                             |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BSC-1 | Guidance model: document additions, editors and read views per section, provenance display, snapshot and prompt rendering, skills cite guidance, channel baseline and overrides, generation integration                           |
 | BSC-2 | SVG logos: secondary variant, usage guidance, vector preview, Studio variant choice and rule check, preview and export parity, raster derivative where a destination needs one (articles), safe download, unsafe-SVG corpus tests |
-| BSC-3 | Facts workspace: migration, categories, origin, sources, review and expiry, correct (supersede), merge, conflicts, sweep, impact events, UI |
-| BSC-4 | Sources and setup: brand_sources, capture (URL, PDF, DOCX, text, assets), assist jobs, workflow, suggestion generation, setup wizard and review by section, re-import preservation |
-| BSC-5 | Collaboration: section assistant and overall assistant on BSC-4 jobs, compare with current, selective accept, undo, history and restore |
-| BSC-6 | Staging journeys and release evidence |
+| BSC-3 | Facts workspace: migration, categories, origin, sources, review and expiry, correct (supersede), merge, conflicts, sweep, impact events, UI                                                                                       |
+| BSC-4 | Sources and setup: brand_sources, capture (URL, PDF, DOCX, text, assets), assist jobs, workflow, suggestion generation, setup wizard and review by section, re-import preservation                                                |
+| BSC-5 | Collaboration: section assistant and overall assistant on BSC-4 jobs, compare with current, selective accept, undo, history and restore                                                                                           |
+| BSC-6 | Staging journeys and release evidence                                                                                                                                                                                             |

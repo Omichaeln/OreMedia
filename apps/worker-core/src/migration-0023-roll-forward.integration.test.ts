@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
-import { runInTenant, withTransaction } from '@oremedia/db';
+import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { approvedFacts } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -101,8 +101,7 @@ describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', (
       sources: [{ kind: 'other', ref: 'seed' }],
       state: 'proposed',
     });
-    const run = <T>(fn: Parameters<typeof withTransaction<T>>[0]) =>
-      runInTenant(ctx, () => withTransaction(fn));
+    const run = <T>(fn: (tx: Tx) => Promise<T>) => runInTenant(ctx, () => withTransaction(fn));
     await run((tx) => brandService.facts.approve(owner, { brandId, factId, expectedVersion: 0 }, tx));
     const correction = await run((tx) =>
       brandService.facts.correct(

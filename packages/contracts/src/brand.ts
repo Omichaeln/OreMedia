@@ -513,6 +513,8 @@ export const FactList = z.object({
   hasConflicts: z.boolean().optional(),
   possibleDuplicates: z.boolean().optional(),
   search: z.string().trim().min(1).max(200).optional(),
+  /** Only these facts of the brand (a brief's offer facts, for example); another brand's ids are left out. */
+  ids: z.array(z.string().max(32)).min(1).max(100).optional(),
   page: PageRequest,
 });
 export const ObjectiveSet = z.object({

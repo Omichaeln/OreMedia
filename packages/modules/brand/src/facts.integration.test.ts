@@ -554,6 +554,8 @@ describe('facts workspace (BSC-3) against MySQL 8', () => {
     });
     expect((await list({ search: '20%' })).items.map((f) => f.id)).toEqual([soon.factId]); // % is literal
     expect((await list({ search: 'tariro' })).items.map((f) => f.id)).toEqual([due.factId]);
+    // A brief's offer facts by id: another tenant's id is simply left out.
+    expect((await list({ ids: [soon.factId, factOfB] })).items.map((f) => f.id)).toEqual([soon.factId]);
     const suggested = (await list({ origin: 'suggested' })).items;
     expect(suggested.length).toBeGreaterThan(0);
     expect(suggested.every((f) => f.origin === 'suggested')).toBe(true);

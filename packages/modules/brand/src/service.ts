@@ -1566,10 +1566,12 @@ export const brandService = {
           return kept.length ? [[id, kept] as const] : [];
         }),
       );
-      const { page, ...filters } = parsed;
+      const { page, ids, ...filters } = parsed;
+      const duplicateIds = parsed.possibleDuplicates ? [...duplicates.keys()] : undefined;
+      const only = ids && duplicateIds ? ids.filter((id) => duplicates.has(id)) : (ids ?? duplicateIds);
       const rows = await factsRepo.list(
         brand.id,
-        { ...filters, at, ...(parsed.possibleDuplicates ? { ids: [...duplicates.keys()] } : {}) },
+        { ...filters, at, ...(only ? { ids: only } : {}) },
         page,
         tx,
       );

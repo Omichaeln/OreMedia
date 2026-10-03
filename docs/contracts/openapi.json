@@ -1742,6 +1742,12 @@
                   "search": {
                     "type": "string"
                   },
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "page": {
                     "type": "object",
                     "properties": {
@@ -12791,6 +12797,12 @@
             },
             "search": {
               "type": "string"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "page": {
               "type": "object",
