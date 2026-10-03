@@ -543,6 +543,9 @@ importers:
       '@oremedia/domain':
         specifier: workspace:*
         version: link:../domain
+      '@oremedia/editor':
+        specifier: workspace:*
+        version: link:../editor
       '@oremedia/module-access':
         specifier: workspace:*
         version: link:../modules/access
@@ -1391,6 +1394,9 @@ importers:
         specifier: ^1.24.0
         version: 1.24.0
     devDependencies:
+      '@temporalio/activity':
+        specifier: ^1.24.0
+        version: 1.24.0
       '@temporalio/testing':
         specifier: ^1.24.0
         version: 1.24.0(@swc/helpers@0.5.23)(lightningcss@1.33.0)

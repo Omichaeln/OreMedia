@@ -1,6 +1,7 @@
 // Studio video v1 (STU-2b): the timeline model's pure reducer, inverse, rebase, guards, validation, overlay
 // helpers shared by the preview and the compositor, and the built-in starter templates.
 export * from './time';
+export { framePlacement, type FramePlacement } from './frame';
 export {
   reduceVideo,
   applyVideoBatch,

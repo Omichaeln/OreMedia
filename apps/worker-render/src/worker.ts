@@ -14,6 +14,7 @@ import {
   createRenderJobActivities,
   createVideoExportActivities,
   createVideoIngestActivities,
+  createVideoRenderActivities,
 } from '@oremedia/activities';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
@@ -151,6 +152,18 @@ const videoWorker = (await mediaToolsAvailable())
             : {}),
         }),
         ...createVideoExportActivities({ storage: storage() }),
+        // STU-2b: timeline renders (videoRenderJobWorkflowV1): overlays through the same Chromium renderer as
+        // stills, composition and encoding with ffmpeg (VIDEO_FFMPEG_THREADS threads, default 2).
+        ...createVideoRenderActivities({
+          store: creativeRenderJobStore(),
+          overlays: renderer,
+          rendererVersion: RENDERER_VERSION,
+          storage: storage(),
+          ...(process.env['MEDIA_TMP_MAX_BYTES']
+            ? { tmpMaxBytes: Number(process.env['MEDIA_TMP_MAX_BYTES']) }
+            : {}),
+          encoder: { threads: Number(process.env['VIDEO_FFMPEG_THREADS'] ?? 2) },
+        }),
       },
       maxConcurrentActivityTaskExecutions: Number(process.env['VIDEO_CONCURRENCY'] ?? 1),
     })
