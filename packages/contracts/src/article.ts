@@ -7,6 +7,7 @@ import {
   type ArticleFaqAnswerBlockV1,
   type ArticleImageV1,
 } from './content';
+import { scanMarkup, type MarkupToken } from './markup';
 
 /*
  * Ledger R2-3 (D-16): the one place an article becomes HTML and the one place HTML from outside (a remote
@@ -95,37 +96,33 @@ export function sanitizeArticleHtml(html: string): string {
   const out: string[] = [];
   const open: string[] = [];
   let dropping: string | null = null;
-  const token =
-    /<!--[\s\S]*?-->|<\/([a-zA-Z][a-zA-Z0-9]*)\s*>|<([a-zA-Z][a-zA-Z0-9]*)((?:\s+[^\s=>/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>|<|[^<]+/g;
-  for (const m of html.matchAll(token)) {
-    const [raw, closing, opening, attrs, selfClosing] = m;
-    if (raw.startsWith('<!--')) continue;
-    if (closing !== undefined) {
-      const name = closing.toLowerCase();
+  // One pass of the linear markup scanner (markup.ts): no regular expression runs over the untrusted markup.
+  for (const t of scanMarkup(html, { rawText: false })) {
+    if (t.type === 'close') {
       if (dropping) {
-        if (name === dropping) dropping = null;
+        if (t.name === dropping) dropping = null;
         continue;
       }
-      if (!(name in ARTICLE_HTML_ALLOWED_TAGS)) continue;
-      const at = open.lastIndexOf(name);
+      if (!Object.hasOwn(ARTICLE_HTML_ALLOWED_TAGS, t.name)) continue;
+      const at = open.lastIndexOf(t.name);
       if (at === -1) continue; // a close without its open: dropped
       while (open.length > at) out.push(`</${open.pop() as string}>`);
       continue;
     }
-    if (opening !== undefined) {
-      const name = opening.toLowerCase();
+    if (t.type === 'open') {
+      const name = t.name;
       if (dropping) continue;
       if (DROP_WITH_CONTENT.has(name)) {
-        if (!selfClosing) dropping = name;
+        if (!t.selfClosing) dropping = name;
         continue;
       }
-      const allowed = ARTICLE_HTML_ALLOWED_TAGS[name];
+      const allowed = Object.hasOwn(ARTICLE_HTML_ALLOWED_TAGS, name)
+        ? ARTICLE_HTML_ALLOWED_TAGS[name]
+        : undefined;
       if (!allowed) continue;
       const kept: string[] = [];
-      for (const a of (attrs ?? '').matchAll(/([^\s=>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
-        const attr = (a[1] as string).toLowerCase();
+      for (const [attr, value] of t.attrs) {
         if (!allowed.includes(attr)) continue;
-        const value = a[2] ?? a[3] ?? a[4] ?? '';
         if (URL_ATTRS.has(attr)) {
           const url = safeArticleUrl(value);
           if (!url) continue;
@@ -142,7 +139,7 @@ export function sanitizeArticleHtml(html: string): string {
       continue;
     }
     if (dropping) continue;
-    out.push(raw === '<' ? '&lt;' : escapeText(raw));
+    out.push(escapeText(t.text));
   }
   while (open.length) out.push(`</${open.pop() as string}>`);
   return out.join('');
@@ -263,7 +260,11 @@ export const articlePlainText = (article: ArticleDocumentV1): string =>
  * RA-03: the characters a body given as HTML carries once rendered (tags removed, entities decoded): the measure
  * ARTICLE_BODY_MAX_CHARS bounds, never the HTML's own length.
  */
-export const articleHtmlChars = (html: string): number => decodeEntities(html.replace(/<[^>]+>/g, '')).length;
+export const articleHtmlChars = (html: string): number => {
+  let text = '';
+  for (const t of scanMarkup(html, { rawText: false })) if (t.type === 'text') text += t.text;
+  return decodeEntities(text).length;
+};
 
 // ---- rendered-page validation (R2-3): what a published page must show ----
 
@@ -307,28 +308,80 @@ const decodeEntities = (text: string): string =>
     .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, (_, e: string) =>
       e === 'amp' ? '&' : e === 'lt' ? '<' : e === 'gt' ? '>' : e === 'quot' ? '"' : e === 'nbsp' ? ' ' : "'",
     );
-/** Text as a page shows it: tags removed, entities decoded, whitespace folded, case folded. */
-export const pageText = (html: string): string =>
-  decodeEntities(html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' '))
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+/** Text as shown: entities decoded, whitespace folded, case folded. */
 const fold = (text: string): string => decodeEntities(text).replace(/\s+/g, ' ').trim().toLowerCase();
-const tagText = (html: string, tag: string): string[] =>
-  [...html.matchAll(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'gi'))].map((m) =>
-    pageText(m[1] as string),
+
+/**
+ * The text of markup as it reads, built token by token from the scanner: tags become spaces and the contents of
+ * script and style elements are dropped.
+ */
+const visibleText = () => {
+  const parts: string[] = [];
+  let skip: string | null = null;
+  return {
+    add(t: MarkupToken): void {
+      if (skip !== null) {
+        if (t.type === 'close' && t.name === skip) skip = null;
+      } else if (t.type === 'text') parts.push(t.text);
+      else {
+        parts.push(' ');
+        if (t.type === 'open' && (t.name === 'script' || t.name === 'style')) skip = t.name;
+      }
+    },
+    text: (): string => fold(parts.join('')),
+  };
+};
+type VisibleText = ReturnType<typeof visibleText>;
+
+/** Text as a page shows it: tags removed, entities decoded, whitespace folded, case folded. */
+export const pageText = (html: string): string => {
+  const text = visibleText();
+  for (const t of scanMarkup(html, { rawText: false })) text.add(t);
+  return text.text();
+};
+
+/** What the rendered-page checks read from a page, in one pass of the linear markup scanner (markup.ts). */
+interface RenderedPageRead {
+  text: string;
+  /** The text of each `<title>` and each `<h1>`. */
+  titles: string[];
+  metas: Array<Map<string, string>>;
+  links: Array<Map<string, string>>;
+}
+function readRenderedPage(html: string): RenderedPageRead {
+  const page = visibleText();
+  const titles: string[] = [];
+  const metas: Array<Map<string, string>> = [];
+  const links: Array<Map<string, string>> = [];
+  // An element whose text is being read (each up to its first close tag, as a title or heading is written).
+  const reading: Record<'title' | 'h1', VisibleText | null> = { title: null, h1: null };
+  for (const t of scanMarkup(html, { rawText: false })) {
+    page.add(t);
+    for (const name of ['title', 'h1'] as const) {
+      const current = reading[name];
+      if (current && t.type === 'close' && t.name === name) {
+        titles.push(current.text());
+        reading[name] = null;
+      } else if (current) current.add(t);
+      else if (t.type === 'open' && t.name === name) reading[name] = visibleText();
+    }
+    if (t.type === 'open' && t.name === 'meta') metas.push(t.attrs);
+    else if (t.type === 'open' && t.name === 'link') links.push(t.attrs);
+  }
+  return { text: page.text(), titles, metas, links };
+}
+/** A meta tag naming `name` (as the earlier pattern read it: the name attribute begins with it) whose content matches. */
+const hasMeta = (page: RenderedPageRead, name: string, content: RegExp): boolean =>
+  page.metas.some(
+    (attrs) =>
+      (attrs.get('name') ?? '').toLowerCase().startsWith(name) && content.test(attrs.get('content') ?? ''),
   );
-const hasMeta = (html: string, name: string, content: RegExp): boolean =>
-  [...html.matchAll(/<meta\b[^>]*>/gi)].some((m) => {
-    const tag = m[0];
-    return new RegExp(`name\\s*=\\s*["']?${name}["']?`, 'i').test(tag) && content.test(tag);
-  });
 /** The canonical link's href, or null when the page carries none. */
-const canonicalHref = (html: string): string | null => {
-  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
-    if (!/rel\s*=\s*["']?canonical["']?/i.test(m[0])) continue;
-    const href = /href\s*=\s*["']([^"']+)["']/i.exec(m[0]);
-    if (href) return decodeEntities(href[1] as string);
+const canonicalHref = (page: RenderedPageRead): string | null => {
+  for (const attrs of page.links) {
+    if (!(attrs.get('rel') ?? '').toLowerCase().startsWith('canonical')) continue;
+    const href = attrs.get('href');
+    if (href) return decodeEntities(href);
   }
   return null;
 };
@@ -368,14 +421,14 @@ export function validateRenderedPage(input: {
   slug?: string;
   lastParagraph?: string;
 }): RenderedCheck[] {
-  const html = input.html;
+  const page = readRenderedPage(input.html);
   const title = fold(input.title);
-  const titles = [...tagText(html, 'title'), ...tagText(html, 'h1')];
-  const noindex = hasMeta(html, 'robots', /noindex/i) || hasMeta(html, 'googlebot', /noindex/i);
+  const titles = page.titles;
+  const noindex = hasMeta(page, 'robots', /noindex/i) || hasMeta(page, 'googlebot', /noindex/i);
   const paragraph = fold(input.firstParagraph);
   const last = fold(input.lastParagraph ?? '');
-  const canonical = canonicalHref(html);
-  const text = pageText(html);
+  const canonical = canonicalHref(page);
+  const text = page.text;
   return [
     { key: 'status_ok', ok: input.status === 200 },
     { key: 'title_present', ok: title !== '' && titles.some((t) => t.includes(title)) },
