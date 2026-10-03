@@ -38,6 +38,26 @@ export function stringsOf(value: unknown, out: string[] = [], depth = 0): string
   return out;
 }
 
+/**
+ * Keys whose strings explain the output rather than form the copy a person would publish: findings quote the
+ * phrase they refuse, and a rationale names what it avoided. The prohibited-term check leaves them out, so a skill
+ * that reports a forbidden claim is not failed for quoting it. Neither is ever published: content.draftCopy keeps a
+ * variant's rationale beside the master text for reviewers, channel variants are generated from the master text
+ * alone, and findings stay in the run's output.
+ */
+const EXPLANATORY_KEYS: ReadonlySet<string> = new Set(['findings', 'rationale']);
+
+/** Every string in a value except under an explanatory key, depth-first. */
+function copyStringsOf(value: unknown, out: string[] = [], depth = 0): string[] {
+  if (depth > 32) return out;
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const v of value) copyStringsOf(v, out, depth + 1);
+  else if (value && typeof value === 'object')
+    for (const [k, v] of Object.entries(value as object))
+      if (!EXPLANATORY_KEYS.has(k)) copyStringsOf(v, out, depth + 1);
+  return out;
+}
+
 /** Objects carrying `factId` / `factIds` / `factRefs` anywhere in the output are claims. */
 function factRefsOf(value: unknown, out: string[] = [], depth = 0): string[] {
   if (depth > 32 || !value || typeof value !== 'object') return out;
@@ -86,7 +106,8 @@ export function runDeterministicChecks(
   const prohibited = [...snapshot.document.voice.prohibitedPhrases, ...snapshot.policy.prohibitedTerms]
     .map((t) => t.toLowerCase().trim())
     .filter(Boolean);
-  const text = [trace.outputText, ...strings].join('\n').toLowerCase();
+  // Without parsed output the raw text is all there is to scan.
+  const copy = (output === null ? [trace.outputText] : copyStringsOf(output)).join('\n').toLowerCase();
   const evaluate = (check: EvaluationProperty): DeterministicResult => {
     switch (check) {
       case 'schema_valid': {
@@ -119,7 +140,7 @@ export function runDeterministicChecks(
           : { check, passed: true };
       }
       case 'no_prohibited_terms': {
-        const hit = prohibited.filter((term) => text.includes(term));
+        const hit = prohibited.filter((term) => copy.includes(term));
         return hit.length
           ? { check, passed: false, detail: `prohibited: ${hit.join(', ')}` }
           : { check, passed: true };
