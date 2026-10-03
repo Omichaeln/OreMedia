@@ -86,7 +86,7 @@ const publicationRow = (p: PublicationSummaryDto, calendarHref: string): NeedsYo
 
 /**
  * Spec 21.2 "action needed" as one list: review requests that wait on a person, publications that failed, have an
- * unknown outcome or are held, and proposed facts. Every row says what happened and what to do, and links to the
+ * unknown outcome or are held, proposed facts and facts due for review. Every row says what happened and what to do, and links to the
  * exact item. Only what the lists return; nothing is estimated.
  */
 export function NeedsYou() {
@@ -97,10 +97,13 @@ export function NeedsYou() {
   const unknown = usePublicationsInState(brandId, 'outcome_unknown');
   const held = usePublicationsInState(brandId, 'held');
   const facts = useFacts(brandId, 'proposed');
-  const queries = [inbox, failed, unknown, held, facts];
+  const reviewDue = useFacts(brandId, { reviewDue: true });
+  const queries = [inbox, failed, unknown, held, facts, reviewDue];
   const reviewHref = brandPath(companyId, brandId, 'review');
   const calendarHref = brandPath(companyId, brandId, 'calendar');
   const factCount = facts.data?.items.length ?? 0;
+  const reviewDueCount = reviewDue.data?.items.length ?? 0;
+  const factsHref = `${brandPath(companyId, brandId, 'system')}?section=facts`;
   const rows: NeedsYouRow[] = [
     ...(unknown.data?.items ?? []).map((p) => publicationRow(p, calendarHref)),
     ...(failed.data?.items ?? []).map((p) => publicationRow(p, calendarHref)),
@@ -114,7 +117,22 @@ export function NeedsYou() {
             state: 'Proposed',
             title: `${factCount} proposed brand ${factCount === 1 ? 'fact' : 'facts'}`,
             detail: 'Agents and checks cannot rely on them until a brand manager approves them.',
-            href: `${brandPath(companyId, brandId, 'system')}?section=facts`,
+            href: factsHref,
+            action: 'Review facts',
+            at: null,
+          },
+        ]
+      : []),
+    ...(reviewDueCount > 0
+      ? [
+          {
+            key: 'facts-review-due',
+            tone: 'warning' as const,
+            state: 'Review due',
+            title: `${reviewDueCount} brand ${reviewDueCount === 1 ? 'fact is' : 'facts are'} due for review`,
+            detail:
+              'Confirm they still hold, correct them or withdraw them; copy keeps using them meanwhile.',
+            href: factsHref,
             action: 'Review facts',
             at: null,
           },
@@ -137,7 +155,7 @@ export function NeedsYou() {
       {rows.length === 0 && queries.every((q) => q.isSuccess) && (
         <EmptyState
           title="Nothing needs you"
-          description="No review is waiting on a person, no publication failed or is unconfirmed, and no facts are proposed."
+          description="No review is waiting on a person, no publication failed or is unconfirmed, and no facts are proposed or due for review."
         />
       )}
       {rows.length > 0 && (

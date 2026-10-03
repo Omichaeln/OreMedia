@@ -1,5 +1,5 @@
 import { BrandChangeImpactInputV1 } from '@oremedia/contracts/brand-change-impact';
-import { registerOutboxRoute } from '@oremedia/module-operations';
+import { registerOutboxRoute, type OutboxRoute } from '@oremedia/module-operations';
 
 /** Spec 4.4: worker-core hosts task queue `core` (authority-bearing work; the publishing module names it too). */
 const CORE_TASK_QUEUE = 'core';
@@ -28,20 +28,25 @@ export function registerReviewOutboxRoutes(): void {
       args: [input],
     };
   });
-  registerOutboxRoute('brand.fact_revoked', (evt) => {
-    const p = evt.payload;
-    const input = BrandChangeImpactInputV1.parse({
-      tenantId: evt.tenantId,
-      actor: { kind: p['actorKind'], id: p['actorId'] },
-      correlationId: evt.correlationId,
-      brandId: p['brandId'],
-      change: { kind: 'fact_revoked', factId: p['factId'] },
-    });
-    return {
-      workflowType: BRAND_CHANGE_IMPACT_WORKFLOW_TYPE,
-      taskQueue: CORE_TASK_QUEUE,
-      workflowId: `brand-change:${evt.id}`,
-      args: [input],
-    };
-  });
+  // brand.fact_revoked covers revoke, withdraw and supersede (payload `cause`). Expiry is held by the daily fact
+  // sweep itself (BSC-3), so brand.fact_expired is informational and has no route.
+  registerOutboxRoute('brand.fact_revoked', factImpactRoute);
 }
+
+/** A fact that stopped applying (revoked, withdrawn or superseded) → the brand's change impact. */
+const factImpactRoute: OutboxRoute = (evt) => {
+  const p = evt.payload;
+  const input = BrandChangeImpactInputV1.parse({
+    tenantId: evt.tenantId,
+    actor: { kind: p['actorKind'], id: p['actorId'] },
+    correlationId: evt.correlationId,
+    brandId: p['brandId'],
+    change: { kind: 'fact_revoked', factId: p['factId'] },
+  });
+  return {
+    workflowType: BRAND_CHANGE_IMPACT_WORKFLOW_TYPE,
+    taskQueue: CORE_TASK_QUEUE,
+    workflowId: `brand-change:${evt.id}`,
+    args: [input],
+  };
+};

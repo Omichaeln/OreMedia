@@ -655,14 +655,21 @@ export const publicationService = {
    * without it each is flagged for attention (audit + publication.needs_attention) and keeps its state.
    */
   async applyFactRevocation(
-    input: { brandId: string; contentRevisionIds: readonly string[]; factId: string; hold: boolean },
+    input: {
+      brandId: string;
+      contentRevisionIds: readonly string[];
+      factId: string;
+      hold: boolean;
+      /** What ended the fact (BSC-3): the daily sweep passes fact_expired; a revocation is the default. */
+      cause?: 'fact_revoked' | 'fact_expired';
+    },
     tx: Tx,
   ) {
     const citing = new Set(input.contentRevisionIds);
     const rows = (await publicationsRepo.listScheduledForBrand(input.brandId, tx)).filter((p) =>
       citing.has(p.contentRevisionId),
     );
-    const reason = `fact_revoked:${input.factId}`;
+    const reason = `${input.cause ?? 'fact_revoked'}:${input.factId}`;
     if (input.hold) return { ...(await holdWhereReleaseFails(rows, reason, tx)), flagged: [] as string[] };
     const flagged: string[] = [];
     for (const row of rows) {

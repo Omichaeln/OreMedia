@@ -58,6 +58,34 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: (f) => ({ brandId: f['brandId'], factId: f['factId'], expectedVersion: 0, reason: 'x' }),
   },
   'brand.facts.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'brand.facts.update': {
+    buildInput: (f) => ({ brandId: f['brandId'], factId: f['factId'], expectedVersion: 0, statement: 'x' }),
+  },
+  'brand.facts.withdraw': {
+    buildInput: (f) => ({ brandId: f['brandId'], factId: f['factId'], expectedVersion: 0, reason: 'x' }),
+  },
+  'brand.facts.correct': {
+    buildInput: (f) => ({ brandId: f['brandId'], factId: f['factId'], expectedVersion: 0, statement: 'x' }),
+  },
+  'brand.facts.merge': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      keep: { factId: f['factId'], expectedVersion: 0 },
+      merge: [{ factId: f['factId2'], expectedVersion: 0 }],
+    }),
+  },
+  'brand.facts.markReviewed': {
+    buildInput: (f) => ({ brandId: f['brandId'], factId: f['factId'], expectedVersion: 0 }),
+  },
+  'brand.facts.resolveConflict': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      factId: f['factId'],
+      expectedVersion: 0,
+      conflictId: 'c1',
+      outcome: 'kept_this',
+    }),
+  },
   'brand.objectives.set': {
     buildInput: (f) => ({
       brandId: f['brandId'],

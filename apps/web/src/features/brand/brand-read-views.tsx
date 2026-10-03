@@ -457,7 +457,7 @@ export function OverviewView({
     ],
     ['patterns', 'Patterns', `${doc.patterns.filter((p) => p.key !== REFERENCE_PATTERN).length} patterns`],
     ['channels', 'Channels', doc.channelGuidance.map((c) => c.providerKey).join(', ') || 'No guidance'],
-    ['facts', 'Facts', factCount === undefined ? '…' : `${factCount} approved`],
+    ['facts', 'Facts', factCount === undefined ? '…' : `${factCount} in effect`],
   ];
   const accent = doc.tokens.colours.find((c) => c.role === 'primary') ?? doc.tokens.colours[0];
   return (
