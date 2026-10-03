@@ -238,7 +238,8 @@ export const RenderValidationResult = z.object({
 });
 export type RenderValidationResult = z.infer<typeof RenderValidationResult>;
 
-export const RenderJobState = z.enum(['pending', 'rendering', 'ready', 'failed']);
+/** `cancelled` (STU-2a, appended): a person stopped a long (video) render before it finished; terminal. */
+export const RenderJobState = z.enum(['pending', 'rendering', 'ready', 'failed', 'cancelled']);
 export type RenderJobState = z.infer<typeof RenderJobState>;
 
 export const ElementCommentState = z.enum(['open', 'resolved', 'outdated']);
@@ -354,19 +355,50 @@ export const TemplateList = z.object({ brandId: z.string(), page: PageRequest })
 export const TemplateGet = z.object({ templateId: z.string(), templateVersionId: z.string().optional() });
 
 // ---- render worker DTOs (spec 11.5: the worker reports through the creative module, never by writing state) ----
-export const RenderExportInput = z.object({
-  pageId: z.string().min(1).max(40),
-  formatKey: z.string().min(1).max(40),
-  mime: z.string().min(1).max(40),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  bytes: z.number().int().nonnegative(),
-  storageKey: z.string().min(1).max(300),
-  contentHash: z.string().length(64),
-  rendererVersion: z.string().min(1).max(40),
-  manifest: RenderManifest,
-  validation: RenderValidationResult,
-});
+/** Studio video v1 output frame rates (architecture: 24/25/30 fps). */
+export const VIDEO_EXPORT_FPS = [24, 25, 30] as const;
+export const VIDEO_EXPORT_MIME = 'video/mp4';
+/** Studio video v1: a project is at most 180 s. */
+export const VIDEO_EXPORT_MAX_DURATION_MS = 180_000;
+
+/**
+ * An export as the render worker records it. A still is an image (PNG); a video export (STU-2a) is `video/mp4` and
+ * also carries its duration, frame rate and the storage key of its poster frame (and of a WebVTT captions sidecar
+ * when the project has captions).
+ */
+export const RenderExportInput = z
+  .object({
+    pageId: z.string().min(1).max(40),
+    formatKey: z.string().min(1).max(40),
+    mime: z.string().min(1).max(40),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    bytes: z.number().int().nonnegative(),
+    storageKey: z.string().min(1).max(300),
+    contentHash: z.string().length(64),
+    rendererVersion: z.string().min(1).max(40),
+    manifest: RenderManifest,
+    validation: RenderValidationResult,
+    durationMs: z.number().int().positive().max(VIDEO_EXPORT_MAX_DURATION_MS).optional(),
+    fps: z.number().int().positive().optional(),
+    posterStorageKey: z.string().min(1).max(300).optional(),
+    captionsStorageKey: z.string().min(1).max(300).optional(),
+  })
+  .superRefine((e, ctx) => {
+    if (!e.mime.startsWith('video/')) {
+      for (const k of ['durationMs', 'fps', 'posterStorageKey', 'captionsStorageKey'] as const)
+        if (e[k] !== undefined) ctx.addIssue({ code: 'custom', path: [k], message: 'video_only' });
+      return;
+    }
+    if (e.mime !== VIDEO_EXPORT_MIME)
+      ctx.addIssue({ code: 'custom', path: ['mime'], message: `video_mime_not_supported:${e.mime}` });
+    if (e.durationMs === undefined)
+      ctx.addIssue({ code: 'custom', path: ['durationMs'], message: 'required' });
+    if (e.fps === undefined || !(VIDEO_EXPORT_FPS as readonly number[]).includes(e.fps))
+      ctx.addIssue({ code: 'custom', path: ['fps'], message: `fps_not_supported:${e.fps ?? 'none'}` });
+    if (e.posterStorageKey === undefined)
+      ctx.addIssue({ code: 'custom', path: ['posterStorageKey'], message: 'required' });
+  });
 export type RenderExportInput = z.infer<typeof RenderExportInput>;
 export const RenderMarkRendering = z.object({ renderJobId: z.string() });
 export const RenderMarkReady = z.object({
@@ -374,3 +406,13 @@ export const RenderMarkReady = z.object({
   exports: z.array(RenderExportInput).min(1).max(100),
 });
 export const RenderMarkFailed = z.object({ renderJobId: z.string(), error: z.string().min(1).max(2000) });
+/** STU-2a: how far a long (video) render is, as the worker reports it; shown while the job is rendering. */
+export const RenderProgress = z.object({
+  phase: z.string().min(1).max(40),
+  /** 0..1 of the whole job. */
+  fraction: z.number().min(0).max(1),
+});
+export type RenderProgress = z.infer<typeof RenderProgress>;
+export const RenderMarkProgress = z.object({ renderJobId: z.string(), progress: RenderProgress });
+/** STU-2a: a pending or rendering job stopped by a person; the worker sees `cancelled` and stops. */
+export const RenderCancel = z.object({ renderJobId: z.string(), reason: z.string().max(200).optional() });

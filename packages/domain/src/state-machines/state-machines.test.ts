@@ -99,6 +99,13 @@ describe('other machines', () => {
     expect(renderJobMachine.transition('failed', 'retry')).toBe('pending');
     expect(renderJobMachine.can('ready', 'retry')).toBe(false);
   });
+  it('render job (STU-2a): pending or rendering jobs can be cancelled; cancelled and ready are final', () => {
+    expect(renderJobMachine.transition('pending', 'cancel')).toBe('cancelled');
+    expect(renderJobMachine.transition('rendering', 'cancel')).toBe('cancelled');
+    expect(renderJobMachine.can('ready', 'cancel')).toBe(false);
+    expect(renderJobMachine.can('failed', 'cancel')).toBe(false);
+    for (const e of renderJobMachine.events) expect(renderJobMachine.can('cancelled', e)).toBe(false);
+  });
   it('agent run: waiting_for_review expires or resumes; terminal states are final', () => {
     expect(agentRunMachine.transition('running', 'await_review')).toBe('waiting_for_review');
     expect(agentRunMachine.transition('waiting_for_review', 'waiting_expired')).toBe('waiting_expired');
