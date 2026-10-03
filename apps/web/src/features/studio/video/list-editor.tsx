@@ -103,7 +103,7 @@ export function ListEditor({
                     <div className="flex flex-wrap items-center gap-1">
                       <button
                         type="button"
-                        className="flex-1 truncate text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="min-h-6 flex-1 truncate text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-pressed={selected}
                         onClick={() => onSelect(selected ? null : { trackId: track.id, itemId: item.id })}
                         data-testid="list-item"

@@ -72,6 +72,18 @@ export type VideoStudioAction =
       key: string;
     }
   | { type: 'commit:success'; revision: VideoCommitted; findings: Finding[]; media: VideoMediaInfo[] }
+  /**
+   * STU-3: a revision the server wrote for this person (an assembled storyboard, an accepted AI proposal). It becomes
+   * the head and an undo entry (what it applied, to the head it replaced), exactly like a commit of theirs.
+   */
+  | {
+      type: 'commit:external';
+      revision: VideoCommitted;
+      operations: VideoOperation[];
+      summary: string;
+      findings: Finding[];
+      media: VideoMediaInfo[];
+    }
   | { type: 'commit:failed'; error: UiError; key: string }
   | { type: 'commit:stale' }
   | { type: 'rebase:applied'; head: VideoCommitted; operations: VideoOperation[]; key: string }
@@ -223,6 +235,23 @@ export function videoStudioReducer(s: VideoStudioState, a: VideoStudioAction): V
             ? { ...base, undo: [...s.undo, entry], redo: s.redo.slice(0, -1) }
             : { ...base, undo: [...s.undo, entry], redo: [] };
       return { ...next, save: restStatus(next) };
+    }
+    case 'commit:external': {
+      if (hasLocalVideoWork(s)) return s; // the panels only offer it with nothing unsaved
+      const entry: VideoHistoryEntry = {
+        before: s.committed.snapshot,
+        operations: a.operations,
+        summary: a.summary,
+      };
+      return {
+        ...s,
+        committed: a.revision,
+        findings: a.findings,
+        media: { ...s.media, ...Object.fromEntries(a.media.map((m) => [m.assetVersionId, m])) },
+        undo: [...s.undo, entry],
+        redo: [],
+        save: { kind: 'saved', at: Date.now() },
+      };
     }
     case 'commit:failed': {
       // An autosave's operations go back in front of anything queued since, with a fresh idempotency key.

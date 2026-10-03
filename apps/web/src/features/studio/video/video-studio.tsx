@@ -15,7 +15,9 @@ import { Inspector } from './inspector';
 import { Library, mediaOfAsset } from './library';
 import { ListEditor } from './list-editor';
 import { PreviewPlayer } from './preview-player';
+import { RecutPanel } from './recut-panel';
 import { ScenesPanel } from './scenes-panel';
+import { StoryboardPanel } from './storyboard-panel';
 import { Timeline } from './timeline';
 import { timecode } from './timecode';
 import { useVideoSourceUrls, sourceIdsOf } from './use-video-media';
@@ -166,17 +168,23 @@ export function VideoStudio({ documentId, initial }: { documentId: string; initi
             to={brandPath(companyId, brandId, 'studio')}
             aria-label="Studio"
             title="Back to the Studio documents"
-            className="rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
             <span aria-hidden="true">←</span>
           </Link>
-          <Link to={`/c/${encodeURIComponent(companyId)}`} className="truncate">
+          <Link
+            to={`/c/${encodeURIComponent(companyId)}`}
+            className="inline-flex min-h-6 items-center truncate"
+          >
             {companyName ?? companyId}
           </Link>
           <span aria-hidden="true" className="text-muted-foreground">
             /
           </span>
-          <Link to={brandPath(companyId, brandId)} className="truncate font-medium">
+          <Link
+            to={brandPath(companyId, brandId)}
+            className="inline-flex min-h-6 items-center truncate font-medium"
+          >
             {brand.name}
           </Link>
           <span aria-hidden="true" className="text-muted-foreground">
@@ -389,6 +397,8 @@ export function VideoStudio({ documentId, initial }: { documentId: string; initi
           >
             <Tabs defaultValue="render" className="flex min-h-0 flex-1 flex-col">
               <TabList label="Video panels" className="flex-wrap">
+                <Tab value="storyboard">Storyboard</Tab>
+                <Tab value="ai">AI edit</Tab>
                 <Tab value="render">Render</Tab>
                 <Tab value="checks">
                   Checks{' '}
@@ -400,6 +410,12 @@ export function VideoStudio({ documentId, initial }: { documentId: string; initi
                 </Tab>
                 <Tab value="history">History</Tab>
               </TabList>
+              <TabPanel value="storyboard" className="overflow-auto p-3">
+                <StoryboardPanel documentId={documentId} project={project} studio={studio} />
+              </TabPanel>
+              <TabPanel value="ai" className="overflow-auto p-3">
+                <RecutPanel documentId={documentId} project={project} studio={studio} />
+              </TabPanel>
               <TabPanel value="render" className="p-3">
                 <VideoRenderPanel
                   documentId={documentId}

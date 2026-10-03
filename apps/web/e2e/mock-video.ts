@@ -9,12 +9,33 @@ import type {
 } from '@oremedia/contracts/video';
 import type { Finding } from '@oremedia/contracts/creative';
 import {
+  VIDEO_AI_PROGRESS,
+  VideoAiRequest,
+  type ModelRecutOutput,
+  type ModelStoryboardOutput,
+  type Storyboard,
+  type VideoAiAccept,
+  type VideoAiAssemble,
+  type VideoAiJobState,
+  type VideoAiPreflight,
+  type VideoAiResult,
+  type VideoAiScope,
+  type VideoAiStart,
+} from '@oremedia/contracts/video-ai';
+import {
   applyVideoBatch,
   blankVideoProject,
+  checkModelStoryboard,
+  compileAssembly,
+  compileRecut,
   instantiateVideoTemplate,
+  isEmptyProject,
   listVideoTemplates,
+  storyboardProblems,
   validateVideoProject,
+  videoTimelineDiff,
   VideoOperationError,
+  type StoryboardAsset,
 } from '@oremedia/editor';
 import { fixtureSnapshot } from '@oremedia/editor/fixtures';
 
@@ -454,5 +475,423 @@ export class VideoMockBackend {
       height: m.height,
       durationMs: m.durationMs,
     }));
+  }
+}
+
+// ---- STU-3: studio video AI in the mock transport ---------------------------------------------------------------
+
+/** What the scripted "model" answers next (tests set them); the real checks and compilers run on them. */
+export interface VideoAiScript {
+  storyboard: ModelStoryboardOutput;
+  recut: ModelRecutOutput;
+}
+
+interface MockAiJob {
+  id: string;
+  brandId: string;
+  documentId: string;
+  baseRevisionId: string;
+  kind: 'storyboard' | 'recut';
+  state: VideoAiJobState;
+  progress: number;
+  attempt: number;
+  request: VideoAiRequest;
+  result: VideoAiResult | null;
+  error: { code: string; message: string } | null;
+  polls: number;
+  output: ModelStoryboardOutput | ModelRecutOutput;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const ELIGIBLE_STORYBOARD: StoryboardAsset[] = VIDEO_LIBRARY.map((m) => ({
+  assetVersionId: m.assetVersionId,
+  kind: m.kind === 'image' ? ('photo' as const) : m.kind,
+  name: m.name,
+  altText: m.name,
+  semanticRole: null,
+  durationMs: m.durationMs,
+  width: m.width,
+  height: m.height,
+  hasAudio: m.hasAudio,
+  derivatives: m.derivatives,
+}));
+const STAGES: VideoAiJobState[] = ['queued', 'generating', 'validating', 'completed'];
+
+/**
+ * Durable video AI jobs, simulated: each poll moves a job one state on; on completion the scripted answer goes
+ * through the real storyboard check or recut compile (eligible assets are the mock library; the fixture brand's
+ * facts in force are `fct_e2e_cold`). Assemble and accept use the real assembly and recut compilers and write
+ * revisions through the backend's apply, so undo, redo and history behave as in the app.
+ */
+export class VideoAiMockBackend {
+  readonly jobs = new Map<string, MockAiJob>();
+  script: VideoAiScript;
+  effectiveFactIds = new Set(['fct_e2e_cold']);
+  constructor(
+    private readonly video: VideoMockBackend,
+    script: VideoAiScript,
+  ) {
+    this.script = script;
+  }
+
+  private bindings() {
+    return {
+      fonts: {
+        display: 'av_font_display',
+        heading: 'av_font_display',
+        caption: 'av_font_display',
+        body: 'av_font_display',
+      },
+      colours: { text: 'paper', box: 'ink' },
+      newElementId: () =>
+        `el_${randomUUID()
+          .replace(/-/g, '')
+          .slice(0, 26)
+          .toUpperCase()
+          .replace(/[ILOU]/g, '0')}`,
+    };
+  }
+
+  private dto(j: MockAiJob) {
+    const live = !['completed', 'failed', 'cancelled'].includes(j.state);
+    return {
+      id: j.id,
+      brandId: j.brandId,
+      documentId: j.documentId,
+      baseRevisionId: j.baseRevisionId,
+      kind: j.kind,
+      state: j.state,
+      progress: j.progress,
+      attempt: j.attempt,
+      live,
+      request: j.request,
+      costReservedMicros: 170_000,
+      costSpentMicros: j.state === 'completed' ? 42_000 : 0,
+      error: j.error,
+      result: j.result,
+      createdAt: j.createdAt,
+      updatedAt: j.updatedAt,
+      finishedAt: live ? null : j.updatedAt,
+      version: j.version,
+    };
+  }
+
+  private headOf(documentId: string) {
+    const doc = this.video.doc(documentId);
+    if (!doc) throw new NotFoundError('CreativeDocument', documentId);
+    return { doc, head: this.video.head(doc) };
+  }
+
+  preflight(input: z.infer<typeof VideoAiPreflight>) {
+    const { head } = this.headOf(input.documentId);
+    const request = VideoAiRequest.parse(input.request);
+    const factIds = request.kind === 'storyboard' ? request.brief.factIds : request.recut.factIds;
+    const issues = factIds
+      .filter((id) => !this.effectiveFactIds.has(id))
+      .map((id) => ({
+        code: 'fact_not_effective',
+        severity: 'blocking' as const,
+        message: 'A chosen fact is not in force',
+        ref: id,
+      }));
+    return {
+      blocking: issues.length > 0,
+      issues,
+      cost: { modelCalls: 1, totalMicros: 170_000, remainingMicros: 20_000_000 },
+      inputs: {
+        brandVersionId: head.brandVersionId,
+        brandVersionNumber: 1,
+        formatKey: head.snapshot.format.key,
+        durationMs: head.snapshot.durationMs,
+        templateKey: head.snapshot.templateKey ?? null,
+        templateScenes: [],
+        eligible: { clips: 2, stills: 1, audio: 1 },
+        facts: [],
+        capabilities: { videoGeneration: false, speechGeneration: false, transcription: false },
+        empty: isEmptyProject(head.snapshot),
+      },
+    };
+  }
+
+  start(input: z.infer<typeof VideoAiStart>) {
+    const { doc } = this.headOf(input.documentId);
+    if (doc.currentRevisionId !== input.baseRevisionId) throw new StaleRevisionError(doc.currentRevisionId);
+    const request = VideoAiRequest.parse(input.request);
+    const id = rid('svj');
+    const job: MockAiJob = {
+      id,
+      brandId: this.video.brandId,
+      documentId: doc.id,
+      baseRevisionId: input.baseRevisionId,
+      kind: request.kind,
+      state: 'queued',
+      progress: VIDEO_AI_PROGRESS.queued,
+      attempt: 1,
+      request,
+      result: null,
+      error: null,
+      polls: 0,
+      output: request.kind === 'storyboard' ? this.script.storyboard : this.script.recut,
+      version: 0,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.jobs.set(id, job);
+    return this.dto(job);
+  }
+
+  /** Each read moves a live job on one state; completion checks or compiles the scripted answer. */
+  get(jobId: string) {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new NotFoundError('StudioVideoJob', jobId);
+    if (STAGES.includes(job.state) && job.state !== 'completed') {
+      job.polls += 1;
+      const next = STAGES[Math.min(STAGES.length - 1, STAGES.indexOf(job.state) + 1)] as VideoAiJobState;
+      if (next === 'completed') job.result = this.complete(job);
+      job.state = next;
+      job.progress = VIDEO_AI_PROGRESS[next];
+      job.updatedAt = now();
+      job.version += 1;
+    }
+    return this.dto(job);
+  }
+
+  private compileCtx(job: MockAiJob, scope: VideoAiScope | null) {
+    return {
+      media: MEDIA,
+      bindings: this.bindings(),
+      idPrefix: `ai${job.id.slice(-6).toLowerCase()}_`,
+      waveforms: {},
+      eligibleAssetIds: new Set(
+        ELIGIBLE_STORYBOARD.filter((a) => a.kind !== 'audio').map((a) => a.assetVersionId),
+      ),
+      effectiveFactIds: this.effectiveFactIds,
+      scope,
+    };
+  }
+
+  private complete(job: MockAiJob): VideoAiResult {
+    const { head } = this.headOf(job.documentId);
+    if (job.request.kind === 'storyboard') {
+      let n = 0;
+      const { storyboard, refused } = checkModelStoryboard(job.output as ModelStoryboardOutput, {
+        brief: job.request.brief,
+        eligible: new Map(ELIGIBLE_STORYBOARD.map((a) => [a.assetVersionId, a])),
+        effectiveFactIds: this.effectiveFactIds,
+        alternatives: (kind) =>
+          kind === 'footage'
+            ? [
+                {
+                  kind: 'use_still',
+                  label: 'Use an approved still for the shot (held on screen; no motion)',
+                  available: true,
+                },
+                {
+                  kind: 'generated_clip',
+                  label: 'Generate a 5 s clip (labelled as generated, held for approval)',
+                  available: false,
+                  reason: 'Video generation is turned off for this company',
+                },
+                {
+                  kind: 'ask_for_footage',
+                  label: 'Ask for footage: upload it to the library with its rights',
+                  available: true,
+                },
+              ]
+            : [{ kind: 'no_music', label: 'No music', available: true }],
+        mint: () => `${job.id.slice(-4).toLowerCase()}s${++n}`,
+      });
+      return {
+        storyboard,
+        proposal: null,
+        revisions: [],
+        conflicts: [],
+        refused,
+        findings: [],
+        summary: storyboard.title,
+      };
+    }
+    const output = job.output as ModelRecutOutput;
+    const scope = job.request.recut.scope;
+    const compiled = compileRecut(head.snapshot, output.actions, this.compileCtx(job, scope));
+    const proposal = compiled.operations.length
+      ? {
+          kind: 'recut' as const,
+          documentId: job.documentId,
+          baseRevisionId: head.id,
+          origin: 'agent' as const,
+          summary: output.summary,
+          operations: compiled.operations,
+          groups: compiled.groups.map(({ operations: _o, ...g }) => g),
+          changes: videoTimelineDiff(head.snapshot, compiled.project),
+          findings: [],
+          contentHash: hash(compiled.project),
+          scope,
+          acceptedRevisionId: null,
+        }
+      : null;
+    return {
+      storyboard: null,
+      proposal,
+      revisions: [],
+      conflicts: [
+        ...compiled.conflicts,
+        ...output.unsupported.map((m) => ({ code: 'not_supported', message: m, itemIds: [] })),
+      ],
+      refused: [],
+      findings: [],
+      summary: output.summary,
+    };
+  }
+
+  active(documentId: string) {
+    const all = [...this.jobs.values()].filter((j) => j.documentId === documentId).reverse();
+    const finished = (k: MockAiJob['kind']) =>
+      all.find((j) => j.kind === k && ['completed', 'failed', 'cancelled'].includes(j.state));
+    const sb = finished('storyboard');
+    const rc = finished('recut');
+    return {
+      items: all
+        .filter((j) => !['completed', 'failed', 'cancelled'].includes(j.state))
+        .map((j) => this.dto(j)),
+      lastStoryboard: sb ? this.dto(sb) : null,
+      lastRecut: rc ? this.dto(rc) : null,
+    };
+  }
+
+  cancel(jobId: string) {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new NotFoundError('StudioVideoJob', jobId);
+    if (job.state !== 'cancelled') {
+      if (['completed', 'failed', 'saving'].includes(job.state))
+        throw new ValidationFailedError([
+          { path: 'state', issue: `illegal transition: ${job.state} → cancel` },
+        ]);
+      job.state = 'cancelled';
+      job.progress = 100;
+      job.version += 1;
+    }
+    return this.dto(job);
+  }
+
+  retry(jobId: string) {
+    const job = this.jobs.get(jobId);
+    if (!job) throw new NotFoundError('StudioVideoJob', jobId);
+    if (job.state === 'failed' || job.state === 'cancelled') {
+      job.state = 'queued';
+      job.attempt += 1;
+      job.progress = VIDEO_AI_PROGRESS.queued;
+      job.error = null;
+      job.result = null;
+      job.version += 1;
+    }
+    return this.dto(job);
+  }
+
+  private commit(
+    job: MockAiJob,
+    operations: VideoOperationBatch['operations'],
+    summary: string,
+    origin: 'user' | 'agent',
+  ) {
+    const res = this.video.apply({
+      documentId: job.documentId,
+      baseRevisionId: this.headOf(job.documentId).doc.currentRevisionId,
+      operations,
+      summary,
+      origin,
+    });
+    return res;
+  }
+
+  assemble(input: z.infer<typeof VideoAiAssemble>) {
+    const job = this.jobs.get(input.jobId);
+    if (!job || job.kind !== 'storyboard' || !job.result)
+      throw new NotFoundError('StudioVideoJob', input.jobId);
+    const { doc, head } = this.headOf(job.documentId);
+    if (doc.currentRevisionId !== input.baseRevisionId) throw new StaleRevisionError(doc.currentRevisionId);
+    const problems = storyboardProblems(input.storyboard, {
+      eligible: new Map(ELIGIBLE_STORYBOARD.map((a) => [a.assetVersionId, a])),
+      effectiveFactIds: this.effectiveFactIds,
+      brief: (job.request as Extract<VideoAiRequest, { kind: 'storyboard' }>).brief,
+    });
+    if (problems.length)
+      throw new ValidationFailedError(
+        problems.map((p) => ({ path: p.path, issue: p.reason })),
+        'The storyboard uses something it may not',
+      );
+    const ctx = { media: MEDIA, bindings: this.bindings(), idPrefix: `ai${job.id.slice(-6).toLowerCase()}_` };
+    const compiled = compileAssembly(head.snapshot, input.storyboard, ctx);
+    const summary = `Assembled storyboard “${input.storyboard.title}”`;
+    job.result = { ...job.result, storyboard: input.storyboard, conflicts: compiled.conflicts };
+    if (isEmptyProject(head.snapshot)) {
+      const res = this.commit(job, compiled.operations, summary, 'user');
+      return {
+        applied: true as const,
+        ...res,
+        conflicts: compiled.conflicts,
+        proposal: null,
+        job: this.dto(job),
+      };
+    }
+    const proposal = {
+      kind: 'assembly' as const,
+      documentId: doc.id,
+      baseRevisionId: head.id,
+      origin: 'user' as const,
+      summary,
+      operations: compiled.operations,
+      groups: compiled.groups.map(({ operations: _o, ...g }) => g),
+      changes: videoTimelineDiff(head.snapshot, compiled.project),
+      findings: [],
+      contentHash: hash(compiled.project),
+      scope: null,
+      storyboard: input.storyboard,
+      acceptedRevisionId: null,
+    };
+    job.result = { ...job.result, proposal };
+    job.version += 1;
+    return { applied: false as const, proposal, conflicts: compiled.conflicts, job: this.dto(job) };
+  }
+
+  accept(input: z.infer<typeof VideoAiAccept>) {
+    const job = this.jobs.get(input.jobId);
+    const proposal = job?.result?.proposal;
+    if (!job || !proposal) throw new ValidationFailedError([{ path: 'jobId', issue: 'no_proposal' }]);
+    const { doc, head } = this.headOf(job.documentId);
+    if (doc.currentRevisionId !== proposal.baseRevisionId)
+      throw new StaleRevisionError(doc.currentRevisionId);
+    const only = new Set(input.groupIds);
+    const operations =
+      proposal.kind === 'recut'
+        ? compileRecut(
+            head.snapshot,
+            (job.output as ModelRecutOutput).actions,
+            this.compileCtx(job, proposal.scope),
+            only,
+          ).operations
+        : compileAssembly(
+            head.snapshot,
+            proposal.storyboard as Storyboard,
+            { media: MEDIA, bindings: this.bindings(), idPrefix: `ai${job.id.slice(-6).toLowerCase()}_` },
+            only,
+          ).operations;
+    const kept = proposal.groups.filter((g) => only.has(g.id));
+    const res = this.commit(
+      job,
+      operations,
+      kept.length === proposal.groups.length
+        ? proposal.summary
+        : `${proposal.summary} (${kept.map((g) => g.label).join('; ')})`,
+      proposal.origin,
+    );
+    job.result = {
+      ...(job.result as VideoAiResult),
+      proposal: { ...proposal, acceptedRevisionId: res.revision.id },
+    };
+    job.version += 1;
+    return { ...res, job: this.dto(job) };
   }
 }

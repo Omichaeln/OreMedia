@@ -7,6 +7,16 @@ import { z } from 'zod';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
 import { VideoOperationsApply, VideoOperationsPropose, VideoTemplateList } from '@oremedia/contracts/video';
 import {
+  VideoAiAccept,
+  VideoAiActive,
+  VideoAiAssemble,
+  VideoAiCancel,
+  VideoAiGet,
+  VideoAiPreflight,
+  VideoAiRetry,
+  VideoAiStart,
+} from '@oremedia/contracts/video-ai';
+import {
   CommentAdd,
   CommentList,
   CommentResolve,
@@ -118,7 +128,7 @@ import { CommunityBackend, communityRouters } from './mock-community';
 import { DestinationsBackend, destinationsRouters } from './mock-destinations';
 import { FactsBackend, factsRouter } from './mock-facts';
 import { overviewRouters } from './mock-overview';
-import { VideoMockBackend } from './mock-video';
+import { VideoAiMockBackend, VideoMockBackend } from './mock-video';
 
 /**
  * A UI-only transport for the studio smoke test: the same procedure paths, input DTOs, error envelope and header
@@ -865,6 +875,8 @@ export class MockBackend {
   readonly docs = new Map<string, Doc>();
   /** STU-2b: video documents, their renders and the media library. */
   readonly video: VideoMockBackend;
+  /** STU-3: storyboard and recut jobs over the video documents (tests script the model's answers). */
+  readonly videoAi: VideoAiMockBackend;
   readonly comments: Comment[] = [];
   readonly jobs = new Map<string, RenderJob>();
   readonly replays = new Map<string, unknown>();
@@ -908,6 +920,17 @@ export class MockBackend {
     };
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
     this.video = new VideoMockBackend(company.brandId, E2E.brandVersionId, () => this.objectStoreOrigin);
+    this.videoAi = new VideoAiMockBackend(this.video, {
+      storyboard: {
+        title: 'Storyboard',
+        scenes: [
+          { title: 'Scene', shots: [{ description: 'Shot', assetVersionId: null, durationMs: 2_000 }] },
+        ],
+        gaps: [],
+        musicAssetVersionId: null,
+      },
+      recut: { summary: 'No change', actions: [], unsupported: [] },
+    });
     this.brandVersions = seedBrandVersions(company.brandId);
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
@@ -2834,6 +2857,16 @@ export function createMockRouter(backend: MockBackend) {
       }),
       videoTemplates: t.router({
         list: query.input(VideoTemplateList).query(() => backend.video.templates()),
+      }),
+      videoAi: t.router({
+        preflight: query.input(VideoAiPreflight).query(({ input }) => backend.videoAi.preflight(input)),
+        start: mutation.input(VideoAiStart).mutation(({ input }) => backend.videoAi.start(input)),
+        get: query.input(VideoAiGet).query(({ input }) => backend.videoAi.get(input.jobId)),
+        active: query.input(VideoAiActive).query(({ input }) => backend.videoAi.active(input.documentId)),
+        cancel: mutation.input(VideoAiCancel).mutation(({ input }) => backend.videoAi.cancel(input.jobId)),
+        retry: mutation.input(VideoAiRetry).mutation(({ input }) => backend.videoAi.retry(input.jobId)),
+        assemble: mutation.input(VideoAiAssemble).mutation(({ input }) => backend.videoAi.assemble(input)),
+        accept: mutation.input(VideoAiAccept).mutation(({ input }) => backend.videoAi.accept(input)),
       }),
       renders: t.router({
         request: mutation.input(RenderRequest).mutation(({ input }) => {
