@@ -25,3 +25,8 @@ export {
   PolicyVersionRepository,
   PlatformBrandRepository,
 } from './repositories';
+export {
+  BRAND_FACT_SWEEP_SCHEDULE_ID,
+  BRAND_FACT_SWEEP_WORKFLOW_TYPE,
+  createBrandFactSweepRuntime,
+} from './fact-sweep';

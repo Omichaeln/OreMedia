@@ -17,6 +17,7 @@ import {
 } from '@temporalio/client';
 import {
   createBrandChangeImpactActivities,
+  createBrandFactSweepActivities,
   createCommunityReplyControlActivities,
   createCommunityReplyProviderActivities,
   createConnectChoicePurgeActivities,
@@ -47,6 +48,11 @@ import {
   publishTaskQueue,
   type WorkflowProbe,
 } from '@oremedia/module-publishing';
+import {
+  BRAND_FACT_SWEEP_SCHEDULE_ID,
+  BRAND_FACT_SWEEP_WORKFLOW_TYPE,
+  createBrandFactSweepRuntime,
+} from '@oremedia/module-brand';
 import { createCommunityReplyRuntime } from '@oremedia/module-community';
 import {
   DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
@@ -136,6 +142,8 @@ export async function startPublishingWorkers(
       ...createDestinationRevokeActivities(destinations.revoke),
       // brand.version_published / brand.fact_revoked → brandChangeImpactWorkflowV1 (spec 8.2)
       ...createBrandChangeImpactActivities(createBrandChangeImpactRuntime()),
+      // brandFactSweepWorkflowV1 (BSC-3): expiry events, review-due flags and duplicate keys of brand facts
+      ...createBrandFactSweepActivities(createBrandFactSweepRuntime()),
       // brandAnalystWorkflowV1 / brandAnalystSweepWorkflowV1 / baselineComparisonWorkflowV1 (spec 16.3, 16.8)
       ...intelligenceActivities(),
       // deletionRequestWorkflowV1 / retentionSweepWorkflowV1 (spec 17.5)
@@ -239,6 +247,34 @@ export async function ensureDestinationTokenRefreshScheduled(client: Client): Pr
       policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
     });
     logger().info({ status: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID }, 'schedule created');
+  } catch (err) {
+    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
+    throw err;
+  }
+}
+
+/** Daily at 03:20 UTC, after the destination refresh and outside the top-of-hour publishing burst. */
+export const BRAND_FACT_SWEEP_CALENDAR = { hour: 3, minute: 20 } as const;
+
+/**
+ * BSC-3: brandFactSweepWorkflowV1 once a day (one schedule per namespace, joined if it exists): approved facts whose
+ * validity ended emit brand.fact_expired once (their scheduled work is held), facts past their review date are
+ * flagged for the workspace and Needs you.
+ */
+export async function ensureBrandFactSweepScheduled(client: Client): Promise<void> {
+  try {
+    await client.schedule.create({
+      scheduleId: BRAND_FACT_SWEEP_SCHEDULE_ID,
+      spec: { calendars: [{ ...BRAND_FACT_SWEEP_CALENDAR }] },
+      action: {
+        type: 'startWorkflow',
+        workflowType: BRAND_FACT_SWEEP_WORKFLOW_TYPE,
+        taskQueue: CORE_TASK_QUEUE,
+        args: [{}],
+      },
+      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+    });
+    logger().info({ status: BRAND_FACT_SWEEP_SCHEDULE_ID }, 'schedule created');
   } catch (err) {
     if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
     throw err;
