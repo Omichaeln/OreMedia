@@ -302,6 +302,23 @@ Rollout order for speech generation (migration 0008, flag `creative.audio_genera
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
 `worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
+Rollout order for video and audio uploads (migration 0025, STU-2a; no flag: a person's video or audio upload is
+accepted as soon as the API is on the new build):
+
+1. Apply migration 0025 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
+   `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
+   `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
+2. Raise the clamav service's `StreamMaxLength` (and `MaxScanSize`/`MaxFileSize`) to at least 1100M: video uploads are
+   up to 1 GiB and are streamed to clamd; below the limit clamd gives no verdict and the upload stays quarantined
+   (`scanner_unavailable`, the detail names `StreamMaxLength`).
+3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
+   default 1; resources in infra/railway/README.md). Check its log for `polling task queues render, media and video`
+   and no `ffmpeg/ffprobe not found` line.
+4. Deploy the API and the other workers as usual. Upload completions now carry the intent's kind and video/audio
+   ones start `videoIngestWorkflowV1` on `video`; image, font and PDF uploads keep `assetIngestWorkflowV1` on `media`.
+   Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish
+   on worker-render, which must stay on the new build until they drain.
+
 Rollout order for plan items (migration 0014, UX-09): apply 0014 (`plan_items`, additive; the api pre-deploy
 command does it) and re-apply `app-role.sql` (the new table needs its grants); then deploy the api and workers in
 the usual order. The built-in `campaign-planning` skill gains `content.proposePlan` and an optional `briefId`

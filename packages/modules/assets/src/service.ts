@@ -18,7 +18,6 @@ import {
   GOOGLE_FONTS_SOURCE,
   GoogleFontImport,
   KIND_MIME_GROUPS,
-  KINDS_NOT_PROCESSABLE,
   MediaSignedUrlRequest,
   RIGHTS_ATTENTION_DAYS,
   SIGNED_URL_TTL_SEC,
@@ -70,7 +69,7 @@ import {
   type UploadIntentRow,
   type UsageRightsRow,
 } from './repositories';
-import { storage, storageKeys } from './storage';
+import { hashStoredObject, storage, storageKeys } from './storage';
 
 const assetsRepo = new AssetRepository();
 const versionsRepo = new AssetVersionRepository();
@@ -125,6 +124,7 @@ const toRef = (a: AssetRow, v: AssetVersionRow): AssetRef => ({
   contentHash: v.contentHash,
   width: v.width,
   height: v.height,
+  durationMs: v.durationMs,
 });
 
 const fontFileRow = (r: { asset: AssetRow; version: AssetVersionRow }): FontFileRow => ({
@@ -149,6 +149,8 @@ const versionView = (v: AssetVersionRow) => ({
   width: v.width,
   height: v.height,
   durationMs: v.durationMs,
+  /** STU-2a: what ffprobe found in a video or audio source (codecs, frame rate, rotation, streams). */
+  media: v.mediaInfo ?? null,
   colourProfile: v.colourProfile,
   focalPoint: v.focalPoint,
   altText: v.altText,
@@ -209,6 +211,9 @@ export const assetService = {
       state: intent.state,
       assetId: intent.resultAssetId ?? null,
       rejectionReason: intent.rejectionReason ?? null,
+      /** STU-2a: what was found and the limit it broke (video and audio ingest), when the step recorded one. */
+      rejectionDetail: intent.rejectionDetail ?? null,
+      kind: intent.kind,
     };
   },
 
@@ -217,9 +222,9 @@ export const assetService = {
    * provenance, the bytes are written to its quarantine key and the intent completes, so assetIngestWorkflowV1 runs
    * every step an upload gets (sniff, scan, sanitise, hash, derivatives) and catalogues a pending asset whose
    * version records the provenance. Authorised as creative.edit, the images tool's action: an agent may not upload
-   * outright (asset.upload is propose_only), and a pending asset is the proposal a person approves. Video and audio
-   * kinds are accepted here only (D-06): ingest checks them structurally and caps their duration; a person's own
-   * video or audio upload still waits for Release 2 (spec 9.1).
+   * outright (asset.upload is propose_only), and a pending asset is the proposal a person approves. Generated video
+   * and audio (D-06) go through videoIngestWorkflowV1 like a person's own (STU-2a) and keep the generated duration
+   * caps (MEDIA_DURATION_CAPS_SECONDS).
    */
   async uploadGenerated(
     actor: ResolvedActor,
@@ -502,6 +507,7 @@ export const assetService = {
               mime: v.mime,
               width: v.width,
               height: v.height,
+              durationMs: v.durationMs,
               altText: v.altText,
               contentHash: v.contentHash,
             }
@@ -912,15 +918,19 @@ export const assetService = {
       width: number;
       height: number;
       bytes: number;
+      /** A video export (STU-2a): carried through to the adapter with the URL. */
+      durationMs?: number | null;
+      fps?: number | null;
     },
     providerProcessingWindowSec: number,
     tx?: Tx,
   ) {
     const { tenantId } = requireTenant();
-    const bytes = await storage().getObject(input.storageKey);
-    if (!bytes) throw new NotFoundError('RenderedExportObject', input.storageKey);
-    const actual = sha256(bytes);
-    if (actual !== input.contentHash || bytes.length !== input.bytes)
+    // Streamed (STU-2a): a video export is read once through the hash, never held whole in memory.
+    const stored = await hashStoredObject(storage(), input.storageKey);
+    if (!stored) throw new NotFoundError('RenderedExportObject', input.storageKey);
+    const actual = stored.contentHash;
+    if (actual !== input.contentHash || stored.bytes !== input.bytes)
       throw new ReleaseIntegrityError(input.storageKey, input.contentHash, actual);
     const id = newId('assetDerivative');
     const releaseKey = storageKeys.release(tenantId, input.brandId, input.exportId, 'export', id);
@@ -947,6 +957,8 @@ export const assetService = {
       width: input.width,
       height: input.height,
       bytes: input.bytes,
+      ...(input.durationMs ? { durationMs: input.durationMs } : {}),
+      ...(input.fps ? { fps: input.fps } : {}),
     };
   },
 };
@@ -966,8 +978,6 @@ async function issueIntent(
   const mime = parsed.declaredMime.toLowerCase();
   if (ARCHIVE_MIMES.includes(mime))
     throw new ValidationFailedError([{ path: 'declaredMime', issue: 'archives_rejected' }]);
-  if (KINDS_NOT_PROCESSABLE.includes(parsed.kind) && !provenance)
-    throw new ValidationFailedError([{ path: 'kind', issue: 'processing_not_available_in_release_1' }]);
   const group = KIND_MIME_GROUPS[parsed.kind].find((g) => ACCEPTED_MIMES[g]?.includes(mime));
   if (!group)
     throw new ValidationFailedError([{ path: 'declaredMime', issue: 'mime_not_accepted_for_kind' }]);
@@ -1089,7 +1099,14 @@ async function markUploaded(actor: ResolvedActor, intent: UploadIntentRow, tx: T
   await outbox.add(
     'asset.upload_completed',
     { type: 'upload_intent', id: intent.id, version: intent.version + 1 },
-    { uploadIntentId: intent.id, brandId: intent.brandId, actorKind: actor.kind, actorId: actor.id },
+    // `kind` (STU-2a, additive) routes video and audio to videoIngestWorkflowV1 (outbox-routes.ts).
+    {
+      uploadIntentId: intent.id,
+      brandId: intent.brandId,
+      actorKind: actor.kind,
+      actorId: actor.id,
+      kind: intent.kind,
+    },
     tx,
     { brandId: intent.brandId },
   );
