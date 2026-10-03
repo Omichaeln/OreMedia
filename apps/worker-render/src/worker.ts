@@ -120,7 +120,11 @@ const mediaWorker = await Worker.create({
     // BSC-4: the text of documents supplied to brand assist jobs, read with the other untrusted-input parsers.
     ...createBrandSourceExtractActivities(
       createBrandAssistRuntime({
-        objects: { get: (key) => storage().getObject(key), delete: (key) => storage().deleteObject(key) },
+        objects: {
+          head: (key) => storage().headObject(key),
+          get: (key, range) => storage().getObject(key, range),
+          delete: (key) => storage().deleteObject(key),
+        },
       }),
     ),
   },

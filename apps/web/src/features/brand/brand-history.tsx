@@ -11,6 +11,7 @@ import { useBrandContext } from './brand-context';
 import { PublishImpact } from './publish-impact';
 import { useBrandVersionImpact } from './use-brand';
 import { useBrandHistory, useHistoryCompare, type HistoryEntryDto } from './use-assist';
+import { errorText } from './assist-review';
 
 /**
  * BSC-5 history of the brand system (D-22: versions stay internal): each applied state with who applied it, when
@@ -165,14 +166,7 @@ export function BrandHistory({
           >
             <PublishImpact brandId={brandId} />
             {restoreError && (
-              <StatusBanner
-                tone="critical"
-                title="Not restored"
-                description={[
-                  restoreError.message,
-                  ...restoreError.details.map((d) => d.issue.replaceAll('_', ' ')),
-                ].join(' · ')}
-              />
+              <StatusBanner tone="critical" title="Not restored" description={errorText(restoreError)} />
             )}
             <DialogActions>
               <DialogClose asChild>

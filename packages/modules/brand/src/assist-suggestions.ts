@@ -123,16 +123,61 @@ export function verifyEvidence(
 
 const join = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(' ') || null;
 
+/** Passages shorter than this cannot carry a fact on their own (a heading, a fragment). */
+export const FACT_EXCERPT_MIN_CHARS = 30;
+/** Share of the statement's content words the passage must contain. */
+export const FACT_WORD_OVERLAP_MIN = 0.6;
+const STOPWORDS = new Set(
+  (
+    'the and for are but not you all any can had her was one our out has his how its may new now old see two who ' +
+    'did get let put say she too use that with have this will your from they been more when were what than then ' +
+    'them into only over such also each just most some very which their there these those about after before ' +
+    'being would could should other where while every since until because'
+  ).split(' '),
+);
+const words = (folded: string): string[] => folded.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+/** Figures (years, prices, percentages) as written, e.g. 2014, £4.50, 30%. */
+const figures = (folded: string): string[] =>
+  (folded.match(/[£$€¥]?\d[\d,.]*%?/g) ?? []).map((f) => f.replace(/[.,]+$/, ''));
+/** Names: capitalised words after the first word of the statement. */
+const names = (statement: string): string[] =>
+  (statement.normalize('NFKC').match(/\p{Lu}[\p{L}\p{N}'-]*/gu) ?? [])
+    .filter((_, i, all) => !(i === 0 && statement.trimStart().startsWith(all[0] as string)))
+    .map((n) => foldForMatch(n));
+
+/**
+ * Whether a passage actually states a fact (MAJOR: a found passage is not enough; it must say this): long enough to
+ * carry it, every figure and name of the statement verbatim, and most of its content words.
+ */
+export function supportsStatement(statement: string, excerpt: string): boolean {
+  const passage = foldForMatch(excerpt);
+  if (passage.length < FACT_EXCERPT_MIN_CHARS) return false;
+  const said = foldForMatch(statement);
+  const passageWords = new Set(words(passage));
+  for (const f of figures(said)) if (!passage.includes(f)) return false;
+  for (const n of names(statement)) if (!words(n).every((w) => passageWords.has(w))) return false;
+  const content = [...new Set(words(said).filter((w) => w.length >= 3 && !STOPWORDS.has(w)))];
+  if (content.length === 0) return true;
+  const found = content.filter((w) => passageWords.has(w)).length;
+  return found / content.length >= FACT_WORD_OVERLAP_MIN;
+}
+
 /** Provenance, confidence and uncertainty from the model's basis and what its evidence turned out to be. */
 export function judge(
   meta: ModelMeta,
   evidence: SuggestionEvidence[],
   sources: ReadonlyMap<string, SuggestionSource>,
+  /** A fact's statement: only passages that state it count as its evidence. */
+  statement?: string,
 ): { provenance: GuidanceProvenance; uncertainty: string | null } {
-  const verified = evidence.filter((e) => e.verified);
+  const found = evidence.filter((e) => e.verified);
+  const verified =
+    statement === undefined ? found : found.filter((e) => supportsStatement(statement, e.excerpt));
   let origin: GuidanceOrigin;
   let confidence = meta.confidence;
   let uncertainty = meta.uncertainty?.trim() || null;
+  if (statement !== undefined && found.length > verified.length && verified.length === 0)
+    uncertainty = join(uncertainty, 'The cited passage does not state this fact.');
   if (meta.basis === 'stated' && verified.length > 0) origin = 'imported';
   else if (meta.basis === 'inferred') {
     origin = 'inferred';
@@ -143,7 +188,7 @@ export function judge(
     }
   } else {
     origin = 'suggested';
-    if (meta.basis === 'stated')
+    if (meta.basis === 'stated' && found.length === 0)
       uncertainty = join(uncertainty, 'The passage it cites was not found in the sources.');
   }
   const refs: EvidenceRef[] = verified.slice(0, 10).map((e) => {
@@ -322,7 +367,11 @@ export function suggestionsFromOutput(output: ModelSectionOutput, ctx: ConvertCo
       parsed.target.kind === 'keyed' && parsed.target.virtual ? undefined : valueAt(ctx.current, cand.path);
     const isUser = provenanceAt(ctx.current, cand.path)?.origin === 'user';
     const evidence = verifyEvidence(cand.meta.evidence, ctx.sources, folded);
-    const { provenance, uncertainty } = judge(cand.meta, evidence, ctx.sources);
+    const statement =
+      ctx.section === 'facts' && cand.value && typeof cand.value === 'object' && 'statement' in cand.value
+        ? String((cand.value as { statement: unknown }).statement)
+        : undefined;
+    const { provenance, uncertainty } = judge(cand.meta, evidence, ctx.sources, statement);
     let op = cand.op;
     let value: unknown = null;
     if (op === 'remove') {

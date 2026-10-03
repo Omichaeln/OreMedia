@@ -25,7 +25,9 @@ import {
   brandVersions,
   brands,
 } from '@oremedia/db/schema/brand';
+import { usageLedger } from '@oremedia/db/schema/billing';
 import { outboxEvents } from '@oremedia/db/schema/operations';
+import { applyChange, valueAt } from '@oremedia/domain/brand-suggestions';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { budgets } from '@oremedia/module-billing';
@@ -37,6 +39,8 @@ import {
   registerSourceUploadStore,
 } from './assist';
 import { createBrandAssistRuntime } from './assist-runtime';
+import { htmlToText } from './capture/html-text';
+import { ProcessingLimitError } from './capture/isolate';
 import { brandService, registerChannelKeySource, resetChannelKeySource } from './service';
 
 /**
@@ -118,6 +122,7 @@ function site(): Promise<{ server: Server; base: string }> {
     '/moved': () => ({ status: 302, headers: { location: 'https://10.1.2.3/' } }),
     '/big': () => ({ status: 200, body: PAGE('Big', `<p>${'x'.repeat(3 * 1024 * 1024)}</p>`) }),
     '/home': () => ({ status: 301, headers: { location: '/' } }),
+    '/shop': () => ({ status: 200, body: PAGE('Shop', '<p>Bags of coffee, posted weekly.</p>') }),
   };
   const server = createServer((req, res) => {
     const route = routes[(req.url ?? '/').split('?')[0] as string];
@@ -342,6 +347,15 @@ describe('brand sources, assist jobs, suggestions and history (BSC-4/5) against 
       await expect(addUrl('https://10.0.0.8/')).rejects.toMatchObject({
         details: [{ path: 'url', issue: 'blocked_address' }],
       });
+      // Only the standard https port (the loopback test server is the one exception).
+      configureSourceCapture({});
+      try {
+        await expect(addUrl('https://example.com:8443/')).rejects.toMatchObject({
+          details: [{ path: 'url', issue: 'unsupported_port' }],
+        });
+      } finally {
+        configureSourceCapture({ insecureAllowLoopback: true });
+      }
       expect(await source(a.sourceId)).toMatchObject({ status: 'pending', kind: 'url', createdById: USER });
     });
 
@@ -468,6 +482,32 @@ describe('brand sources, assist jobs, suggestions and history (BSC-4/5) against 
         });
         expect(await source(s.sourceId)).toMatchObject({ status, reason, text: null });
       }
+    });
+
+    it('a secondary page the parser fails on or stops is skipped; the source keeps what was read', async () => {
+      const s = await addUrl(`${web.base}/shop`);
+      const j = await start(['voice'], [s.sourceId], { instruction: 'shop' });
+      const rt = createBrandAssistRuntime({
+        isolate: () => ({
+          pageText: async (html, url) => {
+            if (url.endsWith('/about')) throw new Error('parser crashed');
+            if (url.endsWith('/products')) throw new ProcessingLimitError('stopped after 10 s');
+            return htmlToText(html, url);
+          },
+          extract: async () => {
+            throw new Error('not used');
+          },
+          close: async () => {},
+        }),
+      });
+      await read(() => rt.beginBrandAssist(input(j.jobId)));
+      expect(
+        await read(() => rt.captureBrandSourceUrl({ ...input(j.jobId), sourceId: s.sourceId })),
+      ).toMatchObject({ status: 'captured' });
+      const row = await source(s.sourceId);
+      expect(row.pages?.map((p) => new URL(p.url).pathname)).toEqual(['/shop']);
+      expect(row.detail).toBe('3 pages skipped (capture_failed)');
+      expect(row.text).toContain('Bags of coffee');
     });
 
     it('an address that redirects to a page already read is captured as a duplicate of it', async () => {
@@ -838,6 +878,63 @@ describe('brand sources, assist jobs, suggestions and history (BSC-4/5) against 
       expect(facts.map((f) => f.state)).toEqual(['revoked', 'revoked']);
     });
 
+    it('a suggestion whose item a person changed since is refused, and shown as changed; a proposal in review takes none', async () => {
+      const pending = (await suggestions(jobId)).filter(
+        (r) => r.section === 'channels' && r.status === 'pending',
+      );
+      const [target, other] = pending;
+      const draft = (
+        await tdb.db
+          .select()
+          .from(brandVersions)
+          .where(and(eq(brandVersions.brandId, brandA), eq(brandVersions.state, 'draft')))
+      )[0]!;
+      // A person writes the item after the suggestion was made.
+      const before = BrandSystemDocumentV1.parse(draft.document);
+      const edited = applyChange(before, {
+        path: target!.path,
+        op: valueAt(before, target!.path) === undefined ? 'add' : 'replace',
+        value: target!.op === 'remove' ? valueAt(before, target!.path) : target!.payload,
+        provenance: { origin: 'user' },
+      });
+      await tdb.db
+        .update(brandVersions)
+        .set({ document: edited, contentHash: hashCanonical(edited) })
+        .where(eq(brandVersions.id, draft.id));
+      const listed = await read(() =>
+        brandAssistService.suggestions.list(A, {
+          brandId: brandA,
+          jobId,
+          section: 'channels',
+          page: { limit: 50 },
+        }),
+      );
+      expect(listed.items.find((i) => i.id === target!.id)?.changedSince).toBe(true);
+      const res = await run((tx) =>
+        brandAssistService.suggestions.accept(A, { brandId: brandA, suggestionIds: [target!.id] }, tx),
+      );
+      expect(res).toMatchObject({
+        decided: [],
+        skipped: [{ suggestionId: target!.id, reason: 'changed_since' }],
+      });
+      expect(
+        BrandSystemDocumentV1.parse(
+          (await tdb.db.select().from(brandVersions).where(eq(brandVersions.id, draft.id)))[0]!.document,
+        ),
+      ).toEqual(edited);
+      // Sent for review: suggestions wait until it is back.
+      await tdb.db.update(brandVersions).set({ state: 'in_review' }).where(eq(brandVersions.id, draft.id));
+      await expect(
+        run((tx) =>
+          brandAssistService.suggestions.accept(A, { brandId: brandA, suggestionIds: [other!.id] }, tx),
+        ),
+      ).rejects.toMatchObject({ details: [{ issue: 'proposal_in_review' }] });
+      await tdb.db
+        .update(brandVersions)
+        .set({ state: 'draft', document: before, contentHash: hashCanonical(before) })
+        .where(eq(brandVersions.id, draft.id));
+    });
+
     it('answers start a follow-up section job that carries them', async () => {
       const follow = await run((tx) =>
         brandAssistService.assist.answer(
@@ -889,6 +986,64 @@ describe('brand sources, assist jobs, suggestions and history (BSC-4/5) against 
       expect(done.state).toBe('failed');
       expect((await job(j.jobId)).error).toBe('budget_exhausted_day');
       expect(seen).toEqual([]);
+    });
+
+    it('two attempts of one section that overlap (a timed-out attempt still running) insert its suggestions once; each attempt is charged once', async () => {
+      const j = await start(['voice'], [textId], { instruction: 'overlap' });
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      const scripted = scriptedModel({
+        voice: () => ({
+          personality: [{ value: { trait: 'Overlapping-attempt trait' }, ...meta([], 'suggested') }],
+          principles: [],
+          styleRules: [],
+          claimRules: [],
+          remove: [],
+          questions: [],
+        }),
+      });
+      let calls = 0;
+      // The first attempt's model call is held until the second attempt has finished the section.
+      const rt = createBrandAssistRuntime({
+        model: {
+          async propose(req) {
+            const n = ++calls;
+            if (n === 1) await gate;
+            // Each attempt words its answer differently, as a model does.
+            const out = await scripted.propose(req);
+            const raw = out.raw as Record<string, unknown>;
+            return {
+              ...out,
+              raw: {
+                ...raw,
+                personality: [{ value: { trait: `Attempt ${n} trait` }, ...meta([], 'suggested') }],
+              },
+            };
+          },
+        },
+      });
+      const inp = input(j.jobId);
+      await read(() => rt.beginBrandAssist(inp));
+      await read(() => rt.prepareBrandAssistProposals(inp, A));
+      const hooks = (attempt: number) => ({ heartbeat: () => {}, attempt });
+      const first = read(() => rt.proposeBrandAssistSection({ ...inp, section: 'voice' }, hooks(1)));
+      while (calls === 0) await new Promise((r) => setTimeout(r, 10));
+      const second = await read(() => rt.proposeBrandAssistSection({ ...inp, section: 'voice' }, hooks(2)));
+      release();
+      expect(second).toMatchObject({ outcome: 'ready', suggestions: 1 });
+      expect(await first).toMatchObject({ outcome: 'ready', suggestions: 1 });
+      expect((await suggestions(j.jobId)).map((r) => r.path)).toEqual(['voice.personality#Attempt 2 trait']);
+      const charges = await tdb.db
+        .select()
+        .from(usageLedger)
+        .where(eq(usageLedger.sourceRef, `brand-assist:${j.jobId}:voice`));
+      expect(charges.map((c) => c.idempotencyKey).sort()).toEqual([
+        `brand-assist:${j.jobId}:voice:a1`,
+        `brand-assist:${j.jobId}:voice:a2`,
+      ]);
+      // A replay of attempt 2 neither charges again nor adds anything.
+      await read(() => rt.proposeBrandAssistSection({ ...inp, section: 'voice' }, hooks(2)));
+      expect(await suggestions(j.jobId)).toHaveLength(1);
     });
 
     it('cancel stops the next section; the job ends cancelled and its reservation is settled', async () => {

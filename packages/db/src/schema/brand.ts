@@ -15,6 +15,7 @@ import type {
   BrandAssistProgressV1,
   BrandAssistQuestionV1,
   BrandSourcePageV1,
+  SuggestionBasis,
   SuggestionConflict,
   SuggestionEvidence,
 } from '@oremedia/contracts/brand-assist';
@@ -405,6 +406,8 @@ export const brandSuggestions = mysqlTable(
     evidence: json('evidence').$type<SuggestionEvidence[]>().notNull(),
     fingerprint: hash('fingerprint').notNull(),
     againstUserItem: mysqlEnum('against_user_item', ['yes', 'no']).notNull().default('no'),
+    /** What the item was when the suggestion was made (value and origin): accept refuses if it has changed since. */
+    basedOn: json('based_on').$type<SuggestionBasis>(),
     status: mysqlEnum('status', ['pending', 'accepted', 'edited', 'rejected', 'superseded']).notNull(),
     decidedById: ref('decided_by_id'),
     decidedAt: ts('decided_at'),

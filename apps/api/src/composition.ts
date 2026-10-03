@@ -349,8 +349,8 @@ export function composeModules(): void {
   // uploaded to the assets module's store (quarantine prefix, deleted once read) and assets are described by it.
   registerAssistModelGate(brandAssistModelGate());
   registerSourceUploadStore({
-    signUpload: (key, { contentType }) =>
-      storage().signUploadUrl(key, { contentType, expiresInSec: UPLOAD_INTENT_TTL_SEC }),
+    signUpload: (key, { contentType, contentLength }) =>
+      storage().signUploadUrl(key, { contentType, contentLength, expiresInSec: UPLOAD_INTENT_TTL_SEC }),
     delete: (key) => storage().deleteObject(key),
   });
   registerSourceAssetResolver((brandId, assetVersionId, tx) =>

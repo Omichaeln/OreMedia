@@ -41,6 +41,44 @@ import {
  * suggestions go into the proposed update, which is applied through the usual review and save.
  */
 
+/** What a refusal or a skipped suggestion means, in words (codes come from the brand module). */
+const ISSUE_TEXT: Record<string, string> = {
+  changed_since: 'the item changed after the suggestion was made',
+  proposal_in_review: 'the proposed changes are in review; approve them or send them back first',
+  proposal_closed: 'the proposed changes were already applied or discarded',
+  nothing_to_undo: 'there is nothing to undo',
+  invalid_value: 'the value does not fit this item',
+  document_limit: 'the brand system would be over its size limits',
+  not_part_of_the_document: 'this item is not part of the brand system',
+  unknown_path: 'this item is not known',
+  key_changed: 'an edit cannot rename the item',
+  removal_has_no_value: 'a removal has nothing to edit',
+  job_not_ready: 'the suggestions are still being made',
+  unknown_question: 'that question is no longer open',
+  never_applied: 'that state was never applied',
+  already_current: 'that is already the current state',
+  duplicate_key: 'two items have the same name',
+  duplicate_variant: 'two logo variants are the same',
+  empty: 'a required text is empty',
+  not_a_hex_colour: 'a colour is not a hex value',
+  unknown_colour_key: 'a colour it refers to no longer exists',
+  not_a_logo_of_this_brand: 'a logo it refers to is no longer one of the brand’s',
+  not_a_version_of_this_logo: 'a logo version it refers to no longer exists',
+  not_a_font_of_this_brand: 'a font it refers to is no longer one of the brand’s',
+  not_an_asset_of_this_brand: 'an asset it refers to is no longer one of the brand’s',
+};
+export const issueText = (issue: string): string => ISSUE_TEXT[issue] ?? issue.replaceAll('_', ' ');
+
+/** An error's message and its issues as readable text. */
+export const errorText = (error: { message: string; details: Array<{ issue: string }> }): string =>
+  [error.message, ...[...new Set(error.details.map((d) => issueText(d.issue)))]].join(' · ');
+
+/** "2 not accepted: the item changed after the suggestion was made." */
+const skippedText = (verb: string, skipped: Array<{ reason: string }>): string =>
+  skipped.length === 0
+    ? ''
+    : `${skipped.length} not ${verb}: ${[...new Set(skipped.map((x) => issueText(x.reason)))].join('; ')}.`;
+
 const STATE_TEXT: Record<AssistJobDto['state'], string> = {
   queued: 'Waiting to start',
   capturing: 'Reading websites',
@@ -374,15 +412,7 @@ function EditDialog({ suggestion, onClose }: { suggestion: SuggestionDto; onClos
               </Field>
             );
           })}
-          {error && (
-            <StatusBanner
-              tone="critical"
-              title="Not saved"
-              description={[error.message, ...error.details.map((d) => d.issue.replaceAll('_', ' '))].join(
-                ' · ',
-              )}
-            />
-          )}
+          {error && <StatusBanner tone="critical" title="Not saved" description={errorText(error)} />}
           <DialogActions>
             <DialogClose asChild>
               <Button size="sm" variant="ghost">
@@ -461,6 +491,12 @@ export function SuggestionCard({
           A person wrote the current wording. Accepting replaces it.
         </p>
       )}
+      {s.changedSince && s.status === 'pending' && (
+        <p className="text-xs text-status-warning" data-testid="suggestion-changed">
+          This item changed after the suggestion was made, so it can no longer be accepted. Reject it, or
+          request alternatives for the section.
+        </p>
+      )}
       {s.uncertainty && <p className="text-xs text-muted-foreground">Uncertain: {s.uncertainty}</p>}
       {s.conflicts
         .filter((c) => !c.note.startsWith('A person wrote'))
@@ -491,10 +527,12 @@ export function SuggestionCard({
       )}
       {canDecide && s.status === 'pending' && (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="primary" disabled={busy} onClick={onAccept}>
-            Accept<span className="sr-only"> {s.label}</span>
-          </Button>
-          {s.op !== 'remove' && (
+          {!s.changedSince && (
+            <Button size="sm" variant="primary" disabled={busy} onClick={onAccept}>
+              Accept<span className="sr-only"> {s.label}</span>
+            </Button>
+          )}
+          {s.op !== 'remove' && !s.changedSince && (
             <Button size="sm" disabled={busy} onClick={() => setEditing(true)}>
               Edit<span className="sr-only"> {s.label}</span>
             </Button>
@@ -625,13 +663,19 @@ export function SuggestionReview({
       onSettled,
       onSuccess: (res) => {
         const msg = `Undone: ${res.decided.length} suggestion${res.decided.length === 1 ? '' : 's'} back to review.`;
-        setStatus(msg);
-        toast({ tone: 'info', title: msg });
+        const left = skippedText('undone', res.skipped);
+        setStatus([msg, left].filter(Boolean).join(' '));
+        toast({ tone: left ? 'warning' : 'info', title: msg, ...(left ? { description: left } : {}) });
       },
       onError: (err) =>
-        toast({ tone: 'critical', title: 'Nothing undone', description: toUiError(err).message }),
+        toast({ tone: 'critical', title: 'Nothing undone', description: errorText(toUiError(err)) }),
     }),
   );
+  const reportAccepted = (msg: string, skipped: Array<{ reason: string }>) => {
+    const left = skippedText('accepted', skipped);
+    setStatus([msg, left].filter(Boolean).join(' '));
+    if (left) toast({ tone: 'warning', title: 'Some suggestions were not accepted', description: left });
+  };
   const busy = accept.isPending || reject.isPending || acceptAll.isPending || undo.isPending;
   const error = [accept.error, reject.error, acceptAll.error].find(Boolean);
   const bySection = useMemo(() => {
@@ -661,7 +705,7 @@ export function SuggestionReview({
           description="The sources did not add anything new to what the brand system already says, or every suggestion was already decided."
         />
       )}
-      {error && <StatusBanner tone="critical" title="Not saved" description={toUiError(error).message} />}
+      {error && <StatusBanner tone="critical" title="Not saved" description={errorText(toUiError(error))} />}
       {bySection.map(({ section, items }) => {
         const pending = items.filter((s) => s.status === 'pending');
         return (
@@ -687,7 +731,10 @@ export function SuggestionReview({
                       onClick={() =>
                         acceptAll.mutate(
                           { brandId, jobId, section },
-                          { onSuccess: (r) => setStatus(`${r.decided.length} suggestions accepted.`) },
+                          {
+                            onSuccess: (r) =>
+                              reportAccepted(`${r.decided.length} suggestions accepted.`, r.skipped),
+                          },
                         )
                       }
                     >
@@ -712,7 +759,10 @@ export function SuggestionReview({
                   onAccept={() =>
                     accept.mutate(
                       { brandId, suggestionIds: [s.id] },
-                      { onSuccess: () => setStatus(`Accepted: ${s.label}.`) },
+                      {
+                        onSuccess: (r) =>
+                          reportAccepted(r.decided.length ? `Accepted: ${s.label}.` : '', r.skipped),
+                      },
                     )
                   }
                   onReject={() =>

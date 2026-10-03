@@ -39,6 +39,7 @@ export {
 // BSC-4 / BSC-5: sources, AI assist jobs, suggestions and history (the API's brand.sources/assist/suggestions/history).
 export {
   brandAssistService,
+  brandSourceRetention,
   registerAssistModelGate,
   registerSourceUploadStore,
   registerSourceAssetResolver,

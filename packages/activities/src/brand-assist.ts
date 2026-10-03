@@ -7,7 +7,7 @@ import type { TenantContextInput } from '@oremedia/contracts/tenancy';
 import type { BrandAssistRuntime } from '@oremedia/module-brand';
 import { loadActorGrants, resolveActivityActor } from './actor';
 import { toActivityFailure } from './agent-run';
-import { heartbeat, inTenant, type GrantLoader } from './tenant';
+import { activityAttempt, heartbeat, inTenant, type GrantLoader } from './tenant';
 
 /** Closing a job (its bookkeeping and the budget settlement) is not an effect on anyone's behalf: the whole tenant. */
 const wholeTenant: GrantLoader = async () => ({ brandIds: 'all' });
@@ -41,7 +41,8 @@ export function createBrandAssistActivities(runtime: BrandAssistRuntime): BrandA
     ),
     proposeBrandAssistSection: asActor((input) => {
       heartbeat(`brand-assist:${input.jobId}:${input.section}`);
-      return runtime.proposeBrandAssistSection(input, { heartbeat });
+      const attempt = activityAttempt();
+      return runtime.proposeBrandAssistSection(input, { heartbeat, ...(attempt ? { attempt } : {}) });
     }),
     recordBrandAssistSectionFailure: asTenant((input) => runtime.recordBrandAssistSectionFailure(input)),
     finishBrandAssist: asTenant((input) => runtime.finishBrandAssist(input)),

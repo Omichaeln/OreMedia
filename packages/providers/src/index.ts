@@ -77,6 +77,7 @@ export {
   type RobotsRules,
   type SitemapListing,
 } from './site-rules';
+export { scanMarkup, type MarkupToken } from './markup';
 export { wordpressCmsCapability } from './cms/wordpress/capability';
 export { Ga4PropertyAdapter, ga4PropertyAdapter } from './sources/ga4_property/adapter';
 export { ga4PropertyCapability, ga4Reports } from './sources/ga4_property/capability';

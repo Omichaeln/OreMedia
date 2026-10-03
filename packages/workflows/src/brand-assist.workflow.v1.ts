@@ -2,6 +2,7 @@ import {
   CancellationScope,
   defineSignal,
   getExternalWorkflowHandle,
+  isCancellation,
   proxyActivities,
   setHandler,
 } from '@temporalio/workflow';
@@ -52,6 +53,8 @@ export interface BrandAssistHost {
   cancelled(): boolean;
   /** CancellationScope.nonCancellable in the workflow; the identity in tests. */
   nonCancellable<T>(fn: () => Promise<T>): Promise<T>;
+  /** Whether an error is the workflow being cancelled (Temporal's isCancellation); absent means never. */
+  isCancellation?(err: unknown): boolean;
 }
 
 /** The orchestration, separated from the activity proxies so it runs with fakes in unit tests. */
@@ -63,8 +66,17 @@ export async function runBrandAssist(
   host: BrandAssistHost,
 ): Promise<BrandAssistFinishResultV1> {
   let failure: string | null = null;
+  // A cancelled workflow (not only the cancel signal) ends the job as cancelled, never as failed.
+  let workflowCancelled = false;
+  const cancelled = () => workflowCancelled || host.cancelled();
+  const stopIfCancelled = (err: unknown) => {
+    if (host.isCancellation?.(err)) {
+      workflowCancelled = true;
+      throw err;
+    }
+  };
   const finish = () =>
-    host.nonCancellable(() => acts.finishBrandAssist({ ...input, cancelled: host.cancelled(), failure }));
+    host.nonCancellable(() => acts.finishBrandAssist({ ...input, cancelled: cancelled(), failure }));
   try {
     const plan = await acts.beginBrandAssist(input);
     if (plan.outcome === 'skipped')
@@ -79,7 +91,8 @@ export async function runBrandAssist(
       if (host.cancelled()) break;
       try {
         await capture.captureBrandSourceUrl({ ...input, sourceId });
-      } catch {
+      } catch (err) {
+        stopIfCancelled(err);
         await acts.recordBrandSourceFailure({ ...input, sourceId, reason: 'capture_failed' });
       }
     }
@@ -89,7 +102,8 @@ export async function runBrandAssist(
         if (host.cancelled()) break;
         try {
           await extract.extractBrandSourceDocument({ ...input, sourceId });
-        } catch {
+        } catch (err) {
+          stopIfCancelled(err);
           await acts.recordBrandSourceFailure({ ...input, sourceId, reason: 'capture_failed' });
         }
       }
@@ -103,12 +117,14 @@ export async function runBrandAssist(
           try {
             await acts.proposeBrandAssistSection({ ...input, section });
           } catch (err) {
+            stopIfCancelled(err);
             await acts.recordBrandAssistSectionFailure({ ...input, section, reason: reasonOf(err) });
           }
         }
     }
   } catch (err) {
-    failure = reasonOf(err);
+    if (host.isCancellation?.(err)) workflowCancelled = true;
+    else failure = reasonOf(err);
   }
   return finish();
 }
@@ -119,8 +135,10 @@ export async function brandAssistWorkflowV1(input: BrandAssistInputV1): Promise<
     retry: { initialInterval: '5s', maximumAttempts: 3, nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES },
   });
   // One bounded model call per attempt; a provider failure or an answer that does not fit its schema is retried once.
+  // The activity heartbeats through the model call, so a lost worker is noticed in a minute, not at the 5-minute mark.
   const model = proxyActivities<Pick<BrandAssistActivitiesV1, 'proposeBrandAssistSection'>>({
     startToCloseTimeout: '5 minutes',
+    heartbeatTimeout: '1 minute',
     retry: { initialInterval: '10s', maximumAttempts: 2, nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES },
   });
   const capture = proxyActivities<BrandSourceCaptureActivitiesV1>({
@@ -132,6 +150,7 @@ export async function brandAssistWorkflowV1(input: BrandAssistInputV1): Promise<
   const extract = proxyActivities<BrandSourceExtractActivitiesV1>({
     taskQueue: 'media',
     startToCloseTimeout: '3 minutes',
+    heartbeatTimeout: '1 minute',
     retry: { initialInterval: '10s', maximumAttempts: 2, nonRetryableErrorTypes: NON_RETRYABLE_ERROR_TYPES },
   });
   let cancelled = false;
@@ -151,6 +170,7 @@ export async function brandAssistWorkflowV1(input: BrandAssistInputV1): Promise<
   return runBrandAssist(acts, capture, extract, input, {
     cancelled: () => cancelled,
     nonCancellable: (fn) => CancellationScope.nonCancellable(fn),
+    isCancellation,
   });
 }
 

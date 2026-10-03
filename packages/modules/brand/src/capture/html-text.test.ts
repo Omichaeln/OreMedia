@@ -96,3 +96,28 @@ describe('choosePages (BSC-4 crawl order)', () => {
     ]);
   });
 });
+
+describe('htmlToText on hostile markup (BSC-4)', () => {
+  const N = 20_000;
+  it.each([
+    ['unclosed headings', '<h1>'.repeat(N)],
+    ['mismatched headings', '<h1>x</h2>'.repeat(N)],
+    ['hidden attributes without closes', '<p hidden>'.repeat(N)],
+    ['drop blocks without closes', '<svg><iframe>'.repeat(N)],
+    ['tags without ends', '<a href="/x"'.repeat(N)],
+    ['bare brackets', '<'.repeat(N * 4)],
+    ['list items', '<li>'.repeat(N)],
+  ])('stays linear on %s', (_, html) => {
+    const started = performance.now();
+    htmlToText(html, 'https://ore.example/');
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it('skips hidden and aria-hidden elements, nested in themselves, and keeps what follows', () => {
+    const out = htmlToText(
+      '<body><div hidden><div>gone</div>still gone</div><span aria-hidden="true">x</span><p>kept</p></body>',
+      'https://ore.example/',
+    );
+    expect(out.text).toBe('kept');
+  });
+});

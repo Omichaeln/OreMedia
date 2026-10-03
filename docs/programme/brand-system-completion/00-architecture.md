@@ -122,3 +122,23 @@ source can never be approved as-is: approval requires a source or an explicit re
   checked against strict per-section schemas (`contracts/brand-assist.ts`) and never repaired. A fact suggestion
   becomes a proposed fact only when a person accepts it.
 - History is a read over applied versions; restore calls `brand.system.save` with the earlier document.
+- Untrusted markup is read with a linear-time scanner (`packages/providers/src/markup.ts`), never with regular
+  expressions over the markup; robots rules are matched without building a regular expression. Pages and documents
+  are parsed in a worker thread (`capture/isolate.ts`, bundled as `capture-worker.js` next to worker-ingest and
+  worker-render) with a memory ceiling (resourceLimits, plus heap sampling because a process-wide
+  `--max-old-space-size` overrides worker limits) and a hard timer (10 s a page, 90 s a document); a stopped parse is
+  the `processing_limit` refusal. A page that fails past the start page is skipped, never the whole source.
+- An upload's size is read from the store before anything is downloaded and the download is ranged at the limit;
+  the presigned PUT signs the declared Content-Length. Websites are read on the standard https port only, robots.txt
+  in its first 512 KiB, and every fetch gets no more than the crawl's remaining time.
+- A suggestion records what its item was when it was made (`brand_suggestions.based_on`); accept and edit refuse
+  with `changed_since` when the item changed or a person wrote it since. A proposal in review takes no suggestions
+  (`proposal_in_review`). Undo walks its batch in reverse and re-runs the document reference checks.
+- A fact counts as stated only when its cited passage says it (at least 30 characters, every figure and name
+  verbatim, 60% of its content words); otherwise it is a suggestion that says why.
+- Section calls heartbeat through the model call (heartbeat timeout 1 minute) and insert their suggestions only
+  while the section is still running, under the job's lock: an attempt that outlived its timeout adds nothing; each
+  attempt is charged once (`brand-assist:<job>:<section>:a<attempt>`). A cancelled workflow ends the job cancelled.
+- Retention: captured source text follows the tenant's `agent_transcripts` class (90 days by default) through the
+  retention sweep (`brand.source_text`, retention role: SELECT and UPDATE on `brand_sources`). A website or asset
+  goes back to pending and is read again when next used; uploaded or pasted text becomes `expired`.

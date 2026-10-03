@@ -560,6 +560,7 @@ export class AssistBackend {
         return { ...e, sourceTitle: src?.title ?? null, sourceUrl: src?.url ?? null };
       }),
       againstUserItem: s.againstUserItem,
+      changedSince: false,
       status: s.status,
       decidedByName: s.status === 'pending' ? null : 'E2E Owner',
       decidedAt: null,

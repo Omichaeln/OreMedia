@@ -61,6 +61,9 @@ export const SOURCE_REASON: Record<BrandSourceReason, string> = {
   not_uploaded: 'The file did not finish uploading. Remove it and add it again.',
   asset_not_usable: 'This asset can no longer be used.',
   capture_failed: 'Reading it failed. Try again; if it keeps failing, paste the text instead.',
+  processing_limit:
+    'It took too long or was too complex to read safely. Paste the text, or upload a simpler file.',
+  expired: 'Its text was removed after the retention period. Add it again to use it.',
 };
 
 const KIND_LABEL: Record<BrandSourceDto['kind'], string> = {

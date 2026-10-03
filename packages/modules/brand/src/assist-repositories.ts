@@ -48,6 +48,39 @@ export class BrandSourceRepository extends BrandScopedRepository<typeof brandSou
   ) {
     await this.updateScoped(id, expectedVersion, values, tx);
   }
+  /**
+   * Retention (the tenant's agent_transcripts class: source text is prompt material): the text captured before the
+   * cut-off is removed, tenant-wide. A website or brand asset goes back to pending (the next job that uses it reads
+   * it again); an uploaded document or pasted text cannot be read again and becomes inaccessible (`expired`).
+   */
+  async purgeTextCapturedBefore(cutoff: Date, dryRun: boolean, tx?: Tx): Promise<number> {
+    const due = this.scope(and(isNotNull(brandSources.text), lte(brandSources.capturedAt, cutoff)) as SQL);
+    const rows = await this.conn(tx)
+      .select({ n: sql<number>`count(*)` })
+      .from(brandSources)
+      .where(due);
+    const n = Number(rows[0]?.n ?? 0);
+    if (dryRun || n === 0) return n;
+    const cleared = {
+      text: null,
+      pages: null,
+      contentHash: null,
+      duplicateOfSourceId: null,
+      charCount: null,
+      capturedAt: null,
+      truncated: 'no' as const,
+      version: sql`${brandSources.version} + 1`,
+    };
+    await this.conn(tx)
+      .update(brandSources)
+      .set({ ...cleared, status: 'pending', reason: null, detail: null })
+      .where(and(due, inArray(brandSources.kind, ['url', 'brand_asset'])));
+    await this.conn(tx)
+      .update(brandSources)
+      .set({ ...cleared, status: 'inaccessible', reason: 'expired', detail: null })
+      .where(and(due, inArray(brandSources.kind, ['document', 'text'])));
+    return n;
+  }
   /** Live sources newest first, without their text (lists never carry it). */
   async list(brandId: string, page: PageRequest, tx?: Tx) {
     const cursor = page.cursor ? decodeCursor(page.cursor) : null;

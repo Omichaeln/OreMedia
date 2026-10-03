@@ -6,6 +6,7 @@ import {
   foldForMatch,
   parseSectionOutput,
   suggestionsFromOutput,
+  supportsStatement,
   verifyEvidence,
   type ConvertContext,
   type SuggestionSource,
@@ -192,6 +193,57 @@ describe('merge rules (BSC-4)', () => {
     );
     expect(out.map((s) => [s.path, s.provenance.origin])).toEqual([
       ['facts#Best coffee in Leeds.', 'suggested'],
+    ]);
+  });
+
+  it('a fact counts as stated only when its passage says it: long enough, figures and names verbatim, most words', () => {
+    expect(supportsStatement('Founded in 2014.', 'We were founded in 2014 by two baristas.')).toBe(true);
+    expect(supportsStatement('Founded in 2014.', 'Founded in 2014.')).toBe(false); // too short to carry it alone
+    expect(supportsStatement('Founded in 2015.', 'We were founded in 2014 by two baristas.')).toBe(false);
+    expect(
+      supportsStatement('A bag costs £4.50.', 'Every bag of our house roast costs £4.95 in the shop.'),
+    ).toBe(false);
+    expect(
+      supportsStatement('Roasted in Leeds by Ore.', 'Roasted in York by a small team of roasters.'),
+    ).toBe(false);
+    expect(
+      supportsStatement(
+        'Every bag names its farm and roast date.',
+        'Our coffee is good and we like it a lot here.',
+      ),
+    ).toBe(false);
+    expect(
+      supportsStatement('Every bag names its farm.', 'It is true that every single bag names its farm.'),
+    ).toBe(true);
+  });
+
+  it('a stated fact whose found passage does not state it is downgraded to a suggestion, and says why', () => {
+    const source: SuggestionSource = {
+      ...SRC,
+      text: 'We roast single-origin coffee in small batches every Tuesday in our Leeds roastery.',
+    };
+    const facts = parseSectionOutput('facts', {
+      facts: [
+        {
+          statement: 'Founded in 2014.',
+          category: 'company',
+          ...meta(['We roast single-origin coffee in small batches every Tuesday']),
+        },
+        {
+          statement: 'Roasts coffee in small batches every Tuesday.',
+          category: 'company',
+          ...meta(['We roast single-origin coffee in small batches every Tuesday']),
+        },
+      ],
+      questions: [],
+    });
+    const out = suggestionsFromOutput(
+      facts,
+      ctx({ section: 'facts', sources: new Map([[source.id, source]]) }),
+    );
+    expect(out.map((s) => [s.path, s.provenance.origin, s.uncertainty])).toEqual([
+      ['facts#Founded in 2014.', 'suggested', 'The cited passage does not state this fact.'],
+      ['facts#Roasts coffee in small batches every Tuesday.', 'imported', null],
     ]);
   });
 

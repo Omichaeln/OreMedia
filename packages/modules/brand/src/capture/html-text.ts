@@ -1,11 +1,13 @@
-import { decodeEntities } from '@oremedia/providers';
+import { scanMarkup } from '@oremedia/providers/markup';
+import { decodeEntities } from '@oremedia/providers/site-rules';
 
 /**
  * BSC-4: a web page as readable text for the brand assistant. Scripts, styles, forms, embedded media and the page's
  * navigation, footer and side boilerplate are dropped; headings become `#` lines, list items `- ` lines, paragraphs
  * and table rows their own lines. The page's title and canonical URL are kept as the page states them, and its
- * same-site links are returned (navigation links first) so the crawl can choose what to read next. Regex over the
- * markup, as the audit crawl reads pages: nothing is executed and no DOM is built from untrusted HTML.
+ * same-site links are returned (navigation links first) so the crawl can choose what to read next. One pass of the
+ * linear markup scanner (packages/providers/src/markup.ts): no regular expression runs over the markup, nothing is
+ * executed and no DOM is built from untrusted HTML.
  */
 export interface PageText {
   title: string | null;
@@ -16,7 +18,8 @@ export interface PageText {
   links: string[];
 }
 
-const DROP_BLOCKS = [
+/** Elements whose whole contents are dropped (and whose links are not followed). */
+const DROP_BLOCKS = new Set([
   'script',
   'style',
   'noscript',
@@ -30,23 +33,49 @@ const DROP_BLOCKS = [
   'form',
   'select',
   'button',
-  'head',
-];
-const BOILERPLATE_BLOCKS = ['nav', 'footer', 'aside'];
+]);
+/** Boilerplate: its text is dropped, its links still guide the crawl. */
+const BOILERPLATE_BLOCKS = new Set(['nav', 'footer', 'aside']);
+const NAV_BLOCKS = new Set(['nav', 'header']);
+const LINE_BLOCKS = new Set([
+  'p',
+  'div',
+  'section',
+  'tr',
+  'table',
+  'ul',
+  'ol',
+  'dl',
+  'dt',
+  'dd',
+  'blockquote',
+  'pre',
+  'figure',
+  'figcaption',
+  'header',
+  'hr',
+  'main',
+  'article',
+  'body',
+]);
+const VOID = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'source',
+  'track',
+  'wbr',
+]);
 const LINKS_MAX = 200;
 
-const dropBlocks = (html: string, tags: readonly string[]): string =>
-  tags.reduce((h, tag) => h.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}\\s*>`, 'gi'), ' '), html);
-
-const attr = (tag: string, name: string): string | null => {
-  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i').exec(tag);
-  return m ? decodeEntities((m[1] ?? m[2] ?? m[3] ?? '').trim()) : null;
-};
-
-const inline = (html: string): string =>
-  decodeEntities(html.replace(/<[^>]+>/g, ' '))
-    .replace(/[ \t\f\v\u00a0]+/g, ' ')
-    .trim();
+const collapse = (text: string): string => text.replace(/[\s\u00a0]+/g, ' ').trim();
 
 /** The absolute URL of a link when it stays on the site (same host, or the same host with/without `www.`). */
 export function sameSiteUrl(href: string, pageUrl: string): string | null {
@@ -71,72 +100,147 @@ export function sameSiteUrl(href: string, pageUrl: string): string | null {
 export const sameSiteHost = (a: string, b: string): boolean =>
   a.toLowerCase().replace(/^www\./, '') === b.toLowerCase().replace(/^www\./, '');
 
-function linksIn(html: string, pageUrl: string): string[] {
-  const out = new Set<string>();
-  for (const m of html.matchAll(/<a\b[^>]*>/gi)) {
-    const href = attr(m[0], 'href');
-    const url = href === null ? null : sameSiteUrl(href, pageUrl);
-    if (url && url !== pageUrl) out.add(url);
-    if (out.size >= LINKS_MAX) break;
-  }
-  return [...out];
-}
-
 export function htmlToText(html: string, pageUrl: string): PageText {
-  const noComments = html.replace(/<!--[\s\S]*?-->/g, ' ');
-  const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(noComments);
-  const title = titleTag ? inline(titleTag[1] as string) || null : null;
+  let title: string | null = null;
   let canonicalUrl: string | null = null;
-  for (const m of noComments.matchAll(/<link\b[^>]*>/gi)) {
-    const rel = (attr(m[0], 'rel') ?? '').toLowerCase().split(/\s+/);
-    const href = attr(m[0], 'href');
-    if (rel.includes('canonical') && href) {
-      try {
-        canonicalUrl = new URL(href, pageUrl).toString();
-      } catch {
-        canonicalUrl = null;
-      }
-      break;
+  let canonicalSeen = false;
+  const navLinks = new Set<string>();
+  const links = new Set<string>();
+  const parts: string[] = [];
+  // An element being skipped whole (dropped block, or hidden): its name and how deeply it nests in itself.
+  let skip: string | null = null;
+  let skipDepth = 0;
+  let inHead = false;
+  let inTitle = false;
+  let navDepth = 0;
+  let boilerplateDepth = 0;
+  let heading: { level: number; text: string } | null = null;
+  let item = -1; // index in `parts` of the open list item's marker
+  const region: Record<'main' | 'article', { start: number; end: number; depth: number }> = {
+    main: { start: -1, end: -1, depth: 0 },
+    article: { start: -1, end: -1, depth: 0 },
+  };
+  const emit = (text: string) => {
+    if (heading) heading.text += text;
+    else if (!inHead && boilerplateDepth === 0) parts.push(text);
+  };
+  const endHeading = () => {
+    if (!heading) return;
+    const t = collapse(heading.text);
+    const level = heading.level;
+    heading = null;
+    emit(t ? `\n\n${'#'.repeat(level)} ${t}\n\n` : '\n');
+  };
+
+  for (const t of scanMarkup(html)) {
+    if (skip !== null) {
+      if (t.type === 'open' && t.name === skip && !t.selfClosing) skipDepth++;
+      else if (t.type === 'close' && t.name === skip && --skipDepth === 0) skip = null;
+      continue;
     }
+    if (t.type === 'text') {
+      if (!inTitle) emit(t.text);
+      else if (title === null) title = collapse(decodeEntities(t.text)) || null;
+      continue;
+    }
+    const name = t.name;
+    if (t.type === 'close') {
+      if (name === 'title') inTitle = false;
+      else if (name === 'head') inHead = false;
+      else if (/^h[1-6]$/.test(name)) endHeading();
+      else if (name === 'li') closeItem();
+      else if (name === 'main' || name === 'article') {
+        const r = region[name];
+        if (r.depth > 0 && --r.depth === 0 && r.end < 0) r.end = parts.length;
+      }
+      if (NAV_BLOCKS.has(name) && navDepth > 0) navDepth--;
+      if (BOILERPLATE_BLOCKS.has(name) && boilerplateDepth > 0) boilerplateDepth--;
+      if (LINE_BLOCKS.has(name)) emit('\n');
+      else if (name !== 'title') emit(' ');
+      continue;
+    }
+    const open = !t.selfClosing && !VOID.has(name);
+    const hidden =
+      t.attrs.has('hidden') || (t.attrs.get('aria-hidden') ?? '').trim().toLowerCase() === 'true';
+    if (open && (DROP_BLOCKS.has(name) || hidden)) {
+      skip = name;
+      skipDepth = 1;
+      continue;
+    }
+    if (name === 'title') inTitle = open;
+    else if (name === 'head') inHead = open;
+    else if (name === 'body') inHead = false;
+    else if (name === 'link' && !canonicalSeen) {
+      const rel = (t.attrs.get('rel') ?? '').toLowerCase().split(/\s+/);
+      const href = t.attrs.get('href');
+      if (rel.includes('canonical') && href) {
+        canonicalSeen = true;
+        try {
+          canonicalUrl = new URL(decodeEntities(href).trim(), pageUrl).toString();
+        } catch {
+          canonicalUrl = null;
+        }
+      }
+    } else if (name === 'a') {
+      const href = t.attrs.get('href');
+      const url = href === undefined ? null : sameSiteUrl(decodeEntities(href), pageUrl);
+      if (url && url !== pageUrl) {
+        if (navDepth > 0 && navLinks.size < LINKS_MAX) navLinks.add(url);
+        if (links.size < LINKS_MAX) links.add(url);
+      }
+    }
+    if (!open) {
+      emit(name === 'br' ? '\n' : LINE_BLOCKS.has(name) ? '\n' : ' ');
+      continue;
+    }
+    if (NAV_BLOCKS.has(name)) navDepth++;
+    if (BOILERPLATE_BLOCKS.has(name)) boilerplateDepth++;
+    if (name === 'main' || name === 'article') {
+      const r = region[name];
+      if (r.start < 0) r.start = parts.length;
+      if (r.end < 0) r.depth++;
+    }
+    const level = /^h([1-6])$/.exec(name);
+    if (level) {
+      endHeading();
+      heading = { level: Number(level[1]), text: '' };
+    } else if (name === 'li') {
+      closeItem();
+      emit('\n');
+      item = parts.length;
+      emit('- ');
+      if (parts.length === item) item = -1;
+    } else if (name === 'td' || name === 'th') emit(' | ');
+    else if (LINE_BLOCKS.has(name)) emit('\n');
+    else emit(' ');
   }
-  const scriptless = dropBlocks(
-    noComments,
-    DROP_BLOCKS.filter((t) => t !== 'head'),
-  );
-  const navHtml = [...scriptless.matchAll(/<(nav|header)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)]
-    .map((m) => m[2] as string)
-    .join(' ');
-  const navLinks = linksIn(navHtml, pageUrl);
-  const links = [...new Set([...navLinks, ...linksIn(scriptless, pageUrl)])].slice(0, LINKS_MAX);
+  endHeading();
+  closeItem();
+  const pick = (r: { start: number; end: number }) => parts.slice(r.start, r.end < 0 ? parts.length : r.end);
+  const chosen =
+    region.main.start >= 0 ? pick(region.main) : region.article.start >= 0 ? pick(region.article) : parts;
+  const text = tidyText(decodeEntities(chosen.join('')));
+  return {
+    title,
+    canonicalUrl,
+    text,
+    navLinks: [...navLinks],
+    links: [...new Set([...navLinks, ...links])].slice(0, LINKS_MAX),
+  };
 
-  let body = dropBlocks(noComments, DROP_BLOCKS);
-  const main =
-    /<main\b[^>]*>([\s\S]*?)<\/main\s*>/i.exec(body) ??
-    /<article\b[^>]*>([\s\S]*?)<\/article\s*>/i.exec(body);
-  body = main ? (main[1] as string) : (/<body\b[^>]*>([\s\S]*?)(?:<\/body\s*>|$)/i.exec(body)?.[1] ?? body);
-  body = dropBlocks(body, BOILERPLATE_BLOCKS);
-  body = body.replace(
-    /<[^>]+\b(?:aria-hidden\s*=\s*["']?true|hidden)\b[^>]*>[\s\S]*?<\/[a-z0-9]+\s*>/gi,
-    ' ',
-  );
-
-  const text = body
-    .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, (_, level: string, inner: string) => {
-      const t = inline(inner);
-      return t ? `\n\n${'#'.repeat(Number(level))} ${t}\n\n` : '\n';
-    })
-    .replace(/<li\b[^>]*>([\s\S]*?)(?:<\/li\s*>|(?=<li\b)|(?=<\/[uo]l))/gi, (_, inner: string) => {
-      const t = inline(inner);
-      return t ? `\n- ${t}\n` : '\n';
-    })
-    .replace(/<(td|th)\b[^>]*>/gi, ' | ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(
-      /<\/?(p|div|section|tr|table|ul|ol|dl|dt|dd|blockquote|pre|figure|figcaption|header|hr)\b[^>]*>/gi,
-      '\n',
+  function closeItem() {
+    if (item < 0) return;
+    // An item with no text leaves no `- ` line behind.
+    if (
+      parts
+        .slice(item + 1)
+        .join('')
+        .trim() === ''
     )
-    .replace(/<[^>]+>/g, ' ');
-  return { title, canonicalUrl, text: tidyText(decodeEntities(text)), navLinks, links };
+      parts[item] = '';
+    else emit('\n');
+    item = -1;
+  }
 }
 
 /** NFC, LF line ends, spaces collapsed within lines, at most one blank line in a row, trimmed lines. */

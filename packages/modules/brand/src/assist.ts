@@ -58,6 +58,7 @@ import {
   changedSectionLabels,
   parsePath,
   pathLabel,
+  provenanceAt,
   sameValue,
   stripProvenance,
   valueAt,
@@ -110,7 +111,11 @@ export const assistModelGate = (): AssistModelGateV1 | null => modelGate;
  * (composition wires the assets module's storage). Until registered, document sources are refused.
  */
 export interface SourceUploadStore {
-  signUpload(key: string, opts: { contentType: string }): Promise<{ url: string; expiresAt: Date }>;
+  /** A presigned PUT bound to the declared size (the store refuses any other body length). */
+  signUpload(
+    key: string,
+    opts: { contentType: string; contentLength: number },
+  ): Promise<{ url: string; expiresAt: Date }>;
   delete(key: string): Promise<void>;
 }
 let uploadStore: SourceUploadStore | null = null;
@@ -207,6 +212,12 @@ function normaliseSourceUrl(raw: string): URL {
       );
     throw new ValidationFailedError([{ path: 'url', issue: 'invalid_url' }], 'This is not a web address');
   }
+  // Only the standard https port: a site is read where its visitors read it (loopback test servers aside).
+  if (url.port !== '' && !sourceCaptureOptions().insecureAllowLoopback)
+    throw new ValidationFailedError(
+      [{ path: 'url', issue: 'unsupported_port' }],
+      'Use the site’s standard https address, without a port number',
+    );
   url.hash = '';
   return url;
 }
@@ -338,6 +349,19 @@ const factOriginFor = (p: GuidanceProvenance): FactOrigin =>
         ? 'user'
         : 'suggested';
 
+/**
+ * Whether the item changed after the suggestion was made (MAJOR: a later edit must never be overwritten silently):
+ * it now says something else, or a person has written it since. Facts are checked by their own dedupe.
+ */
+export const changedSince = (
+  row: Pick<SuggestionRow, 'basedOn' | 'section' | 'path'>,
+  doc: BrandSystemDocumentV1,
+): boolean => {
+  if (!row.basedOn || row.section === 'facts') return false;
+  if (!sameValue(row.basedOn.value ?? null, valueAt(doc, row.path) ?? null)) return true;
+  return provenanceAt(doc, row.path)?.origin === 'user' && row.basedOn.origin !== 'user';
+};
+
 interface SuggestionContext {
   doc: BrandSystemDocumentV1;
   names: ReadonlyMap<string, string>;
@@ -371,6 +395,7 @@ function toSuggestionDto(s: SuggestionRow, ctx: SuggestionContext): BrandSuggest
       sourceUrl: ctx.labels.get(e.sourceId)?.url ?? null,
     })),
     againstUserItem: s.againstUserItem === 'yes',
+    changedSince: s.status === 'pending' && changedSince(s, ctx.doc),
     status: s.status,
     decidedByName: nameOf(ctx.names, s.decidedById),
     decidedAt: iso(s.decidedAt),
@@ -398,10 +423,22 @@ async function suggestionContext(
   return { doc, names, labels };
 }
 
+/** D-22: a proposal sent for review is not changed under its reviewers; suggestions wait until it is back. */
+function assertProposalOpenForEdits(proposal: Pick<VersionRow, 'state'>, path: string): void {
+  if (proposal.state === 'in_review')
+    throw new ValidationFailedError(
+      [{ path, issue: 'proposal_in_review' }],
+      'The proposed changes are in review. Approve them or send them back before changing them with suggestions',
+    );
+}
+
 /** The pending proposal to write into, made from the applied brand system when there is none (D-22 proposal). */
 async function proposalFor(actor: ResolvedActor, brand: BrandRow, tx: Tx): Promise<VersionRow> {
   const existing = await pendingProposalOf(brand, tx);
-  if (existing) return existing;
+  if (existing) {
+    assertProposalOpenForEdits(existing, 'suggestionIds');
+    return existing;
+  }
   const document = await appliedDocument(brand, tx);
   const id = newId('brandVersion');
   const number = await versionsRepo.nextNumber(brand.id, tx);
@@ -507,6 +544,10 @@ async function decideAccept(
       continue;
     }
     if (!doc) continue;
+    if (changedSince(row, doc)) {
+      skipped.push({ suggestionId: row.id, reason: 'changed_since' });
+      continue;
+    }
     const value = edited ?? row.payload;
     const previous = valueAt(doc, row.path);
     const provenance: GuidanceProvenance =
@@ -593,6 +634,12 @@ function pendingOnly(rows: SuggestionRow[]) {
 
 // ---- the service ----
 
+/** Retention of captured source text (worker-core registers it with the retention sweep). */
+export const brandSourceRetention = {
+  purgeText: (cutoff: Date, dryRun: boolean, tx: Tx): Promise<number> =>
+    sourcesRepo.purgeTextCapturedBefore(cutoff, dryRun, tx),
+};
+
 export const brandAssistService = {
   sources: {
     /**
@@ -675,7 +722,10 @@ export const brandAssistService = {
             },
             tx,
           );
-          const signed = await uploadStore.signUpload(storageKey, { contentType: parsed.mime });
+          const signed = await uploadStore.signUpload(storageKey, {
+            contentType: parsed.mime,
+            contentLength: parsed.byteSize,
+          });
           upload = { url: signed.url, expiresAt: signed.expiresAt.toISOString(), contentType: parsed.mime };
           break;
         }
@@ -1175,10 +1225,37 @@ export const brandAssistService = {
           [{ path: 'batchId', issue: 'proposal_closed' }],
           'These suggestions were already applied or discarded; restore an earlier version from History instead',
         );
+      if (proposal) assertProposalOpenForEdits(proposal, 'batchId');
       let doc = proposal ? BrandSystemDocumentV1.parse(proposal.document) : null;
+      const before = doc;
       const skipped: BrandSuggestionDecisionResult['skipped'] = [];
       const undone: string[] = [];
-      for (const r of rows) {
+      // Walked in reverse of how the batch was applied: an item goes back only while it still holds what this batch
+      // wrote, so when two changes in the batch touched one item, the later one is undone first.
+      const order: SuggestionRow[] = [];
+      const waiting = rows.filter((r) => r.section !== 'facts');
+      for (let progress = true; progress && waiting.length;) {
+        progress = false;
+        for (const r of [...waiting]) {
+          const now = doc ? valueAt(doc, r.path) : undefined;
+          if (!doc || !sameValue(stripProvenance(now) ?? null, stripProvenance(r.appliedValue) ?? null))
+            continue;
+          order.push(r);
+          waiting.splice(waiting.indexOf(r), 1);
+          progress = true;
+          const prior = r.appliedBefore ?? undefined;
+          doc = applyChange(doc, {
+            path: r.path,
+            op: prior === undefined ? 'remove' : 'replace',
+            value: prior === undefined ? null : stripProvenance(prior),
+            ...(prior && typeof prior === 'object' && 'provenance' in (prior as object)
+              ? { provenance: (prior as { provenance: GuidanceProvenance }).provenance }
+              : {}),
+          });
+        }
+      }
+      for (const r of waiting) skipped.push({ suggestionId: r.id, reason: 'changed_since' });
+      for (const r of [...rows.filter((x) => x.section === 'facts'), ...order]) {
         if (r.section === 'facts') {
           const applied = r.appliedValue as { factId?: string; created?: boolean } | null;
           if (applied?.factId && applied.created) {
@@ -1201,21 +1278,6 @@ export const brandAssistService = {
                 tx,
               );
           }
-        } else if (doc) {
-          const now = valueAt(doc, r.path);
-          if (!sameValue(stripProvenance(now) ?? null, stripProvenance(r.appliedValue) ?? null)) {
-            skipped.push({ suggestionId: r.id, reason: 'changed_since' });
-            continue;
-          }
-          const before = r.appliedBefore ?? undefined;
-          doc = applyChange(doc, {
-            path: r.path,
-            op: before === undefined ? 'remove' : 'replace',
-            value: before === undefined ? null : stripProvenance(before),
-            ...(before && typeof before === 'object' && 'provenance' in (before as object)
-              ? { provenance: (before as { provenance: GuidanceProvenance }).provenance }
-              : {}),
-          });
         }
         await suggestionsRepo.update(
           r.id,
@@ -1234,10 +1296,19 @@ export const brandAssistService = {
         );
         undone.push(r.id);
       }
-      if (proposal && doc) {
+      if (proposal && doc && before) {
         const contentHash = hashCanonical(doc);
-        if (contentHash !== proposal.contentHash)
+        if (contentHash !== proposal.contentHash) {
+          // What is put back must still hold together, as any save (a reference removed meanwhile, for instance).
+          const published = brand.publishedVersionId ? await versionsRepo.findPublished(brand.id, tx) : null;
+          await assertDocumentReferences(
+            brand.id,
+            doc,
+            published ? BrandSystemDocumentV1.parse(published.document) : before,
+            tx,
+          );
           await versionsRepo.update(proposal.id, proposal.version, { document: doc, contentHash }, tx);
+        }
       }
       await audit.record(
         actorRef(actor),

@@ -97,6 +97,22 @@ describe('brandAssistWorkflowV1 orchestration (BSC-4)', () => {
     expect(f.calls.slice(-2)).toEqual(['propose:facts', 'finish:false:null']);
   });
 
+  it('a cancelled workflow (not only the signal) closes the job as cancelled, never failed, and records no failures', async () => {
+    const cancellation = Object.assign(new Error('Workflow cancelled'), { name: 'CancelledFailure' });
+    const f = fakes({
+      proposeBrandAssistSection: async (i) => {
+        f.calls.push(`propose:${i.section}`);
+        throw cancellation;
+      },
+    });
+    await runBrandAssist(f.acts, f.capture, f.extract, input, {
+      ...host(),
+      isCancellation: (err) => err === cancellation,
+    });
+    expect(f.calls.slice(-2)).toEqual(['propose:voice', 'finish:true:null']);
+    expect(f.calls.some((c) => c.startsWith('section-failed'))).toBe(false);
+  });
+
   it('a refused preparation (budget, gates) proposes nothing and closes the job with the reason', async () => {
     const f = fakes({
       prepareBrandAssistProposals: async () => ({

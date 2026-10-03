@@ -2,6 +2,7 @@ import type { ActivityHooks, EvidenceItem } from '@oremedia/contracts/agents';
 import { BrandSystemDocumentV1, emptyBrandSystemDocument } from '@oremedia/contracts/brand';
 import {
   ASSIST_MAX_QUESTIONS,
+  SOURCE_DOCUMENT_MAX_BYTES,
   SOURCE_FETCH_TIMEOUT_MS,
   type AssistSection,
   type AssistStage,
@@ -23,7 +24,7 @@ import {
 import { BudgetExhaustedError, NotFoundError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
-import { describeValue, pathLabel, valueAt } from '@oremedia/domain/brand-suggestions';
+import { describeValue, pathLabel, provenanceAt, valueAt } from '@oremedia/domain/brand-suggestions';
 import { factDedupeKey } from '@oremedia/domain/facts';
 import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
@@ -47,7 +48,8 @@ import {
   workingDocument,
 } from './assist';
 import { parseSectionOutput, suggestionsFromOutput, type SuggestionSource } from './assist-suggestions';
-import { DocumentRefusal, capText, extractDocument } from './capture/documents';
+import { DocumentRefusal, capText } from './capture/documents';
+import { createCaptureIsolate, type CaptureIsolate } from './capture/isolate';
 import { crawlSite } from './capture/site-crawl';
 import { ApprovedFactRepository, BrandRepository, BrandVersionRepository } from './repositories';
 import { brandResource, knownChannelKeys } from './service';
@@ -73,7 +75,10 @@ const RESERVATION_TTL_MS = 2 * 3_600_000;
 
 /** Reads the bytes of an uploaded document or an asset's original (worker-render wires the object store). */
 export interface SourceObjectReader {
-  get(key: string): Promise<Buffer | null>;
+  /** The object's size before anything is downloaded; null when there is no object. */
+  head(key: string): Promise<{ bytes: number } | null>;
+  /** The object's bytes within an inclusive range (never more than the range, however large the object). */
+  get(key: string, range: { start: number; end: number }): Promise<Buffer | null>;
   delete(key: string): Promise<void>;
 }
 
@@ -82,6 +87,8 @@ export interface BrandAssistRuntimeOptions {
   model?: BrandAssistModelV1;
   /** The object store (worker-render). */
   objects?: SourceObjectReader;
+  /** Where untrusted pages and documents are parsed (default: a worker thread with time and memory limits). */
+  isolate?: () => CaptureIsolate;
   /** Tests: the IO the crawl fetches through (default: the SSRF-safe provider IO). */
   io?: (tenantId: string) => ProviderIO;
   now?: () => Date;
@@ -91,6 +98,24 @@ const usable = (s: Pick<SourceRow, 'status' | 'duplicateOfSourceId'>) =>
   s.status === 'captured' && !s.duplicateOfSourceId;
 const isTerminal = (s: BrandAssistJobState) =>
   ['ready', 'partially_ready', 'failed', 'cancelled'].includes(s);
+
+/** The activity host's hooks for a section call: heartbeats, and which Temporal attempt this is. */
+export interface SectionHooks extends ActivityHooks {
+  attempt?: number;
+}
+
+const HEARTBEAT_EVERY_MS = 20_000;
+
+/** Awaits `work`, heartbeating every HEARTBEAT_EVERY_MS so a long model call or parse is never taken for a dead worker. */
+async function beating<T>(hooks: ActivityHooks | undefined, detail: string, work: Promise<T>): Promise<T> {
+  if (!hooks) return work;
+  const timer = setInterval(() => hooks.heartbeat(detail), HEARTBEAT_EVERY_MS);
+  try {
+    return await work;
+  } finally {
+    clearInterval(timer);
+  }
+}
 
 /** How a crawl or extraction refusal reads as a source status. */
 function statusFor(reason: BrandSourceReason): BrandSourceStatus {
@@ -431,7 +456,7 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
      */
     async proposeBrandAssistSection(
       input: BrandAssistSectionInputV1,
-      hooks?: ActivityHooks,
+      hooks?: SectionHooks,
     ): Promise<BrandAssistSectionResultV1> {
       const model = opts.model;
       if (!model) throw new Error('brand assist runtime has no model');
@@ -500,29 +525,33 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
         : [];
       const gate = assistModelGate();
       hooks?.heartbeat(`section:${input.section}`);
-      const result = await model.propose({
-        tenantId: input.tenantId,
-        jobId: job.id,
-        section: input.section,
-        brandName: brand.name,
-        defaultLocale: brand.defaultLocale,
-        guidance,
-        facts: facts.map((f) => ({ id: f.id, statement: f.statement })),
-        evidence: evidenceFor(sources),
-        instruction: job.instruction,
-        preserve: job.preserve.map((p) =>
-          `${pathLabel(p)}: ${describeValue(valueAt(working, p))}`.slice(0, 600),
-        ),
-        answers: job.answers ?? [],
-        avoid: avoidRows
-          .slice(0, AVOID_MAX)
-          .map((s) => `${pathLabel(s.path)}: ${describeValue(s.payload)}`.slice(0, 400)),
-        channelKeys: knownChannelKeys(),
-        maxOutputTokens: Math.min(
-          SECTION_OUTPUT_TOKENS,
-          gate?.describe().maxOutputTokens ?? SECTION_OUTPUT_TOKENS,
-        ),
-      });
+      const result = await beating(
+        hooks,
+        `section:${input.section}:model`,
+        model.propose({
+          tenantId: input.tenantId,
+          jobId: job.id,
+          section: input.section,
+          brandName: brand.name,
+          defaultLocale: brand.defaultLocale,
+          guidance,
+          facts: facts.map((f) => ({ id: f.id, statement: f.statement })),
+          evidence: evidenceFor(sources),
+          instruction: job.instruction,
+          preserve: job.preserve.map((p) =>
+            `${pathLabel(p)}: ${describeValue(valueAt(working, p))}`.slice(0, 600),
+          ),
+          answers: job.answers ?? [],
+          avoid: avoidRows
+            .slice(0, AVOID_MAX)
+            .map((s) => `${pathLabel(s.path)}: ${describeValue(s.payload)}`.slice(0, 400)),
+          channelKeys: knownChannelKeys(),
+          maxOutputTokens: Math.min(
+            SECTION_OUTPUT_TOKENS,
+            gate?.describe().maxOutputTokens ?? SECTION_OUTPUT_TOKENS,
+          ),
+        }),
+      );
       hooks?.heartbeat(`section:${input.section}:charge`);
       // Cost already incurred is always charged before anything else is decided (spec 12.6).
       let overBudget = false;
@@ -535,7 +564,8 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           'tokens',
           result.costMicros,
           `brand-assist:${job.id}:${input.section}`,
-          `brand-assist:${job.id}:${input.section}:${newId('usageLedger')}`,
+          // One charge per attempt: each attempt made its own model call; a replay of the same attempt charges nothing.
+          `brand-assist:${job.id}:${input.section}:${hooks?.attempt !== undefined ? `a${hooks.attempt}` : newId('usageLedger')}`,
         );
       } catch (err) {
         if (!(err instanceof BudgetExhaustedError)) throw err;
@@ -563,6 +593,18 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
       }
       return withTransaction(async (tx) => {
         const j = await lockJob(input, tx);
+        // Re-checked under the job's lock: an earlier attempt that outlived its timeout may have finished this
+        // section already (or the job was closed meanwhile). Only a section still running gets suggestions, once.
+        const sectionNow = j.progress.sections[input.section];
+        if (sectionNow?.status !== 'running') {
+          await jobsRepo.update(j.id, j.version, { spentMicros: j.spentMicros + result.costMicros }, tx);
+          return {
+            section: input.section,
+            outcome: sectionNow?.status === 'ready' ? ('ready' as const) : ('skipped' as const),
+            suggestions: sectionNow?.suggestions ?? 0,
+            reason: sectionNow?.status === 'ready' ? null : (sectionNow?.reason ?? 'superseded_attempt'),
+          };
+        }
         const current = await workingDocument(brand, tx);
         const liveFacts = await factsRepo.listLiveStatements(brand.id, tx);
         const blocked = await suggestionsRepo.fingerprintsIn(
@@ -609,6 +651,14 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
               evidence: d.evidence,
               fingerprint: d.fingerprint,
               againstUserItem: d.againstUserItem ? 'yes' : 'no',
+              // What the item is now: accepting later refuses if it has changed in between.
+              basedOn:
+                d.section === 'facts'
+                  ? null
+                  : {
+                      value: valueAt(current, d.path) ?? null,
+                      origin: provenanceAt(current, d.path)?.origin ?? null,
+                    },
               status: 'pending',
             },
             tx,
@@ -747,10 +797,17 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           status: source.status,
           reason: (source.reason as BrandSourceReason | null) ?? null,
         };
-      const crawl = await crawlSite(io(input.tenantId), source.url, {
-        ...sourceCaptureOptions(),
-        ...(hooks ? { heartbeat: hooks.heartbeat } : {}),
-      });
+      const isolate = (opts.isolate ?? createCaptureIsolate)();
+      let crawl: Awaited<ReturnType<typeof crawlSite>>;
+      try {
+        crawl = await crawlSite(io(input.tenantId), source.url, {
+          ...sourceCaptureOptions(),
+          ...(hooks ? { heartbeat: hooks.heartbeat } : {}),
+          parse: (html, pageUrl) => isolate.pageText(html, pageUrl),
+        });
+      } finally {
+        await isolate.close();
+      }
       return crawl.ok
         ? recordSource(input, 'capturing', {
             ok: true,
@@ -781,9 +838,29 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           reason: (source.reason as BrandSourceReason | null) ?? null,
         };
       hooks?.heartbeat(`extract:${source.id}`);
-      const bytes = await objects.get(source.storageKey);
+      const storageKey = source.storageKey;
       // An uploaded document is deleted once read (its text is what is kept); an asset's original never is.
       const release = source.kind === 'document' ? { storageKey: null } : {};
+      const discard = async () => {
+        if (source.kind === 'document') await objects.delete(storageKey).catch(() => {});
+      };
+      const refuse = async (reason: BrandSourceReason, detail: string | null) => {
+        const out = await recordSource(input, 'extracting', { ok: false, reason, detail }, release);
+        await discard();
+        return out;
+      };
+      // The size is checked before anything is downloaded, and the download itself is capped one byte past the limit
+      // (an object replaced after the check still cannot be read whole).
+      const head = await objects.head(storageKey);
+      if (!head)
+        return recordSource(
+          input,
+          'extracting',
+          { ok: false, reason: 'not_uploaded', detail: null },
+          release,
+        );
+      if (head.bytes > SOURCE_DOCUMENT_MAX_BYTES) return refuse('too_large', `${head.bytes} bytes`);
+      const bytes = await objects.get(storageKey, { start: 0, end: SOURCE_DOCUMENT_MAX_BYTES });
       if (!bytes)
         return recordSource(
           input,
@@ -791,9 +868,12 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           { ok: false, reason: 'not_uploaded', detail: null },
           release,
         );
+      if (bytes.length > SOURCE_DOCUMENT_MAX_BYTES)
+        return refuse('too_large', `over ${SOURCE_DOCUMENT_MAX_BYTES} bytes`);
       let result: BrandSourceCaptureResultV1;
+      const isolate = (opts.isolate ?? createCaptureIsolate)();
       try {
-        const doc = await extractDocument(bytes, source.mime);
+        const doc = await beating(hooks, `extract:${source.id}`, isolate.extract(bytes, source.mime));
         result = await recordSource(
           input,
           'extracting',
@@ -814,8 +894,10 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           { ok: false, reason: err.reason, detail: err.detail },
           release,
         );
+      } finally {
+        await isolate.close();
       }
-      if (source.kind === 'document') await objects.delete(source.storageKey).catch(() => {});
+      await discard();
       return result;
     },
   };

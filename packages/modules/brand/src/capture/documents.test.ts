@@ -82,3 +82,16 @@ describe('document text extraction (BSC-4)', () => {
     ).toBe('a\tb\nc');
   });
 });
+
+describe('docxXmlToText on hostile XML (BSC-4)', () => {
+  const N = 20_000;
+  it.each([
+    ['unclosed paragraphs', '<w:p>'.repeat(N)],
+    ['paragraph tags without ends', '<w:p '.repeat(N)],
+    ['unclosed text runs', '<w:p><w:t>'.repeat(N)],
+  ])('stays linear on %s', (_, xml) => {
+    const started = performance.now();
+    docxXmlToText(`<w:document><w:body>${xml}</w:body></w:document>`);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+});

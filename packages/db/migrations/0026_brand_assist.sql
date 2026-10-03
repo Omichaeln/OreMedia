@@ -80,6 +80,7 @@ CREATE TABLE `brand_suggestions` (
 	`evidence` json NOT NULL,
 	`fingerprint` char(64) NOT NULL,
 	`against_user_item` enum('yes','no') NOT NULL DEFAULT 'no',
+	`based_on` json,
 	`status` enum('pending','accepted','edited','rejected','superseded') NOT NULL,
 	`decided_by_id` varchar(32),
 	`decided_at` datetime(3),

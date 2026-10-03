@@ -5,7 +5,8 @@ import {
   SOURCE_TEXT_MAX_CHARS,
   type BrandSourceReason,
 } from '@oremedia/contracts/brand-assist';
-import { decodeEntities } from '@oremedia/providers';
+import { scanMarkup } from '@oremedia/providers/markup';
+import { decodeEntities } from '@oremedia/providers/site-rules';
 import { tidyText } from './html-text';
 
 /**
@@ -212,33 +213,61 @@ function readEntry(buf: Buffer, entry: ZipEntry, maxBytes: number): Buffer {
 }
 
 /** Word paragraphs as text: headings (Title, Heading 1-6) as `#` lines, list paragraphs as `- ` lines. */
+/** WordprocessingML paragraphs as text, read in one pass of the linear markup scanner (no regex over the XML). */
 export function docxXmlToText(xml: string): string {
   const out: string[] = [];
-  const body = /<w:body\b[^>]*>([\s\S]*)<\/w:body>/.exec(xml)?.[1] ?? xml;
-  for (const m of body.matchAll(/<w:p\b[^>]*?(?:\/>|>([\s\S]*?)<\/w:p>)/g)) {
-    const inner = m[1] ?? '';
-    const runs = [
-      ...inner.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>/g),
-    ]
-      .map((r) =>
-        r[0].startsWith('<w:tab')
-          ? '\t'
-          : r[0].startsWith('<w:br') || r[0].startsWith('<w:cr')
-            ? '\n'
-            : (r[1] ?? ''),
-      )
-      .join('');
-    const text = decodeEntities(runs).trim();
+  let para: { runs: string; style: string; list: boolean } | null = null;
+  let inText = false;
+  const endParagraph = () => {
+    if (!para) return;
+    const text = decodeEntities(para.runs).trim();
+    const style = para.style;
+    const list = para.list;
+    para = null;
     if (!text) {
       out.push('');
-      continue;
+      return;
     }
-    const style = /<w:pStyle\b[^>]*w:val="([^"]+)"/.exec(inner)?.[1] ?? '';
     const heading = /^Title$/i.test(style) ? 1 : Number(/^Heading([1-6])$/i.exec(style)?.[1] ?? 0);
     if (heading) out.push(`\n${'#'.repeat(heading)} ${text}\n`);
-    else if (/<w:numPr\b/.test(inner) || /^List/i.test(style)) out.push(`- ${text}`);
+    else if (list || /^List/i.test(style)) out.push(`- ${text}`);
     else out.push(text);
+  };
+  for (const t of scanMarkup(xml, { rawText: false })) {
+    if (t.type === 'text') {
+      if (para && inText) para.runs += t.text;
+      continue;
+    }
+    if (t.type === 'close') {
+      if (t.name === 'w:t') inText = false;
+      else if (t.name === 'w:p') endParagraph();
+      continue;
+    }
+    switch (t.name) {
+      case 'w:p':
+        endParagraph();
+        if (t.selfClosing) out.push('');
+        else para = { runs: '', style: '', list: false };
+        break;
+      case 'w:t':
+        inText = !t.selfClosing;
+        break;
+      case 'w:tab':
+        if (para) para.runs += '\t';
+        break;
+      case 'w:br':
+      case 'w:cr':
+        if (para) para.runs += '\n';
+        break;
+      case 'w:pstyle':
+        if (para && !para.style) para.style = t.attrs.get('w:val') ?? '';
+        break;
+      case 'w:numpr':
+        if (para) para.list = true;
+        break;
+    }
   }
+  endParagraph();
   return out.join('\n');
 }
 

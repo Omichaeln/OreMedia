@@ -15,7 +15,11 @@ import {
   type ModelConfig,
 } from '@oremedia/ai';
 import { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
-import type { AssistSection, BrandAssistActivitiesV1 } from '@oremedia/contracts/brand-assist';
+import {
+  SOURCE_DOCUMENT_MAX_BYTES,
+  type AssistSection,
+  type BrandAssistActivitiesV1,
+} from '@oremedia/contracts/brand-assist';
 import type { ModelRequest } from '@oremedia/contracts/agents';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
@@ -156,7 +160,14 @@ describe('brand assist jobs end to end (BSC-4)', () => {
     const capture = createBrandSourceCaptureActivities(createBrandAssistRuntime());
     const extract = createBrandSourceExtractActivities(
       createBrandAssistRuntime({
-        objects: { get: async (k) => objects.get(k) ?? null, delete: async (k) => void objects.delete(k) },
+        objects: {
+          head: async (k) => {
+            const o = objects.get(k);
+            return o ? { bytes: o.length } : null;
+          },
+          get: async (k, range) => objects.get(k)?.subarray(range.start, range.end + 1) ?? null,
+          delete: async (k) => void objects.delete(k),
+        },
       }),
     );
     return { acts, capture, extract };
@@ -316,6 +327,19 @@ describe('brand assist jobs end to end (BSC-4)', () => {
     expect(adapter.requests[0]!.system).toContain('We never shout.');
     expect(adapter.requests[0]!.system).toContain('# Voice');
     expect(suggestions).toEqual([]);
+  });
+
+  it('an upload larger than its declared size is refused from its size alone, never downloaded, and deleted', async () => {
+    const big = await addDocument('big.pdf', 'application/pdf', pdfWithText(['small']));
+    const key = (await tdb.db.select().from(brandSources).where(eq(brandSources.id, big)))[0]!.storageKey!;
+    objects.set(key, Buffer.alloc(SOURCE_DOCUMENT_MAX_BYTES + 1, 0x20)); // the PUT sent more than it declared
+    const adapter = new FakeModelAdapter((req) => ({ kind: 'done', text: answer(req) }));
+    const { job } = await runJob(['voice'], [big], adapter);
+    expect(job.state).toBe('failed');
+    const row = (await tdb.db.select().from(brandSources).where(eq(brandSources.id, big)))[0]!;
+    expect(row).toMatchObject({ status: 'unsupported', reason: 'too_large', storageKey: null, text: null });
+    expect(objects.has(key)).toBe(false);
+    expect(adapter.requests).toHaveLength(0);
   });
 
   it('website and documents together, with a provider failure that succeeds on retry', async () => {

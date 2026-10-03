@@ -2474,6 +2474,13 @@
           "autoincrement": false,
           "default": "'no'"
         },
+        "based_on": {
+          "name": "based_on",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
           "type": "enum('pending','accepted','edited','rejected','superseded')",

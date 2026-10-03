@@ -5,7 +5,7 @@ import { createRetentionActivities } from '@oremedia/activities';
 import { configureDatabase, configureRoleDatabase, type Db } from '@oremedia/db';
 import { tenants, users } from '@oremedia/db/schema/access';
 import { agentRuns, agentSteps } from '@oremedia/db/schema/agents';
-import { brands } from '@oremedia/db/schema/brand';
+import { brandSources, brands } from '@oremedia/db/schema/brand';
 import { brandDestinations, destinationReportRows, seoAuditRuns } from '@oremedia/db/schema/destinations';
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { createRoleUser, createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -40,6 +40,23 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
   const property = newId('dst'); // disconnected, no credential: its rows still expire with the 7-day cache
   const site = newId('dst'); // disconnected website: the last 4 audit runs are kept
   const runIds = [1, 2, 3, 4, 5].map(() => newId('sar'));
+  const oldSite = newId('bsrc'); // captured past the TTL: read again when next used
+  const oldPaste = newId('bsrc'); // pasted text past the TTL: cannot be read again
+  const freshSite = newId('bsrc');
+  const sourceStates = async () =>
+    Object.fromEntries(
+      (
+        await appDb
+          .select({
+            id: brandSources.id,
+            status: brandSources.status,
+            reason: brandSources.reason,
+            text: brandSources.text,
+          })
+          .from(brandSources)
+          .where(eq(brandSources.tenantId, tenantId))
+      ).map((r) => [r.id, [r.status, r.reason, r.text]]),
+    );
   const dayKey = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
   const stepIds = async () =>
@@ -146,6 +163,27 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
         outcome: 'completed' as const,
       })),
     );
+    const source = (id: string, kind: 'url' | 'text', capturedAt: Date) => ({
+      id,
+      tenantId,
+      brandId,
+      kind,
+      title: id,
+      url: kind === 'url' ? `https://site.example/${id}` : null,
+      status: 'captured' as const,
+      text: `Text of ${id}`,
+      charCount: 20,
+      capturedAt,
+      createdByKind: 'user' as const,
+      createdById: ownerId,
+    });
+    await tdb.db
+      .insert(brandSources)
+      .values([
+        source(oldSite, 'url', old),
+        source(oldPaste, 'text', old),
+        source(freshSite, 'url', new Date()),
+      ]);
     const app = await createRoleUser(tdb, 'app');
     const retention = await createRoleUser(tdb, 'retention');
     roles.push(app, retention);
@@ -173,11 +211,16 @@ describe('retention sweep on the retention role (ledger 7.16)', () => {
     expect(await runRetentionSweep(operationsActivities(), input)).toMatchObject({
       tenants: 1,
       failed: 0,
-      rows: 3, // the old step, the 12-day-old report day, the fifth audit run
+      rows: 5, // the old step, two old source texts, the 12-day-old report day, the fifth audit run
+    });
+    expect(await sourceStates()).toEqual({
+      [oldSite]: ['pending', null, null],
+      [oldPaste]: ['inaccessible', 'expired', null],
+      [freshSite]: ['captured', null, `Text of ${freshSite}`],
     });
     expect(await stepIds()).toEqual([newStep]);
     expect(await rowDays()).toEqual([dayKey(2)]);
     expect(await runCount()).toBe(4);
-    expect(await retentionAudits()).toBe(3); // written through the retention role's INSERT on audit_events
+    expect(await retentionAudits()).toBe(4); // written through the retention role's INSERT on audit_events
   });
 });

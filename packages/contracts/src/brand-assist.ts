@@ -76,6 +76,10 @@ export const BrandSourceReason = z.enum([
   'not_uploaded',
   'asset_not_usable',
   'capture_failed',
+  /** Reading it took longer or needed more memory than a source may use (it runs isolated, and was stopped). */
+  'processing_limit',
+  /** Its text was removed at the end of the retention period and cannot be read again. */
+  'expired',
 ]);
 export type BrandSourceReason = z.infer<typeof BrandSourceReason>;
 
@@ -302,6 +306,11 @@ export const SuggestionConflict = z.object({
   sourceIds: z.array(z.string().max(32)).max(5),
 });
 export type SuggestionConflict = z.infer<typeof SuggestionConflict>;
+/** The item a suggestion was made against: its value then (null when absent) and who wrote it (provenance origin). */
+export interface SuggestionBasis {
+  value: unknown;
+  origin: string | null;
+}
 
 export const BrandSuggestionList = z.object({
   brandId: z.string(),
@@ -354,6 +363,8 @@ export interface BrandSuggestionDto {
   evidence: Array<SuggestionEvidence & { sourceTitle: string | null; sourceUrl: string | null }>;
   /** A person wrote the current item: accepting replaces or removes their wording. */
   againstUserItem: boolean;
+  /** The item changed after the suggestion was made (a later edit): it can no longer be accepted as it is. */
+  changedSince: boolean;
   status: SuggestionStatus;
   decidedByName: string | null;
   decidedAt: string | null;
