@@ -343,10 +343,11 @@ export interface RenderedValidationV1 {
 export const RENDERED_PAGE_MAX_BYTES = 2 * 1024 * 1024;
 export const RENDERED_PAGE_TIMEOUT_MS = 15_000;
 
+/** Never throws: a reference that is not a Unicode scalar value (NUL, a surrogate, beyond U+10FFFF) is U+FFFD. */
 const decodeEntities = (text: string): string =>
   text
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (_, n: string) => codePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => codePoint(parseInt(n, 16)))
     .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, (_, e: string) =>
       e === 'amp' ? '&' : e === 'lt' ? '<' : e === 'gt' ? '>' : e === 'quot' ? '"' : e === 'nbsp' ? ' ' : "'",
     );

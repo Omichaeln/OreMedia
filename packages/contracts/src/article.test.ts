@@ -458,6 +458,33 @@ describe('rich article documents (RA-08)', () => {
   });
 });
 
+describe('character references that are not Unicode scalar values (crafted pages)', () => {
+  const refs = ['&#99999999;', '&#x110000;', '&#xD800;', '&#55296;', '&#0;', '&#x0;'];
+
+  it.each(refs)('pageText reads %s as U+FFFD instead of throwing', (ref) => {
+    expect(pageText(`<p>a${ref}b</p>`)).toBe('a�b');
+  });
+
+  it.each(refs)('articleHtmlChars counts %s as one character instead of throwing', (ref) => {
+    expect(articleHtmlChars(`<p>a${ref}b</p>`)).toBe(3);
+  });
+
+  it.each(refs)('the canonical check reads %s in the canonical href as U+FFFD instead of throwing', (ref) => {
+    const checks = validateRenderedPage({
+      status: 200,
+      html: `<html><head><title>T</title><link rel="canonical" href="https://site.example/a${ref}b"></head><body><p>p</p></body></html>`,
+      title: 'T',
+      firstParagraph: 'p',
+      lastParagraph: 'p',
+      draft: false,
+      remoteUrl: 'https://site.example/a%EF%BF%BDb',
+      slug: 'other',
+    });
+    expect(checks.find((c) => c.key === 'canonical_present')?.ok).toBe(true);
+    expect(checks.find((c) => c.key === 'canonical_matches')?.ok).toBe(true);
+  });
+});
+
 describe('reading untrusted markup in linear time (the sanitiser and the rendered-page checks)', () => {
   /** A generous bound: the regular expressions these replace took seconds (or, for attributes, forever) here. */
   const fast = (run: () => unknown) => {
