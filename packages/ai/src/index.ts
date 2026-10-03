@@ -121,6 +121,7 @@ export {
   generationTool,
   assembleGenerationPrompt,
   parseGenerationOutput,
+  ModelToolNotCalledError,
 } from './generation-prompt';
 export * from './tools';
 export * from './evaluation';

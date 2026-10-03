@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { BudgetExhaustedError } from '@oremedia/contracts/errors';
 import type { GenerationErrorCode, StudioGenerationRuntimeV1 } from '@oremedia/contracts/generation';
 import {
@@ -58,17 +59,30 @@ export function createStudioGenerationRuntime(
       hooks?.heartbeat(`generation:${input.jobId}:model:done`);
       const costMicros = estimateCostMicros(opts.modelConfig, completion.usage);
       const callRef = generationModelCallRef(input.jobId, input.attempt);
-      // Incurred cost is ledgered first (once per attempt's call); exceeding the reservation fails the job.
-      await budgets.consume(
-        reservationId,
-        ctx.brandId,
-        'model_tokens',
-        completion.usage.inputTokens + completion.usage.outputTokens,
-        'tokens',
-        costMicros,
-        callRef,
-        callRef,
-      );
+      // Incurred cost is ledgered first, once per call: a retried activity is a new call and is charged again, a
+      // replay of the same charge is not (the key names this call). Exceeding the reservation fails the job.
+      const chargeKey = `${callRef}:${randomUUID()}`;
+      try {
+        await budgets.consume(
+          reservationId,
+          ctx.brandId,
+          'model_tokens',
+          completion.usage.inputTokens + completion.usage.outputTokens,
+          'tokens',
+          costMicros,
+          callRef,
+          chargeKey,
+        );
+      } catch (err) {
+        // Cancelled while the call ran: the reservation was released, so nothing more is reserved or spent from
+        // it; what the call cost is recorded on the job and the attempt stops.
+        if (err instanceof BudgetExhaustedError && err.scope === 'reservation_closed') {
+          await generationJobs.addSpend(input, costMicros);
+          const now = await generationJobs.status(input);
+          if (!now.proceed) return now;
+        }
+        throw err;
+      }
       let output;
       try {
         output = parseGenerationOutput(completion, ctx.variations);

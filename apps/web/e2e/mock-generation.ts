@@ -222,7 +222,8 @@ export class GenerationBackend {
       (j) =>
         j.documentId === input.documentId &&
         j.baseRevisionId === input.baseRevisionId &&
-        j.inputsHash === inputsHash,
+        j.inputsHash === inputsHash &&
+        LIVE.has(j.state),
     );
     if (existing) return this.dto(existing);
     const pre = this.preflight(input);

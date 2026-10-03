@@ -2,8 +2,8 @@ import { z } from 'zod';
 import type { BrandSnapshot } from '@oremedia/contracts/brand';
 import {
   CreativeDocumentV1,
+  Operation,
   type Finding,
-  type Operation,
   type OperationBatch,
 } from '@oremedia/contracts/creative';
 import {
@@ -59,7 +59,7 @@ import { policy } from '@oremedia/module-access';
 import { budgets } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import { StudioGenerationJobRepository } from './repositories';
-import { creativeEngine as engine, creativeService, type CreativeDocumentRow } from './service';
+import { creativeEngine as engine, type CreativeDocumentRow } from './service';
 
 /**
  * STU-1b: the generation job service (preflight, start, get, active, cancel, retry) and the runtime surface the
@@ -161,13 +161,23 @@ const SYSTEM = { kind: 'system' as const, id: 'studio_generation' };
 const LIVE: ReadonlySet<GenerationJobState> = new Set(['queued', 'generating', 'validating', 'saving']);
 export const workflowIdFor = (jobId: string, attempt: number): string => `studio-gen:${jobId}:${attempt}`;
 export const modelCallRef = (jobId: string, attempt: number): string => `sgj:${jobId}:${attempt}:model`;
+/**
+ * The budget reservation key of one attempt (budget_reservations.run_id, at most 32 characters): derived from the
+ * job and the attempt, so every step of an attempt (and only of that attempt) reaches the same reservation, and a
+ * late step of a superseded attempt can never settle or charge the reservation of the attempt that replaced it.
+ */
+export const budgetRunIdFor = (jobId: string, attempt: number): string =>
+  `g${jobId.slice(jobId.indexOf('_') + 1)}${attempt}`.slice(0, 32);
+
+/** The operation contract's batch bound (OperationBatch.operations, GenerationProposal.operations). */
+const MAX_BATCH_OPERATIONS = 100;
 
 const StoredModelOutput = z.object({
   output: ModelGenerationOutput,
   callRef: z.string(),
   /** The structural operations the model saw the result of (element ids it may name come from them). */
   structure: z.object({
-    operations: z.array(z.unknown()),
+    operations: z.array(Operation),
     labels: z.array(z.string()),
     targetPageIds: z.array(z.string()),
     createdPageIds: z.array(z.string()),
@@ -207,7 +217,19 @@ async function loadJob(jobId: string, tx?: Tx) {
 
 /** The request as stored and hashed: parsed with every default, so equal intents hash equally. */
 const normalised = (request: z.input<typeof GenerationRequest>) => GenerationRequest.parse(request);
-const inputsHashOf = (request: z.infer<typeof GenerationRequest>) => hashCanonical(request);
+/**
+ * The idempotency key of a start: the request with every default, the brand version it is designed against and who
+ * asked. `round` tells apart later jobs with the same inputs once an earlier one has finished (the unique key is
+ * per document, base revision and hash): only a live job of the same person is reused.
+ */
+const inputsHashOf = (
+  request: z.infer<typeof GenerationRequest>,
+  brandVersionId: string,
+  requester: string,
+  round: number,
+) => hashCanonical({ request, brandVersionId, requester, ...(round ? { round } : {}) });
+/** How many finished jobs with the same inputs a document and base revision can accumulate before starts refuse. */
+const MAX_ROUNDS = 50;
 
 const estimateOf = (request: z.infer<typeof GenerationRequest>, emptyImageSlots: number) => {
   const variations = request.kind === 'generate' ? request.brief.variations : 1;
@@ -274,7 +296,7 @@ async function prepare(
     : null;
   const structure = fixedStructure
     ? {
-        operations: fixedStructure.operations as Operation[],
+        operations: fixedStructure.operations,
         labels: fixedStructure.labels,
         targetPageIds: fixedStructure.targetPageIds,
         createdPageIds: fixedStructure.createdPageIds,
@@ -449,9 +471,16 @@ export const generationService = {
     await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
     await policy.assert(actor, 'agent.start_run', engine.brandResource(doc.brandId), {}, tx);
     const request = normalised(parsed.request);
-    const inputsHash = inputsHashOf(request);
-    const existing = await jobsRepo.findByInputs(doc.id, parsed.baseRevisionId, inputsHash, tx);
-    if (existing) return toJobDto(existing);
+    const base = await engine.loadRevision(doc, parsed.baseRevisionId, tx);
+    let inputsHash = '';
+    for (let round = 0; ; round++) {
+      if (round >= MAX_ROUNDS)
+        throw new ValidationFailedError([{ path: 'request', issue: 'too_many_repeats' }]);
+      inputsHash = inputsHashOf(request, base.brandVersionId, actor.id, round);
+      const existing = await jobsRepo.findByInputs(doc.id, parsed.baseRevisionId, inputsHash, tx);
+      if (!existing) break;
+      if (LIVE.has(existing.state)) return toJobDto(existing); // the same person's live job: a replayed start
+    }
     if (doc.currentRevisionId !== parsed.baseRevisionId)
       throw new StaleRevisionError(doc.currentRevisionId ?? '');
     const prepared = await prepare(actor, doc, parsed.baseRevisionId, request, tx);
@@ -585,6 +614,8 @@ export const generationService = {
         'The document changed since this generation was asked for; start a new one from the current revision',
       );
     const attempt = job.attempt + 1;
+    // The finished attempt keeps nothing reserved (its own settle is idempotent and keyed to that attempt only).
+    if (job.budgetRunId) await budgets.release(job.budgetRunId, tx);
     await jobsRepo.update(
       job.id,
       parsed.expectedVersion, // optimistic: a retry decided on an outdated view is a conflict
@@ -706,9 +737,9 @@ export const generationJobs = {
   async reserve(input: StudioGenerationInputV1): Promise<GenerationStepOutcomeV1> {
     const job = await loadForInput(input);
     const outcome = outcomeFor(job, input.attempt);
-    if (!outcome.proceed || job.budgetRunId) return outcome;
+    const budgetRunId = budgetRunIdFor(job.id, input.attempt);
+    if (!outcome.proceed || job.budgetRunId === budgetRunId) return outcome;
     const estimate = Math.max(job.costReservedMicros, pricing.modelCallMicros); // the start's estimate
-    const budgetRunId = newId('budgetReservation');
     const reservation = await budgets.reserveSpend(
       job.brandId,
       budgetRunId,
@@ -739,7 +770,8 @@ export const generationJobs = {
   ): Promise<GenerationModelContext | null> {
     const job = await loadForInput(input);
     if (!outcomeFor(job, input.attempt).proceed || job.modelOutput) return null;
-    if (!job.budgetRunId) throw new BudgetExhaustedError('no_reservation');
+    if (job.budgetRunId !== budgetRunIdFor(job.id, input.attempt))
+      throw new BudgetExhaustedError('no_reservation');
     const doc = await engine.documentsRepo.getById(job.documentId);
     await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, undefined);
     const request = GenerationRequest.parse(job.request);
@@ -801,10 +833,14 @@ export const generationJobs = {
     });
   },
 
-  /** Spend that does not come with an output (a model call whose answer was refused). */
+  /**
+   * Spend that does not come with an output (a model call whose answer was refused, or one that finished after the
+   * job was cancelled and its reservation released). Only the attempt's own job row is charged.
+   */
   async addSpend(input: StudioGenerationInputV1, costMicros: number): Promise<void> {
     await withTransaction(async (tx) => {
       const job = await jobsRepo.lock((await loadForInput(input, tx)).id, tx);
+      if (job.attempt !== input.attempt) return;
       await jobsRepo.update(job.id, job.version, { costSpentMicros: job.costSpentMicros + costMicros }, tx);
     });
   },
@@ -814,9 +850,10 @@ export const generationJobs = {
     return outcomeFor(await loadForInput(input), input.attempt);
   },
 
-  /** The attempt's reservation id, which model and image charges are recorded against. */
+  /** The attempt's reservation id, which model and image charges are recorded against (null for another attempt). */
   async reservationIdOf(input: StudioGenerationInputV1): Promise<string | null> {
-    return (await loadForInput(input)).budgetReservationId;
+    const job = await loadForInput(input);
+    return job.budgetRunId === budgetRunIdFor(job.id, input.attempt) ? job.budgetReservationId : null;
   },
 
   /**
@@ -864,6 +901,8 @@ export const generationJobs = {
           paletteTokens: new Set(prepared.snapshot.document.tokens.colours.map((c) => c.key)),
           effectiveFactIds: new Set(prepared.snapshot.facts.map((f) => f.id)),
           newId: newElementId,
+          // A batch (and a proposal) holds at most MAX_BATCH_OPERATIONS operations, the requested ones included.
+          maxOperations: MAX_BATCH_OPERATIONS - prepared.structure.operations.length,
         });
         refused.push(...compiled.refused);
         let operations = [...prepared.structure.operations, ...compiled.operations];
@@ -881,7 +920,8 @@ export const generationJobs = {
           assetVersionIds: compiled.assetVersionIds,
           factIds: compiled.factIds,
           modelCallRefs: [stored.callRef],
-          costMicros: job.costSpentMicros,
+          // One model call serves every variation: each revision records its share.
+          costMicros: Math.ceil(job.costSpentMicros / fills.length),
           variation,
         };
         // The structural operations are the person's request (checked as theirs); the fill is the model's.
@@ -947,13 +987,22 @@ export const generationJobs = {
           );
         let into = doc;
         if (variation > 0) {
-          const copy = await creativeService.documents.duplicate(
+          // A copy of the job's base revision at the job's brand version: the first variation's edits are not in it.
+          const copy = await engine.duplicateRevision(
             actor,
-            { documentId: doc.id, title: `${doc.title} – variation ${variation + 1}`.slice(0, 200) },
+            doc,
+            prepared.base,
+            `${doc.title} – variation ${variation + 1}`,
+            job.id,
             tx,
           );
           into = await engine.documentsRepo.lock(copy.documentId, tx);
           first = await evaluate(operations, into);
+          if (first.evaluated.findings.some(engine.isBlocking))
+            throw new ValidationFailedError(
+              first.evaluated.findings.filter(engine.isBlocking).map(engine.findingDetail),
+              'The generated variation has blocking findings',
+            );
         }
         const base = await engine.loadRevision(into, into.currentRevisionId ?? '', tx);
         const committed = await engine.commitRevision(
@@ -982,7 +1031,8 @@ export const generationJobs = {
           ],
           'The generated changes could not be used',
         );
-      const result: z.infer<typeof GenerationResult> = { revisions, proposal, refused, findings };
+      // Parsed before it is written: what get and active read back always matches the contract.
+      const result = GenerationResult.parse({ revisions, proposal, refused, findings });
       const fresher = await jobsRepo.lock(job.id, tx);
       await advance(fresher, 'complete', tx, { result, finishedAt: new Date() });
       await audit.record(
@@ -1042,8 +1092,8 @@ export const generationJobs = {
 
   /** Releases what the attempt reserved and did not spend (idempotent). */
   async settle(input: StudioGenerationInputV1): Promise<void> {
-    const job = await loadForInput(input);
-    if (job.budgetRunId) await budgets.settle(job.budgetRunId);
+    await loadForInput(input); // tenant binding
+    await budgets.settle(budgetRunIdFor(input.jobId, input.attempt)); // this attempt's reservation only; idempotent
   },
 };
 

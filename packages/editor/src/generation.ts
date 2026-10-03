@@ -307,6 +307,8 @@ export interface CompileContext {
   paletteTokens: ReadonlySet<string>;
   effectiveFactIds: ReadonlySet<string>;
   newId: () => string;
+  /** At most this many operations in all; an edit that would go past it is refused (too_many_operations). */
+  maxOperations?: number;
 }
 
 export interface CompiledFill {
@@ -412,6 +414,15 @@ export function compileFill(doc: CreativeDocumentV1, fill: ModelFill, ctx: Compi
         pageId: edit.pageId,
         elementId: edit.elementId,
         reason: compiled.reason,
+      });
+      continue;
+    }
+    if (ctx.maxOperations !== undefined && out.operations.length + compiled.ops.length > ctx.maxOperations) {
+      out.refused.push({
+        variation: ctx.variation,
+        pageId: edit.pageId,
+        elementId: edit.elementId,
+        reason: 'too_many_operations',
       });
       continue;
     }

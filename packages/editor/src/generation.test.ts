@@ -283,10 +283,24 @@ describe('scope guard', () => {
       fit: 'cover',
     } as Element;
     deny({ op: 'insertElement', pageId: 'page_1', element: image });
+    const areaIndex = document.pages[0]!.elements.findIndex((e) => e.id === area.id);
     guardScope(document, { op: 'removeElement', pageId: 'page_1', elementId: area.id }, state);
+    // The freed place takes one insertion, at that place only.
+    deny({ op: 'insertElement', pageId: 'page_1', element: image });
+    deny({ op: 'insertElement', pageId: 'page_1', element: image, index: areaIndex + 1 });
     expect(() =>
-      guardScope(document, { op: 'insertElement', pageId: 'page_1', element: image }, state),
+      guardScope(
+        document,
+        { op: 'insertElement', pageId: 'page_1', element: image, index: areaIndex },
+        state,
+      ),
     ).not.toThrow();
+    deny({
+      op: 'insertElement',
+      pageId: 'page_1',
+      element: { ...image, id: eid('01HIMG2') },
+      index: areaIndex,
+    });
     // The inserted image is in scope for the rest of the batch.
     expect(() =>
       guardScope(document, { op: 'setMask', pageId: 'page_1', elementId: image.id, mask: null }, state),
@@ -345,6 +359,23 @@ describe('structure', () => {
     const next = applyBatch(document, { operations: s.operations });
     expect(next.pages.map((p) => p.id)).toEqual(['page_1', ...s.targetPageIds]);
     expect(next.pages[0]).toEqual(document.pages[0]);
+  });
+});
+
+describe('operation bound', () => {
+  it('edits past the batch bound are refused as too_many_operations; the ones before it are kept', () => {
+    const { document } = photoFeature();
+    const headline = byName(document, 'Headline');
+    const edits = Array.from({ length: 6 }, (_, i) => ({
+      label: `Size ${i}`,
+      pageId: 'page_1',
+      elementId: headline.id,
+      sizePx: 64 + i,
+      weight: 700,
+    }));
+    const out = compileFill(document, { summary: 's', edits }, contextFor(document, { maxOperations: 4 }));
+    expect(out.operations).toHaveLength(4);
+    expect(out.refused.map((r) => r.reason)).toEqual(['too_many_operations', 'too_many_operations']);
   });
 });
 

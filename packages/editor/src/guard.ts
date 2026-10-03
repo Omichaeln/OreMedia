@@ -134,15 +134,18 @@ export interface ScopeState {
   scope: GenerationScope;
   createdPageIds: Set<string>;
   insertedIds: Set<string>;
-  /** Scoped elements the batch removed: each allows one insertion on the scoped page (an image area's image). */
-  replacements: number;
+  /**
+   * Places freed by removing a selected top-level element: each allows exactly one insertion at that place in the
+   * page's layer order (an image area's image), nowhere else.
+   */
+  replacements: number[];
 }
 
 export const scopeState = (scope: GenerationScope): ScopeState => ({
   scope,
   createdPageIds: new Set(),
   insertedIds: new Set(),
-  replacements: 0,
+  replacements: [],
 });
 
 const scopeDenied = (what: string): PolicyDeniedError =>
@@ -177,8 +180,9 @@ export function guardScope(doc: CreativeDocumentV1, op: Operation, state: ScopeS
   if (wholePage) return;
   if (op.op === 'applyTemplate') throw scopeDenied(`the whole of page ${pageId}`);
   if (op.op === 'insertElement') {
-    if (state.replacements <= 0) throw scopeDenied('new elements outside the selection');
-    state.replacements -= 1;
+    const at = op.index === undefined ? -1 : state.replacements.indexOf(op.index);
+    if (at < 0) throw scopeDenied('new elements outside the selection');
+    state.replacements.splice(at, 1);
     state.insertedIds.add(op.element.id);
     return;
   }
@@ -192,5 +196,8 @@ export function guardScope(doc: CreativeDocumentV1, op: Operation, state: ScopeS
     if (![...found.ancestors, found.element].some((el) => scope.elementIds.includes(el.id)))
       throw scopeDenied(`element ${id}`);
   }
-  if (op.op === 'removeElement') state.replacements += 1;
+  if (op.op === 'removeElement') {
+    const index = page.elements.findIndex((e) => e.id === op.elementId);
+    if (index >= 0) state.replacements.push(index); // a nested element frees no top-level place
+  }
 }

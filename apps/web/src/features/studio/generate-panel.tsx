@@ -92,6 +92,7 @@ const REFUSED_TEXT = (reason: string): string => {
       asset_not_eligible: 'the asset is not eligible',
       colour_not_in_palette: 'not a brand colour',
       box_outside_page: 'would leave the page',
+      too_many_operations: 'more changes than one proposal can hold',
     }[reason] ?? reason.replaceAll('_', ' ')
   );
 };
@@ -217,23 +218,27 @@ export function GeneratePanel({
     }
   }, [finished, documentId, queryClient, trpc]);
 
-  const intent = useIntentKey();
+  // One idempotency key per command, renewed after every attempt (a cancel never replays as a retry or vice versa).
+  const cancelIntent = useIntentKey();
+  const retryIntent = useIntentKey();
   const cancel = useMutation(
     trpc.creative.generation.cancel.mutationOptions({
-      trpc: intentContext(intent.key),
-      onSuccess: () => {
-        intent.renew();
+      trpc: intentContext(cancelIntent.key),
+      onSettled: () => {
+        cancelIntent.renew();
         void queryClient.invalidateQueries(trpc.creative.generation.pathFilter());
       },
     }),
   );
   const retry = useMutation(
     trpc.creative.generation.retry.mutationOptions({
-      trpc: intentContext(intent.key),
+      trpc: intentContext(retryIntent.key),
       onSuccess: (res) => {
-        intent.renew();
         handled.current = null;
         setJobId(res.id);
+      },
+      onSettled: () => {
+        retryIntent.renew();
         void queryClient.invalidateQueries(trpc.creative.generation.pathFilter());
       },
     }),

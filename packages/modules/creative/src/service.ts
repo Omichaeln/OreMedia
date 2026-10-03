@@ -1748,6 +1748,47 @@ async function templateVersionOf(
 }
 
 /**
+ * STU-1b: a variation copy of a generation job: a new document whose revision 1 is exactly the job's base revision
+ * (not the source's current head, which the job's first variation may already have changed), designed against the
+ * brand version that revision was made against, as the job's inputs record. Same permissions and asset
+ * authorisation as documents.duplicate; the audit names the job.
+ */
+async function duplicateRevision(
+  actor: ResolvedActor,
+  source: DocumentRow,
+  revision: RevisionRow,
+  title: string,
+  jobId: string,
+  tx: Tx,
+) {
+  await policy.assert(actor, 'creative.read', documentResource(source), {}, tx);
+  await policy.assert(actor, 'creative.edit', brandResource(source.brandId), {}, tx);
+  const document = CreativeDocumentV1.parse(revision.snapshot);
+  const snapshot = await resolveSnapshot(actor, source.brandId, document.brandVersionId, tx);
+  return insertDocument(
+    actor,
+    {
+      brandId: source.brandId,
+      title: title.slice(0, 200),
+      contentPackageId: null,
+      document,
+      summary: `Variation of revision ${revision.number} of ${source.title}`.slice(0, 500),
+      auditAction: 'creative.document.duplicate',
+      auditMeta: {
+        sourceType: 'creative_document',
+        sourceId: source.id,
+        sourceRevisionId: revision.id,
+        sourceBrandVersionId: document.brandVersionId,
+        generationJobId: jobId,
+        ...(document.contentType ? { contentType: document.contentType } : {}),
+      },
+    },
+    snapshot,
+    tx,
+  );
+}
+
+/**
  * STU-1b: the operation engine as the generation job service (generation.ts) composes it. Not part of the module's
  * public index: other modules reach generation through its service and runtime API only.
  */
@@ -1756,6 +1797,7 @@ export const creativeEngine = {
   revisionsRepo,
   evaluateBatch,
   commitRevision,
+  duplicateRevision,
   loadRevision,
   loadCurrentRevision,
   resolveSnapshot,

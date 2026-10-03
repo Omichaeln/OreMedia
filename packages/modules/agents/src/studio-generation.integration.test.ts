@@ -447,7 +447,7 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     const ledger = await tdb.db
       .select()
       .from(usageLedger)
-      .where(eq(usageLedger.idempotencyKey, `sgj:${job.id}:1:model`));
+      .where(eq(usageLedger.sourceRef, `sgj:${job.id}:1:model`));
     expect(ledger).toHaveLength(1);
     const jobRow = (
       await tdb.db.select().from(studioGenerationJobs).where(eq(studioGenerationJobs.id, job.id))
@@ -879,5 +879,274 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
       .from(creativeRevisions)
       .where(and(eq(creativeRevisions.documentId, d.documentId)));
     expect(revs).toHaveLength(2);
+  });
+
+  it('variations placing an image in an image area, with a brand template layout, each start from the base revision at the job brand version', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const area = el(d.document, 'Image area');
+    // An approved brand template made of the same starter: its headline and body are slots.
+    const t = await run(tenantA, (tx) =>
+      creativeService.templates.create(A, { brandId: brandA, name: 'Photo layout' }, tx),
+    );
+    const tv = await run(tenantA, (tx) =>
+      creativeService.templates.createVersion(
+        A,
+        {
+          templateId: t.templateId,
+          document: d.document,
+          slots: [
+            { key: 'headline', elementId: headline.id, kind: 'text' },
+            { key: 'body', elementId: el(d.document, 'Body').id, kind: 'text' },
+          ],
+          formats: ['square_1080'],
+        },
+        tx,
+      ),
+    );
+    await run(tenantA, (tx) =>
+      creativeService.templates.approve(
+        A,
+        { templateId: t.templateId, templateVersionId: tv.templateVersionId, expectedVersion: 0 },
+        tx,
+      ),
+    );
+    const jobBrandVersion = (await head(d.documentId)).brandVersionId;
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'generate',
+      brief: {
+        keyMessage: 'Two photos',
+        variations: 2,
+        layout: { kind: 'template', templateVersionId: tv.templateVersionId },
+      },
+    });
+    const fill = (n: number, asset: string): ModelFill => ({
+      summary: `Take ${n}`,
+      edits: [
+        { label: 'Headline', pageId: 'page_1', elementId: headline.id, text: `Take ${n}` },
+        { label: 'Photo', pageId: 'page_1', elementId: area.id, assetVersionId: asset },
+      ],
+    });
+    const { runtime } = runtimeWith([fillCall(fill(1, 'av_photo'), fill(2, 'av_photo2'))]);
+    // A newer brand version is published while the job runs: the copy stays at the job's version.
+    await publishBrand(tenantA, brandA);
+    expect(await drive(job, runtime)).toBe('completed');
+    const done = await getJob(job.id);
+    expect(done.resultDocumentIds).toHaveLength(2);
+    expect(done.result?.refused).toEqual([]);
+    for (const [i, documentId] of done.resultDocumentIds.entries()) {
+      const got = await inTenant(tenantA, () => creativeService.documents.get(A, { documentId }));
+      const page = got.revision.snapshot.pages[0]!;
+      expect(got.revision.number).toBe(2);
+      expect(got.revision.brandVersionId).toBe(jobBrandVersion);
+      expect(got.revision.generationInputs).toMatchObject({
+        brandVersionId: jobBrandVersion,
+        variation: i,
+        templateVersionId: tv.templateVersionId,
+      });
+      expect(got.revision.snapshot.templateVersionId).toBe(tv.templateVersionId);
+      expect(page.elements.find((e) => e.id === headline.id)).toMatchObject({ text: `Take ${i + 1}` });
+      const images = page.elements.filter((e) => e.type === 'image');
+      expect(images).toEqual([
+        expect.objectContaining({ assetVersionId: i === 0 ? 'av_photo' : 'av_photo2' }),
+      ]);
+    }
+    // Each revision records its share of the one model call.
+    const shares = await Promise.all(
+      done.resultRevisionIds.map(
+        async (revisionId, i) =>
+          (
+            await inTenant(tenantA, () =>
+              creativeService.revisions.get(A, { documentId: done.resultDocumentIds[i]!, revisionId }),
+            )
+          ).generationInputs?.costMicros,
+      ),
+    );
+    expect(shares[0]).toBe(Math.ceil(done.costSpentMicros / 2));
+  });
+
+  it('a late step of a cancelled attempt never settles the reservation of the attempt that replaced it', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'generate',
+      brief: { keyMessage: 'Quick retry' },
+    });
+    const { runtime } = runtimeWith([
+      fillCall({
+        summary: 's',
+        edits: [{ label: 'H', pageId: 'page_1', elementId: headline.id, text: 'Second' }],
+      }),
+    ]);
+    const input = (attempt: number): StudioGenerationInputV1 => ({
+      tenantId: tenantA,
+      actor: { kind: 'user', id: USER },
+      correlationId: 'c',
+      jobId: job.id,
+      attempt,
+    });
+    await inTenant(tenantA, () => runtime.begin(input(1)));
+    await inTenant(tenantA, () => runtime.reserve(input(1)));
+    const cancelled = await run(tenantA, (tx) =>
+      generationService.cancel(A, { jobId: job.id, expectedVersion: 0 }, tx),
+    );
+    const retried = await run(tenantA, (tx) =>
+      generationService.retry(A, { jobId: job.id, expectedVersion: cancelled.version }, tx),
+    );
+    await inTenant(tenantA, () => runtime.begin(input(2)));
+    await inTenant(tenantA, () => runtime.reserve(input(2)));
+    // The first attempt's workflow wakes up late: its settle and any spend touch only its own reservation.
+    await inTenant(tenantA, () => runtime.settle(input(1)));
+    const row = (
+      await tdb.db.select().from(studioGenerationJobs).where(eq(studioGenerationJobs.id, job.id))
+    )[0]!;
+    const reservations = await tdb.db
+      .select()
+      .from(budgetReservations)
+      .where(eq(budgetReservations.brandId, brandA));
+    const second = reservations.find((r) => r.runId === row.budgetRunId)!;
+    expect(row.attempt).toBe(2);
+    expect(second.state).toBe('held');
+    const first = reservations.find(
+      (r) => r.runId !== row.budgetRunId && r.runId.startsWith(row.budgetRunId!.slice(0, -1)),
+    );
+    expect(first?.state).toBe('released');
+    expect(await drive(retried, runtime)).toBe('completed');
+  });
+
+  it('a proposal never holds more operations than a batch can: further edits are refused, the stored result reads back', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const edited = await run(tenantA, (tx) =>
+      creativeService.operations.apply(
+        A,
+        {
+          documentId: d.documentId,
+          baseRevisionId: d.revisionId,
+          operations: [{ op: 'setText', pageId: 'page_1', elementId: headline.id, text: 'Mine' }],
+          summary: 'Edit',
+          origin: 'user',
+        },
+        tx,
+      ),
+    );
+    const job = await start(d.documentId, edited.revision.id, {
+      kind: 'generate',
+      brief: { keyMessage: 'Many edits' },
+    });
+    const edits = Array.from({ length: 60 }, (_, i) => ({
+      label: `Step ${i}`,
+      pageId: 'page_1',
+      elementId: headline.id,
+      sizePx: 64 + (i % 5),
+      weight: 700,
+      box: { x: 97 + (i % 3), y: 651, width: 880 - (i % 4), height: 169 },
+    }));
+    const { runtime } = runtimeWith([fillCall({ summary: 'Many', edits })]);
+    expect(await drive(job, runtime)).toBe('completed');
+    const done = await getJob(job.id);
+    expect(done.result!.proposal!.operations.length).toBeLessThanOrEqual(100);
+    expect(done.result!.refused.some((r) => r.reason === 'too_many_operations')).toBe(true);
+    const active = await inTenant(tenantA, () => generationService.active(A, { documentId: d.documentId }));
+    expect(active.last?.id).toBe(job.id);
+  });
+
+  it('a fact that stopped being in force between the proposal and the accept refuses the accept as the agent', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const expiring = newId('approvedFact');
+    await tdb.db.insert(approvedFacts).values({
+      id: expiring,
+      tenantId: tenantA,
+      brandId: brandA,
+      kind: 'offer',
+      statement: 'Free shipping this week',
+      evidence: [],
+      state: 'approved',
+      proposedByKind: 'user',
+      proposedById: USER,
+    });
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'refine',
+      refine: {
+        instruction: 'Say free shipping',
+        scope: { pageId: 'page_1', elementIds: [headline.id] },
+        factIds: [expiring],
+      },
+    });
+    const { runtime } = runtimeWith([
+      fillCall({
+        summary: 's',
+        edits: [
+          {
+            label: 'Claim',
+            pageId: 'page_1',
+            elementId: headline.id,
+            text: 'Free shipping',
+            factIds: [expiring],
+          },
+        ],
+      }),
+    ]);
+    expect(await drive(job, runtime)).toBe('completed');
+    const proposal = (await getJob(job.id)).result!.proposal!;
+    expect(proposal.findings.filter((f) => f.severity === 'blocking')).toEqual([]);
+    await tdb.db
+      .update(approvedFacts)
+      .set({ validUntil: new Date(Date.now() - 1000) })
+      .where(eq(approvedFacts.id, expiring));
+    await expect(
+      run(tenantA, (tx) =>
+        creativeService.operations.apply(
+          A,
+          {
+            documentId: d.documentId,
+            baseRevisionId: d.revisionId,
+            operations: proposal.operations,
+            summary: proposal.summary,
+            origin: 'agent',
+            generation: { jobId: job.id, groupIds: ['g1'] },
+          },
+          tx,
+        ),
+      ),
+    ).rejects.toThrow(/no blocking findings/);
+  });
+
+  it('a cancel while the model call runs: the closed reservation is not charged further, the call cost is recorded, nothing is saved', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'generate',
+      brief: { keyMessage: 'Cancel mid-call' },
+    });
+    const inner = new FakeModelAdapter([
+      fillCall({
+        summary: 's',
+        edits: [{ label: 'H', pageId: 'page_1', elementId: headline.id, text: 'Late' }],
+      }),
+    ]);
+    const adapter = {
+      provider: 'fake',
+      async complete(req: Parameters<typeof inner.complete>[0]) {
+        const current = await getJob(job.id);
+        await run(tenantA, (tx) =>
+          generationService.cancel(A, { jobId: job.id, expectedVersion: current.version }, tx),
+        );
+        return inner.complete(req);
+      },
+    };
+    const runtime = createStudioGenerationRuntime({ adapter, modelConfig });
+    expect(await drive(job, runtime)).toBe('stopped');
+    const row = (
+      await tdb.db.select().from(studioGenerationJobs).where(eq(studioGenerationJobs.id, job.id))
+    )[0]!;
+    expect(row.state).toBe('cancelled');
+    expect(row.costSpentMicros).toBeGreaterThan(0);
+    const reservation = (
+      await tdb.db.select().from(budgetReservations).where(eq(budgetReservations.runId, row.budgetRunId!))
+    )[0]!;
+    expect(reservation).toMatchObject({ state: 'released', consumedMicros: 0 });
+    expect((await head(d.documentId)).id).toBe(d.revisionId);
   });
 });

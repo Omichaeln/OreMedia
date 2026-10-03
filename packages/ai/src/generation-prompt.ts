@@ -182,9 +182,9 @@ export function assembleGenerationPrompt(ctx: GenerationModelContext): { system:
   if (brief) {
     task.push(
       `Generate ${ctx.variations} variation${ctx.variations === 1 ? '' : 's'} of the copy and imagery for the pages below.`,
-      ...(brief.objective ? [`Objective: ${brief.objective}`] : []),
-      ...(brief.audience ? [`Audience: ${brief.audience}`] : []),
-      ...(brief.keyMessage ? [`Key message: ${brief.keyMessage}`] : []),
+      ...(brief.objective ? [`Objective: ${JSON.stringify(brief.objective)}`] : []),
+      ...(brief.audience ? [`Audience: ${JSON.stringify(brief.audience)}`] : []),
+      ...(brief.keyMessage ? [`Key message: ${JSON.stringify(brief.keyMessage)}`] : []),
       ...(ctx.contentType ? [`Content type: ${ctx.contentType}`] : []),
       ...(brief.channelKeys.length ? [`Destinations: ${brief.channelKeys.join(', ')}`] : []),
       ...(brief.requiredCopy.headline
@@ -198,7 +198,7 @@ export function assembleGenerationPrompt(ctx: GenerationModelContext): { system:
         : []),
       ...(brief.assets.include.length ? [`Assets to include: ${brief.assets.include.join(', ')}`] : []),
       ...(brief.assets.prioritise.length ? [`Assets to prefer: ${brief.assets.prioritise.join(', ')}`] : []),
-      ...(brief.visualDirection ? [`Visual direction: ${brief.visualDirection}`] : []),
+      ...(brief.visualDirection ? [`Visual direction: ${JSON.stringify(brief.visualDirection)}`] : []),
       ...(brief.referenceAssetVersionIds.length
         ? [
             `Reference assets (for direction only, do not place unless included): ${brief.referenceAssetVersionIds.join(', ')}`,
@@ -232,28 +232,25 @@ export function assembleGenerationPrompt(ctx: GenerationModelContext): { system:
   return { system, user };
 }
 
+/** The model did not call the required tool: a provider failure (retried), never parsed out of free text. */
+export class ModelToolNotCalledError extends Error {
+  constructor(stopReason: string) {
+    super(`the model did not call ${STUDIO_FILL_TOOL} (stop reason ${stopReason})`);
+    this.name = 'ModelToolNotCalledError';
+  }
+}
+
 /**
- * The model's answer as the strict output: the tool call's input, or JSON in the text when a provider answered in
- * text. Anything else is refused (`model_output_invalid`), never repaired by guessing.
+ * The model's answer as the strict output: the required tool call's input only. No tool call is a provider failure;
+ * a tool call whose input does not match the schema is refused (`model_output_invalid`), never repaired by guessing.
  */
 export function parseGenerationOutput(
   completion: ModelCompletion,
   variations: number,
 ): ModelGenerationOutput {
   const call = completion.toolCalls.find((c) => c.name === STUDIO_FILL_TOOL);
-  let raw: unknown = call?.arguments;
-  if (raw === undefined) {
-    const text = completion.content.map((c) => c.text).join('\n');
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start)
-      try {
-        raw = JSON.parse(text.slice(start, end + 1));
-      } catch {
-        raw = undefined;
-      }
-  }
-  const parsed = ModelGenerationOutput.safeParse(raw);
+  if (!call) throw new ModelToolNotCalledError(completion.stopReason);
+  const parsed = ModelGenerationOutput.safeParse(call.arguments);
   if (!parsed.success)
     throw new ValidationFailedError(
       parsed.error.issues.slice(0, 10).map((i) => ({ path: `output.${i.path.join('.')}`, issue: i.message })),
