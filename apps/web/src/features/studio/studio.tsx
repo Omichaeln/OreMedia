@@ -11,7 +11,7 @@ import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
 import { CommentsPanel } from './comments-panel';
 import { diffDocuments } from './diff';
-import { assetVersionIdsOf, fontRefsOf } from './document-helpers';
+import { assetVersionIdsOf, fontRefsOf, logoVersionIdsOf } from './document-helpers';
 import { FormatStrip } from './format-strip';
 import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
@@ -81,7 +81,13 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const brandVersion = useBrandVersion(brandId, state.committed.snapshot.brandVersionId);
   const colourTokens = useMemo(() => brandVersion.data?.document.tokens.colours ?? [], [brandVersion.data]);
   const colourMap = useMemo(() => new Map(colourTokens.map((c) => [c.key, c.value])), [colourTokens]);
-  const assetUrls = useAssetUrls(useMemo(() => assetVersionIdsOf(doc), [doc]));
+  const logoIds = useMemo(() => logoVersionIdsOf(doc), [doc]);
+  const imageUrls = useAssetUrls(
+    useMemo(() => assetVersionIdsOf(doc).filter((id) => !logoIds.includes(id)), [doc, logoIds]),
+  );
+  // Logos draw from their original (an SVG as vector), the bytes the export draws (BSC-2).
+  const logoUrls = useAssetUrls(logoIds, 'original');
+  const assetUrls = new Map([...imageUrls, ...logoUrls]);
   const fontFamilyFor = useDocumentFonts(useMemo(() => fontRefsOf(doc), [doc]));
   const resolverVersion = `${[...assetUrls.keys()].join(',')}|${[...assetUrls.values()].join(',').length}|${colourTokens.map((c) => c.key + c.value).join(',')}|${fontRefsOf(doc).map(fontFamilyFor).join(',')}`;
 
@@ -304,6 +310,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 <AssetsPanel
                   brandId={brandId}
                   page={page}
+                  logoRules={brandVersion.data?.document.logoRules ?? []}
                   selection={state.selection}
                   readOnly={readOnly}
                   onIntent={studio.applyIntent}

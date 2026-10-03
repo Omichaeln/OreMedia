@@ -862,7 +862,7 @@ describe('review module (spec 13) against MySQL 8', () => {
       }
     });
 
-    it('RA-08 at dispatch: a website article whose image is an SVG (or not an image kind) fails assets_rights_valid, a raster one passes', async () => {
+    it('RA-08 at dispatch: a website article whose image is not an image type (or not an image kind) fails assets_rights_valid; a raster or an SVG (sent as PNG, BSC-2) passes', async () => {
       const destinationId = (
         await tdb.db
           .select({ id: brandDestinations.id })
@@ -953,8 +953,10 @@ describe('review module (spec 13) against MySQL 8', () => {
       };
       authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/png' });
       expect(await reasonsOf()).not.toContain('assets_rights_valid');
-      // The version became an SVG on the site's way (an asset re-ingested, say): held before any upload.
-      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'image/svg+xml' });
+      // BSC-2: an SVG passes (the site is sent its PNG rendition); a type that is no image is held before any upload.
+      authorised.versions.set(assetVersionId, { kind: 'logo', mime: 'image/svg+xml' });
+      expect(await reasonsOf()).not.toContain('assets_rights_valid');
+      authorised.versions.set(assetVersionId, { kind: 'photo', mime: 'video/mp4' });
       expect(await reasonsOf()).toContain('assets_rights_valid');
       authorised.versions.set(assetVersionId, { kind: 'video', mime: 'image/png' });
       expect(await reasonsOf()).toContain('assets_rights_valid');

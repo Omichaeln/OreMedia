@@ -131,7 +131,10 @@ async function uploadArticleMedia(
   for (const [index, image] of images.entries()) {
     let release: Awaited<ReturnType<typeof assetService.releaseDerivative>>;
     try {
-      release = await assetService.releaseDerivative(image.assetVersionId, ARTICLE_MEDIA_RELEASE_WINDOW_SEC);
+      // BSC-2: an SVG (a vector logo) goes to the site as its PNG rendition; a raster as it is.
+      release = await assetService.releaseDerivative(image.assetVersionId, ARTICLE_MEDIA_RELEASE_WINDOW_SEC, {
+        raster: true,
+      });
     } catch (err) {
       // A version gone since the revision was written (the release check holds this earlier; never a throw here).
       if (!(err instanceof OremediaError)) throw err;
@@ -143,7 +146,8 @@ async function uploadArticleMedia(
         },
       };
     }
-    // Raster images only (contracts ARTICLE_IMAGE_MIMES): an SVG or a video never lands on a website's page.
+    // Raster images only (contracts ARTICLE_IMAGE_MIMES): an SVG (released above as its PNG) or a video never lands
+    // on a website's page; one that could not be drawn is still refused here.
     if (!(ARTICLE_IMAGE_MIMES as readonly string[]).includes(release.mime.toLowerCase()))
       return {
         failed: {

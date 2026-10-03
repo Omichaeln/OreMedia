@@ -42,6 +42,22 @@ export function assetVersionIdsOf(doc: CreativeDocumentV1): string[] {
   return [...ids].sort();
 }
 
+/**
+ * The asset versions the document draws as logos. BSC-2: the canvas draws these from their original file (an SVG as
+ * vector), as the render worker does, so the studio preview and the export use the same bytes.
+ */
+export function logoVersionIdsOf(doc: CreativeDocumentV1): string[] {
+  const ids = new Set<string>();
+  const walk = (elements: Element[]) => {
+    for (const el of elements) {
+      if (el.type === 'logo') ids.add(el.assetVersionId);
+      else if (el.type === 'group') walk(el.children);
+    }
+  };
+  for (const p of doc.pages) walk(p.elements);
+  return [...ids].sort();
+}
+
 export function fontRefsOf(doc: CreativeDocumentV1): string[] {
   const refs = new Set<string>();
   const walk = (elements: Element[]) => {

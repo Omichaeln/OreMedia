@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import { useTRPC, useTRPCClient } from '../../lib/trpc';
@@ -11,7 +11,8 @@ export type UploadStep =
   /** Accepted by the API; the ingest workflow is scanning, sanitising and cataloguing (polled until it settles). */
   | { kind: 'queued'; intentId: string }
   | { kind: 'accepted'; intentId: string; assetId: string }
-  | { kind: 'rejected'; intentId: string; reason: string }
+  /** `message` (BSC-2) says what was wrong and what to do; null for a reason the server has no words for. */
+  | { kind: 'rejected'; intentId: string; reason: string; message: string | null }
   /** Still processing after the wait, or the status could not be read: the outcome is not known here. */
   | { kind: 'unsettled'; intentId: string; message: string }
   | { kind: 'failed'; message: string; details: string[] };
@@ -36,13 +37,18 @@ const INGEST_WAIT_MS = 5 * 60_000;
  * reads the intent back until it is accepted (the asset id) or rejected (the reason), never leaving the person
  * with "processing" and no outcome (R1-B). On acceptance the asset lists are refetched.
  */
-export function useAssetUpload(brandId: string) {
+export function useAssetUpload(brandId: string, opts: { onAccepted?: (assetId: string) => void } = {}) {
   const trpc = useTRPC();
   const client = useTRPCClient();
   const queryClient = useQueryClient();
   const [step, setStep] = useState<UploadStep>({ kind: 'idle' });
   const intentId = step.kind === 'queued' ? step.intentId : null;
   const [queuedAt, setQueuedAt] = useState(0);
+  // The latest callback, read when the upload settles (the caller's closure may have changed since it started).
+  const onAccepted = useRef(opts.onAccepted);
+  useEffect(() => {
+    onAccepted.current = opts.onAccepted;
+  });
   const status = useQuery({
     ...trpc.assets.uploads.get.queryOptions({ intentId: intentId ?? '' }),
     enabled: intentId !== null,
@@ -64,8 +70,14 @@ export function useAssetUpload(brandId: string) {
     if (status.data.state === 'accepted' && status.data.assetId) {
       setStep({ kind: 'accepted', intentId, assetId: status.data.assetId });
       void queryClient.invalidateQueries(trpc.assets.pathFilter());
+      onAccepted.current?.(status.data.assetId);
     } else if (status.data.state === 'rejected') {
-      setStep({ kind: 'rejected', intentId, reason: status.data.rejectionReason ?? 'rejected' });
+      setStep({
+        kind: 'rejected',
+        intentId,
+        reason: status.data.rejectionReason ?? 'rejected',
+        message: status.data.rejectionMessage ?? null,
+      });
     } else if (Date.now() - queuedAt > INGEST_WAIT_MS) {
       setStep({
         kind: 'unsettled',

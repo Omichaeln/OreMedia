@@ -202,29 +202,101 @@ const SVG_URI_ATTRS = new Set(['href', 'xlink:href', 'src', 'xml:base', 'action'
  * `<image>` are still admitted by DOMPurify's own data-URI rule for image tags. The xlink namespace declaration
  * is the one absolute URL a design file legitimately carries.
  */
-const SVG_ALLOWED_URI = /^(?:#|[^a-z/]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\.w3\.org\/1999\/xlink$)/i;
-const EXTERNAL_STYLE_REF = /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+const SVG_ALLOWED_URI = /^(?:#|[^a-z/\\]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\.w3\.org\/1999\/xlink$)/i;
+/**
+ * External loads from CSS, tested on the cleaned file after CSS comments are removed and CSS escapes decoded (so
+ * `\75rl(\68ttp://…)` and `@\69mport` are seen for what they are): url() with a scheme, `//` or a backslash, an
+ * image-set() string with a scheme other than data:image or a `//` prefix, and @import.
+ */
+const EXTERNAL_STYLE_REF =
+  /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\\)|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+
+/** The text as CSS reads it: comments removed, escapes (`\68`, `\h`) decoded. Used only to test, never stored. */
+export function cssReadable(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\\(?:([0-9a-f]{1,6})\s?|([\s\S]))/gi, (_m, hex: string | undefined, ch: string | undefined) => {
+      if (hex === undefined) return ch ?? '';
+      const code = parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
+    });
+}
+
+/** SMIL elements that can rewrite a link's target at run time (`<set attributeName="href" to="javascript:…">`). */
+const SVG_ANIMATION_TAGS = new Set(['animate', 'set', 'animatemotion', 'animatetransform']);
 
 /** Shape of DOMPurify.removed entries (jsdom nodes); typed structurally because the lib has no DOM types. */
 type Removed = {
-  element?: { nodeName: string } | null;
+  element?: { nodeName: string; getAttribute?: (name: string) => string | null } | null;
   attribute?: { name: string; value: string | null } | null;
+  from?: { nodeName: string } | null;
 };
 
+/** Elements that embed another document or media player: never part of a logo or illustration. */
+const SVG_EMBEDDING_TAGS = new Set(['foreignobject', 'iframe', 'object', 'embed', 'audio', 'video']);
+/** Elements that point the file at another address (a base URL, a stylesheet link). */
+const SVG_LINKING_TAGS = new Set(['base', 'link']);
+/** An embedded raster is admitted only as one of these image types (DOMPurify admits any data: URI on <image>). */
+const EMBEDDED_DATA_URI = /\b(?:href|src)\s*=\s*["']\s*data:(?!image\/(?:png|jpe?g|gif|webp)[;,])/i;
+
+/**
+ * Why an SVG is refused, most specific first: the reason the uploader is shown (contracts INGEST_REJECTION_MESSAGES)
+ * says what to remove from the file. A file carrying several problems is refused for the first in this order; the
+ * detail lists every finding.
+ */
+const SVG_REASON_ORDER: readonly IngestRejectionReason[] = [
+  'svg_script',
+  'svg_event_handler',
+  'svg_embedded_content',
+  'svg_remote_image',
+  'svg_external_reference',
+  'svg_unsafe_content',
+];
+
 /** Which removals mean the file carried active or external content (an attack fixture, not a design file). */
-function unsafeRemovals(removed: Removed[]): string[] {
-  const unsafe: string[] = [];
+function unsafeRemovals(removed: Removed[]): Array<{ reason: IngestRejectionReason; finding: string }> {
+  const unsafe: Array<{ reason: IngestRejectionReason; finding: string }> = [];
   for (const r of removed) {
     if (r.element) {
       const tag = r.element.nodeName.toLowerCase();
-      if (SVG_UNSAFE_TAGS.has(tag)) unsafe.push(`element:${tag}`);
+      // A script under any prefix (`<x:script>` bound to the SVG namespace) is still a script.
+      const local = tag.slice(tag.lastIndexOf(':') + 1);
+      if (local === 'script' && tag !== 'script') {
+        unsafe.push({ reason: 'svg_script', finding: `element:${tag}` });
+        continue;
+      }
+      if (SVG_ANIMATION_TAGS.has(local)) {
+        const target = (r.element.getAttribute?.('attributeName') ?? '').trim().toLowerCase();
+        if (target === 'href' || target === 'xlink:href')
+          unsafe.push({ reason: 'svg_script', finding: `animation:${local}:${target}` });
+        continue; // other animations are dropped (a logo is static); metadata and editor namespaces likewise
+      }
+      if (!SVG_UNSAFE_TAGS.has(tag)) continue;
+      const reason: IngestRejectionReason =
+        tag === 'script'
+          ? 'svg_script'
+          : SVG_EMBEDDING_TAGS.has(tag)
+            ? 'svg_embedded_content'
+            : SVG_LINKING_TAGS.has(tag)
+              ? 'svg_external_reference'
+              : 'svg_unsafe_content';
+      unsafe.push({ reason, finding: `element:${tag}` });
     } else if (r.attribute) {
       const name = r.attribute.name.toLowerCase();
       const value = (r.attribute.value ?? '').trimStart();
-      if (name.startsWith('on')) unsafe.push(`handler:${name}`);
+      if (name.startsWith('on')) unsafe.push({ reason: 'svg_event_handler', finding: `handler:${name}` });
       else if (name.startsWith('xmlns')) continue;
-      else if (SVG_URI_ATTRS.has(name) || /^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//'))
-        unsafe.push(`external_ref:${name}`);
+      else if (SVG_URI_ATTRS.has(name) || /^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) {
+        const from = r.from?.nodeName.toLowerCase();
+        const reason: IngestRejectionReason = /^javascript:/i.test(value.replace(/\s+/g, ''))
+          ? 'svg_script'
+          : /^data:/i.test(value)
+            ? 'svg_embedded_content'
+            : from === 'image' || from === 'img'
+              ? 'svg_remote_image'
+              : 'svg_external_reference';
+        unsafe.push({ reason, finding: `external_ref:${name}` });
+      }
     }
   }
   return unsafe;
@@ -285,12 +357,15 @@ export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok
 /**
  * SVG: DOMPurify SVG profile with only fragment and data-image URIs allowed (scripts, event handlers and external
  * references stripped), then a PNG preview rasterised with sharp. A file from which active or external content
- * had to be removed is rejected rather than quietly cleaned (Phase 2 gate: attack fixtures rejected).
+ * had to be removed is rejected rather than quietly cleaned (Phase 2 gate: attack fixtures rejected), with the most
+ * specific reason (BSC-2) so the uploader is told what to take out. Legitimate artwork is kept as it is: gradients,
+ * clip paths, masks, `<use>` of a fragment, `<style>` without external references, transparency and a viewBox.
  */
 async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<IngestStepResult<SanitisedFile>> {
   const maxPixels = opts.maxPixels ?? MAX_IMAGE_PIXELS;
   const prolog = stripSvgDoctype(bytes.toString('utf8').replace(/^\uFEFF/, ''));
-  if (!prolog.ok) return reject('svg_unsafe_content', prolog.detail);
+  // What stripSvgDoctype still refuses (external or parameter entities, expansion) is the XXE vector.
+  if (!prolog.ok) return reject('svg_entity_declaration', prolog.detail);
   const text = prolog.text;
   const clean = DOMPurify.sanitize(text, {
     USE_PROFILES: { svg: true, svgFilters: true },
@@ -302,27 +377,32 @@ async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<Ingest
   });
   const removed = [...(DOMPurify.removed as Removed[])];
   const unsafe = unsafeRemovals(removed);
-  if (EXTERNAL_STYLE_REF.test(clean)) unsafe.push('style:external_url');
-  if (unsafe.length) return reject('svg_unsafe_content', [...new Set(unsafe)].slice(0, 10).join(','));
+  if (EXTERNAL_STYLE_REF.test(cssReadable(clean)))
+    unsafe.push({ reason: 'svg_external_reference', finding: 'style:external_url' });
+  if (EMBEDDED_DATA_URI.test(clean))
+    unsafe.push({ reason: 'svg_embedded_content', finding: 'data_uri:not_image' });
+  if (unsafe.length) {
+    const reasons = new Set(unsafe.map((u) => u.reason));
+    const reason = SVG_REASON_ORDER.find((r) => reasons.has(r)) ?? 'svg_unsafe_content';
+    return reject(reason, [...new Set(unsafe.map((u) => u.finding))].slice(0, 10).join(','));
+  }
   if (!/<svg[\s>]/i.test(clean)) return reject('svg_unparsable');
   const cleanBytes = Buffer.from(clean, 'utf8');
   let meta: Metadata;
   try {
     meta = await sharp(cleanBytes, { limitInputPixels: false }).metadata();
-  } catch {
+  } catch (err) {
+    // librsvg refuses a zero, negative or relative size ("bad dimensions"); anything else could not be drawn.
+    if (err instanceof Error && /dimensions/i.test(err.message))
+      return reject('svg_no_size', 'bad dimensions');
     return reject('svg_unrenderable');
   }
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
-  if (!width || !height) return reject('svg_unrenderable', 'no intrinsic size');
+  if (!width || !height) return reject('svg_no_size', 'no intrinsic size');
   if (width * height > maxPixels) return reject('pixel_limit_exceeded', `${width}x${height}`);
-  const density = Math.round(72 * Math.max(1, Math.min(8, 1024 / Math.max(width, height))));
-  let preview: Buffer;
-  try {
-    preview = await sharp(cleanBytes, { density, limitInputPixels: maxPixels }).png().toBuffer();
-  } catch {
-    return reject('svg_unrenderable');
-  }
+  const preview = await rasteriseSvg(cleanBytes, { width, height }, 1024, maxPixels);
+  if (!preview) return reject('svg_unrenderable');
   return {
     ok: true,
     bytes: cleanBytes,
@@ -333,6 +413,26 @@ async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<Ingest
     preview,
     sanitised: removed.length > 0 || clean !== text,
   };
+}
+
+/**
+ * A sanitised SVG drawn as a transparent PNG whose longer side is about `targetSide` (never below the intrinsic size,
+ * at most 8x it): the source of an SVG's derivatives and of its PNG renditions. Null when the file cannot be drawn.
+ */
+export async function rasteriseSvg(
+  svg: Buffer,
+  intrinsic: { width: number; height: number },
+  targetSide: number,
+  maxPixels: number = MAX_IMAGE_PIXELS,
+): Promise<Buffer | null> {
+  const density = Math.round(
+    72 * Math.max(1, Math.min(8, targetSide / Math.max(intrinsic.width, intrinsic.height))),
+  );
+  try {
+    return await sharp(svg, { density, limitInputPixels: maxPixels }).png().toBuffer();
+  } catch {
+    return null;
+  }
 }
 
 const RASTER_FORMATS = new Set(['jpeg', 'png', 'webp', 'heif']);
@@ -626,7 +726,88 @@ export async function derivatives(
       return reject('image_undecodable', `derivative ${spec.purpose}`);
     }
   }
+  if (source.group === 'svg') {
+    const png = await svgPngRendition(source.bytes, PNG_RENDITION_MAX_SIDE, maxPixels);
+    if (!png) return reject('svg_unrenderable', 'derivative png');
+    out.push(png);
+  }
   return { ok: true, derivatives: out };
+}
+
+/** Longest side of the PNG rendition of an SVG kept at ingest: what a destination that needs a raster receives. */
+export const PNG_RENDITION_MAX_SIDE = 2048;
+
+/**
+ * BSC-2: a transparent PNG of a sanitised SVG whose longer side is `maxSide` (drawn from the vector at that size, never
+ * upscaled from a smaller raster; a tiny SVG is drawn at most 8x its own size), or, with `side: 'width'`, whose width
+ * is `maxSide`: kept at ingest as the `png` derivative for destinations that take rasters only
+ * (website articles), and drawn at a chosen width for a download. Null when the file cannot be drawn.
+ */
+export async function svgPngRendition(
+  svg: Buffer,
+  maxSide: number,
+  maxPixels: number = MAX_IMAGE_PIXELS,
+  opts: { side?: 'longer' | 'width' } = {},
+): Promise<DerivativeFile | null> {
+  let meta: Metadata;
+  try {
+    meta = await sharp(svg, { limitInputPixels: false }).metadata();
+  } catch {
+    return null;
+  }
+  if (!meta.width || !meta.height) return null;
+  const byWidth = opts.side === 'width';
+  const target = byWidth ? Math.max(maxSide, (maxSide * meta.height) / meta.width) : maxSide;
+  // Drawn a little larger than asked (the density is whole dots per inch), then resized down to the exact size.
+  const drawn = await rasteriseSvg(svg, { width: meta.width, height: meta.height }, target * 1.05, maxPixels);
+  if (!drawn) return null;
+  try {
+    const r = await sharp(drawn, { limitInputPixels: maxPixels })
+      .resize(
+        byWidth
+          ? { width: maxSide, withoutEnlargement: true }
+          : { width: maxSide, height: maxSide, fit: 'inside', withoutEnlargement: true },
+      )
+      .png()
+      .toBuffer({ resolveWithObject: true });
+    return {
+      purpose: 'png',
+      bytes: r.data,
+      mime: 'image/png',
+      width: r.info.width,
+      height: r.info.height,
+      transform: { op: 'rasterise', fit: 'inside', maxSide, format: 'png' },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BSC-2: a PNG of a raster image at `width` (never enlarged; alpha kept), for a download at a chosen width. Null
+ * when the bytes cannot be decoded.
+ */
+export async function rasterPngRendition(
+  bytes: Buffer,
+  width: number,
+  maxPixels: number = MAX_IMAGE_PIXELS,
+): Promise<DerivativeFile | null> {
+  try {
+    const r = await sharp(bytes, { limitInputPixels: maxPixels })
+      .resize({ width, withoutEnlargement: true })
+      .png()
+      .toBuffer({ resolveWithObject: true });
+    return {
+      purpose: 'png',
+      bytes: r.data,
+      mime: 'image/png',
+      width: r.info.width,
+      height: r.info.height,
+      transform: { op: 'resize', width, format: 'png' },
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ---- 7. move to immutable -------------------------------------------------------------------------------------

@@ -1470,11 +1470,8 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
         ],
       });
       await tdb.db.update(assets).set({ state: 'approved' }).where(eq(assets.id, assetId));
-      // Raster images of an image kind only: an SVG (stored-XSS surface on the site) or a video is refused.
-      await tdb.db
-        .update(assetVersions)
-        .set({ mime: 'image/svg+xml' })
-        .where(eq(assetVersions.id, versionId));
+      // Images of an image kind only: a video is refused. (BSC-2: an SVG is accepted; it is sent as its PNG.)
+      await tdb.db.update(assetVersions).set({ mime: 'video/mp4' }).where(eq(assetVersions.id, versionId));
       await expect(
         run(tenantA, (tx) =>
           contentService.packages.create(
