@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
+import type { CreativeDocumentV1, CreativePage, Operation } from '@oremedia/contracts/creative';
 import {
   KonvaEditorAdapter,
+  findElement,
   fitScale,
   nudgeIntent,
   type IntentBatch,
@@ -18,7 +19,13 @@ export interface CanvasProps {
   onSelect: (ids: string[]) => void;
   onIntent: (batch: IntentBatch) => void;
   onEditText: (elementId: string) => void;
+  /** The text element being edited in place (STU-1a): a textarea over the text that commits setText. */
+  editingTextId: string | null;
+  onEditTextDone: () => void;
   onDeleteSelected: () => void;
+  /** Ctrl/Cmd+G groups the selection, Ctrl/Cmd+Shift+G ungroups the selected group. */
+  onGroup: () => void;
+  onUngroup: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -49,7 +56,11 @@ export function Canvas(props: CanvasProps) {
     onSelect,
     onIntent,
     onEditText,
+    editingTextId,
+    onEditTextDone,
     onDeleteSelected,
+    onGroup,
+    onUngroup,
     onUndo,
     onRedo,
     onSave,
@@ -63,6 +74,7 @@ export function Canvas(props: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<KonvaEditorHandle | null>(null);
   const [scale, setScale] = useState(1);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const latest = useRef({
     doc,
     page,
@@ -122,6 +134,7 @@ export function Canvas(props: CanvasProps) {
     const update = () => {
       handleRef.current?.fit();
       setScale(fitScale(page, { width: wrapper.clientWidth, height: wrapper.clientHeight }));
+      setViewport({ width: wrapper.clientWidth, height: wrapper.clientHeight });
     };
     update();
     const ro = new ResizeObserver(update);
@@ -130,6 +143,7 @@ export function Canvas(props: CanvasProps) {
   }, [page]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return; // keys typed in the in-place text editor stay there
     const meta = e.ctrlKey || e.metaKey;
     if (meta && e.key.toLowerCase() === 'z') {
       e.preventDefault();
@@ -147,13 +161,16 @@ export function Canvas(props: CanvasProps) {
       onSave();
       return;
     }
+    if (meta && e.key.toLowerCase() === 'g') {
+      e.preventDefault();
+      if (!readOnly) (e.shiftKey ? onUngroup : onGroup)();
+      return;
+    }
     if (e.key === 'Escape') {
       onSelect([]);
       return;
     }
-    if (readOnly) return;
-    const selected = selection[0];
-    if (!selected) return;
+    if (readOnly || selection.length === 0) return;
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       onDeleteSelected();
@@ -161,7 +178,7 @@ export function Canvas(props: CanvasProps) {
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      onEditText(selected);
+      if (selection[0]) onEditText(selection[0]);
       return;
     }
     const step = e.shiftKey ? 10 : 1;
@@ -174,8 +191,19 @@ export function Canvas(props: CanvasProps) {
     const d = delta[e.key];
     if (!d) return;
     e.preventDefault();
-    const intent = nudgeIntent(page, selected, d[0], d[1]);
-    if (intent) onIntent(intent);
+    // Every selected element moves by the same step, as one batch.
+    const operations: Operation[] = selection.flatMap(
+      (id) => nudgeIntent(page, id, d[0], d[1])?.operations ?? [],
+    );
+    if (operations.length)
+      onIntent({
+        operations,
+        summary:
+          selection.length === 1
+            ? `Move ${findElement(page, selection[0] ?? '')?.name ?? ''}`
+            : `Move ${selection.length} elements`,
+        origin: 'user',
+      });
   };
 
   const w = Math.round(page.width * scale);
@@ -187,7 +215,7 @@ export function Canvas(props: CanvasProps) {
       ref={wrapperRef}
       role="application"
       tabIndex={0}
-      aria-label={`Canvas: ${page.name}, ${page.width} by ${page.height} pixels. Select elements in the layers panel; arrow keys nudge the selected element by one pixel, ten with Shift; Enter edits text in the properties panel; Delete removes.`}
+      aria-label={`Canvas: ${page.name}, ${page.width} by ${page.height} pixels${page.locked ? ', locked page' : ''}. Select elements in the layers panel or by clicking, Shift-click or dragging a frame to select several; arrow keys nudge the selection by one pixel, ten with Shift; Enter edits text in place; Delete removes; Ctrl+G groups.`}
       aria-describedby="canvas-help"
       onKeyDown={onKeyDown}
       data-testid="canvas"
@@ -200,6 +228,32 @@ export function Canvas(props: CanvasProps) {
         Every canvas action is also available from the layers and properties panels.
       </p>
       <div ref={containerRef} className="absolute inset-0 flex items-center justify-center" />
+      {editingTextId && (
+        <InPlaceText
+          key={editingTextId}
+          page={page}
+          elementId={editingTextId}
+          scale={scale}
+          origin={{ x: (viewport.width - w) / 2, y: (viewport.height - h) / 2 }}
+          fontFamilyFor={fontFamilyFor}
+          colourFor={colourFor}
+          onCommit={(text) => {
+            const el = findElement(page, editingTextId);
+            if (el?.type === 'text' && el.text !== text)
+              onIntent({
+                operations: [{ op: 'setText', pageId: page.id, elementId: el.id, text }],
+                summary: `Edit ${el.name}`,
+                origin: 'user',
+              });
+            onEditTextDone();
+            wrapperRef.current?.focus();
+          }}
+          onCancel={() => {
+            onEditTextDone();
+            wrapperRef.current?.focus();
+          }}
+        />
+      )}
       {overlayItems.length > 0 && (
         <svg
           aria-hidden="true"
@@ -238,5 +292,84 @@ export function Canvas(props: CanvasProps) {
         </svg>
       )}
     </div>
+  );
+}
+
+/**
+ * STU-1a on-canvas text editing: a textarea laid exactly over the text element (position, size, rotation, font, size,
+ * line height, tracking, alignment and colour at the canvas scale). Ctrl/Cmd+Enter or leaving the field commits one
+ * setText; Escape cancels.
+ */
+function InPlaceText({
+  page,
+  elementId,
+  scale,
+  origin,
+  fontFamilyFor,
+  colourFor,
+  onCommit,
+  onCancel,
+}: {
+  page: CreativePage;
+  elementId: string;
+  scale: number;
+  origin: { x: number; y: number };
+  fontFamilyFor: (ref: string) => string | null;
+  colourFor: (token: string) => string | null;
+  onCommit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const el = findElement(page, elementId);
+  const [draft, setDraft] = useState(el?.type === 'text' ? el.text : '');
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const done = useRef(false);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  if (!el || el.type !== 'text') return null;
+  const t = el.transform;
+  const finish = (commit: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    if (commit) onCommit(draft);
+    else onCancel();
+  };
+  return (
+    <textarea
+      ref={ref}
+      aria-label={`Edit the text of ${el.name}`}
+      data-testid="in-place-text"
+      value={draft}
+      maxLength={5000}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => finish(true)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          finish(false);
+        } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          finish(true);
+        }
+      }}
+      className="absolute z-10 resize-none overflow-hidden border border-dashed border-accent bg-transparent p-0 outline-none"
+      style={{
+        left: origin.x + t.x * scale,
+        top: origin.y + t.y * scale,
+        width: t.width * scale,
+        height: t.height * scale,
+        transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
+        transformOrigin: 'center',
+        fontFamily: fontFamilyFor(el.style.fontAssetVersionId) ?? 'sans-serif',
+        fontSize: el.style.sizePx * scale,
+        fontWeight: el.style.weight,
+        lineHeight: el.style.lineHeight,
+        letterSpacing: `${el.style.tracking}em`,
+        textAlign: el.style.align,
+        color: (el.style.colourToken ? colourFor(el.style.colourToken) : el.style.colourValue) ?? '#000000',
+      }}
+    />
   );
 }

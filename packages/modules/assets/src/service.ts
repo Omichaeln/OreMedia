@@ -546,6 +546,31 @@ export const assetService = {
     return out;
   },
 
+  /**
+   * BSC-4: one version of the brand's asset as a brand source reads it (registered as the brand module's
+   * SourceAssetResolver): name, kind, state, the file's type, size and description, and its original's object key.
+   * A version that is missing, foreign, of another brand or of a retired asset is null.
+   */
+  async describeForSource(brandId: string, assetVersionId: string, tx?: Tx) {
+    const v = await versionsRepo.findInTenant(assetVersionId, tx);
+    if (!v || v.brandId !== brandId) return null;
+    const a = await assetsRepo.findInTenant(v.assetId, tx);
+    if (!a || a.brandId !== brandId || a.state === 'retired') return null;
+    return {
+      assetId: a.id,
+      assetVersionId: v.id,
+      name: a.name,
+      kind: a.kind,
+      state: a.state,
+      mime: v.mime,
+      bytes: v.bytes,
+      altText: v.altText,
+      width: v.width,
+      height: v.height,
+      storageKey: v.storageKey,
+    };
+  },
+
   /** Any asset id from a client is loaded through the scoped repository first; a foreign id is NOT_FOUND. */
   async get(actor: ResolvedActor, input: z.infer<typeof AssetGet>, tx?: Tx) {
     const { assetId } = AssetGet.parse(input);
@@ -964,7 +989,8 @@ export const assetService = {
       mime = d.mime;
     }
     const signed = await storage().signDownloadUrl(key, { expiresInSec: SIGNED_URL_TTL_SEC });
-    return { url: signed.url, expiresAt: signed.expiresAt, mime };
+    // STU-1a: where the file came from, so the studio can label generated raster images honestly.
+    return { url: signed.url, expiresAt: signed.expiresAt, mime, origin: v.provenance.kind };
   },
 
   /**

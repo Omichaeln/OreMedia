@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   fitScale,
   formatForPage,
+  frameTransformIntent,
+  marqueeSelection,
+  toggleSelection,
   isInteractive,
   moveIntent,
   nudgeIntent,
@@ -73,5 +76,47 @@ describe('KonvaEditorAdapter intent mapping (DOM-free)', () => {
       height: 1080,
       safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
     });
+  });
+
+  it('shift-click toggles an element in the selection; a marquee selects the top-level elements it touches', () => {
+    expect(toggleSelection([ids.image], ids.body)).toEqual([ids.image, ids.body]);
+    expect(toggleSelection([ids.image, ids.body], ids.image)).toEqual([ids.body]);
+    // The headline (80..200) and the image (260..720) but never the background.
+    expect(marqueeSelection(page(), { x: 0, y: 100, width: 300, height: 200 })).toEqual([
+      ids.image,
+      ids.headline,
+    ]);
+    expect(marqueeSelection(page(), { x: 300, y: 300, width: -250, height: -250 })).toEqual([
+      ids.image,
+      ids.headline,
+    ]);
+    expect(marqueeSelection(page(), { x: 1040, y: 1040, width: 10, height: 10 })).toEqual([]);
+  });
+
+  it('a rotation gesture keeps the element turning about its centre and emits setRotation', () => {
+    // The image box is 80,260 920×460; rotating its frame by 90° about the frame origin.
+    const intent = frameTransformIntent(page(), ids.image, {
+      x: 80,
+      y: 260,
+      width: 920,
+      height: 460,
+      rotation: 90,
+    });
+    expect(intent?.summary).toBe('Rotate Hero');
+    const move = intent?.operations.find((o) => o.op === 'moveElement');
+    // centre = origin + R(90°)·(460, 230) = (80 - 230, 260 + 460) → box top-left = centre − half size.
+    expect(move).toMatchObject({ x: 80 - 230 - 460, y: 260 + 460 - 230 });
+    expect(intent?.operations.at(-1)).toEqual({
+      op: 'setRotation',
+      pageId: 'page_1',
+      elementId: ids.image,
+      rotation: 90,
+    });
+    expect(
+      frameTransformIntent(page(), ids.image, { x: 80, y: 260, width: 920, height: 460, rotation: 0 }),
+    ).toBeNull();
+    expect(
+      frameTransformIntent(page(), ids.bg, { x: 0, y: 0, width: 10, height: 10, rotation: 5 }),
+    ).toBeNull();
   });
 });

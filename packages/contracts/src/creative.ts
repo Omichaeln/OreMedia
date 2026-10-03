@@ -119,6 +119,16 @@ export const LayoutConstraint = z.object({
   marginPx: z.number(),
 });
 
+/**
+ * STU-1a: a custom page size is a format key of the form `custom_<width>x<height>` (packages/editor formatFor parses
+ * it into a definition with a proportional safe area), so renders, variants and checks treat it like a preset. The
+ * bounds are the render worker's edge limit and a sensible aspect range.
+ */
+export const CUSTOM_FORMAT_MIN_PX = 64;
+export const CUSTOM_FORMAT_MAX_PX = 4096;
+/** Longest edge over shortest edge: wider than a 4:1 banner (1584×396) is allowed, a sliver is not. */
+export const CUSTOM_FORMAT_MAX_ASPECT = 8;
+
 export const CreativePage = z.object({
   id: z.string(),
   name: z.string(),
@@ -127,13 +137,34 @@ export const CreativePage = z.object({
   height: z.number().int().positive(),
   elements: z.array(ElementSchema).max(300), // z-order = array order
   layoutConstraints: z.array(LayoutConstraint).default([]),
+  /**
+   * STU-1a: a locked page blocks every agent operation on the page and its elements, and manual move, resize and
+   * rotation. Optional with no default so stored pages parse and hash exactly as before; unlocking removes the key.
+   */
+  locked: z.boolean().optional(),
 });
 export type CreativePage = z.infer<typeof CreativePage>;
+
+/**
+ * STU-1a (architecture principle 4): what the document is for, separate from its layout (pages and formats) and its
+ * destinations (format and channel variants). `video` is reserved for the video document kind.
+ */
+export const ContentType = z.enum([
+  'social_post',
+  'carousel',
+  'story',
+  'video',
+  'thumbnail_banner',
+  'custom',
+]);
+export type ContentType = z.infer<typeof ContentType>;
 
 export const CreativeDocumentV1 = z.object({
   schemaVersion: z.literal(1),
   brandVersionId: z.string(),
   templateVersionId: z.string().optional(),
+  /** Optional with no default: documents stored before STU-1a parse and hash unchanged. */
+  contentType: ContentType.optional(),
   pages: z.array(CreativePage).min(1).max(20), // carousels are multi-page
   variants: z
     .array(
@@ -189,8 +220,71 @@ export const Operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('addPage'), page: CreativePage, index: z.number().int().optional() }),
   z.object({ op: z.literal('createFormatVariant'), sourcePageId: z.string(), formatKey: z.string() }), // reflows via constraints; never scales pixels blindly
   z.object({ op: z.literal('setLock'), pageId: z.string(), elementId: Id, locked: z.boolean() }),
+  // ---- STU-1a: editor completeness. Every operation is pure, invertible and guarded like the ones above. ----
+  /**
+   * Wraps top-level elements of a page in a new group at the place of the front-most member; children keep their
+   * page-absolute transforms (scene.ts) and their paint order, the group's box encloses them.
+   */
+  z.object({
+    op: z.literal('groupElements'),
+    pageId: z.string(),
+    elementIds: z.array(Id).min(2).max(100),
+    groupId: Id,
+    name: z.string().min(1).max(80).optional(),
+  }),
+  /** Replaces a top-level group by its children at its place; a translucent group's opacity moves into them. */
+  z.object({ op: z.literal('ungroupElement'), pageId: z.string(), elementId: Id }),
+  z.object({
+    op: z.literal('setRotation'),
+    pageId: z.string(),
+    elementId: Id,
+    rotation: z.number().min(-360).max(360),
+  }),
+  /** An image's mask shape; null removes it. */
+  z.object({
+    op: z.literal('setMask'),
+    pageId: z.string(),
+    elementId: Id,
+    mask: z
+      .object({ kind: z.enum(['rect', 'rounded', 'circle']), radius: z.number().min(0).max(4096).optional() })
+      .nullable(),
+  }),
+  z.object({ op: z.literal('removePage'), pageId: z.string() }),
+  /**
+   * Copies a page with new ids: `elementIdMap` maps every element id of the page (groups' children included) to a
+   * new one, so the reducer stays pure and the copy is addressable at once.
+   */
+  z.object({
+    op: z.literal('duplicatePage'),
+    pageId: z.string(),
+    newPageId: z.string().min(1).max(40),
+    elementIdMap: z.record(Id),
+    index: z.number().int().optional(),
+  }),
+  z.object({ op: z.literal('reorderPage'), pageId: z.string(), toIndex: z.number().int() }),
+  z.object({ op: z.literal('setPageLock'), pageId: z.string(), locked: z.boolean() }),
+  /** Aligns element boxes to the selection's bounds or to the page. */
+  z.object({
+    op: z.literal('alignElements'),
+    pageId: z.string(),
+    elementIds: z.array(Id).min(1).max(100),
+    align: z.enum(['left', 'center', 'right', 'top', 'middle', 'bottom']),
+    relativeTo: z.enum(['selection', 'page']),
+  }),
+  /** Equal gaps between element boxes along an axis, within the selection's span or the page. */
+  z.object({
+    op: z.literal('distributeElements'),
+    pageId: z.string(),
+    elementIds: z.array(Id).min(2).max(100),
+    axis: z.enum(['horizontal', 'vertical']),
+    relativeTo: z.enum(['selection', 'page']),
+  }),
 ]);
 export type Operation = z.infer<typeof Operation>;
+/** Every operation name, in contract order (the agent tool schema and the studio's labels enumerate these). */
+export const OPERATION_NAMES = Operation.options.map((o) => o.shape.op.value) as ReadonlyArray<
+  Operation['op']
+>;
 
 export const OperationBatch = z.object({
   baseRevisionId: z.string(),
@@ -289,13 +383,33 @@ export const TemplateSlot = z.object({
 export type TemplateSlot = z.infer<typeof TemplateSlot>;
 
 // ---- router DTOs (spec 7.5 creative router) ----
+/**
+ * STU-1a: where a new document starts from, recorded in the audit trail. `template` makes the server start from the
+ * approved brand template version itself (no `document` is sent); `starter` names a built-in starter the client
+ * instantiated with the brand's tokens, fonts and logos (packages/editor/src/starters), sent as `document`.
+ */
+export const DocumentSource = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('blank') }),
+  z.object({ kind: z.literal('custom') }),
+  z.object({ kind: z.literal('starter'), starterKey: z.string().min(1).max(80) }),
+  z.object({ kind: z.literal('template'), templateId: z.string(), templateVersionId: z.string() }),
+]);
+export type DocumentSource = z.infer<typeof DocumentSource>;
+export const DocumentTitle = z.string().trim().min(1).max(200);
 export const DocumentCreate = z.object({
   brandId: z.string(),
-  title: z.string().min(1).max(200),
+  title: DocumentTitle,
   contentPackageId: z.string().optional(),
   /** Optional initial document; its brandVersionId is replaced by the published brand version resolved on the server. */
   document: CreativeDocumentV1.optional(),
+  /** STU-1a: stored on the document snapshot (overrides the document's own when both are given). */
+  contentType: ContentType.optional(),
+  source: DocumentSource.optional(),
 });
+/** STU-1a: a new document whose revision 1 is the source document's current revision, provenance in the audit. */
+export const DocumentDuplicate = z.object({ documentId: z.string(), title: DocumentTitle.optional() });
+/** STU-1a: the title is a label, last writer wins; it never touches revisions. */
+export const DocumentRename = z.object({ documentId: z.string(), title: DocumentTitle });
 export const DocumentGet = z.object({ documentId: z.string() });
 /** The brand's documents, newest first; optionally those created for one content package. */
 export const DocumentList = z.object({
@@ -306,14 +420,23 @@ export const DocumentList = z.object({
 export const RevisionList = z.object({ documentId: z.string(), page: PageRequest });
 export const RevisionGet = z.object({ documentId: z.string(), revisionId: z.string() });
 /** Spec 11.4 applyOperations(docId, batch): the batch plus the document it targets. */
-export const OperationsApply = OperationBatch.extend({ documentId: z.string() });
+export const OperationsApply = OperationBatch.extend({
+  documentId: z.string(),
+  /**
+   * STU-1b: the batch accepts (part of) a generation job's proposal: the operations must be exactly those of the
+   * named groups, in proposal order; the revision records the job's generation inputs and the groups kept.
+   */
+  generation: z
+    .object({ jobId: z.string(), groupIds: z.array(z.string().min(1).max(20)).min(1).max(100) })
+    .optional(),
+});
 export type OperationsApply = z.infer<typeof OperationsApply>;
 export const RenderFormatKeys = z.array(z.string().min(1).max(40)).min(1).max(20);
 /**
  * Same input as apply; runs the same guards and validation as a dry run (agent preview). With `previewRender` the
  * proposed snapshot is also queued as a worker preview render (spec 11.4): its output is never publishable.
  */
-export const OperationsPropose = OperationsApply.extend({
+export const OperationsPropose = OperationsApply.omit({ generation: true }).extend({
   previewRender: z.object({ formatKeys: RenderFormatKeys }).optional(),
 });
 export const RenderRequest = z.object({
@@ -352,7 +475,21 @@ export const TemplateApprove = z.object({
   /** The template row's version (optimistic concurrency); the version row moves by state transition. */
   expectedVersion: z.number().int(),
 });
+/**
+ * STU-1a: retiring is a brand-standards decision like approval. With a version id that version is retired (the
+ * template falls back to its newest other approved version); without one the template and its versions are.
+ */
+export const TemplateRetire = z.object({
+  templateId: z.string(),
+  templateVersionId: z.string().optional(),
+  expectedVersion: z.number().int(),
+});
 export const TemplateList = z.object({ brandId: z.string(), page: PageRequest });
+/**
+ * STU-1a: the brand's active templates with their current (approved) version document, in one read, for the
+ * creation gallery's previews (instead of one templates.get per card).
+ */
+export const TemplateListCurrent = z.object({ brandId: z.string(), page: PageRequest });
 export const TemplateGet = z.object({ templateId: z.string(), templateVersionId: z.string().optional() });
 
 // ---- render worker DTOs (spec 11.5: the worker reports through the creative module, never by writing state) ----

@@ -173,8 +173,22 @@
     {
       "idx": 24,
       "version": "5",
-      "when": 1791028481587,
-      "tag": "0024_video_media",
+      "when": 1791050815610,
+      "tag": "0024_brand_assist",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1791055662066,
+      "tag": "0025_studio_generation",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1791058825628,
+      "tag": "0026_video_media",
       "breakpoints": true
     }
   ]

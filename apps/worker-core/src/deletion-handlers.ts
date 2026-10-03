@@ -34,6 +34,7 @@ import {
   type DeletionScope,
 } from '@oremedia/module-operations';
 import { CredentialRefRepository } from '@oremedia/module-publishing';
+import { brandSourceRetention } from '@oremedia/module-brand';
 import { destinationRetention } from '@oremedia/module-destinations';
 
 type Table = ReturnType<typeof tenantScopedTables>[number];
@@ -266,6 +267,13 @@ export function registerRetentionHandlers(): void {
     name: 'agents.transcripts',
     dataClass: 'agent_transcripts',
     run: byAge([agentsSchema.agentSteps, agentsSchema.toolInvocations]),
+  });
+  // BSC-4 brand source text is prompt material: it follows the same class (a website is read again when next used;
+  // an uploaded document or pasted text is marked expired). The source rows and their suggestions are kept.
+  registerRetentionHandler({
+    name: 'brand.source_text',
+    dataClass: 'agent_transcripts',
+    run: (cutoff, dryRun, tx) => brandSourceRetention.purgeText(cutoff, dryRun, tx),
   });
   // Provider results and metrics: 25 months rolling.
   registerRetentionHandler({

@@ -1,59 +1,23 @@
-import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
+import { Link } from 'react-router';
+import { Button, EmptyState, Skeleton } from '@oremedia/ui';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useDocuments } from './use-document';
-import { useTRPC } from '../../lib/trpc';
-import { mutationIntent, useIntentKey } from '../../lib/intent-key';
-import { toUiError } from '../../lib/errors';
 
-/** The form that creates a document and opens it; shown with Documents on the home page and the Studio section. */
-export function NewDocument({ disabledReason }: { disabledReason?: string }) {
+/** Where documents are made (STU-1a): the Studio's creation screen; the home page links to it. */
+export function NewDocumentLink({ disabledReason }: { disabledReason?: string }) {
   const { companyId, brandId } = useBrandContext();
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const intent = useIntentKey();
-  const [title, setTitle] = useState('');
-  const create = useMutation(
-    trpc.creative.documents.create.mutationOptions({
-      ...mutationIntent(intent.key),
-      onSuccess: (res) => {
-        intent.renew();
-        void queryClient.invalidateQueries(trpc.creative.documents.pathFilter());
-        navigate(brandPath(companyId, brandId, `studio/${encodeURIComponent(res.documentId)}`));
-      },
-    }),
-  );
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (title.trim()) create.mutate({ brandId, title: title.trim() });
-  };
+  if (disabledReason)
+    return (
+      <Button variant="primary" disabledReason={disabledReason}>
+        New document
+      </Button>
+    );
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-      <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
-        <Field
-          label="New document title"
-          htmlFor="doc-title"
-          error={create.isError ? toUiError(create.error).message : undefined}
-        >
-          <Input id="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
-        </Field>
-        <div>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={create.isPending || !title.trim()}
-            disabledReason={disabledReason}
-          >
-            {create.isPending ? 'Creating…' : 'Create and open'}
-          </Button>
-        </div>
-      </form>
-    </div>
+    <Button asChild variant="primary">
+      <Link to={brandPath(companyId, brandId, 'studio')}>New document</Link>
+    </Button>
   );
 }
 
@@ -74,7 +38,7 @@ export function Documents() {
     return (
       <EmptyState
         title="No documents yet"
-        description="Create the first one below; every document of the brand is listed here."
+        description="Start one from a template above; every document of the brand is listed here."
       />
     );
   return (

@@ -48,6 +48,7 @@ const skillEvaluation = (ctx: ActivityContext, f: Ids) => ({
   suiteId: f['evaluationSuiteId'],
   runs: 3,
 });
+const generation = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['generationJobId'], attempt: 1 });
 const publication = (ctx: ActivityContext, f: Ids) => ({ ...ctx, publicationId: f['publicationId'] });
 const reply = (ctx: ActivityContext, f: Ids) => ({ ...ctx, responseDraftId: f['responseDraftId'] });
 const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
@@ -107,6 +108,16 @@ const seoAudit = (ctx: ActivityContext, f: Ids) => ({
   trigger: 'scheduled',
   runId: f['seoAuditRunId'],
 });
+/** BSC-4: an assist job of the foreign brand (its brand id and job id are both the foreign tenant's). */
+const assistJob = (ctx: ActivityContext, f: Ids) => ({
+  ...ctx,
+  brandId: f['brandId'],
+  jobId: f['brandAssistJobId'],
+});
+const assistSource = (ctx: ActivityContext, f: Ids) => ({
+  ...assistJob(ctx, f),
+  sourceId: f['brandSourceId'],
+});
 /** Brand change impact finds nothing of a foreign brand in the caller's tenant: every list and count is empty. */
 const BRAND_CHANGE_NO_OP =
   'the brand change runs in the caller tenant, where the foreign brand has no approvals or publications';
@@ -140,6 +151,34 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'agents.runSkillEvaluation': { buildInput: skillEvaluation },
     'agents.failSkillEvaluation': {
       buildInput: (ctx, f) => ({ ...skillEvaluation(ctx, f), error: 'harness failure' }),
+    },
+    // STU-1b studioGenerationWorkflowV1: a foreign job is NOT_FOUND before anything is read or written.
+    'agents.beginGeneration': { buildInput: generation },
+    'agents.reserveGenerationBudget': { buildInput: generation },
+    'agents.callGenerationModel': { buildInput: generation },
+    'agents.saveGeneration': { buildInput: generation },
+    'agents.failGeneration': {
+      buildInput: (ctx, f) => ({ ...generation(ctx, f), code: 'failed', detail: 'harness' }),
+    },
+    'agents.settleGenerationBudget': { buildInput: generation },
+    // brandAssistWorkflowV1 (BSC-4): every step names the foreign brand and its job, so each is NOT_FOUND before
+    // anything is read, reserved, charged or written
+    'agents.beginBrandAssist': { buildInput: assistJob },
+    'agents.markBrandAssistStage': {
+      buildInput: (ctx, f) => ({ ...assistJob(ctx, f), stage: 'extracting' }),
+    },
+    'agents.recordBrandSourceFailure': {
+      buildInput: (ctx, f) => ({ ...assistSource(ctx, f), reason: 'capture_failed' }),
+    },
+    'agents.prepareBrandAssistProposals': { buildInput: assistJob },
+    'agents.proposeBrandAssistSection': {
+      buildInput: (ctx, f) => ({ ...assistJob(ctx, f), section: 'voice' }),
+    },
+    'agents.recordBrandAssistSectionFailure': {
+      buildInput: (ctx, f) => ({ ...assistJob(ctx, f), section: 'voice', reason: 'model_failed' }),
+    },
+    'agents.finishBrandAssist': {
+      buildInput: (ctx, f) => ({ ...assistJob(ctx, f), cancelled: false, failure: null }),
     },
 
     // ---- task queue `core`: publicationWorkflowV1 control activities (spec 14.3) ----
@@ -345,6 +384,8 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
       buildInput: (ctx, f) => ({ ...seoAudit(ctx, f), limitsHit: [], failedPages: 0 }),
     },
     'ingest-metrics.pruneSeoAudits': { buildInput: seoAudit },
+    // BSC-4: a website source of a brand assist job, read here; a foreign job is NOT_FOUND before any fetch
+    'ingest-metrics.captureBrandSourceUrl': { buildInput: assistSource },
     'ingest-comments.readCollectionPlan': { buildInput: collectionPlan },
     'ingest-comments.pullComments': {
       buildInput: (ctx, f) => ({ ...publication(ctx, f), pullIndex: 0, since: null, cursor: null }),
@@ -386,6 +427,8 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     },
     'render.failRender': { buildInput: (ctx, f) => ({ ...renderJob(ctx, f), reason: 'render_failed' }) },
 
+    // ---- task queue `media`: BSC-4 document text of a brand assist job (a foreign job is NOT_FOUND before any read) ----
+    'media.extractBrandSourceDocument': { buildInput: assistSource },
     // ---- task queue `media`: assetIngestWorkflowV1 (spec 9.1) ----
     'media.beginIngest': { buildInput: ingest },
     'media.verifyUpload': { buildInput: ingest },

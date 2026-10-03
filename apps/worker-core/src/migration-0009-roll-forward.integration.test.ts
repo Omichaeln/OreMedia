@@ -5,8 +5,15 @@ import { defaultPolicyDocument } from '@oremedia/contracts/brand';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
-import { brands, policyVersions } from '@oremedia/db/schema/brand';
+import {
+  brandAssistJobs,
+  brandSources,
+  brandSuggestions,
+  brands,
+  policyVersions,
+} from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
 import {
@@ -31,6 +38,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
 const PREVIOUS_HEAD = '0008_usage_audio_generation';
 /** Added by later migrations (0010 to 0013: their migration-*-roll-forward tests). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   pendingChannelGrants,
   publicationRemoteChanges,
   passwordSetupTokens,
@@ -42,6 +54,7 @@ const LATER_TABLES: MySqlTable[] = [
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
+  studioGenerationJobs, // 0025
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

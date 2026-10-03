@@ -60,6 +60,12 @@ export function useTemplates(brandId: string) {
   return useQuery(trpc.creative.templates.list.queryOptions({ brandId, page: { limit: 50 } }));
 }
 
+/** STU-1a: active templates with their current version document in one read (the creation gallery). */
+export function useTemplatesWithCurrent(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.creative.templates.listCurrent.queryOptions({ brandId, page: { limit: 50 } }));
+}
+
 export function useTemplate(templateId: string | null) {
   const trpc = useTRPC();
   return useQuery({

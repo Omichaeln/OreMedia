@@ -7,7 +7,7 @@ import { AgentActivity } from '../../../../../../features/home/agent-activity';
 import { NeedsYou } from '../../../../../../features/home/needs-you';
 import { Section } from '../../../../../../components/section';
 import { WeekStrip } from '../../../../../../features/home/week-strip';
-import { Documents, NewDocument } from '../../../../../../features/studio/documents-panel';
+import { Documents, NewDocumentLink } from '../../../../../../features/studio/documents-panel';
 import { useSessionUser } from '../../../../../../features/session/use-session-user';
 import { hasCredential } from '../../../../../../lib/session';
 
@@ -87,9 +87,11 @@ export function BrandHomeRoute() {
         <AgentActivity />
         <Section id="documents" title="Documents">
           <Documents />
-          <NewDocument
-            disabledReason={brand.publishedVersionId ? undefined : 'Save the brand system first'}
-          />
+          <div className="mt-3">
+            <NewDocumentLink
+              disabledReason={brand.publishedVersionId ? undefined : 'Save the brand system first'}
+            />
+          </div>
         </Section>
       </div>
     </main>

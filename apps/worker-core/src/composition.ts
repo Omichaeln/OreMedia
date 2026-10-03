@@ -37,14 +37,20 @@ import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerChannelKeySource,
   registerBrandAssetVersionSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
+  registerAssistModelGate,
+  registerBrandOutboxRoutes,
 } from '@oremedia/module-brand';
 import {
+  configureGenerationPricing,
   creativeService,
   registerAssetAuthoriser,
+  registerChannelCapabilitySource,
+  registerGenerationAssetSource,
   registerCreativeOutboxRoutes,
 } from '@oremedia/module-creative';
 import {
@@ -60,6 +66,7 @@ import {
   skillsService,
 } from '@oremedia/module-skills';
 import {
+  brandAssistModelGate,
   createEvaluationRunnerFromEnv,
   createOpenRouterImageGeneratorFromEnv,
   createOpenRouterSpeechGeneratorFromEnv,
@@ -76,6 +83,9 @@ import {
   registerSkillResolver,
   registerSpeechGenerator,
   registerVideoGenerator,
+  IMAGE_COST_MICROS,
+  estimateCostMicros,
+  modelConfigFromEnv,
 } from '@oremedia/ai';
 import {
   contentService,
@@ -127,6 +137,7 @@ import {
   registerPublishingBrandChecker,
   registerDestinationPublisher,
   type WorkflowProbe,
+  providerRegistryInUse,
 } from '@oremedia/module-publishing';
 
 /**
@@ -153,6 +164,10 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   // Spec 12: agent runs start and are signalled through the outbox; the context resolver pins skills (spec 12.3).
   registerSkillBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerAgentOutboxRoutes();
+  // BSC-4: brand.assist_requested / brand.assist_cancel_requested → brandAssistWorkflowV1 (and its relay) on `agents`;
+  // the assist runtime reads the deployment's model and the tenant's routing policy through the gate.
+  registerBrandOutboxRoutes();
+  registerAssistModelGate(brandAssistModelGate());
   // Spec 12.2 / 12.7: provider job ids survive a worker restart; the tenant's stored routing policy gates every call.
   // Only here: agent runs (the only callers with a run row for fk_provider_job_run) dispatch tools in this process.
   // The API's surface path (MCP, spec 7.6 / 12.4) never reaches a provider job: the only tool that submits one,
@@ -278,7 +293,42 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     contentService.revisions.withVariants(contentRevisionId, tx),
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
+  // STU-1b: generation reads the eligible assets, the channel capability register in use and its price list.
+  registerGenerationAssetSource(async (brandId, tx) =>
+    (
+      await assetService.findEligibleAssets(
+        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        { limit: 200 },
+        tx,
+      )
+    ).items.map((a) => ({
+      assetId: a.assetId,
+      assetVersionId: a.assetVersionId,
+      kind: a.kind,
+      altText: a.altText,
+      semanticRole: a.semanticRole,
+    })),
+  );
+  registerChannelCapabilitySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.capability),
+  );
+  const generationModel = modelConfigFromEnv();
+  configureGenerationPricing({
+    modelCallMicros: estimateCostMicros(generationModel, {
+      inputTokens: 12_000,
+      outputTokens: generationModel.maxOutputTokens,
+    }),
+    imageMicros: IMAGE_COST_MICROS,
+  });
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
+  // BSC-1: guidance names the channels of the registry publishing uses (the one channels.limits reads).
+  registerChannelKeySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.key),
+  );
   registerBrandAssetVersionSource((brandId, ids, tx) => assetService.assetsOfVersions(brandId, ids, tx));
   // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
   registerOnboardingRunSource(onboardingRunSource);

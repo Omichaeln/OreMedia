@@ -11,10 +11,12 @@ import {
 } from '@temporalio/worker';
 import {
   createAssetIngestActivities,
+  createBrandSourceExtractActivities,
   createRenderJobActivities,
   createVideoExportActivities,
   createVideoIngestActivities,
 } from '@oremedia/activities';
+import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
 import {
@@ -39,9 +41,10 @@ import { creativeRenderJobStore } from './creative-store';
 /**
  * worker-render (spec 4.4, 11.5): the isolated worker pool for CPU/memory-heavy and untrusted-input work. Three
  * Temporal workers share one connection: task queue `render` (renderJobWorkflowV1: headless Chromium), task
- * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads) and, STU-2a, task
- * queue `video` (videoIngestWorkflowV1 and the video export store: ffprobe/ffmpeg jobs that run for minutes, with
- * their own concurrency, VIDEO_CONCURRENCY, so they never starve still renders or image ingest). No credential
+ * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads; BSC-4 document
+ * text extraction for brand assist jobs) and, STU-2a, task queue `video` (videoIngestWorkflowV1 and the video export
+ * store: ffprobe/ffmpeg jobs that run for minutes, with their own concurrency, VIDEO_CONCURRENCY, so they never
+ * starve still renders or image ingest). No credential
  * broker access; egress is restricted to the object store at the network layer. Workflow code is pre-bundled at
  * build time (tsup.config.ts → dist/workflows.<queue>.js) because production images carry no sources. The process
  * entry is main.ts, which checks the configuration before this module (and its dependencies) load.
@@ -125,7 +128,19 @@ const mediaWorker = await Worker.create({
   namespace,
   taskQueue: 'media',
   ...workflowsFor('media'),
-  activities: createAssetIngestActivities({ storage: storage() }),
+  activities: {
+    ...createAssetIngestActivities({ storage: storage() }),
+    // BSC-4: the text of documents supplied to brand assist jobs, read with the other untrusted-input parsers.
+    ...createBrandSourceExtractActivities(
+      createBrandAssistRuntime({
+        objects: {
+          head: (key) => storage().headObject(key),
+          get: (key, range) => storage().getObject(key, range),
+          delete: (key) => storage().deleteObject(key),
+        },
+      }),
+    ),
+  },
   maxConcurrentActivityTaskExecutions: Number(process.env['MEDIA_CONCURRENCY'] ?? 4),
 });
 // Media jobs work in private temp directories (MEDIA_TMP_DIR); a container killed mid-job leaves them behind.

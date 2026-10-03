@@ -40,6 +40,63 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
       proposal: { versionId: f['brandVersionId'], expectedVersion: 0 },
     }),
   },
+  'brand.sources.add': {
+    buildInput: (f) => ({ kind: 'url', brandId: f['brandId'], url: 'https://example.com/' }),
+  },
+  'brand.sources.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'brand.sources.get': { buildInput: (f) => ({ brandId: f['brandId'], sourceId: f['brandSourceId'] }) },
+  'brand.sources.remove': {
+    buildInput: (f) => ({ brandId: f['brandId'], sourceId: f['brandSourceId'], expectedVersion: 0 }),
+  },
+  'brand.assist.estimate': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      kind: 'setup',
+      sections: ['voice'],
+      sourceIds: [f['brandSourceId']],
+    }),
+  },
+  'brand.assist.start': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      kind: 'setup',
+      sections: ['voice'],
+      sourceIds: [f['brandSourceId']],
+    }),
+  },
+  'brand.assist.get': { buildInput: (f) => ({ brandId: f['brandId'], jobId: f['brandAssistJobId'] }) },
+  'brand.assist.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'brand.assist.cancel': { buildInput: (f) => ({ brandId: f['brandId'], jobId: f['brandAssistJobId'] }) },
+  'brand.assist.answer': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      jobId: f['brandAssistJobId'],
+      answers: [{ questionId: 'q1', answer: 'x' }],
+    }),
+  },
+  'brand.suggestions.list': {
+    buildInput: (f) => ({ brandId: f['brandId'], jobId: f['brandAssistJobId'], page: { limit: 50 } }),
+  },
+  'brand.suggestions.accept': {
+    buildInput: (f) => ({ brandId: f['brandId'], suggestionIds: [f['brandSuggestionId']] }),
+  },
+  'brand.suggestions.edit': {
+    buildInput: (f) => ({ brandId: f['brandId'], suggestionId: f['brandSuggestionId'], value: 'x' }),
+  },
+  'brand.suggestions.reject': {
+    buildInput: (f) => ({ brandId: f['brandId'], suggestionIds: [f['brandSuggestionId']] }),
+  },
+  'brand.suggestions.acceptAll': {
+    buildInput: (f) => ({ brandId: f['brandId'], jobId: f['brandAssistJobId'], section: 'voice' }),
+  },
+  'brand.suggestions.undo': { buildInput: (f) => ({ brandId: f['brandId'] }) },
+  'brand.history.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'brand.history.compare': {
+    buildInput: (f) => ({ brandId: f['brandId'], versionId: f['brandVersionId'] }),
+  },
+  'brand.history.restore': {
+    buildInput: (f) => ({ brandId: f['brandId'], versionId: f['brandVersionId'], basedOnVersionId: null }),
+  },
   'brand.system.discardProposal': {
     buildInput: (f) => ({ brandId: f['brandId'], versionId: f['brandVersionId'], expectedVersion: 0 }),
   },

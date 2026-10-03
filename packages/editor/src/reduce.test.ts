@@ -221,7 +221,17 @@ describe('template slots (spec 6.3 / 11.3: kinds, replaceable, constraints)', ()
       { key: 'hero', elementId: T_HERO, kind: 'image', required: false },
       { key: 'background', elementId: T_BG, kind: 'background', required: false, replaceable: false },
     ]);
-    const next = reduce(fixtureDocument(), apply({ headline: ids.headline, hero: ids.image }), { templates });
+    // STU-1a: a template does not replace a page holding locked elements, so the fixture's background is unlocked.
+    const unlocked = reduce(fixtureDocument(), {
+      op: 'setLock',
+      pageId: P,
+      elementId: ids.bg,
+      locked: false,
+    });
+    const next = reduce(unlocked, apply({ headline: ids.headline, hero: ids.image }), { templates });
+    expect(() =>
+      reduce(fixtureDocument(), apply({ headline: ids.headline, hero: ids.image }), { templates }),
+    ).toThrowError(/element_locked/);
     const page = next.pages[0]!;
     expect(page.elements.map((e) => e.id)).toEqual([T_BG, ids.image, ids.headline]);
     expect(findElement(page, ids.headline)).toMatchObject({ type: 'text', text: 'October offer' });

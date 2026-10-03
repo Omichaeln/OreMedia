@@ -107,6 +107,14 @@ export {
 } from './tool-dispatcher';
 export { redactForRecord } from './redact';
 export {
+  buildBrandAssistPrompt,
+  createBrandAssistModel,
+  brandAssistModelGate,
+  parseModelJson,
+  SECTION_EXAMPLES,
+  type BrandAssistPrompt,
+} from './brand-assist';
+export {
   MemoryProviderJobStore,
   registerProviderJobStore,
   providerJobs,
@@ -116,5 +124,12 @@ export {
   type ProviderJobStatus,
   type ProviderJobStore,
 } from './provider-jobs';
+export {
+  STUDIO_FILL_TOOL,
+  generationTool,
+  assembleGenerationPrompt,
+  parseGenerationOutput,
+  ModelToolNotCalledError,
+} from './generation-prompt';
 export * from './tools';
 export * from './evaluation';

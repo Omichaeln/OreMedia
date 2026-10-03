@@ -50,6 +50,13 @@ const METADATA_ALLOWLIST = new Set([
   // The object a decision created downstream (a recommendation's brief, RA-11 a finding's work): type and id only
   'downstreamType',
   'downstreamId',
+  // STU-1a: where a creative document started (blank, custom, starter, template, duplicate) and what it is for
+  'sourceType',
+  'sourceId',
+  'sourceRevisionId',
+  'sourceBrandVersionId',
+  'sourceClaimed',
+  'contentType',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

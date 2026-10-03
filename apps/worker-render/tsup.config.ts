@@ -17,7 +17,13 @@ import { defineConfig } from 'tsup';
 const QUEUES = ['render', 'media', 'video'] as const;
 
 export default defineConfig({
-  entry: { main: 'src/main.ts', worker: 'src/worker.ts' },
+  entry: {
+    main: 'src/main.ts',
+    worker: 'src/worker.ts',
+    // BSC-4: the worker thread brand sources are parsed in (packages/modules/brand/src/capture/isolate.ts loads
+    // `capture-worker.js` from next to the bundle).
+    'capture-worker': '../../packages/modules/brand/src/capture/worker.ts',
+  },
   format: ['esm'],
   target: 'node22',
   platform: 'node',

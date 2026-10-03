@@ -93,6 +93,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
       .toBe('Studio');
     expect(await nav.count()).toBe(1);
+    await page.getByRole('button', { name: 'Blank canvas…' }).click();
     await page.getByLabel('New document title').fill('Studio index document');
     await page.getByRole('button', { name: 'Create and open' }).click();
     await page.waitForURL('**/studio/*', { timeout: 15_000 });
@@ -101,7 +102,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.waitForURL('**/studio', { timeout: 15_000 });
     const documents = page.getByTestId('documents');
     await documents.waitFor({ timeout: 15_000 });
-    expect(await documents.getByRole('link', { name: 'Studio index document' }).count()).toBe(1);
+    // The creation dialog closed before the studio opened, so nothing of the index stays hidden from assistive
+    // technology (aria-hidden / inert left behind by a modal that the route change unmounted).
+    expect(await documents.evaluate((el) => Boolean(el.closest('[aria-hidden="true"], [inert]')))).toBe(
+      false,
+    );
+    await expect
+      .poll(() => documents.getByRole('link', { name: 'Studio index document' }).count(), { timeout: 15_000 })
+      .toBe(1);
     expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(1);
     await page.close();
   }, 45_000);
@@ -1130,13 +1138,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     // The mock proposal adds reference imagery and guidelines; nothing else differs.
     await expect
       .poll(() => proposed.textContent(), { timeout: 15_000 })
-      .toContain('It changes Imagery, Guidelines.');
+      .toContain('It changes Vocabulary, Imagery, Guidelines.');
     expect(await proposed.textContent()).toContain('Imported from the brand skill e2e-brand.');
     await proposed.getByRole('button', { name: 'Review' }).click();
     const review = page.getByTestId('proposal-review');
     await expect
       .poll(() => review.textContent(), { timeout: 15_000 })
-      .toContain('Changes Imagery, Guidelines.');
+      .toContain('Changes Vocabulary, Imagery, Guidelines.');
     await review.getByRole('button', { name: 'Save', exact: true }).click();
     // UX-20: the confirmation names what the save reaches, from the review and publishing stores. Whether the
     // settings test above recorded a choice or not, the policy line names today's behaviour.

@@ -7,6 +7,7 @@ import {
   changedElementIds,
   findElement,
   invertBatch,
+  operationsOfGroups,
   rebaseBatch,
   type IntentBatch,
   type TemplateDocument,
@@ -41,6 +42,8 @@ export interface CommitRequest {
   baseNumber: number;
   origin: 'user' | 'agent';
   mode: CommitMode;
+  /** STU-1b: the batch accepts these groups of a generation job's proposal. */
+  generation?: { jobId: string; groupIds: string[] };
 }
 
 export interface StudioApi {
@@ -63,7 +66,11 @@ export interface StudioApi {
   setPage: (id: string) => void;
   resolveTemplate: (templateId: string, templateVersionId: string) => Promise<TemplateDocument | null>;
   simulateProposal: () => Promise<void>;
-  acceptProposal: () => void;
+  /**
+   * Commits the pending proposal. A generation proposal may be accepted in part (`groupIds`) and, when it has blocking
+   * findings, taken as the person's own edit (`asMine`): the job reference goes with it either way.
+   */
+  acceptProposal: (opts?: { groupIds?: string[]; asMine?: boolean }) => void;
   modifyProposal: () => void;
   rejectProposal: () => void;
   /** UX-07: a run's proposal (read from the server) shown as the pending proposal; cleared once decided. */
@@ -71,6 +78,11 @@ export interface StudioApi {
   clearProposal: () => void;
   /** Re-reads the document head (after a run applied a decision) and adopts it when nothing local is pending. */
   refreshHead: () => Promise<void>;
+  /**
+   * STU-1b: adopts a head one revision ahead of the committed one (a generation job saved it) as an undoable step;
+   * anything else is a plain refresh.
+   */
+  adoptHead: () => Promise<void>;
   blocker: ReturnType<typeof useBlocker>;
 }
 
@@ -165,6 +177,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
             operations: req.operations,
             summary: req.summary,
             origin: req.origin,
+            ...(req.generation ? { generation: req.generation } : {}),
           },
           intentContext(req.key),
         );
@@ -355,29 +368,51 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     dispatch({ type: 'head:refresh', head: committedOf(head) });
   }, [afterCommit, client, documentId]);
 
-  const acceptProposal = useCallback(() => {
+  const acceptProposal = useCallback(
+    (opts: { groupIds?: string[]; asMine?: boolean } = {}) => {
+      const s = stateRef.current;
+      const p = s.proposal;
+      if (!p || hasLocalWork(s) || p.baseRevisionId !== s.committed.revisionId) return;
+      if (p.result.blocking && !(p.generation && opts.asMine)) return;
+      const groupIds = p.generation ? (opts.groupIds ?? p.generation.groups.map((g) => g.id)) : [];
+      const operations = p.generation
+        ? operationsOfGroups(p.batch.operations, p.generation.groups, groupIds)
+        : p.batch.operations;
+      if (operations.length === 0) return;
+      const origin = opts.asMine ? 'user' : 'agent';
+      const key = newIntentKey();
+      dispatch({ type: 'commit:start', mode: 'proposal', operations, summary: p.batch.summary, key, origin });
+      void runCommit({
+        operations,
+        summary: p.batch.summary,
+        key,
+        baseRevisionId: s.committed.revisionId,
+        baseNumber: s.committed.number,
+        origin,
+        mode: 'proposal',
+        ...(p.generation ? { generation: { jobId: p.generation.jobId, groupIds } } : {}),
+      });
+    },
+    [runCommit],
+  );
+
+  const adoptHead = useCallback(async () => {
+    const head = await client.creative.documents.get.query({ documentId });
     const s = stateRef.current;
-    const p = s.proposal;
-    if (!p || hasLocalWork(s) || p.result.blocking || p.baseRevisionId !== s.committed.revisionId) return;
-    const key = newIntentKey();
-    dispatch({
-      type: 'commit:start',
-      mode: 'proposal',
-      operations: p.batch.operations,
-      summary: p.batch.summary,
-      key,
-      origin: 'agent',
-    });
-    void runCommit({
-      operations: p.batch.operations,
-      summary: p.batch.summary,
-      key,
-      baseRevisionId: s.committed.revisionId,
-      baseNumber: s.committed.number,
-      origin: 'agent',
-      mode: 'proposal',
-    });
-  }, [runCommit]);
+    const next = committedOf(head);
+    afterCommit(next, head.revision);
+    if (head.revision.parentRevisionId === s.committed.revisionId)
+      dispatch({
+        type: 'head:advanced',
+        head: next,
+        entry: {
+          before: s.committed.snapshot,
+          operations: head.revision.operations.operations,
+          summary: head.revision.changeSummary,
+        },
+      });
+    else dispatch({ type: 'head:refresh', head: next });
+  }, [afterCommit, client, documentId]);
 
   return {
     state,
@@ -408,6 +443,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
     setProposal: (proposal) => dispatch({ type: 'proposal:set', proposal }),
     clearProposal: () => dispatch({ type: 'proposal:clear' }),
     refreshHead,
+    adoptHead,
     blocker,
   };
 }

@@ -278,10 +278,11 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'review_flagged_at',
     'expiry_notified_at',
   ], // 0023
-  asset_versions: ['media_info'], // 0024
-  upload_intents: ['rejection_detail'], // 0024
-  render_jobs: ['progress'], // 0024
-  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key'], // 0024
+  creative_revisions: ['generation_inputs'], // 0025
+  asset_versions: ['media_info'], // 0026
+  upload_intents: ['rejection_detail'], // 0026
+  render_jobs: ['progress'], // 0026
+  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key'], // 0026
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
