@@ -234,4 +234,50 @@ describe.skipIf(!enabled)('logos: SVG first (built app in Chromium)', () => {
       .toBe(true);
     await studio.close();
   }, 90_000);
+  it('a newer version of a pinned logo: the Studio explains why it cannot insert it; the brand system offers to use it', async () => {
+    const secondary = backend.assets.find((a) => a.name === 'acme-stacked.svg');
+    if (!secondary?.file) throw new Error('the uploaded logo is missing');
+    const pinned = secondary.file.versionId;
+    secondary.file = { ...secondary.file, versionId: `${pinned}_v2`, previousVersionIds: [pinned] };
+
+    const doc = backend.createDocument('Logo layout 2', {
+      ...fixtureDocument(),
+      brandVersionId: E2E.brandVersionId,
+    });
+    const studio = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await signIn(studio);
+    await studio.goto(`${origin}${brandPath}/studio/${encodeURIComponent(doc.id)}`);
+    await studio.getByTestId('document-title').waitFor({ timeout: 15_000 });
+    await studio.getByRole('tab', { name: 'Assets' }).click();
+    const variant = studio.getByRole('combobox', { name: 'Logo variant' });
+    await variant.waitFor({ timeout: 15_000 });
+    await variant.click();
+    await studio.getByRole('option', { name: /^Secondary/ }).click();
+    const why = studio.getByTestId('logo-unavailable');
+    await why.waitFor({ timeout: 15_000 });
+    expect(await why.textContent()).toContain('earlier version of this logo');
+    expect(
+      await studio.getByRole('button', { name: 'Insert secondary logo' }).getAttribute('aria-disabled'),
+    ).toBe('true');
+    await studio.close();
+
+    await page.goto(`${origin}${brandPath}/system?section=logo`);
+    await page.getByRole('heading', { level: 1 }).waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: /^Edit / }).click({ timeout: 15_000 });
+    const editor = page.getByTestId('brand-kit-editor');
+    const newer = editor.getByTestId('logo-newer-secondary');
+    await newer.waitFor({ timeout: 15_000 });
+    await newer.getByRole('button', { name: 'Use the newer version' }).click();
+    await expect.poll(() => editor.getByTestId('logo-newer-secondary').count()).toBe(0);
+    await editor.getByRole('button', { name: 'Save', exact: true }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Save and apply the brand system?' });
+    await expect
+      .poll(() => dialog.getByRole('button', { name: 'Save and apply' }).isEnabled(), { timeout: 15_000 })
+      .toBe(true);
+    await dialog.getByRole('button', { name: 'Save and apply' }).click();
+    await expect.poll(() => editor.count(), { timeout: 15_000 }).toBe(0);
+    expect(applied().document.logoRules.find((r) => r.variant === 'secondary')?.assetVersionId).toBe(
+      `${pinned}_v2`,
+    );
+  }, 90_000);
 });

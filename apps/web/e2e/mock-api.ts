@@ -40,6 +40,7 @@ import {
 import {
   AssetApprove,
   AssetDownloadRequest,
+  AssetVersionsList,
   INGEST_REJECTION_MESSAGES,
   AssetGet,
   AssetList,
@@ -392,7 +393,7 @@ interface MockAsset {
   version: number;
   createdAt: string;
   /** BSC-2: an uploaded logo's own version (an SVG served as vector); absent for the seeded sample assets. */
-  file?: { versionId: string; mime: string; width: number; height: number };
+  file?: { versionId: string; mime: string; width: number; height: number; previousVersionIds?: string[] };
 }
 const mockAsset = (
   id: string,
@@ -542,7 +543,9 @@ export class MockBackend {
   readonly downloads: Array<z.infer<typeof AssetDownloadRequest>> = [];
   /** BSC-2: the asset whose version this is (an uploaded logo's own version), if any. */
   assetOfVersion(assetVersionId: string): MockAsset | undefined {
-    return this.assets.find((a) => a.file?.versionId === assetVersionId);
+    return this.assets.find(
+      (a) => a.file?.versionId === assetVersionId || a.file?.previousVersionIds?.includes(assetVersionId),
+    );
   }
   /** The last brand system document saved (brand.system.save, or brand.versions.update by an import or agent). */
   savedBrandDocument: BrandSystemDocumentV1 | null = null;
@@ -2371,6 +2374,17 @@ export function createMockRouter(backend: MockBackend) {
             issues: assetIssues(a),
           }));
         return paged(items, input.page);
+      }),
+      /** BSC-2: an asset's versions, newest first (an uploaded logo's current and earlier versions). */
+      versions: t.router({
+        list: query.input(AssetVersionsList).query(({ input }) => {
+          const a = backend.asset(input.assetId);
+          const ids = a.file ? [a.file.versionId, ...(a.file.previousVersionIds ?? [])] : ['av_photo'];
+          return {
+            items: ids.map((id, i) => ({ ...assetVersionOf(a), id, number: ids.length - i })),
+            nextCursor: null,
+          };
+        }),
       }),
       /** The asset as the inspector and the brand kit editor read it. */
       get: query.input(AssetGet).query(({ input }) => {

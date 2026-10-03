@@ -9,10 +9,10 @@ import {
   type LogoRuleV1,
   type LogoVariant,
 } from '@oremedia/contracts/brand';
-import { Badge, Button, EmptyState, Field, Input, Skeleton, Textarea, cn } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
-import { useAsset, useBrandAssetsOfKind, useSignedUrl } from '../assets/use-assets';
+import { useAsset, useAssetVersions, useBrandAssetsOfKind, useSignedUrl } from '../assets/use-assets';
 import { useAssetUpload } from '../assets/use-upload';
 import { UploadStatus } from '../assets/upload-status';
 import { useBrandContext } from './brand-context';
@@ -103,25 +103,70 @@ function LogoImage({
 }
 
 /**
+ * The version of a rule's logo the brand system means: the one it pins, else the asset's current version. `newer` is
+ * the current version when the pinned one has been superseded (only the current version can be used in new work).
+ */
+export function useRuleLogoVersion(rule: Pick<LogoRuleV1, 'assetId' | 'assetVersionId'>) {
+  const asset = useAsset(rule.assetId);
+  const current = asset.data?.currentVersion ?? null;
+  const pinned = rule.assetVersionId;
+  const superseded = Boolean(pinned && current && current.id !== pinned);
+  const versions = useAssetVersions(rule.assetId, superseded);
+  const version =
+    !pinned || current?.id === pinned ? current : (versions.data?.items.find((v) => v.id === pinned) ?? null);
+  return {
+    asset,
+    version,
+    newer: superseded ? current : null,
+    isPending: asset.isPending || (superseded && versions.isPending),
+  };
+}
+
+/**
  * The logo on a checkerboard (transparency) with its clear space drawn around it, then on each ground the rule allows,
- * with its proportions. `assetId` is the rule's logo; the version shown is its current one.
+ * with its proportions: the version the rule pins (else the current one). When a newer version of the logo exists it
+ * says so; in the editor (`onUseNewer`) one click pins the newer version, applied with the rest of the save.
  */
 export function LogoGrounds({
   rule,
   colours,
   label,
+  onUseNewer,
 }: {
   rule: LogoRuleV1;
   colours: Colour[];
   label: string;
+  onUseNewer?: (assetVersionId: string) => void;
 }) {
-  const asset = useAsset(rule.assetId);
-  if (asset.isPending) return <Skeleton label="Loading logo" lines={1} />;
+  const { asset, version: v, newer, isPending } = useRuleLogoVersion(rule);
+  if (isPending) return <Skeleton label="Loading logo" lines={1} />;
   if (asset.isError) return <RequestError error={asset.error} />;
-  const v = asset.data.currentVersion;
+  const notice = newer && (
+    <StatusBanner
+      tone="warning"
+      title="A newer version of this logo exists"
+      description={
+        onUseNewer
+          ? 'The brand system names an earlier version, which new work cannot use. Use the newer one and save.'
+          : 'The brand system names an earlier version, which new work cannot use. Update it in the brand system.'
+      }
+      actions={
+        onUseNewer ? (
+          <Button size="sm" onClick={() => onUseNewer(newer.id)}>
+            Use the newer version
+          </Button>
+        ) : undefined
+      }
+      data-testid={`logo-newer-${rule.variant}`}
+    />
+  );
   if (!v)
     return (
-      <p className="text-xs text-muted-foreground">Processing: the logo appears here once it is ingested.</p>
+      notice || (
+        <p className="text-xs text-muted-foreground">
+          Processing: the logo appears here once it is ingested.
+        </p>
+      )
     );
   const pad = Math.round(Math.min(2, Math.max(0, rule.clearSpaceRatio)) * 32);
   const grounds = rule.allowedBackgroundColourKeys.flatMap((k) => {
@@ -131,6 +176,7 @@ export function LogoGrounds({
   const alt = `${label} logo`;
   return (
     <div className="flex flex-col gap-2" data-testid={`logo-grounds-${rule.variant}`}>
+      {notice}
       <div className="flex flex-wrap items-start gap-2">
         <figure className="flex flex-col gap-1">
           <div
@@ -191,9 +237,15 @@ export function LogoGrounds({
  * Download: the original (an SVG stays vector) or a PNG at a chosen width, as an attachment from the store (BSC-2:
  * never shown inline from the app). The URL is minted on request and lives five minutes.
  */
-export function LogoDownload({ assetId, label }: { assetId: string; label: string }) {
+export function LogoDownload({
+  rule,
+  label,
+}: {
+  rule: Pick<LogoRuleV1, 'assetId' | 'assetVersionId'>;
+  label: string;
+}) {
   const trpc = useTRPC();
-  const asset = useAsset(assetId);
+  const { version: v } = useRuleLogoVersion(rule);
   const intent = useIntentKey();
   const [format, setFormat] = useState<string>('original');
   const [error, setError] = useState<string | null>(null);
@@ -217,7 +269,6 @@ export function LogoDownload({ assetId, label }: { assetId: string; label: strin
       },
     }),
   );
-  const v = asset.data?.currentVersion;
   if (!v) return null;
   const isSvg = v.mime === SVG;
   const options = [
@@ -499,7 +550,12 @@ function LogoSlot({
       {rule?.assetId && (
         <>
           <LogoRights assetId={rule.assetId} />
-          <LogoGrounds rule={rule} colours={colours} label={label} />
+          <LogoGrounds
+            rule={rule}
+            colours={colours}
+            label={label}
+            onUseNewer={(assetVersionId) => onChange({ ...rule, assetVersionId })}
+          />
         </>
       )}
       <div className="flex flex-wrap items-end gap-2">
@@ -623,7 +679,7 @@ function LogoSlot({
               }}
             />
           </Field>
-          <LogoDownload assetId={rule.assetId} label={label} />
+          <LogoDownload rule={rule} label={label} />
         </>
       )}
     </li>
@@ -662,7 +718,7 @@ export function LogoView({ doc }: { doc: Doc }) {
                 </ul>
               </div>
             )}
-            <LogoDownload assetId={r.assetId} label={label} />
+            <LogoDownload rule={r} label={label} />
           </li>
         );
       })}

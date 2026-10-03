@@ -43,6 +43,17 @@ const assetForRule = (rule: LogoRuleV1, eligible: readonly AssetRefDto[]) =>
   );
 
 /**
+ * Why a rule's logo cannot be inserted, in words a person acts on; null when it can. Only the current version of an
+ * approved logo with usage rights is eligible, so a pin to an earlier version blocks insertion until it is updated.
+ */
+export function logoUnavailableReason(rule: LogoRuleV1, eligible: readonly AssetRefDto[]): string | null {
+  if (assetForRule(rule, eligible)) return null;
+  if (rule.assetVersionId && eligible.some((a) => a.assetId === rule.assetId))
+    return 'The brand system names an earlier version of this logo. Update it in the brand system (logos) to use the newer one.';
+  return 'This logo is not usable yet: it needs approval and recorded usage rights (Assets).';
+}
+
+/**
  * A new image element: 40% of the page width (a logo at least its minimum width), centred, aspect from the asset when
  * known. A logo carries the variant it is placed as (BSC-2: the rule's variant, never assumed primary when known).
  */
@@ -115,7 +126,8 @@ export function AssetsPanel({
     else {
       // A logo picked from the grid is placed as the variant the brand system names it (the one allowed on this
       // ground first); a logo no rule names stays primary and the brand check says so.
-      const rules = logoRules.filter((r) => assetForRule(r, [asset]));
+      // Matched by asset: a newer version than the one pinned keeps its variant (the brand check flags the mismatch).
+      const rules = logoRules.filter((r) => r.assetId === asset.assetId);
       const variant = defaultLogoVariant(rules, ground);
       const rule = rules.find((r) => r.variant === variant);
       const element = imageElementFor(
@@ -227,6 +239,7 @@ function BrandLogoInsert({
   const variant = picked ?? suggested;
   const rule = rules.find((r) => r.variant === variant);
   const asset = rule ? assetForRule(rule, logos.items) : undefined;
+  const unavailable = rule ? logoUnavailableReason(rule, logos.items) : null;
   const insert = () => {
     if (!rule || !asset || readOnly) return;
     const element = imageElementFor(page, asset, { variant: rule.variant, minWidthPx: rule.minWidthPx });
@@ -256,8 +269,7 @@ function BrandLogoInsert({
             onValueChange={(v) => setPicked(v as LogoVariant)}
             options={rules.map((r) => ({
               value: r.variant,
-              label: `${LOGO_LABEL[r.variant]}${fits(r) ? ' (suits this background)' : ''}${assetForRule(r, logos.items) ? '' : ' (not usable: rights or approval missing)'}`,
-              disabled: !assetForRule(r, logos.items),
+              label: `${LOGO_LABEL[r.variant]}${fits(r) ? ' (suits this background)' : ''}${assetForRule(r, logos.items) ? '' : ' (not usable now)'}`,
             }))}
           />
           {asset && (
@@ -272,7 +284,17 @@ function BrandLogoInsert({
               The brand system does not allow this variant on <code>{ground}</code>.
             </p>
           )}
-          <Button size="sm" disabled={readOnly || !asset} onClick={insert}>
+          {unavailable && (
+            <p className="text-xs text-status-warning" role="status" data-testid="logo-unavailable">
+              {unavailable}
+            </p>
+          )}
+          <Button
+            size="sm"
+            disabled={readOnly || !asset}
+            disabledReason={unavailable ?? undefined}
+            onClick={insert}
+          >
             Insert {variant ? LOGO_LABEL[variant].toLowerCase() : ''} logo
           </Button>
         </>
