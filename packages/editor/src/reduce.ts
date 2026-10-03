@@ -180,6 +180,156 @@ const requireElement = (page: CreativePage, elementId: string, op: Operation['op
   return found;
 };
 
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** Locked pages refuse manual transforms (move, resize, rotate, align, distribute); agents are refused anything (guard). */
+const assertPageUnlocked = (page: CreativePage, op: Operation['op']) => {
+  if (page.locked) throw new OperationError('page_locked', op);
+};
+
+/** An element or anything inside it is locked: a group moves its children, so a locked child pins the group. */
+export function isLockedDeep(el: Element): boolean {
+  return el.locked || (el.type === 'group' && el.children.some(isLockedDeep));
+}
+
+const assertMovable = (el: Element, op: Operation['op']) => {
+  if (isLockedDeep(el)) throw new OperationError('element_locked', op);
+};
+
+/** Group children carry page-absolute transforms (scene.ts), so moving a group moves every descendant. */
+function translate(el: Element, dx: number, dy: number): Element {
+  const t = el.transform;
+  const moved = { ...el, transform: { ...t, x: round2(t.x + dx), y: round2(t.y + dy) } } as Element;
+  if (moved.type === 'group') return { ...moved, children: moved.children.map((c) => translate(c, dx, dy)) };
+  return moved;
+}
+
+/** Resizing a group scales its descendants' boxes about the group's top-left corner. */
+function scaleWithin(el: Element, origin: { x: number; y: number }, sx: number, sy: number): Element {
+  const t = el.transform;
+  const scaled = {
+    ...el,
+    transform: {
+      ...t,
+      x: round2(origin.x + (t.x - origin.x) * sx),
+      y: round2(origin.y + (t.y - origin.y) * sy),
+      width: Math.max(1, round2(t.width * sx)),
+      height: Math.max(1, round2(t.height * sy)),
+    },
+  } as Element;
+  if (scaled.type === 'group')
+    return { ...scaled, children: scaled.children.map((c) => scaleWithin(c, origin, sx, sy)) };
+  return scaled;
+}
+
+/** The axis-aligned box enclosing an element's transform rotated about its centre. */
+export function footprintOf(t: Element['transform']): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  if (!t.rotation) return { x: t.x, y: t.y, width: t.width, height: t.height };
+  const rad = (t.rotation * Math.PI) / 180;
+  const w = Math.abs(t.width * Math.cos(rad)) + Math.abs(t.height * Math.sin(rad));
+  const h = Math.abs(t.width * Math.sin(rad)) + Math.abs(t.height * Math.cos(rad));
+  return { x: t.x + t.width / 2 - w / 2, y: t.y + t.height / 2 - h / 2, width: w, height: h };
+}
+
+/** The box enclosing a set of boxes. */
+export function boundsOf(boxes: ReadonlyArray<{ x: number; y: number; width: number; height: number }>) {
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.width));
+  const bottom = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+/** Every element id in a tree (groups' children included), in paint order. */
+const idsIn = (elements: readonly Element[]): string[] =>
+  elements.flatMap((e) => [e.id, ...(e.type === 'group' ? idsIn(e.children) : [])]);
+
+const withIds = (el: Element, map: Readonly<Record<string, string>>): Element => {
+  const id = map[el.id] as string;
+  if (el.type === 'group') return { ...el, id, children: el.children.map((c) => withIds(c, map)) };
+  return { ...el, id };
+};
+
+/** The new top-left of each element when aligned (spec: to the selection's bounds or to the page). */
+function alignedPositions(
+  page: CreativePage,
+  elements: Element[],
+  align: Extract<Operation, { op: 'alignElements' }>['align'],
+  relativeTo: 'selection' | 'page',
+): Map<string, { x: number; y: number }> {
+  const b =
+    relativeTo === 'page'
+      ? { x: 0, y: 0, width: page.width, height: page.height }
+      : boundsOf(elements.map((e) => e.transform));
+  const out = new Map<string, { x: number; y: number }>();
+  for (const el of elements) {
+    const t = el.transform;
+    let { x, y } = t;
+    if (align === 'left') x = b.x;
+    if (align === 'center') x = b.x + (b.width - t.width) / 2;
+    if (align === 'right') x = b.x + b.width - t.width;
+    if (align === 'top') y = b.y;
+    if (align === 'middle') y = b.y + (b.height - t.height) / 2;
+    if (align === 'bottom') y = b.y + b.height - t.height;
+    out.set(el.id, { x: round2(x), y: round2(y) });
+  }
+  return out;
+}
+
+/**
+ * Equal gaps between boxes along the axis, in their current order on it: within the span from the first box to the
+ * last (selection) or across the page with the same gap at both edges (page).
+ */
+function distributedPositions(
+  page: CreativePage,
+  elements: Element[],
+  axis: 'horizontal' | 'vertical',
+  relativeTo: 'selection' | 'page',
+): Map<string, { x: number; y: number }> {
+  const pos = (e: Element) => (axis === 'horizontal' ? e.transform.x : e.transform.y);
+  const len = (e: Element) => (axis === 'horizontal' ? e.transform.width : e.transform.height);
+  const sorted = [...elements].sort((a, b) => pos(a) - pos(b) || a.id.localeCompare(b.id));
+  const total = sorted.reduce((sum, e) => sum + len(e), 0);
+  let start: number;
+  let gap: number;
+  if (relativeTo === 'page') {
+    const span = axis === 'horizontal' ? page.width : page.height;
+    gap = (span - total) / (sorted.length + 1);
+    start = gap;
+  } else {
+    const first = sorted[0] as Element;
+    const last = sorted[sorted.length - 1] as Element;
+    start = pos(first);
+    gap = (pos(last) + len(last) - start - total) / (sorted.length - 1);
+  }
+  const out = new Map<string, { x: number; y: number }>();
+  let cursor = start;
+  for (const el of sorted) {
+    const at = round2(cursor);
+    out.set(el.id, axis === 'horizontal' ? { x: at, y: el.transform.y } : { x: el.transform.x, y: at });
+    cursor += len(el) + gap;
+  }
+  return out;
+}
+
+/** Applies new top-left positions to elements found anywhere on the page (groups move their descendants). */
+function moveAll(page: CreativePage, positions: Map<string, { x: number; y: number }>, op: Operation['op']) {
+  for (const [id, p] of positions) {
+    const { parent, index, element } = requireElement(page, id, op);
+    parent[index] = translate(element, p.x - element.transform.x, p.y - element.transform.y);
+  }
+}
+
+const distinctElements = (page: CreativePage, ids: readonly string[], op: Operation['op']): Element[] => {
+  if (new Set(ids).size !== ids.length) throw new OperationError('duplicate_element_ids', op);
+  return ids.map((id) => requireElement(page, id, op).element);
+};
+
 const STYLE_KEYS_BY_TYPE: Record<string, ReadonlySet<string>> = {
   text: new Set([
     'typeRole',
@@ -256,16 +406,24 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
     }
     case 'moveElement': {
       const page = pageOf(next, op.pageId, op.op);
+      assertPageUnlocked(page, op.op);
       const { parent, index, element } = requireElement(page, op.elementId, op.op);
-      if (element.locked) throw new OperationError('element_locked', op.op);
-      parent[index] = { ...element, transform: { ...element.transform, x: op.x, y: op.y } };
+      assertMovable(element, op.op);
+      if (element.type === 'group')
+        parent[index] = translate(element, op.x - element.transform.x, op.y - element.transform.y);
+      else parent[index] = { ...element, transform: { ...element.transform, x: op.x, y: op.y } };
       return next;
     }
     case 'resizeElement': {
       const page = pageOf(next, op.pageId, op.op);
+      assertPageUnlocked(page, op.op);
       const { parent, index, element } = requireElement(page, op.elementId, op.op);
-      if (element.locked) throw new OperationError('element_locked', op.op);
-      parent[index] = { ...element, transform: { ...element.transform, width: op.width, height: op.height } };
+      assertMovable(element, op.op);
+      const t = element.transform;
+      if (element.type === 'group') {
+        const scaled = scaleWithin(element, t, op.width / t.width, op.height / t.height);
+        parent[index] = { ...scaled, transform: { ...t, width: op.width, height: op.height } };
+      } else parent[index] = { ...element, transform: { ...t, width: op.width, height: op.height } };
       return next;
     }
     case 'reorderElement': {
@@ -327,13 +485,153 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
       const format = formatFor(op.formatKey);
       if (!format) throw new OperationError('unknown_format', op.op);
       if (next.pages.length >= 20) throw new OperationError('too_many_pages', op.op);
-      next.pages.push(reflow(source, format.key, format.width, format.height));
+      const variant = reflow(source, format.key, format.width, format.height);
+      if (next.pages.some((p) => p.id === variant.id)) throw new OperationError('duplicate_page_id', op.op);
+      next.pages.push(variant);
       return next;
     }
     case 'setLock': {
       const page = pageOf(next, op.pageId, op.op);
       const { parent, index, element } = requireElement(page, op.elementId, op.op);
       parent[index] = { ...element, locked: op.locked };
+      return next;
+    }
+    case 'groupElements': {
+      const page = pageOf(next, op.pageId, op.op);
+      if (locate(page.elements, op.groupId)) throw new OperationError('duplicate_element_id', op.op);
+      const members = distinctElements(page, op.elementIds, op.op);
+      const indices = op.elementIds.map((id) => page.elements.findIndex((e) => e.id === id));
+      if (indices.some((i) => i < 0)) throw new OperationError('nested_element', op.op);
+      if (members.some((m) => m.type === 'background'))
+        throw new OperationError('cannot_group_background', op.op);
+      if (members.some(isLockedDeep)) throw new OperationError('element_locked', op.op);
+      const ordered = [...indices].sort((a, b) => a - b);
+      const children = ordered.map((i) => page.elements[i] as Element);
+      const box = boundsOf(children.map((c) => footprintOf(c.transform)));
+      const group: Element = {
+        id: op.groupId,
+        name: op.name ?? 'Group',
+        type: 'group',
+        locked: false,
+        visible: true,
+        opacity: 1,
+        protected: false,
+        transform: {
+          x: round2(box.x),
+          y: round2(box.y),
+          width: Math.max(1, round2(box.width)),
+          height: Math.max(1, round2(box.height)),
+          rotation: 0,
+        },
+        children,
+      };
+      const front = ordered[ordered.length - 1] as number;
+      page.elements = page.elements.filter((_, i) => !ordered.includes(i));
+      page.elements.splice(front - ordered.length + 1, 0, group);
+      return next;
+    }
+    case 'ungroupElement': {
+      const page = pageOf(next, op.pageId, op.op);
+      const index = page.elements.findIndex((e) => e.id === op.elementId);
+      const group = page.elements[index];
+      if (!group) {
+        requireElement(page, op.elementId, op.op);
+        throw new OperationError('nested_element', op.op);
+      }
+      if (group.type !== 'group') throw new OperationError('not_a_group', op.op);
+      if (group.locked) throw new OperationError('element_locked', op.op);
+      const children =
+        group.opacity === 1
+          ? group.children
+          : group.children.map((c) => ({ ...c, opacity: round2(c.opacity * group.opacity) }) as Element);
+      page.elements.splice(index, 1, ...children);
+      return next;
+    }
+    case 'setRotation': {
+      const page = pageOf(next, op.pageId, op.op);
+      assertPageUnlocked(page, op.op);
+      const { parent, index, element } = requireElement(page, op.elementId, op.op);
+      assertMovable(element, op.op);
+      // Group children carry their own page-absolute transforms; a group is rotated by rotating its members.
+      if (element.type === 'group') throw new OperationError('group_rotation_unsupported', op.op);
+      parent[index] = { ...element, transform: { ...element.transform, rotation: op.rotation } };
+      return next;
+    }
+    case 'setMask': {
+      const page = pageOf(next, op.pageId, op.op);
+      const { parent, index, element } = requireElement(page, op.elementId, op.op);
+      if (element.type !== 'image') throw new OperationError('not_an_image', op.op);
+      const { mask: _old, ...rest } = element;
+      parent[index] = op.mask ? { ...rest, mask: { ...op.mask } } : rest;
+      return next;
+    }
+    case 'removePage': {
+      const index = next.pages.findIndex((p) => p.id === op.pageId);
+      const page = next.pages[index];
+      if (!page) throw new OperationError('page_not_found', op.op);
+      if (page.locked) throw new OperationError('page_locked', op.op);
+      if (next.pages.length <= 1) throw new OperationError('last_page', op.op);
+      next.pages.splice(index, 1);
+      return next;
+    }
+    case 'duplicatePage': {
+      const sourceIndex = next.pages.findIndex((p) => p.id === op.pageId);
+      const source = next.pages[sourceIndex];
+      if (!source) throw new OperationError('page_not_found', op.op);
+      if (next.pages.length >= 20) throw new OperationError('too_many_pages', op.op);
+      if (next.pages.some((p) => p.id === op.newPageId)) throw new OperationError('duplicate_page_id', op.op);
+      const sourceIds = idsIn(source.elements);
+      const mapped = Object.keys(op.elementIdMap);
+      if (mapped.length !== sourceIds.length || sourceIds.some((id) => op.elementIdMap[id] === undefined))
+        throw new OperationError('element_id_map_incomplete', op.op);
+      const existing = new Set(next.pages.flatMap((p) => idsIn(p.elements)));
+      const fresh = Object.values(op.elementIdMap);
+      if (new Set(fresh).size !== fresh.length || fresh.some((id) => existing.has(id)))
+        throw new OperationError('duplicate_element_id', op.op);
+      const { locked: _locked, ...unlocked } = structuredClone(source);
+      const copy: CreativePage = {
+        ...unlocked,
+        id: op.newPageId,
+        name: `${source.name} (copy)`.slice(0, 200),
+        elements: source.elements.map((e) => withIds(structuredClone(e), op.elementIdMap)),
+        layoutConstraints: source.layoutConstraints.map((c) => ({
+          ...c,
+          elementId: op.elementIdMap[c.elementId] ?? c.elementId,
+        })),
+      };
+      const index =
+        op.index === undefined ? sourceIndex + 1 : Math.max(0, Math.min(op.index, next.pages.length));
+      next.pages.splice(index, 0, copy);
+      return next;
+    }
+    case 'reorderPage': {
+      const index = next.pages.findIndex((p) => p.id === op.pageId);
+      if (index < 0) throw new OperationError('page_not_found', op.op);
+      const [page] = next.pages.splice(index, 1);
+      next.pages.splice(Math.max(0, Math.min(op.toIndex, next.pages.length)), 0, page as CreativePage);
+      return next;
+    }
+    case 'setPageLock': {
+      const page = pageOf(next, op.pageId, op.op);
+      // Unlocking removes the key, so a page that was never locked hashes as it did before.
+      if (op.locked) page.locked = true;
+      else delete page.locked;
+      return next;
+    }
+    case 'alignElements': {
+      const page = pageOf(next, op.pageId, op.op);
+      assertPageUnlocked(page, op.op);
+      const members = distinctElements(page, op.elementIds, op.op);
+      for (const m of members) assertMovable(m, op.op);
+      moveAll(page, alignedPositions(page, members, op.align, op.relativeTo), op.op);
+      return next;
+    }
+    case 'distributeElements': {
+      const page = pageOf(next, op.pageId, op.op);
+      assertPageUnlocked(page, op.op);
+      const members = distinctElements(page, op.elementIds, op.op);
+      for (const m of members) assertMovable(m, op.op);
+      moveAll(page, distributedPositions(page, members, op.axis, op.relativeTo), op.op);
       return next;
     }
   }
@@ -402,7 +700,10 @@ export function changedElementIds(batch: Pick<OperationBatch, 'operations'>): st
   const ids = new Set<string>();
   for (const op of batch.operations) {
     if ('elementId' in op) ids.add(op.elementId);
+    if ('elementIds' in op) for (const id of op.elementIds) ids.add(id);
     if (op.op === 'insertElement') ids.add(op.element.id);
+    if (op.op === 'groupElements') ids.add(op.groupId);
+    if (op.op === 'duplicatePage') for (const id of Object.values(op.elementIdMap)) ids.add(id);
     if (op.op === 'applyTemplate') for (const id of Object.values(op.slotBindings)) ids.add(id);
   }
   return [...ids];

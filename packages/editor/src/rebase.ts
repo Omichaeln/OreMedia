@@ -14,14 +14,19 @@ export interface RebaseConflict {
 
 export type RebaseResult = { ok: true; operations: Operation[] } | { ok: false; conflicts: RebaseConflict[] };
 
-/** Page ids an operation touches as a whole (applyTemplate replaces every element on its page; addPage owns the page id). */
+/**
+ * Page ids an operation touches as a whole: applyTemplate replaces every element on its page, removePage takes them
+ * all away; addPage and duplicatePage own the page id they create.
+ */
 const pageScope = (op: Operation): string | null => {
-  if (op.op === 'applyTemplate') return op.pageId;
+  if (op.op === 'applyTemplate' || op.op === 'removePage') return op.pageId;
   if (op.op === 'addPage') return op.page.id;
+  if (op.op === 'duplicatePage') return op.newPageId;
   return null;
 };
 
 const pageOfOp = (op: Operation): string | null => {
+  if (op.op === 'duplicatePage') return op.newPageId;
   if ('pageId' in op) return op.pageId;
   if (op.op === 'addPage') return op.page.id;
   if (op.op === 'createFormatVariant') return op.sourcePageId;

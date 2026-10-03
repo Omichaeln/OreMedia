@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Finding, Operation, OperationBatch } from '@oremedia/contracts/creative';
+import { Finding, OPERATION_NAMES, Operation, OperationBatch } from '@oremedia/contracts/creative';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import type { Tx } from '@oremedia/db';
@@ -20,30 +20,20 @@ const ProposeOutput = z.object({
   findings: z.array(Finding),
 });
 
+/**
+ * The JSON schema the model sees for one operation; the zod contract (Operation) is the authority and parses every
+ * field. The op names come from the contract so a new operation is offered as soon as it exists. STU-1a: locked
+ * elements and pages are refused by the server guard whatever the model sends (architecture principle 2).
+ */
 const OPERATION_INPUT_SCHEMA = {
   type: 'object',
-  description: 'One creative operation (spec 11.3), discriminated by "op".',
+  description:
+    'One creative operation (spec 11.3), discriminated by "op". Elements or pages marked locked (and protected elements such as logos) cannot be changed by agents; such operations are refused.',
   properties: {
-    op: {
-      type: 'string',
-      enum: [
-        'insertElement',
-        'removeElement',
-        'setText',
-        'setStyle',
-        'replaceAsset',
-        'moveElement',
-        'resizeElement',
-        'reorderElement',
-        'setCrop',
-        'applyTemplate',
-        'addPage',
-        'createFormatVariant',
-        'setLock',
-      ],
-    },
+    op: { type: 'string', enum: [...OPERATION_NAMES] },
     pageId: { type: 'string' },
     elementId: { type: 'string' },
+    elementIds: { type: 'array', items: { type: 'string' } },
   },
   required: ['op'],
 };

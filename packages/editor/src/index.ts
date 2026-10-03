@@ -7,6 +7,9 @@ export {
   changedElementIds,
   allElementIds,
   findElement,
+  isLockedDeep,
+  footprintOf,
+  boundsOf,
   OperationError,
   SlotConstraintError,
   validateSlotBindings,
@@ -14,7 +17,7 @@ export {
   type SlotFinding,
   type TemplateDocument,
 } from './reduce';
-export { guardProtected, guardLogoInsertion } from './guard';
+export { guardProtected, guardLocks, guardLogoInsertion } from './guard';
 export { fontFaceDescriptors } from './renderer/scene';
 export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';

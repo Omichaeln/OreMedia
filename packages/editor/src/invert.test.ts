@@ -1,17 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { hashCanonical } from '@oremedia/domain/hash';
-import type { Element, Operation } from '@oremedia/contracts/creative';
+import type { CreativeDocumentV1, CreativePage, Element, Operation } from '@oremedia/contracts/creative';
 import { applyBatch, findElement, type TemplateDocument } from './reduce';
 import { invertBatch } from './invert';
 import { eid, fixtureDocument, ids } from './fixtures';
 
 const P = 'page_1';
 
+/** A complete old → new element id map for duplicatePage. */
+const copyMap = (page: CreativePage): Record<string, string> => {
+  const map: Record<string, string> = {};
+  const walk = (els: Element[]) => {
+    for (const e of els) {
+      map[e.id] = eid(`01HCP${Object.keys(map).length}`);
+      if (e.type === 'group') walk(e.children);
+    }
+  };
+  walk(page.elements);
+  return map;
+};
+
 /** applyBatch(applyBatch(doc, ops), invert) ≡ doc, compared as canonical JSON (spec 11.4 undo). */
-const roundTrips = (ops: Operation[], ctx = {}) => {
+const roundTrips = (ops: Operation[], ctx = {}, mustChange = true) => {
   const doc = fixtureDocument();
   const edited = applyBatch(doc, { operations: ops }, ctx);
-  expect(hashCanonical(edited)).not.toBe(hashCanonical(doc));
+  if (mustChange) expect(hashCanonical(edited)).not.toBe(hashCanonical(doc));
   const inverse = invertBatch(doc, { operations: ops }, ctx);
   if (!inverse.ok) throw new Error(`expected invertible: ${inverse.reason}`);
   const restored = applyBatch(edited, { operations: inverse.operations }, ctx);
@@ -145,23 +158,115 @@ describe('invertBatch (spec 11.4: undo is a new revision whose snapshot equals a
     expect(restored.templateVersionId).toBe('tv_1');
   });
 
-  it('page-level operations without an inverse are reported, never guessed', () => {
+  it('page-level operations invert through removePage, addPage, reorderPage and setPageLock (STU-1a)', () => {
     const doc = fixtureDocument();
-    const variant = invertBatch(doc, {
-      operations: [{ op: 'createFormatVariant', sourcePageId: P, formatKey: 'ig_story_9x16' }],
+    const two = applyBatch(doc, {
+      operations: [{ op: 'addPage', page: { ...doc.pages[0]!, id: 'page_2' } }],
     });
-    expect(variant).toEqual({
-      ok: false,
-      reason: 'no_inverse:createFormatVariant',
-      op: 'createFormatVariant',
-    });
-    const added = invertBatch(doc, {
-      operations: [
-        { op: 'setText', pageId: P, elementId: ids.headline, text: 'x' },
-        { op: 'addPage', page: { ...doc.pages[0]!, id: 'page_2' } },
+    const cases: Array<[string, CreativeDocumentV1, Operation[]]> = [
+      [
+        'createFormatVariant',
+        doc,
+        [{ op: 'createFormatVariant', sourcePageId: P, formatKey: 'ig_story_9x16' }],
       ],
-    });
-    expect(added).toMatchObject({ ok: false, op: 'addPage' });
+      [
+        'addPage with an edit',
+        doc,
+        [
+          { op: 'setText', pageId: P, elementId: ids.headline, text: 'x' },
+          { op: 'addPage', page: { ...doc.pages[0]!, id: 'page_2' } },
+        ],
+      ],
+      [
+        'addPage (locked page)',
+        doc,
+        [{ op: 'addPage', page: { ...doc.pages[0]!, id: 'page_2', locked: true } }],
+      ],
+      ['removePage', two, [{ op: 'removePage', pageId: P }]],
+      ['reorderPage', two, [{ op: 'reorderPage', pageId: 'page_2', toIndex: 0 }]],
+      ['setPageLock', doc, [{ op: 'setPageLock', pageId: P, locked: true }]],
+      [
+        'duplicatePage',
+        doc,
+        [{ op: 'duplicatePage', pageId: P, newPageId: 'page_copy', elementIdMap: copyMap(doc.pages[0]!) }],
+      ],
+    ];
+    for (const [name, before, ops] of cases) {
+      const edited = applyBatch(before, { operations: ops });
+      expect(hashCanonical(edited), name).not.toBe(hashCanonical(before));
+      const inverse = invertBatch(before, { operations: ops });
+      if (!inverse.ok) throw new Error(`${name}: ${inverse.reason}`);
+      expect(hashCanonical(applyBatch(edited, { operations: inverse.operations })), name).toBe(
+        hashCanonical(before),
+      );
+    }
+  });
+
+  it('round-trips the STU-1a element operations', () => {
+    const group: Operation = {
+      op: 'groupElements',
+      pageId: P,
+      elementIds: [ids.body, ids.image],
+      groupId: eid('01HGRP'),
+      name: 'Pair',
+    };
+    roundTrips([group]);
+    roundTrips([group, { op: 'moveElement', pageId: P, elementId: eid('01HGRP'), x: 33.3, y: 41.7 }]);
+    roundTrips([
+      group,
+      { op: 'resizeElement', pageId: P, elementId: eid('01HGRP'), width: 333, height: 777 },
+    ]);
+    roundTrips([
+      group,
+      { op: 'setStyle', pageId: P, elementId: eid('01HGRP'), patch: { opacity: 0.5 } },
+      {
+        op: 'ungroupElement',
+        pageId: P,
+        elementId: eid('01HGRP'),
+      },
+    ]);
+    roundTrips([{ op: 'setRotation', pageId: P, elementId: ids.image, rotation: 12.5 }]);
+    roundTrips([{ op: 'setMask', pageId: P, elementId: ids.image, mask: { kind: 'circle' } }]);
+    roundTrips([
+      { op: 'setMask', pageId: P, elementId: ids.image, mask: { kind: 'rounded', radius: 24 } },
+      { op: 'setMask', pageId: P, elementId: ids.image, mask: null },
+      { op: 'setMask', pageId: P, elementId: ids.image, mask: { kind: 'rect' } },
+    ]);
+    for (const align of ['left', 'center', 'right', 'top', 'middle', 'bottom'] as const)
+      for (const relativeTo of ['selection', 'page'] as const)
+        roundTrips(
+          [
+            {
+              op: 'alignElements',
+              pageId: P,
+              elementIds: [ids.headline, ids.body, ids.image],
+              align,
+              relativeTo,
+            },
+          ],
+          {},
+          false, // the fixture's elements share a left edge
+        );
+    for (const axis of ['horizontal', 'vertical'] as const)
+      roundTrips([
+        {
+          op: 'distributeElements',
+          pageId: P,
+          elementIds: [ids.headline, ids.body, ids.image],
+          axis,
+          relativeTo: 'page',
+        },
+      ]);
+    roundTrips([
+      group,
+      {
+        op: 'alignElements',
+        pageId: P,
+        elementIds: [eid('01HGRP'), ids.headline],
+        align: 'right',
+        relativeTo: 'page',
+      },
+    ]);
   });
 
   it('reports structural problems instead of producing a wrong inverse', () => {
