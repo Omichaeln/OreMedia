@@ -230,6 +230,58 @@ function unsafeRemovals(removed: Removed[]): string[] {
   return unsafe;
 }
 
+/** At most this many internal entities, each a short literal: Illustrator declares about ten namespace URIs. */
+const SVG_MAX_ENTITIES = 32;
+const SVG_MAX_ENTITY_VALUE = 512;
+const SVG_DOCTYPE = /<!DOCTYPE\s+svg\b([^[>]*)(?:\[([\s\S]*?)\]\s*)?>/i;
+const SVG_ENTITY = /^<!ENTITY\s+([A-Za-z_][\w.-]*)\s+(?:"([^"]*)"|'([^']*)')\s*>$/;
+
+/**
+ * Design tools write a DOCTYPE: Affinity and Illustrator's SVG 1.1 export reference the public SVG 1.1 DTD, and
+ * Illustrator's "preserve editing" export declares its namespace URIs as internal entities (`&ns_ai;`). Neither
+ * is needed to draw the file. The DOCTYPE is removed (nothing fetches the external DTD) and internal entities are
+ * expanded once, in place, only when each is a short literal with no markup or further references: external
+ * (SYSTEM/PUBLIC) and parameter entities, nested references and anything else in the internal subset are refused,
+ * which closes XXE and entity-expansion attacks. Anything outside the one leading DOCTYPE is refused as before.
+ */
+export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok: false; detail: string } {
+  const match = SVG_DOCTYPE.exec(text);
+  if (!match)
+    return /<!DOCTYPE|<!ENTITY/i.test(text)
+      ? { ok: false, detail: 'entity_declaration' }
+      : { ok: true, text };
+  const before = text.slice(0, match.index);
+  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own.
+  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*$/.test(before))
+    return { ok: false, detail: 'entity_declaration' };
+  const rest = text.slice(match.index + match[0].length);
+  if (/<!DOCTYPE|<!ENTITY/i.test(rest)) return { ok: false, detail: 'entity_declaration' };
+  const entities = new Map<string, string>();
+  const subset = (match[2] ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
+  if (subset) {
+    const declarations = subset.match(/<![\s\S]*?>/g) ?? [];
+    if (declarations.join('').replace(/\s/g, '') !== subset.replace(/\s/g, ''))
+      return { ok: false, detail: 'entity_declaration' };
+    if (declarations.length > SVG_MAX_ENTITIES) return { ok: false, detail: 'entity_declaration' };
+    for (const declaration of declarations) {
+      const [, name, double, single] = SVG_ENTITY.exec(declaration.trim()) ?? [];
+      const value = double ?? single ?? '';
+      if (!name || value.length > SVG_MAX_ENTITY_VALUE || /[&%<>]/.test(value))
+        return { ok: false, detail: 'entity_declaration' };
+      entities.set(name, value);
+    }
+  }
+  let unknown = false;
+  const body = rest.replace(/&([A-Za-z_][\w.-]*);/g, (ref, name: string) => {
+    const value = entities.get(name);
+    if (value !== undefined) return value.replace(/"/g, '&quot;');
+    if (!['amp', 'lt', 'gt', 'quot', 'apos'].includes(name)) unknown = true;
+    return ref;
+  });
+  if (unknown) return { ok: false, detail: 'entity_declaration' };
+  return { ok: true, text: before + body };
+}
+
 /**
  * SVG: DOMPurify SVG profile with only fragment and data-image URIs allowed (scripts, event handlers and external
  * references stripped), then a PNG preview rasterised with sharp. A file from which active or external content
@@ -237,9 +289,9 @@ function unsafeRemovals(removed: Removed[]): string[] {
  */
 async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<IngestStepResult<SanitisedFile>> {
   const maxPixels = opts.maxPixels ?? MAX_IMAGE_PIXELS;
-  const text = bytes.toString('utf8').replace(/^\uFEFF/, '');
-  // Entity declarations are never needed by a design file and are the vector for XXE and entity expansion.
-  if (/<!ENTITY|<!DOCTYPE/i.test(text)) return reject('svg_unsafe_content', 'entity_declaration');
+  const prolog = stripSvgDoctype(bytes.toString('utf8').replace(/^\uFEFF/, ''));
+  if (!prolog.ok) return reject('svg_unsafe_content', prolog.detail);
+  const text = prolog.text;
   const clean = DOMPurify.sanitize(text, {
     USE_PROFILES: { svg: true, svgFilters: true },
     // `use` is outside DOMPurify's SVG profile because of external references; with hrefs limited to fragments it is safe.

@@ -214,6 +214,68 @@ describe('ingest step 4: sanitise SVG', () => {
       detail: 'entity_declaration',
     });
   });
+  it.each([
+    [
+      'the public SVG 1.1 DOCTYPE (Affinity, Illustrator SVG 1.1)',
+      `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<svg ${SVG_NS} width="200" height="80" viewBox="0 0 200 80"><path fill="#1d3557" d="M10,10h50v60H10z"/></svg>`,
+    ],
+    [
+      "Illustrator's namespace entities (preserve editing)",
+      `<?xml version="1.0" encoding="utf-8"?>\n<!-- Generator: Adobe Illustrator 27.0.0 -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n\t<!ENTITY ns_extend "http://ns.adobe.com/Extensibility/1.0/">\n\t<!ENTITY ns_ai "http://ns.adobe.com/AdobeIllustrator/10.0/">\n]>\n<svg version="1.1" xmlns:x="&ns_extend;" xmlns:i="&ns_ai;" ${SVG_NS} width="200" height="80" viewBox="0 0 200 80"><path fill="#1d3557" d="M10,10h50v60H10z"/></svg>`,
+    ],
+  ])('accepts a design-tool SVG with %s and drops the DOCTYPE', async (_label, svg) => {
+    const r = await sanitise(Buffer.from(svg), 'image/svg+xml', 'svg');
+    expect(r).toMatchObject({ ok: true, width: 200, height: 80 });
+    if (!r.ok) return;
+    const text = r.bytes.toString('utf8');
+    expect(text).not.toMatch(/<!DOCTYPE|<!ENTITY|&ns_/);
+    expect(text).toContain('M10,10h50v60H10z');
+  });
+  it.each([
+    [
+      'an external entity',
+      `<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg ${SVG_NS} width="10" height="10"><text>&x;</text></svg>`,
+    ],
+    [
+      'a public external entity',
+      `<!DOCTYPE svg [<!ENTITY x PUBLIC "-//X//EN" "http://evil.example/x">]><svg ${SVG_NS} width="10" height="10"><text>&x;</text></svg>`,
+    ],
+    ['a parameter entity', `<!DOCTYPE svg [<!ENTITY % p "x">]><svg ${SVG_NS} width="10" height="10"/>`],
+    [
+      'nested entity references (expansion)',
+      `<!DOCTYPE svg [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]><svg ${SVG_NS} width="10" height="10"><text>&b;</text></svg>`,
+    ],
+    [
+      'markup inside an entity',
+      `<!DOCTYPE svg [<!ENTITY a "<script>alert(1)</script>">]><svg ${SVG_NS} width="10" height="10"><text>&a;</text></svg>`,
+    ],
+    [
+      'an undeclared entity reference',
+      `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg ${SVG_NS} width="10" height="10"><text>&undeclared;</text></svg>`,
+    ],
+    [
+      'an element declaration in the subset',
+      `<!DOCTYPE svg [<!ELEMENT svg ANY>]><svg ${SVG_NS} width="10" height="10"/>`,
+    ],
+    [
+      'a second DOCTYPE in the body',
+      `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg ${SVG_NS} width="10" height="10"><!DOCTYPE svg></svg>`,
+    ],
+    [
+      'a DOCTYPE after content',
+      `<svg ${SVG_NS} width="10" height="10"/><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">`,
+    ],
+    [
+      'too many entities',
+      `<!DOCTYPE svg [${Array.from({ length: 40 }, (_, i) => `<!ENTITY e${i} "v">`).join('')}]><svg ${SVG_NS} width="10" height="10"/>`,
+    ],
+  ])('still rejects a DOCTYPE carrying %s', async (_label, svg) => {
+    expect(await sanitise(Buffer.from(svg), 'image/svg+xml', 'svg')).toMatchObject({
+      ok: false,
+      reason: 'svg_unsafe_content',
+      detail: 'entity_declaration',
+    });
+  });
   it('accepts a clean SVG, keeps internal references and rasterises a PNG preview', async () => {
     const r = await sanitise(Buffer.from(safeSvg), 'image/svg+xml', 'svg');
     expect(r.ok).toBe(true);
