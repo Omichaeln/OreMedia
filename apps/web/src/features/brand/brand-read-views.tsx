@@ -314,37 +314,8 @@ export function changedSections(next: Doc, base: Doc): Array<{ key: string; labe
   );
 }
 
-const LOGO_LABEL: Record<Doc['logoRules'][number]['variant'], string> = {
-  primary: 'Primary',
-  reversed: 'Reversed',
-  mono: 'Mono',
-  mark_only: 'Mark only',
-};
-
-export function LogoView({ doc }: { doc: Doc }) {
-  if (doc.logoRules.length === 0) return nothing('logo rules');
-  return (
-    <ul className="grid gap-4 sm:grid-cols-2">
-      {doc.logoRules.map((r) => (
-        <li
-          key={`${r.variant}-${r.assetId}`}
-          className="flex gap-3 rounded-md border border-border p-3 text-sm"
-        >
-          <AssetById assetId={r.assetId} className="h-16 w-24 shrink-0" />
-          <div className="min-w-0">
-            <p className="font-medium">{LOGO_LABEL[r.variant]}</p>
-            <p className="text-muted-foreground">
-              Clear space {r.clearSpaceRatio}× · min {r.minWidthPx} px
-            </p>
-            {r.allowedBackgroundColourKeys.length > 0 && (
-              <p className="text-xs text-muted-foreground">On {r.allowedBackgroundColourKeys.join(', ')}</p>
-            )}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
+/** BSC-2: the logo read view lives with the logo editor (vector previews on grounds, guidance, download). */
+export { LogoView } from './logo-rules';
 
 const REFERENCE_PATTERN = 'reference-imagery';
 
