@@ -93,6 +93,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
       .toBe('Studio');
     expect(await nav.count()).toBe(1);
+    await page.getByRole('button', { name: 'Blank canvas…' }).click();
     await page.getByLabel('New document title').fill('Studio index document');
     await page.getByRole('button', { name: 'Create and open' }).click();
     await page.waitForURL('**/studio/*', { timeout: 15_000 });

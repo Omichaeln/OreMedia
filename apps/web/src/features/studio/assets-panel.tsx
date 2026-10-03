@@ -20,6 +20,8 @@ export interface AssetsPanelProps {
   onIntent: (batch: IntentBatch) => void;
   /** The brand system's logo rules (BSC-2): which logo each variant is, and the grounds it may sit on. */
   logoRules?: LogoRuleV1[];
+  /** STU-1a: a newly placed image or logo is selected so it can be arranged, cropped or masked at once. */
+  onInserted?: (elementId: string) => void;
 }
 
 /** The palette key of the page's background fill, when it has one. */
@@ -99,6 +101,7 @@ export function AssetsPanel({
   readOnly,
   onIntent,
   logoRules = [],
+  onInserted,
 }: AssetsPanelProps) {
   const [query, setQuery] = useState('');
   const ground = pageGround(page);
@@ -124,6 +127,7 @@ export function AssetsPanel({
         summary: `Fill ${area.name}`,
         origin: 'user',
       });
+      onInserted?.(image.id);
       return;
     }
     if (replaceable && selected)
@@ -156,6 +160,7 @@ export function AssetsPanel({
         summary: `Insert ${element.name}`,
         origin: 'user',
       });
+      onInserted?.(element.id);
     }
   };
 

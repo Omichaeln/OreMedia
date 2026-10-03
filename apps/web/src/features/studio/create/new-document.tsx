@@ -159,7 +159,7 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
             id="gallery-channel"
             size="sm"
             value={filters.channel}
-            onValueChange={(channel) => set({ channel })}
+            onValueChange={(channel) => channel && set({ channel })}
             options={[
               { value: 'all', label: 'All channels' },
               ...CHANNELS.map((c) => ({ value: c.key, label: c.label })),
@@ -171,7 +171,7 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
             id="gallery-format"
             size="sm"
             value={filters.format}
-            onValueChange={(format) => set({ format })}
+            onValueChange={(format) => format && set({ format })}
             options={[
               { value: 'all', label: 'All formats' },
               ...formatsInUse.map((k) => ({ value: k, label: formatLabel(k) })),
@@ -183,7 +183,7 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
             id="gallery-source"
             size="sm"
             value={filters.source}
-            onValueChange={(source) => set({ source: source as SourceFilter })}
+            onValueChange={(source) => source && set({ source: source as SourceFilter })}
             options={[
               { value: 'all', label: 'Built-in and brand templates' },
               { value: 'builtin', label: 'Built-in starters' },
@@ -395,9 +395,9 @@ function GalleryCard({
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <h4 id={headingId} className="text-sm font-semibold">
+        <h3 id={headingId} className="text-sm font-semibold">
           {entry.name}
-        </h4>
+        </h3>
         <Badge glyph={false}>{entry.badge}</Badge>
         <Badge tone="neutral" glyph={false}>
           {contentTypeOf(entry.contentType).label}
@@ -620,7 +620,9 @@ function BlankDialog({
     contentTypeOf(initialType).available ? initialType : 'social_post',
   );
   const option = contentTypeOf(type);
-  const [formatKey, setFormatKey] = useState(option.formats[0] ?? 'square_1080');
+  const [picked, setPicked] = useState<string | null>(null);
+  // The picked format when the type offers it, else the type's default (changing the type resets it).
+  const formatKey = picked && option.formats.includes(picked) ? picked : (option.formats[0] ?? 'square_1080');
   const format = formatFor(formatKey);
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -646,8 +648,7 @@ function BlankDialog({
               id="blank-type"
               value={type}
               onValueChange={(v) => {
-                setType(v as ContentType);
-                setFormatKey(contentTypeOf(v as ContentType).formats[0] ?? 'square_1080');
+                if (v) setType(v as ContentType);
               }}
               options={startable.map((c) => ({ value: c.key, label: c.label }))}
             />
@@ -664,7 +665,9 @@ function BlankDialog({
             <Select
               id="blank-format"
               value={formatKey}
-              onValueChange={setFormatKey}
+              onValueChange={(v) => {
+                if (v) setPicked(v);
+              }}
               options={option.formats.map((k) => ({ value: k, label: formatLabel(k) }))}
             />
           </Field>

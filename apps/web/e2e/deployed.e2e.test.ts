@@ -88,7 +88,7 @@ describe.skipIf(!webOrigin)('deployed origin (real web, api and fixtures in Chro
     await expect
       .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 30_000 })
       .toBe('Studio');
-    await page.getByRole('button', { name: 'Create and open' }).waitFor({ timeout: 30_000 });
+    await page.getByRole('button', { name: 'Blank canvas…' }).waitFor({ timeout: 30_000 });
   }, 90_000);
 
   it('U2: the brand system shows the saved brand system of the fixture brand', async () => {

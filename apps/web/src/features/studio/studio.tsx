@@ -376,6 +376,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   selection={state.selection}
                   readOnly={readOnly}
                   onIntent={studio.applyIntent}
+                  onInserted={(id) => selectNew([id])}
                 />
               </TabPanel>
               <TabPanel value="templates">
