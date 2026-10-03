@@ -51,6 +51,17 @@ export function parseClassification(text: string): MessageClassificationValue {
   return parsed.success ? parsed.data : 'other';
 }
 
+/**
+ * The comment cannot close its own markers: format characters are stripped, the text NFKC-normalised (so a
+ * full-width or zero-width-split `<<<` is caught) and every `<<<` replaced.
+ */
+const neutraliseComment = (text: string): string =>
+  text
+    .slice(0, 4000)
+    .replace(/\p{Cf}/gu, '')
+    .normalize('NFKC')
+    .replace(/<<</g, '[marker removed]');
+
 export async function classifyComment(tenantId: string, text: string): Promise<MessageClassificationValue> {
   const cfg = currentClassifier();
   await assertRoutingAllowed(tenantId, cfg.adapter.provider, cfg.modelId); // before EVERY call (spec 12.7)
@@ -60,7 +71,7 @@ export async function classifyComment(tenantId: string, text: string): Promise<M
     messages: [
       {
         role: 'user',
-        content: [{ type: 'text', text: `<<<comment>>>\n${text.slice(0, 4000)}\n<<<end comment>>>` }],
+        content: [{ type: 'text', text: `<<<comment>>>\n${neutraliseComment(text)}\n<<<end comment>>>` }],
       },
     ],
     tools: [],
