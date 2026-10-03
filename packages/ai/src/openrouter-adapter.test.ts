@@ -145,6 +145,20 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
     await expect(run(200, { error: { code: 400, message: 'bad' } })).rejects.toBeInstanceOf(
       ValidationFailedError,
     );
+    // The status and the provider's own message reach the operator (a failed evaluation records the message).
+    const named = (await run(401, { error: { message: 'No auth credentials  found\n' } }).catch(
+      (e: unknown) => e,
+    )) as ValidationFailedError;
+    expect(named.message).toBe('The model provider rejected the request (401: No auth credentials found)');
+    expect(named.details).toEqual([
+      { path: 'model', issue: 'provider rejected the request (401: No auth credentials found)' },
+    ]);
+    const bare = (await run(404, 'not json').catch((e: unknown) => e)) as ValidationFailedError;
+    expect(bare.message).toBe('The model provider rejected the request (404)');
+    const inBody = (await run(200, { error: { code: 400, message: 'x'.repeat(300) } }).catch(
+      (e: unknown) => e,
+    )) as ValidationFailedError;
+    expect(inBody.message).toBe(`The model provider rejected the request (400: ${'x'.repeat(200)})`);
   });
 
   it('treats a connection failure or timeout as unavailable', async () => {
