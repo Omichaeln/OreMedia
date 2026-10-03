@@ -5,7 +5,12 @@ import { Badge, Button, EmptyState, Panel, StatusBanner } from '@oremedia/ui';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { useBrandVersion } from '../brand/use-brand';
 import { brandPath, useBrandContext } from '../brand/brand-context';
-import { useAssetUrls } from '../assets/use-assets';
+import { useAssetUrls, useBrandFonts, useGeneratedAssetIds } from '../assets/use-assets';
+import { useStarterBrand } from './create/use-starter-brand';
+import { DocumentTitle } from './document-title';
+import { InsertToolbar } from './insert-toolbar';
+import { newElementId } from '../../lib/ids';
+import type { FontOption } from './properties-panel';
 import { useTheme } from '../../lib/theme';
 import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
@@ -71,6 +76,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const { theme, toggle } = useTheme();
   const readOnly = false;
   const [focusText, setFocusText] = useState(0);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [rightTab, setRightTab] = useState<RightTab>('agent');
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -89,6 +95,25 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const logoUrls = useAssetUrls(logoIds, 'original');
   const assetUrls = new Map([...imageUrls, ...logoUrls]);
   const fontFamilyFor = useDocumentFonts(useMemo(() => fontRefsOf(doc), [doc]));
+  // STU-1a: the brand pieces new text and shapes are made of, the font picker and honest labels for generated images.
+  const starterBrand = useStarterBrand(brandId, state.committed.snapshot.brandVersionId);
+  const kit = starterBrand.brand
+    ? { colours: starterBrand.brand.colours, typeRoles: starterBrand.brand.typeRoles }
+    : null;
+  const brandFonts = useBrandFonts(brandId);
+  const fontOptions: FontOption[] = useMemo(
+    () =>
+      (brandFonts.data?.items ?? []).map((f) => ({
+        assetVersionId: f.assetVersionId,
+        label: [f.family ?? f.name, f.subfamily ?? (f.weight ? String(f.weight) : null)]
+          .filter(Boolean)
+          .join(' '),
+      })),
+    [brandFonts.data],
+  );
+  const generatedIds = useGeneratedAssetIds(
+    useMemo(() => assetVersionIdsOf(doc).filter((id) => !logoIds.includes(id)), [doc, logoIds]),
+  );
   const resolverVersion = `${[...assetUrls.keys()].join(',')}|${[...assetUrls.values()].join(',').length}|${colourTokens.map((c) => c.key + c.value).join(',')}|${fontRefsOf(doc).map(fontFamilyFor).join(',')}`;
 
   const proposalDiff = useMemo(
@@ -114,14 +139,53 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
     canvasRef.current?.querySelector<HTMLElement>('[data-testid="canvas"]')?.focus(); // managed focus on panel change
   };
   const deleteSelected = () => {
-    const id = state.selection[0];
-    const el = page && id ? findElement(page, id) : null;
-    if (!page || !el || el.locked) return;
+    if (!page) return;
+    const removable = state.selection
+      .map((id) => findElement(page, id))
+      .filter((el): el is NonNullable<typeof el> => el !== null && !el.locked);
+    if (removable.length === 0) return;
     studio.applyIntent({
-      operations: [{ op: 'removeElement', pageId: page.id, elementId: el.id }],
-      summary: `Remove ${el.name}`,
+      operations: removable.map((el) => ({
+        op: 'removeElement' as const,
+        pageId: page.id,
+        elementId: el.id,
+      })),
+      summary:
+        removable.length === 1 ? `Remove ${removable[0]?.name}` : `Remove ${removable.length} elements`,
       origin: 'user',
     });
+  };
+  /** Selects ids that may not be in this render's page yet (a just-inserted element, a new group). */
+  const selectNew = (ids: string[]) => studio.dispatch({ type: 'select', ids });
+  const groupSelection = () => {
+    if (!page || state.selection.length < 2) return;
+    const groupId = newElementId();
+    if (
+      studio.applyIntent({
+        operations: [{ op: 'groupElements', pageId: page.id, elementIds: state.selection, groupId }],
+        summary: `Group ${state.selection.length} elements`,
+        origin: 'user',
+      })
+    )
+      selectNew([groupId]);
+  };
+  const ungroupSelection = () => {
+    const el = page && state.selection.length === 1 ? findElement(page, state.selection[0] ?? '') : null;
+    if (!page || !el || el.type !== 'group') return;
+    if (
+      studio.applyIntent({
+        operations: [{ op: 'ungroupElement', pageId: page.id, elementId: el.id }],
+        summary: `Ungroup ${el.name}`,
+        origin: 'user',
+      })
+    )
+      selectNew(el.children.map((c) => c.id));
+  };
+  const editText = (id: string) => {
+    const el = page ? findElement(page, id) : null;
+    studio.select([id]);
+    if (el?.type === 'text' && !el.locked) setEditingTextId(id);
+    else setFocusText((n) => n + 1);
   };
 
   if (!page)
@@ -158,9 +222,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           <span aria-hidden="true" className="text-muted-foreground">
             /
           </span>
-          <h1 className="truncate text-sm font-semibold" data-testid="document-title">
-            {initial.title}
-          </h1>
+          <DocumentTitle documentId={documentId} title={initial.title} />
         </div>
         <SaveIndicator
           save={state.save}
@@ -302,7 +364,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 <LayersPanel
                   page={page}
                   selection={state.selection}
-                  onSelect={studio.select}
+                  onSelect={selectNew}
                   onActivate={() => setFocusText((n) => n + 1)}
                 />
               </TabPanel>
@@ -324,6 +386,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   resolveTemplate={studio.resolveTemplate}
                   onIntent={studio.applyIntent}
                   templates={state.templates}
+                  saveSource={dirty ? null : { title: initial.title, document: state.committed.snapshot }}
                 />
               </TabPanel>
             </Tabs>
@@ -335,6 +398,19 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           className="flex min-h-72 min-w-0 flex-col rounded-md border border-border md:min-h-0"
           data-testid="canvas-column"
         >
+          <InsertToolbar
+            page={page}
+            kit={kit}
+            readOnly={readOnly}
+            onIntent={studio.applyIntent}
+            onInserted={(id) => selectNew([id])}
+          />
+          {page.locked && (
+            <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground" role="status">
+              This page is locked: elements on it cannot be moved, resized or rotated, and AI agents cannot
+              change it.
+            </p>
+          )}
           <Canvas
             doc={doc}
             page={page}
@@ -342,11 +418,12 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             readOnly={readOnly}
             onSelect={studio.select}
             onIntent={studio.applyIntent}
-            onEditText={(id) => {
-              studio.select([id]);
-              setFocusText((n) => n + 1);
-            }}
+            onEditText={editText}
+            editingTextId={editingTextId}
+            onEditTextDone={() => setEditingTextId(null)}
             onDeleteSelected={deleteSelected}
+            onGroup={groupSelection}
+            onUngroup={ungroupSelection}
             onUndo={studio.undo}
             onRedo={studio.redo}
             onSave={() => void studio.saveNow()}
@@ -370,10 +447,14 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             <Panel title="Properties" level={2} className="shrink-0 md:max-h-[45%] md:overflow-auto">
               <PropertiesPanel
                 page={page}
-                elementId={state.selection[0] ?? null}
+                selection={state.selection}
                 readOnly={readOnly}
                 colourTokens={colourTokens}
+                fonts={fontOptions}
+                generatedIds={generatedIds}
+                resolveAssetUrl={(id) => assetUrls.get(id) ?? null}
                 onIntent={studio.applyIntent}
+                onSelect={selectNew}
                 focusTextRequest={focusText}
               />
             </Panel>

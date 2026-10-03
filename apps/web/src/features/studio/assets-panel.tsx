@@ -10,6 +10,7 @@ import { LOGO_LABEL } from '../brand/logo-rules';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useAssetSearch, type AssetRefDto } from '../assets/use-assets';
 import { newElementId } from '../../lib/ids';
+import { imageForArea, isImageArea } from './element-factory';
 
 export interface AssetsPanelProps {
   brandId: string;
@@ -108,8 +109,23 @@ export function AssetsPanel({
     (selected.type === 'image' || selected.type === 'logo' || selected.type === 'background') &&
     !selected.locked;
 
+  const area = isImageArea(selected) && selected && !selected.locked ? selected : null;
   const use = (asset: AssetRefDto) => {
     if (readOnly) return;
+    if (area && asset.kind !== 'logo') {
+      // STU-1a: a starter's image area becomes the image, in the same box and place in the layer order.
+      const index = page.elements.findIndex((e) => e.id === area.id);
+      const image = imageForArea(area, asset.assetVersionId, asset.altText ?? 'Image');
+      onIntent({
+        operations: [
+          { op: 'removeElement', pageId: page.id, elementId: area.id },
+          { op: 'insertElement', pageId: page.id, element: image, ...(index >= 0 ? { index } : {}) },
+        ],
+        summary: `Fill ${area.name}`,
+        origin: 'user',
+      });
+      return;
+    }
     if (replaceable && selected)
       onIntent({
         operations: [
@@ -163,9 +179,11 @@ export function AssetsPanel({
         className="h-8"
       />
       <p className="text-xs text-muted-foreground">
-        {replaceable
-          ? `Choosing an asset replaces the asset of ${selected.name}.`
-          : 'Choosing an asset inserts it as a new layer.'}
+        {area
+          ? `Choosing a photo fills ${area.name}.`
+          : replaceable
+            ? `Choosing an asset replaces the asset of ${selected.name}.`
+            : 'Choosing an asset inserts it as a new layer.'}
       </p>
       {search.isPending && <Skeleton label="Loading assets" lines={2} />}
       {search.isError && <RequestError error={search.error} onRetry={() => void search.refetch()} />}
@@ -183,7 +201,7 @@ export function AssetsPanel({
                 type="button"
                 disabled={readOnly}
                 onClick={() => use(a)}
-                aria-label={`${replaceable ? 'Use' : 'Insert'} ${a.altText ?? a.kind}`}
+                aria-label={`${area ? 'Fill with' : replaceable ? 'Use' : 'Insert'} ${a.altText ?? a.kind}`}
                 className="flex w-full flex-col gap-0.5 rounded-md border border-border p-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
               >
                 <AssetThumb

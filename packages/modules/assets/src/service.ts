@@ -958,7 +958,8 @@ export const assetService = {
       mime = d.mime;
     }
     const signed = await storage().signDownloadUrl(key, { expiresInSec: SIGNED_URL_TTL_SEC });
-    return { url: signed.url, expiresAt: signed.expiresAt, mime };
+    // STU-1a: where the file came from, so the studio can label generated raster images honestly.
+    return { url: signed.url, expiresAt: signed.expiresAt, mime, origin: v.provenance.kind };
   },
 
   /**

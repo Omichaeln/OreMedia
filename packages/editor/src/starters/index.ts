@@ -141,8 +141,8 @@ function paletteOf(colours: StarterBrand['colours']): Palette | null {
   const valid = colours.filter((c) => contrastRatio(c.value, '#000000') !== null);
   if (valid.length < 2) return null;
   const byLum = [...valid].sort((a, b) => luminanceOrder(b.value) - luminanceOrder(a.value));
-  const lightest = byLum[0]!;
-  const darkest = byLum[byLum.length - 1]!;
+  const lightest = byLum[0] as (typeof byLum)[number];
+  const darkest = byLum[byLum.length - 1] as (typeof byLum)[number];
   const backgrounds = byLum.filter((c) => c.role === 'background');
   const light = backgrounds[0] ?? lightest;
   if ((contrastRatio(light.value, darkest.value) ?? 0) < MIN_TEXT_CONTRAST) return null;
@@ -208,7 +208,7 @@ export function instantiateStarter(spec: StarterSpec, brand: StarterBrand): Inst
       (contrastRatio(hex.get(palette.accent) as string, ground) ?? 0) >= MIN_TEXT_CONTRAST
     )
       return palette.accent;
-    let best = brand.colours[0]!.key;
+    let best = palette.dark;
     let bestRatio = -1;
     for (const c of brand.colours) {
       const r = contrastRatio(c.value, ground) ?? -1;
@@ -256,12 +256,13 @@ export function instantiateStarter(spec: StarterSpec, brand: StarterBrand): Inst
       transform: { x: box[0], y: box[1], width: box[2], height: box[3], rotation: 0 },
       ...(role ? { semanticRole: role } : {}),
     });
-    elements.push({
+    const background: Element = {
       ...base(0, 'Background', [0, 0, format.width, format.height], 'background'),
       type: 'background',
       fillToken: ground,
-    });
-    addSlot('background', elements[0]!.id);
+    };
+    elements.push(background);
+    addSlot('background', background.id);
     pageSpec.elements.forEach((e, i) => {
       const index = i + 1;
       if (e.kind === 'text') {
