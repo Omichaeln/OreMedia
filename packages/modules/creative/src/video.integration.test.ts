@@ -846,6 +846,12 @@ describe('video documents (STU-2b) against MySQL 8', () => {
       });
       const [job] = await tdb.db.select().from(renderJobs).where(eq(renderJobs.id, queued.renderJobId));
       expect(job?.state).toBe('cancelled');
+      // A job that is not ready has no export URLs to offer.
+      expect(
+        await runInTenant(ctx(tenantA), () =>
+          creativeService.renders.exportMedia(A, { renderJobId: queued.renderJobId }),
+        ),
+      ).toEqual({ items: [] });
     });
   });
 

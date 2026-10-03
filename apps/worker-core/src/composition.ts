@@ -45,6 +45,7 @@ import {
   creativeService,
   registerAssetAuthoriser,
   registerCreativeAssetCatalog,
+  registerExportSigner,
   registerCreativeOutboxRoutes,
 } from '@oremedia/module-creative';
 import {
@@ -157,6 +158,7 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
     currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
   });
+  registerExportSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerAssetOutboxRoutes();
   registerCreativeOutboxRoutes();
   registerSkillOutboxRoutes();

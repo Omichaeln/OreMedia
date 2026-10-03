@@ -27,6 +27,7 @@ import {
   creativeService,
   registerAssetAuthoriser,
   registerCreativeAssetCatalog,
+  registerExportSigner,
   registerRevisionChangeHook,
 } from '@oremedia/module-creative';
 import {
@@ -128,6 +129,7 @@ export function composeModules(): void {
     mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
     currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
   });
+  registerExportSigner((storageKey) => assetService.signStorageKey(storageKey));
   // Spec 12.3: the context resolver pins skill versions through the skills module. Spec 19.6: evaluation suites
   // are graded by worker-core (skillEvaluationWorkflowV1), never inside an API transaction.
   registerSkillResolver((input, tx) =>

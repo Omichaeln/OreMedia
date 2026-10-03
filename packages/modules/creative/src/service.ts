@@ -173,6 +173,16 @@ export const registerAssetAuthoriser = (fn: AssetAuthoriser): void => {
   assetAuthoriser = fn;
 };
 
+/**
+ * STU-2b: short-lived download URLs for a job's exports (the studio plays and downloads a rendered video); the
+ * assets module signs storage keys (registered at composition). Unregistered, URLs are not offered.
+ */
+export type ExportSigner = (storageKey: string) => Promise<{ url: string; expiresAt: string }>;
+let exportSigner: ExportSigner | null = null;
+export const registerExportSigner = (fn: ExportSigner): void => {
+  exportSigner = fn;
+};
+
 /** Spec 11.4 approvals.invalidateForCreativeRevisionChange: the review module registers it in Phase 5; no-op until then. */
 export type RevisionChangeHook = (documentId: string, tx: Tx) => Promise<void>;
 let revisionChangeHook: RevisionChangeHook = async () => undefined;
@@ -1385,6 +1395,34 @@ export const creativeService = {
       await policy.assert(actor, 'creative.read', documentResource(doc), {}, tx);
       const preview = await previewsRepo.findForJob(job.id, tx);
       return toRenderJobDto(job, await exportsOfJob(job, preview, tx), preview);
+    },
+
+    /**
+     * STU-2b: signed URLs of a ready job's exports, with the poster and captions of a video; creative.read. A job
+     * that is not ready (or a preview job) has none.
+     */
+    async exportMedia(actor: ResolvedActor, input: z.infer<typeof RenderGet>, tx?: Tx) {
+      const parsed = RenderGet.parse(input);
+      const job = await renderJobsRepo.getById(parsed.renderJobId, tx);
+      const revision = await revisionsRepo.getById(job.revisionId, tx);
+      const doc = await documentsRepo.getById(revision.documentId, tx);
+      await policy.assert(actor, 'creative.read', documentResource(doc), {}, tx);
+      if (job.state !== 'ready' || !exportSigner || (await previewsRepo.findForJob(job.id, tx)))
+        return { items: [] };
+      const sign = exportSigner;
+      const items = [];
+      for (const e of await exportsRepo.listByIds(job.brandId, exportIdsOf(job), tx)) {
+        const main = await sign(e.storageKey);
+        items.push({
+          exportId: e.id,
+          mime: e.mime,
+          url: main.url,
+          posterUrl: e.posterStorageKey ? (await sign(e.posterStorageKey)).url : null,
+          captionsUrl: e.captionsStorageKey ? (await sign(e.captionsStorageKey)).url : null,
+          expiresAt: main.expiresAt,
+        });
+      }
+      return { items };
     },
 
     /**

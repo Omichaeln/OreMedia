@@ -38,6 +38,7 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'creative.renders.get': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
+  'creative.renders.exportMedia': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
   'creative.renders.cancel': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
   'creative.operations.applyVideo': {
     buildInput: (f) => ({

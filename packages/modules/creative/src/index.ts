@@ -4,11 +4,13 @@ export {
   registerAssetAuthoriser,
   resetAssetAuthoriser,
   registerRevisionChangeHook,
+  registerExportSigner,
   type ActorOptions,
   type AssetAuthoriser,
   type AssetRef,
   type CreativeAssetPurpose,
   type RevisionChangeHook,
+  type ExportSigner,
   VIDEO_EXPORT_PAGE_ID,
 } from './service';
 export { registerCreativeAssetCatalog, type CreativeAssetCatalog } from './video-support';

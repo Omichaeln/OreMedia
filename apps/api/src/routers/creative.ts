@@ -93,6 +93,10 @@ export const creativeRouter = router({
     get: tenantQuery
       .input(RenderGet)
       .query(({ ctx, input }) => creativeService.renders.get(ctx.tenant.actor, input)),
+    /** STU-2b: signed URLs of a ready job's exports (video, poster, captions) to play or download. */
+    exportMedia: tenantQuery
+      .input(RenderGet)
+      .query(({ ctx, input }) => creativeService.renders.exportMedia(ctx.tenant.actor, input)),
     /** STU-2a/2b: stop a pending or rendering job; a running video render is signalled and ffmpeg stops. */
     cancel: tenantMutation
       .input(RenderCancel)

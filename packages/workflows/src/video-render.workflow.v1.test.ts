@@ -79,8 +79,8 @@ function fakes(
   const calls: string[] = [];
   const seen: Record<string, unknown> = {};
   const rec =
-    <A extends unknown[], R>(name: string, fn: (...a: A) => R) =>
-    async (...a: A) => {
+    <A extends unknown[], R>(name: string, fn: (...a: A) => R | Promise<R>) =>
+    async (...a: A): Promise<R> => {
       calls.push(name);
       seen[name] = a[0];
       return fn(...a);

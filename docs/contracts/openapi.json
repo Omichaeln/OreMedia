@@ -7198,6 +7198,27 @@
         }
       }
     },
+    "/trpc/creative.renders.exportMedia": {
+      "get": {
+        "operationId": "creative.renders.exportMedia",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "renderJobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["renderJobId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/creative.renders.get": {
       "get": {
         "operationId": "creative.renders.get",
@@ -19279,6 +19300,18 @@
               "type": "string"
             },
             "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["renderJobId"]
+        }
+      },
+      "creative.renders.exportMedia": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "renderJobId": {
               "type": "string"
             }
           },
