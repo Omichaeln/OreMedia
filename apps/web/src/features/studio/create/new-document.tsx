@@ -16,8 +16,8 @@ import { RequestError } from '../../../components/request-state';
 import { Select } from '../../../components/select';
 import { toUiError } from '../../../lib/errors';
 import { useBrandContext } from '../../brand/brand-context';
-import type { TemplateDto } from '../types';
-import { useDocuments, useTemplate, useTemplates } from '../use-document';
+import type { TemplateWithCurrentDto } from '../types';
+import { useDocuments, useTemplatesWithCurrent } from '../use-document';
 import {
   CHANNELS,
   CONTENT_TYPES,
@@ -75,8 +75,7 @@ const matches = (
 export function NewDocumentGallery({ disabledReason }: { disabledReason?: string }) {
   const { brandId, brand } = useBrandContext();
   const starterBrand = useStarterBrand(brandId, brand.publishedVersionId ?? null);
-  const templates = useTemplates(brandId);
-  const start = useStartDocument();
+  const templates = useTemplatesWithCurrent(brandId);
   const [filters, setFilters] = useState<Filters>({
     type: 'all',
     channel: 'all',
@@ -85,6 +84,12 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
   });
   const [details, setDetails] = useState<GalleryEntry | null>(null);
   const [other, setOther] = useState<'blank' | 'custom' | 'duplicate' | null>(null);
+  const start = useStartDocument({
+    onCreated: () => {
+      setDetails(null);
+      setOther(null);
+    },
+  });
   const set = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
 
   const starters = useMemo((): Array<{ spec: StarterSpec; made: InstantiatedStarter }> => {
@@ -202,6 +207,14 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
       )}
       {starterBrand.isPending && <Skeleton label="Loading the brand's starters" lines={3} />}
       {starterBrand.isError && <RequestError error={starterBrand.error} onRetry={starterBrand.refetch} />}
+      {starterBrand.notes.length > 0 && (
+        <StatusBanner
+          tone="info"
+          title="About the logos in the starters"
+          description={starterBrand.notes.join(' ')}
+        />
+      )}
+      {templates.isError && <RequestError error={templates.error} onRetry={() => void templates.refetch()} />}
       {starterBrand.brand && starterBrand.issue && (
         <StatusBanner
           tone="info"
@@ -416,7 +429,7 @@ function GalleryCard({
   );
 }
 
-/** A brand template: its approved version is loaded for the preview and the facts, then filtered like a starter. */
+/** A brand template with its current approved version (one read for the gallery), filtered like a starter. */
 function BrandTemplateCard({
   template,
   filters,
@@ -426,7 +439,7 @@ function BrandTemplateCard({
   onStart,
   onDetails,
 }: {
-  template: TemplateDto;
+  template: TemplateWithCurrentDto;
   filters: Filters;
   colours: ReadonlyArray<{ key: string; value: string }>;
   disabledReason?: string;
@@ -435,20 +448,12 @@ function BrandTemplateCard({
   onDetails: (e: GalleryEntry) => void;
 }) {
   const { brandId } = useBrandContext();
-  const detail = useTemplate(template.id);
-  const version = detail.data?.selectedVersion ?? null;
-  const document = version?.document;
+  const version = template.currentVersion;
+  const document = version.document;
   const resolvers = usePreviewResolvers(
-    useMemo(() => (document ? [document] : []), [document]),
+    useMemo(() => [document], [document]),
     colours,
   );
-  if (detail.isPending)
-    return (
-      <li className="rounded-md border border-border p-3">
-        <Skeleton label={`Loading ${template.name}`} lines={3} />
-      </li>
-    );
-  if (!document || !version) return null;
   const page = document.pages[0];
   const entry: GalleryEntry = {
     id: `template:${template.id}`,

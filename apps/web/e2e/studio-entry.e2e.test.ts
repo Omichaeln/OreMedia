@@ -254,6 +254,14 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
 
   it('saves the document as a template with inferred slots; a brand manager approves it and the gallery offers it', async () => {
     await page.getByRole('tab', { name: 'Templates' }).click();
+    // The headline is still locked from the lock test: a template would replace it, so Apply says why it is off.
+    await page
+      .getByTestId('format-strip')
+      .getByRole('tab', { name: /^1\. Post/ })
+      .click();
+    await expect
+      .poll(() => page.getByTestId('template-lock-note').textContent())
+      .toContain('holds locked elements');
     await page.getByRole('button', { name: 'Save as template…' }).click();
     const slots = page.getByTestId('template-slots');
     await slots.waitFor();

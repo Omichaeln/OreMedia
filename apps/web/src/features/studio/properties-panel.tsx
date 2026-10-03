@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CreativePage, Element, Operation } from '@oremedia/contracts/creative';
-import { findElement, isLockedDeep, type IntentBatch } from '@oremedia/editor';
+import { findElement, findWithAncestors, isLockedInContext, type IntentBatch } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Field, Input, Textarea } from '@oremedia/ui';
 import { Select } from '../../components/select';
 import { elementTypeLabel } from './document-helpers';
@@ -190,7 +190,7 @@ function MultiSelection({
   onSelect,
 }: Pick<PropertiesPanelProps, 'page' | 'selection' | 'readOnly' | 'onIntent' | 'onSelect'>) {
   const elements = selection.map((id) => findElement(page, id)).filter((e): e is Element => e !== null);
-  const locked = elements.filter(isLockedDeep);
+  const locked = elements.filter((e) => isLockedInContext(e, findWithAncestors(page, e.id)?.ancestors ?? []));
   const topLevel = elements.every((e) => page.elements.some((p) => p.id === e.id));
   const moveBlocked = readOnly
     ? 'This page is locked or read-only'
@@ -453,7 +453,9 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
     );
 
   const pageLocked = page.locked === true;
-  const lockedDeep = isLockedDeep(el);
+  const ancestors = findWithAncestors(page, el.id)?.ancestors ?? [];
+  const inLockedGroup = ancestors.some((a) => a.locked);
+  const lockedDeep = isLockedInContext(el, ancestors);
   const locked = el.locked || readOnly; // content edits stop when the element itself is locked
   const fixed = lockedDeep || readOnly || pageLocked; // position, size and rotation
   const one = (op: Operation, summary: string) => onIntent({ operations: [op], summary, origin: 'user' });
@@ -486,7 +488,9 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
             ? 'This page is locked: nothing on it can be moved, resized or rotated, and AI agents cannot change anything on it. Unlock the page in the page strip to change it.'
             : el.locked
               ? 'Locked: it cannot be moved, resized or rotated, and AI agents cannot change it at all (text, style, image, position or removal). You can still edit its content here; unlock it to move it.'
-              : 'Part of this group is locked, so the group cannot be moved or resized and agents cannot change it.'}
+              : inLockedGroup
+                ? 'It is inside a locked group: it cannot be moved, resized, rotated or removed, and AI agents cannot change it. Unlock the group to change it.'
+                : 'Part of this group is locked, so the group cannot be moved, resized or removed and agents cannot change it.'}
         </p>
       )}
       {generated && (
@@ -830,7 +834,9 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           <Button
             size="sm"
             variant="danger"
-            disabledReason={el.locked ? 'Unlock it to remove it' : undefined}
+            disabledReason={
+              lockedDeep ? 'Locked elements are not removed: unlock it (or its group) first' : undefined
+            }
             onClick={() =>
               one({ op: 'removeElement', pageId: page.id, elementId: el.id }, `Remove ${el.name}`)
             }

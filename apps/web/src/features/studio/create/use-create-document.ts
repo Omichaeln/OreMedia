@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import type { inferInput } from '@trpc/tanstack-react-query';
@@ -15,7 +16,7 @@ export type StartRequest =
  * or duplicate). Each start is its own intent (a fresh idempotency key); on success the studio opens on the new
  * document, so choosing a start is the only step.
  */
-export function useStartDocument() {
+export function useStartDocument(opts: { onCreated?: () => void } = {}) {
   const { companyId, brandId } = useBrandContext();
   const trpc = useTRPC();
   const client = useTRPCClient();
@@ -30,6 +31,9 @@ export function useStartDocument() {
     },
     onSuccess: (res) => {
       void queryClient.invalidateQueries(trpc.creative.documents.pathFilter());
+      // Close any open dialog BEFORE leaving: a modal unmounted by the route change can leave the page it hid
+      // (aria-hidden, inert) hidden from assistive technology when the person comes back.
+      if (opts.onCreated) flushSync(opts.onCreated);
       navigate(brandPath(companyId, brandId, `studio/${encodeURIComponent(res.documentId)}`));
     },
   });
