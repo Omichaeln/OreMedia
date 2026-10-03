@@ -85,6 +85,14 @@ export class AssetRepository extends BrandScopedRepository<typeof assets> {
       .limit(1);
     return rows[0] ?? null;
   }
+  /** STU-2b: several assets of the tenant in one query (at most ID_LIST_MAX ids). */
+  async listInTenant(ids: readonly string[], tx?: Tx): Promise<AssetRow[]> {
+    if (!ids.length) return [];
+    return this.conn(tx)
+      .select()
+      .from(assets)
+      .where(this.scope(inArray(assets.id, ids.slice(0, ID_LIST_MAX))));
+  }
   /**
    * Spec 9.2 filter, SQL-expressible part: tenant, brand or active grant for the purpose, state approved, kind
    * compatible, rights present when required and not expiring inside the processing window. Channels and
@@ -242,6 +250,14 @@ export class AssetVersionRepository extends BrandScopedRepository<typeof assetVe
       .limit(1);
     return rows[0] ?? null;
   }
+  /** STU-2b: several versions of the tenant in one query (at most ID_LIST_MAX ids). */
+  async listInTenant(ids: readonly string[], tx?: Tx): Promise<AssetVersionRow[]> {
+    if (!ids.length) return [];
+    return this.conn(tx)
+      .select()
+      .from(assetVersions)
+      .where(this.scope(inArray(assetVersions.id, ids.slice(0, ID_LIST_MAX))));
+  }
   /**
    * Row lock (SELECT ... FOR UPDATE) on a version: serialises drawing a rendition of it, so two requests for the same
    * rendition record one derivative row (BSC-2).
@@ -328,6 +344,17 @@ export class AssetDerivativeRepository extends BrandScopedRepository<typeof asse
       .where(this.scope(eq(assetDerivatives.assetVersionId, assetVersionId)))
       .orderBy(desc(assetDerivatives.id))
       .limit(ID_LIST_MAX);
+  }
+  /** STU-2b: the derivative purposes recorded for each of several versions (at most ID_LIST_MAX ids), in one query. */
+  async purposesForVersions(
+    assetVersionIds: readonly string[],
+    tx?: Tx,
+  ): Promise<Array<{ assetVersionId: string; purpose: string }>> {
+    if (!assetVersionIds.length) return [];
+    return this.conn(tx)
+      .selectDistinct({ assetVersionId: assetDerivatives.assetVersionId, purpose: assetDerivatives.purpose })
+      .from(assetDerivatives)
+      .where(this.scope(inArray(assetDerivatives.assetVersionId, assetVersionIds.slice(0, ID_LIST_MAX))));
   }
   async find(assetVersionId: string, purpose: string, tx?: Tx): Promise<AssetDerivativeRow | null> {
     const rows = await this.conn(tx)

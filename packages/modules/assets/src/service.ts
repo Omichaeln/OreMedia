@@ -555,22 +555,36 @@ export const assetService = {
    */
   async mediaSummaries(assetVersionIds: readonly string[], tx?: Tx): Promise<VideoMediaInfo[]> {
     const out: VideoMediaInfo[] = [];
-    for (const id of [...new Set(assetVersionIds)].slice(0, ID_LIST_MAX)) {
-      const v = await versionsRepo.findInTenant(id, tx);
-      if (!v) continue;
-      const a = await assetsRepo.findInTenant(v.assetId, tx);
-      if (!a) continue;
-      const derivatives = await derivativesRepo.listForVersion(v.id, tx);
-      out.push({
-        assetVersionId: v.id,
-        kind: a.kind === 'video' ? 'video' : a.kind === 'audio' ? 'audio' : 'image',
-        mime: v.mime,
-        durationMs: v.durationMs ?? v.mediaInfo?.durationMs ?? null,
-        width: v.width,
-        height: v.height,
-        hasAudio: (v.mediaInfo?.audio.length ?? 0) > 0,
-        derivatives: [...new Set(derivatives.map((d) => d.purpose))].slice(0, 12),
-      });
+    const unique = [...new Set(assetVersionIds)];
+    // Three queries per ID_LIST_MAX ids (a project holds up to 8 × 200 items), whatever the number of sources.
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX) {
+      const versions = await versionsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx);
+      const owners = new Map(
+        (await assetsRepo.listInTenant([...new Set(versions.map((v) => v.assetId))], tx)).map((a) => [
+          a.id,
+          a,
+        ]),
+      );
+      const purposes = new Map<string, string[]>();
+      for (const d of await derivativesRepo.purposesForVersions(
+        versions.map((v) => v.id),
+        tx,
+      ))
+        purposes.set(d.assetVersionId, [...(purposes.get(d.assetVersionId) ?? []), d.purpose]);
+      for (const v of versions) {
+        const a = owners.get(v.assetId);
+        if (!a) continue;
+        out.push({
+          assetVersionId: v.id,
+          kind: a.kind === 'video' ? 'video' : a.kind === 'audio' ? 'audio' : 'image',
+          mime: v.mime,
+          durationMs: v.durationMs ?? v.mediaInfo?.durationMs ?? null,
+          width: v.width,
+          height: v.height,
+          hasAudio: (v.mediaInfo?.audio.length ?? 0) > 0,
+          derivatives: [...new Set(purposes.get(v.id) ?? [])].sort().slice(0, 12),
+        });
+      }
     }
     return out;
   },
@@ -578,10 +592,10 @@ export const assetService = {
   /** STU-2b: the current version of each asset found in the tenant (templates bind brand fonts and logos by asset). */
   async currentVersionIds(assetIds: readonly string[], tx?: Tx): Promise<Record<string, string>> {
     const out: Record<string, string> = {};
-    for (const id of [...new Set(assetIds)].slice(0, ID_LIST_MAX)) {
-      const a = await assetsRepo.findInTenant(id, tx);
-      if (a?.currentVersionId && a.state !== 'retired') out[a.id] = a.currentVersionId;
-    }
+    const unique = [...new Set(assetIds)];
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX)
+      for (const a of await assetsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx))
+        if (a.currentVersionId && a.state !== 'retired') out[a.id] = a.currentVersionId;
     return out;
   },
 
