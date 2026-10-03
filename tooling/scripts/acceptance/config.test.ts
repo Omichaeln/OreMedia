@@ -24,6 +24,18 @@ describe('acceptanceConfigFromEnv', () => {
     });
     expect(cfg.disabledChannels.size).toBe(0);
     expect(cfg.expectStoreOrigin).toBeUndefined();
+    expect(cfg.settle).toEqual({ revision: null, timeoutMs: 20 * 60_000 });
+  });
+
+  it('reads the settle step: its own commit and the timeout, refusing a malformed timeout by name', () => {
+    const cfg = acceptanceConfigFromEnv(
+      { ...base, RAILWAY_GIT_COMMIT_SHA: ' f3ba12f ', ACCEPTANCE_SETTLE_TIMEOUT_MS: '60000' },
+      '/src',
+    );
+    expect(cfg.settle).toEqual({ revision: 'f3ba12f', timeoutMs: 60_000 });
+    expect(() => acceptanceConfigFromEnv({ ...base, ACCEPTANCE_SETTLE_TIMEOUT_MS: 'soon' }, '/src')).toThrow(
+      /^ACCEPTANCE_SETTLE_TIMEOUT_MS must be a positive number$/,
+    );
   });
 
   it('refuses to run without the staging confirmation, in a production environment, or against a production origin', () => {
