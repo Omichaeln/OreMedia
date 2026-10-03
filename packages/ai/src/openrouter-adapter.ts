@@ -10,7 +10,7 @@ import type {
 import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
-import type { ModelAdapter } from './model-adapter';
+import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 
 export interface OpenRouterAdapterOptions {
   apiKey: string;
@@ -88,7 +88,7 @@ export class OpenRouterModelAdapter implements ModelAdapter {
         ? {
             tools: req.tools.map((t) => ({
               type: 'function',
-              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+              function: { name: wireToolName(t.name), description: t.description, parameters: t.inputSchema },
             })),
             tool_choice: 'auto',
           }
@@ -120,7 +120,7 @@ export class OpenRouterModelAdapter implements ModelAdapter {
         ? unavailable(`upstream ${code}`)
         : rejected(code, errorMessageOf(json.error));
     }
-    return toCompletion(json);
+    return toCompletion(json, toolNamesOf(req.tools));
   }
 }
 
@@ -137,7 +137,7 @@ function toChat(m: ModelMessage): ChatMessage[] {
             {
               id: p.id,
               type: 'function' as const,
-              function: { name: p.name, arguments: JSON.stringify(p.input ?? {}) },
+              function: { name: wireToolName(p.name), arguments: JSON.stringify(p.input ?? {}) },
             },
           ]
         : [],
@@ -167,14 +167,14 @@ const STOP_REASONS: Record<string, string> = {
   content_filter: 'refusal',
 };
 
-export function toCompletion(json: ChatResponse): ModelCompletion {
+export function toCompletion(json: ChatResponse, names?: ReadonlyMap<string, string>): ModelCompletion {
   const choice = json.choices?.[0];
   const content: ModelContent[] = choice?.message?.content
     ? [{ type: 'text', text: choice.message.content }]
     : [];
   const toolCalls: ModelToolCall[] = (choice?.message?.tool_calls ?? []).map((c) => ({
     id: c.id,
-    name: c.function?.name ?? '',
+    name: names?.get(c.function?.name ?? '') ?? c.function?.name ?? '',
     arguments: parseArguments(c.function?.arguments),
   }));
   const finish = choice?.finish_reason ?? 'stop';

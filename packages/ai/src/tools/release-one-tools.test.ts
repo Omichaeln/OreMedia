@@ -11,6 +11,7 @@ import { CreateBriefInput, DraftCopyInput } from './content';
 import { ProposeScheduleInput, ScheduleProposalPayload } from './publications';
 import { RequestReviewInput } from './review';
 import { createReleaseOneRegistry, RELEASE_1_TOOLS } from './index';
+import { toolNamesOf, wireToolName } from '../model-adapter';
 import {
   NOT_AVAILABLE_YET,
   type ContentToolSource,
@@ -91,6 +92,15 @@ function harness(sources: Partial<Pick<ToolServices, 'content' | 'review' | 'pub
 const call = (name: string, args: unknown): ModelToolCall => ({ id: 'toolu_1', name, arguments: args });
 
 describe('Release 1 tools (spec 12.4 table)', () => {
+  it('every tool name reaches the providers in a form they accept, distinct and reversible', () => {
+    const names = createReleaseOneRegistry().names();
+    const wire = names.map(wireToolName);
+    for (const w of wire) expect(w).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    expect(new Set(wire).size).toBe(names.length);
+    const back = toolNamesOf(names.map((name) => ({ name })));
+    expect(wire.map((w) => back.get(w))).toEqual(names);
+  });
+
   it('every tool has the effect and action of the table and a JSON schema whose required keys exist', () => {
     expect(RELEASE_1_TOOLS.map((t) => t.name).sort()).toEqual(Object.keys(TABLE).sort());
     for (const def of RELEASE_1_TOOLS as AnyToolDefinition[]) {

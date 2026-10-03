@@ -42,7 +42,11 @@ const okBody = {
         content: 'Calling a tool.',
         reasoning: 'PRIVATE REASONING',
         tool_calls: [
-          { id: 'call_1', type: 'function', function: { name: 'facts.list', arguments: '{"kind":"offer"}' } },
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'facts__list', arguments: '{"kind":"offer"}' },
+          },
         ],
       },
     },
@@ -89,7 +93,8 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
       tools: [
         {
           type: 'function',
-          function: { name: 'facts.list', parameters: { type: 'object', properties: {} } },
+          // Providers accept only [a-zA-Z0-9_-] in tool names: the dotted platform name goes out encoded.
+          function: { name: 'facts__list', parameters: { type: 'object', properties: {} } },
         },
       ],
     });
@@ -100,7 +105,11 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
         role: 'assistant',
         content: 'Checking facts.',
         tool_calls: [
-          { id: 'call_a', type: 'function', function: { name: 'facts.list', arguments: '{"kind":"offer"}' } },
+          {
+            id: 'call_a',
+            type: 'function',
+            function: { name: 'facts__list', arguments: '{"kind":"offer"}' },
+          },
         ],
       },
       { role: 'tool', tool_call_id: 'call_a', content: 'ERROR: {"kind":"denied"}' },

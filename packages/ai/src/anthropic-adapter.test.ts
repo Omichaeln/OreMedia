@@ -37,7 +37,7 @@ const responseBody = {
     { type: 'thinking', thinking: 'PRIVATE REASONING', signature: 'sig' },
     { type: 'redacted_thinking', data: 'x' },
     { type: 'text', text: 'Calling a tool.' },
-    { type: 'tool_use', id: 'toolu_1', name: 'facts.list', input: { kind: 'offer' } },
+    { type: 'tool_use', id: 'toolu_1', name: 'facts__list', input: { kind: 'offer' } },
   ],
   stop_reason: 'tool_use',
   stop_sequence: null,
@@ -84,11 +84,11 @@ describe('AnthropicModelAdapter (spec 12.7, tool-use API)', () => {
       tool_choice: { type: 'auto' },
       metadata: { user_id: 'run_1' },
       tools: [
-        { name: 'facts.list', description: 'Lists facts', input_schema: { type: 'object', properties: {} } },
+        { name: 'facts__list', description: 'Lists facts', input_schema: { type: 'object', properties: {} } },
       ],
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'Begin.' }] },
-        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_a', name: 'facts.list', input: {} }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_a', name: 'facts__list', input: {} }] },
         {
           role: 'user',
           content: [
@@ -99,6 +99,17 @@ describe('AnthropicModelAdapter (spec 12.7, tool-use API)', () => {
     });
     expect(call.body).not.toHaveProperty('temperature');
     expect(call.body).not.toHaveProperty('thinking');
+  });
+
+  it('a call without tools sends neither tools nor tool_choice (Anthropic refuses tool_choice without tools)', async () => {
+    const f = fakeFetch();
+    await new AnthropicModelAdapter({
+      apiKey: 'k',
+      baseURL: 'https://anthropic.invalid',
+      fetch: f.fetch as never,
+    }).complete({ ...request, tools: [] });
+    expect(f.calls[0]!.body).not.toHaveProperty('tools');
+    expect(f.calls[0]!.body).not.toHaveProperty('tool_choice');
   });
 
   it('maps the response to text, tool calls, usage and stop reason, dropping private reasoning blocks', async () => {
