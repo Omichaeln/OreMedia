@@ -40,7 +40,14 @@ interface ChatResponse {
     };
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
-  error?: { code?: number; message?: string };
+  error?: OpenRouterError;
+}
+
+/** OpenRouter's error object; `metadata` names the upstream provider and carries its raw answer. */
+interface OpenRouterError {
+  code?: number;
+  message?: string;
+  metadata?: { provider_name?: string; raw?: unknown };
 }
 
 /**
@@ -75,11 +82,17 @@ export class OpenRouterModelAdapter implements ModelAdapter {
       max_tokens: req.maxOutputTokens,
       ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
       messages: [{ role: 'system', content: req.system } as ChatMessage, ...req.messages.flatMap(toChat)],
-      tools: req.tools.map((t) => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.inputSchema },
-      })),
-      tool_choice: req.tools.length ? 'auto' : 'none',
+      // A call without tools (the evaluation grader, for one) sends neither field: OpenAI-compatible providers
+      // reject an empty `tools` array, and OpenRouter reports that as an upstream 400.
+      ...(req.tools.length
+        ? {
+            tools: req.tools.map((t) => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+            })),
+            tool_choice: 'auto',
+          }
+        : {}),
       provider: { data_collection: 'deny' },
       user: req.metadata.runId,
     };
@@ -105,7 +118,7 @@ export class OpenRouterModelAdapter implements ModelAdapter {
       const code = json.error.code ?? 500;
       throw code === 429 || code >= 500
         ? unavailable(`upstream ${code}`)
-        : rejected(code, json.error.message);
+        : rejected(code, errorMessageOf(json.error));
     }
     return toCompletion(json);
   }
@@ -201,10 +214,42 @@ export function rejectionDetail(message: string | undefined, status: number): st
 async function errorDetail(res: Response): Promise<string | undefined> {
   try {
     const json = (await res.json()) as ChatResponse;
-    return json.error?.message;
+    return json.error ? errorMessageOf(json.error) : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * OpenRouter's message, followed by the upstream provider's name and its own message when OpenRouter relays one
+ * ("Provider returned error" alone names neither). The raw answer is parsed for its message when it is JSON; the
+ * whole is bounded by rejectionDetail.
+ */
+export function errorMessageOf(error: OpenRouterError): string | undefined {
+  const provider = error.metadata?.provider_name;
+  const raw = upstreamMessage(error.metadata?.raw);
+  const upstream = [provider, raw].filter(Boolean).join(': ');
+  if (!upstream) return error.message;
+  return error.message ? `${error.message} (${upstream})` : upstream;
+}
+
+function upstreamMessage(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  let value: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw) as unknown;
+    } catch {
+      return raw;
+    }
+  }
+  if (value && typeof value === 'object') {
+    const v = value as { error?: { message?: unknown } | string; message?: unknown };
+    if (typeof v.error === 'string') return v.error;
+    if (typeof v.error?.message === 'string') return v.error.message;
+    if (typeof v.message === 'string') return v.message;
+  }
+  return typeof raw === 'string' ? raw : undefined;
 }
 
 function rejected(status: number, message?: string): ValidationFailedError {
