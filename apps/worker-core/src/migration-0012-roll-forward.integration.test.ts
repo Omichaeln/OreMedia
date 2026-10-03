@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { conversations, messages, responseDrafts } from '@oremedia/db/schema/community';
 import { channelConnections, credentialRefs } from '@oremedia/db/schema/publishing';
@@ -37,6 +38,7 @@ const LATER_TABLES: MySqlTable[] = [
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
+  studioGenerationJobs, // 0027
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

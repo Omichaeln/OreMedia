@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { approvedFacts } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
@@ -19,7 +20,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * supersedes it. Additive and roll-forward safe: the new columns are in LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0022_channel_health';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+/** Added by later migrations (0027). */
+const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t));
 
 describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

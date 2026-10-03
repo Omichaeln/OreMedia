@@ -4,6 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { channelConnections } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -19,7 +20,11 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * the two columns are in LATER_COLUMNS (seed.ts), so the earlier suites keep seeding without them.
  */
 const PREVIOUS_HEAD = '0021_report_quality_finding_work';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+/** Added by later migrations (0027). */
+const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t));
 
 describe('migration 0022 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

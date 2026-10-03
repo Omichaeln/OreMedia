@@ -41,6 +41,8 @@ export const ID_PREFIXES = {
   template: 'tpl',
   templateVersion: 'tv',
   renderJob: 'rj',
+  /** STU-1b: a durable studio generation or refinement job. */
+  studioGenerationJob: 'sgj',
   renderPreview: 'rpv',
   previewExport: 'pvx',
   campaign: 'cmp',

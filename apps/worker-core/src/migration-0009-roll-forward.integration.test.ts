@@ -5,6 +5,7 @@ import { defaultPolicyDocument } from '@oremedia/contracts/brand';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { brands, policyVersions } from '@oremedia/db/schema/brand';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
@@ -42,6 +43,7 @@ const LATER_TABLES: MySqlTable[] = [
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
+  studioGenerationJobs, // 0027
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

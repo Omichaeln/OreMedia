@@ -1,6 +1,8 @@
 import type { CreativeDocumentV1, CreativePage, Element, Operation } from '@oremedia/contracts/creative';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
-import { allElementIds, findElement, isLockedDeep } from './reduce';
+import type { GenerationScope } from '@oremedia/contracts/generation';
+import { ancestryOf } from './generation';
+import { allElementIds, findElement, isLockedDeep, reflow } from './reduce';
 
 /** Spec 11.2/11.4: protected elements (e.g. logos) cannot be moved, resized, recoloured, replaced or removed by agents. */
 const MUTATING_ON_ELEMENT = new Set<Operation['op']>([
@@ -86,4 +88,73 @@ export function guardLogoInsertion(op: Operation, origin: 'user' | 'agent'): voi
       'agent_logo_insert',
       'Agents cannot add logo elements; logos are placed from approved assets by a person',
     );
+}
+
+/**
+ * STU-1b scope state for one batch: the scope a person gave the request and what the batch itself created so far
+ * (pages copied or adapted from the scoped page, elements inserted in place of a scoped one). Created pages and
+ * inserted elements are in scope for the rest of the batch.
+ */
+export interface ScopeState {
+  scope: GenerationScope;
+  createdPageIds: Set<string>;
+  insertedIds: Set<string>;
+  /** Scoped elements the batch removed: each allows one insertion on the scoped page (an image area's image). */
+  replacements: number;
+}
+
+export const scopeState = (scope: GenerationScope): ScopeState => ({
+  scope,
+  createdPageIds: new Set(),
+  insertedIds: new Set(),
+  replacements: 0,
+});
+
+const scopeDenied = (what: string): PolicyDeniedError =>
+  new PolicyDeniedError('out_of_scope', `The request's scope does not include ${what}`);
+
+/**
+ * STU-1b, architecture principle 2: an AI batch made for a scope (a page, or selected elements of it) may change
+ * only what the scope holds. A selected group brings its children; an element inside a selected group is in scope.
+ * The scoped page may be copied or adapted (the original is only read) when the scope is the whole page, and the new
+ * pages are in scope. Everything else (other pages, unselected elements, page removal or reordering, new pages that
+ * do not come from the scope) is refused here, on the server, whatever the prompt said. Runs before the reducer.
+ */
+export function guardScope(doc: CreativeDocumentV1, op: Operation, state: ScopeState): void {
+  const { scope } = state;
+  const wholePage = scope.elementIds.length === 0;
+  const pageId = pageIdOf(op);
+  if (op.op === 'addPage') throw scopeDenied('new pages');
+  if (op.op === 'duplicatePage' || op.op === 'createFormatVariant') {
+    if (pageId !== scope.pageId || !wholePage) throw scopeDenied(`copies of page ${pageId}`);
+    if (op.op === 'duplicatePage') state.createdPageIds.add(op.newPageId);
+    else {
+      const source = doc.pages.find((p) => p.id === op.sourcePageId);
+      if (source) state.createdPageIds.add(reflow(source, op.formatKey, 1, 1).id);
+    }
+    return;
+  }
+  if (pageId === null) throw scopeDenied(`operation ${op.op}`);
+  if (state.createdPageIds.has(pageId)) return;
+  if (pageId !== scope.pageId) throw scopeDenied(`page ${pageId}`);
+  if (op.op === 'removePage' || op.op === 'reorderPage' || op.op === 'setPageLock')
+    throw scopeDenied(`changes to page ${pageId} itself`);
+  if (wholePage) return;
+  if (op.op === 'applyTemplate') throw scopeDenied(`the whole of page ${pageId}`);
+  if (op.op === 'insertElement') {
+    if (state.replacements <= 0) throw scopeDenied('new elements outside the selection');
+    state.replacements -= 1;
+    state.insertedIds.add(op.element.id);
+    return;
+  }
+  const page = doc.pages.find((p) => p.id === pageId);
+  if (!page) return; // the reducer reports page_not_found
+  const ids = [...('elementId' in op ? [op.elementId] : []), ...('elementIds' in op ? op.elementIds : [])];
+  for (const id of ids) {
+    if (state.insertedIds.has(id)) continue;
+    const path = ancestryOf(page, id);
+    if (!path) continue; // the reducer reports element_not_found
+    if (!path.some((el) => scope.elementIds.includes(el.id))) throw scopeDenied(`element ${id}`);
+  }
+  if (op.op === 'removeElement') state.replacements += 1;
 }

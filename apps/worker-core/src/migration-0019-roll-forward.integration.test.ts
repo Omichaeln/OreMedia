@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import {
   brandDestinations,
   seoAuditPages,
@@ -26,7 +27,7 @@ const sha256Hex = (value: string) => createHash('sha256').update(value).digest('
 const PREVIOUS_HEAD = '0018_cms_articles';
 const NEW_TABLES: MySqlTable[] = [seoAuditRuns, seoAuditPages];
 /** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
-const LATER_TABLES: MySqlTable[] = [seoFindingWork];
+const LATER_TABLES: MySqlTable[] = [seoFindingWork, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));

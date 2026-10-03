@@ -13,7 +13,7 @@ import { generatedUploads } from '@oremedia/db/schema/assets';
 import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
-import { previewExports, renderPreviews } from '@oremedia/db/schema/creative';
+import { previewExports, renderPreviews, studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { planItems } from '@oremedia/db/schema/content';
 import {
   brandDestinations,
@@ -61,6 +61,7 @@ const LATER_TABLES: MySqlTable[] = [
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
+  studioGenerationJobs, // 0027
 ];
 
 const TABLES = (Object.values(schema) as unknown[])
