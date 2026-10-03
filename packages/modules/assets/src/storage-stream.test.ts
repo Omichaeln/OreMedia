@@ -121,15 +121,17 @@ describe('S3StorageProvider.putObjectStream (multipart)', () => {
     expect(s3.calls.map((c) => c.name)).toEqual(['PutObjectCommand']);
   });
 
-  it('aborts the multipart upload when a part fails, and rethrows', async () => {
+  it('aborts the multipart upload when a part fails, destroys the source stream, and rethrows', async () => {
     const s3 = fakeS3({ failPart: 2 });
+    const body = Readable.from(chunkStream([bytes(4096 * 5)], 1000));
     await expect(
       runInTenant(ctx(A), () =>
-        provider(s3.client).putObjectStream(`quarantine/${A}/ui_1/y`, Readable.from([bytes(4096 * 3)]), {
+        provider(s3.client).putObjectStream(`quarantine/${A}/ui_1/y`, body, {
           contentType: 'video/mp4',
         }),
       ),
     ).rejects.toThrow('network reset');
+    expect(body.destroyed).toBe(true);
     expect(s3.calls.map((c) => c.name)).toContain('AbortMultipartUploadCommand');
     expect(s3.calls.map((c) => c.name)).not.toContain('CompleteMultipartUploadCommand');
   });

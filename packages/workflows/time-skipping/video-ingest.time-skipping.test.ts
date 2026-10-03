@@ -8,7 +8,7 @@ import { VIDEO_WORKFLOWS, createTestEnvironment, type TestEnvironment } from './
 /**
  * videoIngestWorkflowV1 (STU-2a) on a real Temporal server: the media steps run on task queue `video` in order; a
  * transcode that fails transiently is retried after its backoff (skipped time) and the asset is catalogued once; a
- * domain refusal (TempDiskBudgetExceededError) is not retried; the histories replay. Activities are recording fakes.
+ * domain refusal (PolicyDeniedError) is not retried; the histories replay. Activities are recording fakes.
  */
 const QUEUE = 'video-time-skipping';
 
@@ -46,7 +46,7 @@ const probe: MediaProbeV1 = {
   audio: [{ codec: 'aac', channels: 2, sampleRate: 48_000, bitRate: 128_000 }],
 };
 
-function fakes(derivativeFailures: Array<'transient' | 'budget'> = []) {
+function fakes(derivativeFailures: Array<'transient' | 'denied'> = []) {
   const calls: string[] = [];
   let attempts = 0;
   const rec =
@@ -73,16 +73,19 @@ function fakes(derivativeFailures: Array<'transient' | 'budget'> = []) {
     scanMediaUpload: rec('scanMediaUpload', () => ({ ok: true as const, engine: 'fake' })),
     inspectMediaUpload: rec('inspectMediaUpload', () => ({
       ok: true as const,
+      sourceKey: 'quarantine/ten_ts/ui_ts',
       contentHash: 'a'.repeat(64),
+      bytes: 30_000_000,
+      sanitised: false,
       probe,
     })),
     buildMediaDerivatives: rec('buildMediaDerivatives', () => {
       const failure = derivativeFailures[attempts++];
       if (failure === 'transient') throw new Error('ffmpeg was killed (worker restart)');
-      if (failure === 'budget')
+      if (failure === 'denied')
         throw ApplicationFailure.create({
-          type: 'TempDiskBudgetExceededError',
-          message: 'temp disk budget exceeded',
+          type: 'PolicyDeniedError',
+          message: 'the uploader lost asset.upload',
         });
       return {
         ok: true as const,
@@ -98,6 +101,7 @@ function fakes(derivativeFailures: Array<'transient' | 'budget'> = []) {
             transform: { op: 'proxy' },
           },
         ],
+        playedMs: 29_960,
       };
     }),
     moveToImmutable: rec('moveToImmutable', (i: { derivatives: unknown[] }) => ({
@@ -180,8 +184,8 @@ describe('videoIngestWorkflowV1 on a Temporal server (time-skipping in CI)', () 
     histories.push(history);
   }, 300_000);
 
-  it('does not retry a temp disk budget refusal', async () => {
-    const f = fakes(['budget']);
+  it('does not retry a domain refusal (PolicyDeniedError)', async () => {
+    const f = fakes(['denied']);
     const { result } = await run(f);
     expect(result).toBeInstanceOf(Error);
     expect(f.count('buildMediaDerivatives')).toBe(1);

@@ -2,24 +2,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
-import { runInTenant, withTransaction } from '@oremedia/db';
+import { runInTenant } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { assetVersions, uploadIntents } from '@oremedia/db/schema/assets';
-import { renderJobs, renderedExports } from '@oremedia/db/schema/creative';
+import { creativeDocuments, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { assetService } from '@oremedia/module-assets';
 import { creativeService } from '@oremedia/module-creative';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0025 (STU-2a video media): on a database populated at the previous head the migration
- * adds nullable asset_versions.media_info, upload_intents.rejection_detail, render_jobs.progress and the video
- * columns of rendered_exports, and appends `cancelled` to render_jobs.state; every existing row is unchanged and
- * reads null. On the migrated data the seeded version reads with no media info, the seeded intent's status has no
- * detail, and the seeded pending render job can be cancelled. The columns are in LATER_COLUMNS (seed.ts).
- * When 0023/0024 land first, PREVIOUS_HEAD becomes the latest of them.
+ * Ledger 1.g4 for migration 0025 (STU-2b video projects): on a database populated at the previous head the migration
+ * adds creative_documents.kind (NOT NULL, default graphic) and the nullable rendered_exports.dedupe_key with its
+ * index; every existing row is unchanged, every existing document reads as graphic, and the seeded graphic document
+ * still reads with its snapshot through the new code. The columns are in LATER_COLUMNS (seed.ts).
  */
-const PREVIOUS_HEAD = '0022_channel_health';
+const PREVIOUS_HEAD = '0024_video_media';
 const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
 
 describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', () => {
@@ -40,32 +36,26 @@ describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(assetVersions)).rejects.toThrow(); // media_info not there yet
+    await expect(tdb.db.select().from(creativeDocuments)).rejects.toThrow(); // kind not there yet
     before = await snapshot();
   });
   afterAll(async () => {
     await tdb?.drop();
   });
 
-  it('adds the nullable columns, null on every existing row, and leaves every existing row unchanged', async () => {
+  it('adds kind (graphic on every existing document) and dedupe_key (null), leaving every existing row unchanged', async () => {
     await tdb.migrateToHead();
     expect(await snapshot()).toBe(before);
-    expect((await tdb.db.select().from(assetVersions)).every((v) => v.mediaInfo === null)).toBe(true);
-    expect((await tdb.db.select().from(uploadIntents)).every((i) => i.rejectionDetail === null)).toBe(true);
-    const jobs = await tdb.db.select().from(renderJobs);
-    expect(jobs.length).toBeGreaterThan(0);
-    expect(jobs.every((j) => j.progress === null)).toBe(true);
-    expect(
-      (await tdb.db.select().from(renderedExports)).every(
-        (e) => e.durationMs === null && e.fps === null && e.posterStorageKey === null,
-      ),
-    ).toBe(true);
+    const docs = await tdb.db.select().from(creativeDocuments);
+    expect(docs.length).toBeGreaterThan(0);
+    expect(docs.every((d) => d.kind === 'graphic')).toBe(true);
+    expect((await tdb.db.select().from(renderedExports)).every((e) => e.dedupeKey === null)).toBe(true);
     await expect(
-      tdb.db.execute(sql`update ${renderJobs} set state = 'paused' where id = ${jobs[0]!.id}`),
+      tdb.db.execute(sql`update ${creativeDocuments} set kind = 'audio' where id = ${docs[0]!.id}`),
     ).rejects.toMatchObject({ cause: { code: 'WARN_DATA_TRUNCATED' } });
   });
 
-  it('the seeded rows work with the new code: upload status, and a pending render job is cancelled', async () => {
+  it('the seeded graphic document reads through the new code as graphic with its snapshot', async () => {
     const owner: ResolvedActor = {
       kind: 'user',
       id: tenantA.ownerUserId,
@@ -83,19 +73,10 @@ describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', (
       brandIds: 'all' as const,
       correlationId: 'corr_roll_forward_0025',
     };
-    const intentId = tenantA.ids['uploadIntentId'] as string;
-    expect(await runInTenant(ctx, () => assetService.uploadStatus(owner, { intentId }))).toMatchObject({
-      state: 'issued',
-      rejectionDetail: null,
-      kind: 'photo',
-    });
-    const renderJobId = tenantA.ids['renderJobId'] as string;
-    expect(
-      await runInTenant(ctx, () =>
-        withTransaction((tx) => creativeService.renders.cancel(owner, { renderJobId }, tx)),
-      ),
-    ).toMatchObject({ state: 'cancelled' });
-    const [job] = await tdb.db.select().from(renderJobs).where(eq(renderJobs.id, renderJobId));
-    expect(job?.state).toBe('cancelled');
+    const documentId = tenantA.ids['creativeDocumentId'] as string;
+    const got = await runInTenant(ctx, () => creativeService.documents.get(owner, { documentId }));
+    expect(got).toMatchObject({ kind: 'graphic', revision: { kind: 'graphic' } });
+    const [row] = await tdb.db.select().from(creativeDocuments).where(eq(creativeDocuments.id, documentId));
+    expect(row?.kind).toBe('graphic');
   });
 });

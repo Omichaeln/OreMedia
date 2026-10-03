@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import {
   MEDIA_DURATION_CAPS_SECONDS,
   PERSON_MEDIA_LIMITS,
@@ -13,13 +14,21 @@ import type {
   IngestMediaInspectInput,
   IngestMediaInspectResult,
 } from '@oremedia/contracts/media';
+import { ValidationFailedError } from '@oremedia/contracts/errors';
 import { requireTenant } from '@oremedia/db';
 import { AssetVersionRepository, GeneratedUploadRepository } from '../repositories';
 import { storageKeys } from '../storage';
 import { TempDiskBudgetExceededError, withTempDir } from '../temp-disk';
 import { loadIntent, type IngestDeps } from './pipeline';
 import { ScannerUnavailableError } from './scanner';
-import { buildMediaDerivatives, checkProbe, decodeCheck, probeFile } from './video';
+import {
+  buildMediaDerivatives,
+  checkProbe,
+  decodeCheck,
+  inspectFile,
+  stripMetadata,
+  withToolContext,
+} from './video';
 
 /**
  * STU-2a: the storage-and-database side of the video ingest steps (videoIngestWorkflowV1), one function per activity,
@@ -34,7 +43,21 @@ export interface MediaIngestDeps extends IngestDeps {
   proxyTimeoutMs?: number;
   /** Progress for heartbeats: a phase and a fraction of the step. */
   onProgress?: (phase: string, fraction: number) => void;
+  /** The activity's cancellation: running ffmpeg/ffprobe processes are killed when it fires. */
+  signal?: AbortSignal;
+  /** Called every TOOL_TICK_MS while a tool runs (heartbeats for steps that print no progress). */
+  heartbeat?: (detail: string) => void;
 }
+
+/** Runs a step's tools under the activity's cancellation and heartbeat. */
+const inTools = <T>(deps: MediaIngestDeps, phase: string, fn: () => Promise<T>): Promise<T> =>
+  withToolContext(
+    {
+      ...(deps.signal ? { signal: deps.signal } : {}),
+      tick: () => deps.heartbeat?.(`${phase}:working`),
+    },
+    fn,
+  );
 
 const versionsRepo = new AssetVersionRepository();
 const generatedRepo = new GeneratedUploadRepository();
@@ -92,8 +115,9 @@ export const mediaIngest = {
   },
 
   /**
-   * Streams the source to temp disk (hashing it on the way), runs ffprobe, checks the limits, decodes the first
-   * seconds, and proposes a duplicate when the brand already holds the same bytes.
+   * Streams the source to temp disk (hashing it on the way), runs ffprobe with the sniffed demuxer, checks the limits,
+   * decodes the first seconds, strips personal metadata (location, device, creation time) into a copy that becomes
+   * the original, and proposes a duplicate when the brand already holds the same bytes.
    */
   async inspect(
     deps: MediaIngestDeps,
@@ -102,28 +126,59 @@ export const mediaIngest = {
     const intent = await loadIntent(input, 'quarantined');
     const group = mediaGroup(input.group);
     const maxDurationSeconds = await durationCapSeconds(intent.id, group);
+    const { tenantId } = requireTenant();
+    // Room for the source and its metadata-free rewrite.
+    const maxBytes = intent.maxBytes * 2 + 64 * 1024 * 1024;
     return withinBudget<IngestStepResult<IngestMediaInspectResult>>(() =>
-      withTempDir({ maxBytes: intent.maxBytes + 64 * 1024 * 1024 }, async (dir) => {
-        const source = await dir.download(deps.storage, intent.storageKey, 'source', {
-          onProgress: (bytes) => deps.onProgress?.('download', Math.min(1, bytes / intent.maxBytes)),
-        });
-        if (!source) return { ok: false, reason: 'object_missing' };
-        const probe = await probeFile(source.path, source.bytes);
-        if ('ok' in probe) return probe;
-        const refused = checkProbe(probe, group, { maxDurationSeconds });
-        if (refused) return refused;
-        const undecodable = await decodeCheck(source.path, group);
-        if (undecodable) return undecodable;
-        const existing = await versionsRepo.findLiveByHash(intent.brandId, source.contentHash, null);
-        if (existing)
+      inTools(deps, 'inspect', () =>
+        withTempDir({ maxBytes }, async (dir) => {
+          const source = await dir.download(deps.storage, intent.storageKey, 'source', {
+            onProgress: (bytes) => deps.onProgress?.('download', Math.min(1, bytes / intent.maxBytes)),
+          });
+          if (!source) return { ok: false, reason: 'object_missing' };
+          const inspected = await inspectFile(source.path, source.bytes, {
+            mime: input.mime,
+            maxSeconds: maxDurationSeconds,
+          });
+          if ('ok' in inspected) return inspected;
+          let probe = inspected.probe;
+          const refused = checkProbe(probe, group, { maxDurationSeconds });
+          if (refused) return refused;
+          const undecodable = await decodeCheck(source.path, group, input.mime);
+          if (undecodable) return undecodable;
+          let kept = { key: intent.storageKey, contentHash: source.contentHash, bytes: source.bytes };
+          const sanitised = inspected.personalTags.length > 0;
+          if (sanitised) {
+            const clean = await stripMetadata(dir, source.path, input.mime, 'clean');
+            if ('ok' in clean) return clean;
+            const again = await inspectFile(clean.path, (await stat(clean.path)).size, {
+              mime: input.mime,
+              maxSeconds: maxDurationSeconds,
+            });
+            if ('ok' in again) return again;
+            probe = again.probe;
+            const key = storageKeys.quarantine(tenantId, intent.id, 'sanitised');
+            const stored = await dir.upload(deps.storage, key, 'clean', input.mime);
+            kept = { key, contentHash: stored.contentHash, bytes: stored.bytes };
+          }
+          const existing = await versionsRepo.findLiveByHash(intent.brandId, kept.contentHash, null);
+          if (existing)
+            return {
+              ok: false,
+              reason: 'duplicate_of',
+              duplicateOfAssetId: existing.assetId,
+              detail: 'identical content already exists in this brand',
+            };
           return {
-            ok: false,
-            reason: 'duplicate_of',
-            duplicateOfAssetId: existing.assetId,
-            detail: 'identical content already exists in this brand',
+            ok: true,
+            sourceKey: kept.key,
+            contentHash: kept.contentHash,
+            bytes: kept.bytes,
+            sanitised,
+            probe,
           };
-        return { ok: true, contentHash: source.contentHash, probe };
-      }),
+        }),
+      ),
     );
   },
 
@@ -138,39 +193,49 @@ export const mediaIngest = {
     const intent = await loadIntent(input, 'quarantined');
     const group = mediaGroup(input.group);
     const { tenantId } = requireTenant();
+    // Only this intent's own quarantine objects can be the source.
+    const prefix = storageKeys.quarantine(tenantId, intent.id);
+    if (input.sourceKey !== prefix && !input.sourceKey.startsWith(`${prefix}/`))
+      throw new ValidationFailedError([{ path: 'sourceKey', issue: 'not_this_intent' }]);
+    const maxDurationSeconds = await durationCapSeconds(intent.id, group);
     return withinBudget<IngestStepResult<IngestMediaDerivativesResult>>(() =>
-      withTempDir({ maxBytes: deps.tmpMaxBytes ?? intent.maxBytes + TMP_HEADROOM }, async (dir) => {
-        const source = await dir.download(deps.storage, intent.storageKey, 'source');
-        if (!source) return { ok: false, reason: 'object_missing' };
-        const built = await buildMediaDerivatives(
-          dir,
-          source.path,
-          input.probe,
-          group,
-          { maxDurationSeconds: Math.ceil(input.probe.durationMs / 1000) },
-          {
-            ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
-            ...(deps.proxyTimeoutMs ? { proxyTimeoutMs: deps.proxyTimeoutMs } : {}),
-          },
-        );
-        if (!built.ok) return built;
-        const refs: IngestDerivativeRef[] = [];
-        for (const f of built.files) {
-          const key = storageKeys.quarantine(tenantId, intent.id, `derivative-${f.purpose}`);
-          const stored = await dir.upload(deps.storage, key, f.name, f.mime);
-          refs.push({
-            purpose: f.purpose,
-            key,
-            mime: f.mime,
-            width: f.width,
-            height: f.height,
-            bytes: stored.bytes,
-            contentHash: stored.contentHash,
-            transform: f.transform,
+      inTools(deps, 'derivatives', () =>
+        withTempDir({ maxBytes: deps.tmpMaxBytes ?? intent.maxBytes + TMP_HEADROOM }, async (dir) => {
+          const source = await dir.download(deps.storage, input.sourceKey, 'source', {
+            onProgress: (bytes) => deps.heartbeat?.(`download:${bytes}`),
           });
-        }
-        return { ok: true, derivatives: refs };
-      }),
+          if (!source) return { ok: false, reason: 'object_missing' };
+          const built = await buildMediaDerivatives(
+            dir,
+            source.path,
+            input.probe,
+            group,
+            { maxDurationSeconds },
+            {
+              mime: input.mime,
+              ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
+              ...(deps.proxyTimeoutMs ? { proxyTimeoutMs: deps.proxyTimeoutMs } : {}),
+            },
+          );
+          if (!built.ok) return built;
+          const refs: IngestDerivativeRef[] = [];
+          for (const f of built.files) {
+            const key = storageKeys.quarantine(tenantId, intent.id, `derivative-${f.purpose}`);
+            const stored = await dir.upload(deps.storage, key, f.name, f.mime);
+            refs.push({
+              purpose: f.purpose,
+              key,
+              mime: f.mime,
+              width: f.width,
+              height: f.height,
+              bytes: stored.bytes,
+              contentHash: stored.contentHash,
+              transform: f.transform,
+            });
+          }
+          return { ok: true, derivatives: refs, playedMs: built.playedMs };
+        }),
+      ),
     );
   },
 };

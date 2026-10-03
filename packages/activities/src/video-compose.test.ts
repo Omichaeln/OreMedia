@@ -279,7 +279,7 @@ describe.skipIf(!hasTools)('compositor on real ffmpeg', { timeout: 300_000 }, ()
       { path: join(dir, 'title.png'), startMs: 500, endMs: 3_500, itemId: 'title' },
       { path: join(dir, 'caption.png'), startMs: 8_000, endMs: 9_500, itemId: 'cap' },
     ]);
-    const p = (await probeFile(main.output, 1)) as MediaProbeV1;
+    const p = (await probeFile(main.output, 1, { mime: 'video/mp4' })) as MediaProbeV1;
     expect(p.video).toMatchObject({ codec: 'h264', profile: 'High', width: 1080, height: 1920, fps: 30 });
     expect(p.audio[0]).toMatchObject({ codec: 'aac', sampleRate: 48_000, channels: 2 });
     expect(Math.abs(p.durationMs - 10_000)).toBeLessThanOrEqual(34);

@@ -67,6 +67,13 @@ export const ARTICLE_IMAGE_MIMES = [
   'image/webp',
   'image/avif',
 ] as const;
+/**
+ * BSC-2: types an article may name that are never sent as they are: an SVG (a vector logo, icon or illustration) is
+ * released to the site as its PNG rendition, so the page still only carries a raster.
+ */
+export const ARTICLE_RASTERISED_MIMES = ['image/svg+xml'] as const;
+/** Every type an article image may be chosen as: the rasters, and the vectors sent as their PNG rendition. */
+export const ARTICLE_IMAGE_SOURCE_MIMES = [...ARTICLE_IMAGE_MIMES, ...ARTICLE_RASTERISED_MIMES] as const;
 /** An image from the asset library: the asset version (immutable bytes) and the alt text the page carries. */
 export const ArticleImageV1 = z.object({
   assetVersionId: z.string().min(1),

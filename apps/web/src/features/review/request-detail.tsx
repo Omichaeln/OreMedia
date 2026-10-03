@@ -47,10 +47,12 @@ function ManifestMedia({
   reviewRequestId,
   manifest,
   name,
+  locale,
 }: {
   reviewRequestId: string;
   manifest: FrozenManifestV1;
   name: (channelConnectionId: string) => string;
+  locale?: string | undefined;
 }) {
   const media = useManifestMedia(reviewRequestId);
   if (manifest.exports.length === 0) return null;
@@ -94,6 +96,7 @@ function ManifestMedia({
                   src={item.url}
                   poster={item.posterUrl}
                   captions={item.captionsUrl}
+                  captionsLang={locale ?? null}
                   label={`Rendered video for ${item.channelConnectionIds.map(name).join(', ')}${
                     altFor(item.channelConnectionIds[0] ?? '', item.exportId)
                       ? `: ${altFor(item.channelConnectionIds[0] ?? '', item.exportId)}`
@@ -200,6 +203,7 @@ export function ManifestSummary({
   channels,
   destinations,
   reviewRequestId,
+  locale,
 }: {
   manifest: FrozenManifestV1;
   manifestHash: string;
@@ -208,6 +212,8 @@ export function ManifestSummary({
   destinations?: ReadonlyMap<string, DestinationDto>;
   /** When given, the frozen files are loaded and shown (spec 13.3); the summary alone lists their counts. */
   reviewRequestId?: string;
+  /** The brand's default locale, for video captions (unknown in the reviewer portal). */
+  locale?: string | undefined;
 }) {
   const name = (id: string) => {
     const c = channels?.get(id);
@@ -278,7 +284,9 @@ export function ManifestSummary({
       {(manifest.article || manifest.websites) && (
         <FrozenArticle reviewRequestId={reviewRequestId} manifest={manifest} />
       )}
-      {reviewRequestId && <ManifestMedia reviewRequestId={reviewRequestId} manifest={manifest} name={name} />}
+      {reviewRequestId && (
+        <ManifestMedia reviewRequestId={reviewRequestId} manifest={manifest} name={name} locale={locale} />
+      )}
     </div>
   );
 }
@@ -290,10 +298,18 @@ export interface RequestDetailProps {
   destinations?: ReadonlyMap<string, DestinationDto>;
   /** What the request is about (the package title), shown as the heading. */
   title?: ReactNode;
+  /** The brand's default locale: the language of a video export's captions. */
+  locale?: string;
 }
 
 /** Spec 21.2 inbox states: changes requested, stale approval, revoked external access, decided. */
-export function RequestDetail({ reviewRequestId, channels, destinations, title }: RequestDetailProps) {
+export function RequestDetail({
+  reviewRequestId,
+  channels,
+  destinations,
+  title,
+  locale,
+}: RequestDetailProps) {
   const request = useReviewRequest(reviewRequestId);
   return (
     <section
@@ -330,7 +346,12 @@ export function RequestDetail({ reviewRequestId, channels, destinations, title }
         />
       )}
       {request.isSuccess && isMemberView(request.data) && (
-        <MemberDetail request={request.data} channels={channels} destinations={destinations} />
+        <MemberDetail
+          request={request.data}
+          channels={channels}
+          destinations={destinations}
+          locale={locale}
+        />
       )}
     </section>
   );
@@ -340,10 +361,12 @@ function MemberDetail({
   request: r,
   channels,
   destinations,
+  locale,
 }: {
   request: MemberReviewRequestDto;
   channels: ReadonlyMap<string, ChannelDto>;
   destinations?: ReadonlyMap<string, DestinationDto>;
+  locale?: string;
 }) {
   const state = REQUEST_STATE_CHIP[r.state];
   const validApproval = r.approvals.find((a) => a.state === 'valid');
@@ -422,6 +445,7 @@ function MemberDetail({
           channels={channels}
           destinations={destinations}
           reviewRequestId={r.id}
+          locale={locale}
         />
       </section>
 

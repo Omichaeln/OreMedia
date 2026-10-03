@@ -69,6 +69,9 @@ export const EVENT_TYPES = {
   // RA-04 (appended; additive only): a live article's rendered page is due for a delayed re-validation; emitted
   // with `availableAt` at publish, renderedValidationWorkflowV1 re-runs the checks
   'publication.rendered_validation_due': 1,
+  // BSC-3 (appended; additive only): an approved fact's validity ended; emitted once by the daily fact sweep, which
+  // holds the scheduled work citing it itself (informational: no route)
+  'brand.fact_expired': 1,
   // STU-2b (appended; additive only): a person cancelled a video render; relayed as a signal to its workflow
   'creative.render_cancel_requested': 1,
 } as const;

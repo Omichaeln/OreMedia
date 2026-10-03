@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "27d0ca53-e6b7-4bac-a7e6-cc971f02e147",
-  "prevId": "22c0c8e3-ae81-46f5-a3f4-83b38b74c6b4",
+  "id": "503b2558-6512-474d-8f53-9f2969dba663",
+  "prevId": "7f336b69-1f4f-4d7f-97d3-8cfd74cc83a7",
   "tables": {
     "api_clients": {
       "name": "api_clients",
@@ -1424,7 +1424,7 @@
         },
         "state": {
           "name": "state",
-          "type": "enum('proposed','approved','revoked')",
+          "type": "enum('proposed','approved','revoked','superseded')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -1453,6 +1453,104 @@
         "revoked_by_user_id": {
           "name": "revoked_by_user_id",
           "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "category": {
+          "name": "category",
+          "type": "enum('company','product','service','location','contact','differentiator','audience','terminology','claim','faq','offer','price','statistic','legal')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "enum('user','extracted','inferred','suggested')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sources": {
+          "name": "sources",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "review_due_at": {
+          "name": "review_due_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reviewed_by_user_id": {
+          "name": "reviewed_by_user_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reviewed_at": {
+          "name": "reviewed_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "superseded_by_fact_id": {
+          "name": "superseded_by_fact_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "supersedes_fact_id": {
+          "name": "supersedes_fact_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "revoke_reason": {
+          "name": "revoke_reason",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "conflicts": {
+          "name": "conflicts",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "review_flagged_at": {
+          "name": "review_flagged_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "expiry_notified_at": {
+          "name": "expiry_notified_at",
+          "type": "datetime(3)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1496,6 +1594,15 @@
             "tenant_id",
             "brand_id",
             "state"
+          ],
+          "isUnique": false
+        },
+        "ix_fact_dedupe": {
+          "name": "ix_fact_dedupe",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "dedupe_key"
           ],
           "isUnique": false
         }
@@ -3448,6 +3555,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "kind": {
+          "name": "kind",
+          "type": "enum('graphic','video')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'graphic'"
+        },
         "created_at": {
           "name": "created_at",
           "type": "datetime(3)",
@@ -4414,6 +4529,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "datetime(3)",
@@ -4429,6 +4551,15 @@
             "tenant_id",
             "revision_id",
             "format_key"
+          ],
+          "isUnique": false
+        },
+        "ix_export_dedupe": {
+          "name": "ix_export_dedupe",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "dedupe_key"
           ],
           "isUnique": false
         },

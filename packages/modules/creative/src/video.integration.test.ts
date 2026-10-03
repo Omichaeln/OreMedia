@@ -411,7 +411,7 @@ describe('video documents (STU-2b) against MySQL 8', () => {
         variants: [],
       };
       const at = new Date();
-      // As 0025-era code wrote them: no kind column value (the default applies), the graphic batch and snapshot.
+      // As 0024-era code wrote them: no kind column value (the default applies), the graphic batch and snapshot.
       await tdb.db.execute(
         sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at, version) values (${documentId}, ${tenantA}, ${brandA}, 'Old', ${revisionId}, 1, ${at}, ${at}, 1)`,
       );

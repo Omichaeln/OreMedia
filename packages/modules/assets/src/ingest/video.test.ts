@@ -31,6 +31,7 @@ import {
  * CI installs it (.github/workflows/ci.yml) so they run there.
  */
 const hasTools = await mediaToolsAvailable();
+const MP4 = { mime: 'video/mp4' };
 if (!hasTools)
   console.error('video.test.ts: ffmpeg/ffprobe not found on PATH; the ffmpeg suites are skipped');
 
@@ -315,7 +316,7 @@ describe.skipIf(!hasTools)(
     });
 
     it('probes a clip and a rotated clip', async () => {
-      const p = await probeFile(file('clip.mp4'), await size('clip.mp4'));
+      const p = await probeFile(file('clip.mp4'), await size('clip.mp4'), MP4);
       expect('ok' in p).toBe(false);
       expect(p).toMatchObject({
         durationMs: expect.any(Number),
@@ -323,12 +324,12 @@ describe.skipIf(!hasTools)(
       });
       expect((p as MediaProbeV1).durationMs).toBeGreaterThan(2_900);
       expect((p as MediaProbeV1).durationMs).toBeLessThan(3_200);
-      const r = (await probeFile(file('rotated.mp4'), await size('rotated.mp4'))) as MediaProbeV1;
+      const r = (await probeFile(file('rotated.mp4'), await size('rotated.mp4'), MP4)) as MediaProbeV1;
       expect(r.video).toMatchObject({ width: 360, height: 640, codedWidth: 640, rotation: 270 });
     });
 
     it('rejects a truncated MP4 whose index is missing as media_malformed', async () => {
-      const r = await probeFile(file('truncated-end.mp4'), await size('truncated-end.mp4'));
+      const r = await probeFile(file('truncated-end.mp4'), await size('truncated-end.mp4'), MP4);
       expect(r).toMatchObject({ ok: false, reason: 'media_malformed' });
       expect((r as { detail: string }).detail).not.toContain(dir);
     });
@@ -337,21 +338,29 @@ describe.skipIf(!hasTools)(
       const probe = (await probeFile(
         file('truncated-fast.mp4'),
         await size('truncated-fast.mp4'),
+        MP4,
       )) as MediaProbeV1;
       expect(probe.video?.codec).toBe('h264'); // the index survives: only decoding finds the damage
       const r = await withTempDir({ maxBytes: 256 * 1024 * 1024 }, (tmp) =>
-        buildMediaDerivatives(tmp, file('truncated-fast.mp4'), probe, 'video', { maxDurationSeconds: 600 }),
+        buildMediaDerivatives(
+          tmp,
+          file('truncated-fast.mp4'),
+          probe,
+          'video',
+          { maxDurationSeconds: 600 },
+          MP4,
+        ),
       );
       expect(r).toMatchObject({ ok: false, reason: 'media_malformed' });
     });
 
     it('decodes the first seconds of a good stream', async () => {
-      expect(await decodeCheck(file('clip.mp4'), 'video')).toBeNull();
-      expect(await decodeCheck(file('audio.wav'), 'audio')).toBeNull();
+      expect(await decodeCheck(file('clip.mp4'), 'video', 'video/mp4')).toBeNull();
+      expect(await decodeCheck(file('audio.wav'), 'audio', 'audio/wav')).toBeNull();
     });
 
     it('builds poster, strip, proxy and waveform derivatives for a video', async () => {
-      const probe = (await probeFile(file('clip.mp4'), await size('clip.mp4'))) as MediaProbeV1;
+      const probe = (await probeFile(file('clip.mp4'), await size('clip.mp4'), MP4)) as MediaProbeV1;
       const phases: string[] = [];
       await withTempDir({ maxBytes: 256 * 1024 * 1024 }, async (tmp) => {
         const r = await buildMediaDerivatives(
@@ -361,6 +370,7 @@ describe.skipIf(!hasTools)(
           'video',
           { maxDurationSeconds: 600 },
           {
+            mime: 'video/mp4',
             onProgress: (phase) => phases.push(phase),
           },
         );
@@ -383,6 +393,7 @@ describe.skipIf(!hasTools)(
         const proxy = (await probeFile(
           tmp.file('proxy.mp4'),
           (await stat(tmp.file('proxy.mp4'))).size,
+          MP4,
         )) as MediaProbeV1;
         expect(proxy.video).toMatchObject({ codec: 'h264', width: 640, height: 360, fps: 25 });
         expect(proxy.audio[0]).toMatchObject({ codec: 'aac', sampleRate: 48_000, channels: 2 });
@@ -402,17 +413,24 @@ describe.skipIf(!hasTools)(
 
     it('builds a 128k AAC proxy, waveform and waveform images for audio (M4A and WAV)', async () => {
       for (const name of ['audio.m4a', 'audio.wav']) {
-        const probe = (await probeFile(file(name), await size(name))) as MediaProbeV1;
+        const mime = name.endsWith('.wav') ? 'audio/wav' : 'audio/mp4';
+        const probe = (await probeFile(file(name), await size(name), { mime })) as MediaProbeV1;
         expect(probe.video).toBeNull();
         expect(checkProbe(probe, 'audio', { maxDurationSeconds: 600 })).toBeNull();
         await withTempDir({ maxBytes: 64 * 1024 * 1024 }, async (tmp) => {
-          const r = await buildMediaDerivatives(tmp, file(name), probe, 'audio', { maxDurationSeconds: 600 });
+          const r = await buildMediaDerivatives(
+            tmp,
+            file(name),
+            probe,
+            'audio',
+            { maxDurationSeconds: 600 },
+            { mime },
+          );
           if (!r.ok) throw new Error(r.detail);
           expect(r.files.map((f) => f.purpose).sort()).toEqual(['preview', 'proxy', 'thumbnail', 'waveform']);
-          const proxy = (await probeFile(
-            tmp.file('proxy.m4a'),
-            (await stat(tmp.file('proxy.m4a'))).size,
-          )) as MediaProbeV1;
+          const proxy = (await probeFile(tmp.file('proxy.m4a'), (await stat(tmp.file('proxy.m4a'))).size, {
+            mime: 'audio/mp4',
+          })) as MediaProbeV1;
           expect(proxy.audio[0]).toMatchObject({ codec: 'aac', sampleRate: 48_000 });
           expect(proxy.video).toBeNull();
           const preview = r.files.find((f) => f.purpose === 'preview')!;

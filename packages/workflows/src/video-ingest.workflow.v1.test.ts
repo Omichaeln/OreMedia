@@ -65,8 +65,15 @@ function fakes(overrides: Partial<VideoIngestActivitiesV1> = {}) {
     verifyUpload: async () => ({ ok: true, bytes: 3_000_000 }),
     sniffUpload: async () => ({ ok: true, mime: 'video/mp4', group: 'video' }),
     scanMediaUpload: async () => ({ ok: true, engine: 'fake' }),
-    inspectMediaUpload: async () => ({ ok: true, contentHash: 'b'.repeat(64), probe }),
-    buildMediaDerivatives: async () => ({ ok: true, derivatives }),
+    inspectMediaUpload: async () => ({
+      ok: true,
+      sourceKey: 'quarantine/ten_A/ui_1',
+      contentHash: 'b'.repeat(64),
+      bytes: 3_000_000,
+      sanitised: false,
+      probe,
+    }),
+    buildMediaDerivatives: async () => ({ ok: true, derivatives, playedMs: 11_960 }),
     moveToImmutable: async (i) => ({
       assetId: 'ast_1',
       assetVersionId: 'av_1',
@@ -107,7 +114,11 @@ describe('videoIngestWorkflowV1 orchestration (STU-2a)', () => {
       'finaliseMediaUpload',
     ]);
     expect(f.inputOf('inspectMediaUpload')).toMatchObject({ mime: 'video/mp4', group: 'video' });
-    expect(f.inputOf('buildMediaDerivatives')).toMatchObject({ group: 'video', probe });
+    expect(f.inputOf('buildMediaDerivatives')).toMatchObject({
+      group: 'video',
+      probe,
+      sourceKey: 'quarantine/ten_A/ui_1',
+    });
     // The upload is the original: move copies it as is, and the quarantine key is cleaned up.
     expect(f.inputOf('moveToImmutable')).toMatchObject({ sanitisedKey: 'quarantine/ten_A/ui_1' });
     expect(f.inputOf('catalogueMediaAsset')).toMatchObject({
@@ -197,10 +208,46 @@ describe('videoIngestWorkflowV1 orchestration (STU-2a)', () => {
     const audioProbe: MediaProbeV1 = { ...probe, video: null };
     const f = fakes({
       sniffUpload: async () => ({ ok: true, mime: 'audio/mpeg', group: 'audio' }),
-      inspectMediaUpload: async () => ({ ok: true, contentHash: 'd'.repeat(64), probe: audioProbe }),
+      inspectMediaUpload: async () => ({
+        ok: true,
+        sourceKey: 'quarantine/ten_A/ui_1',
+        contentHash: 'd'.repeat(64),
+        bytes: 400_000,
+        sanitised: false,
+        probe: audioProbe,
+      }),
     });
     expect((await runVideoIngest(f.acts, input)).outcome).toBe('accepted');
     expect(f.inputOf('buildMediaDerivatives')).toMatchObject({ group: 'audio' });
     expect(f.inputOf('catalogueMediaAsset')).toMatchObject({ width: null, height: null, mime: 'audio/mpeg' });
+  });
+
+  it('a source with personal metadata: its stripped copy is the original, catalogued as sanitised and cleaned up', async () => {
+    const f = fakes({
+      inspectMediaUpload: async () => ({
+        ok: true,
+        sourceKey: 'quarantine/ten_A/ui_1/sanitised',
+        contentHash: 'e'.repeat(64),
+        bytes: 2_999_000,
+        sanitised: true,
+        probe,
+      }),
+      // Played a little longer than the header said (inside the tolerance): the version records what played.
+      buildMediaDerivatives: async () => ({ ok: true, derivatives, playedMs: 12_200 }),
+    });
+    expect((await runVideoIngest(f.acts, input)).outcome).toBe('accepted');
+    expect(f.inputOf('buildMediaDerivatives')).toMatchObject({
+      sourceKey: 'quarantine/ten_A/ui_1/sanitised',
+    });
+    expect(f.inputOf('moveToImmutable')).toMatchObject({ sanitisedKey: 'quarantine/ten_A/ui_1/sanitised' });
+    expect(f.inputOf('catalogueMediaAsset')).toMatchObject({
+      contentHash: 'e'.repeat(64),
+      bytes: 2_999_000,
+      sanitised: true,
+      probe: { ...probe, durationMs: 12_200 },
+    });
+    expect(f.inputOf('finaliseMediaUpload')).toMatchObject({
+      cleanupKeys: expect.arrayContaining(['quarantine/ten_A/ui_1', 'quarantine/ten_A/ui_1/sanitised']),
+    });
   });
 });

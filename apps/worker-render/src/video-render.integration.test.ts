@@ -162,7 +162,7 @@ describe.skipIf(!hasTools)('video render end to end (MySQL + creative module + C
     const storageKey = storageKeys.original(tenantA, brandA, id, versionId);
     let mediaInfo: MediaProbeV1 | null = null;
     if (typeof file === 'string' && (kind === 'video' || kind === 'audio')) {
-      const p = await probeFile(file, bytes.length);
+      const p = await probeFile(file, bytes.length, { mime });
       if ('ok' in p) throw new Error(`probe ${key}`);
       mediaInfo = p;
     }

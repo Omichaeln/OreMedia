@@ -302,27 +302,34 @@ Rollout order for speech generation (migration 0008, flag `creative.audio_genera
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
 `worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
-Rollout order for video and audio uploads (migration 0025, STU-2a; no flag: a person's video or audio upload is
+Rollout order for video and audio uploads (migration 0024, STU-2a; no flag: a person's video or audio upload is
 accepted as soon as the API is on the new build):
 
-1. Apply migration 0025 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
+1. Apply migration 0024 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
-2. Raise the clamav service's `StreamMaxLength` (and `MaxScanSize`/`MaxFileSize`) to at least 1100M: video uploads are
-   up to 1 GiB and are streamed to clamd; below the limit clamd gives no verdict and the upload stays quarantined
-   (`scanner_unavailable`, the detail names `StreamMaxLength`).
+2. Before the merge that ships this (the api deploys on merge and accepts video at once), raise the clamav service's
+   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: point the service at this repository with config
+   file `infra/railway/clamav/railway.json` (the official image plus the raised limits; the build fails if clamd's
+   config file moves), in staging first, then production. Video uploads are up to 1 GiB and are streamed to clamd;
+   below the limit clamd gives no verdict and the upload stays quarantined (`scanner_unavailable`, the detail names
+   `StreamMaxLength`).
 3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
-   default 1; resources in infra/railway/README.md). Check its log for `polling task queues render, media and video`
-   and no `ffmpeg/ffprobe not found` line.
+   default 1; resources in infra/railway/README.md). In production a container without ffmpeg/ffprobe refuses to
+   start (`refusing to start (task queue video)` in its log), so a broken image fails its deploy. Check the start
+   line names all three queues: `worker-render polling task queues render, media, video`.
+   The reviewer's captions track is fetched by the browser (then played from a blob URL): the assets bucket's CORS
+   rules must allow GET from the web origin, as they already allow the browser's upload PUT. Without that rule the
+   video still plays, without captions.
 4. Deploy the API and the other workers as usual. Upload completions now carry the intent's kind and video/audio
    ones start `videoIngestWorkflowV1` on `video`; image, font and PDF uploads keep `assetIngestWorkflowV1` on `media`.
    Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish
    on worker-render, which must stay on the new build until they drain.
 
-Rollout order for video documents (migration 0026, STU-2b; no flag: a person can create a video document once the
+Rollout order for video documents (migration 0025, STU-2b; no flag: a person can create a video document once the
 API is on the new build):
 
-1. Apply migration 0026 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
+1. Apply migration 0025 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
    `rendered_exports.dedupe_key` with index `ix_export_dedupe`; existing documents stay graphic) with the api
    pre-deploy command.
 2. Deploy `worker-render` first: it registers `videoRenderJobWorkflowV1` and `videoRenderSignalRelayV1` and the

@@ -351,6 +351,16 @@ function validateLogo(
         ...at,
       },
     ];
+  // BSC-2: the rule names the artwork for its variant; an element showing another logo under that variant (the
+  // reversed lock-up labelled primary, an old logo) breaks the rule even when sizes and grounds are right. Checked when
+  // the rule pins a version (rules saved before pinning name only the asset, which the element cannot be matched to).
+  if (rule.assetVersionId && el.assetVersionId !== rule.assetVersionId)
+    out.push({
+      code: 'logo_asset_mismatch',
+      severity: 'blocking',
+      message: `This is not the brand's ${el.variant.replace('_', ' ')} logo: use the logo the brand system names for that variant`,
+      ...at,
+    });
   if (el.transform.width < rule.minWidthPx)
     out.push({
       code: 'logo_min_width',

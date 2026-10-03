@@ -133,6 +133,11 @@ const PNG_BYTES = Buffer.from(
   'base64',
 );
 
+/** BSC-2: the vector logo the store answers for a `.svg` object: a mark and a wordmark on a transparent ground. */
+const SVG_LOGO = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100" viewBox="0 0 300 100"><circle cx="50" cy="50" r="40" fill="#e94e1b"/><path d="M110 35h170v30H110z" fill="#222"/></svg>',
+);
+
 function serveObjectStore(
   req: IncomingMessage,
   res: ServerResponse,
@@ -163,6 +168,15 @@ function serveObjectStore(
   }
   if (req.method === 'GET' && url.pathname.startsWith('/e2e-object/')) {
     store?.gets.push(url.pathname);
+    // BSC-2: a signed download answers as an attachment, as the store does for assets.media.download.
+    const download = url.searchParams.get('download');
+    if (download)
+      res.setHeader('content-disposition', `attachment; filename="${download.replace(/"/g, '')}"`);
+    if (url.pathname.endsWith('.svg')) {
+      res.setHeader('content-type', 'image/svg+xml');
+      res.end(SVG_LOGO);
+      return true;
+    }
     // An image version (RA-08: article images and thumbnails) is a 2×2 PNG; anything else is the fixture font.
     if (url.pathname.endsWith('.png')) {
       res.setHeader('content-type', 'image/png');

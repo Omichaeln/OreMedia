@@ -163,9 +163,13 @@ describe.skipIf(!enabled)('video and audio media (built app in Chromium, mock tr
       expect(await first.getAttribute('src')).toBe('/e2e-object/exp_seed.webm');
       expect(await first.getAttribute('poster')).toBe('/e2e-object/exp_seed-poster.png');
       expect(await first.getAttribute('aria-label')).toMatch(/^Rendered video for /);
-      const track = first.locator('track');
+      // The captions are fetched into a blob URL (no crossOrigin on the video), in the brand's default locale.
+      expect(await first.getAttribute('crossorigin')).toBeNull();
+      const track = first.getByTestId('captions-track');
+      await expect.poll(() => track.count(), { timeout: 15_000 }).toBe(1);
       expect(await track.getAttribute('kind')).toBe('captions');
-      expect(await track.getAttribute('src')).toBe('/e2e-object/exp_seed.vtt');
+      expect(await track.getAttribute('src')).toMatch(/^blob:/);
+      expect(await track.getAttribute('srclang')).toBe('en');
       await expect.poll(() => metadataLoaded(page, 'inline-video'), { timeout: 15_000 }).toBe(true);
       expect(await media.textContent()).toContain('0:02 · 30 fps');
       // The same player in the external reviewer portal, through a request-bound link.

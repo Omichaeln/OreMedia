@@ -5,7 +5,7 @@ import type {
   IngestStepRejection,
 } from '@oremedia/contracts/assets';
 import type { VideoIngestActivitiesV1 } from '@oremedia/contracts/media';
-import { isFailureOfType } from './asset-ingest.workflow.v1';
+import { isFailureOfType } from './failure';
 
 /**
  * STU-2a: complete(intentId) of a video or audio upload → videoIngestWorkflowV1 on task queue `video` (worker-render,
@@ -23,7 +23,6 @@ const NON_RETRYABLE_ERROR_TYPES = [
   'ConflictError',
   'TenantContextMissingError',
   'IllegalTransitionError',
-  'TempDiskBudgetExceededError',
 ];
 
 /** The orchestration, separated from the activity proxies so it can be exercised with fakes. */
@@ -77,13 +76,16 @@ export async function runVideoIngest(
   if (!scanned.ok)
     return finish(scanned, scanned.reason === 'scanner_unavailable' ? 'quarantined' : 'rejected');
 
-  // 4–5. ffprobe inspection against the limits, a decode check, the content hash and the dedupe proposal
+  // 4–5. ffprobe inspection against the limits, a decode check, personal metadata stripped into a copy when there is
+  // any, the content hash and the dedupe proposal
   const inspected = await acts.inspectMediaUpload({ ...input, mime: sniffed.mime, group });
   if (!inspected.ok) return finish(inspected, 'rejected');
+  if (inspected.sourceKey !== begin.storageKey) cleanupKeys.push(inspected.sourceKey);
 
-  // 6. poster, thumbnail strip, editing proxy, waveform
+  // 6. poster, thumbnail strip, editing proxy, waveform (a source playing longer than it claims is refused here)
   const built = await acts.buildMediaDerivatives({
     ...input,
+    sourceKey: inspected.sourceKey,
     mime: sniffed.mime,
     group,
     probe: inspected.probe,
@@ -91,14 +93,19 @@ export async function runVideoIngest(
   if (!built.ok) return finish(built, 'rejected');
   cleanupKeys.push(...built.derivatives.map((d) => d.key));
 
-  // 7. the upload itself is the original (stored as uploaded); derivatives go to their immutable keys
+  // 7. the kept source (the upload, or its metadata-free copy) is the original; derivatives go to immutable keys
   const moved = await acts.moveToImmutable({
     ...input,
-    sanitisedKey: begin.storageKey,
+    sanitisedKey: inspected.sourceKey,
     derivatives: built.derivatives,
   });
 
-  const probe = inspected.probe;
+  // The version records the longer of the header's duration and what actually played (within the 5% tolerance a
+  // longer play was not refused for); the last frame's timestamp stops one frame short of the end.
+  const probe =
+    built.playedMs > inspected.probe.durationMs
+      ? { ...inspected.probe, durationMs: built.playedMs }
+      : inspected.probe;
   const catalogued = await acts.catalogueMediaAsset({
     ...input,
     assetId: moved.assetId,
@@ -106,11 +113,11 @@ export async function runVideoIngest(
     originalKey: moved.originalKey,
     contentHash: inspected.contentHash,
     mime: sniffed.mime,
-    bytes: verified.bytes,
+    bytes: inspected.bytes,
     width: probe.video?.width ?? null,
     height: probe.video?.height ?? null,
     colourProfile: null,
-    sanitised: false,
+    sanitised: inspected.sanitised,
     derivatives: moved.derivatives,
     probe,
   }); // 8

@@ -7,5 +7,8 @@
  *  - MAJOR: a change to the scene contract (SceneContext/SceneHandle) or to what a document means.
  * A web app and a render worker on different MINOR/MAJOR versions produce different pixels; the manifest makes the
  * skew visible (runbook recover-rendering).
+ *
+ * 1.1.0 (BSC-2): logos are contain-fitted in their box instead of stretched (pixels change only for a logo whose box
+ * aspect differs from its artwork, which the logo-distortion check blocked before).
  */
-export const RENDERER_VERSION = '1.0.0';
+export const RENDERER_VERSION = '1.1.0';

@@ -3,7 +3,12 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
-import type { AssetIngestInputV1, IngestSanitiseResult, IngestStepResult } from '@oremedia/contracts/assets';
+import {
+  INGEST_REJECTION_MESSAGES,
+  type AssetIngestInputV1,
+  type IngestSanitiseResult,
+  type IngestStepResult,
+} from '@oremedia/contracts/assets';
 import {
   NotFoundError,
   PolicyDeniedError,
@@ -291,6 +296,7 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         state: 'accepted',
         assetId: result.assetId,
         rejectionReason: null,
+        rejectionMessage: null,
         rejectionDetail: null,
         kind: 'photo',
       });
@@ -365,11 +371,11 @@ describe('assets module against MySQL 8 (spec 9)', () => {
           true,
         ),
       );
-      expect(bad).toMatchObject({ outcome: 'rejected', reason: 'svg_unsafe_content' });
+      expect(bad).toMatchObject({ outcome: 'rejected', reason: 'svg_script' });
       const [intent] = await tdb.db.select().from(uploadIntents).where(eq(uploadIntents.id, badIntent));
       expect(intent).toMatchObject({
         state: 'rejected',
-        rejectionReason: 'svg_unsafe_content',
+        rejectionReason: 'svg_script',
         resultAssetId: null,
       });
       await expect(
@@ -378,12 +384,127 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         intentId: badIntent,
         state: 'rejected',
         assetId: null,
-        rejectionReason: 'svg_unsafe_content',
+        rejectionReason: 'svg_script',
+        rejectionMessage: INGEST_REJECTION_MESSAGES.svg_script,
         rejectionDetail: null,
         kind: 'logo',
       });
       expect(mem.keys().filter((k) => k.includes(badIntent))).toEqual([]);
       expect((await tdb.db.select().from(assets).where(eq(assets.name, 'evil.svg'))).length).toBe(0);
+    });
+
+    it('BSC-2: an SVG logo is kept as vector with a transparent PNG rendition; downloads are attachments; an article release sends the PNG', async () => {
+      const logoSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="100" viewBox="0 0 300 100"><defs><linearGradient id="g"><stop offset="0" stop-color="#e94e1b"/><stop offset="1" stop-color="#1b4ee9"/></linearGradient></defs><circle cx="50" cy="50" r="40" fill="url(#g)"/><path d="M110 30h170v40H110z" fill="#222"/></svg>`;
+      const intentId = await uploadAs(
+        ownerA,
+        brandA1,
+        'logo',
+        'image/svg+xml',
+        Buffer.from(logoSvg),
+        'Oré logo.svg',
+      );
+      const result = await runInTenant(ctxFor(ownerA), () =>
+        runPipeline(
+          {
+            tenantId: tenantA,
+            actor: { kind: 'user', id: ownerA.id },
+            correlationId: 'c',
+            intentId,
+            brandId: brandA1,
+          },
+          true,
+        ),
+      );
+      if (result.outcome !== 'accepted') throw new Error(`svg logo ${result.outcome}`);
+      const [version] = await tdb.db
+        .select()
+        .from(assetVersions)
+        .where(eq(assetVersions.id, result.assetVersionId));
+      expect(version).toMatchObject({ mime: 'image/svg+xml', width: 300, height: 100 });
+      const stored = await runInTenant(ctxFor(ownerA), () => mem.getObject(version?.storageKey ?? ''));
+      expect(stored?.toString('utf8')).toContain('url(#g)'); // the vector, sanitised, structure kept
+      const derivs = await tdb.db
+        .select()
+        .from(assetDerivatives)
+        .where(eq(assetDerivatives.assetVersionId, result.assetVersionId));
+      expect(derivs.map((d) => d.purpose).sort()).toEqual(['png', 'preview', 'thumbnail', 'web']);
+      const png = derivs.find((d) => d.purpose === 'png');
+      expect(png).toMatchObject({ mime: 'image/png', width: 2048, height: 683 });
+      const pngBytes = await runInTenant(ctxFor(ownerA), () => mem.getObject(png?.storageKey ?? ''));
+      expect((await sharp(pngBytes as Buffer).metadata()).hasAlpha).toBe(true);
+
+      // Download the original: an attachment with the SVG type and the asset's name, from the store.
+      const original = await runInTenant(ctxFor(ownerA), () =>
+        withTransaction((tx) =>
+          assetService.downloadUrl(ownerA, { assetVersionId: result.assetVersionId, format: 'original' }, tx),
+        ),
+      );
+      expect(original).toMatchObject({ mime: 'image/svg+xml', filename: 'Oré logo.svg' });
+      const q = new URL(original.url.replace('memory://', 'https://')).searchParams;
+      expect(q.get('response-content-disposition')).toMatch(/^attachment; filename="Or_ logo.svg"/);
+      expect(q.get('response-content-type')).toBe('image/svg+xml');
+      // A PNG at a chosen width is drawn from the vector once, recorded as a derivative and reused.
+      const at512 = await runInTenant(ctxFor(creatorA1), () =>
+        withTransaction((tx) =>
+          assetService.downloadUrl(
+            creatorA1,
+            { assetVersionId: result.assetVersionId, format: 'png', width: 512 },
+            tx,
+          ),
+        ),
+      );
+      expect(at512).toMatchObject({ mime: 'image/png', filename: 'Oré logo-512px.png', width: 512 });
+      expect(
+        new URL(at512.url.replace('memory://', 'https://')).searchParams.get('response-content-type'),
+      ).toBe('image/png');
+      const again = await runInTenant(ctxFor(ownerA), () =>
+        withTransaction((tx) =>
+          assetService.downloadUrl(
+            ownerA,
+            { assetVersionId: result.assetVersionId, format: 'png', width: 512 },
+            tx,
+          ),
+        ),
+      );
+      expect(again.url.split('?')[0]).toBe(at512.url.split('?')[0]);
+      const rows = await tdb.db
+        .select()
+        .from(assetDerivatives)
+        .where(eq(assetDerivatives.assetVersionId, result.assetVersionId));
+      expect(rows.filter((d) => d.purpose === 'png-512')).toHaveLength(1);
+      // asset.read is re-checked: another tenant's owner gets nothing.
+      await expect(
+        runInTenant(ctxFor(ownerB), () =>
+          withTransaction((tx) =>
+            assetService.downloadUrl(
+              ownerB,
+              { assetVersionId: result.assetVersionId, format: 'original' },
+              tx,
+            ),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+
+      // A destination that takes rasters only (an article) is sent the PNG rendition, never the SVG.
+      const release = await runInTenant(ctxFor(ownerA), () =>
+        assetService.releaseDerivative(result.assetVersionId, 900, { raster: true }),
+      );
+      expect(release).toMatchObject({ mime: 'image/png', contentHash: png?.contentHash });
+      expect(release.storageKey).toContain(`/${result.assetVersionId}/png/`);
+      // Without the raster option the original is released as it is (social providers rasterise on render).
+      const asIs = await runInTenant(ctxFor(ownerA), () =>
+        assetService.releaseDerivative(result.assetVersionId, 900),
+      );
+      expect(asIs.mime).toBe('image/svg+xml');
+      // A version from before the rendition existed gets one drawn on demand (and recorded).
+      await tdb.db.delete(assetDerivatives).where(eq(assetDerivatives.purpose, 'png'));
+      const late = await runInTenant(ctxFor(ownerA), () =>
+        assetService.releaseDerivative(result.assetVersionId, 900, { raster: true }),
+      );
+      expect(late.mime).toBe('image/png');
+      expect(
+        (await tdb.db.select().from(assetDerivatives).where(eq(assetDerivatives.purpose, 'png'))).length,
+      ).toBe(1);
     });
 
     it('identical content in the same brand is a duplicate_of proposal, not a second asset', async () => {

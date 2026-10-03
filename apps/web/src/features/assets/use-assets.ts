@@ -93,6 +93,15 @@ export function useAsset(assetId: string | null) {
   return useQuery({ ...trpc.assets.get.queryOptions({ assetId: assetId ?? '' }), enabled: assetId !== null });
 }
 
+/** An asset's versions, newest first (the brand system may pin one that is no longer current). */
+export function useAssetVersions(assetId: string, enabled = true) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.assets.versions.list.queryOptions({ assetId, page: { limit: 50 } }),
+    enabled,
+  });
+}
+
 /** Spec 9.3: a 5-minute signed GET; refreshed before it expires. */
 export function useSignedUrl(
   assetVersionId: string | null,

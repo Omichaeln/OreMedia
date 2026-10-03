@@ -2,6 +2,9 @@ export {
   brandService,
   guidelinesEvidence,
   registerBrandAssetKindSource,
+  registerBrandAssetVersionSource,
+  resetBrandAssetVersionSource,
+  type BrandAssetVersionSource,
   registerEligibleTemplateSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
@@ -25,3 +28,8 @@ export {
   PolicyVersionRepository,
   PlatformBrandRepository,
 } from './repositories';
+export {
+  BRAND_FACT_SWEEP_SCHEDULE_ID,
+  BRAND_FACT_SWEEP_WORKFLOW_TYPE,
+  listBrandFactSweepTargets,
+} from './fact-sweep';

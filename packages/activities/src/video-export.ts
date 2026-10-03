@@ -9,11 +9,12 @@ import {
   probeFile,
   storage,
   withTempDir,
+  withToolContext,
   type StorageProvider,
 } from '@oremedia/module-assets';
 import { loadActorGrants } from './actor';
 import { RenderIntegrityError } from './render-job';
-import { heartbeat, inTenant } from './tenant';
+import { cancellationSignal, heartbeat, inTenant } from './tenant';
 
 /**
  * STU-2a: the video export store path. The timeline compositor (STU-2b) renders an MP4 under the key below, writes its
@@ -147,13 +148,18 @@ export function createVideoExportActivities(
           throw new Error(`captions not readable yet: ${e.captionsStorageKey}`); // retried
         heartbeat('video-export:probe');
         const boxes = await topLevelBoxes(store(), e.storageKey, stored.bytes);
-        const issues = await withTempDir({ maxBytes: stored.bytes + 16 * 1024 * 1024 }, async (dir) => {
-          const local = await dir.download(store(), e.storageKey, 'export.mp4');
-          if (!local) throw new Error(`export object not readable yet: ${e.storageKey}`);
-          const probe = await probeFile(local.path, local.bytes);
-          if ('ok' in probe) return [{ path: 'storageKey', issue: probe.reason }];
-          return checkVideoExport(probe, boxes, e);
-        });
+        const signal = cancellationSignal();
+        const issues = await withToolContext(
+          { ...(signal ? { signal } : {}), tick: () => heartbeat('video-export:probe') },
+          () =>
+            withTempDir({ maxBytes: stored.bytes + 16 * 1024 * 1024 }, async (dir) => {
+              const local = await dir.download(store(), e.storageKey, 'export.mp4');
+              if (!local) throw new Error(`export object not readable yet: ${e.storageKey}`);
+              const probe = await probeFile(local.path, local.bytes, { mime: 'video/mp4' });
+              if ('ok' in probe) return [{ path: 'storageKey', issue: probe.reason }];
+              return checkVideoExport(probe, boxes, e);
+            }),
+        );
         if (issues.length)
           throw new ValidationFailedError(issues, 'The rendered video is not a valid export');
         return {

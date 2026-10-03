@@ -110,8 +110,8 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
   const document = seedCreativeDocument(creativePublishedBrandVersionId, creativeElementId);
   const creativeDocumentId = newId('creativeDocument');
   const creativeRevisionId = newId('creativeRevision');
-  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0026), which the roll-forward suites'
-  // earlier heads do not have; at 0026 and later the column takes its default, graphic.
+  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0025), which the roll-forward suites'
+  // earlier heads do not have; at 0025 and later the column takes its default, graphic.
   const docAt = new Date();
   await db.execute(
     sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at, version) values (${creativeDocumentId}, ${tenantId}, ${brandId}, 'Seeded document', ${creativeRevisionId}, 1, ${docAt}, ${docAt}, 0)`,
@@ -173,14 +173,14 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     state: 'draft',
   });
   const renderJobId = newId('renderJob');
-  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0025), which the roll-forward suites'
+  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0024), which the roll-forward suites'
   // earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
   const at = new Date();
   await db.execute(
     sql`insert into ${renderJobs} (id, tenant_id, brand_id, revision_id, format_keys, state, attempts, requested_by_kind, requested_by_id, created_at, updated_at) values (${renderJobId}, ${tenantId}, ${brandId}, ${creativeRevisionId}, '["square_1080"]', 'pending', 0, 'user', ${ownerUserId}, ${at}, ${at})`,
   );
   // STU-2b: a video document with revision 1 (one clip-less picture track, a caption track and a caption), so a
-  // foreign caller has timeline ids to try. Only where creative_documents.kind exists (0026 and later).
+  // foreign caller has timeline ids to try. Only where creative_documents.kind exists (0025 and later).
   const kindColumn = (await db.execute(
     sql`select column_name from information_schema.columns where table_schema = database() and table_name = 'creative_documents' and column_name = 'kind'`,
   )) as unknown as [unknown[]];

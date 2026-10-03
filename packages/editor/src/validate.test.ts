@@ -67,6 +67,42 @@ describe('validateAgainstBrand (spec 11.4)', () => {
     doc = reduce(fixtureDocument(), { op: 'moveElement', pageId: P, elementId: ids.body, x: 80, y: 880 });
     expect(codes(validateAgainstBrand(doc, fixtureSnapshot()))).toContain('blocking:logo_clear_space');
   });
+  it('BSC-2: a logo must be the artwork its variant names when the rule pins a version (secondary included)', () => {
+    const pinned = (variant: 'primary' | 'secondary', assetVersionId: string) => {
+      const snap = fixtureSnapshot();
+      const [rule] = snap.document.logoRules;
+      if (!rule) throw new Error('fixture has no logo rule');
+      snap.document.logoRules = [{ ...rule, variant, assetVersionId }];
+      return snap;
+    };
+    // Pinned to the version the element shows: no mismatch.
+    expect(codes(validateAgainstBrand(fixtureDocument(), pinned('primary', 'av_logo')))).not.toContain(
+      'blocking:logo_asset_mismatch',
+    );
+    // The rule names another logo for primary: the element is the wrong artwork.
+    const wrong = validateAgainstBrand(fixtureDocument(), pinned('primary', 'av_logo_reversed'));
+    expect(codes(wrong)).toContain('blocking:logo_asset_mismatch');
+    expect(wrong.find((f) => f.code === 'logo_asset_mismatch')).toMatchObject({
+      pageId: P,
+      elementId: ids.logo,
+    });
+    // A rule that names only the asset (saved before pinning) cannot be matched and is not flagged.
+    expect(codes(validateAgainstBrand(fixtureDocument(), fixtureSnapshot()))).not.toContain(
+      'blocking:logo_asset_mismatch',
+    );
+    // A secondary logo element is checked against the secondary rule; min width and grounds still apply.
+    const doc = fixtureDocument();
+    const page = doc.pages[0];
+    const logo = page?.elements.find((e) => e.id === ids.logo);
+    if (!logo || logo.type !== 'logo') throw new Error('fixture has no logo element');
+    logo.variant = 'secondary';
+    logo.transform = { ...logo.transform, width: 100, height: 30 };
+    const c = codes(validateAgainstBrand(doc, pinned('secondary', 'av_logo')));
+    expect(c).not.toContain('blocking:logo_asset_mismatch');
+    expect(c).not.toContain('warning:logo_rule_missing');
+    expect(c).toContain('blocking:logo_min_width');
+    expect(codes(validateAgainstBrand(doc, fixtureSnapshot()))).toContain('warning:logo_rule_missing');
+  });
   it('elements leaving the safe area are flagged', () => {
     const doc = reduce(fixtureDocument(), {
       op: 'moveElement',

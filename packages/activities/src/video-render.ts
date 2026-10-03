@@ -38,6 +38,7 @@ import {
   assetService,
   ffmpegPath,
   probeFile,
+  withToolContext,
   renderFontFaces,
   storage,
   withTempDir,
@@ -620,7 +621,10 @@ export function createVideoRenderActivities(deps: VideoRenderDeps): VideoRenderJ
             let width: number | null = null;
             let height: number | null = null;
             if (s.kind === 'video') {
-              const probe = await probeFile(local.path, local.bytes);
+              const probe = await withToolContext(
+                { signal: abort.signal, tick: () => heartbeat('video:probe') },
+                () => probeFile(local.path, local.bytes, { mime: s.mime, maxSeconds: 601 }),
+              );
               if ('ok' in probe)
                 throw new ValidationFailedError([{ path: s.assetVersionId, issue: probe.reason }]);
               probes.set(s.assetVersionId, probe);

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
+import sharp from 'sharp';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import type { Provenance } from '@oremedia/contracts/assets';
 import type { CreativeDocumentV1, Element } from '@oremedia/contracts/creative';
@@ -407,6 +408,61 @@ describe('render job end to end (MySQL + creative module + Chromium)', () => {
     const a = await read(() => mem.getObject(rows[0]!.storageKey));
     const b = await read(() => mem.getObject(rows[1]!.storageKey));
     expect(a!.equals(b!)).toBe(true);
+  }, 300_000);
+
+  it('BSC-2: an SVG logo renders into the PNG export from its vector original, contain-fitted (never stretched) in its box', async () => {
+    // A sanitised logo as ingest stores it: vector, transparent around the artwork. Only a viewBox (no width or
+    // height) on the second, as design tools often export.
+    const svg = (attrs: string) =>
+      Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" ${attrs}><defs><linearGradient id="g"><stop offset="0" stop-color="#e94e1b"/><stop offset="1" stop-color="#e94e1b"/></linearGradient></defs><rect width="300" height="100" fill="url(#g)"/></svg>`,
+      );
+    await seedAsset(
+      'svg_logo',
+      'logo',
+      'image/svg+xml',
+      svg('width="300" height="100" viewBox="0 0 300 100"'),
+      300,
+      100,
+    );
+    await seedAsset('svg_logo_vb', 'logo', 'image/svg+xml', svg('viewBox="0 0 300 100"'), 300, 100);
+    const doc = studioDocument(brandVersionId, refs());
+    const page = doc.pages[0]!;
+    const logo = page.elements.find((e) => e.id === el.logo);
+    if (!logo || logo.type !== 'logo') throw new Error('no logo element');
+    // A square box for a 3:1 logo: before renderer 1.1.0 the logo was stretched to fill it.
+    logo.assetVersionId = seeded['svg_logo']!.versionId;
+    logo.transform = { x: 80, y: 700, width: 300, height: 300, rotation: 0 };
+    const second = newElementId();
+    page.elements.push({
+      ...logo,
+      id: second,
+      name: 'Logo 2',
+      assetVersionId: seeded['svg_logo_vb']!.versionId,
+      transform: { x: 600, y: 700, width: 300, height: 300, rotation: 0 },
+    });
+    const { revisionId, renderJobId } = await createAndRequest(doc, ['square_1080']);
+    expect((await runRenderJob(acts, inputFor(renderJobId))).outcome).toBe('ready');
+    const [row] = await exportRows(revisionId);
+    expect(row).toBeDefined();
+    expect(row!.manifest.assets.map((a) => a.assetVersionId)).toEqual(
+      expect.arrayContaining([seeded['svg_logo']!.versionId, seeded['svg_logo_vb']!.versionId]),
+    );
+    const codes = row!.validation.findings.map((f) => f.code);
+    expect(codes).not.toContain('missing_asset');
+    expect(codes).not.toContain('logo_distortion');
+    const bytes = await read(() => mem.getObject(row!.storageKey));
+    const { data, info } = await sharp(bytes!).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const px = (x: number, y: number) => {
+      const i = (y * info.width + x) * info.channels;
+      return `#${[data[i], data[i + 1], data[i + 2]].map((c) => c!.toString(16).padStart(2, '0')).join('')}`;
+    };
+    for (const x0 of [80, 600]) {
+      // The 300×100 artwork sits in the middle third of its 300×300 box: logo colour there, the ground above/below.
+      expect(px(x0 + 150, 850)).toBe('#e94e1b');
+      expect(px(x0 + 150, 720)).toBe('#f4f6f3');
+      expect(px(x0 + 150, 980)).toBe('#f4f6f3');
+    }
   }, 300_000);
 
   it('an imported face split by unicode subset is pinned whole and each file registered with its range', async () => {

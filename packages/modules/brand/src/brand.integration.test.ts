@@ -31,10 +31,12 @@ import { newId } from '@oremedia/domain/ids';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerBrandAssetVersionSource,
   registerEligibleTemplateSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   resetBrandAssetKindSource,
+  resetBrandAssetVersionSource,
   resetBrandChangeImpactSource,
   resetEligibleTemplateSource,
   resetOnboardingRunSource,
@@ -1186,6 +1188,57 @@ describe('brand module (spec 8) against MySQL 8', () => {
         'tokens.typeRoles.1.fontAssetId not_a_font_of_this_brand',
       ]);
       version = (await save(kit())).version;
+    });
+
+    it('BSC-2: a secondary logo with usage guidance saves; a pinned version must be a version of that logo; one rule per variant', async () => {
+      registerBrandAssetVersionSource(async (brandId, ids) =>
+        brandId === brandKit
+          ? new Map(ids.flatMap((id) => (id === 'av_logo' ? [[id, 'ast_logo'] as [string, string]] : [])))
+          : new Map(),
+      );
+      try {
+        const primary = kit().logoRules[0]!;
+        const secondary = {
+          ...primary,
+          assetVersionId: 'av_logo',
+          variant: 'secondary' as const,
+          usage: { backgroundsNote: 'Mid-tone photographs only.', donts: ['Never recolour the mark'] },
+          preferredFormat: 'svg' as const,
+        };
+        version = (await save(kit({ logoRules: [primary, secondary] }))).version;
+        const got = await runInTenant(ctx(tenantA), () =>
+          brandService.versions.get(A, { brandId: brandKit, versionId: draft }),
+        );
+        expect(got.document.logoRules[1]).toEqual(secondary);
+        expect(
+          await issuesOf(
+            kit({
+              logoRules: [
+                { ...primary, assetVersionId: 'av_photo' },
+                { ...secondary, variant: 'primary', usage: { backgroundsNote: '', donts: [' '] } },
+              ],
+            }),
+          ),
+        ).toEqual([
+          'logoRules.0.assetVersionId not_a_version_of_this_logo',
+          'logoRules.1.variant duplicate_variant',
+          'logoRules.1.usage.donts.0 empty',
+        ]);
+        // A document stored with a variant twice (before the check) still saves unchanged; only a new duplicate is refused.
+        const twice = kit({ logoRules: [primary, { ...primary, assetId: 'ast_logo' }] });
+        await tdb.db.update(brandVersions).set({ document: twice }).where(eq(brandVersions.id, draft));
+        version = (await save(twice)).version;
+        version = (await save(kit())).version;
+        // Fail closed: without a registered version source a pinned version is refused.
+        resetBrandAssetVersionSource();
+        expect(await issuesOf(kit({ logoRules: [secondary] }))).toEqual([
+          'logoRules.0.assetVersionId not_a_version_of_this_logo',
+        ]);
+        // A rule that pins nothing never consults the source.
+        version = (await save(kit())).version;
+      } finally {
+        resetBrandAssetVersionSource();
+      }
     });
 
     it('without a registered asset source a draft naming assets is refused (fail closed)', async () => {

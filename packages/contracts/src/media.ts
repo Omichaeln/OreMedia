@@ -85,19 +85,31 @@ export type StripMapV1 = z.infer<typeof StripMapV1>;
 
 // --- videoIngestWorkflowV1 contract (workflows import only contracts) ----------------------------------------
 
-/** Inspection result: the streamed content hash (dedupe) and the probe, after the limits were checked. */
+/**
+ * Inspection result, after the limits were checked: the object that becomes the original (the upload itself, or a
+ * copy without personal metadata under the intent's quarantine prefix), its content hash (dedupe) and size, and the
+ * probe of that object.
+ */
 export interface IngestMediaInspectResult {
+  sourceKey: string;
   contentHash: string;
+  bytes: number;
+  /** True when location, device or other personal metadata was stripped (the original is the rewritten copy). */
+  sanitised: boolean;
   probe: MediaProbeV1;
 }
 export type IngestMediaInspectInput = AssetIngestInputV1 & { mime: string; group: 'video' | 'audio' };
 export type IngestMediaDerivativesInput = AssetIngestInputV1 & {
+  /** The object inspection kept (the upload, or its metadata-free copy). */
+  sourceKey: string;
   mime: string;
   group: 'video' | 'audio';
   probe: MediaProbeV1;
 };
 export interface IngestMediaDerivativesResult {
   derivatives: IngestDerivativeRef[];
+  /** How long the source actually played while the proxy was made (the duration recorded on the version). */
+  playedMs: number;
 }
 export type IngestMediaCatalogueInput = IngestCatalogueInput & { probe: MediaProbeV1 };
 export type IngestMediaFinaliseInput = IngestFinaliseInput & {

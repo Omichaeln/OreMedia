@@ -46,6 +46,10 @@ export const ASSETS_INPUTS: Record<string, CrossTenantFixture> = {
   'assets.media.signedUrl': {
     buildInput: (f) => ({ assetVersionId: f['assetVersionId'], derivative: 'original' }),
   },
+  // BSC-2: a foreign version is NOT_FOUND before any rendition is drawn or URL signed.
+  'assets.media.download': {
+    buildInput: (f) => ({ assetVersionId: f['assetVersionId'], format: 'png', width: 512 }),
+  },
 };
 
 /**
@@ -96,7 +100,7 @@ export const ASSETS_SEED: SeedExtension | null = async (db, { tenantId, brandIds
       rightsState: 'unknown',
     },
   ]);
-  // sql``, not insert(…).values(): Drizzle would name media_info (0025) on asset_versions and rejection_detail (0025)
+  // sql``, not insert(…).values(): Drizzle would name media_info (0024) on asset_versions and rejection_detail (0024)
   // on upload_intents, which the roll-forward suites' earlier heads do not have; the columns named here exist at
   // every head, later ones take their defaults.
   for (const v of [version(assetVersionId, assetId), version(pendingVersionId, pendingAssetId)])

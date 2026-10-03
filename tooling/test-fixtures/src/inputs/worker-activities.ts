@@ -280,6 +280,12 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         publishedAt: '2026-01-01T00:00:00.000Z',
       }),
     },
+    // brandFactSweepWorkflowV1 (BSC-3): the due listing is platform-level; a brand's sweep names one brand of the
+    // tenant it runs in, so a foreign brand is NOT_FOUND before any fact is read or marked
+    'core.listBrandFactSweepTargets': { buildInput: null, reason: PLATFORM_SWEEP },
+    'core.sweepBrandFacts': {
+      buildInput: (ctx, f) => ({ ...ctx, brandId: f['brandId'], now: '2026-01-01T00:00:00.000Z' }),
+    },
     'core.listRetentionTenants': { buildInput: null, reason: PLATFORM_SWEEP },
     'core.applyRetention': {
       buildInput: null,

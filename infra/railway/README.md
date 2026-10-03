@@ -33,8 +33,8 @@ The render image carries ffmpeg and ffprobe (Ubuntu noble's 6.1.1 package, pinne
 `video` (video and audio ingest; the video export store) runs on `worker-render` beside `render` and `media`, with
 its own activity slots: `VIDEO_CONCURRENCY` (default 1) bounds concurrent ffmpeg jobs per container, independent of
 `RENDER_CONCURRENCY` and `MEDIA_CONCURRENCY`, so a ten-minute transcode never takes a still render's slot. A
-container without ffmpeg does not poll `video` (it logs `ffmpeg/ffprobe not found`); video jobs then wait in the
-queue rather than fail.
+production container without ffmpeg/ffprobe refuses to start (its deploy fails); outside production it does not
+poll `video` and logs `ffmpeg/ffprobe not found`. The start line names the queues polled.
 
 Expectations per container, for one video job at a time. Measured during STU-2a on a shared 4 vCPU host (ffmpeg
 6.1.1) with a deliberately hard 30 s 1080p30 source (12 Mbit/s with film-grain noise, 46 MB): probe 0.2–0.6 s,
@@ -52,7 +52,10 @@ for ffmpeg and 300 MB for the worker process. Ordinary camera footage encodes fa
 `VIDEO_CONCURRENCY` above 1 multiplies the CPU, memory and disk lines. Railway's default ephemeral disk is enough
 for one job; raise the plan or attach a volume and point `MEDIA_TMP_DIR` at it before raising concurrency. The clamav
 service's `StreamMaxLength` must cover the video cap (1 GiB) or every video upload stays quarantined with
-`scanner_unavailable` (the scan names the setting); see the runbook rollout order for STU-2a.
+`scanner_unavailable` (the scan names the setting). `infra/railway/clamav/` builds that service from the official
+image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; point the clamav service at the repo with
+config file `infra/railway/clamav/railway.json` (staging first) before the video rollout. See the runbook rollout
+order for STU-2a.
 
 ### Video export (STU-2b)
 
