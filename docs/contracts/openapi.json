@@ -1126,7 +1126,16 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["thumbnail", "preview", "web"]
+                        "enum": [
+                          "thumbnail",
+                          "preview",
+                          "web",
+                          "poster",
+                          "strip",
+                          "strip_map",
+                          "proxy",
+                          "waveform"
+                        ]
                       }
                     ]
                   }
@@ -11796,7 +11805,7 @@
                 },
                 {
                   "type": "string",
-                  "enum": ["thumbnail", "preview", "web"]
+                  "enum": ["thumbnail", "preview", "web", "poster", "strip", "strip_map", "proxy", "waveform"]
                 }
               ]
             }

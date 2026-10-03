@@ -162,7 +162,15 @@ export function composeModules(): void {
   // module reads the export rows; the assets module re-verifies the bytes against the pinned hash (spec 3.g4)
   // and mints the URL for the provider's processing window.
   registerPublishMediaSource({
-    describe: (variant, tx) => creativeService.renders.exportsByIds(variant.brandId, variant.exportIds, tx),
+    // STU-2a: a video export carries its duration and frame rate (null on stills) for the capability check.
+    describe: async (variant, tx) =>
+      (await creativeService.renders.exportsByIds(variant.brandId, variant.exportIds, tx)).map(
+        ({ durationMs, fps, ...e }) => ({
+          ...e,
+          ...(durationMs !== null ? { durationMs } : {}),
+          ...(fps !== null ? { fps } : {}),
+        }),
+      ),
     release: async (variant, { providerProcessingWindowSec }, tx) => {
       const media = [];
       for (const e of await creativeService.renders.exportsByIds(variant.brandId, variant.exportIds, tx))

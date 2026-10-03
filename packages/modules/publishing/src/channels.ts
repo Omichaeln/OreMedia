@@ -655,7 +655,15 @@ export const channelService = {
     const input: ChannelVariantInput = {
       text: variant.text,
       altTexts: variant.altTexts,
-      media: media.map((m) => ({ mime: m.mime, width: m.width, height: m.height, bytes: m.bytes })),
+      // STU-2a: a video export carries its duration and frame rate, so media.video limits are enforced.
+      media: media.map((m) => ({
+        mime: m.mime,
+        width: m.width,
+        height: m.height,
+        bytes: m.bytes,
+        ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}),
+        ...(m.fps !== undefined ? { fps: m.fps } : {}),
+      })),
       settings: variant.settings,
     };
     return adapter.validateVariant(input);

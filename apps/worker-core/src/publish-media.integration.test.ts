@@ -326,4 +326,95 @@ describe('publish media source end to end (worker-core composition, fake Tempora
     expect(holds).toHaveLength(1);
     expect(holds[0]!.metadata).toMatchObject({ reason: EXPORT_HASH_MISMATCH, toState: 'held' });
   });
+
+  describe('STU-2a video exports', () => {
+    /** A video export row (video/mp4 with duration, rate and poster) with its bytes in the store. */
+    async function seedVideoExport(bytes: Buffer, durationMs: number) {
+      const id = newId('rex');
+      const base = `assets/${tenantA}/${brandA}/exports/${revisionId}/${newId('rjb')}/page_1-reel_1080`;
+      await inTenant(() => mem.putObject(`${base}.mp4`, bytes, { contentType: 'video/mp4' }));
+      await inTenant(() =>
+        mem.putObject(`${base}.poster.webp`, Buffer.from('webp'), { contentType: 'image/webp' }),
+      );
+      await tdb.db.insert(renderedExports).values({
+        id,
+        tenantId: tenantA,
+        brandId: brandA,
+        revisionId,
+        pageId: 'page_1',
+        formatKey: 'reel_1080',
+        mime: 'video/mp4',
+        width: 1080,
+        height: 1920,
+        bytes: bytes.length,
+        storageKey: `${base}.mp4`,
+        contentHash: sha256(bytes),
+        rendererVersion: 'renderer-test',
+        manifest: {
+          rendererVersion: 'renderer-test',
+          fonts: [],
+          assets: [],
+          brandVersionId: 'bv_media',
+          revisionContentHash: 'd'.repeat(64),
+        },
+        validation: { ok: true, findings: [] },
+        durationMs,
+        fps: 30,
+        posterStorageKey: `${base}.poster.webp`,
+      });
+      return { id, storageKey: `${base}.mp4`, contentHash: sha256(bytes) };
+    }
+    beforeAll(() => {
+      // The fixture channel takes video up to 60 s and 50 MB (as a capability register entry would declare).
+      fixture.capability.media.video = { mimes: ['video/mp4'], maxDurationSec: 60, maxBytes: 50_000_000 };
+    });
+    afterAll(() => {
+      delete fixture.capability.media.video;
+    });
+
+    it('the capability check enforces the channel video limits with the export duration', async () => {
+      const ok = newVariant('Short clip', await seedVideoExport(Buffer.from('mp4-short'), 15_000));
+      expect(await inTenant(() => channelService.validateVariantDetailed(ok.id))).toMatchObject({ ok: true });
+      const long = newVariant('Long clip', await seedVideoExport(Buffer.from('mp4-long'), 90_000));
+      expect(await inTenant(() => channelService.validateVariantDetailed(long.id))).toEqual({
+        ok: false,
+        issues: [{ path: 'media.0', issue: 'video_too_long:90s>60s' }],
+      });
+      expect(releaseKeys().filter((k) => k.includes('reel'))).toEqual([]);
+    });
+
+    it('a video export is released streamed and hash-verified; the provider receives mime, size, duration and rate', async () => {
+      const bytes = Buffer.alloc(3 * 1024 * 1024 + 17, 7); // several stream chunks
+      const exp = await seedVideoExport(bytes, 15_000);
+      const v = newVariant('Video post', exp);
+      const pub = await schedule(v.id);
+      await runPublication(control, wfInput(pub.id), host());
+      expect(await row(pub.id)).toMatchObject({ state: 'published' });
+      const media = fixture.posts[fixture.posts.length - 1]!.media[0]!;
+      expect(media).toMatchObject({
+        mime: 'video/mp4',
+        width: 1080,
+        height: 1920,
+        bytes: bytes.length,
+        contentHash: exp.contentHash,
+        durationMs: 15_000,
+        fps: 30,
+      });
+      const releaseKey = releaseKeys().find((k) => media.url.includes(k));
+      expect(sha256((await inTenant(() => mem.getObject(releaseKey!)))!)).toBe(exp.contentHash);
+    });
+
+    it('a video export whose bytes changed after approval is held, nothing sent', async () => {
+      const exp = await seedVideoExport(Buffer.from('mp4-approved-bytes'), 15_000);
+      const v = newVariant('Tampered video', exp);
+      const pub = await schedule(v.id);
+      await inTenant(() =>
+        mem.putObject(exp.storageKey, Buffer.from('mp4-TAMPERED-bytes'), { contentType: 'video/mp4' }),
+      );
+      const postsBefore = fixture.posts.length;
+      await runPublication(control, wfInput(pub.id), host());
+      expect(await row(pub.id)).toMatchObject({ state: 'held', holdReasons: [EXPORT_HASH_MISMATCH] });
+      expect(fixture.posts).toHaveLength(postsBefore);
+    });
+  });
 });

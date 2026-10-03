@@ -1612,11 +1612,48 @@ describe('review module (spec 13) against MySQL 8', () => {
             mime: 'image/png',
             width: 1080,
             height: 1080,
+            durationMs: null,
+            fps: null,
             verified: true,
             url: `https://signed.test/renders/${tenantA}/a.png`,
             expiresAt: '2030-01-01T00:00:00.000Z',
+            posterUrl: null,
+            captionsUrl: null,
           },
         ]);
+        // STU-2a: a video export is signed with its poster frame and captions sidecar, with duration and rate.
+        await tdb.db
+          .update(renderedExports)
+          .set({
+            mime: 'video/mp4',
+            durationMs: 15_000,
+            fps: 30,
+            posterStorageKey: `renders/${tenantA}/a.poster.webp`,
+            captionsStorageKey: `renders/${tenantA}/a.vtt`,
+          })
+          .where(eq(renderedExports.id, exportIds[0]!));
+        const video = await runA(() =>
+          reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id }),
+        );
+        expect(video.items[0]).toMatchObject({
+          mime: 'video/mp4',
+          durationMs: 15_000,
+          fps: 30,
+          verified: true,
+          url: `https://signed.test/renders/${tenantA}/a.png`,
+          posterUrl: `https://signed.test/renders/${tenantA}/a.poster.webp`,
+          captionsUrl: `https://signed.test/renders/${tenantA}/a.vtt`,
+        });
+        await tdb.db
+          .update(renderedExports)
+          .set({
+            mime: 'image/png',
+            durationMs: null,
+            fps: null,
+            posterStorageKey: null,
+            captionsStorageKey: null,
+          })
+          .where(eq(renderedExports.id, exportIds[0]!));
         // Spec 3.g4: a stored export whose hash no longer matches the manifest is never delivered as approved media.
         await tdb.db
           .update(renderedExports)
@@ -1625,7 +1662,12 @@ describe('review module (spec 13) against MySQL 8', () => {
         const tampered = await runA(() =>
           reviewService.requests.media(manager.actor, { reviewRequestId: withFiles.id }),
         );
-        expect(tampered.items[0]).toMatchObject({ verified: false, url: null, expiresAt: null });
+        expect(tampered.items[0]).toMatchObject({
+          verified: false,
+          url: null,
+          expiresAt: null,
+          posterUrl: null,
+        });
         await tdb.db
           .update(renderedExports)
           .set({ contentHash: 'a'.repeat(64) })
