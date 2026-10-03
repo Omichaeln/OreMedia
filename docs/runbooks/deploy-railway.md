@@ -238,7 +238,12 @@ production keeps running with that capability degraded, and the gap is reported.
   capability names only (no setting name, no value; `/health` is public through the web origin). It stays 200 while
   degraded, so Railway's health check still passes; the smoke check (section 3a) fails on a non-empty list. The
   capability names (for example `uploads`, `channel:x`) are therefore publicly visible to anyone who requests
-  `/health`; no setting name or value ever is.
+  `/health`; no setting name or value ever is. The api's answer also carries `"revision"`: the deployed git commit
+  (`RAILWAY_GIT_COMMIT_SHA`, else `OREMEDIA_VERSION`, else `null`), which the staging acceptance job waits for
+  (`staging-acceptance.md`, "Reading the log").
+- **Log environment label.** Every log line carries `service` and `env`. `env` is `OREMEDIA_ENV` when set, else
+  Railway's `RAILWAY_ENVIRONMENT_NAME` (`staging`, `production`), else `NODE_ENV` (which every deployed image sets to
+  `production`), else `development`; filter a log search by `env` to separate staging from production.
 - **Strict mode (off by default).** `OREMEDIA_CONFIG_STRICT=1` on a service makes a degraded capability fatal: the
   same line says `refusing to start` and the process exits 2 (the deploy's health check then fails). Only the exact
   value `1` turns it on. Turn it on per service once that service's report is clean, so a later deploy that loses a
@@ -323,8 +328,9 @@ Rollout order for Google sign-in (migration 0003, D-03):
 
 ## 3. Verify
 
-1. `GET https://<web domain>/health` returns `{ "ok": true, "degraded": [] }` (served by the api through the web
-   proxy); a non-empty `degraded` names what is not configured (section 1c).
+1. `GET https://<web domain>/health` returns `{ "ok": true, "degraded": [], "revision": "<commit>" }` (served by
+   the api through the web proxy); a non-empty `degraded` names what is not configured (section 1c), and
+   `revision` is the commit the deployment was built from.
 2. `https://<web domain>/sign-in` → **Continue with Google** returns to the portfolio signed in; an account that
    was not invited returns to the sign-in page with "This Google account has not been invited".
 3. Worker logs show `worker started` for every task queue.
