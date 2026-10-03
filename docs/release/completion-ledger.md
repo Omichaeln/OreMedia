@@ -215,7 +215,7 @@ header)`, and worker-core logs `openrouter 401: Missing Authentication header`. 
   #45 moves the four OpenRouter adapters to undici's fetch; the next staging run discriminates: the same 401 after
   #45 means the staging `OPENROUTER_API_KEY_REF` value is wrong (owner action; its value was not read).
 - 3 October 2026, 02:05 UTC: #45 (OpenRouter adapters on undici's fetch) squash-merged as 3220166 with CI green;
-  every per-commit production service deployed SUCCESS from 3220166 in us-west2. Staging acceptance run 9 (3220166,
+  every per-commit production service deployed SUCCESS from 3220166 in us-west2; production smoke run 38 passed on 3220166. Staging acceptance run 9 (3220166,
   evaluation handled by the new worker-core deployment) returned the same `401: Missing Authentication header`, so
   the transport is ruled out by the test stated before the change: the staging `OPENROUTER_API_KEY_REF` value is not a
   working OpenRouter key. Owner action: set a valid OpenRouter key on staging worker-core (its value was not read and
