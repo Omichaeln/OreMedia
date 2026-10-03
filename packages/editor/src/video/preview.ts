@@ -86,15 +86,19 @@ export function activeCaptions(
   );
 }
 
+/** Operations in one applyVideo batch (contracts VideoOperationBatch). */
+const BATCH_MAX = 100;
+
 /**
  * The operations that turn `current` into `target` (restoring an earlier revision as a new one): the picture track's
  * items are replaced, every other track is removed and re-added, the scenes replaced and the duration set. Locked
- * items or tracks cannot be replaced, so a restore over them is refused with the reason (null operations).
+ * items or tracks cannot be replaced, so a restore over them is refused with the reason (null operations). A large
+ * restore is split into `batches` of at most 100 operations, committed in order (each state between them is valid).
  */
 export function restoreVideoOps(
   current: VideoProjectV1,
   target: VideoProjectV1,
-): { ok: true; operations: VideoOperation[] } | { ok: false; reason: string } {
+): { ok: true; operations: VideoOperation[]; batches: VideoOperation[][] } | { ok: false; reason: string } {
   if (current.format.key !== target.format.key || current.format.fps !== target.format.fps)
     return { ok: false, reason: 'The revision has another format; it cannot be restored here' };
   const locked = current.tracks.some(
@@ -126,7 +130,8 @@ export function restoreVideoOps(
   if (targetVideo.locked) lockedLater.push({ op: 'setTrackLock', trackId: video.id, locked: true });
   for (const s of target.scenes) ops.push({ op: 'setScene', scene: structuredClone(s) });
   const operations = [...ops, ...lockedLater];
-  if (operations.length > 100)
-    return { ok: false, reason: 'This revision differs in too many items to restore in one step' };
-  return { ok: true, operations };
+  const batches: VideoOperation[][] = [];
+  for (let at = 0; at < operations.length; at += BATCH_MAX)
+    batches.push(operations.slice(at, at + BATCH_MAX));
+  return { ok: true, operations, batches };
 }

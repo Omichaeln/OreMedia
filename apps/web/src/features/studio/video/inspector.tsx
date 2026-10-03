@@ -167,6 +167,7 @@ export function Inspector(props: InspectorProps) {
       {track.kind === 'overlay' && 'element' in item && (
         <OverlayFields {...props} track={track} item={item} locked={locked} />
       )}
+      <TrackField {...props} track={track} item={item} locked={locked} />
       <div className="flex flex-wrap gap-1 border-t border-border pt-2">
         <Button
           size="sm"
@@ -219,6 +220,45 @@ export function Inspector(props: InspectorProps) {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Moves the item to another track of the same kind at the same time (moveClip with toTrackId), so the list editor
+ * reaches what dragging between lanes does on the timeline. Shown when there is another such track.
+ */
+function TrackField({
+  project,
+  track,
+  item,
+  locked,
+  onIntent,
+}: InspectorProps & { track: Track; item: TrackItem; locked: boolean }) {
+  const same = project.tracks.filter((t) => t.kind === track.kind);
+  if (same.length < 2) return null;
+  return (
+    <Field label="Track" htmlFor="item-track" hint="Moves it to the other track at the same time">
+      <Select
+        id="item-track"
+        value={track.id}
+        disabled={locked}
+        onValueChange={(toTrackId) => {
+          const target = same.find((t) => t.id === toTrackId);
+          if (!target || target.id === track.id) return;
+          onIntent({
+            operations: [
+              { op: 'moveClip', trackId: track.id, itemId: item.id, startMs: item.startMs, toTrackId },
+            ],
+            summary: `Move ${itemLabel(item)} to ${target.name}`,
+          });
+        }}
+        options={same.map((t) => ({
+          value: t.id,
+          label: t.locked ? `${t.name} (locked)` : t.name,
+          disabled: t.locked && t.id !== track.id,
+        }))}
+      />
+    </Field>
   );
 }
 

@@ -557,6 +557,30 @@ describe('locks bind everyone except the unlock operation', () => {
       ]),
     ).toBe('lock_by_lock_op');
   });
+  it('new items and tracks start unlocked: a lock arrives only through the lock ops', () => {
+    expect(fails([{ op: 'insertClip', trackId: 'trk_video', item: newClip({ locked: true }) }])).toBe(
+      'lock_by_lock_op',
+    );
+    expect(
+      fails([
+        {
+          op: 'upsertCaption',
+          trackId: 'trk_captions',
+          caption: { id: 'cap_new', startMs: 0, endMs: 1_000, text: 'x', locked: true },
+        },
+      ]),
+    ).toBe('lock_by_lock_op');
+    expect(
+      fails([
+        { op: 'addTrack', track: { id: 'trk_more', kind: 'overlay', name: 'More', locked: true, items: [] } },
+      ]),
+    ).toBe('lock_by_lock_op');
+    const p = apply([
+      { op: 'insertClip', trackId: 'trk_video', item: newClip() },
+      { op: 'setItemLock', trackId: 'trk_video', itemId: 'clip_new', locked: true },
+    ]);
+    expect(clip(p, 'clip_new').locked).toBe(true);
+  });
 });
 
 describe('duration and scenes', () => {

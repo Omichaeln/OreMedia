@@ -147,7 +147,7 @@ export function useVideoStudio(documentId: string, initial: VideoDocumentDto): V
       key: string;
       baseRevisionId: string;
       baseNumber: number;
-    }) => {
+    }): Promise<{ revisionId: string; number: number } | null> => {
       try {
         const res = await client.creative.operations.applyVideo.mutate(
           {
@@ -166,14 +166,16 @@ export function useVideoStudio(documentId: string, initial: VideoDocumentDto): V
           media: res.media,
         });
         afterCommit(res.revision);
+        return { revisionId: res.revision.id, number: res.revision.number };
       } catch (err) {
         const ui = toUiError(err);
         if (ui.kind === 'stale_revision') {
           dispatch({ type: 'commit:stale' });
           await rebase(req.operations, req.baseNumber);
-          return;
+          return null;
         }
         dispatch({ type: 'commit:failed', error: ui, key: newIntentKey() });
+        return null;
       }
     },
     [afterCommit, client, documentId, rebase],
@@ -267,9 +269,30 @@ export function useVideoStudio(documentId: string, initial: VideoDocumentDto): V
         });
         return;
       }
-      commitDirect('restore', ops.operations, `Restore revision ${number}`);
+      if (ops.batches.length === 1) {
+        commitDirect('restore', ops.operations, `Restore revision ${number}`);
+        return;
+      }
+      // A large restore is committed batch by batch (each a revision, each undoable); it stops at a failure.
+      void (async () => {
+        let base = { revisionId: s.committed.revisionId, number: s.committed.number };
+        for (const [n, operations] of ops.batches.entries()) {
+          const summary = `Restore revision ${number} (part ${n + 1} of ${ops.batches.length})`;
+          const key = newIntentKey();
+          dispatch({ type: 'commit:start', mode: 'restore', operations, summary, key });
+          const next = await runCommit({
+            operations,
+            summary,
+            key,
+            baseRevisionId: base.revisionId,
+            baseNumber: base.number,
+          });
+          if (!next) return;
+          base = next;
+        }
+      })();
     },
-    [commitDirect],
+    [commitDirect, runCommit],
   );
 
   const blockedReason = (stack: VideoStudioState['undo'], verb: string): string | null => {

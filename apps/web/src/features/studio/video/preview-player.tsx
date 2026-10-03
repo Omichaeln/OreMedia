@@ -153,6 +153,8 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
     }
   };
 
+  const spoken = useSettled(playing ? '' : `Playhead at ${timecode(t)}`);
+
   return (
     <section aria-label="Preview" className="flex flex-col gap-2" data-testid="video-preview">
       <div ref={outerRef} className="flex w-full justify-center">
@@ -220,11 +222,15 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
         <span className="font-mono text-sm tabular-nums" data-testid="time-readout">
           {timecode(t)} / {timecode(project.durationMs)}
         </span>
-        {/* Announced only while paused, so a playing preview does not flood assistive technology. */}
+        {/* Announced while paused, once the playhead settles (scrubbing with the keyboard on the preview, the
+            timeline or the list editor), so neither playback nor a held arrow key floods assistive technology. */}
         <span className="sr-only" aria-live="polite" data-testid="time-live">
-          {playing ? '' : `Playhead at ${timecode(t)}`}
+          {spoken}
         </span>
       </div>
+      <p className="text-xs text-muted-foreground" data-testid="preview-note">
+        The preview plays 720p editing copies; the rendered video is made from the originals at full quality.
+      </p>
     </section>
   );
 }
@@ -424,4 +430,14 @@ function OverlayCanvas({
       data-testid="overlay-canvas"
     />
   );
+}
+
+/** `text` once it has stopped changing for `delayMs` (a live region then speaks the settled value, not every step). */
+function useSettled(text: string, delayMs = 250): string {
+  const [settled, setSettled] = useState(text);
+  useEffect(() => {
+    const id = window.setTimeout(() => setSettled(text), delayMs);
+    return () => window.clearTimeout(id);
+  }, [text, delayMs]);
+  return settled;
 }

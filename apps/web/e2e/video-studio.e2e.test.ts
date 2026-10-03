@@ -81,6 +81,8 @@ describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)'
     expect(head().format).toEqual({ key: 'video_9x16', width: 1080, height: 1920, fps: 30 });
     await expect.poll(() => page.getByTestId('timeline').count()).toBe(1);
     expect(await page.getByRole('group', { name: 'Video (Video track)' }).count()).toBe(1);
+    // The preview says what it plays: editing copies, not the export.
+    expect(await page.getByTestId('preview-note').textContent()).toMatch(/720p editing copies/);
   }, 60_000);
 
   it('builds a sequence from the library: two clips and music, saved as one revision', async () => {
@@ -169,6 +171,20 @@ describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)'
     expect(headNumber()).toBe(before + 2);
     const redone = head().tracks.find((t) => t.kind === 'caption');
     expect(redone?.kind === 'caption' && redone.items[0]?.endMs).toBe(5_000);
+  }, 60_000);
+
+  it('moves the music to another audio track from the inspector (what dragging between lanes does)', async () => {
+    await page.getByRole('button', { name: 'Add audio track' }).click();
+    await saved();
+    await page.getByRole('button', { name: /^Upbeat music/ }).click();
+    await page.getByLabel('Track', { exact: true }).click();
+    await page.getByRole('option', { name: 'Audio 2' }).click();
+    await saved();
+    const audio = head().tracks.filter((t) => t.kind === 'audio');
+    expect(audio.map((t) => [t.name, t.items.length])).toEqual([
+      ['Music', 0],
+      ['Audio 2', 1],
+    ]);
   }, 60_000);
 
   it('moves the selected clip with the keyboard (Shift+arrow: one second) and announces the playhead', async () => {

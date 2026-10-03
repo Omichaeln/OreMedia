@@ -230,6 +230,11 @@ function lift(track: Track, item: TrackItem, ripple: boolean, fail: Fail): void 
   }
 }
 
+/** Items and tracks are created unlocked; a lock is only ever set by setItemLock / setTrackLock (undo and the agent guard rely on it). */
+function assertCreatedUnlocked(locked: boolean, fail: Fail): void {
+  if (locked) fail('lock_by_lock_op', 'New items and tracks start unlocked; lock them with the lock control');
+}
+
 /**
  * The pure timeline reducer: `next = reduceVideo(project, op)`. Never mutates its input; throws
  * VideoOperationError with a stable code when the operation is not possible on this project.
@@ -256,6 +261,7 @@ export function reduceVideo(
       const track = trackOf(next, op.trackId, fail);
       assertTrackUnlocked(track, fail);
       const item = asTrackItem(track, op.item, fail);
+      assertCreatedUnlocked(item.locked, fail);
       uniqueId(next, item.id, fail);
       place(track, item, op.ripple ?? false, fail);
       touched.add(track.id);
@@ -455,7 +461,10 @@ export function reduceVideo(
         if (existing.locked) fail('item_locked', 'This caption is locked; unlock it to change it');
         if (op.caption.locked !== existing.locked)
           fail('lock_by_lock_op', 'Lock or unlock a caption with the lock control');
-      } else uniqueId(next, op.caption.id, fail);
+      } else {
+        assertCreatedUnlocked(op.caption.locked, fail);
+        uniqueId(next, op.caption.id, fail);
+      }
       if (op.caption.endMs <= op.caption.startMs) fail('item_empty', 'A caption must end after it starts');
       setItems(track, [...(track.items as CaptionItem[]).filter((c) => c.id !== op.caption.id), op.caption]);
       touched.add(track.id);
@@ -477,7 +486,10 @@ export function reduceVideo(
         if (existing.locked) fail('item_locked', 'This overlay is locked; unlock it to change it');
         if (op.overlay.locked !== existing.locked)
           fail('lock_by_lock_op', 'Lock or unlock an overlay with the lock control');
-      } else uniqueId(next, op.overlay.id, fail);
+      } else {
+        assertCreatedUnlocked(op.overlay.locked, fail);
+        uniqueId(next, op.overlay.id, fail);
+      }
       if (op.overlay.endMs <= op.overlay.startMs) fail('item_empty', 'An overlay must end after it starts');
       setItems(track, [...(track.items as OverlayItem[]).filter((o) => o.id !== op.overlay.id), op.overlay]);
       touched.add(track.id);
@@ -541,7 +553,11 @@ export function reduceVideo(
       if (op.track.kind === 'video' && next.tracks.some((t) => t.kind === 'video'))
         fail('one_video_track', 'A video has one picture track; add clips to it');
       const track = structuredClone(op.track);
-      for (const i of track.items as TrackItem[]) uniqueId(next, i.id, fail);
+      assertCreatedUnlocked(track.locked, fail);
+      for (const i of track.items as TrackItem[]) {
+        assertCreatedUnlocked(i.locked, fail);
+        uniqueId(next, i.id, fail);
+      }
       const ids = (track.items as TrackItem[]).map((i) => i.id);
       if (new Set(ids).size !== ids.length) fail('duplicate_item_id', 'Item ids must be unique');
       setItems(track, track.items as TrackItem[]);

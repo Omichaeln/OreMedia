@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hashCanonical } from '@oremedia/domain/hash';
+import type { VideoOperation } from '@oremedia/contracts/video';
 import { fixtureVideoProject, videoFixtureLookup } from './fixtures';
 import { framePlacement } from './frame';
 import { activeCaptions, activeOverlays, pictureLayersAt, restoreVideoOps } from './preview';
@@ -141,6 +142,35 @@ describe('restoreVideoOps', () => {
         applyVideoBatch(earlier, { operations: [{ op: 'setDuration', durationMs: 10_000 }] }, ctx),
       ),
     );
+  });
+  it('splits a large restore into batches of at most 100 operations that apply in order', () => {
+    const earlier = fixtureVideoProject();
+    const clips: VideoOperation[] = Array.from({ length: 120 }, (_, i) => ({
+      op: 'insertClip',
+      trackId: 'trk_video',
+      item: {
+        id: `clip_m${i}`,
+        assetVersionId: 'av_clip_a',
+        sourceInMs: 0,
+        sourceOutMs: 200,
+        startMs: 20_000 + i * 200,
+        frame: { fit: 'fill', focalX: 0.5, focalY: 0.5, zoom: 1 },
+        gainDb: 0,
+        muted: false,
+        locked: false,
+      },
+    }));
+    const now = applyVideoBatch(
+      applyVideoBatch(earlier, { operations: clips.slice(0, 100) }, ctx),
+      { operations: clips.slice(100) },
+      ctx,
+    );
+    const restore = restoreVideoOps(earlier, now);
+    if (!restore.ok) throw new Error(restore.reason);
+    expect(restore.batches.length).toBeGreaterThan(1);
+    expect(restore.batches.every((b) => b.length <= 100)).toBe(true);
+    const restored = restore.batches.reduce((p, b) => applyVideoBatch(p, { operations: b }, ctx), earlier);
+    expect(hashCanonical(restored)).toBe(hashCanonical(now));
   });
   it('refuses over locked items', () => {
     const locked = applyVideoBatch(
