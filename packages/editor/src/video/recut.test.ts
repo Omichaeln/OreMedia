@@ -384,13 +384,19 @@ describe('recut compile', () => {
     expect(brandCtaCopy('Use a soft CTA, e.g. learn more')).toBeNull();
     expect(brandCtaCopy('Always end with a question that invites the reader to reply')).toBeNull();
     expect(brandCtaCopy('')).toBeNull();
-    // Plain CTA copy is not a claim; numbers, comparisons and superlatives are.
-    expect(['Learn more', 'Shop the range', 'Book a demo'].map(looksLikeClaim)).toEqual([
-      false,
-      false,
-      false,
-    ]);
-    expect(['Save 20%', 'Twice as fast', 'The best bottle'].map(looksLikeClaim)).toEqual([true, true, true]);
+    // Plain CTA copy (free, first, a phone number) is not a claim; measures, comparisons and rankings are.
+    const plain = [
+      'Learn more',
+      'Shop the range',
+      'Book a demo',
+      'Try it free',
+      'Book your first lesson',
+      'Call 0800 123 4567',
+      'Open from 9 to 5',
+    ];
+    expect(plain.filter(looksLikeClaim)).toEqual([]);
+    const claims = ['Save 20%', 'Twice as fast', 'The best bottle', '2x colder', 'From £9', 'The #1 bottle'];
+    expect(claims.filter((c) => !looksLikeClaim(c))).toEqual([]);
   });
 
   it('takes caption text from the storyboard script only, and places only an approved call to action', () => {

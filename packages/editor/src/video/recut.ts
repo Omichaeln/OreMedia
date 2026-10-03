@@ -47,6 +47,7 @@ import { contentEndMs, lengthOf, previousAdjacent, sortByStart, spanOf, type Tim
 export interface RecutContext extends VideoCompileContext {
   waveforms: Readonly<Record<string, WaveformV1 | undefined>>;
   eligibleAssetIds: ReadonlySet<string>;
+  /** Facts the change may cite: those the request names that are approved and in force. */
   effectiveFactIds: ReadonlySet<string>;
   scope: VideoAiScope | null;
   /** The document's script by scene (its storyboard): captions are made from it, never from the model's words. */

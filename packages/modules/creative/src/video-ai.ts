@@ -554,6 +554,12 @@ const generationInputsOf = (
   };
 };
 
+/** The facts a job's change may cite: for a recut, those its request names that are in force. */
+const citableFactIds = (request: VideoAiRequest, prepared: Prepared): ReadonlySet<string> =>
+  request.kind === 'recut'
+    ? new Set(request.recut.factIds.filter((id) => prepared.effectiveFactIds.has(id)))
+    : prepared.effectiveFactIds;
+
 /** The compile context of a job against a prepared base. */
 const compileContext = (job: JobRow, prepared: Prepared, scope: VideoAiScope | null) => ({
   media: prepared.media,
@@ -563,7 +569,8 @@ const compileContext = (job: JobRow, prepared: Prepared, scope: VideoAiScope | n
   eligibleAssetIds: new Set(
     [...prepared.eligible.values()].filter((a) => SHOT_KINDS.includes(a.kind)).map((a) => a.assetVersionId),
   ),
-  effectiveFactIds: prepared.effectiveFactIds,
+  // A recut may cite only the facts its request names, and only while they are in force.
+  effectiveFactIds: citableFactIds(job.request, prepared),
   scope,
   script: prepared.script,
   approvedCtas: prepared.approvedCtas,
@@ -717,15 +724,19 @@ export const videoAiService = {
    */
   async start(actor: ResolvedActor, input: z.input<typeof VideoAiStart>, tx: Tx) {
     const parsed = VideoAiStart.parse(input);
-    const doc = await engine.documentsRepo.lock(parsed.documentId, tx);
-    await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
-    await policy.assert(actor, 'agent.start_run', engine.brandResource(doc.brandId), {}, tx);
-    engine.assertVideo(doc);
+    const found = await engine.documentsRepo.getById(parsed.documentId, tx);
+    await policy.assert(actor, 'creative.edit', engine.documentResource(found), {}, tx);
+    await policy.assert(actor, 'agent.start_run', engine.brandResource(found.brandId), {}, tx);
+    engine.assertVideo(found);
     const request = normalised(parsed.request);
     const inputsHash = hashCanonical(request);
     const liveKey = liveKeyOf(actor.id, parsed.baseRevisionId, inputsHash);
-    const existing = await liveJobOf(doc.id, liveKey, tx);
+    // Lock order as in save, assemble and accept: the job (a stale one taken over) before the document.
+    const existing = await liveJobOf(found.id, liveKey, tx);
     if (existing) return toJobDto(existing);
+    const doc = await engine.documentsRepo.lock(parsed.documentId, tx);
+    const raced = await jobsRepo.findLive(doc.id, liveKey, tx); // a start that committed while we waited
+    if (raced) return toJobDto(raced);
     if (doc.currentRevisionId !== parsed.baseRevisionId)
       throw new StaleRevisionError(doc.currentRevisionId ?? '');
     const prepared = await prepare(actor, doc, parsed.baseRevisionId, request, tx);
@@ -919,6 +930,12 @@ export const videoAiService = {
         'Only a finished storyboard can be edited',
       );
     const result = VideoAiResult.parse(job.result);
+    // Once assembled, the storyboard on the job is what was assembled; a draft from before it would overwrite that.
+    if (result.assembledAt)
+      throw new ValidationFailedError(
+        [{ path: 'jobId', issue: 'storyboard_assembled' }],
+        'This storyboard was assembled; edits are no longer saved on it (assemble again to apply them)',
+      );
     await jobsRepo.update(
       job.id,
       parsed.expectedVersion,
@@ -1000,7 +1017,15 @@ export const videoAiService = {
       await jobsRepo.update(
         job.id,
         job.version,
-        { result: { ...result, storyboard, draft: null, conflicts: compiled.conflicts } },
+        {
+          result: {
+            ...result,
+            storyboard,
+            draft: null,
+            assembledAt: new Date().toISOString(),
+            conflicts: compiled.conflicts,
+          },
+        },
         tx,
       );
       await audit.record(
@@ -1037,7 +1062,16 @@ export const videoAiService = {
     await jobsRepo.update(
       job.id,
       job.version,
-      { result: { ...result, storyboard, draft: null, proposal, conflicts: compiled.conflicts } },
+      {
+        result: {
+          ...result,
+          storyboard,
+          draft: null,
+          assembledAt: new Date().toISOString(),
+          proposal,
+          conflicts: compiled.conflicts,
+        },
+      },
       tx,
     );
     await audit.record(
@@ -1270,7 +1304,9 @@ async function liveJobOf(documentId: string, liveKey: string, tx: Tx, now = Date
   const found = await jobsRepo.findLive(documentId, liveKey, tx);
   if (!found || now - found.updatedAt.getTime() <= VIDEO_JOB_STALE_MS) return found;
   const job = await jobsRepo.lock(found.id, tx);
-  if (!LIVE.has(job.state)) return null;
+  if (!LIVE.has(job.state) || job.liveKey !== liveKey) return null;
+  // Re-checked on the locked row: a step that committed meanwhile means the workflow is alive.
+  if (now - job.updatedAt.getTime() <= VIDEO_JOB_STALE_MS) return job;
   await advance(job, 'fail', tx, {
     errorCode: 'failed',
     error: 'The job stopped making progress and was ended; ask again',
@@ -1491,6 +1527,7 @@ export const videoAiJobs = {
           proposal: null,
           revisions: [],
           draft: null,
+          assembledAt: null,
           conflicts: [],
           refused: checked.refused,
           findings: [],
@@ -1672,6 +1709,7 @@ async function saveRecut(
     proposal,
     revisions,
     draft: null,
+    assembledAt: null,
     conflicts,
     refused: [],
     findings,

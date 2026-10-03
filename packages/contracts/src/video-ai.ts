@@ -417,6 +417,8 @@ export const VideoAiResult = z.object({
   revisions: z.array(z.object({ documentId: z.string(), revisionId: z.string(), label: z.string() })),
   /** The person's edits of the storyboard, saved as they work (validated against the schema on every read). */
   draft: Storyboard.nullable().default(null),
+  /** When the storyboard was assembled (directly or as a proposal); drafts are no longer saved after it. */
+  assembledAt: z.string().nullable().default(null),
   conflicts: z.array(VideoConflict),
   refused: z.array(RefusedItem),
   findings: z.array(Finding),

@@ -676,7 +676,11 @@ export class VideoAiMockBackend {
       eligibleAssetIds: new Set(
         ELIGIBLE_STORYBOARD.filter((a) => a.kind !== 'audio').map((a) => a.assetVersionId),
       ),
-      effectiveFactIds: this.effectiveFactIds,
+      // As the server: a recut cites only the facts its request names that are in force.
+      effectiveFactIds:
+        job.request.kind === 'recut'
+          ? new Set(job.request.recut.factIds.filter((id) => this.effectiveFactIds.has(id)))
+          : this.effectiveFactIds,
       scope,
       script: this.scriptOf(job.documentId),
       approvedCtas: [
@@ -742,6 +746,7 @@ export class VideoAiMockBackend {
         findings: [],
         summary: storyboard.title,
         draft: null,
+        assembledAt: null,
       };
     }
     const output = job.output as ModelRecutOutput;
@@ -775,6 +780,7 @@ export class VideoAiMockBackend {
       findings: [],
       summary: output.summary,
       draft: null,
+      assembledAt: null,
     };
   }
 
@@ -844,6 +850,8 @@ export class VideoAiMockBackend {
       throw new NotFoundError('StudioVideoJob', input.jobId);
     if (job.version !== input.expectedVersion)
       throw new ConflictError('StudioVideoJob', job.id, input.expectedVersion);
+    if (job.result.assembledAt)
+      throw new ValidationFailedError([{ path: 'jobId', issue: 'storyboard_assembled' }]);
     job.result = { ...job.result, draft: input.storyboard };
     job.version += 1;
     return this.dto(job);
@@ -868,7 +876,13 @@ export class VideoAiMockBackend {
     const ctx = { media: MEDIA, bindings: this.bindings(), idPrefix: `ai${job.id.slice(-6).toLowerCase()}_` };
     const compiled = compileAssembly(head.snapshot, input.storyboard, ctx);
     const summary = `Assembled storyboard “${input.storyboard.title}”`;
-    job.result = { ...job.result, storyboard: input.storyboard, draft: null, conflicts: compiled.conflicts };
+    job.result = {
+      ...job.result,
+      storyboard: input.storyboard,
+      draft: null,
+      assembledAt: new Date().toISOString(),
+      conflicts: compiled.conflicts,
+    };
     if (isEmptyProject(head.snapshot)) {
       const res = this.commit(job, compiled.operations, summary, 'agent'); // model-planned: agent guards
       return {

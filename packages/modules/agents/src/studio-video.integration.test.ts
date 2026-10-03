@@ -547,6 +547,22 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
       modelCallRefs: [expect.stringMatching(new RegExp(`^svj:${job.id}:1:model:`))],
     });
 
+    // Assembled: the job keeps what was assembled; a draft saved after it (an older tab) is refused.
+    const assembledJob = await getJob(job.id);
+    expect(assembledJob.result?.assembledAt).not.toBeNull();
+    expect(assembledJob.result?.draft).toBeNull();
+    expect(
+      await failure(
+        run(tenantA, (tx) =>
+          videoAiService.saveDraft(
+            A,
+            { jobId: job.id, expectedVersion: assembledJob.version, storyboard: edited },
+            tx,
+          ),
+        ),
+      ),
+    ).toBeInstanceOf(ValidationFailedError);
+
     // Assembling again over the assembled video is a proposal; keep only the captions group.
     const second = await run(tenantA, (tx) =>
       videoAiService.assemble(

@@ -389,17 +389,30 @@ function StoryboardJob({
 const DRAFT_SETTLE_MS = 800;
 const DRAFT_RETRY_MAX_MS = 30_000;
 
+/** The storyboard changed elsewhere (another tab or device saved or assembled it) while this one was being edited. */
+interface DraftConflict {
+  /** The storyboard as the server has it now (its draft, else the storyboard). */
+  latest: Storyboard | null;
+  version: number;
+  /** It was assembled elsewhere: edits are no longer saved on it. */
+  assembled: boolean;
+}
+
 /**
  * Saves the person's storyboard edits on the job (videoAi.saveDraft) once they settle. One save at a time, each on
  * the version the previous one returned, so two are never in flight on the same expectedVersion; the newest edit
- * wins. A save is marked done only when it succeeded; a failure is retried with backoff, and a conflict (the job
- * moved on, e.g. another device saved) re-reads the job's version first. An unsaved edit is flushed when the editor
- * closes. Each payload carries its own idempotency key (retries of the same payload reuse it).
+ * wins. A save is marked done only when it succeeded; a transient failure is retried with backoff. A conflict (the
+ * job moved on: another tab or device saved or assembled) is never overwritten silently: saving stops and the person
+ * chooses to load the latest or keep theirs. Once the storyboard is assembled, edits are no longer saved (the server
+ * refuses them). On close, an unsaved edit gets one final attempt and nothing is scheduled after it. Each payload
+ * carries its own idempotency key (retries of the same payload reuse it).
  */
-function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
+function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard, onLoad: (s: Storyboard) => void) {
   const client = useTRPCClient();
   const settled = useSettled(draft, DRAFT_SETTLE_MS);
   const [error, setError] = useState<unknown>(null);
+  const [conflict, setConflict] = useState<DraftConflict | null>(null);
+  const [stopped, setStopped] = useState(Boolean(job.result?.assembledAt));
   const state = useRef({
     jobId: job.id,
     version: job.version,
@@ -409,20 +422,33 @@ function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
     inFlight: false,
     failures: 0,
     timer: 0,
+    /** Waiting for the person's choice after a conflict. */
+    blocked: false,
+    /** Assembled: nothing more is saved. */
+    stopped: Boolean(job.result?.assembledAt),
+    /** The editor closed: one final attempt, no retries. */
+    closed: false,
   });
+  const latest = useRef(draft);
+  latest.current = draft;
   useEffect(() => {
     state.current.version = Math.max(state.current.version, job.version);
   }, [job.version]);
 
+  const stop = useCallback(() => {
+    const s = state.current;
+    s.stopped = true;
+    s.pending = null;
+    window.clearTimeout(s.timer);
+    s.timer = 0;
+    if (!s.closed) setStopped(true);
+  }, []);
+
   const pump = useCallback(async (): Promise<void> => {
     const s = state.current;
-    if (s.inFlight || s.timer) return;
+    if (s.inFlight || s.timer || s.blocked || s.stopped) return;
     const storyboard = s.pending;
-    if (!storyboard) {
-      setError(null);
-      return;
-    }
-    if (storyboard === s.saved) {
+    if (!storyboard || storyboard === s.saved) {
       s.pending = null;
       return;
     }
@@ -440,20 +466,40 @@ function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
       s.saved = storyboard;
       if (s.pending === storyboard) s.pending = null;
       s.failures = 0;
-      setError(null);
+      if (!s.closed) setError(null);
     } catch (err) {
-      s.failures += 1;
-      setError(err);
-      const kind = toUiError(err).kind;
-      // A refusal that a retry cannot change (the job is not an editable storyboard, no access) is shown, not retried.
-      if (kind === 'validation' || kind === 'forbidden' || kind === 'not_found' || kind === 'sign_in') return;
-      if (kind === 'conflict') {
-        try {
-          s.version = (await client.creative.videoAi.get.query({ jobId: s.jobId })).version;
-        } catch {
-          // The retry below tries again.
-        }
+      const ui = toUiError(err);
+      if (ui.details.some((d) => d.issue === 'storyboard_assembled')) {
+        stop();
+        return;
       }
+      if (s.closed) return; // the final attempt after close: nothing is scheduled
+      if (ui.kind === 'conflict') {
+        s.blocked = true;
+        try {
+          const fresh = await client.creative.videoAi.get.query({ jobId: s.jobId });
+          setConflict({
+            latest: fresh.result?.draft ?? fresh.result?.storyboard ?? null,
+            version: fresh.version,
+            assembled: Boolean(fresh.result?.assembledAt),
+          });
+        } catch (readErr) {
+          s.blocked = false;
+          setError(readErr);
+        }
+        if (s.blocked) return;
+      } else {
+        setError(err);
+        // A refusal that a retry cannot change (no access, the job is gone) is shown, not retried.
+        if (
+          ui.kind === 'validation' ||
+          ui.kind === 'forbidden' ||
+          ui.kind === 'not_found' ||
+          ui.kind === 'sign_in'
+        )
+          return;
+      }
+      s.failures += 1;
       s.timer = window.setTimeout(
         () => {
           s.timer = 0;
@@ -466,7 +512,7 @@ function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
       s.inFlight = false;
     }
     if (s.pending) void pump(); // an edit that settled while this save ran
-  }, [client]);
+  }, [client, stop]);
 
   useEffect(() => {
     const s = state.current;
@@ -475,36 +521,64 @@ function useStoryboardDraftSaver(job: VideoAiJobDto, draft: Storyboard) {
     void pump();
   }, [settled, pump]);
 
-  // Flush on close: the newest edit (even one that has not settled yet) goes through the same queue, after a save
-  // still in flight, without waiting out a retry delay.
-  const latest = useRef(draft);
-  latest.current = draft;
+  // Close: timers are cleared; the newest edit gets one final attempt (after a save still in flight).
   useEffect(
     () => () => {
       const s = state.current;
+      s.closed = true;
       window.clearTimeout(s.timer);
       s.timer = 0;
-      if (latest.current === s.saved) return;
+      if (s.blocked || s.stopped || latest.current === s.saved) return;
       s.pending = latest.current;
       void pump();
     },
     [pump],
   );
 
-  /** After assembling: the server cleared the draft and moved the job on; what is on screen counts as saved. */
-  const assembled = useCallback((version: number) => {
+  /** The person's choice after a conflict: take the server's storyboard. */
+  const loadLatest = useCallback(() => {
     const s = state.current;
-    s.version = Math.max(s.version, version);
-    s.saved = latest.current;
+    if (!conflict) return;
+    s.version = Math.max(s.version, conflict.version);
+    if (conflict.latest) {
+      s.saved = conflict.latest;
+      onLoad(conflict.latest);
+    }
     s.pending = null;
     s.attempt = null;
     s.failures = 0;
-    window.clearTimeout(s.timer);
-    s.timer = 0;
+    s.blocked = false;
+    setConflict(null);
     setError(null);
-  }, []);
+    if (conflict.assembled) stop();
+  }, [conflict, onLoad, stop]);
 
-  return { error, assembled };
+  /** The person's choice after a conflict: save theirs over it, on the fresh version. */
+  const keepMine = useCallback(() => {
+    const s = state.current;
+    if (!conflict || conflict.assembled) return;
+    s.version = Math.max(s.version, conflict.version);
+    s.pending = latest.current;
+    s.attempt = null;
+    s.failures = 0;
+    s.blocked = false;
+    setConflict(null);
+    void pump();
+  }, [conflict, pump]);
+
+  /** After assembling here: the server cleared the draft and saves no more edits on this job. */
+  const assembled = useCallback(
+    (version: number) => {
+      state.current.version = Math.max(state.current.version, version);
+      state.current.saved = latest.current;
+      state.current.attempt = null;
+      setError(null);
+      stop();
+    },
+    [stop],
+  );
+
+  return { error, conflict, stopped, loadLatest, keepMine, assembled };
 }
 
 function StoryboardEditor({
@@ -525,7 +599,7 @@ function StoryboardEditor({
   const assembleKey = useIntentKey();
   // The person's edits are kept on the job (a reload or another device picks them up), saved once they settle.
   const [draft, setDraft] = useState<Storyboard>(() => job.result?.draft ?? initial);
-  const drafts = useStoryboardDraftSaver(job, draft);
+  const drafts = useStoryboardDraftSaver(job, draft, setDraft);
   const assemble = useMutation(
     trpc.creative.videoAi.assemble.mutationOptions({
       ...mutationIntent(assembleKey.key),
@@ -765,6 +839,34 @@ function StoryboardEditor({
           title="Some parts could not be placed"
           description={assemble.data.conflicts.map((c) => c.message).join(' ')}
         />
+      )}
+      {drafts.conflict && (
+        <div data-testid="storyboard-draft-conflict" className="flex flex-col gap-2">
+          <StatusBanner
+            tone="warning"
+            title="This storyboard changed elsewhere"
+            description={
+              drafts.conflict.assembled
+                ? 'It was assembled in another tab or on another device; your edits here are not saved. Load the latest to continue from what was assembled.'
+                : 'It was saved in another tab or on another device since you started. Load the latest, or keep your version and save it over that one.'
+            }
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="primary" onClick={drafts.loadLatest} data-testid="draft-load-latest">
+              Load latest
+            </Button>
+            {!drafts.conflict.assembled && (
+              <Button size="sm" variant="ghost" onClick={drafts.keepMine} data-testid="draft-keep-mine">
+                Keep mine
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+      {drafts.stopped && !drafts.conflict && (
+        <p className="text-xs text-muted-foreground" data-testid="storyboard-draft-stopped">
+          This storyboard was assembled. Edits here are not saved; assemble again to apply them.
+        </p>
       )}
       {drafts.error !== null && (
         <StatusBanner

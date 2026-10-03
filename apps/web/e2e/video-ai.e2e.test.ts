@@ -136,12 +136,46 @@ describe.skipIf(!enabled)('video AI: storyboard, assembly and recut (built app, 
     await expect
       .poll(() => draft()?.scenes.map((sc) => sc.title), { timeout: 5_000 })
       .toEqual(['City', 'Opening']);
+    await expect.poll(() => draft()?.scenes[0]?.shots[0]?.durationMs, { timeout: 5_000 }).toBe(2_500);
+    // Another device saves the storyboard meanwhile: the next save here is a conflict, never a silent overwrite.
+    const job = [...backend.videoAi.jobs.values()].find((j) => j.kind === 'storyboard');
+    const theirs = {
+      ...(draft() as NonNullable<ReturnType<typeof draft>>),
+      title: 'Beach launch, from the phone',
+    };
+    backend.videoAi.saveDraft({
+      jobId: job?.id ?? '',
+      expectedVersion: job?.version ?? 0,
+      storyboard: theirs,
+    });
+    await page.getByLabel('Scene 2 title').fill('Opening!');
+    await expect
+      .poll(() => page.getByTestId('storyboard-draft-conflict').count(), { timeout: 10_000 })
+      .toBe(1);
+    expect(draft()?.title).toBe('Beach launch, from the phone'); // theirs was not overwritten
+    await page.getByTestId('draft-load-latest').click();
+    await expect.poll(() => page.getByLabel('Scene 2 title').inputValue()).toBe('Opening');
+    expect(await page.getByTestId('storyboard-panel').textContent()).toContain(
+      'Beach launch, from the phone',
+    );
+    expect(await page.getByTestId('storyboard-draft-conflict').count()).toBe(0);
   }, 60_000);
 
   it('assembles into the empty video at once; undo and redo work from the keyboard', async () => {
     await page.getByTestId('assemble-storyboard').click();
     await expect.poll(() => page.getByTestId('assembled').count(), { timeout: 15_000 }).toBe(1);
     expect(headNumber()).toBe(2);
+    // Assembled: the server keeps what was assembled and saves no later draft over it.
+    expect(await page.getByTestId('storyboard-draft-stopped').count()).toBe(1);
+    const sb = [...backend.videoAi.jobs.values()].find((j) => j.kind === 'storyboard');
+    expect(sb?.result?.draft).toBeNull();
+    expect(() =>
+      backend.videoAi.saveDraft({
+        jobId: sb?.id ?? '',
+        expectedVersion: sb?.version ?? 0,
+        storyboard: sb!.result!.storyboard!,
+      }),
+    ).toThrow();
     expect(clips().map((c) => [c.assetVersionId, c.startMs])).toEqual([
       ['av_video_city', 0],
       ['av_photo', 2_500],

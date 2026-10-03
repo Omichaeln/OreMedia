@@ -63,16 +63,20 @@ export function prohibitedPhrasesIn(text: string, prohibited: readonly string[])
 }
 
 /**
- * Whether short copy (a call to action, a title) reads as a claim that needs an approved fact behind it: a number or
- * a percentage, or a superlative, comparative or guarantee. Deliberately broad: a false positive only asks for a fact.
+ * Whether short copy (a call to action, a title) reads as a claim that needs an approved fact behind it: a measured
+ * number (a percentage, a multiplier such as "2x" or "3 times", a price), a comparison or superlative, a ranking or a
+ * guarantee. Plain imperative CTA words ("Try it free", "Book your first lesson") and bare digits such as a phone
+ * number or a date are not claims.
  */
 export function looksLikeClaim(text: string): boolean {
-  return (
-    /\d/.test(text) ||
-    /\b(best|better|fastest|faster|cheapest|cheaper|strongest|stronger|lightest|lighter|longest|longer|most|first|only|leading|guaranteed?|proven|than|twice|double|half|#1|no\.? ?1|free)\b/i.test(
+  const measured =
+    /\d\s*(%|percent\b|x\b|×|times\b)/i.test(text) || /[$€£¥]\s*\d/.test(text) || /\d\s*[$€£¥]/.test(text);
+  const compared =
+    /\b(best|better|fastest|faster|cheapest|cheaper|strongest|stronger|lightest|lighter|longest|longer|most|leading|unbeatable|guaranteed?|proven|than|twice|double|half the)\b/i.test(
       text,
-    )
-  );
+    );
+  const ranked = /(^|\s)#\s?1\b|\bno\.?\s?1\b|\bnumber one\b/i.test(text);
+  return measured || compared || ranked;
 }
 
 export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSnapshot): Finding[] {
