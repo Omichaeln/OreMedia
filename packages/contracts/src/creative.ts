@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LogoVariant } from './brand';
 import { ElementId as Id } from './ids';
 import { PageRequest } from './pagination';
 
@@ -70,7 +71,7 @@ export const ImageElement = Base.extend({
 export const LogoElement = Base.extend({
   type: z.literal('logo'),
   assetVersionId: z.string(),
-  variant: z.enum(['primary', 'reversed', 'mono', 'mark_only']),
+  variant: LogoVariant,
 });
 
 export const ShapeElement = Base.extend({

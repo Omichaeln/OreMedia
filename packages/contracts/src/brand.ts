@@ -20,6 +20,36 @@ export const BrandGuidelinesV1 = z.object({
 });
 export type BrandGuidelinesV1 = z.infer<typeof BrandGuidelinesV1>;
 
+/** The lock-ups a brand system names (BSC-2 adds `secondary`, an alternative lock-up such as a stacked version). */
+export const LogoVariant = z.enum(['primary', 'secondary', 'reversed', 'mono', 'mark_only']);
+export type LogoVariant = z.infer<typeof LogoVariant>;
+export const LOGO_USAGE_NOTE_MAX = 500;
+export const LOGO_DONTS_MAX = 10;
+export const LOGO_DONT_MAX = 200;
+
+/**
+ * One logo rule: which logo asset is the variant, the grounds it may sit on, its clear space (a multiple of the mark
+ * height) and minimum width. BSC-2 additions are optional with no defaults, so stored documents parse and hash as
+ * they did: `assetVersionId` pins the logo's version (the studio checks a logo element against it), `usage` is the
+ * written guidance (backgrounds, don'ts) and `preferredFormat` says whether the brand supplies the logo as vector.
+ */
+export const LogoRuleV1 = z.object({
+  assetId: z.string(),
+  assetVersionId: z.string().optional(),
+  variant: LogoVariant,
+  allowedBackgroundColourKeys: z.array(z.string()),
+  clearSpaceRatio: z.number(), // multiple of mark height
+  minWidthPx: z.number(),
+  usage: z
+    .object({
+      backgroundsNote: z.string().max(LOGO_USAGE_NOTE_MAX),
+      donts: z.array(z.string().max(LOGO_DONT_MAX)).max(LOGO_DONTS_MAX),
+    })
+    .optional(),
+  preferredFormat: z.enum(['svg', 'raster']).optional(),
+});
+export type LogoRuleV1 = z.infer<typeof LogoRuleV1>;
+
 /** Spec 8.1: the brand system document, versioned. */
 export const BrandSystemDocumentV1 = z.object({
   schemaVersion: z.literal(1),
@@ -55,15 +85,7 @@ export const BrandSystemDocumentV1 = z.object({
     radii: z.array(z.number()),
     contrastTarget: z.enum(['AA', 'AAA']).default('AA'),
   }),
-  logoRules: z.array(
-    z.object({
-      assetId: z.string(),
-      variant: z.enum(['primary', 'reversed', 'mono', 'mark_only']),
-      allowedBackgroundColourKeys: z.array(z.string()),
-      clearSpaceRatio: z.number(), // multiple of mark height
-      minWidthPx: z.number(),
-    }),
-  ),
+  logoRules: z.array(LogoRuleV1),
   patterns: z.array(
     z.object({
       key: z.string(),

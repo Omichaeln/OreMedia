@@ -114,6 +114,25 @@ export const resetBrandAssetKindSource = (): void => {
 };
 
 /**
+ * BSC-2: the asset each listed version belongs to, for versions of this brand's live assets (composition wires
+ * `assetService.assetsOfVersions`). Versions that are missing, foreign or of another brand are absent. Only a logo rule
+ * that pins a version is checked against it; until registered a pinned version is refused, as an asset reference is.
+ */
+export type BrandAssetVersionSource = (
+  brandId: string,
+  assetVersionIds: string[],
+  tx?: Tx,
+) => Promise<Map<string, string>>;
+const noBrandVersions: BrandAssetVersionSource = async () => new Map();
+let brandAssetVersionSource: BrandAssetVersionSource = noBrandVersions;
+export const registerBrandAssetVersionSource = (fn: BrandAssetVersionSource): void => {
+  brandAssetVersionSource = fn;
+};
+export const resetBrandAssetVersionSource = (): void => {
+  brandAssetVersionSource = noBrandVersions;
+};
+
+/**
  * Spec 8.2 onboarding runs are agent runs, which are the agents module's rows, so it registers the source
  * (composition wires `agentsService.runs.start` / `runs.get`). `get` returns the run's brief as the server wrote it.
  * Unlike the other hooks there is no harmless default (a missing template or asset list is an empty answer; a
@@ -235,9 +254,21 @@ async function assertDocumentReferences(
   const fontIds = changedRoles.map(({ r }) => r.fontAssetId);
   const ids = [...new Set([...logoIds, ...exampleIds, ...fontIds])];
   const kinds = ids.length ? await brandAssetKindSource(brandId, ids, tx) : new Map<string, AssetKind>();
+  const pinned = document.logoRules.flatMap((r) => (r.assetVersionId ? [r.assetVersionId] : []));
+  const versionAssets = pinned.length
+    ? await brandAssetVersionSource(brandId, [...new Set(pinned)], tx)
+    : new Map<string, string>();
+  const variants = new Set<string>();
   document.logoRules.forEach((r, i) => {
     if (kinds.get(r.assetId) !== 'logo')
       issues.push({ path: `logoRules.${i}.assetId`, issue: 'not_a_logo_of_this_brand' });
+    if (variants.has(r.variant)) issues.push({ path: `logoRules.${i}.variant`, issue: 'duplicate_variant' });
+    variants.add(r.variant);
+    if (r.assetVersionId && versionAssets.get(r.assetVersionId) !== r.assetId)
+      issues.push({ path: `logoRules.${i}.assetVersionId`, issue: 'not_a_version_of_this_logo' });
+    r.usage?.donts.forEach((d, j) => {
+      if (!d.trim()) issues.push({ path: `logoRules.${i}.usage.donts.${j}`, issue: 'empty' });
+    });
     r.allowedBackgroundColourKeys.forEach((k, j) => {
       if (!keys.has(k))
         issues.push({ path: `logoRules.${i}.allowedBackgroundColourKeys.${j}`, issue: 'unknown_colour_key' });
