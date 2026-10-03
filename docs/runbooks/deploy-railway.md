@@ -319,6 +319,18 @@ accepted as soon as the API is on the new build):
    Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish
    on worker-render, which must stay on the new build until they drain.
 
+Rollout order for video documents (migration 0026, STU-2b; no flag: a person can create a video document once the
+API is on the new build):
+
+1. Apply migration 0026 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
+   `rendered_exports.dedupe_key` with index `ix_export_dedupe`; existing documents stay graphic) with the api
+   pre-deploy command.
+2. Deploy `worker-render` first: it registers `videoRenderJobWorkflowV1` and `videoRenderSignalRelayV1` and the
+   compose activities on `video` (`VIDEO_FFMPEG_THREADS`, default 2). Graphic renders keep `renderJobWorkflowV1`.
+3. Deploy the API and the other workers. Video render requests and `creative.render_cancel_requested` events now
+   start workflows on `video`; rolling back the API leaves existing video documents readable but uneditable, and
+   video workflows already started finish on worker-render.
+
 Rollout order for plan items (migration 0014, UX-09): apply 0014 (`plan_items`, additive; the api pre-deploy
 command does it) and re-apply `app-role.sql` (the new table needs its grants); then deploy the api and workers in
 the usual order. The built-in `campaign-planning` skill gains `content.proposePlan` and an optional `briefId`

@@ -53,3 +53,14 @@ for ffmpeg and 300 MB for the worker process. Ordinary camera footage encodes fa
 for one job; raise the plan or attach a volume and point `MEDIA_TMP_DIR` at it before raising concurrency. The clamav
 service's `StreamMaxLength` must cover the video cap (1 GiB) or every video upload stays quarantined with
 `scanner_unavailable` (the scan names the setting); see the runbook rollout order for STU-2a.
+
+### Video export (STU-2b)
+
+`videoRenderJobWorkflowV1` composes a committed video document on `video`: Chromium draws title, caption and logo
+overlays as PNGs, then one ffmpeg run (`-threads` from `VIDEO_FFMPEG_THREADS`, default 2) encodes H.264 High + AAC
+with faststart. Measured on the same shared 4 vCPU host: a 30 s 1920x1080 30 fps project (3 clips, 2 transitions,
+6 captions) took 32.8 s end to end (about 1.1 x real time) and produced a 24.8 MB MP4. A project is at most 180 s, so
+expect up to about 3.5 minutes per export on 2 threads; the compose activity's timeout is 60 minutes with a 1 minute
+heartbeat. Temp files (sources, overlay PNGs, the MP4) count against `MEDIA_TMP_MAX_BYTES` (default 20 GiB for a
+render; the encoder's `-fs` stops at the remaining budget). The same `VIDEO_CONCURRENCY` slot bounds exports and
+ingest.
