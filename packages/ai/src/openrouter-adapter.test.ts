@@ -187,6 +187,41 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
     }
   });
 
+  it('sends neither tools nor tool_choice on a call without tools (OpenAI-compatible providers reject an empty list)', async () => {
+    const { fetch: f, calls } = fakeFetch();
+    await new OpenRouterModelAdapter({ apiKey: 'k', fetch: f }).complete({ ...request, tools: [] });
+    expect(calls[0]!.body).not.toHaveProperty('tools');
+    expect(calls[0]!.body).not.toHaveProperty('tool_choice');
+  });
+
+  it("names the upstream provider and its own message when OpenRouter answers 'Provider returned error'", async () => {
+    const run = (status: number, body: unknown) =>
+      new OpenRouterModelAdapter({ apiKey: 'k', fetch: fakeFetch(status, body).fetch }).complete(request);
+    const relayed = (await run(400, {
+      error: {
+        code: 400,
+        message: 'Provider returned error',
+        metadata: {
+          provider_name: 'OpenAI',
+          raw: JSON.stringify({ error: { message: "[] is too short - 'tools'" } }),
+        },
+      },
+    }).catch((e: unknown) => e)) as ValidationFailedError;
+    expect(relayed.message).toBe(
+      "The model provider rejected the request (400: Provider returned error (OpenAI: [] is too short - 'tools'))",
+    );
+    const plainRaw = (await run(200, {
+      error: {
+        code: 400,
+        message: 'Provider returned error',
+        metadata: { provider_name: 'X', raw: 'bad input' },
+      },
+    }).catch((e: unknown) => e)) as ValidationFailedError;
+    expect(plainRaw.message).toBe(
+      'The model provider rejected the request (400: Provider returned error (X: bad input))',
+    );
+  });
+
   it('treats a connection failure or timeout as unavailable', async () => {
     const failing = (async () => {
       throw new TypeError('fetch failed');
