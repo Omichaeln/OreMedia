@@ -31,9 +31,50 @@ const OPERATION_INPUT_SCHEMA = {
     'One creative operation (spec 11.3), discriminated by "op". Elements or pages marked locked (and protected elements such as logos) cannot be changed by agents; such operations are refused.',
   properties: {
     op: { type: 'string', enum: [...OPERATION_NAMES] },
-    pageId: { type: 'string' },
-    elementId: { type: 'string' },
-    elementIds: { type: 'array', items: { type: 'string' } },
+    pageId: { type: 'string', description: 'The page the operation acts on.' },
+    elementId: { type: 'string', description: 'The element the operation acts on (el_ + 26 characters).' },
+    elementIds: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'groupElements, alignElements, distributeElements: the elements acted on together.',
+    },
+    groupId: {
+      type: 'string',
+      description: 'groupElements: the new group element id (el_ + 26 characters).',
+    },
+    newPageId: { type: 'string', description: 'duplicatePage: the id of the copy (at most 40 characters).' },
+    elementIdMap: {
+      type: 'object',
+      additionalProperties: { type: 'string' },
+      description:
+        'duplicatePage: every element id of the source page (group children included) mapped to a new id.',
+    },
+    toIndex: {
+      type: 'integer',
+      description: 'reorderElement, reorderPage: the new position (0 is the back or the first page).',
+    },
+    rotation: {
+      type: 'number',
+      minimum: -360,
+      maximum: 360,
+      description: 'setRotation: degrees about the element centre.',
+    },
+    align: {
+      type: 'string',
+      enum: ['left', 'center', 'right', 'top', 'middle', 'bottom'],
+      description: 'alignElements: the edge or centre line to align to.',
+    },
+    axis: {
+      type: 'string',
+      enum: ['horizontal', 'vertical'],
+      description: 'distributeElements: the direction of equal gaps.',
+    },
+    relativeTo: {
+      type: 'string',
+      enum: ['selection', 'page'],
+      description: 'alignElements, distributeElements: the bounds of the elements themselves, or the page.',
+    },
+    locked: { type: 'boolean', description: 'setLock, setPageLock: agents may lock but never unlock.' },
   },
   required: ['op'],
 };

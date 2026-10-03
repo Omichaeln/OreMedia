@@ -154,20 +154,33 @@ const pageOf = (doc: CreativeDocumentV1, pageId: string, op: Operation['op']): C
   return page;
 };
 
-/** Depth-first search through groups. Returns the containing array and index so edits stay local. */
+/**
+ * Depth-first search through groups. Returns the containing array and index so edits stay local, and the groups
+ * that contain the element (outermost first): a locked or protected group covers everything inside it.
+ */
 function locate(
   elements: Element[],
   elementId: string,
-): { parent: Element[]; index: number; element: Element } | null {
+  ancestors: Element[] = [],
+): { parent: Element[]; index: number; element: Element; ancestors: Element[] } | null {
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i] as Element;
-    if (el.id === elementId) return { parent: elements, index: i, element: el };
+    if (el.id === elementId) return { parent: elements, index: i, element: el, ancestors };
     if (el.type === 'group') {
-      const found = locate(el.children, elementId);
+      const found = locate(el.children, elementId, [...ancestors, el]);
       if (found) return found;
     }
   }
   return null;
+}
+
+/** The element and the groups that contain it, outermost first; null when the page has no such element. */
+export function findWithAncestors(
+  page: CreativePage,
+  elementId: string,
+): { element: Element; ancestors: Element[] } | null {
+  const found = locate(page.elements, elementId);
+  return found ? { element: found.element, ancestors: found.ancestors } : null;
 }
 
 export function findElement(page: CreativePage, elementId: string): Element | null {
@@ -192,8 +205,12 @@ export function isLockedDeep(el: Element): boolean {
   return el.locked || (el.type === 'group' && el.children.some(isLockedDeep));
 }
 
-const assertMovable = (el: Element, op: Operation['op']) => {
-  if (isLockedDeep(el)) throw new OperationError('element_locked', op);
+/** Locked for editing: the element, anything inside it, or a group that contains it is locked. */
+export const isLockedInContext = (el: Element, ancestors: readonly Element[]): boolean =>
+  isLockedDeep(el) || ancestors.some((a) => a.locked);
+
+const assertMovable = (el: Element, op: Operation['op'], ancestors: readonly Element[] = []) => {
+  if (isLockedInContext(el, ancestors)) throw new OperationError('element_locked', op);
 };
 
 /** Group children carry page-absolute transforms (scene.ts), so moving a group moves every descendant. */
@@ -204,7 +221,11 @@ function translate(el: Element, dx: number, dy: number): Element {
   return moved;
 }
 
-/** Resizing a group scales its descendants' boxes about the group's top-left corner. */
+/**
+ * Resizing a group scales its descendants' boxes about the group's top-left corner. A rotated child keeps its
+ * rotation and has its unrotated box scaled (so a non-uniform resize does not skew it); its footprint may then extend
+ * slightly beyond the group's new box, which is recomputed only when the group is made again.
+ */
 function scaleWithin(el: Element, origin: { x: number; y: number }, sx: number, sy: number): Element {
   const t = el.transform;
   const scaled = {
@@ -262,21 +283,23 @@ function alignedPositions(
   align: Extract<Operation, { op: 'alignElements' }>['align'],
   relativeTo: 'selection' | 'page',
 ): Map<string, { x: number; y: number }> {
+  // Rotated elements align by their footprint (the box they visibly cover), as groupElements bounds them.
   const b =
     relativeTo === 'page'
       ? { x: 0, y: 0, width: page.width, height: page.height }
-      : boundsOf(elements.map((e) => e.transform));
+      : boundsOf(elements.map((e) => footprintOf(e.transform)));
   const out = new Map<string, { x: number; y: number }>();
   for (const el of elements) {
     const t = el.transform;
-    let { x, y } = t;
-    if (align === 'left') x = b.x;
-    if (align === 'center') x = b.x + (b.width - t.width) / 2;
-    if (align === 'right') x = b.x + b.width - t.width;
-    if (align === 'top') y = b.y;
-    if (align === 'middle') y = b.y + (b.height - t.height) / 2;
-    if (align === 'bottom') y = b.y + b.height - t.height;
-    out.set(el.id, { x: round2(x), y: round2(y) });
+    const f = footprintOf(t);
+    let { x: fx, y: fy } = f;
+    if (align === 'left') fx = b.x;
+    if (align === 'center') fx = b.x + (b.width - f.width) / 2;
+    if (align === 'right') fx = b.x + b.width - f.width;
+    if (align === 'top') fy = b.y;
+    if (align === 'middle') fy = b.y + (b.height - f.height) / 2;
+    if (align === 'bottom') fy = b.y + b.height - f.height;
+    out.set(el.id, { x: round2(t.x + fx - f.x), y: round2(t.y + fy - f.y) });
   }
   return out;
 }
@@ -291,8 +314,11 @@ function distributedPositions(
   axis: 'horizontal' | 'vertical',
   relativeTo: 'selection' | 'page',
 ): Map<string, { x: number; y: number }> {
-  const pos = (e: Element) => (axis === 'horizontal' ? e.transform.x : e.transform.y);
-  const len = (e: Element) => (axis === 'horizontal' ? e.transform.width : e.transform.height);
+  // By footprint, like alignment: a rotated element is spaced by the box it visibly covers.
+  const pos = (e: Element) =>
+    axis === 'horizontal' ? footprintOf(e.transform).x : footprintOf(e.transform).y;
+  const len = (e: Element) =>
+    axis === 'horizontal' ? footprintOf(e.transform).width : footprintOf(e.transform).height;
   const sorted = [...elements].sort((a, b) => pos(a) - pos(b) || a.id.localeCompare(b.id));
   const total = sorted.reduce((sum, e) => sum + len(e), 0);
   let start: number;
@@ -310,8 +336,13 @@ function distributedPositions(
   const out = new Map<string, { x: number; y: number }>();
   let cursor = start;
   for (const el of sorted) {
-    const at = round2(cursor);
-    out.set(el.id, axis === 'horizontal' ? { x: at, y: el.transform.y } : { x: el.transform.x, y: at });
+    const shift = cursor - pos(el); // the footprint moves to the cursor; the transform moves with it
+    out.set(
+      el.id,
+      axis === 'horizontal'
+        ? { x: round2(el.transform.x + shift), y: el.transform.y }
+        : { x: el.transform.x, y: round2(el.transform.y + shift) },
+    );
     cursor += len(el) + gap;
   }
   return out;
@@ -379,7 +410,9 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
     }
     case 'removeElement': {
       const page = pageOf(next, op.pageId, op.op);
-      const { parent, index } = requireElement(page, op.elementId, op.op);
+      const { parent, index, element, ancestors } = requireElement(page, op.elementId, op.op);
+      // STU-1a: a locked element (or a group holding one, or one inside a locked group) is never removed; unlock first.
+      assertMovable(element, op.op, ancestors);
       parent.splice(index, 1);
       return next;
     }
@@ -407,8 +440,8 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
     case 'moveElement': {
       const page = pageOf(next, op.pageId, op.op);
       assertPageUnlocked(page, op.op);
-      const { parent, index, element } = requireElement(page, op.elementId, op.op);
-      assertMovable(element, op.op);
+      const { parent, index, element, ancestors } = requireElement(page, op.elementId, op.op);
+      assertMovable(element, op.op, ancestors);
       if (element.type === 'group')
         parent[index] = translate(element, op.x - element.transform.x, op.y - element.transform.y);
       else parent[index] = { ...element, transform: { ...element.transform, x: op.x, y: op.y } };
@@ -417,8 +450,8 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
     case 'resizeElement': {
       const page = pageOf(next, op.pageId, op.op);
       assertPageUnlocked(page, op.op);
-      const { parent, index, element } = requireElement(page, op.elementId, op.op);
-      assertMovable(element, op.op);
+      const { parent, index, element, ancestors } = requireElement(page, op.elementId, op.op);
+      assertMovable(element, op.op, ancestors);
       const t = element.transform;
       if (element.type === 'group') {
         const scaled = scaleWithin(element, t, op.width / t.width, op.height / t.height);
@@ -448,6 +481,9 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
       if (!template) throw new OperationError('template_not_resolved', op.op);
       const slotFindings = validateSlotBindings(template, page, op.slotBindings);
       if (slotFindings.length) throw new SlotConstraintError(slotFindings);
+      // STU-1a: a template replaces every element of the page, so a locked page or locked element stops it.
+      assertPageUnlocked(page, op.op);
+      if (page.elements.some(isLockedDeep)) throw new OperationError('element_locked', op.op);
       // Template elements come in with their template ids; bound slots take the existing element's content.
       const incoming = structuredClone(template.page.elements);
       for (const slot of template.slots) {
@@ -550,8 +586,8 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
     case 'setRotation': {
       const page = pageOf(next, op.pageId, op.op);
       assertPageUnlocked(page, op.op);
-      const { parent, index, element } = requireElement(page, op.elementId, op.op);
-      assertMovable(element, op.op);
+      const { parent, index, element, ancestors } = requireElement(page, op.elementId, op.op);
+      assertMovable(element, op.op, ancestors);
       // Group children carry their own page-absolute transforms; a group is rotated by rotating its members.
       if (element.type === 'group') throw new OperationError('group_rotation_unsupported', op.op);
       parent[index] = { ...element, transform: { ...element.transform, rotation: op.rotation } };
@@ -622,7 +658,10 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
       const page = pageOf(next, op.pageId, op.op);
       assertPageUnlocked(page, op.op);
       const members = distinctElements(page, op.elementIds, op.op);
-      for (const m of members) assertMovable(m, op.op);
+      for (const id of op.elementIds) {
+        const { element, ancestors } = requireElement(page, id, op.op);
+        assertMovable(element, op.op, ancestors);
+      }
       moveAll(page, alignedPositions(page, members, op.align, op.relativeTo), op.op);
       return next;
     }
@@ -630,7 +669,10 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
       const page = pageOf(next, op.pageId, op.op);
       assertPageUnlocked(page, op.op);
       const members = distinctElements(page, op.elementIds, op.op);
-      for (const m of members) assertMovable(m, op.op);
+      for (const id of op.elementIds) {
+        const { element, ancestors } = requireElement(page, id, op.op);
+        assertMovable(element, op.op, ancestors);
+      }
       moveAll(page, distributedPositions(page, members, op.axis, op.relativeTo), op.op);
       return next;
     }
