@@ -7336,6 +7336,10 @@
                       "templateVersionId": {
                         "type": "string"
                       },
+                      "contentType": {
+                        "type": "string",
+                        "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                      },
                       "pages": {
                         "type": "array",
                         "items": {
@@ -7380,6 +7384,9 @@
                                 },
                                 "required": ["elementId", "anchor", "marginPx"]
                               }
+                            },
+                            "locked": {
+                              "type": "boolean"
                             }
                           },
                           "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -7409,9 +7416,86 @@
                       }
                     },
                     "required": ["schemaVersion", "brandVersionId", "pages"]
+                  },
+                  "contentType": {
+                    "type": "string",
+                    "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                  },
+                  "source": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "blank"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "custom"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "starter"
+                          },
+                          "starterKey": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "starterKey"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "template"
+                          },
+                          "templateId": {
+                            "type": "string"
+                          },
+                          "templateVersionId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "templateId", "templateVersionId"]
+                      }
+                    ]
                   }
                 },
                 "required": ["brandId", "title"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.documents.duplicate": {
+      "post": {
+        "operationId": "creative.documents.duplicate",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": ["documentId"]
               }
             }
           }
@@ -7469,6 +7553,30 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.documents.rename": {
+      "post": {
+        "operationId": "creative.documents.rename",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": ["documentId", "title"]
               }
             }
           }
@@ -7748,6 +7856,9 @@
                                     },
                                     "required": ["elementId", "anchor", "marginPx"]
                                   }
+                                },
+                                "locked": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -7790,6 +7901,209 @@
                             }
                           },
                           "required": ["op", "pageId", "elementId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "groupElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "groupId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "groupId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "ungroupElement"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setRotation"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "rotation": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "rotation"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setMask"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "mask": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["rect", "rounded", "circle"]
+                                },
+                                "radius": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removePage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "duplicatePage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "newPageId": {
+                              "type": "string"
+                            },
+                            "elementIdMap": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "index": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "newPageId", "elementIdMap"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "reorderPage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "toIndex": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "toIndex"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setPageLock"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "alignElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "align": {
+                              "type": "string",
+                              "enum": ["left", "center", "right", "top", "middle", "bottom"]
+                            },
+                            "relativeTo": {
+                              "type": "string",
+                              "enum": ["selection", "page"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "align", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "distributeElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "axis": {
+                              "type": "string",
+                              "enum": ["horizontal", "vertical"]
+                            },
+                            "relativeTo": {
+                              "type": "string",
+                              "enum": ["selection", "page"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
                         }
                       ]
                     }
@@ -8088,6 +8402,9 @@
                                     },
                                     "required": ["elementId", "anchor", "marginPx"]
                                   }
+                                },
+                                "locked": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -8130,6 +8447,209 @@
                             }
                           },
                           "required": ["op", "pageId", "elementId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "groupElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "groupId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "groupId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "ungroupElement"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setRotation"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "rotation": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "rotation"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setMask"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "mask": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["rect", "rounded", "circle"]
+                                },
+                                "radius": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["kind"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "removePage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "pageId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "duplicatePage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "newPageId": {
+                              "type": "string"
+                            },
+                            "elementIdMap": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "index": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "newPageId", "elementIdMap"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "reorderPage"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "toIndex": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["op", "pageId", "toIndex"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setPageLock"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "locked": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "locked"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "alignElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "align": {
+                              "type": "string",
+                              "enum": ["left", "center", "right", "top", "middle", "bottom"]
+                            },
+                            "relativeTo": {
+                              "type": "string",
+                              "enum": ["selection", "page"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "align", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "distributeElements"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "axis": {
+                              "type": "string",
+                              "enum": ["horizontal", "vertical"]
+                            },
+                            "relativeTo": {
+                              "type": "string",
+                              "enum": ["selection", "page"]
+                            }
+                          },
+                          "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
                         }
                       ]
                     }
@@ -8351,6 +8871,10 @@
                       "templateVersionId": {
                         "type": "string"
                       },
+                      "contentType": {
+                        "type": "string",
+                        "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                      },
                       "pages": {
                         "type": "array",
                         "items": {
@@ -8395,6 +8919,9 @@
                                 },
                                 "required": ["elementId", "anchor", "marginPx"]
                               }
+                            },
+                            "locked": {
+                              "type": "boolean"
                             }
                           },
                           "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -8547,6 +9074,66 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.templates.listCurrent": {
+      "get": {
+        "operationId": "creative.templates.listCurrent",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.templates.retire": {
+      "post": {
+        "operationId": "creative.templates.retire",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "templateId": {
+                    "type": "string"
+                  },
+                  "templateVersionId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["templateId", "expectedVersion"]
               }
             }
           }
@@ -20415,6 +21002,10 @@
                 "templateVersionId": {
                   "type": "string"
                 },
+                "contentType": {
+                  "type": "string",
+                  "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                },
                 "pages": {
                   "type": "array",
                   "items": {
@@ -20459,6 +21050,9 @@
                           },
                           "required": ["elementId", "anchor", "marginPx"]
                         }
+                      },
+                      "locked": {
+                        "type": "boolean"
                       }
                     },
                     "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -20488,9 +21082,77 @@
                 }
               },
               "required": ["schemaVersion", "brandVersionId", "pages"]
+            },
+            "contentType": {
+              "type": "string",
+              "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "blank"
+                    }
+                  },
+                  "required": ["kind"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "custom"
+                    }
+                  },
+                  "required": ["kind"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "starter"
+                    },
+                    "starterKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "starterKey"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "template"
+                    },
+                    "templateId": {
+                      "type": "string"
+                    },
+                    "templateVersionId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "templateId", "templateVersionId"]
+                }
+              ]
             }
           },
           "required": ["brandId", "title"]
+        }
+      },
+      "creative.documents.duplicate": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": ["documentId"]
         }
       },
       "creative.documents.get": {
@@ -20530,6 +21192,21 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "creative.documents.rename": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": ["documentId", "title"]
         }
       },
       "creative.operations.applyBatch": {
@@ -20800,6 +21477,9 @@
                               },
                               "required": ["elementId", "anchor", "marginPx"]
                             }
+                          },
+                          "locked": {
+                            "type": "boolean"
                           }
                         },
                         "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -20842,6 +21522,209 @@
                       }
                     },
                     "required": ["op", "pageId", "elementId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "groupElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "groupId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "groupId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "ungroupElement"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setRotation"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "rotation": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "rotation"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setMask"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "mask": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["rect", "rounded", "circle"]
+                          },
+                          "radius": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["kind"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removePage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "duplicatePage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "newPageId": {
+                        "type": "string"
+                      },
+                      "elementIdMap": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "index": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "newPageId", "elementIdMap"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "reorderPage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "toIndex": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "toIndex"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setPageLock"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "alignElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "align": {
+                        "type": "string",
+                        "enum": ["left", "center", "right", "top", "middle", "bottom"]
+                      },
+                      "relativeTo": {
+                        "type": "string",
+                        "enum": ["selection", "page"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "align", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "distributeElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "axis": {
+                        "type": "string",
+                        "enum": ["horizontal", "vertical"]
+                      },
+                      "relativeTo": {
+                        "type": "string",
+                        "enum": ["selection", "page"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
                   }
                 ]
               }
@@ -21131,6 +22014,9 @@
                               },
                               "required": ["elementId", "anchor", "marginPx"]
                             }
+                          },
+                          "locked": {
+                            "type": "boolean"
                           }
                         },
                         "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -21173,6 +22059,209 @@
                       }
                     },
                     "required": ["op", "pageId", "elementId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "groupElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "groupId": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "groupId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "ungroupElement"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setRotation"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "rotation": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "rotation"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setMask"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "mask": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["rect", "rounded", "circle"]
+                          },
+                          "radius": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["kind"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "removePage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["op", "pageId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "duplicatePage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "newPageId": {
+                        "type": "string"
+                      },
+                      "elementIdMap": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "index": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "newPageId", "elementIdMap"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "reorderPage"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "toIndex": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["op", "pageId", "toIndex"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setPageLock"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "locked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "locked"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "alignElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "align": {
+                        "type": "string",
+                        "enum": ["left", "center", "right", "top", "middle", "bottom"]
+                      },
+                      "relativeTo": {
+                        "type": "string",
+                        "enum": ["selection", "page"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "align", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "distributeElements"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "axis": {
+                        "type": "string",
+                        "enum": ["horizontal", "vertical"]
+                      },
+                      "relativeTo": {
+                        "type": "string",
+                        "enum": ["selection", "page"]
+                      }
+                    },
+                    "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
                   }
                 ]
               }
@@ -21331,6 +22420,10 @@
                 "templateVersionId": {
                   "type": "string"
                 },
+                "contentType": {
+                  "type": "string",
+                  "enum": ["social_post", "carousel", "story", "video", "thumbnail_banner", "custom"]
+                },
                 "pages": {
                   "type": "array",
                   "items": {
@@ -21375,6 +22468,9 @@
                           },
                           "required": ["elementId", "anchor", "marginPx"]
                         }
+                      },
+                      "locked": {
+                        "type": "boolean"
                       }
                     },
                     "required": ["id", "name", "formatKey", "width", "height", "elements"]
@@ -21509,6 +22605,48 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "creative.templates.listCurrent": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "creative.templates.retire": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "templateId": {
+              "type": "string"
+            },
+            "templateVersionId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["templateId", "expectedVersion"]
         }
       },
       "destinations.audit.createWork": {

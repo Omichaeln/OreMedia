@@ -9,7 +9,7 @@ import type {
 } from '@oremedia/contracts/creative';
 import type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
 import { formatFor } from './formats';
-import { findElement } from './reduce';
+import { findElement, footprintOf, isLockedDeep } from './reduce';
 import { buildScene, type SceneContext, type SceneHandle } from './renderer/scene';
 
 /** A batch without its base revision: the application owns the committed document and decides when to send it. */
@@ -23,10 +23,67 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
  * Locked, hidden and background elements are not draggable in the UI; the server guard is the real policy. Groups
- * are selectable only: their children carry page-absolute transforms (scene.ts), so a group drag has no operation.
+ * are draggable (moveElement translates their page-absolute children, see reduce.ts) but not resized or rotated on
+ * the canvas; a group holding a locked element is pinned.
  */
 export function isInteractive(el: Element, readOnly: boolean): boolean {
-  return !readOnly && el.visible && !el.locked && el.type !== 'background' && el.type !== 'group';
+  return !readOnly && el.visible && !isLockedDeep(el) && el.type !== 'background';
+}
+
+/** Shift-click: adds an element to the selection or takes it out. */
+export function toggleSelection(selection: readonly string[], id: string): string[] {
+  return selection.includes(id) ? selection.filter((s) => s !== id) : [...selection, id];
+}
+
+/**
+ * Marquee selection: the visible top-level elements (backgrounds excepted) whose footprint the dragged rectangle
+ * touches, in paint order. Locked ones are selected too, so their lock can be seen and explained.
+ */
+export function marqueeSelection(
+  page: CreativePage,
+  rect: { x: number; y: number; width: number; height: number },
+): string[] {
+  const r = {
+    x: Math.min(rect.x, rect.x + rect.width),
+    y: Math.min(rect.y, rect.y + rect.height),
+    width: Math.abs(rect.width),
+    height: Math.abs(rect.height),
+  };
+  return page.elements
+    .filter((el) => el.visible && el.type !== 'background')
+    .filter((el) => {
+      const f = footprintOf(el.transform);
+      return f.x < r.x + r.width && f.x + f.width > r.x && f.y < r.y + r.height && f.y + f.height > r.y;
+    })
+    .map((el) => el.id);
+}
+
+/**
+ * A transformer gesture on one element's frame node (the unrotated box, scene.ts): the node was moved to (x, y),
+ * scaled and rotated by `rotation` degrees about its own origin. The element keeps rotating about its centre, so
+ * the new centre is the node origin plus the rotated half-size; the box follows from it.
+ */
+export function frameTransformIntent(
+  page: CreativePage,
+  elementId: string,
+  node: { x: number; y: number; width: number; height: number; rotation: number },
+): IntentBatch | null {
+  const el = findElement(page, elementId);
+  if (!el || el.locked) return null;
+  if (!node.rotation) return transformIntent(page, elementId, node);
+  const rad = (node.rotation * Math.PI) / 180;
+  const cx = node.x + (node.width / 2) * Math.cos(rad) - (node.height / 2) * Math.sin(rad);
+  const cy = node.y + (node.width / 2) * Math.sin(rad) + (node.height / 2) * Math.cos(rad);
+  const box = { x: cx - node.width / 2, y: cy - node.height / 2, width: node.width, height: node.height };
+  const moved = transformIntent(page, elementId, box);
+  let rotation = round2(el.transform.rotation + node.rotation);
+  while (rotation > 180) rotation -= 360;
+  while (rotation <= -180) rotation += 360;
+  const operations: Operation[] = [...(moved?.operations ?? [])];
+  if (rotation !== el.transform.rotation)
+    operations.push({ op: 'setRotation', pageId: page.id, elementId, rotation });
+  if (operations.length === 0) return null;
+  return { operations, summary: `Rotate ${el.name}`, origin: 'user' };
 }
 
 export function moveIntent(page: CreativePage, elementId: string, x: number, y: number): IntentBatch | null {
@@ -173,6 +230,8 @@ class MountedStage implements KonvaEditorHandle {
   private readonly transformer: Konva.Transformer;
   private scene: SceneHandle | null = null;
   private selection: string[] = [];
+  private readonly marquee: Konva.Rect;
+  private marqueeStart: { x: number; y: number } | null = null;
   private readonly intentSubscribers = new Set<(batch: IntentBatch) => void>();
   private readonly selectionSubscribers = new Set<(ids: string[]) => void>();
   private readonly editTextSubscribers = new Set<(id: string) => void>();
@@ -200,17 +259,28 @@ class MountedStage implements KonvaEditorHandle {
     this.layer = new Konva.Layer();
     this.overlay = new Konva.Layer();
     this.transformer = new Konva.Transformer({
-      rotateEnabled: false,
+      rotateEnabled: true,
+      rotationSnaps: [0, 45, 90, 135, 180, 225, 270, 315],
+      rotationSnapTolerance: 4,
       ignoreStroke: true,
       borderStrokeWidth: 1,
       anchorSize: 8,
     });
+    this.marquee = new Konva.Rect({
+      visible: false,
+      fill: 'rgba(37, 99, 235, 0.08)',
+      stroke: 'rgb(37, 99, 235)',
+      strokeWidth: 1,
+      strokeScaleEnabled: false,
+      listening: false,
+    });
     this.overlay.add(this.transformer);
+    this.overlay.add(this.marquee);
     this.stage.add(this.layer);
     this.stage.add(this.overlay);
-    this.stage.on('click tap', (e) => {
-      if (e.target === this.stage) this.setSelection([]);
-    });
+    // One batch for the whole gesture: every node the transformer moved, scaled or rotated.
+    this.transformer.on('transformend', () => this.emitTransform());
+    this.wireMarquee();
     this.rebuild();
   }
 
@@ -249,39 +319,135 @@ class MountedStage implements KonvaEditorHandle {
     });
   }
 
+  /** Pointer position in page pixels (the stage is scaled to fit). */
+  private pagePointer(): { x: number; y: number } | null {
+    const p = this.stage.getPointerPosition();
+    if (!p) return null;
+    const scale = this.stage.scaleX() || 1;
+    return { x: p.x / scale, y: p.y / scale };
+  }
+
+  /** A press on the empty canvas (or the background) starts a marquee; a click without a drag clears the selection. */
+  private wireMarquee(): void {
+    this.stage.on('mousedown touchstart', (e) => {
+      if (e.target !== this.stage) return;
+      this.marqueeStart = this.pagePointer();
+    });
+    this.stage.on('mousemove touchmove', () => {
+      if (!this.marqueeStart) return;
+      const p = this.pagePointer();
+      if (!p) return;
+      this.marquee.setAttrs({
+        visible: true,
+        x: Math.min(this.marqueeStart.x, p.x),
+        y: Math.min(this.marqueeStart.y, p.y),
+        width: Math.abs(p.x - this.marqueeStart.x),
+        height: Math.abs(p.y - this.marqueeStart.y),
+      });
+      this.overlay.batchDraw();
+    });
+    this.stage.on('mouseup touchend', (e) => {
+      const start = this.marqueeStart;
+      this.marqueeStart = null;
+      if (!start) return;
+      const dragged = this.marquee.visible() && this.marquee.width() > 3 && this.marquee.height() > 3;
+      const rect = {
+        x: this.marquee.x(),
+        y: this.marquee.y(),
+        width: this.marquee.width(),
+        height: this.marquee.height(),
+      };
+      this.marquee.visible(false);
+      this.overlay.batchDraw();
+      const page = this.page();
+      if (!page) return;
+      if (!dragged) {
+        if (!e.evt.shiftKey) this.setSelection([]);
+        return;
+      }
+      const hits = marqueeSelection(page, rect);
+      this.setSelection(e.evt.shiftKey ? [...new Set([...this.selection, ...hits])] : hits);
+    });
+  }
+
+  private interactiveOn(page: CreativePage, el: Element): boolean {
+    return isInteractive(el, this.readOnly || page.locked === true);
+  }
+
   private wire(page: CreativePage, id: string, node: Konva.Node): void {
     const el = findElement(page, id);
     if (!el) return;
-    const interactive = isInteractive(el, this.readOnly);
+    const interactive = this.interactiveOn(page, el);
     // The scene builds every node non-listening (the worker never needs hit graphs); the studio switches them on.
     const listening = el.visible && el.type !== 'background';
     node.listening(listening);
     if (node instanceof Konva.Container)
       for (const child of node.find(() => true)) child.listening(listening);
-    node.draggable(interactive);
+    // Children of a group are picked through the group (shift-click or the layers panel reaches them).
+    const topLevel = page.elements.some((e) => e.id === id);
+    node.draggable(interactive && topLevel);
+    if (!topLevel) return;
     node.on('click tap', (e) => {
       e.cancelBubble = true;
-      this.setSelection(interactive ? [id] : []);
-    });
-    if (!interactive) return;
-    node.on('dragstart', () => this.setSelection([id]));
-    node.on('dragend', () => this.emit(moveIntent(this.currentPage(), id, node.x(), node.y())));
-    node.on('transformend', () => {
-      const box = {
-        x: node.x(),
-        y: node.y(),
-        width: node.width() * node.scaleX(),
-        height: node.height() * node.scaleY(),
-      };
-      node.scale({ x: 1, y: 1 });
-      this.emit(transformIntent(this.currentPage(), id, box));
+      const shift = 'shiftKey' in e.evt && e.evt.shiftKey;
+      this.setSelection(shift ? toggleSelection(this.selection, id) : [id]);
     });
     if (el.type === 'text')
       node.on('dblclick dbltap', () => {
         for (const cb of this.editTextSubscribers) cb(id);
       });
+    if (!interactive) return;
+    node.on('dragstart', () => {
+      if (!this.selection.includes(id)) this.setSelection([id]);
+    });
+    node.on('dragend', () => {
+      const current = this.currentPage();
+      if (el.type === 'group') {
+        // A group node sits at the origin (its children are page-absolute): its offset is the move.
+        const intent = moveIntent(current, id, el.transform.x + node.x(), el.transform.y + node.y());
+        node.position({ x: 0, y: 0 });
+        this.emit(intent);
+        return;
+      }
+      this.emit(moveIntent(current, id, node.x(), node.y()));
+    });
     node.on('mouseenter', () => this.stage.container().style.setProperty('cursor', 'move'));
     node.on('mouseleave', () => this.stage.container().style.removeProperty('cursor'));
+  }
+
+  /** The transformer finished: one batch with the move/resize/rotation of every node it held. */
+  private emitTransform(): void {
+    const page = this.currentPage();
+    const operations: Operation[] = [];
+    const names: string[] = [];
+    for (const node of this.transformer.nodes()) {
+      const id = node.id();
+      const el = findElement(page, id);
+      if (!el || el.type === 'group') continue;
+      const box = {
+        x: node.x(),
+        y: node.y(),
+        width: node.width() * node.scaleX(),
+        height: node.height() * node.scaleY(),
+        rotation: node.rotation(),
+      };
+      node.scale({ x: 1, y: 1 });
+      node.rotation(0);
+      const intent = frameTransformIntent(page, id, box);
+      if (intent) {
+        operations.push(...intent.operations);
+        names.push(el.name);
+      }
+    }
+    if (operations.length === 0) return;
+    const rotated = operations.some((o) => o.op === 'setRotation');
+    const resized = operations.some((o) => o.op === 'resizeElement');
+    const verb = rotated ? 'Rotate' : resized ? 'Resize' : 'Move';
+    this.emit({
+      operations,
+      summary: `${verb} ${names.length === 1 ? names[0] : `${names.length} elements`}`,
+      origin: 'user',
+    });
   }
 
   private currentPage(): CreativePage {
@@ -306,29 +472,41 @@ class MountedStage implements KonvaEditorHandle {
     const page = this.page();
     const nodes: Konva.Node[] = [];
     let keepRatio = false;
+    let rotatable = true;
+    let resizable = true;
     if (page && this.scene)
       for (const id of this.selection) {
         const el = findElement(page, id);
         const node = this.scene.nodes.get(id);
-        if (el && node && isInteractive(el, this.readOnly)) {
+        if (el && node && this.interactiveOn(page, el) && page.elements.some((e) => e.id === id)) {
           nodes.push(node);
-          if (el.type === 'logo') keepRatio = true;
+          if (el.type === 'logo') {
+            keepRatio = true;
+            rotatable = false; // logos are never rotated (brand check logo_rotated)
+          }
+          if (el.type === 'group') {
+            rotatable = false;
+            resizable = false;
+          }
         }
       }
     this.transformer.keepRatio(keepRatio);
+    this.transformer.rotateEnabled(rotatable);
     this.transformer.enabledAnchors(
-      keepRatio
-        ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
-        : [
-            'top-left',
-            'top-center',
-            'top-right',
-            'middle-left',
-            'middle-right',
-            'bottom-left',
-            'bottom-center',
-            'bottom-right',
-          ],
+      !resizable
+        ? []
+        : keepRatio
+          ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+          : [
+              'top-left',
+              'top-center',
+              'top-right',
+              'middle-left',
+              'middle-right',
+              'bottom-left',
+              'bottom-center',
+              'bottom-right',
+            ],
     );
     this.transformer.nodes(nodes);
     this.overlay.batchDraw();

@@ -78,6 +78,10 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   async setCurrentRevision(id: string, expectedVersion: number, revisionId: string, tx: Tx) {
     await this.updateScoped(id, expectedVersion, { currentRevisionId: revisionId }, tx);
   }
+  /** STU-1a: the title only; optimistic version like every other row update. */
+  async rename(id: string, expectedVersion: number, title: string, tx: Tx) {
+    await this.updateScoped(id, expectedVersion, { title }, tx);
+  }
 }
 
 /** Insert-only (spec 6.1): revisions are never updated or deleted; undo is a new revision. */
@@ -328,6 +332,14 @@ export class TemplateVersionRepository extends BrandScopedRepository<typeof temp
       .from(templateVersions)
       .where(this.brandScope(brandId, eq(templateVersions.templateId, templateId)));
     return Number(rows[0]?.max ?? 0) + 1;
+  }
+  /** Versions by id (current versions of a page of templates), bounded by the id-list maximum (spec 7.4). */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(templateVersions)
+      .where(this.brandScope(brandId, inArray(templateVersions.id, ids.slice(0, ID_LIST_MAX))));
   }
   async listForTemplate(brandId: string, templateId: string, tx?: Tx) {
     return this.conn(tx)

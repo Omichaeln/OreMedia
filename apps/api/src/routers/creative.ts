@@ -3,8 +3,10 @@ import {
   CommentList,
   CommentResolve,
   DocumentCreate,
+  DocumentDuplicate,
   DocumentGet,
   DocumentList,
+  DocumentRename,
   OperationsApply,
   OperationsPropose,
   RenderGet,
@@ -15,6 +17,8 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
+  TemplateRetire,
   TemplateVersionCreate,
 } from '@oremedia/contracts/creative';
 import { creativeService } from '@oremedia/module-creative';
@@ -40,6 +44,19 @@ export const creativeRouter = router({
     list: tenantQuery
       .input(DocumentList)
       .query(({ ctx, input }) => creativeService.documents.list(ctx.tenant.actor, input)),
+    /** STU-1a: a copy whose revision 1 is the source's current revision (provenance in the audit). */
+    duplicate: tenantMutation
+      .input(DocumentDuplicate)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.documents.duplicate(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    rename: tenantMutation
+      .input(DocumentRename)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.documents.rename(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   revisions: router({
@@ -111,9 +128,17 @@ export const creativeRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => creativeService.templates.approve(ctx.tenant.actor, input, tx)),
       ),
+    retire: tenantMutation
+      .input(TemplateRetire)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.templates.retire(ctx.tenant.actor, input, tx)),
+      ),
     list: tenantQuery
       .input(TemplateList)
       .query(({ ctx, input }) => creativeService.templates.list(ctx.tenant.actor, input)),
+    listCurrent: tenantQuery
+      .input(TemplateListCurrent)
+      .query(({ ctx, input }) => creativeService.templates.listCurrent(ctx.tenant.actor, input)),
     get: tenantQuery
       .input(TemplateGet)
       .query(({ ctx, input }) => creativeService.templates.get(ctx.tenant.actor, input)),
