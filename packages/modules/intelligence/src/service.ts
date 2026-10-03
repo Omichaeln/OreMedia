@@ -679,11 +679,21 @@ export const intelligenceService = {
               servicePrincipalId: parsed.servicePrincipalId,
               requestedAutonomy: 'create',
               taskKind: 'copywriting',
+              // The recommendation's title and rationale may have been written by a model: they reach the new run as
+              // untrusted evidence, never as task-brief text.
               brief: {
                 recommendationId: r.id,
-                objective: r.title,
-                rationale: r.rationale,
+                objective: 'Write copy variants for the accepted recommendation given in the evidence.',
                 insightIds: r.insightIds,
+                evidence: [
+                  {
+                    id: r.id,
+                    sourceKind: 'other',
+                    ref: `recommendation:${r.id}`,
+                    text: `${r.title}\n\n${r.rationale}`.slice(0, 20_000),
+                    trust: 'untrusted',
+                  },
+                ],
               },
             },
             tx,
