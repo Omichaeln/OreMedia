@@ -910,6 +910,7 @@ export const generationJobs = {
         if (compiled.operations.length === 0) continue;
         const summary = `Generated: ${fill.summary}`.slice(0, 500);
         const inputs: GenerationInputs = {
+          documentKind: 'graphic',
           jobId: job.id,
           kind: request.kind,
           request,

@@ -348,6 +348,7 @@ export class GenerationBackend {
           ? `Change: ${job.request.refine.instruction}`.slice(0, 500)
           : 'Generated: scripted fill';
       const inputs: GenerationInputs = {
+        documentKind: 'graphic',
         jobId: job.id,
         kind: job.kind,
         request: job.request,

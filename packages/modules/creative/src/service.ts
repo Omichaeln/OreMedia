@@ -52,7 +52,12 @@ import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/stat
 import { renderJobMachine } from '@oremedia/domain/state-machines/render-job';
 import { templateMachine, templateVersionMachine } from '@oremedia/domain/state-machines/template-version';
 import { formatFor } from '@oremedia/editor/formats';
-import { GenerationInputs, GenerationProposal, type GenerationScope } from '@oremedia/contracts/generation';
+import {
+  graphicGenerationInputs,
+  GenerationProposal,
+  type GenerationInputs,
+  type GenerationScope,
+} from '@oremedia/contracts/generation';
 import { operationsOfGroups } from '@oremedia/editor/generation';
 import {
   guardLocks,
@@ -674,8 +679,8 @@ const toRevisionDto = (r: RevisionRow) => ({
   operations: OperationBatch.parse(r.operations),
   snapshot: CreativeDocumentV1.parse(r.snapshot),
   contentHash: r.contentHash,
-  /** STU-1b: what produced an AI-generated revision (brief or request, template, scope, assets, cost). */
-  generationInputs: r.generationInputs ? GenerationInputs.parse(r.generationInputs) : null,
+  /** STU-1b: what produced an AI-generated revision (brief or request, template, scope, assets, cost); graphic only. */
+  generationInputs: graphicGenerationInputs(r.generationInputs),
   createdAt: r.createdAt.toISOString(),
 });
 const toRevisionSummary = (r: RevisionRow) => {

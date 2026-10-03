@@ -62,7 +62,10 @@ export const creativeRevisions = mysqlTable(
     operations: json('operations').$type<OperationBatch>().notNull(), // what changed from parent
     snapshot: json('snapshot').$type<CreativeDocumentV1>().notNull(), // full document at this revision
     contentHash: hash('content_hash').notNull(),
-    /** STU-1b (principle 8): what produced an AI-generated revision; null for people's edits and older rows. */
+    /**
+     * STU-1b (principle 8): what produced an AI-generated revision; null for people's edits and older rows. Graphic
+     * inputs; video revisions store another document kind here, so reads go through graphicGenerationInputs.
+     */
     generationInputs: json('generation_inputs').$type<GenerationInputs>(),
     createdAt: createdAt(),
   },

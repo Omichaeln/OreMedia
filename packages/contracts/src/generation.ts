@@ -221,9 +221,12 @@ export type RefusedEdit = z.infer<typeof RefusedEdit>;
 /**
  * Principle 8: what produced a revision, stored on creative_revisions.generation_inputs. The request is the brief or
  * the refinement as the person sent it; asset versions are those the batch placed; the model call reference is the
- * job's ledger key, never a prompt or a model identifier.
+ * job's ledger key, never a prompt or a model identifier. The column is shared with video documents (STU-3 writes
+ * `documentKind: 'video'` inputs), so graphic inputs carry `documentKind: 'graphic'`; rows written before the field
+ * existed have none and read as graphic.
  */
 export const GenerationInputs = z.object({
+  documentKind: z.literal('graphic').default('graphic'),
   jobId: z.string(),
   kind: GenerationKind,
   request: GenerationRequest,
@@ -240,6 +243,17 @@ export const GenerationInputs = z.object({
   acceptedGroupIds: z.array(z.string()).optional(),
 });
 export type GenerationInputs = z.infer<typeof GenerationInputs>;
+
+/**
+ * A stored generation_inputs value read as a graphic revision's inputs: null when the row holds none, or holds inputs
+ * of another document kind (a video revision's) or of a shape this release does not know. Never throws, so a revision
+ * list stays readable whatever the column holds.
+ */
+export function graphicGenerationInputs(stored: unknown): GenerationInputs | null {
+  if (stored === null || stored === undefined) return null;
+  const parsed = GenerationInputs.safeParse(stored);
+  return parsed.success ? parsed.data : null;
+}
 
 /**
  * A proposal group: operations that belong together (one element's change, or a page the job created) and are
