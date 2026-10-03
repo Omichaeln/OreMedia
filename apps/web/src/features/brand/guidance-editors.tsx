@@ -31,6 +31,7 @@ import {
   byPerson,
   channelLabel,
   slug,
+  useRowKeys,
 } from './guidance-fields';
 
 type Doc = BrandSystemDocumentV1;
@@ -179,6 +180,10 @@ export function VoicePersonalitySection({ doc, onChange }: Props) {
   const principles = v.principles ?? [];
   const styleRules = v.styleRules ?? [];
   const claimRules = v.claimRules ?? [];
+  const personalityKeys = useRowKeys(personality);
+  const principleKeys = useRowKeys(principles);
+  const styleRuleKeys = useRowKeys(styleRules);
+  const claimRuleKeys = useRowKeys(claimRules);
   return (
     <EditorSection
       title="Personality, style and claims"
@@ -190,7 +195,7 @@ export function VoicePersonalitySection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Personality traits">
           {personality.map((p, i) => (
             <Row
-              key={i}
+              key={personalityKeys[i]}
               provenance={p.provenance}
               removeLabel={`trait ${p.trait || i + 1}`}
               onRemove={() => setVoice({ personality: personality.filter((_, j) => j !== i) })}
@@ -235,7 +240,7 @@ export function VoicePersonalitySection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Principles">
           {principles.map((p, i) => (
             <Row
-              key={i}
+              key={principleKeys[i]}
               provenance={p.provenance}
               removeLabel={`principle ${i + 1}`}
               onRemove={() => setVoice({ principles: principles.filter((_, j) => j !== i) })}
@@ -312,7 +317,7 @@ export function VoicePersonalitySection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Style rules">
           {styleRules.map((r, i) => (
             <Row
-              key={i}
+              key={styleRuleKeys[i]}
               provenance={r.provenance}
               removeLabel={`style rule ${i + 1}`}
               onRemove={() => setVoice({ styleRules: styleRules.filter((_, j) => j !== i) })}
@@ -359,7 +364,7 @@ export function VoicePersonalitySection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Claim rules">
           {claimRules.map((r, i) => (
             <Row
-              key={i}
+              key={claimRuleKeys[i]}
               provenance={r.provenance}
               removeLabel={`claim rule ${i + 1}`}
               onRemove={() => setVoice({ claimRules: claimRules.filter((_, j) => j !== i) })}
@@ -408,15 +413,26 @@ export function MessagingSection({ doc, onChange }: Props) {
   const setM = (patch: Partial<Messaging>) => onChange({ ...doc, messaging: { ...m, ...patch } });
   const audiences = doc.voice.audiences;
   const setAudiences = (next: Audience[]) => onChange({ ...doc, voice: { ...doc.voice, audiences: next } });
+  const pillarKeys = useRowKeys(m.pillars);
+  const messageKeys = useRowKeys(m.keyMessages);
+  const audienceKeys = useRowKeys(audiences);
   // A renamed pillar keeps its key messages.
+  // A renamed pillar keeps its key messages, when its key named only it before and names only it after.
   const updatePillar = (i: number, patch: Partial<Pillar>) => {
     const before = m.pillars[i]?.key;
+    const others = m.pillars.filter((_, j) => j !== i).map((p) => p.key);
+    const follow =
+      patch.key !== undefined &&
+      before !== undefined &&
+      before.trim() !== '' &&
+      patch.key.trim() !== '' &&
+      !others.includes(before) &&
+      !others.includes(patch.key);
     setM({
       pillars: patchRow(m.pillars, i, patch),
-      keyMessages:
-        patch.key !== undefined && before !== undefined
-          ? m.keyMessages.map((k) => (k.pillarKey === before ? { ...k, pillarKey: patch.key } : k))
-          : m.keyMessages,
+      keyMessages: follow
+        ? m.keyMessages.map((k) => (k.pillarKey === before ? { ...k, pillarKey: patch.key } : k))
+        : m.keyMessages,
     });
   };
   const pillarOptions = [
@@ -452,7 +468,7 @@ export function MessagingSection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Pillars">
           {m.pillars.map((p, i) => (
             <Row
-              key={i}
+              key={pillarKeys[i]}
               provenance={p.provenance}
               removeLabel={`pillar ${p.title || i + 1}`}
               onRemove={() =>
@@ -524,7 +540,7 @@ export function MessagingSection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Key messages">
           {m.keyMessages.map((k, i) => (
             <Row
-              key={i}
+              key={messageKeys[i]}
               provenance={k.provenance}
               removeLabel={`key message ${i + 1}`}
               onRemove={() => setM({ keyMessages: m.keyMessages.filter((_, j) => j !== i) })}
@@ -571,7 +587,7 @@ export function MessagingSection({ doc, onChange }: Props) {
         <ul className="flex flex-col gap-2" aria-label="Audiences">
           {audiences.map((a, i) => (
             <Row
-              key={i}
+              key={audienceKeys[i]}
               provenance={a.provenance}
               removeLabel={`audience ${a.key || i + 1}`}
               onRemove={() => setAudiences(audiences.filter((_, j) => j !== i))}
@@ -702,6 +718,7 @@ const USAGES: Array<{ value: VocabularyUsage; label: string }> = [
 export function VocabularySection({ doc, onChange }: Props) {
   const terms = doc.vocabulary ?? [];
   const set = (next: Term[]) => onChange({ ...doc, vocabulary: next });
+  const termKeys = useRowKeys(terms);
   return (
     <EditorSection
       title="Vocabulary"
@@ -712,7 +729,7 @@ export function VocabularySection({ doc, onChange }: Props) {
       <ul className="flex flex-col gap-2" aria-label="Vocabulary">
         {terms.map((t, i) => (
           <Row
-            key={i}
+            key={termKeys[i]}
             provenance={t.provenance}
             removeLabel={`term ${t.term || i + 1}`}
             onRemove={() => set(terms.filter((_, j) => j !== i))}
@@ -871,6 +888,7 @@ const contentOptions = [{ value: NONE, label: 'Any content' }, ...CONTENT_TYPES]
 export function ExamplesSection({ doc, onChange }: Props) {
   const examples = doc.voice.examples;
   const set = (next: Example[]) => onChange({ ...doc, voice: { ...doc.voice, examples: next } });
+  const exampleKeys = useRowKeys(examples);
   // Optional fields are removed rather than stored empty when the person picks "Any".
   const setOptional = (i: number, key: 'channelKey' | 'contentType', value: string) => {
     const e = examples[i];
@@ -888,7 +906,7 @@ export function ExamplesSection({ doc, onChange }: Props) {
       <ul className="flex flex-col gap-2" aria-label="Examples">
         {examples.map((e, i) => (
           <Row
-            key={i}
+            key={exampleKeys[i]}
             provenance={e.provenance}
             removeLabel={`example ${i + 1}`}
             onRemove={() => set(examples.filter((_, j) => j !== i))}
@@ -938,7 +956,7 @@ export function ExamplesSection({ doc, onChange }: Props) {
                 rows={2}
                 maxLength={1000}
                 value={e.rationale ?? e.note}
-                onChange={(ev) => set(patchRow(examples, i, { rationale: ev.target.value, note: '' }))}
+                onChange={(ev) => set(patchRow(examples, i, { rationale: ev.target.value }))}
               />
             </Field>
             {e.verdict === 'off_brand' && (
@@ -973,6 +991,7 @@ export function ExamplesSection({ doc, onChange }: Props) {
 export function TemplatesSection({ doc, onChange }: Props) {
   const templates = doc.copyTemplates ?? [];
   const set = (next: Template[]) => onChange({ ...doc, copyTemplates: next });
+  const templateKeys = useRowKeys(templates);
   const update = (i: number, patch: Partial<Template>) => set(patchRow(templates, i, patch));
   return (
     <EditorSection
@@ -984,7 +1003,7 @@ export function TemplatesSection({ doc, onChange }: Props) {
       <ul className="flex flex-col gap-2" aria-label="Copy templates">
         {templates.map((t, i) => (
           <Row
-            key={i}
+            key={templateKeys[i]}
             provenance={t.provenance}
             removeLabel={`template ${t.name || i + 1}`}
             onRemove={() => set(templates.filter((_, j) => j !== i))}
@@ -1119,6 +1138,7 @@ function TemplateParts({
   };
   const update = (j: number, patch: Partial<Template['structure'][number]>) =>
     onChange(structure.map((s, k) => (k === j ? { ...s, ...patch } : s)));
+  const partKeys = useRowKeys(structure);
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="mb-1 text-xs font-medium text-muted-foreground">Parts, in order</legend>
@@ -1126,7 +1146,10 @@ function TemplateParts({
         {structure.map((s, j) => {
           const id = `kit-template-${index}-part-${j}`;
           return (
-            <li key={j} className="grid gap-2 rounded-md bg-muted/40 p-2 sm:grid-cols-[10rem_1fr_7rem]">
+            <li
+              key={partKeys[j]}
+              className="grid gap-2 rounded-md bg-muted/40 p-2 sm:grid-cols-[10rem_1fr_7rem]"
+            >
               <Field label={`Part ${j + 1}`} htmlFor={`${id}-slot`}>
                 <Input
                   id={`${id}-slot`}
@@ -1435,19 +1458,10 @@ function ChannelRow({
               }}
             />
           </Field>
-          <ListEditor
+          <ChannelExamples
             id={`${id}-examples`}
-            label="Channel examples"
-            item="example"
-            values={(value.examples ?? []).map((e) => e.text)}
-            max={6}
-            maxLength={1000}
-            onChange={(texts) =>
-              onChange({
-                ...value,
-                examples: texts.map((text, k) => ({ ...(value.examples ?? [])[k], text })),
-              })
-            }
+            examples={value.examples ?? []}
+            onChange={(examples) => onChange({ ...value, examples })}
           />
         </div>
         <aside aria-label={`Platform limits${label ? ` for ${label}` : ''}`}>
@@ -1463,5 +1477,73 @@ function ChannelRow({
         </aside>
       </div>
     </li>
+  );
+}
+
+type ChannelExample = NonNullable<Channel['examples']>[number];
+
+/** A channel's examples, one row each with its note; a row keeps its note when another is removed. */
+function ChannelExamples({
+  id,
+  examples,
+  onChange,
+}: {
+  id: string;
+  examples: ChannelExample[];
+  onChange: (next: ChannelExample[]) => void;
+}) {
+  const keys = useRowKeys(examples);
+  const update = (i: number, patch: Partial<ChannelExample>) =>
+    onChange(
+      examples.map((e, j) => {
+        if (j !== i) return e;
+        const next = { ...e, ...patch };
+        if (next.note === '') {
+          const { note: _empty, ...rest } = next;
+          return rest;
+        }
+        return next;
+      }),
+    );
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="mb-1 text-xs font-medium text-muted-foreground">Channel examples</legend>
+      <ul className="flex flex-col gap-2" aria-label="Channel examples">
+        {examples.map((e, i) => (
+          <Row
+            key={keys[i]}
+            removeLabel={`channel example ${i + 1}`}
+            onRemove={() => onChange(examples.filter((_, j) => j !== i))}
+          >
+            <Field label={`Channel example ${i + 1}`} htmlFor={`${id}-${i}-text`}>
+              <Textarea
+                id={`${id}-${i}-text`}
+                rows={2}
+                maxLength={1000}
+                value={e.text}
+                onChange={(ev) => update(i, { text: ev.target.value })}
+              />
+            </Field>
+            <Field label={`Channel example ${i + 1} note`} htmlFor={`${id}-${i}-note`}>
+              <Input
+                id={`${id}-${i}-note`}
+                value={e.note ?? ''}
+                maxLength={500}
+                onChange={(ev) => update(i, { note: ev.target.value })}
+              />
+            </Field>
+          </Row>
+        ))}
+      </ul>
+      <div>
+        <Button
+          size="sm"
+          disabled={examples.length >= 6}
+          onClick={() => onChange([...examples, { text: '' }])}
+        >
+          Add channel example
+        </Button>
+      </div>
+    </fieldset>
   );
 }

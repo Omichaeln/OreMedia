@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import type {
   ChannelGuidanceField,
   CopyContentType,
@@ -57,6 +57,41 @@ export const byPerson = <T extends object>(item: T): T & { provenance: GuidanceP
 });
 
 /**
+ * Stable React keys for a list of row objects. A row keeps its key while it is the same object, an edited row (a new
+ * object at the same place, replacing one no longer in the list) keeps the key of the row it replaced, and an added
+ * row gets a new key, so removing or moving a row never hands its state (focus, typed text) to its neighbour.
+ */
+export function useRowKeys(rows: readonly object[]): number[] {
+  const state = useRef<{
+    next: number;
+    rows: readonly object[];
+    keys: number[];
+    byRow: WeakMap<object, number>;
+  }>({
+    next: 0,
+    rows: [],
+    keys: [],
+    byRow: new WeakMap(),
+  });
+  const s = state.current;
+  if (s.rows === rows) return s.keys;
+  const present = new Set(rows);
+  const used = new Set<number>();
+  const keys = rows.map((row, i) => {
+    let key = s.byRow.get(row);
+    const before = s.rows[i];
+    if ((key === undefined || used.has(key)) && before !== undefined && !present.has(before)) key = s.keys[i];
+    if (key === undefined || used.has(key)) key = s.next++;
+    used.add(key);
+    s.byRow.set(row, key);
+    return key;
+  });
+  s.rows = rows;
+  s.keys = keys;
+  return keys;
+}
+
+/**
  * A list of short lines edited one row each (dos, needs, alternatives...): no separators to type. Blank rows are
  * dropped when the brand system is saved.
  */
@@ -79,20 +114,29 @@ export function ListEditor({
   max: number;
   maxLength?: number;
 }) {
+  // Lines are strings (often equal while typed), so their keys are tracked with each add and remove.
+  const ids = useRef<{ next: number; keys: number[] }>({ next: 0, keys: [] });
+  const k = ids.current;
+  while (k.keys.length < values.length) k.keys.push(k.next++);
+  if (k.keys.length > values.length) k.keys = k.keys.slice(0, values.length);
+  const remove = (i: number) => {
+    k.keys = k.keys.filter((_, j) => j !== i);
+    onChange(values.filter((_, j) => j !== i));
+  };
   return (
     <fieldset className="flex min-w-0 flex-col gap-1.5" id={id}>
       <legend className="mb-1 text-xs font-medium text-muted-foreground">{label}</legend>
       {values.length > 0 && (
         <ul className="flex flex-col gap-1.5">
           {values.map((v, i) => (
-            <li key={i} className="flex items-center gap-2">
+            <li key={k.keys[i]} className="flex items-center gap-2">
               <Input
                 aria-label={`${label} ${i + 1}`}
                 value={v}
                 maxLength={maxLength}
                 onChange={(e) => onChange(values.map((x, j) => (j === i ? e.target.value : x)))}
               />
-              <Button size="sm" variant="ghost" onClick={() => onChange(values.filter((_, j) => j !== i))}>
+              <Button size="sm" variant="ghost" onClick={() => remove(i)}>
                 Remove<span className="sr-only"> {`${label} ${i + 1}`}</span>
               </Button>
             </li>
@@ -166,7 +210,9 @@ const duration = (sec: number) => (sec >= 60 ? `${Math.round(sec / 60)} min` : `
 export function PlatformLimits({ limit }: { limit: ChannelLimitsV1 | undefined }) {
   if (!limit)
     return (
-      <p className="text-xs text-muted-foreground">No platform limits are registered for this channel.</p>
+      <p className="text-xs text-muted-foreground">
+        This channel is not certified or not available here yet, so it has no platform limits to show.
+      </p>
     );
   const rows: Array<[string, string]> = [
     [

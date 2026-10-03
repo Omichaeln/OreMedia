@@ -461,7 +461,7 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     await edit();
     await page.locator('#kit-baseline-cta').fill('Invite a reply.');
     await page.locator('#kit-baseline-hashtags').fill('At most two.');
-    await editor().getByRole('button', { name: 'Add channel' }).click();
+    await editor().getByRole('button', { name: 'Add channel', exact: true }).click();
     const save = editor().getByRole('button', { name: 'Save', exact: true });
     expect(await save.getAttribute('aria-disabled')).toBe('true'); // no channel chosen yet
     await choose('kit-channel-0-provider', 'LinkedIn Page');
@@ -487,8 +487,17 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     await row.getByRole('button', { name: 'Add format' }).click();
     await row.getByLabel('Preferred formats 1').fill('carousel');
     await row.getByRole('button', { name: 'Add format' }).click(); // a blank row is not saved
+    // Channel examples are rows with their note; removing one keeps the other's note with it.
+    await row.getByRole('button', { name: 'Add channel example' }).click();
+    await row.getByLabel('Channel example 1', { exact: true }).fill('First draft');
+    await row.getByLabel('Channel example 1 note').fill('first note');
+    await row.getByRole('button', { name: 'Add channel example' }).click();
+    await row.getByLabel('Channel example 2', { exact: true }).fill('We roasted 40 kg this morning.');
+    await row.getByLabel('Channel example 2 note').fill('A number from a fact');
+    await row.getByRole('button', { name: 'Remove channel example 1' }).click();
+    expect(await row.getByLabel('Channel example 1 note').inputValue()).toBe('A number from a fact');
     // A second row cannot take the same channel.
-    await editor().getByRole('button', { name: 'Add channel' }).click();
+    await editor().getByRole('button', { name: 'Add channel', exact: true }).click();
     await page.locator('#kit-channel-1-provider').click();
     expect(
       await page.getByRole('option', { name: 'LinkedIn Page' }).getAttribute('data-disabled'),
@@ -506,6 +515,7 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
         captionStyle: 'Short, first person plural, no hashtags.',
         preferredFormats: ['carousel'],
         ctaConventions: '',
+        examples: [{ text: 'We roasted 40 kg this morning.', note: 'A number from a fact' }],
         provenance: { origin: 'user' },
       },
     ]);
