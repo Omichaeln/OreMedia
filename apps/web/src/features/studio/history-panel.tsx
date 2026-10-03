@@ -18,7 +18,16 @@ const when = (iso: string) =>
  * revision links to the run that produced it; the summary is the one the revision was saved with. Every save
  * invalidates the list (use-studio afterCommit), so it follows the head. Older revisions are fetched page by page.
  */
-export function HistoryPanel({ documentId, headRevisionId }: { documentId: string; headRevisionId: string }) {
+export function HistoryPanel({
+  documentId,
+  headRevisionId,
+  onRestore,
+}: {
+  documentId: string;
+  headRevisionId: string;
+  /** STU-2b: offered on earlier revisions where the studio can restore one as a new revision. */
+  onRestore?: (revisionId: string) => void;
+}) {
   const { companyId, brandId } = useBrandContext();
   const revisions = useRevisions(documentId);
 
@@ -43,6 +52,17 @@ export function HistoryPanel({ documentId, headRevisionId }: { documentId: strin
               <p className="text-muted-foreground">{r.changeSummary || 'No summary recorded'}</p>
               <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {r.id === headRevisionId && <Badge tone="good">Current</Badge>}
+                {onRestore && r.id !== headRevisionId && (
+                  <button
+                    type="button"
+                    className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => onRestore(r.id)}
+                    aria-label={`Restore revision ${r.number}`}
+                    data-testid="restore-revision"
+                  >
+                    Restore
+                  </button>
+                )}
                 <span>{r.authorKind === 'agent' ? 'Agent' : 'Person'}</span>
                 {r.agentRunId && (
                   <Link

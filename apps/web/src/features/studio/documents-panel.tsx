@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
+import { useQuery } from '@tanstack/react-query';
+import { Badge, Button, EmptyState, Field, Input, Skeleton } from '@oremedia/ui';
+import { Select } from '../../components/select';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
@@ -9,6 +11,7 @@ import { useDocuments } from './use-document';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { toUiError } from '../../lib/errors';
+import { VIDEO_FORMAT_KEYS, VIDEO_FORMATS, type VideoFormatKey } from '@oremedia/contracts/video';
 
 /** The form that creates a document and opens it; shown with Documents on the home page and the Studio section. */
 export function NewDocument({ disabledReason }: { disabledReason?: string }) {
@@ -18,6 +21,16 @@ export function NewDocument({ disabledReason }: { disabledReason?: string }) {
   const navigate = useNavigate();
   const intent = useIntentKey();
   const [title, setTitle] = useState('');
+  const [kind, setKind] = useState<'graphic' | 'video'>('graphic');
+  const [formatKey, setFormatKey] = useState<VideoFormatKey>('video_9x16');
+  const [fps, setFps] = useState<24 | 25 | 30>(30);
+  const [templateKey, setTemplateKey] = useState('blank');
+  // STU-2b: the built-in starter video templates (STU-1a's creation screen will show them with previews).
+  const templates = useQuery({
+    ...trpc.creative.videoTemplates.list.queryOptions({ brandId }),
+    enabled: kind === 'video',
+  });
+  const template = templates.data?.items.find((t) => t.key === templateKey);
   const create = useMutation(
     trpc.creative.documents.create.mutationOptions({
       ...mutationIntent(intent.key),
@@ -30,7 +43,19 @@ export function NewDocument({ disabledReason }: { disabledReason?: string }) {
   );
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (title.trim()) create.mutate({ brandId, title: title.trim() });
+    if (!title.trim()) return;
+    if (kind === 'graphic') create.mutate({ brandId, title: title.trim() });
+    else
+      create.mutate({
+        brandId,
+        title: title.trim(),
+        kind: 'video',
+        video: {
+          formatKey: template?.formatKey ?? formatKey,
+          fps,
+          ...(template ? { templateKey: template.key } : {}),
+        },
+      });
   };
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-3">
@@ -42,6 +67,56 @@ export function NewDocument({ disabledReason }: { disabledReason?: string }) {
         >
           <Input id="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
         </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Kind" htmlFor="doc-kind">
+            <Select
+              id="doc-kind"
+              value={kind}
+              onValueChange={(v) => setKind(v as 'graphic' | 'video')}
+              options={[
+                { value: 'graphic', label: 'Graphic (pages)' },
+                { value: 'video', label: 'Video (timeline)' },
+              ]}
+            />
+          </Field>
+          {kind === 'video' && (
+            <Field label="Starting point" htmlFor="doc-template" hint={template?.description}>
+              <Select
+                id="doc-template"
+                value={templateKey}
+                onValueChange={setTemplateKey}
+                options={[
+                  { value: 'blank', label: 'Blank video' },
+                  ...(templates.data?.items ?? []).map((t) => ({ value: t.key, label: t.name })),
+                ]}
+              />
+            </Field>
+          )}
+          {kind === 'video' && (
+            <Field label="Format" htmlFor="doc-format" hint={template ? 'Set by the template' : undefined}>
+              <Select
+                id="doc-format"
+                value={template?.formatKey ?? formatKey}
+                disabled={Boolean(template)}
+                onValueChange={(v) => setFormatKey(v as VideoFormatKey)}
+                options={VIDEO_FORMAT_KEYS.map((k) => ({
+                  value: k,
+                  label: `${VIDEO_FORMATS[k].label} (${VIDEO_FORMATS[k].width}×${VIDEO_FORMATS[k].height})`,
+                }))}
+              />
+            </Field>
+          )}
+          {kind === 'video' && (
+            <Field label="Frame rate" htmlFor="doc-fps">
+              <Select
+                id="doc-fps"
+                value={String(fps)}
+                onValueChange={(v) => setFps(Number(v) as 24 | 25 | 30)}
+                options={[24, 25, 30].map((n) => ({ value: String(n), label: `${n} fps` }))}
+              />
+            </Field>
+          )}
+        </div>
         <div>
           <Button
             type="submit"
@@ -88,6 +163,7 @@ export function Documents() {
             >
               {d.title}
             </Link>
+            {d.kind === 'video' && <Badge glyph={false}>Video</Badge>}
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
               {new Date(d.updatedAt).toLocaleDateString()}
             </span>

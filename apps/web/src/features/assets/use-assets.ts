@@ -52,10 +52,21 @@ export const ASSET_ISSUE_TEXT: Record<AssetIssueDto, { label: string; detail: st
 };
 
 /** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. Page by page (spec 7.4). */
-export function useAssetSearch(brandId: string, purpose: AssetPurpose, query?: string) {
+export function useAssetSearch(
+  brandId: string,
+  purpose: AssetPurpose,
+  query?: string,
+  kinds?: readonly AssetKind[],
+) {
   const trpc = useTRPC();
   const client = useTRPCClient();
-  const search = { brandId, purpose, channelConnectionIds: [], query: query || undefined };
+  const search = {
+    brandId,
+    purpose,
+    channelConnectionIds: [],
+    query: query || undefined,
+    ...(kinds ? { kinds: [...kinds] } : {}),
+  };
   return useCursorPages({
     queryKey: trpc.assets.search.queryKey({ query: search, page: { limit: SEARCH_PAGE } }),
     fetchPage: (cursor) =>

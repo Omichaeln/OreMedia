@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import type { CreativePage, Element } from '@oremedia/contracts/creative';
 import { findElement, type IntentBatch } from '@oremedia/editor';
 import { Badge, EmptyState, Input, Skeleton } from '@oremedia/ui';
@@ -46,7 +47,8 @@ export function imageElementFor(page: CreativePage, asset: AssetRefDto): Element
 /** Spec 9.2/11.4: only eligible assets are offered; the server authorises every referenced version again. */
 export function AssetsPanel({ brandId, page, selection, readOnly, onIntent }: AssetsPanelProps) {
   const [query, setQuery] = useState('');
-  const search = useAssetSearch(brandId, 'creative', query);
+  // Graphic layers take still images (STU-2b: the creative purpose also covers video and audio for timelines).
+  const search = useAssetSearch(brandId, 'creative', query, IMAGE_CREATIVE_KINDS);
   const selected = selection[0] ? findElement(page, selection[0]) : null;
   const replaceable =
     selected &&

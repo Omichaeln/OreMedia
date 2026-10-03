@@ -3,6 +3,13 @@
 export * from './time';
 export { framePlacement, type FramePlacement } from './frame';
 export {
+  pictureLayersAt,
+  activeOverlays,
+  activeCaptions,
+  restoreVideoOps,
+  type PictureLayer,
+} from './preview';
+export {
   reduceVideo,
   applyVideoBatch,
   videoOpItemIds,
