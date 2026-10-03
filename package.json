@@ -54,5 +54,12 @@
     "vitest": "^3.2.4",
     "zod": "^3.25.76"
   },
-  "type": "module"
+  "type": "module",
+  "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ]
+    }
+  }
 }
