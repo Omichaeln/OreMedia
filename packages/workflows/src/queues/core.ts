@@ -24,6 +24,8 @@ export { destinationVerifyWorkflowV1 } from '../destination-verify.workflow.v1';
 // RA-01: the remote revoke of a disconnected destination's grant.
 export { destinationRevokeWorkflowV1 } from '../destination-revoke.workflow.v1';
 export { brandChangeImpactWorkflowV1 } from '../brand-change-impact.workflow.v1';
+// BSC-3: the daily fact sweep (expiry events, review-due flags, duplicate keys).
+export { brandFactSweepWorkflowV1 } from '../brand-fact-sweep.workflow.v1';
 export { brandAnalystWorkflowV1, brandAnalystSweepWorkflowV1 } from '../brand-analyst.workflow.v1';
 export { baselineComparisonWorkflowV1 } from '../baseline-comparison.workflow.v1';
 // Spec 17.5: deletion fan-out and the retention TTL sweep.

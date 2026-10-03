@@ -145,7 +145,7 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     state: 'draft',
   });
   const renderJobId = newId('renderJob');
-  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0025), which the roll-forward suites'
+  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0024), which the roll-forward suites'
   // earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
   const at = new Date();
   await db.execute(

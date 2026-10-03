@@ -105,7 +105,10 @@ export function assembleSystemPrompt(input: PromptInput): string {
       'Logo rules:',
       list(
         brand.document.logoRules.map(
-          (r) => `${r.variant} logo ${r.assetId}: min ${r.minWidthPx}px, clear space ${r.clearSpaceRatio}`,
+          (r) =>
+            `${r.variant} logo ${r.assetId}${r.assetVersionId ? ` (assetVersionId ${r.assetVersionId})` : ''}: min ${r.minWidthPx}px, clear space ${r.clearSpaceRatio}` +
+            (r.usage?.backgroundsNote ? `; backgrounds: ${r.usage.backgroundsNote}` : '') +
+            (r.usage?.donts.length ? `; never: ${r.usage.donts.join('; ')}` : ''),
         ),
       ),
       ...(brand.document.guidelines

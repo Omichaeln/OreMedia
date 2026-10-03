@@ -110,6 +110,19 @@ describe('runRenderChecks (spec 11.5 deterministic checks)', () => {
     expect(codes(fine)).not.toContain('logo_distortion');
   });
 
+  it('BSC-2: the logo minimum width holds for the drawn (contain-fitted) rectangle, not the box', () => {
+    // The fixture logo box is 200 px wide (minimum 120); a square-ish artwork letterboxed into it draws 90 px wide.
+    const narrow = runRenderChecks(
+      input(fixtureDocument(), { [ids.logo]: { drawn: { x: 135, y: 900, width: 90, height: 60 } } }),
+    );
+    expect(blocking(narrow)).toEqual(['logo_min_width']);
+    expect(narrow.findings.find((f) => f.code === 'logo_min_width')?.message).toContain('drawn 90px');
+    const wide = runRenderChecks(
+      input(fixtureDocument(), { [ids.logo]: { drawn: { x: 80, y: 900, width: 200, height: 60 } } }),
+    );
+    expect(codes(wide)).not.toContain('logo_min_width');
+  });
+
   it('contrast is computed against the colour actually under the text, not only the page background', () => {
     // Body text 'ink' on 'paper' passes; the same text drawn on an 'ink' rectangle fails.
     const doc = fixtureDocument();

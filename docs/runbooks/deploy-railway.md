@@ -302,10 +302,10 @@ Rollout order for speech generation (migration 0008, flag `creative.audio_genera
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
 `worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
-Rollout order for video and audio uploads (migration 0025, STU-2a; no flag: a person's video or audio upload is
+Rollout order for video and audio uploads (migration 0024, STU-2a; no flag: a person's video or audio upload is
 accepted as soon as the API is on the new build):
 
-1. Apply migration 0025 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
+1. Apply migration 0024 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
 2. Raise the clamav service's `StreamMaxLength` (and `MaxScanSize`/`MaxFileSize`) to at least 1100M: video uploads are

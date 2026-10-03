@@ -243,6 +243,19 @@ export class AssetVersionRepository extends BrandScopedRepository<typeof assetVe
     return rows[0] ?? null;
   }
   /**
+   * Row lock (SELECT ... FOR UPDATE) on a version: serialises drawing a rendition of it, so two requests for the same
+   * rendition record one derivative row (BSC-2).
+   */
+  async lockInTenant(id: string, tx: Tx): Promise<AssetVersionRow | null> {
+    const rows = await this.conn(tx)
+      .select()
+      .from(assetVersions)
+      .where(this.scope(eq(assetVersions.id, id)))
+      .limit(1)
+      .for('update');
+    return rows[0] ?? null;
+  }
+  /**
    * Dedupe within the brand (spec 9.1 step 5, index ix_asset_version_hash) against what the brand can still use: the current version of a live (approved or pending review) asset
    * of the given kinds with these bytes. A retired or rejected asset's bytes may come in again as a new asset.
    */

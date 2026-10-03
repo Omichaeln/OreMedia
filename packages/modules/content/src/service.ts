@@ -27,7 +27,7 @@ import {
   type PlanItemRestore,
   type ContentClass,
   ARTICLE_IMAGE_KINDS,
-  ARTICLE_IMAGE_MIMES,
+  ARTICLE_IMAGE_SOURCE_MIMES,
   articleImages,
 } from '@oremedia/contracts/content';
 import {
@@ -354,7 +354,7 @@ async function assertArticleAssetsUsable(copy: CopyDocumentV1, brandId: string, 
       await assetService.authoriseUse(
         image.assetVersionId,
         'creative',
-        { brandId, kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_MIMES },
+        { brandId, kinds: ARTICLE_IMAGE_KINDS, mimes: ARTICLE_IMAGE_SOURCE_MIMES },
         tx,
       );
     } catch (err) {
@@ -856,7 +856,7 @@ export const contentService = {
 
   briefs: {
     /**
-     * Spec 6.3 briefs: audience, message, offer facts (must exist on the brand), planned channels (connections of
+     * Spec 6.3 briefs: audience, message, offer facts (the brand's, in effect now), planned channels (connections of
      * the brand; another brand's or tenant's is NOT_FOUND) and constraints. An agent run records its id.
      */
     async create(
@@ -875,11 +875,22 @@ export const contentService = {
         tx,
       );
       if (parsed.campaignId) await loadCampaign(brand.id, parsed.campaignId, tx);
+      // BSC-3: a new brief offers only facts in effect now (approved, inside their validity window). Stored briefs
+      // are not re-checked here; the copy and release checks hold whatever a brief carries.
       for (const [i, factId] of parsed.offerFactIds.entries()) {
         const fact = await factsRepo.getById(factId, tx);
         if (fact.brandId !== brand.id)
           throw new ValidationFailedError([{ path: `offerFactIds.${i}`, issue: 'fact_not_in_brand' }]);
       }
+      const effective = new Set(
+        (await factsRepo.listEffectiveByIds(brand.id, parsed.offerFactIds, new Date(), tx)).map((f) => f.id),
+      );
+      const notEffective = parsed.offerFactIds.findIndex((id) => !effective.has(id));
+      if (notEffective >= 0)
+        throw new ValidationFailedError(
+          [{ path: `offerFactIds.${notEffective}`, issue: 'fact_not_effective' }],
+          'A brief can offer only approved facts that are in effect',
+        );
       for (const channelConnectionId of new Set(parsed.channelConnectionIds)) {
         const channel = await channelResolver(channelConnectionId, tx);
         if (!channel || channel.brandId !== brand.id)

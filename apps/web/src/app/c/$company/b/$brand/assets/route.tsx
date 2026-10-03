@@ -19,15 +19,10 @@ import {
   type AssetListFilter,
 } from '../../../../../../features/assets/use-assets';
 import { useAssetUpload } from '../../../../../../features/assets/use-upload';
-import {
-  acceptFor,
-  isTimeBased,
-  mediaClock,
-  rejectionText,
-  uploadHint,
-} from '../../../../../../features/assets/media';
+import { acceptFor, isTimeBased, mediaClock, uploadHint } from '../../../../../../features/assets/media';
 import { AudioPlayer, VideoPlayer } from '../../../../../../features/assets/media-player';
 import { useSignedUrl } from '../../../../../../features/assets/use-assets';
+import { UploadRejected } from '../../../../../../features/assets/upload-status';
 import { toUiError } from '../../../../../../lib/errors';
 
 const PURPOSE_LABEL: Record<AssetPurposeT, string> = {
@@ -576,20 +571,7 @@ function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
             data-testid="upload-unsettled"
           />
         )}
-        {step.kind === 'rejected' && (
-          <StatusBanner
-            tone="critical"
-            title="Rejected at ingest"
-            description={
-              <>
-                {rejectionText(step.reason)}
-                {step.detail ? <span className="mt-1 block">Found: {step.detail}.</span> : null}
-              </>
-            }
-            data-testid="upload-rejected"
-            data-reason={step.reason}
-          />
-        )}
+        {step.kind === 'rejected' && <UploadRejected step={step} />}
         {step.kind === 'failed' && (
           <StatusBanner
             tone="critical"

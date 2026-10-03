@@ -7,12 +7,14 @@ import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
 import { AssetThumb } from '../assets/asset-thumb';
-import { useAsset, useBrandAssetsOfKind, useBrandFonts, type BrandFontFaceDto } from '../assets/use-assets';
+import { useBrandAssetsOfKind, useBrandFonts, type BrandFontFaceDto } from '../assets/use-assets';
 import { useFontFaces } from '../assets/use-font-faces';
-import { useAssetUpload, type UploadStep } from '../assets/use-upload';
+import { useAssetUpload } from '../assets/use-upload';
+import { UploadStatus } from '../assets/upload-status';
 import { useBrandContext } from './brand-context';
 import { useBrandVersionImpact } from './use-brand';
 import { PublishImpact } from './publish-impact';
+import { LogosSection } from './logo-rules';
 import { RELEASE_1_PROVIDERS } from '../publishing/channel-connect';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { useTRPC } from '../../lib/trpc';
@@ -21,8 +23,6 @@ import { toUiError, type UiError } from '../../lib/errors';
 
 type Doc = BrandSystemDocumentV1;
 type Colour = Doc['tokens']['colours'][number];
-type LogoRule = Doc['logoRules'][number];
-type LogoVariant = LogoRule['variant'];
 type TypeRole = Doc['tokens']['typeRoles'][number];
 type TypeRoleKey = TypeRole['role'];
 
@@ -34,16 +34,6 @@ const COLOUR_ROLES: Colour['role'][] = [
   'background',
   'text',
   'semantic',
-];
-const LOGO_VARIANTS: Array<{ variant: LogoVariant; label: string; hint: string }> = [
-  { variant: 'primary', label: 'Primary', hint: 'The default lock-up on light grounds.' },
-  { variant: 'reversed', label: 'Reversed', hint: 'For dark or photographic grounds.' },
-  { variant: 'mono', label: 'Mono', hint: 'Single colour, for embossing, stamps and low-ink use.' },
-  {
-    variant: 'mark_only',
-    label: 'Mark only',
-    hint: 'The symbol without the wordmark, for avatars and favicons.',
-  },
 ];
 const TYPE_ROLES: Array<{ role: TypeRoleKey; label: string; minSizePx: number; sample: string }> = [
   { role: 'display', label: 'Display', minSizePx: 40, sample: 'Built to last' },
@@ -643,47 +633,6 @@ function UploadButton({ label, kind, accept }: { label: string; kind: AssetKind;
   );
 }
 
-function UploadStatus({ step }: { step: UploadStep }) {
-  if (step.kind === 'uploading') return <StatusBanner tone="info" busy title={`Uploading ${step.name}`} />;
-  if (step.kind === 'queued')
-    return (
-      <StatusBanner
-        tone="info"
-        title="Processing"
-        description="Scanning and preparing the file. It appears below within a minute; use Refresh if it has not."
-      />
-    );
-  if (step.kind === 'accepted')
-    return (
-      <StatusBanner
-        tone="good"
-        title="Ready"
-        description={`Ingested as asset ${step.assetId}; it is listed below.`}
-        data-testid="upload-accepted"
-      />
-    );
-  if (step.kind === 'unsettled')
-    return <StatusBanner tone="warning" title="Outcome not known yet" description={step.message} />;
-  if (step.kind === 'rejected')
-    return (
-      <StatusBanner
-        tone="critical"
-        title="Rejected at ingest"
-        description={`The file was not catalogued: ${step.reason}.`}
-        data-testid="upload-rejected"
-      />
-    );
-  if (step.kind === 'failed')
-    return (
-      <StatusBanner
-        tone="critical"
-        title="Upload not accepted"
-        description={[step.message, ...step.details].join(' · ')}
-      />
-    );
-  return null;
-}
-
 /** A face's weight as people read it: one weight, or the range a variable face covers (400–700). */
 const faceWeight = (f: BrandFontFaceDto) =>
   f.weightRange ? `${f.weightRange.min}–${f.weightRange.max}` : (f.weight ?? '');
@@ -1016,219 +965,6 @@ function GoogleFontImportForm({ onImported }: { onImported: () => void }) {
         />
       )}
     </form>
-  );
-}
-
-function LogosSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
-  const { brandId } = useBrandContext();
-  const logos = useBrandAssetsOfKind(brandId, ['logo']);
-  const ruleFor = (variant: LogoVariant) => doc.logoRules.find((r) => r.variant === variant);
-  const setRule = (variant: LogoVariant, rule: LogoRule | null) =>
-    onChange({
-      ...doc,
-      logoRules: [...doc.logoRules.filter((r) => r.variant !== variant), ...(rule ? [rule] : [])],
-    });
-  const options = (logos.data?.items ?? []).map((l, i) => ({
-    value: l.assetId,
-    label: l.altText ?? `Logo ${i + 1}${l.width && l.height ? ` (${l.width}×${l.height})` : ''}`,
-  }));
-  return (
-    <Section
-      title="Logos"
-      hint="Upload each lock-up once, then assign it to a variant with the grounds it may sit on, its clear space (a multiple of the mark height) and its minimum width. Logos are never generated."
-    >
-      <div className="flex flex-wrap items-start gap-3">
-        <UploadButton
-          label="Upload logo"
-          kind="logo"
-          accept="image/svg+xml,image/png,image/webp,application/pdf"
-        />
-        <Button size="sm" variant="ghost" onClick={() => void logos.refetch()}>
-          Refresh
-        </Button>
-      </div>
-      {logos.isPending && <Skeleton label="Loading logos" lines={2} />}
-      {logos.isError && <RequestError error={logos.error} onRetry={() => void logos.refetch()} />}
-      {logos.isSuccess && options.length === 0 && (
-        <EmptyState
-          title="No logos uploaded"
-          description="Upload SVG where you have it; PNG with transparency otherwise."
-        />
-      )}
-      <ul className="grid gap-3 md:grid-cols-2">
-        {LOGO_VARIANTS.map(({ variant, label, hint }) => (
-          <LogoSlot
-            key={variant}
-            label={label}
-            hint={hint}
-            rule={ruleFor(variant)}
-            options={options}
-            colourKeys={doc.tokens.colours.map((c) => c.key).filter(Boolean)}
-            onChange={(rule) => setRule(variant, rule && { ...rule, variant })}
-          />
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
-function LogoSlot({
-  label,
-  hint,
-  rule,
-  options,
-  colourKeys,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  rule: LogoRule | undefined;
-  options: Array<{ value: string; label: string }>;
-  colourKeys: string[];
-  onChange: (rule: LogoRule | null) => void;
-}) {
-  const base: LogoRule = rule ?? {
-    assetId: '',
-    variant: 'primary',
-    allowedBackgroundColourKeys: [],
-    clearSpaceRatio: 0.5,
-    minWidthPx: 96,
-  };
-  return (
-    <li className="flex flex-col gap-2 rounded-md border border-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h4 className="text-sm font-medium">{label}</h4>
-        {rule && (
-          <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
-            Clear
-          </Button>
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">{hint}</p>
-      {rule?.assetId && <LogoPreview assetId={rule.assetId} />}
-      {options.length === 0 ? (
-        <p className="text-xs text-muted-foreground">Upload a logo above to assign it here.</p>
-      ) : (
-        <Select
-          aria-label={`${label} logo`}
-          placeholder="Choose an uploaded logo"
-          value={rule?.assetId ?? ''}
-          onValueChange={(assetId) => onChange({ ...base, assetId })}
-          options={options}
-        />
-      )}
-      {rule && (
-        <>
-          <fieldset className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-            <legend className="mb-1 text-muted-foreground">Allowed grounds</legend>
-            {colourKeys.length === 0 && (
-              <span className="text-muted-foreground">Add palette colours first.</span>
-            )}
-            {colourKeys.map((k) => (
-              <label key={k} className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={rule.allowedBackgroundColourKeys.includes(k)}
-                  onChange={(e) =>
-                    onChange({
-                      ...rule,
-                      allowedBackgroundColourKeys: e.target.checked
-                        ? [...rule.allowedBackgroundColourKeys, k]
-                        : rule.allowedBackgroundColourKeys.filter((x) => x !== k),
-                    })
-                  }
-                />
-                <code>{k}</code>
-              </label>
-            ))}
-          </fieldset>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Clear space (× mark height)" htmlFor={`${label}-clear`}>
-              <Input
-                id={`${label}-clear`}
-                type="number"
-                min={0}
-                step={0.05}
-                value={rule.clearSpaceRatio}
-                onChange={(e) => onChange({ ...rule, clearSpaceRatio: Number(e.target.value) || 0 })}
-              />
-            </Field>
-            <Field label="Minimum width (px)" htmlFor={`${label}-min`}>
-              <Input
-                id={`${label}-min`}
-                type="number"
-                min={1}
-                value={rule.minWidthPx}
-                onChange={(e) => onChange({ ...rule, minWidthPx: Number(e.target.value) || 0 })}
-              />
-            </Field>
-          </div>
-        </>
-      )}
-    </li>
-  );
-}
-
-/**
- * The chosen logo's preview, and its rights: a logo is only offered for publishing once usage rights are recorded
- * (spec 9.2), so a logo with none gets a one-click "our own logo" record.
- */
-function LogoPreview({ assetId }: { assetId: string }) {
-  const { brand } = useBrandContext();
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
-  const asset = useAsset(assetId);
-  const intent = useIntentKey();
-  const record = useMutation(
-    trpc.assets.rights.set.mutationOptions({
-      ...mutationIntent(intent.key),
-      onSuccess: () => {
-        intent.renew();
-        void queryClient.invalidateQueries(trpc.assets.pathFilter());
-      },
-    }),
-  );
-  if (asset.isPending) return <Skeleton label="Loading logo" lines={1} />;
-  if (asset.isError) return <RequestError error={asset.error} />;
-  const a = asset.data;
-  return (
-    <div className="flex items-center gap-3">
-      {a.currentVersion ? (
-        <AssetThumb
-          assetVersionId={a.currentVersion.id}
-          alt={a.name}
-          className="h-16 w-24 rounded-sm border border-border bg-muted object-contain"
-        />
-      ) : (
-        <div className="flex h-16 w-24 items-center justify-center rounded-sm border border-border bg-muted text-xs text-muted-foreground">
-          Processing
-        </div>
-      )}
-      <div className="flex flex-col gap-1 text-xs">
-        <span className="truncate">{a.name}</span>
-        {a.state !== 'approved' && <Badge tone="warning">Awaiting approval</Badge>}
-        {a.rightsState === 'recorded' ? (
-          <Badge tone="good">Rights recorded</Badge>
-        ) : (
-          <Button
-            size="sm"
-            onClick={() =>
-              record.mutate({
-                assetId,
-                owner: brand.name,
-                permittedChannels: 'all',
-                territories: 'all',
-                releases: [],
-                restrictions: [],
-              })
-            }
-            disabled={record.isPending}
-          >
-            Record as our own logo
-          </Button>
-        )}
-      </div>
-    </div>
   );
 }
 
