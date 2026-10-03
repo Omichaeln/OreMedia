@@ -27,6 +27,7 @@ import {
   TemplateListCurrent,
   TemplateRetire,
   TemplateVersionCreate,
+  type Finding,
   type TemplateSlot,
   type Operation,
   type OperationBatch,
@@ -47,6 +48,8 @@ import {
 } from '@oremedia/contracts/agents';
 import {
   AssetApprove,
+  type AssetIssue,
+  type AssetKind,
   AssetDownloadRequest,
   AssetVersionsList,
   INGEST_REJECTION_MESSAGES,
@@ -67,6 +70,7 @@ import {
 import {
   BrandClassify,
   BrandCompleteSetup,
+  BrandCreate,
   BrandGuidelinesImport,
   BrandProposalDiscard,
   BrandSystemDocumentV1,
@@ -78,6 +82,7 @@ import {
   BrandVersionUpdate,
   emptyBrandSystemDocument,
   ObjectiveList,
+  ObjectiveSet,
   OnboardingStart,
   PolicyGet,
   PolicyVersionActivate,
@@ -116,8 +121,13 @@ import {
   SkillVersionPublish,
   TaskKind,
 } from '@oremedia/contracts/skills';
-import type { MembershipRole } from '@oremedia/contracts/tenancy';
+import type { Action } from '@oremedia/contracts/policy';
+import type { AutonomyMode, MembershipRole } from '@oremedia/contracts/tenancy';
 import {
+  AccountRemovePassword,
+  AccountSetPassword,
+  MemberInvite,
+  MemberIssuePasswordSetup,
   passwordPolicyIssue,
   PasswordSetup,
   PasswordSignIn,
@@ -185,6 +195,9 @@ interface BrandRow {
   name: string;
   publishedVersionId: string | null;
   classification?: 'client' | 'internal';
+  /** Absent means UTC and en, as the seeded brands. */
+  timezone?: string;
+  defaultLocale?: string;
   version?: number;
   /** R1-D: a brand starts in `setup` until a person completes it; absent means active. */
   status?: 'setup' | 'active';
@@ -385,15 +398,20 @@ interface Comment {
 }
 interface RenderJob {
   id: string;
+  brandId: string;
   revisionId: string;
   formatKeys: string[];
   state: 'pending' | 'rendering' | 'ready' | 'failed';
   attempts: number;
   error: string | null;
+  /** STU-2a: a long (video) render's phase and fraction; stills report none. */
+  progress: null;
   requestedByKind: 'user';
   requestedById: string;
   exportIds: string[];
   exports: never[];
+  /** Set for a proposal preview; the studio's renders are of saved revisions. */
+  preview: null;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -469,8 +487,8 @@ const mockAsset = (
   createdAt: now(),
 });
 /** Mirrors packages/modules/assets assetIssues. */
-const assetIssues = (a: MockAsset): string[] => {
-  const out: string[] = [];
+const assetIssues = (a: MockAsset): AssetIssue[] => {
+  const out: AssetIssue[] = [];
   if (a.state !== 'approved') out.push(a.state);
   if (!a.rights) out.push('rights_unknown');
   else if (a.rights.expiresAt && new Date(a.rights.expiresAt).getTime() < Date.now())
@@ -527,10 +545,13 @@ const assetVersionOf = (a: MockAsset) => {
     height: media ? (media.video?.height ?? null) : (a.file?.height ?? 2),
     durationMs: media?.durationMs ?? null,
     media,
+    colourProfile: null,
+    focalPoint: null,
     altText: a.kind === 'photo' ? 'Sample photo' : null,
     contentHash: hash(a.id),
-    provenance: { kind: 'upload' as const },
-    createdAt: now(),
+    provenance: { kind: 'upload' as const, uploadedByUserId: 'usr_e2e', originalFilename: a.name },
+    // As the API's versionView: the row's Date, carried as a Date by superjson.
+    createdAt: new Date(),
   };
 };
 /** The derivatives video ingest makes (STU-2a); stills have none in the mock. */
@@ -621,7 +642,7 @@ export class MockBackend {
   /** Upload intents issued through assets.uploads.createIntent, by id, with how often their status was read. */
   readonly fontIntents = new Map<
     string,
-    { originalFilename: string; declaredMime: string; kind: string; polls: number; assetId: string | null }
+    { originalFilename: string; declaredMime: string; kind: AssetKind; polls: number; assetId: string | null }
   >();
   /**
    * The brand's assets as assets.list and assets.get report them (spec 21.2 states): the sample photo (usable), the
@@ -760,7 +781,7 @@ export class MockBackend {
       operations: Operation[];
       summary: string;
       contentHash: string;
-      findings: unknown[];
+      findings: Finding[];
       createdAt: string;
       reads: number;
       /** A decision a person recorded; the run applies it on its next read, as the workflow does. */
@@ -779,7 +800,7 @@ export class MockBackend {
     key: key as string,
     title: title as string,
     state: 'active' as const,
-    activeVersionId,
+    activeVersionId: activeVersionId ?? null,
     ownerUserId: null,
     createdAt: '2026-09-01T09:00:00.000Z',
     updatedAt: '2026-09-01T09:00:00.000Z',
@@ -810,6 +831,19 @@ export class MockBackend {
   readonly skillBindings = new Map<string, { id: string; skillVersionId: string; skillId: string }>();
   /** Spend limits and the ledger (agents.budgets): the company's month row is brandId ''. */
   readonly spendLimits = new Map<string, number>([['', 100_000_000]]);
+  /** The brands' objectives (brand.objectives.*); none until the brand system screen sets one. */
+  readonly objectives: Array<{
+    id: string;
+    brandId: string;
+    name: string;
+    primaryMetricKey: string;
+    guardrailMetricKeys: string[];
+    engagementQualityWeights: Record<string, number> | null;
+    activeFrom: string;
+    activeUntil: string | null;
+    createdAt: string;
+    version: number;
+  }> = [];
   /** UX-20: the brand's policy versions (brand.policy.*); none until the settings screen writes one. */
   readonly policyVersions: Array<{
     id: string;
@@ -1495,73 +1529,64 @@ export function createMockRouter(backend: MockBackend) {
             })),
           };
         }),
-        invite: mutation
-          .input(
-            z.object({ email: z.string().email(), role: z.string(), allBrands: z.boolean().default(false) }),
-          )
-          .mutation(({ ctx }) => {
-            if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
-              throw new PolicyDeniedError('membership.manage');
-            return { membershipId: rid('mem') };
-          }),
+        invite: mutation.input(MemberInvite).mutation(({ ctx }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('membership.manage');
+          return { membershipId: rid('mem') };
+        }),
         // As the API: owners and admins; an owner's link only from an owner; shown once (fragment URL).
-        issuePasswordSetup: mutation
-          .input(z.object({ membershipId: z.string() }))
-          .mutation(({ ctx, input }) => {
-            if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
-              throw new PolicyDeniedError('membership.manage');
-            const account = MEMBER_ACCOUNTS[input.membershipId];
-            if (!account) throw new NotFoundError('Membership', input.membershipId);
-            if (account.userId === ctx.member.userId)
-              throw new PolicyDeniedError(
-                'self_setup_link',
-                'Set your own password in Settings → Account, not with a setup link',
-              );
-            if ((account.role === 'owner' || account.role === 'admin') && ctx.member.role !== 'owner')
-              throw new PolicyDeniedError(
-                'owner_required',
-                'Only an owner can issue a password setup link for an owner or admin',
-              );
-            for (const link of backend.setupLinks.values())
-              if (link.email === account.email) link.used = true;
-            const token = `pst_e2e_${randomUUID().replace(/-/g, '')}`;
-            const sessionToken = account.userId === 'usr_e2e' ? E2E.token : `ses_e2e_${account.userId}`;
-            backend.setupLinks.set(token, { email: account.email, sessionToken, used: false });
-            if (sessionToken !== E2E.token)
-              backend.sessions.set(sessionToken, {
-                userId: account.userId,
-                memberships: { [backend.tenantId]: { role: account.role, brandIds: null } },
-              });
-            return {
-              url: `/set-password#token=${token}`,
-              expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString(),
-            };
-          }),
+        issuePasswordSetup: mutation.input(MemberIssuePasswordSetup).mutation(({ ctx, input }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('membership.manage');
+          const account = MEMBER_ACCOUNTS[input.membershipId];
+          if (!account) throw new NotFoundError('Membership', input.membershipId);
+          if (account.userId === ctx.member.userId)
+            throw new PolicyDeniedError(
+              'self_setup_link',
+              'Set your own password in Settings → Account, not with a setup link',
+            );
+          if ((account.role === 'owner' || account.role === 'admin') && ctx.member.role !== 'owner')
+            throw new PolicyDeniedError(
+              'owner_required',
+              'Only an owner can issue a password setup link for an owner or admin',
+            );
+          for (const link of backend.setupLinks.values()) if (link.email === account.email) link.used = true;
+          const token = `pst_e2e_${randomUUID().replace(/-/g, '')}`;
+          const sessionToken = account.userId === 'usr_e2e' ? E2E.token : `ses_e2e_${account.userId}`;
+          backend.setupLinks.set(token, { email: account.email, sessionToken, used: false });
+          if (sessionToken !== E2E.token)
+            backend.sessions.set(sessionToken, {
+              userId: account.userId,
+              memberships: { [backend.tenantId]: { role: account.role, brandIds: null } },
+            });
+          return {
+            url: `/set-password#token=${token}`,
+            expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString(),
+          };
+        }),
       }),
       account: t.router({
         signInMethods: authedOnly.query(() => ({
           hasPassword: backend.passwords.has(E2E_EMAIL),
           hasGoogle: backend.hasGoogle,
         })),
-        setPassword: authedOnly
-          .input(z.object({ currentPassword: z.string().optional(), newPassword: z.string() }))
-          .mutation(({ input }) => {
-            const stored = backend.passwords.get(E2E_EMAIL);
-            if (!stored && !backend.recentSignIn)
-              throw new ValidationFailedError(
-                [{ path: 'session', issue: 'recent_sign_in_required' }],
-                'Sign in again to set a password',
-              );
-            if (stored && !input.currentPassword)
-              throw new ValidationFailedError([{ path: 'currentPassword', issue: 'required' }]);
-            if (stored && stored.password !== input.currentPassword)
-              throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
-            const issue = passwordPolicyIssue(input.newPassword, E2E_EMAIL);
-            if (issue) throw new ValidationFailedError([{ path: 'newPassword', issue }]);
-            backend.passwords.set(E2E_EMAIL, { password: input.newPassword, sessionToken: E2E.token });
-            return { ok: true as const };
-          }),
-        removePassword: authedOnly.input(z.object({ currentPassword: z.string() })).mutation(({ input }) => {
+        setPassword: authedOnly.input(AccountSetPassword).mutation(({ input }) => {
+          const stored = backend.passwords.get(E2E_EMAIL);
+          if (!stored && !backend.recentSignIn)
+            throw new ValidationFailedError(
+              [{ path: 'session', issue: 'recent_sign_in_required' }],
+              'Sign in again to set a password',
+            );
+          if (stored && !input.currentPassword)
+            throw new ValidationFailedError([{ path: 'currentPassword', issue: 'required' }]);
+          if (stored && stored.password !== input.currentPassword)
+            throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
+          const issue = passwordPolicyIssue(input.newPassword, E2E_EMAIL);
+          if (issue) throw new ValidationFailedError([{ path: 'newPassword', issue }]);
+          backend.passwords.set(E2E_EMAIL, { password: input.newPassword, sessionToken: E2E.token });
+          return { ok: true as const };
+        }),
+        removePassword: authedOnly.input(AccountRemovePassword).mutation(({ input }) => {
           if (backend.passwords.get(E2E_EMAIL)?.password !== input.currentPassword)
             throw new ValidationFailedError([{ path: 'currentPassword', issue: 'incorrect' }]);
           if (!backend.hasGoogle)
@@ -1740,12 +1765,19 @@ export function createMockRouter(backend: MockBackend) {
           v.version += 1;
           const skill = backend.skills.find((k) => k.id === v.skillId);
           if (skill) skill.activeVersionId = v.id;
-          return { skillVersionId: v.id, state: 'published' as const, version: v.version };
+          return {
+            skillVersionId: v.id,
+            number: v.number,
+            state: 'published' as const,
+            rolloutPercent: input.rolloutPercent,
+            version: v.version,
+          };
         }),
       }),
       bindings: t.router({
         set: mutation.input(SkillBindingSet).mutation(({ input }) => {
           const key = `${input.brandId ?? ''}:${input.skillId}`;
+          const previousVersionId = backend.skillBindings.get(key)?.skillVersionId ?? null;
           if (input.skillVersionId === null) backend.skillBindings.delete(key);
           else
             backend.skillBindings.set(key, {
@@ -1753,7 +1785,13 @@ export function createMockRouter(backend: MockBackend) {
               skillVersionId: input.skillVersionId,
               skillId: input.skillId,
             });
-          return { ok: true as const };
+          return {
+            skillId: input.skillId,
+            scope: input.scope,
+            brandId: input.brandId ?? null,
+            skillVersionId: input.skillVersionId,
+            previousVersionId,
+          };
         }),
       }),
       /** A package's manifest.json names the skill; it lands as the next draft version of that key. */
@@ -1799,6 +1837,8 @@ export function createMockRouter(backend: MockBackend) {
           key: skill.key,
           number,
           packageHash: v.packageHash,
+          suiteId: null,
+          version: 0,
         };
       }),
       export: query.input(SkillExport).query(({ input }) => {
@@ -1918,7 +1958,13 @@ export function createMockRouter(backend: MockBackend) {
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
           const principal = E2E_PRINCIPALS.find((p) => p.id === input.servicePrincipalId);
           if (!principal) throw new NotFoundError('ServicePrincipal', input.servicePrincipalId);
-          return mockEffectiveLimits(input, principal);
+          // As the API: the task kind is free text on the wire and refused unless it names a known kind.
+          const taskKind = TaskKind.safeParse(input.taskKind);
+          if (!taskKind.success)
+            throw new ValidationFailedError([
+              { path: 'taskKind', issue: `unknown task kind ${input.taskKind}` },
+            ]);
+          return mockEffectiveLimits({ ...input, taskKind: taskKind.data }, principal);
         }),
         /** UX-07: a layout run on a document; as the server it is accepted at once and works on its own. */
         start: mutation.input(RunStart).mutation(({ input }) => {
@@ -1973,7 +2019,13 @@ export function createMockRouter(backend: MockBackend) {
               });
             }
           }
-          return { runId: id, state: 'planned' as const, autonomyMode: input.requestedAutonomy };
+          return {
+            runId: id,
+            state: 'planned' as const,
+            autonomyMode: input.requestedAutonomy,
+            workflowId: run.workflowId,
+            version: 0,
+          };
         }),
         cancel: mutation.input(RunCancel).mutation(({ input }) => {
           const run = backend.runs.get(input.runId);
@@ -1985,7 +2037,7 @@ export function createMockRouter(backend: MockBackend) {
             version: run.version + 1,
           });
           backend.runProposals.delete(run.id);
-          return { runId: run.id, state: 'cancelled' as const };
+          return { runId: run.id, state: 'cancelled' as const, version: run.version };
         }),
         pendingProposals: query.input(RunPendingProposals).query(({ input }) => {
           if (input.brandId !== backend.brandId) throw new NotFoundError('Brand', input.brandId);
@@ -2259,14 +2311,29 @@ export function createMockRouter(backend: MockBackend) {
           return { policyVersionId: pv.id, state: 'active' as const, version: pv.version };
         }),
       }),
+      // As brandService.create: a new brand starts in setup with no published version; brand.list shows it.
+      create: mutation.input(BrandCreate).mutation(({ input }) => {
+        const id = rid('brand');
+        backend.brands.push({
+          id,
+          name: input.name,
+          publishedVersionId: null,
+          classification: input.classification,
+          timezone: input.timezone,
+          defaultLocale: input.defaultLocale,
+          version: 0,
+          status: 'setup',
+        });
+        return { brandId: id };
+      }),
       list: query.query(({ ctx }) =>
         backend.brands
           .filter((b) => !ctx.member?.brandIds || ctx.member.brandIds.includes(b.id))
           .map((b) => ({
             id: b.id,
             name: b.name,
-            timezone: 'UTC',
-            defaultLocale: 'en',
+            timezone: b.timezone ?? 'UTC',
+            defaultLocale: b.defaultLocale ?? 'en',
             status: b.status ?? ('active' as const),
             classification: b.classification ?? ('client' as const),
             publishedVersionId: b.publishedVersionId,
@@ -2375,7 +2442,7 @@ export function createMockRouter(backend: MockBackend) {
             coloursAdded: colours.size,
             skipped: files
               .filter((f) => !text.test(f.path))
-              .map((f) => ({ path: f.path, reason: 'not_text' })),
+              .map((f) => ({ path: f.path, reason: 'not_text' as const })),
           };
         }),
       }),
@@ -2409,6 +2476,8 @@ export function createMockRouter(backend: MockBackend) {
           return {
             brandId: input.brandId,
             available: true,
+            // As the API: the scope is read up to 200 requests and approvals; the fixtures stay well below that.
+            truncated: false,
             policy: {
               configured: active?.document.onBrandVersionPublished ?? null,
               effective: 'invalidate_and_hold' as const,
@@ -2533,8 +2602,50 @@ export function createMockRouter(backend: MockBackend) {
       }),
       facts: factsRouter(backend.facts, { router: t.router, query, mutation }),
       ...assistRouters(backend.assist, { router: t.router, query, mutation }),
+      // As brandService.objectives: one active objective at a time, so a new one closes those still open at its start.
       objectives: t.router({
-        list: query.input(ObjectiveList).query(() => ({ items: [], nextCursor: null })),
+        set: mutation.input(ObjectiveSet).mutation(({ input }) => {
+          if (!backend.brands.some((b) => b.id === input.brandId))
+            throw new NotFoundError('Brand', input.brandId);
+          if (input.activeUntil && Date.parse(input.activeUntil) <= Date.parse(input.activeFrom))
+            throw new ValidationFailedError([{ path: 'activeUntil', issue: 'must be after activeFrom' }]);
+          const from = Date.parse(input.activeFrom);
+          const closedObjectiveIds: string[] = [];
+          for (const open of backend.objectives)
+            if (
+              open.brandId === input.brandId &&
+              (open.activeUntil === null || Date.parse(open.activeUntil) > from)
+            ) {
+              open.activeUntil = new Date(Math.max(Date.parse(open.activeFrom), from)).toISOString();
+              open.version += 1;
+              closedObjectiveIds.push(open.id);
+            }
+          const id = rid('bob');
+          backend.objectives.push({
+            id,
+            brandId: input.brandId,
+            name: input.name,
+            primaryMetricKey: input.primaryMetricKey,
+            guardrailMetricKeys: input.guardrailMetricKeys,
+            engagementQualityWeights: input.engagementQualityWeights ?? null,
+            activeFrom: new Date(from).toISOString(),
+            activeUntil: input.activeUntil ? new Date(input.activeUntil).toISOString() : null,
+            createdAt: new Date().toISOString(),
+            version: 0,
+          });
+          return { objectiveId: id, closedObjectiveIds, version: 0 };
+        }),
+        list: query.input(ObjectiveList).query(({ input }) => {
+          const now = Date.now();
+          const items = backend.objectives.filter(
+            (o) =>
+              o.brandId === input.brandId &&
+              (!input.activeOnly ||
+                (Date.parse(o.activeFrom) <= now &&
+                  (o.activeUntil === null || Date.parse(o.activeUntil) > now))),
+          );
+          return { items: [...items].reverse(), nextCursor: null };
+        }),
       }),
     }),
     assets: t.router({
@@ -2823,6 +2934,7 @@ export function createMockRouter(backend: MockBackend) {
               url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}`,
               expiresAt: new Date(Date.now() + 300_000),
               mime: 'font/ttf',
+              origin: 'upload' as const,
             };
           // STU-2a: a video or audio version's proxy plays from the store (WebM in the e2e store); its images are PNG.
           if (/^av_(video|audio)_/.test(input.assetVersionId))
@@ -2831,11 +2943,13 @@ export function createMockRouter(backend: MockBackend) {
                   url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-proxy.webm`,
                   expiresAt: new Date(Date.now() + 300_000),
                   mime: input.assetVersionId.startsWith('av_video_') ? 'video/mp4' : 'audio/mp4',
+                  origin: 'upload' as const,
                 }
               : {
                   url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-${input.derivative}.png`,
                   expiresAt: new Date(Date.now() + 300_000),
                   mime: 'image/webp',
+                  origin: 'upload' as const,
                 };
           const logo = backend.assetOfVersion(input.assetVersionId);
           // BSC-2: an SVG logo's original is the vector file; its renditions are rasters.
@@ -2845,11 +2959,13 @@ export function createMockRouter(backend: MockBackend) {
                   url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.svg`,
                   expiresAt: new Date(Date.now() + 300_000),
                   mime: 'image/svg+xml',
+                  origin: 'upload' as const,
                 }
               : {
                   url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
                   expiresAt: new Date(Date.now() + 300_000),
                   mime: 'image/png',
+                  origin: 'upload' as const,
                 };
           if (input.assetVersionId !== 'av_photo' && input.assetVersionId !== 'av_generated')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
@@ -3009,15 +3125,18 @@ export function createMockRouter(backend: MockBackend) {
           const id = rid('rj');
           backend.jobs.set(id, {
             id,
+            brandId: backend.brandId,
             revisionId: input.revisionId,
             formatKeys: input.formatKeys,
             state: 'pending',
             attempts: 0,
             error: null,
+            progress: null,
             requestedByKind: 'user',
             requestedById: 'usr_e2e',
             exportIds: [],
             exports: [],
+            preview: null,
             createdAt: now(),
             updatedAt: now(),
             version: 0,
@@ -3196,7 +3315,14 @@ function companyHandler(backend: MockBackend) {
  * which answers them or refuses the tenant as apps/api does.
  */
 /** UX-08: the agent principals granted the E2E brand, each with the actions its grants cover there. */
-const E2E_PRINCIPALS = [
+const E2E_PRINCIPALS: Array<{
+  id: string;
+  name: string;
+  kind: 'agent';
+  maxAutonomy: 'create' | 'prepare_release';
+  actions: Action[];
+  createdAt: string;
+}> = [
   {
     id: 'sp_e2e_agent',
     name: 'E2E agent',
@@ -3224,7 +3350,7 @@ const E2E_PRINCIPALS = [
 ];
 
 /** The tools each E2E task kind's skill names and the action each needs (the Release 1 registry's values). */
-const E2E_TASK_TOOLS: Record<string, Array<{ name: string; action: string }>> = {
+const E2E_TASK_TOOLS: Record<string, Array<{ name: string; action: Action }>> = {
   copywriting: [
     { name: 'brand.getSnapshot', action: 'brand.read' },
     { name: 'content.draftCopy', action: 'content.edit' },
@@ -3248,18 +3374,18 @@ const E2E_TASK_TOOLS: Record<string, Array<{ name: string; action: string }>> = 
     { name: 'experiments.proposeDesign', action: 'experiment.manage' },
   ],
 };
-const AUTONOMY_RANK = ['assist', 'create', 'prepare_release', 'managed_autopublish'];
+const AUTONOMY_RANK: readonly AutonomyMode[] = ['assist', 'create', 'prepare_release', 'managed_autopublish'];
 
 /**
  * RA-07 as agents.runs.effectiveLimits computes it: autonomy = min(requested, principal, tenant policy
  * prepare_release, plan prepare_release); budget = the skill's; tools denied where the principal lacks the action.
  */
 function mockEffectiveLimits(
-  input: { brandId: string; taskKind: string; requestedAutonomy: string },
+  input: { brandId: string; taskKind: TaskKind; requestedAutonomy: AutonomyMode },
   principal: (typeof E2E_PRINCIPALS)[number],
 ) {
-  const effective = [input.requestedAutonomy, principal.maxAutonomy, 'prepare_release'].reduce((min, m) =>
-    AUTONOMY_RANK.indexOf(m) < AUTONOMY_RANK.indexOf(min) ? m : min,
+  const effective = [input.requestedAutonomy, principal.maxAutonomy, 'prepare_release' as const].reduce(
+    (min, m) => (AUTONOMY_RANK.indexOf(m) < AUTONOMY_RANK.indexOf(min) ? m : min),
   );
   const tools = (E2E_TASK_TOOLS[input.taskKind] ?? []).map((t) => ({
     ...t,
@@ -3273,8 +3399,8 @@ function mockEffectiveLimits(
     autonomy: {
       requested: input.requestedAutonomy,
       principalMax: principal.maxAutonomy,
-      tenantPolicyMax: 'prepare_release',
-      entitlementMax: 'prepare_release',
+      tenantPolicyMax: 'prepare_release' as const,
+      entitlementMax: 'prepare_release' as const,
       effective,
     },
     skills: skill
