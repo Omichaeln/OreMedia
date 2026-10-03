@@ -308,9 +308,12 @@ accepted as soon as the API is on the new build):
 1. Apply migration 0024 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
-2. Raise the clamav service's `StreamMaxLength` (and `MaxScanSize`/`MaxFileSize`) to at least 1100M: video uploads are
-   up to 1 GiB and are streamed to clamd; below the limit clamd gives no verdict and the upload stays quarantined
-   (`scanner_unavailable`, the detail names `StreamMaxLength`).
+2. Before the merge that ships this (the api deploys on merge and accepts video at once), raise the clamav service's
+   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: point the service at this repository with config
+   file `infra/railway/clamav/railway.json` (the official image plus the raised limits; the build fails if clamd's
+   config file moves), in staging first, then production. Video uploads are up to 1 GiB and are streamed to clamd;
+   below the limit clamd gives no verdict and the upload stays quarantined (`scanner_unavailable`, the detail names
+   `StreamMaxLength`).
 3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
    default 1; resources in infra/railway/README.md). In production a container without ffmpeg/ffprobe refuses to
    start (`refusing to start (task queue video)` in its log), so a broken image fails its deploy. Check the start

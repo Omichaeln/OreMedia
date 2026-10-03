@@ -52,4 +52,7 @@ for ffmpeg and 300 MB for the worker process. Ordinary camera footage encodes fa
 `VIDEO_CONCURRENCY` above 1 multiplies the CPU, memory and disk lines. Railway's default ephemeral disk is enough
 for one job; raise the plan or attach a volume and point `MEDIA_TMP_DIR` at it before raising concurrency. The clamav
 service's `StreamMaxLength` must cover the video cap (1 GiB) or every video upload stays quarantined with
-`scanner_unavailable` (the scan names the setting); see the runbook rollout order for STU-2a.
+`scanner_unavailable` (the scan names the setting). `infra/railway/clamav/` builds that service from the official
+image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; point the clamav service at the repo with
+config file `infra/railway/clamav/railway.json` (staging first) before the video rollout. See the runbook rollout
+order for STU-2a.
