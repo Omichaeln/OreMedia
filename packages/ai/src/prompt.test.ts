@@ -173,7 +173,7 @@ describe('untrusted text in the system prompt (defensive review)', () => {
           {
             assetId: 'ast_1',
             assetVersionId: 'av_1',
-            kind: 'image',
+            kind: 'photo',
             semanticRole: null,
             altText,
             contentHash: 'h'.repeat(64),
@@ -189,7 +189,7 @@ describe('untrusted text in the system prompt (defensive review)', () => {
       prompt.indexOf(SECTION_HEADINGS.brand_constraints),
       prompt.indexOf(SECTION_HEADINGS.task_brief),
     );
-    expect(constraints).toContain('- av_1 (image)');
+    expect(constraints).toContain('- av_1 (photo)');
     expect(constraints).not.toContain('Shop front');
     const evidenceSection = prompt.slice(prompt.indexOf(SECTION_HEADINGS.evidence));
     expect(evidenceSection).toContain(`${EVIDENCE_OPEN} id="av_1" source="asset_metadata" trust="untrusted"`);
