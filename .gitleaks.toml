@@ -1,0 +1,9 @@
+# Extends the default gitleaks rules. .gitleaksignore fingerprints are keyed to a commit SHA and stop matching
+# once a PR is squash-merged, so false positives that recur by shape are allowlisted here instead.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Studio format and starter keys such as yt_thumbnail_1280x720 and promo_vertical_15s are identifiers, not credentials"
+regexTarget = "secret"
+regexes = ['''^[a-z]+(?:_[a-z]+)*_(?:\d+x\d+|\d+s)$''']

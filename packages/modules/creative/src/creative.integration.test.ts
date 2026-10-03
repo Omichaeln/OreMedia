@@ -1119,7 +1119,7 @@ describe('creative module (spec 11) against MySQL 8', () => {
     });
 
     it('applyTemplate with an unapproved version is rejected; an agent cannot approve; approval activates the template', async () => {
-      const current = (await head()).currentRevisionId!;
+      let current = (await head()).currentRevisionId!;
       const apply = (origin: 'user' | 'agent' = 'user') =>
         batch(
           docId,
@@ -1162,6 +1162,18 @@ describe('creative module (spec 11) against MySQL 8', () => {
       const got = await run(tenantA, () => creativeService.templates.get(A, { templateId }));
       expect(got).toMatchObject({ state: 'active', currentVersionId: templateVersionId, version: 1 });
       expect(got.selectedVersion).toMatchObject({ state: 'approved', document: templateDoc() });
+      // STU-1a: a template does not replace a page holding locked elements; the background is unlocked first.
+      await expect(
+        run(tenantA, (tx) => creativeService.operations.apply(A, apply(), tx)),
+      ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', details: [{ issue: 'element_locked' }] });
+      const unlocked = await run(tenantA, (tx) =>
+        creativeService.operations.apply(
+          A,
+          batch(docId, current, [{ op: 'setLock', pageId: 'page_1', elementId: ids.bg, locked: false }]),
+          tx,
+        ),
+      );
+      current = unlocked.revision.id;
       const applied = await run(tenantA, (tx) => creativeService.operations.apply(A, apply(), tx));
       expect(applied.revision.snapshot.templateVersionId).toBe(templateVersionId);
       const elements = applied.revision.snapshot.pages[0]!.elements;
@@ -1311,13 +1323,17 @@ describe('creative module (spec 11) against MySQL 8', () => {
         ],
       });
       await expect(
-        run(tenantA, (tx) =>
-          creativeService.operations.propose(agentA, { ...bindings({}), origin: 'agent' }, tx, AGENT_OPTS),
-        ),
+        run(tenantA, (tx) => creativeService.operations.propose(A, bindings({}), tx)),
       ).rejects.toMatchObject({
         code: 'VALIDATION_FAILED',
         details: [{ path: 'operations.0.slotBindings.headline', issue: 'slot_unbound' }],
       });
+      // STU-1a: the page holds a locked background, so an agent may not replace the page at all.
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.operations.propose(agentA, { ...bindings({}), origin: 'agent' }, tx, AGENT_OPTS),
+        ),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'element_locked' });
       expect((await revisionsOf(docId)).length).toBe(before2);
     });
   });

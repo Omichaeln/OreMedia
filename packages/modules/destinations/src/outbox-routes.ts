@@ -13,7 +13,8 @@ export const DESTINATION_REVOKE_WORKFLOW_TYPE = 'destinationRevokeWorkflowV1';
 export const destinationRevokeWorkflowId = (destinationId: string, version: number): string =>
   `destination-revoke:${destinationId}:${version}`;
 /** R2-4: an on-demand audit crawls on worker-ingest's `ingest-metrics` queue, one workflow per run row. */
-export const SEO_AUDIT_WORKFLOW_TYPE = 'seoAuditWorkflowV1';
+// v2: v1 could not run (its activity set was an empty spread of proxies); in-flight v1 events have all failed.
+export const SEO_AUDIT_WORKFLOW_TYPE = 'seoAuditWorkflowV2';
 export const seoAuditWorkflowId = (runId: string): string => `seo-audit:${runId}`;
 
 /**
@@ -56,7 +57,7 @@ export function registerDestinationOutboxRoutes(): void {
       args: [input],
     };
   });
-  // destination.audit_requested → seoAuditWorkflowV1 (R2-4): the run row exists; the worker crawls and closes it.
+  // destination.audit_requested → seoAuditWorkflowV2 (R2-4): the run row exists; the worker crawls and closes it.
   registerOutboxRoute('destination.audit_requested', (evt) => {
     const p = evt.payload;
     const input = SeoAuditInputV1.parse({

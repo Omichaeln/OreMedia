@@ -97,6 +97,26 @@ export function describeOp(op: Operation): string {
       return 'added a page';
     case 'createFormatVariant':
       return `created a ${op.formatKey} variant`;
+    case 'groupElements':
+      return `grouped ${op.elementIds.length} elements`;
+    case 'ungroupElement':
+      return 'ungrouped it';
+    case 'setRotation':
+      return `rotated to ${Math.round(op.rotation)}°`;
+    case 'setMask':
+      return op.mask ? `masked it (${op.mask.kind})` : 'removed the mask';
+    case 'removePage':
+      return 'removed the page';
+    case 'duplicatePage':
+      return 'duplicated the page';
+    case 'reorderPage':
+      return `moved the page to position ${op.toIndex + 1}`;
+    case 'setPageLock':
+      return op.locked ? 'locked the page' : 'unlocked the page';
+    case 'alignElements':
+      return `aligned ${op.align} to the ${op.relativeTo}`;
+    case 'distributeElements':
+      return `distributed ${op.axis === 'horizontal' ? 'horizontally' : 'vertically'}`;
   }
 }
 

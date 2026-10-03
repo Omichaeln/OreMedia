@@ -246,6 +246,16 @@ const OPERATION_LABEL: Readonly<Record<string, string>> = {
   addPage: 'Add a page',
   createFormatVariant: 'Create a format variant',
   setLock: 'Lock or unlock an element',
+  groupElements: 'Group elements',
+  ungroupElement: 'Ungroup a group',
+  setRotation: 'Rotate an element',
+  setMask: 'Mask an image',
+  removePage: 'Remove a page',
+  duplicatePage: 'Duplicate a page',
+  reorderPage: 'Reorder a page',
+  setPageLock: 'Lock or unlock a page',
+  alignElements: 'Align elements',
+  distributeElements: 'Distribute elements',
 };
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);

@@ -3,7 +3,12 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NativeConnection, Worker, type WorkerOptions } from '@temporalio/worker';
-import { ScheduleAlreadyRunning, ScheduleOverlapPolicy, type Client } from '@temporalio/client';
+import {
+  ScheduleAlreadyRunning,
+  ScheduleNotFoundError,
+  ScheduleOverlapPolicy,
+  type Client,
+} from '@temporalio/client';
 import {
   createCommentIngestionActivities,
   createDestinationReportActivities,
@@ -16,6 +21,7 @@ import {
   DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
   DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
   SEO_AUDIT_SWEEP_SCHEDULE_ID,
+  SEO_AUDIT_SWEEP_V1_SCHEDULE_ID,
   SEO_AUDIT_SWEEP_WORKFLOW_TYPE,
   createDestinationRuntime,
 } from '@oremedia/module-destinations';
@@ -129,15 +135,30 @@ export async function ensureDestinationReportSweepScheduled(client: Client): Pro
   }
 }
 
+/**
+ * The v1 sweep schedule started seoAuditWorkflowV1 children, which could not run (their activity set was an empty
+ * spread of proxies). It is replaced by the v2 schedule; removing it is idempotent (already gone is fine).
+ */
+async function removeSeoAuditSweepV1Schedule(client: Client): Promise<void> {
+  try {
+    await client.schedule.getHandle(SEO_AUDIT_SWEEP_V1_SCHEDULE_ID).delete();
+    logger().info({ status: SEO_AUDIT_SWEEP_V1_SCHEDULE_ID }, 'schedule removed');
+  } catch (err) {
+    if (err instanceof ScheduleNotFoundError) return;
+    throw err;
+  }
+}
+
 /** Weekly, Mondays 05:00 UTC, after the report sweep (04:00) so the two never share the queue's capacity. */
 export const SEO_AUDIT_SWEEP_CALENDAR = { dayOfWeek: 'MONDAY', hour: 5, minute: 0 } as const;
 
 /**
- * Ledger R2-4: seoAuditSweepWorkflowV1 once a week on `ingest-metrics` (one schedule per namespace, joined if it
+ * Ledger R2-4: seoAuditSweepWorkflowV2 once a week on `ingest-metrics` (one schedule per namespace, joined if it
  * exists; as ensureDestinationReportSweepScheduled): every active website destination whose `cms.audit` policy
  * allows reads gets one bounded crawl, overlap skipped.
  */
 export async function ensureSeoAuditSweepScheduled(client: Client): Promise<void> {
+  await removeSeoAuditSweepV1Schedule(client);
   try {
     await client.schedule.create({
       scheduleId: SEO_AUDIT_SWEEP_SCHEDULE_ID,

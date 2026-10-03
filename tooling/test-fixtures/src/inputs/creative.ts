@@ -6,6 +6,10 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
   'creative.documents.create': { buildInput: (f) => ({ brandId: f['brandId'], title: 'Foreign document' }) },
   'creative.documents.get': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
   'creative.documents.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'creative.documents.duplicate': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
+  'creative.documents.rename': {
+    buildInput: (f) => ({ documentId: f['creativeDocumentId'], title: 'Foreign rename' }),
+  },
   'creative.revisions.list': {
     buildInput: (f) => ({ documentId: f['creativeDocumentId'], page: { limit: 50 } }),
   },
@@ -72,7 +76,17 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
       expectedVersion: 0,
     }),
   },
+  'creative.templates.retire': {
+    buildInput: (f) => ({
+      templateId: f['templateId'],
+      templateVersionId: f['templateVersionId'],
+      expectedVersion: 0,
+    }),
+  },
   'creative.templates.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'creative.templates.listCurrent': {
+    buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }),
+  },
   'creative.templates.get': {
     buildInput: (f) => ({ templateId: f['templateId'], templateVersionId: f['templateVersionId'] }),
   },

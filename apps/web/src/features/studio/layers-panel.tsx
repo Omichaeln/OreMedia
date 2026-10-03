@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CreativePage } from '@oremedia/contracts/creative';
+import { toggleSelection } from '@oremedia/editor';
 import { Badge, EmptyState, cn } from '@oremedia/ui';
 import { elementTypeLabel, layerRows } from './document-helpers';
 
@@ -51,7 +52,8 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
       }
     } else if (e.key === ' ') {
       e.preventDefault();
-      if (active) onSelect([active]);
+      // Shift+Space adds the focused layer to the selection (or takes it out): the keyboard path to multi-select.
+      if (active) onSelect(e.shiftKey ? toggleSelection(selection, active) : [active]);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (active) {
@@ -65,7 +67,7 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
     return (
       <EmptyState
         title="No elements on this page"
-        description="Insert an image from the assets tab or apply a template."
+        description="Insert text or a shape from the toolbar, an image from the assets tab, or apply a template."
         className="m-3"
       />
     );
@@ -74,6 +76,7 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
     <ul
       ref={listRef}
       role="listbox"
+      aria-multiselectable="true"
       aria-label={`Layers of ${page.name}, front to back`}
       className="flex flex-col p-1"
       onKeyDown={onKeyDown}
@@ -94,7 +97,9 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
             aria-label={`${el.name}, ${elementTypeLabel[el.type]}${status ? `, ${status}` : ''}`}
             data-element-id={el.id}
             tabIndex={active === el.id ? 0 : -1}
-            onClick={() => onSelect([el.id])}
+            onClick={(e) =>
+              onSelect(e.shiftKey || e.metaKey || e.ctrlKey ? toggleSelection(selection, el.id) : [el.id])
+            }
             onFocus={() => setActive(el.id)}
             className={cn(
               'flex cursor-default items-center gap-1 rounded-md px-1.5 py-1 text-sm outline-none',

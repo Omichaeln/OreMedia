@@ -7,6 +7,11 @@ export {
   changedElementIds,
   allElementIds,
   findElement,
+  isLockedDeep,
+  isLockedInContext,
+  findWithAncestors,
+  footprintOf,
+  boundsOf,
   OperationError,
   SlotConstraintError,
   validateSlotBindings,
@@ -14,7 +19,7 @@ export {
   type SlotFinding,
   type TemplateDocument,
 } from './reduce';
-export { guardProtected, guardLogoInsertion } from './guard';
+export { guardProtected, guardLocks, guardLogoInsertion } from './guard';
 export { fontFaceDescriptors } from './renderer/scene';
 export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
@@ -27,9 +32,23 @@ export {
   nudgeIntent,
   resizeIntent,
   transformIntent,
+  frameTransformIntent,
+  marqueeSelection,
+  toggleSelection,
   formatForPage,
   fitScale,
   type IntentBatch,
   type KonvaAdapterOptions,
   type KonvaEditorHandle,
 } from './konva-adapter';
+export {
+  STARTERS,
+  starterByKey,
+  instantiateStarter,
+  starterBrandIssue,
+  blankDocument,
+  type StarterSpec,
+  type StarterBrand,
+  type StarterSlot,
+  type InstantiatedStarter,
+} from './starters';

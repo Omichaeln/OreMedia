@@ -10,16 +10,24 @@ import {
   CommentList,
   CommentResolve,
   DocumentCreate,
+  DocumentDuplicate,
   DocumentGet,
   DocumentList,
+  DocumentRename,
   OperationsApply,
   OperationsPropose,
   RenderGet,
   RenderRequest,
   RevisionGet,
   RevisionList,
+  TemplateApprove,
+  TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
+  TemplateRetire,
+  TemplateVersionCreate,
+  type TemplateSlot,
   type Operation,
   type OperationBatch,
 } from '@oremedia/contracts/creative';
@@ -86,7 +94,13 @@ import {
   ValidationFailedError,
   type ErrorEnvelope,
 } from '@oremedia/contracts/errors';
-import { applyBatch, changedElementIds, guardProtected, validateAgainstBrand } from '@oremedia/editor';
+import {
+  applyBatch,
+  changedElementIds,
+  guardLocks,
+  guardProtected,
+  validateAgainstBrand,
+} from '@oremedia/editor';
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
 import { providerActivationState, type ProviderActivationV1 } from '@oremedia/contracts/providers';
@@ -328,6 +342,29 @@ interface Doc {
   updatedAt: string;
   version: number;
   revisions: Rev[];
+}
+/** STU-1a: brand templates as the creative module keeps them (template + numbered versions). */
+interface MockTemplateVersion {
+  id: string;
+  templateId: string;
+  number: number;
+  slots: TemplateSlot[];
+  constraints: Record<string, unknown>;
+  formats: string[];
+  document: CreativeDocumentV1;
+  contentHash: string;
+  state: 'draft' | 'approved' | 'retired';
+  createdAt: string;
+}
+interface MockTemplate {
+  id: string;
+  name: string;
+  currentVersionId: string | null;
+  state: 'draft' | 'active' | 'retired';
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+  versions: MockTemplateVersion[];
 }
 interface Comment {
   id: string;
@@ -821,6 +858,48 @@ export class MockBackend {
   /** Procedure paths answered after a delay (ms), to observe loading states. */
   readonly delays = new Map<string, number>();
   readonly docs = new Map<string, Doc>();
+  /** STU-1a: the brand's templates; seeded with one approved template on the fixture document. */
+  readonly templates: MockTemplate[] = [
+    {
+      id: 'tpl_e2e',
+      name: 'Promo template',
+      currentVersionId: 'tv_e2e',
+      state: 'active',
+      createdAt: now(),
+      updatedAt: now(),
+      version: 1,
+      versions: [
+        {
+          id: 'tv_e2e',
+          templateId: 'tpl_e2e',
+          number: 1,
+          slots: [
+            {
+              key: 'headline',
+              elementId: ids.headline,
+              kind: 'text',
+              required: true,
+              replaceable: true,
+              constraints: {},
+            },
+          ],
+          constraints: {},
+          formats: ['square_1080'],
+          document: { ...fixtureDocument(), contentType: 'social_post' },
+          contentHash: hash('tv'),
+          state: 'approved',
+          createdAt: now(),
+        },
+      ],
+    },
+  ];
+  /** STU-1a: create calls received (tests read the source and content type the gallery sent). */
+  readonly creates: Array<z.infer<typeof DocumentCreate>> = [];
+  template(templateId: string): MockTemplate {
+    const t = this.templates.find((x) => x.id === templateId);
+    if (!t) throw new NotFoundError('Template', templateId);
+    return t;
+  }
   readonly comments: Comment[] = [];
   readonly jobs = new Map<string, RenderJob>();
   readonly replays = new Map<string, unknown>();
@@ -1049,6 +1128,7 @@ export class MockBackend {
     let next = base.snapshot;
     batch.operations.forEach((op, index) => {
       guardProtected(next, op, batch.origin);
+      guardLocks(next, op, batch.origin);
       try {
         next = applyBatch(next, { operations: [op] });
       } catch (err) {
@@ -2391,7 +2471,19 @@ export function createMockRouter(backend: MockBackend) {
             height: a.file?.height ?? null,
           }));
         const onlyLogos = purpose === 'logo' || (kinds !== undefined && kinds.every((k) => k === 'logo'));
-        return { items: onlyLogos && logos.length ? logos : [photo, ...logos], nextCursor: null };
+        const generated = {
+          ...photo,
+          assetId: 'ast_generated',
+          assetVersionId: 'av_generated',
+          altText: 'Generated scene',
+        };
+        return {
+          items:
+            onlyLogos && logos.length
+              ? logos
+              : [photo, ...(purpose === 'creative' ? [generated] : []), ...logos],
+          nextCursor: null,
+        };
       }),
       /** Every asset of the brand with its issues (spec 21.2), filtered as assets.list is. */
       list: query.input(AssetList).query(({ input }) => {
@@ -2629,13 +2721,15 @@ export function createMockRouter(backend: MockBackend) {
                   expiresAt: new Date(Date.now() + 300_000),
                   mime: 'image/png',
                 };
-          if (input.assetVersionId !== 'av_photo')
+          if (input.assetVersionId !== 'av_photo' && input.assetVersionId !== 'av_generated')
             throw new NotFoundError('AssetVersion', input.assetVersionId);
           // A signed GET on the store (an https address in production): the renderer keeps http(s) sources only.
           return {
-            url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}.png`,
+            url: `${backend.objectStoreOrigin}/e2e-object/av_photo.png`,
             expiresAt: new Date(Date.now() + 300_000),
             mime: 'image/png',
+            // STU-1a: the provenance kind lets the studio label generated raster images.
+            origin: input.assetVersionId === 'av_generated' ? ('generated' as const) : ('upload' as const),
           };
         }),
         /** BSC-2: a file to save; the fake store answers it as an attachment (static-server ?download=). */
@@ -2663,7 +2757,24 @@ export function createMockRouter(backend: MockBackend) {
     creative: t.router({
       documents: t.router({
         create: mutation.input(DocumentCreate).mutation(({ input }) => {
-          const doc = backend.createDocument(input.title, input.document);
+          backend.creates.push(input);
+          let initial = input.document;
+          if (input.source?.kind === 'template') {
+            const source = input.source;
+            const tv = backend
+              .template(source.templateId)
+              .versions.find((v) => v.id === source.templateVersionId);
+            if (!tv) throw new NotFoundError('TemplateVersion', source.templateVersionId);
+            if (tv.state !== 'approved')
+              throw new ValidationFailedError([
+                { path: 'source.templateVersionId', issue: 'template_version_not_approved' },
+              ]);
+            initial = { ...structuredClone(tv.document), templateVersionId: tv.id };
+          }
+          const document = initial
+            ? { ...initial, ...(input.contentType ? { contentType: input.contentType } : {}) }
+            : undefined;
+          const doc = backend.createDocument(input.title, document);
           const head = backend.head(doc.id);
           return {
             documentId: doc.id,
@@ -2673,6 +2784,29 @@ export function createMockRouter(backend: MockBackend) {
             contentHash: head.contentHash,
             findings: [],
           };
+        }),
+        duplicate: mutation.input(DocumentDuplicate).mutation(({ input }) => {
+          const source = backend.doc(input.documentId);
+          const doc = backend.createDocument(
+            input.title ?? `${source.title} (copy)`,
+            structuredClone(backend.head(source.id).snapshot),
+          );
+          const head = backend.head(doc.id);
+          return {
+            documentId: doc.id,
+            revisionId: head.id,
+            number: 1,
+            version: 1,
+            contentHash: head.contentHash,
+            findings: [],
+          };
+        }),
+        rename: mutation.input(DocumentRename).mutation(({ input }) => {
+          const doc = backend.doc(input.documentId);
+          doc.title = input.title;
+          doc.version += 1;
+          doc.updatedAt = now();
+          return { documentId: doc.id, title: doc.title, version: doc.version };
         }),
         get: query.input(DocumentGet).query(({ input }) => {
           const { revisions: _r, ...doc } = backend.doc(input.documentId);
@@ -2806,43 +2940,103 @@ export function createMockRouter(backend: MockBackend) {
       }),
       templates: t.router({
         list: query.input(TemplateList).query(() => ({
-          items: [
-            {
-              id: 'tpl_e2e',
-              brandId: backend.brandId,
-              name: 'Promo template',
-              currentVersionId: 'tv_e2e',
-              state: 'active' as const,
-              createdAt: now(),
-              updatedAt: now(),
-              version: 1,
-            },
-          ],
+          items: backend.templates.map(({ versions: _v, ...t }) => ({ ...t, brandId: backend.brandId })),
           nextCursor: null,
         })),
-        get: query.input(TemplateGet).query(() => ({
-          id: 'tpl_e2e',
-          brandId: backend.brandId,
-          name: 'Promo template',
-          currentVersionId: 'tv_e2e',
-          state: 'active' as const,
-          createdAt: now(),
-          updatedAt: now(),
-          version: 1,
-          versions: [],
-          selectedVersion: {
-            id: 'tv_e2e',
-            templateId: 'tpl_e2e',
-            number: 1,
-            slots: [{ key: 'headline', elementId: ids.headline, kind: 'text', required: true }],
-            constraints: {},
-            formats: ['square_1080'],
-            document: fixtureDocument(),
-            contentHash: hash('tv'),
-            state: 'approved' as const,
-            createdAt: now(),
-          },
+        listCurrent: query.input(TemplateListCurrent).query(() => ({
+          items: backend.templates.flatMap(({ versions, ...t }) => {
+            const current = versions.find((v) => v.id === t.currentVersionId && v.state === 'approved');
+            return t.state === 'active' && current
+              ? [{ ...t, brandId: backend.brandId, currentVersion: current }]
+              : [];
+          }),
+          nextCursor: null,
         })),
+        get: query.input(TemplateGet).query(({ input }) => {
+          const { versions, ...t } = backend.template(input.templateId);
+          const selectedId = input.templateVersionId ?? t.currentVersionId;
+          const selected = versions.find((v) => v.id === selectedId) ?? null;
+          return {
+            ...t,
+            brandId: backend.brandId,
+            versions: [...versions].reverse().map(({ document: _d, ...v }) => v),
+            selectedVersion: selected,
+          };
+        }),
+        create: mutation.input(TemplateCreate).mutation(({ input }) => {
+          const id = rid('tpl');
+          backend.templates.push({
+            id,
+            name: input.name,
+            currentVersionId: null,
+            state: 'draft',
+            createdAt: now(),
+            updatedAt: now(),
+            version: 0,
+            versions: [],
+          });
+          return { templateId: id, state: 'draft' as const, version: 0 };
+        }),
+        createVersion: mutation.input(TemplateVersionCreate).mutation(({ input }) => {
+          const t = backend.template(input.templateId);
+          const v: MockTemplateVersion = {
+            id: rid('tv'),
+            templateId: t.id,
+            number: t.versions.length + 1,
+            slots: input.slots,
+            constraints: input.constraints,
+            formats: input.formats,
+            document: input.document,
+            contentHash: hash(input.document),
+            state: 'draft',
+            createdAt: now(),
+          };
+          t.versions.push(v);
+          return {
+            templateVersionId: v.id,
+            number: v.number,
+            state: 'draft' as const,
+            contentHash: v.contentHash,
+          };
+        }),
+        approve: mutation.input(TemplateApprove).mutation(({ input }) => {
+          const t = backend.template(input.templateId);
+          const v = t.versions.find((x) => x.id === input.templateVersionId);
+          if (!v) throw new NotFoundError('TemplateVersion', input.templateVersionId);
+          if (t.version !== input.expectedVersion)
+            throw new ConflictError('Template', t.id, input.expectedVersion);
+          v.state = 'approved';
+          t.currentVersionId = v.id;
+          t.state = 'active';
+          t.version += 1;
+          return {
+            templateId: t.id,
+            templateVersionId: v.id,
+            state: v.state,
+            templateState: t.state,
+            version: t.version,
+          };
+        }),
+        retire: mutation.input(TemplateRetire).mutation(({ input }) => {
+          const t = backend.template(input.templateId);
+          if (t.version !== input.expectedVersion)
+            throw new ConflictError('Template', t.id, input.expectedVersion);
+          const retiring = input.templateVersionId
+            ? t.versions.filter((v) => v.id === input.templateVersionId)
+            : t.versions;
+          for (const v of retiring) v.state = 'retired';
+          if (!input.templateVersionId) t.state = 'retired';
+          else if (t.currentVersionId === input.templateVersionId)
+            t.currentVersionId = [...t.versions].reverse().find((v) => v.state === 'approved')?.id ?? null;
+          t.version += 1;
+          return {
+            templateId: t.id,
+            templateVersionId: input.templateVersionId ?? null,
+            templateState: t.state,
+            currentVersionId: t.currentVersionId,
+            version: t.version,
+          };
+        }),
       }),
     }),
   });
