@@ -52,7 +52,12 @@ export interface SignedDownloadOptions {
 /** RFC 6266 attachment header: an ASCII fallback name and the UTF-8 name. */
 export function attachmentDisposition(filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+  // RFC 5987 attr-char excludes ' ( ) * which encodeURIComponent leaves as they are.
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 export interface StorageProvider {

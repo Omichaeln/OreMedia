@@ -55,6 +55,7 @@ import { newId } from '@oremedia/domain/ids';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
+import { logger } from '@oremedia/observability';
 import { compatibleKinds, evaluateEligibility, rightsExpiryThreshold, rightsRequired } from './eligibility';
 import { fontFileIdentity, groupFontFaces, isFaceFile, type FontFileRow } from './fonts';
 import { fetchGoogleFontFiles, type GoogleFontFile } from './google-fonts';
@@ -208,6 +209,9 @@ async function pngRendition(
   width: number | null,
   tx?: Tx,
 ): Promise<StoredRendition | null> {
+  if (!tx) return withTransaction((t) => pngRendition(v, width, t));
+  // Concurrent requests for the same rendition wait here, then find the row the first one recorded.
+  await versionsRepo.lockInTenant(v.id, tx);
   const purpose = width ? `png-${width}` : 'png';
   const existing = await derivativesRepo.find(v.id, purpose, tx);
   if (existing)
@@ -1035,7 +1039,12 @@ export const assetService = {
       if (png) {
         source = png;
         which = 'png';
-      }
+      } else
+        // The original is released as it is; a raster-only destination then refuses it (article_image_not_raster).
+        logger().warn(
+          { assetVersionId: v.id, brandId: v.brandId },
+          'svg could not be drawn as a png rendition for a raster-only destination',
+        );
     } else if (which !== 'original') {
       const d = await derivativesRepo.find(v.id, which, tx);
       if (!d) throw new NotFoundError('AssetDerivative', `${v.id}/${which}`);

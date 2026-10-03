@@ -202,12 +202,32 @@ const SVG_URI_ATTRS = new Set(['href', 'xlink:href', 'src', 'xml:base', 'action'
  * `<image>` are still admitted by DOMPurify's own data-URI rule for image tags. The xlink namespace declaration
  * is the one absolute URL a design file legitimately carries.
  */
-const SVG_ALLOWED_URI = /^(?:#|[^a-z/]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\.w3\.org\/1999\/xlink$)/i;
-const EXTERNAL_STYLE_REF = /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+const SVG_ALLOWED_URI = /^(?:#|[^a-z/\\]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\.w3\.org\/1999\/xlink$)/i;
+/**
+ * External loads from CSS, tested on the cleaned file after CSS comments are removed and CSS escapes decoded (so
+ * `\75rl(\68ttp://…)` and `@\69mport` are seen for what they are): url() with a scheme, `//` or a backslash, an
+ * image-set() string with a scheme other than data:image or a `//` prefix, and @import.
+ */
+const EXTERNAL_STYLE_REF =
+  /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\\)|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+
+/** The text as CSS reads it: comments removed, escapes (`\68`, `\h`) decoded. Used only to test, never stored. */
+export function cssReadable(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\\(?:([0-9a-f]{1,6})\s?|([\s\S]))/gi, (_m, hex: string | undefined, ch: string | undefined) => {
+      if (hex === undefined) return ch ?? '';
+      const code = parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd';
+    });
+}
+
+/** SMIL elements that can rewrite a link's target at run time (`<set attributeName="href" to="javascript:…">`). */
+const SVG_ANIMATION_TAGS = new Set(['animate', 'set', 'animatemotion', 'animatetransform']);
 
 /** Shape of DOMPurify.removed entries (jsdom nodes); typed structurally because the lib has no DOM types. */
 type Removed = {
-  element?: { nodeName: string } | null;
+  element?: { nodeName: string; getAttribute?: (name: string) => string | null } | null;
   attribute?: { name: string; value: string | null } | null;
   from?: { nodeName: string } | null;
 };
@@ -239,6 +259,18 @@ function unsafeRemovals(removed: Removed[]): Array<{ reason: IngestRejectionReas
   for (const r of removed) {
     if (r.element) {
       const tag = r.element.nodeName.toLowerCase();
+      // A script under any prefix (`<x:script>` bound to the SVG namespace) is still a script.
+      const local = tag.slice(tag.lastIndexOf(':') + 1);
+      if (local === 'script' && tag !== 'script') {
+        unsafe.push({ reason: 'svg_script', finding: `element:${tag}` });
+        continue;
+      }
+      if (SVG_ANIMATION_TAGS.has(local)) {
+        const target = (r.element.getAttribute?.('attributeName') ?? '').trim().toLowerCase();
+        if (target === 'href' || target === 'xlink:href')
+          unsafe.push({ reason: 'svg_script', finding: `animation:${local}:${target}` });
+        continue; // other animations are dropped (a logo is static); metadata and editor namespaces likewise
+      }
       if (!SVG_UNSAFE_TAGS.has(tag)) continue;
       const reason: IngestRejectionReason =
         tag === 'script'
@@ -292,7 +324,7 @@ async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<Ingest
   });
   const removed = [...(DOMPurify.removed as Removed[])];
   const unsafe = unsafeRemovals(removed);
-  if (EXTERNAL_STYLE_REF.test(clean))
+  if (EXTERNAL_STYLE_REF.test(cssReadable(clean)))
     unsafe.push({ reason: 'svg_external_reference', finding: 'style:external_url' });
   if (EMBEDDED_DATA_URI.test(clean))
     unsafe.push({ reason: 'svg_embedded_content', finding: 'data_uri:not_image' });

@@ -53,6 +53,11 @@ const SAFE: Array<{ name: string; file: string; keeps: string[] }> = [
     keeps: ['viewBox="0 0 300 100"'],
   },
   {
+    name: 'editor metadata (Inkscape, Sodipodi, RDF) and a harmless colour animation, dropped silently',
+    file: `<svg ${NS} xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="200" height="80"><metadata><rdf:RDF/></metadata><sodipodi:namedview inkscape:zoom="1"/><rect width="200" height="80" fill="#123"><animate attributeName="fill" values="#123;#456" dur="1s"/></rect></svg>`,
+    keeps: ['<rect width="200" height="80" fill="#123"'],
+  },
+  {
     name: 'an embedded PNG raster (data:image/png)',
     file: svg(`<image width="20" height="20" href="data:image/png;base64,${PNG_1PX}"/>`),
     keeps: ['data:image/png;base64,'],
@@ -128,6 +133,67 @@ const UNSAFE: Array<{ name: string; file: string; reason: IngestRejectionReason 
     name: 'a DOCTYPE with an external DTD',
     file: `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">${svg('<rect width="9" height="9"/>')}`,
     reason: 'svg_entity_declaration',
+  },
+  // Review hardening: bypasses through backslashes, CSS escapes, image-set, namespaced scripts and SMIL.
+  {
+    name: 'a backslash-prefixed href (\\host)',
+    file: svg('<image width="20" height="20" href="\\\\evil.example/a.png"/>'),
+    reason: 'svg_remote_image',
+  },
+  {
+    name: 'an escaped-slash href (\\/host)',
+    file: svg('<use href="\\/evil.example/a.svg#x"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a CSS-escaped scheme in url() in a style attribute',
+    file: svg('<rect width="9" height="9" style="fill:url(\\68ttp://evil.example/x)"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a CSS-escaped url( function in a <style> block',
+    file: svg('<style>.a{fill:\\75rl(http://evil.example/x)}</style><rect class="a" width="9" height="9"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a CSS-escaped @import',
+    file: svg('<style>@\\69mport "http://evil.example/a.css";</style><rect width="9" height="9"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a comment inside url( in a <style> block',
+    file: svg(
+      '<style>.a{fill:url(/**/"https://evil.example/x")}</style><rect class="a" width="9" height="9"/>',
+    ),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'image-set() naming a remote image',
+    file: svg(
+      '<style>.a{background-image:image-set("https://evil.example/x.png" 1x)}</style><rect class="a" width="9" height="9"/>',
+    ),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a script element under another prefix bound to the SVG namespace',
+    file: svg(
+      '<x:script xmlns:x="http://www.w3.org/2000/svg">alert(1)</x:script><rect width="9" height="9"/>',
+    ),
+    reason: 'svg_script',
+  },
+  {
+    name: 'a <set> rewriting a link to javascript:',
+    file: svg(
+      '<a href="#a"><set attributeName="href" to="javascript:alert(1)"/><rect width="9" height="9"/></a>',
+    ),
+    reason: 'svg_script',
+  },
+  {
+    name: 'an <animate> of xlink:href',
+    file: svg(
+      '<a xlink:href="#a"><animate attributeName="xlink:href" values="javascript:alert(1)"/><rect width="9" height="9"/></a>',
+    ),
+    reason: 'svg_script',
   },
   {
     name: 'huge declared dimensions',

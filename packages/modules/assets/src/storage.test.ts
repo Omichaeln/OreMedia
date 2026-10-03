@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PolicyDeniedError, TenantContextMissingError } from '@oremedia/contracts/errors';
 import { runInTenant, type TenantContext } from '@oremedia/db';
 import {
+  attachmentDisposition,
   MemoryStorageProvider,
   S3StorageProvider,
   assertTenantKey,
@@ -159,6 +160,9 @@ describe('createStorageFromEnv (spec 9.1: no local storage in production)', () =
         `attachment; filename="Or_ logo.svg"; filename*=UTF-8''Or%C3%A9%20logo.svg`,
       );
       expect(q.get('response-content-type')).toBe('image/svg+xml');
+      expect(attachmentDisposition("Logo (v2)*'s.svg")).toBe(
+        `attachment; filename="Logo (v2)*'s.svg"; filename*=UTF-8''Logo%20%28v2%29%2A%27s.svg`,
+      );
     });
   });
   it('falls back to memory outside production', () => {
