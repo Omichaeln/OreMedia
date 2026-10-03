@@ -27,8 +27,9 @@ import type { SceneElementMetrics, SceneMetrics } from './metrics';
  *  - text with a strong right-to-left first character is laid out right-to-left;
  *  - images: an explicit crop selects the source region, then `fit` places it (cover keeps aspect and crops towards
  *    the focal point; contain letterboxes; fill stretches). Logos are contain-fitted (renderer 1.1.0, BSC-2): a logo
- *    is never stretched, a box whose aspect differs from the artwork letterboxes it, centred. The logo-distortion
- *    check still measures what was drawn. Before 1.1.0 logos were stretched to their box.
+ *    is never stretched, a box whose aspect differs from the artwork letterboxes it, centred, so logo_distortion
+ *    cannot arise from the box. The drawn rectangle is reported (metrics `drawn`) and the render check measures the
+ *    logo minimum width on it, not on the box. Before 1.1.0 logos were stretched to their box.
  *  - an SVG logo is drawn from its original vector file in both the studio and the export, so both draw the same bytes.
  *  - a missing asset draws a neutral placeholder and reports missingAsset; a font family that is not loaded
  *    renders with the fallback and reports missingFont; an unknown colour token draws black and reports missingColour.
@@ -292,6 +293,12 @@ export function buildScene(layer: Konva.Layer, page: CreativePage, ctx: SceneCon
         flag(el.id, {
           naturalAspect: p.crop.width / p.crop.height,
           renderedAspect: p.dest.width / p.dest.height,
+          drawn: {
+            x: el.transform.x + box.x + p.dest.x,
+            y: el.transform.y + box.y + p.dest.y,
+            width: p.dest.width,
+            height: p.dest.height,
+          },
         });
       }),
     );
