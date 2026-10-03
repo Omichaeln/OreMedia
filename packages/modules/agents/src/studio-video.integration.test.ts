@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import type { z } from 'zod';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import { NotFoundError, StaleRevisionError, ValidationFailedError } from '@oremedia/contracts/errors';
@@ -16,13 +16,14 @@ import type {
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { tenants } from '@oremedia/db/schema/access';
-import { usageLedger } from '@oremedia/db/schema/billing';
+import { budgetReservations, usageLedger } from '@oremedia/db/schema/billing';
 import { approvedFacts, brands } from '@oremedia/db/schema/brand';
 import { creativeRevisions, studioVideoJobs } from '@oremedia/db/schema/creative';
 import { outboxEvents } from '@oremedia/db/schema/operations';
 import { newId } from '@oremedia/domain/ids';
 import {
   FakeModelAdapter,
+  type ModelAdapter,
   RECUT_TOOL,
   STORYBOARD_TOOL,
   modelConfigFromEnv,
@@ -45,6 +46,7 @@ import {
   resetAssetAuthoriser,
   resetVideoAiAssetSource,
   videoAiErrorCode,
+  videoAiJobs,
   videoAiService,
 } from '@oremedia/module-creative';
 import { createStudioVideoRuntime } from './studio-video';
@@ -179,6 +181,22 @@ const WAVEFORMS: Record<string, WaveformV1> = {
     peaks: Array.from({ length: 240 }, (_, i) => (i >= 60 && i < 90 ? 4 : 700)),
   },
 };
+
+const registerEligible = () =>
+  registerVideoAiAssetSource(async () =>
+    ELIGIBLE.map((a) => ({
+      assetVersionId: a.id,
+      kind: a.kind,
+      name: a.name,
+      altText: a.alt,
+      semanticRole: null,
+      durationMs: MEDIA[a.id]?.durationMs ?? null,
+      width: MEDIA[a.id]?.width ?? null,
+      height: MEDIA[a.id]?.height ?? null,
+      hasAudio: MEDIA[a.id]?.hasAudio ?? false,
+      derivatives: MEDIA[a.id]?.derivatives ?? [],
+    })),
+  );
 
 const call = (name: string, input: unknown): FakeModelStep => ({
   kind: 'tool_calls',
@@ -353,20 +371,7 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
       waveforms: async (ids) =>
         Object.fromEntries(ids.flatMap((id) => (WAVEFORMS[id] ? [[id, WAVEFORMS[id]]] : []))),
     });
-    registerVideoAiAssetSource(async () =>
-      ELIGIBLE.map((a) => ({
-        assetVersionId: a.id,
-        kind: a.kind,
-        name: a.name,
-        altText: a.alt,
-        semanticRole: null,
-        durationMs: MEDIA[a.id]?.durationMs ?? null,
-        width: MEDIA[a.id]?.width ?? null,
-        height: MEDIA[a.id]?.height ?? null,
-        hasAudio: MEDIA[a.id]?.hasAudio ?? false,
-        derivatives: MEDIA[a.id]?.derivatives ?? [],
-      })),
-    );
+    registerEligible();
     registerVideoAiCapabilitySource(async () => ({
       videoGeneration: { available: true, costMicrosPerSecond: 100_000 },
       speechGeneration: { available: false, reason: 'Speech generation is turned off for this company' },
@@ -471,7 +476,7 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     const ledger = await tdb.db
       .select()
       .from(usageLedger)
-      .where(eq(usageLedger.sourceRef, `svj:${job.id}:1:model`));
+      .where(like(usageLedger.sourceRef, `svj:${job.id}:1:model:%`));
     expect(ledger).toHaveLength(1);
     expect(job.costSpentMicros).toBeGreaterThan(0);
   });
@@ -533,13 +538,13 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
       .select()
       .from(creativeRevisions)
       .where(eq(creativeRevisions.id, applied.revision.id));
-    expect(row?.authorKind).toBe('user');
+    expect(row?.authorKind).toBe('agent'); // model-planned: held to the agent guards, committed by the person
     expect(row?.generationInputs).toMatchObject({
       jobId: job.id,
       kind: 'assembly',
       assetVersionIds: expect.arrayContaining(['av_intro', 'av_demo', 'av_music']),
       factIds: [factInForce],
-      modelCallRefs: [`svj:${job.id}:1:model`],
+      modelCallRefs: [expect.stringMatching(new RegExp(`^svj:${job.id}:1:model:`))],
     });
 
     // Assembling again over the assembled video is a proposal; keep only the captions group.
@@ -641,6 +646,8 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     );
     if (!assembled.applied) throw new Error('expected apply');
     return {
+      jobId: job.id,
+      storyboard: job.result!.storyboard!,
       documentId: v.documentId,
       revision: assembled.revision,
       project: assembled.revision.snapshot as VideoProjectV1,
@@ -780,6 +787,237 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     });
     const [row] = await tdb.db.select().from(creativeRevisions).where(eq(creativeRevisions.id, vertical.id));
     expect(row?.generationInputs).toMatchObject({ kind: 'vertical_version', jobId: job.id });
+  });
+
+  const inputOf = (job: { id: string; attempt: number }): StudioVideoJobInputV1 => ({
+    tenantId: tenantA,
+    actor: { kind: 'user', id: USER },
+    correlationId: 'corr_stu3',
+    jobId: job.id,
+    attempt: job.attempt,
+  });
+  const jobRow = async (jobId: string) =>
+    (await tdb.db.select().from(studioVideoJobs).where(eq(studioVideoJobs.id, jobId)))[0]!;
+  const reservationOf = async (runId: string | null) =>
+    (
+      await tdb.db
+        .select()
+        .from(budgetReservations)
+        .where(eq(budgetReservations.runId, runId ?? ''))
+    )[0];
+
+  it('scopes the idempotent start to the requester and to live jobs: another person or a finished job starts anew', async () => {
+    const v = await newVideo('Live key');
+    const request = { kind: 'storyboard' as const, brief: { objective: 'Scoped' } };
+    const mine = await start(v.documentId, v.revisionId, request);
+    const other = { ...A, id: 'usr_stu3_other', membershipId: 'mem_stu3_other' };
+    const theirs = await run(tenantA, (tx) =>
+      videoAiService.start(other, { documentId: v.documentId, baseRevisionId: v.revisionId, request }, tx),
+    );
+    expect(theirs.id).not.toBe(mine.id); // another person never joins (or can cancel) my job by asking the same
+    const cancelled = await run(tenantA, (tx) =>
+      videoAiService.cancel(A, { jobId: mine.id, expectedVersion: mine.version }, tx),
+    );
+    expect((await jobRow(cancelled.id)).liveKey).toBeNull();
+    const again = await start(v.documentId, v.revisionId, request);
+    expect(again.id).not.toBe(mine.id); // a finished job is not returned for a fresh request
+    expect(again.state).toBe('queued');
+    expect(await start(v.documentId, v.revisionId, request)).toMatchObject({ id: again.id });
+  });
+
+  it('a late settle of a superseded attempt never touches the retry’s reservation; retry released the old one', async () => {
+    const v = await newVideo('Late settle');
+    const job = await start(v.documentId, v.revisionId, { kind: 'storyboard', brief: { objective: 'Late' } });
+    const { runtime } = runtimeWith([call(STORYBOARD_TOOL, storyboardAnswer())]);
+    const first = inputOf(job);
+    await inTenant(tenantA, async () => {
+      await runtime.begin(first);
+      await runtime.reserve(first);
+      await runtime.fail(first, 'model_failed', 'provider down'); // settle of attempt 1 has not run yet
+    });
+    const firstRunId = (await jobRow(job.id)).budgetRunId;
+    expect((await reservationOf(firstRunId))?.state).toBe('held');
+    const failed = await getJob(job.id);
+    const retried = await run(tenantA, (tx) =>
+      videoAiService.retry(A, { jobId: job.id, expectedVersion: failed.version }, tx),
+    );
+    expect((await reservationOf(firstRunId))?.state).toBe('released');
+    const second = inputOf(retried);
+    await inTenant(tenantA, async () => {
+      await runtime.begin(second);
+      await runtime.reserve(second);
+    });
+    const secondRow = await jobRow(job.id);
+    expect(secondRow.budgetRunId).not.toBe(firstRunId);
+    // Attempt 1's activities finish late: settle, spend and its reservation lookup are no-ops for attempt 2.
+    await inTenant(tenantA, async () => {
+      await runtime.settle(first);
+      await videoAiJobs.addSpend(first, 123_456);
+      expect(await videoAiJobs.reservationIdOf(first)).toBeNull();
+      expect(await videoAiJobs.reservationIdOf(second)).toBe(secondRow.budgetReservationId);
+    });
+    expect((await reservationOf(secondRow.budgetRunId))?.state).toBe('held');
+    expect((await jobRow(job.id)).costSpentMicros).toBe(0);
+    // Attempt 2 carries on to completion on its own reservation.
+    await inTenant(tenantA, async () => {
+      expect((await runtime.callModel(second, A)).proceed).toBe(true);
+      expect((await runtime.save(second, A)).state).toBe('completed');
+      await runtime.settle(second);
+    });
+    expect((await reservationOf(secondRow.budgetRunId))?.state).toBe('settled');
+  });
+
+  it('a cancel while the model call is in flight still ledgers what the call cost', async () => {
+    const v = await newVideo('Cancel in flight');
+    const job = await start(v.documentId, v.revisionId, { kind: 'storyboard', brief: { objective: 'Mid' } });
+    const fake = new FakeModelAdapter([call(STORYBOARD_TOOL, storyboardAnswer())]);
+    const adapter: ModelAdapter = {
+      provider: fake.provider,
+      async complete(req) {
+        const now = await getJob(job.id);
+        await run(tenantA, (tx) =>
+          videoAiService.cancel(A, { jobId: job.id, expectedVersion: now.version }, tx),
+        );
+        return fake.complete(req);
+      },
+    };
+    const runtime = createStudioVideoRuntime({ adapter, modelConfig });
+    expect(await drive(job, runtime)).toBe('stopped');
+    const done = await getJob(job.id);
+    expect(done.state).toBe('cancelled');
+    expect(done.result).toBeNull();
+    expect(done.costSpentMicros).toBeGreaterThan(0); // the cancelled attempt shows what it cost
+    const ledger = await tdb.db
+      .select()
+      .from(usageLedger)
+      .where(like(usageLedger.sourceRef, `svj:${job.id}:1:model:%`));
+    expect(ledger).toHaveLength(1);
+    const reservation = await reservationOf((await jobRow(job.id)).budgetRunId);
+    expect(reservation?.state).toBe('released');
+    expect(reservation?.consumedMicros).toBe(ledger[0]?.costMicros);
+  });
+
+  it('accept checks the storyboard again: a fact revoked or an asset no longer eligible since refuses it', async () => {
+    const v = await assembledVideo('Changed since');
+    const proposed = await run(tenantA, (tx) =>
+      videoAiService.assemble(
+        A,
+        { jobId: v.jobId, baseRevisionId: v.revision.id, storyboard: v.storyboard },
+        tx,
+      ),
+    );
+    if (proposed.applied) throw new Error('expected a proposal');
+    const acceptAll = () =>
+      failure(
+        run(tenantA, (tx) =>
+          videoAiService.accept(
+            A,
+            { jobId: v.jobId, baseRevisionId: v.revision.id, groupIds: ['titles', 'captions'] },
+            tx,
+          ),
+        ),
+      );
+    await tdb.db.update(approvedFacts).set({ state: 'revoked' }).where(eq(approvedFacts.id, factInForce));
+    try {
+      const refused = await acceptAll();
+      expect(refused).toBeInstanceOf(ValidationFailedError);
+      expect(JSON.stringify((refused as ValidationFailedError).details)).toContain(
+        'claim_without_effective_fact',
+      );
+    } finally {
+      await tdb.db.update(approvedFacts).set({ state: 'approved' }).where(eq(approvedFacts.id, factInForce));
+    }
+    registerVideoAiAssetSource(async () =>
+      ELIGIBLE.filter((a) => a.id !== 'av_music').map((a) => ({
+        assetVersionId: a.id,
+        kind: a.kind,
+        name: a.name,
+        altText: a.alt,
+        semanticRole: null,
+        durationMs: MEDIA[a.id]?.durationMs ?? null,
+        width: MEDIA[a.id]?.width ?? null,
+        height: MEDIA[a.id]?.height ?? null,
+        hasAudio: MEDIA[a.id]?.hasAudio ?? false,
+        derivatives: MEDIA[a.id]?.derivatives ?? [],
+      })),
+    );
+    try {
+      const refused = await acceptAll();
+      expect(refused).toBeInstanceOf(ValidationFailedError);
+      expect(JSON.stringify((refused as ValidationFailedError).details)).toContain('asset_not_eligible');
+    } finally {
+      registerEligible();
+    }
+    expect((await head(v.documentId)).id).toBe(v.revision.id); // nothing was written
+  });
+
+  it('never rewrites or removes a protected title when assembling, and commits as the agent', async () => {
+    const v = await assembledVideo('Protected title');
+    const track = v.project.tracks.find((t) => t.kind === 'overlay');
+    const title = track?.items.find((o) => o.element.type === 'text');
+    if (!track || !title) throw new Error('expected a title');
+    const guarded = { ...title, element: { ...title.element, protected: true } };
+    const protectedRev = await run(tenantA, (tx) =>
+      creativeService.videoOperations.apply(
+        A,
+        {
+          documentId: v.documentId,
+          baseRevisionId: v.revision.id,
+          operations: [{ op: 'setOverlay', trackId: track.id, overlay: guarded }],
+          summary: 'protect the title',
+          origin: 'user',
+        },
+        tx,
+      ),
+    );
+    const before = (protectedRev.revision.snapshot as VideoProjectV1).tracks
+      .find((t) => t.id === track.id)
+      ?.items.find((o) => o.id === title.id);
+    const proposed = await run(tenantA, (tx) =>
+      videoAiService.assemble(
+        A,
+        { jobId: v.jobId, baseRevisionId: protectedRev.revision.id, storyboard: v.storyboard },
+        tx,
+      ),
+    );
+    if (proposed.applied) throw new Error('expected a proposal');
+    const touched = proposed.proposal.operations.filter(
+      (o) => ('itemId' in o && o.itemId === title.id) || ('overlay' in o && o.overlay.id === title.id),
+    );
+    expect(touched).toEqual([]);
+    const accepted = await run(tenantA, (tx) =>
+      videoAiService.accept(
+        A,
+        { jobId: v.jobId, baseRevisionId: protectedRev.revision.id, groupIds: ['titles'] },
+        tx,
+      ),
+    );
+    const out = accepted.revision.snapshot as VideoProjectV1;
+    expect(out.tracks.find((t) => t.id === track.id)?.items.find((o) => o.id === title.id)).toEqual(before);
+    const [row] = await tdb.db
+      .select()
+      .from(creativeRevisions)
+      .where(eq(creativeRevisions.id, accepted.revision.id));
+    expect(row?.authorKind).toBe('agent');
+  });
+
+  it('a vertical version beside other actions reframes the original; the other actions stay a proposal', async () => {
+    const v = await assembledVideo('Wide and tight');
+    const { job } = await recut(v.documentId, v.revision.id, {
+      summary: 'Tighter, and a vertical one',
+      actions: [{ kind: 'tighten' }, { kind: 'vertical_version', formatKey: 'video_9x16', focus: [] }],
+      unsupported: [],
+    });
+    expect(job.result?.revisions).toHaveLength(1);
+    expect(job.result?.proposal?.groups.map((g) => g.id)).toEqual(['a1']);
+    expect((await head(v.documentId)).id).toBe(v.revision.id);
+    const vertical = await head(job.result?.revisions[0]?.documentId ?? '');
+    expect(vertical.snapshot.format.key).toBe('video_9x16');
+    // Made from the original: the pause the proposal would cut is still there.
+    expect(vertical.snapshot.durationMs).toBe(v.project.durationMs);
+    expect(vertical.snapshot.tracks.find((t) => t.kind === 'video')?.items.map((c) => c.id)).toEqual(
+      v.project.tracks.find((t) => t.kind === 'video')?.items.map((c) => c.id),
+    );
   });
 
   it('a proposal on a moved document is stale; nothing is lost', async () => {

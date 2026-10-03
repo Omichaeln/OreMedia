@@ -27,6 +27,7 @@ import {
   VideoAiGet,
   VideoAiPreflight,
   VideoAiRetry,
+  VideoAiSaveDraft,
   VideoAiStart,
 } from '@oremedia/contracts/video-ai';
 import { creativeService, videoAiService } from '@oremedia/module-creative';
@@ -148,6 +149,11 @@ export const creativeRouter = router({
       .input(VideoAiRetry)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => videoAiService.retry(ctx.tenant.actor, input, tx)),
+      ),
+    saveDraft: tenantMutation
+      .input(VideoAiSaveDraft)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.saveDraft(ctx.tenant.actor, input, tx)),
       ),
     assemble: tenantMutation
       .input(VideoAiAssemble)

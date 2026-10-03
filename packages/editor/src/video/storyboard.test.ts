@@ -256,7 +256,41 @@ describe('assembly compile', () => {
     const hook = overlays.find((o) => o.id === 'ov_hook_title');
     expect(hook?.element.type === 'text' ? hook.element.text : null).toBe('Cold for a day');
     expect(overlays.some((o) => o.id === 'ov_offer_title')).toBe(false);
-    expect(overlays.find((o) => o.id === 'ov_logo')).toMatchObject({ startMs: 500, endMs: 3_000 });
+    expect(overlays.find((o) => o.id === 'ov_logo')).toMatchObject({ startMs: 0, endMs: 3_000 }); // same length, ends with the video
+  });
+
+  it('treats a protected title like a locked one: never rewritten, never removed (agent guards hold)', () => {
+    const project = instantiateVideoTemplate('promo_vertical_15s', { brandVersionId: 'bv_1', ...bindings });
+    if (!project) throw new Error('template');
+    const track = project.tracks.find((t) => t.kind === 'overlay');
+    if (track?.kind !== 'overlay') throw new Error('template');
+    track.items = track.items.map((o) =>
+      o.id === 'ov_hook_title' || o.id === 'ov_offer_title'
+        ? { ...o, element: { ...o.element, protected: true } }
+        : o,
+    );
+    const before = track.items.filter((o) => o.element.protected && o.element.type === 'text');
+    const { storyboard } = checkModelStoryboard(
+      output({
+        scenes: [
+          {
+            title: 'Hook',
+            onScreenText: 'Cold for a day',
+            templateSceneId: 'scene_hook',
+            shots: [{ description: 'a', assetVersionId: 'av_clip_a', durationMs: 3_000 }],
+          },
+        ],
+      }),
+      checkCtx(),
+    );
+    const result = compileAssembly(project, storyboard, { media: MEDIA, bindings, idPrefix: 'as' });
+    const overlays = result.project.tracks.find((t) => t.kind === 'overlay')?.items ?? [];
+    for (const o of before) expect(overlays.find((x) => x.id === o.id)).toEqual(o);
+    // The new title is its own overlay; nothing the guards refuse was planned.
+    const titles = overlays.filter((o) => o.element.type === 'text' && o.element.text === 'Cold for a day');
+    expect(titles.map((o) => o.id)).not.toContain('ov_hook_title');
+    expect(titles).toHaveLength(1);
+    expect(result.conflicts.filter((c) => c.code === 'protected_element')).toEqual([]);
   });
 
   it('keeps locked clips and reports that the picture could not be assembled over them', () => {

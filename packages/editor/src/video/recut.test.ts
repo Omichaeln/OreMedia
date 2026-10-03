@@ -33,6 +33,8 @@ const ctx = (over: Partial<RecutContext> = {}): RecutContext => ({
   eligibleAssetIds: new Set(['av_clip_a', 'av_clip_b', 'av_still']),
   effectiveFactIds: new Set(['fct_1']),
   scope: null,
+  script: [{ sceneId: 'scene_2', narration: 'It folds flat. It fits any bag you carry.' }],
+  approvedCtas: ['Order today', 'Twice as fast'],
   ...over,
 });
 
@@ -56,6 +58,33 @@ const waveform = (): WaveformV1 => ({
 const withoutMusic = (): Project => {
   const p = fixtureVideoProject();
   p.tracks = p.tracks.filter((t) => t.kind !== 'audio');
+  return p;
+};
+
+/** The fixture with a narration track (a voice over the whole 10 s), locked when asked. */
+const withNarration = (locked = false): Project => {
+  const p = fixtureVideoProject();
+  p.tracks.push({
+    id: 'trk_voice',
+    kind: 'audio',
+    name: 'Narration',
+    locked: false,
+    muted: false,
+    items: [
+      {
+        id: 'aud_voice',
+        assetVersionId: 'av_music',
+        sourceInMs: 0,
+        sourceOutMs: 10_000,
+        startMs: 0,
+        gainDb: 0,
+        fadeInMs: 0,
+        fadeOutMs: 0,
+        muted: false,
+        locked,
+      },
+    ],
+  });
   return p;
 };
 
@@ -170,6 +199,39 @@ describe('silence-trim planner', () => {
     expect(result.conflicts.map((c) => c.code)).toContain('no_waveform');
   });
 
+  it('cuts narration at the same spans as the picture (in sync); the music bed only ends earlier', () => {
+    const project = withNarration();
+    const result = compileRecut(
+      project,
+      [{ kind: 'tighten' }],
+      ctx({ waveforms: { av_clip_a: waveform() } }),
+    );
+    const out = replay(project, result);
+    const voice = out.tracks.find((t) => t.id === 'trk_voice')?.items ?? [];
+    // The pause at 1.15-2.05 s is gone from the voice too: what played at 2.05 s now plays at 1.15 s.
+    expect(voice.map((a) => ('sourceInMs' in a ? [a.startMs, a.sourceInMs, a.sourceOutMs] : null))).toEqual([
+      [0, 0, 1_150],
+      [1_150, 2_050, 10_000],
+    ]);
+    const music = out.tracks.find((t) => t.id === 'trk_music')?.items[0];
+    expect(music).toMatchObject({ startMs: 0, sourceInMs: 0, sourceOutMs: 10_000 - 900 });
+    expect(result.conflicts.map((c) => c.code)).not.toContain('sound_out_of_sync');
+  });
+
+  it('reports narration it may not cut (locked) as out of sync instead of trimming its tail', () => {
+    const project = withNarration(true);
+    const result = compileRecut(
+      project,
+      [{ kind: 'tighten' }],
+      ctx({ waveforms: { av_clip_a: waveform() } }),
+    );
+    const out = replay(project, result);
+    expect(out.tracks.find((t) => t.id === 'trk_voice')?.items).toEqual(
+      project.tracks.find((t) => t.id === 'trk_voice')?.items,
+    );
+    expect(result.conflicts.map((c) => c.code)).toContain('sound_out_of_sync');
+  });
+
   it('leaves a scope that holds no sound alone and says so', () => {
     const project = fixtureVideoProject();
     const result = compileRecut(
@@ -238,10 +300,7 @@ describe('recut compile', () => {
   it('adds captions from the script and a call to action citing an effective fact', () => {
     const project = fixtureVideoProject();
     const actions: RecutAction[] = [
-      {
-        kind: 'add_captions',
-        lines: [{ sceneId: 'scene_2', text: 'It folds flat. It fits any bag you carry.' }],
-      },
+      { kind: 'add_captions', sceneIds: ['scene_2'] },
       { kind: 'add_cta', text: 'Order today', factIds: ['fct_1'] },
     ];
     const result = compileRecut(project, actions, ctx());
@@ -272,6 +331,25 @@ describe('recut compile', () => {
     );
     expect(result.operations).toEqual([]);
     expect(result.conflicts.map((c) => c.code)).toEqual(['required_messaging_missing', 'claim_without_fact']);
+  });
+
+  it('takes caption text from the storyboard script only, and places only an approved call to action', () => {
+    const result = compileRecut(
+      fixtureVideoProject(),
+      [
+        { kind: 'add_captions', sceneIds: ['scene_1'] },
+        { kind: 'add_cta', text: 'Buy now, the best deal in the world', factIds: [] },
+      ],
+      ctx(),
+    );
+    expect(result.operations).toEqual([]);
+    expect(result.conflicts.map((c) => c.code)).toEqual(['required_messaging_missing', 'cta_not_approved']);
+    const none = compileRecut(
+      fixtureVideoProject(),
+      [{ kind: 'add_cta', text: 'Order today', factIds: [] }],
+      ctx({ approvedCtas: [] }),
+    );
+    expect(none.conflicts.map((c) => c.code)).toEqual(['required_messaging_missing']);
   });
 
   it('recompiles only the groups a person kept', () => {
@@ -309,13 +387,63 @@ describe('recut compile', () => {
       frame: { fit: 'fill', focalX: 0.7, focalY: 0.4 },
     });
     expect(() => VideoProjectV1.parse(v?.project)).not.toThrow();
-    expect(result.groups[0]?.changes.some((c) => c.target === 'format')).toBe(true);
+    expect(result.groups).toEqual([]);
+    expect(v?.changes.some((c) => c.target === 'format')).toBe(true);
+  });
+
+  it('reframes the original for a new version even after other actions, which stay a proposal', () => {
+    const wide = fixtureVideoProject();
+    wide.format = { key: 'video_16x9', width: 1920, height: 1080, fps: 30 };
+    const result = compileRecut(
+      wide,
+      [
+        { kind: 'keep_only', itemIds: ['clip_a'] },
+        { kind: 'vertical_version', formatKey: 'video_9x16', focus: [] },
+      ],
+      ctx(),
+    );
+    expect(result.groups.map((g) => g.id)).toEqual(['a1']);
+    expect(result.version?.project.tracks[0]?.items).toHaveLength(3);
+  });
+
+  it('keeps locked items and the logo’s size in a new version', () => {
+    const wide = fixtureVideoProject();
+    wide.format = { key: 'video_16x9', width: 1920, height: 1080, fps: 30 };
+    const v = wide.tracks[0];
+    const o = wide.tracks[1];
+    if (v?.kind !== 'video' || o?.kind !== 'overlay') throw new Error('fixture');
+    v.items[1] = { ...v.items[1], locked: true } as (typeof v.items)[number];
+    o.items.push({
+      id: 'ov_logo',
+      startMs: 8_000,
+      endMs: 10_000,
+      locked: false,
+      element: {
+        id: 'el_01ARZ3NDEKTSV4RRFFQ69G5FAW',
+        name: 'Logo',
+        type: 'logo',
+        locked: false,
+        visible: true,
+        opacity: 1,
+        protected: true,
+        transform: { x: 1500, y: 900, width: 300, height: 150, rotation: 0 },
+        assetVersionId: 'av_logo',
+        variant: 'primary',
+      },
+    });
+    const framed = reframeProject(wide, 'video_9x16');
+    expect(framed.project.tracks[0]?.items[1]).toEqual(v.items[1]);
+    expect(framed.conflicts.map((c) => c.code)).toEqual(['locked_item_kept']);
+    const logo = framed.project.tracks[1]?.items.find((i) => i.id === 'ov_logo');
+    if (!logo || !('element' in logo)) throw new Error('logo');
+    expect(logo.element.transform).toMatchObject({ width: 300, height: 150 });
+    expect(logo.element.transform.y + 150).toBeLessThanOrEqual(1920 - 320);
   });
 
   it('reframes titles into the new safe width', () => {
     const wide = fixtureVideoProject();
     wide.format = { key: 'video_16x9', width: 1920, height: 1080, fps: 30 };
-    const out = reframeProject(wide, 'video_9x16');
+    const out = reframeProject(wide, 'video_9x16').project;
     const title = out.tracks[1]?.items[0];
     if (!title || !('element' in title)) throw new Error('fixture');
     const t = title.element.transform;

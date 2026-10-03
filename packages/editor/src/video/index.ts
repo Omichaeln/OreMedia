@@ -72,6 +72,7 @@ export {
   planDurationFit,
   planSilenceTrim,
   reframeProject,
+  isMusicTrack,
   mergeCuts,
   timeMapper,
   FIT_MIN_CLIP_MS,

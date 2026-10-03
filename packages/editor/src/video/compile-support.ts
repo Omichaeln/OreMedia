@@ -52,6 +52,8 @@ export class WorkingProject {
   project: VideoProjectV1;
   readonly operations: VideoOperation[] = [];
   readonly conflicts: VideoConflict[] = [];
+  /** Operation counts after which the plan may be committed in parts (whole groups, or whole scenes of one). */
+  readonly cutPoints: number[] = [];
   constructor(
     project: VideoProjectV1,
     private readonly ctx: VideoReduceContext,
@@ -83,6 +85,11 @@ export class WorkingProject {
   }
   conflict(c: VideoConflict): void {
     this.conflicts.push(c);
+  }
+  /** Marks the plan so far as a state a part may end on. */
+  mark(): void {
+    const n = this.operations.length;
+    if (n && this.cutPoints[this.cutPoints.length - 1] !== n) this.cutPoints.push(n);
   }
 }
 

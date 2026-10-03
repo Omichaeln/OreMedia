@@ -441,19 +441,13 @@ export class StudioVideoJobRepository extends BrandScopedRepository<typeof studi
       throw new NotFoundError('StudioVideoJob', id);
     return row;
   }
-  /** The job a start with these inputs already made (idempotent start). */
-  async findByInputs(documentId: string, baseRevisionId: string, inputsHash: string, tx?: Tx) {
+  /** The live job a start with this key already made (idempotent start: same requester, base and inputs). */
+  async findLive(documentId: string, liveKey: string, tx?: Tx) {
     const rows = await this.conn(tx)
       .select()
       .from(studioVideoJobs)
       .where(
-        this.scope(
-          and(
-            eq(studioVideoJobs.documentId, documentId),
-            eq(studioVideoJobs.baseRevisionId, baseRevisionId),
-            eq(studioVideoJobs.inputsHash, inputsHash),
-          ),
-        ),
+        this.scope(and(eq(studioVideoJobs.documentId, documentId), eq(studioVideoJobs.liveKey, liveKey))),
       )
       .limit(1);
     return rows[0] ?? null;

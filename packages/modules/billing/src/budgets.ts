@@ -251,6 +251,56 @@ export const budgets = {
     if (exceeded) throw new BudgetExhaustedError('run');
   },
 
+  /**
+   * STU-3: records the cost of a call that has already been made, whatever became of its reservation meanwhile (a
+   * person cancelled and the remainder was released, or the attempt's settle ran first). Incurred cost is never lost:
+   * the ledger entry is appended and counted against the reservation even when it is closed. Returns whether the
+   * reservation was closed or is now exceeded, for the caller to stop; it never throws for either. Idempotent per key.
+   */
+  async consumeIncurred(
+    reservationId: string,
+    brandId: string,
+    kind: typeof usageLedger.$inferInsert.kind,
+    quantity: number,
+    unit: string,
+    costMicros: number,
+    sourceRef: string,
+    idempotencyKey: string,
+  ): Promise<{ closed: boolean; exceeded: boolean }> {
+    return withTransaction(async (tx) => {
+      const r = await reservations.lock(reservationId, tx);
+      const closed = r.state !== 'held';
+      if (await ledger.findByIdempotencyKey(idempotencyKey, tx))
+        return { closed, exceeded: r.consumedMicros > r.reservedMicros };
+      const consumed = r.consumedMicros + costMicros;
+      // A closed reservation keeps reserved = consumed, so the period's committed spend grows by exactly this cost.
+      await reservations.update(
+        r.id,
+        r.version,
+        closed ? { consumedMicros: consumed, reservedMicros: consumed } : { consumedMicros: consumed },
+        tx,
+      );
+      await ledger.append(
+        {
+          id: newId('usageLedger'),
+          brandId,
+          kind,
+          quantity,
+          unit,
+          costMicros,
+          sourceRef,
+          reservationId,
+          periodKey: monthKey(),
+          idempotencyKey,
+        },
+        tx,
+      );
+      const exceeded = !closed && consumed > r.reservedMicros;
+      if (exceeded) count(METRIC.modelSpendDriftMicros, consumed - r.reservedMicros, { scope: 'over' });
+      return { closed, exceeded };
+    });
+  },
+
   /** Settles on completion and releases the remainder. Idempotent. */
   async settle(runId: string): Promise<void> {
     await withTransaction(async (tx) => {

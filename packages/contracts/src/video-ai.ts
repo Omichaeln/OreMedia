@@ -106,6 +106,11 @@ export const RecutRequest = z
     factIds: Ids(20).default([]),
     /** Eligible assets the change may place (e.g. a replacement opening shot). */
     assetVersionIds: Ids(20).default([]),
+    /**
+     * The call to action the person approves, verbatim. A call to action the model adds must be this text or one of
+     * the brand's channel CTA conventions; nothing else is placed.
+     */
+    ctaText: Line(80).optional(),
   })
   .strict();
 export type RecutRequest = z.infer<typeof RecutRequest>;
@@ -298,14 +303,17 @@ export const RecutAction = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('add_captions'),
-      lines: z
-        .array(z.object({ sceneId: VideoId.nullable(), text: z.string().min(1).max(600) }).strict())
-        .max(30),
+      /**
+       * The scenes to caption (null: the whole video). The text is never the model's: the server takes each scene's
+       * script from the document's storyboard.
+       */
+      sceneIds: z.array(VideoId).max(30).nullable(),
     })
     .strict(),
   z
     .object({
       kind: z.literal('add_cta'),
+      /** Must be the person's approved call to action or a brand CTA convention (checked on the server). */
       text: z.string().max(80),
       factIds: z.array(z.string().max(64)).max(5).default([]),
     })
@@ -347,7 +355,7 @@ export type ModelRecutOutput = z.infer<typeof ModelRecutOutput>;
 
 // ---- proposals, diffs and conflicts -------------------------------------------------------------------------
 
-export const TimelineChangeKind = z.enum(['added', 'removed', 'moved', 'trimmed', 'changed']);
+export const TimelineChangeKind = z.enum(['added', 'removed', 'moved', 'trimmed', 'replaced', 'changed']);
 export type TimelineChangeKind = z.infer<typeof TimelineChangeKind>;
 /** One item's change between two projects (scene and duration changes use their own ids). */
 export const TimelineChange = z.object({
@@ -405,6 +413,8 @@ export const VideoAiResult = z.object({
   proposal: VideoProposal.nullable(),
   /** Documents written by the job (a vertical version), each revision 1 of a new document. */
   revisions: z.array(z.object({ documentId: z.string(), revisionId: z.string(), label: z.string() })),
+  /** The person's edits of the storyboard, saved as they work (validated against the schema on every read). */
+  draft: Storyboard.nullable().default(null),
   conflicts: z.array(VideoConflict),
   refused: z.array(RefusedItem),
   findings: z.array(Finding),
@@ -413,25 +423,34 @@ export const VideoAiResult = z.object({
 export type VideoAiResult = z.infer<typeof VideoAiResult>;
 
 /**
- * Principle 8: what produced a revision (creative_revisions.generation_inputs). The request is the brief or recut as
- * the person sent it; the model call reference is the job's ledger key, never a prompt or a model identifier.
+ * Principle 8: what produced a revision (creative_revisions.generation_inputs). The column belongs to STU-1b (#59,
+ * GenerationInputs for graphic documents); this is its video variant: the same field names and types where they
+ * overlap (job, inputs hash, template version, brand version, assets, facts, model call refs, cost, variation,
+ * accepted groups), told apart by `documentKind: 'video'`, with the video request, scope and kinds. The model call
+ * reference is the job's ledger key, never a prompt or a model identifier.
  */
 export const VideoGenerationInputs = z.object({
+  documentKind: z.literal('video'),
   jobId: z.string(),
   kind: z.enum(['assembly', 'recut', 'vertical_version']),
   request: VideoAiRequest,
   inputsHash: z.string(),
+  /** Brand template versions are graphic; a video's built-in starter is `templateKey`. */
+  templateVersionId: z.string().nullable(),
   brandVersionId: z.string(),
-  templateKey: z.string().nullable(),
   scope: VideoAiScope.nullable(),
   assetVersionIds: z.array(z.string()),
   factIds: z.array(z.string()),
   modelCallRefs: z.array(z.string()),
   costMicros: z.number().int().min(0),
+  variation: z.number().int().min(0),
   /** The groups a person kept when accepting a proposal. */
   acceptedGroupIds: z.array(z.string()).optional(),
+  templateKey: z.string().nullable(),
   /** Assembly: the hash of the storyboard as assembled. */
   storyboardHash: z.string().optional(),
+  /** A change committed in parts: this revision's part (1-based) and the number of parts. */
+  part: z.object({ index: z.number().int().min(1), count: z.number().int().min(1) }).optional(),
 });
 export type VideoGenerationInputs = z.infer<typeof VideoGenerationInputs>;
 
@@ -484,6 +503,12 @@ export const VideoAiRetry = z.object({ jobId: z.string(), expectedVersion: z.num
 export const VideoAiAssemble = z.object({
   jobId: z.string(),
   baseRevisionId: z.string(),
+  storyboard: Storyboard,
+});
+/** The person's storyboard edits, saved on the job as they work (the studio reattaches to them). */
+export const VideoAiSaveDraft = z.object({
+  jobId: z.string(),
+  expectedVersion: z.number().int(),
   storyboard: Storyboard,
 });
 /** Accept some or all groups of the job's proposal; recompiled against the base revision, which must be current. */
@@ -566,4 +591,6 @@ export interface VideoVersionPlan {
   formatKey: VideoFormatKey;
   project: VideoProjectV1;
   label: string;
+  /** The new version against the original project. */
+  changes: TimelineChange[];
 }

@@ -4,6 +4,14 @@ import type { VideoAiScope } from '@oremedia/contracts/video-ai';
 import { canonicalJson } from '@oremedia/domain/canonical-json';
 import { findItem, spanOf } from './time';
 
+export interface VideoAgentGuardOptions {
+  /**
+   * STU-3 assembly: the brand's primary logo version (from the published logo rules). A model-planned assembly may
+   * place it, protected, over the last scene as the brand's rules say; any other logo is still refused.
+   */
+  brandLogoAssetVersionId?: string;
+}
+
 /**
  * STU-3: the same protected overlay at another time: element, length and animations unchanged. A recut that
  * shortens the picture keeps the brand's end card on the last seconds this way; the logo itself (asset, placement,
@@ -23,13 +31,22 @@ function isRetime(existing: OverlayItem, next: OverlayItem): boolean {
  * cannot be changed, resized, moved in the frame or removed by an agent (STU-3: they may be retimed, unchanged), and
  * agents cannot add logo overlays (logos are placed from approved assets by a person). People are not limited here.
  */
-export function guardVideoAgent(project: VideoProjectV1, op: VideoOperation, origin: 'user' | 'agent'): void {
+export function guardVideoAgent(
+  project: VideoProjectV1,
+  op: VideoOperation,
+  origin: 'user' | 'agent',
+  opts: VideoAgentGuardOptions = {},
+): void {
   if (origin !== 'agent') return;
   if (op.op === 'setTrackLock' || op.op === 'setItemLock')
     throw new PolicyDeniedError('agent_lock_change', 'Agents cannot lock or unlock tracks or items');
   if (op.op === 'setOverlay' && op.overlay.element.type === 'logo') {
     const existing = findItem(project, op.overlay.id);
-    if (!existing)
+    const brandLogo =
+      opts.brandLogoAssetVersionId !== undefined &&
+      op.overlay.element.assetVersionId === opts.brandLogoAssetVersionId &&
+      op.overlay.element.protected;
+    if (!existing && !brandLogo)
       throw new PolicyDeniedError(
         'agent_logo_insert',
         'Agents cannot add logo overlays; logos are placed from approved assets by a person',
@@ -136,8 +153,9 @@ export function guardVideoAgentScoped(
   op: VideoOperation,
   origin: 'user' | 'agent',
   scope: VideoScopeState | null,
+  opts: VideoAgentGuardOptions = {},
 ): void {
-  guardVideoAgent(project, op, origin);
+  guardVideoAgent(project, op, origin, opts);
   if (origin !== 'agent') return;
   const locked = lockedTarget(project, op);
   if (locked)
@@ -179,8 +197,12 @@ export function guardVideoScopeChange(
   };
   const items = (p: VideoProjectV1) =>
     new Map(p.tracks.flatMap((t) => (t.items as TrackItem[]).map((i) => [i.id, i] as const)));
+  const trackOf = (p: VideoProjectV1) =>
+    new Map(p.tracks.flatMap((t) => (t.items as TrackItem[]).map((i) => [i.id, t.id] as const)));
   const was = items(before);
   const now = items(after);
+  const wasTrack = trackOf(before);
+  const nowTrack = trackOf(after);
   if (op.op === 'splitClip' && scope.ids.has(op.itemId)) scope.ids.add(op.newItemId);
   for (const [id, item] of now) {
     const prev = was.get(id);
@@ -191,7 +213,9 @@ export function guardVideoScopeChange(
       else deny(`It would add ${id}`);
       continue;
     }
-    if (scope.ids.has(id) || canonicalJson(prev) === canonicalJson(item)) continue;
+    if (scope.ids.has(id)) continue;
+    if (wasTrack.get(id) !== nowTrack.get(id)) deny(`It would move ${id} to another track`);
+    if (canonicalJson(prev) === canonicalJson(item)) continue;
     if (!sameExceptTime(prev, item)) deny(`It would change ${id}`);
   }
   for (const id of was.keys()) if (!now.has(id) && !scope.ids.has(id)) deny(`It would remove ${id}`);

@@ -32,7 +32,9 @@ import {
   trackOfKind,
   type VideoCompileContext,
 } from './compile-support';
+import { prohibitedPhrasesIn } from '../validate';
 import { videoTimelineDiff } from './diff';
+import { guardVideoAgentScoped } from './guard';
 import { videoFormatOf } from './overlays';
 import { contentEndMs, lengthOf, sortByStart } from './time';
 
@@ -70,6 +72,8 @@ export interface StoryboardCheckContext {
   alternatives: (kind: GapKind) => GapAlternative[];
   /** Mints scene, shot and gap ids. */
   mint: () => string;
+  /** The brand voice's prohibited phrases: on-screen text and script are checked like any copy. */
+  prohibitedPhrases?: readonly string[];
 }
 
 export const storyboardDurationMs = (s: Pick<Storyboard, 'scenes'>): number =>
@@ -128,6 +132,17 @@ export function checkModelStoryboard(
         continue;
       }
       claims.push({ text: c.text.trim(), factIds: effective });
+    }
+    // On-screen text and script go through the same checks as any copy: no prohibited phrase survives.
+    for (const [field, text] of [
+      ['narration', narration],
+      ['onScreenText', onScreenText],
+    ] as const) {
+      const found = prohibitedPhrasesIn(text, ctx.prohibitedPhrases ?? []);
+      if (!found.length) continue;
+      refused.push({ path: `scenes.${si}.${field}`, reason: 'prohibited_phrase', detail: found.join(', ') });
+      if (field === 'narration') narration = '';
+      else onScreenText = '';
     }
     let missing = false;
     const shots = ms.shots.map((sh, k) => {
@@ -224,10 +239,18 @@ export function checkModelStoryboard(
  */
 export function storyboardProblems(
   storyboard: Storyboard,
-  ctx: Pick<StoryboardCheckContext, 'eligible' | 'effectiveFactIds' | 'brief'>,
+  ctx: Pick<StoryboardCheckContext, 'eligible' | 'effectiveFactIds' | 'brief' | 'prohibitedPhrases'>,
 ): RefusedItem[] {
   const out: RefusedItem[] = [];
   storyboard.scenes.forEach((scene, si) => {
+    for (const [field, text] of [
+      ['narration', scene.narration],
+      ['onScreenText', scene.onScreenText],
+    ] as const) {
+      const found = prohibitedPhrasesIn(text, ctx.prohibitedPhrases ?? []);
+      if (found.length)
+        out.push({ path: `scenes.${si}.${field}`, reason: 'prohibited_phrase', detail: found.join(', ') });
+    }
     scene.claims.forEach((c, ci) => {
       const bad = c.factIds.filter((id) => !ctx.effectiveFactIds.has(id));
       if (bad.length)
@@ -296,6 +319,8 @@ export const PACING_TRANSITIONS: Record<VideoPacing, { kind: 'crossfade' | 'cut'
 export interface AssemblyCompile {
   groups: Array<VideoProposalGroup & { operations: VideoOperation[] }>;
   operations: VideoOperation[];
+  /** Operation counts a part of a large commit may end on (never inside a scene or a group's step). */
+  cutPoints: number[];
   project: VideoProjectV1;
   conflicts: VideoConflict[];
   assetVersionIds: string[];
@@ -318,7 +343,13 @@ export function compileAssembly(
   ctx: VideoCompileContext & { logoMinWidthPx?: number },
   only?: ReadonlySet<string>,
 ): AssemblyCompile {
-  const work = new WorkingProject(project, { media: ctx.media as never, strictMedia: false });
+  // Model-planned: held to the agent guards (locks, protected items), the brand's primary logo excepted.
+  const guardOpts = ctx.bindings.logoAssetVersionId
+    ? { brandLogoAssetVersionId: ctx.bindings.logoAssetVersionId }
+    : {};
+  const work = new WorkingProject(project, { media: ctx.media as never, strictMedia: false }, (before, op) =>
+    guardVideoAgentScoped(before, op, 'agent', null, guardOpts),
+  );
   const mint = idMinter(project, ctx.idPrefix);
   const groups: AssemblyCompile['groups'] = [];
   const assetVersionIds = new Set<string>();
@@ -337,6 +368,7 @@ export function compileAssembly(
     const count = work.operations.length;
     fn(id);
     const operations = work.operations.slice(count);
+    work.mark();
     if (operations.length)
       groups.push({
         id,
@@ -382,7 +414,8 @@ export function compileAssembly(
     const templateTitles = new Map<string, OverlayItem>();
     const original = trackOfKind(project, 'overlay');
     for (const o of original?.items ?? []) {
-      if (o.element.type !== 'text' || o.locked) continue;
+      // A protected title is the person's (like a locked one): never reused for new text, never removed.
+      if (o.element.type !== 'text' || o.locked || o.element.protected) continue;
       const scene = project.scenes.find((s) => o.startMs >= s.startMs && o.endMs <= s.endMs);
       if (scene && !templateTitles.has(scene.id)) templateTitles.set(scene.id, o);
     }
@@ -411,10 +444,11 @@ export function compileAssembly(
       }
       if (reuse) reused.add(reuse.id);
       work.apply({ op: 'setOverlay', trackId: track.id, overlay }, groupId);
+      work.mark();
     }
     // Template titles the storyboard did not fill would show placeholder text: they go.
     for (const o of original?.items ?? [])
-      if (o.element.type === 'text' && !o.locked && !reused.has(o.id))
+      if (o.element.type === 'text' && !o.locked && !o.element.protected && !reused.has(o.id))
         work.apply({ op: 'removeOverlay', trackId: track.id, itemId: o.id }, groupId);
     if (!storyboard.logo) return;
     const last = sceneSpans[sceneSpans.length - 1];
@@ -424,11 +458,27 @@ export function compileAssembly(
     );
     const logoStart = Math.max(last.startMs, total - 2_500);
     if (existing) {
-      if (!existing.locked)
-        work.apply(
-          { op: 'setOverlay', trackId: track.id, overlay: { ...existing, startMs: logoStart, endMs: total } },
+      // The brand's logo keeps its length and look; it only moves to end with the video (an agent may retime it).
+      const length = existing.endMs - existing.startMs;
+      if (existing.locked || length > total) {
+        work.conflict({
+          code: 'logo_kept',
+          message: existing.locked
+            ? 'The logo is locked; it keeps its place'
+            : 'The logo lasts longer than the assembled video; shorten it yourself',
           groupId,
-        );
+          itemIds: [existing.id],
+        });
+        return;
+      }
+      work.apply(
+        {
+          op: 'setOverlay',
+          trackId: track.id,
+          overlay: { ...existing, startMs: total - length, endMs: total },
+        },
+        groupId,
+      );
       return;
     }
     if (!ctx.bindings.logoAssetVersionId) {
@@ -510,9 +560,11 @@ export function compileAssembly(
     }
     for (const c of track.items)
       work.apply({ op: 'removeCaption', trackId: track.id, itemId: c.id }, groupId);
-    for (const { scene, startMs, endMs } of sceneSpans)
+    for (const { scene, startMs, endMs } of sceneSpans) {
       for (const caption of timedCaptions(scene.narration, startMs, endMs, mint))
         work.apply({ op: 'upsertCaption', trackId: track.id, caption }, groupId);
+      work.mark();
+    }
   });
 
   run('music', (groupId) => {
@@ -633,6 +685,7 @@ export function compileAssembly(
         }
       });
       work.apply({ op: 'setScene', scene: { id: mint(), title: scene.title, startMs, endMs } }, groupId);
+      work.mark();
     }
     const floor = Math.max(1_000, total, contentEndMs(work.project));
     if (floor < work.project.durationMs) work.apply({ op: 'setDuration', durationMs: floor }, groupId);
@@ -641,6 +694,7 @@ export function compileAssembly(
   return {
     groups,
     operations: [...work.operations],
+    cutPoints: [...work.cutPoints],
     project: work.project,
     conflicts: work.conflicts,
     assetVersionIds: [...assetVersionIds],

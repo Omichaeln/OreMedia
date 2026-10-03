@@ -31,7 +31,7 @@ import {
 import { videoTimelineDiff } from './diff';
 import { guardVideoAgentScoped, guardVideoScopeChange, videoScopeOf, type VideoScopeState } from './guard';
 import { videoFormatOf } from './overlays';
-import { contentEndMs, lengthOf, previousAdjacent, sortByStart, spanOf } from './time';
+import { contentEndMs, lengthOf, previousAdjacent, sortByStart, spanOf, type TimedItem } from './time';
 
 /**
  * STU-3 recut planning: the model chooses edit actions (reorder scenes, fit a duration, tighten pauses, keep or
@@ -46,6 +46,10 @@ export interface RecutContext extends VideoCompileContext {
   eligibleAssetIds: ReadonlySet<string>;
   effectiveFactIds: ReadonlySet<string>;
   scope: VideoAiScope | null;
+  /** The document's script by scene (its storyboard): captions are made from it, never from the model's words. */
+  script: ReadonlyArray<{ sceneId: string | null; narration: string }>;
+  /** Calls to action that may be placed: the person's own (the request) and the brand's CTA conventions. */
+  approvedCtas: readonly string[];
 }
 
 /** A span of the timeline to remove (clip content inside it is cut out and later items close up). */
@@ -135,11 +139,16 @@ function fitTransitions(
   if (next && lengths.nextPrev !== null) set(next, Math.min(lengthOf(next), lengths.nextPrev) / 2);
 }
 
+/** Music beds follow a shorter picture by ending earlier; any other sound (narration, a voice) is cut with it. */
+export const isMusicTrack = (t: { kind: string; id: string; name: string }): boolean =>
+  t.kind === 'audio' && (t.id === 'trk_music' || /music/i.test(t.name));
+
 /**
  * Removes `cuts` from the picture track (clips trimmed, split or removed with ripple, latest cut first so earlier
- * times never move), then retimes everything else through the same time map: titles and captions move and shrink,
- * the music bed is shortened and moved, scenes follow and the project gets shorter. Locked items never move or
- * change (a cut that would move one is refused and reported); out-of-scope items only move.
+ * times never move), cuts every non-music sound track at the same spans (so narration stays in sync), then retimes
+ * everything else through the same time map: titles and captions move and shrink, the music bed is shortened and
+ * moved, scenes follow and the project gets shorter. Locked items never move or change (a cut that would move one is
+ * refused and reported); out-of-scope items only move.
  */
 export function applyCuts(
   work: WorkingProject,
@@ -149,58 +158,98 @@ export function applyCuts(
   const start = work.project;
   const v = videoTrackOf(start);
   if (!v || !cuts.length) return [];
-  if (v.locked) {
+  const applied = cutTimedTrack(work, v.id, mergeCuts(cuts), opts);
+  if (applied.length)
+    for (const t of start.tracks)
+      if (t.kind === 'audio' && !isMusicTrack(t)) {
+        const sound = cutTimedTrack(work, t.id, applied, opts);
+        const missing = overlapOn(t.items, applied) - overlapOn(t.items, sound);
+        if (missing > 0)
+          work.conflict({
+            code: 'sound_out_of_sync',
+            message: `${t.name} could not be cut where the picture was; it is out of sync by up to ${seconds(missing)}`,
+            groupId: opts.groupId,
+            itemIds: t.items.map((i) => i.id),
+          });
+      }
+  retimeOthers(work, start, applied, opts);
+  return applied;
+}
+
+/** How much of `cuts` falls on the items (the sound a cut list removes from a track). */
+const overlapOn = (items: readonly TimedItem[], cuts: readonly TimeCut[]): number =>
+  cuts.reduce(
+    (n, c) =>
+      n +
+      items.reduce(
+        (m, i) =>
+          m + Math.max(0, Math.min(c.endMs, i.startMs + lengthOf(i)) - Math.max(c.startMs, i.startMs)),
+        0,
+      ),
+    0,
+  );
+
+/**
+ * Cuts the spans out of one picture or sound track with ripple, latest first. On the picture track a cut that would
+ * move a locked item is refused; picture transitions are shortened to fit. Only the parts of the spans that fall on
+ * items are cut (the picture's effective cuts are what the sound tracks then take).
+ */
+function cutTimedTrack(
+  work: WorkingProject,
+  trackId: string,
+  cuts: readonly TimeCut[],
+  opts: { scope: VideoScopeState | null; mint: () => string; groupId: string },
+): TimeCut[] {
+  const track0 = work.project.tracks.find((t) => t.id === trackId);
+  if (!track0 || (track0.kind !== 'video' && track0.kind !== 'audio')) return [];
+  if (track0.locked) {
     work.conflict({
       code: 'track_locked',
-      message: `${v.name} is locked; nothing on it can be cut`,
+      message: `${track0.name} is locked; nothing on it can be cut`,
       groupId: opts.groupId,
       itemIds: [],
     });
     return [];
   }
-  const clips = sortByStart(v.items);
-  const byClip = new Map<string, Piece[]>();
-  for (const cut of mergeCuts(cuts))
-    for (const c of clips) {
+  const items = sortByStart(track0.items as TimedItem[]);
+  const byItem = new Map<string, Piece[]>();
+  for (const cut of cuts)
+    for (const c of items) {
       const s = c.startMs;
       const e = s + lengthOf(c);
       const a = Math.max(cut.startMs, s);
       const b = Math.min(cut.endMs, e);
       if (b - a < 1) continue;
+      const refuse = (code: string, message: string, ids: string[]) => {
+        work.conflict({ code, message, groupId: opts.groupId, itemIds: ids });
+      };
       if (!inScope(opts.scope, c.id)) {
-        work.conflict({
-          code: 'out_of_scope',
-          message: `Clip ${nameOf(c)} is outside ${opts.scope?.label ?? 'the scope'}; it was not changed`,
-          groupId: opts.groupId,
-          itemIds: [c.id],
-        });
+        refuse(
+          'out_of_scope',
+          `${nameOf(c)} is outside ${opts.scope?.label ?? 'the scope'}; it was not changed`,
+          [c.id],
+        );
         continue;
       }
       if (c.locked) {
-        work.conflict({
-          code: 'item_locked',
-          message: `Clip ${nameOf(c)} is locked; it was not shortened`,
-          groupId: opts.groupId,
-          itemIds: [c.id],
-        });
+        refuse('item_locked', `${nameOf(c)} is locked; it was not shortened`, [c.id]);
         continue;
       }
-      const pinned = clips.find((o) => o.locked && o.startMs >= e);
+      const pinned = items.find((o) => o.locked && o.startMs >= e);
       if (pinned) {
-        work.conflict({
-          code: 'locked_item_would_move',
-          message: `Shortening ${nameOf(c)} would move the locked clip ${nameOf(pinned)}; unlock it to cut before it`,
-          groupId: opts.groupId,
-          itemIds: [c.id, pinned.id],
-        });
+        refuse(
+          'locked_item_would_move',
+          `Shortening ${nameOf(c)} would move the locked ${nameOf(pinned)}; unlock it to cut before it`,
+          [c.id, pinned.id],
+        );
         continue;
       }
-      byClip.set(c.id, [...(byClip.get(c.id) ?? []), { clipId: c.id, a, b }]);
+      byItem.set(c.id, [...(byItem.get(c.id) ?? []), { clipId: c.id, a, b }]);
     }
-  // Pieces of one clip: remnants shorter than an item may be are cut too (never a sliver of a clip left behind).
+  // Pieces of one item: remnants shorter than an item may be are cut too (never a sliver left behind).
   const pieces: Piece[] = [];
-  for (const [id, list] of byClip) {
-    const c = clips.find((x) => x.id === id) as VideoClipItem;
+  for (const [id, list] of byItem) {
+    const c = items.find((x) => x.id === id) as TimedItem;
     const s = c.startMs;
     const e = s + lengthOf(c);
     const merged: Piece[] = [];
@@ -218,47 +267,56 @@ export function applyCuts(
   pieces.sort((x, y) => y.a - x.a);
   const applied: TimeCut[] = [];
   for (const p of pieces) {
-    const track = videoTrackOf(work.project);
-    const clip = track?.items.find((i) => i.startMs <= p.a && p.b <= i.startMs + lengthOf(i));
-    if (!track || !clip) continue;
+    const track = work.project.tracks.find((t) => t.id === trackId);
+    if (!track || (track.kind !== 'video' && track.kind !== 'audio')) break;
+    const list = track.items as TimedItem[];
+    const clip = list.find((i) => i.startMs <= p.a && p.b <= i.startMs + lengthOf(i));
+    if (!clip) continue;
     const s = clip.startMs;
     const e = s + lengthOf(clip);
     const len = p.b - p.a;
+    const picture = track.kind === 'video' ? (track as VideoTrack) : null;
+    const fit = (lengths: { self: number | null; nextPrev: number | null }) => {
+      if (picture) fitTransitions(work, picture, clip as VideoClipItem, lengths, opts.groupId);
+    };
+    const fresh = () =>
+      ((work.project.tracks.find((t) => t.id === trackId)?.items ?? []) as TimedItem[]).find(
+        (i) => i.id === clip.id,
+      ) ?? clip;
     let ok: boolean;
     if (p.a <= s && p.b >= e) {
-      const prev = previousAdjacent(track.items, clip);
-      fitTransitions(work, track, clip, { self: null, nextPrev: prev ? lengthOf(prev) : null }, opts.groupId);
-      ok = work.apply({ op: 'removeClip', trackId: track.id, itemId: clip.id, ripple: true }, opts.groupId);
+      const prev = picture ? previousAdjacent(picture.items, clip as VideoClipItem) : null;
+      fit({ self: null, nextPrev: prev ? lengthOf(prev) : null });
+      ok = work.apply({ op: 'removeClip', trackId, itemId: clip.id, ripple: true }, opts.groupId);
     } else if (p.b >= e || p.a <= s) {
-      fitTransitions(work, track, clip, { self: e - s - len, nextPrev: e - s - len }, opts.groupId);
-      const fresh = videoTrackOf(work.project)?.items.find((i) => i.id === clip.id) ?? clip;
+      fit({ self: e - s - len, nextPrev: e - s - len });
+      const f = fresh();
+      if ('fadeInMs' in f && f.fadeInMs + f.fadeOutMs > e - s - len)
+        work.apply({ op: 'setAudio', trackId, itemId: f.id, fadeInMs: 0, fadeOutMs: 0 }, opts.groupId);
       ok = work.apply(
         {
           op: 'trimClip',
-          trackId: track.id,
+          trackId,
           itemId: clip.id,
-          sourceInMs: p.a <= s ? fresh.sourceInMs + len : fresh.sourceInMs,
-          sourceOutMs: p.a <= s ? fresh.sourceOutMs : fresh.sourceOutMs - len,
+          sourceInMs: p.a <= s ? f.sourceInMs + len : f.sourceInMs,
+          sourceOutMs: p.a <= s ? f.sourceOutMs : f.sourceOutMs - len,
           ripple: true,
         },
         opts.groupId,
       );
     } else {
-      fitTransitions(work, track, clip, { self: p.a - s, nextPrev: e - p.b }, opts.groupId);
-      const fresh = videoTrackOf(work.project)?.items.find((i) => i.id === clip.id) ?? clip;
+      fit({ self: p.a - s, nextPrev: e - p.b });
+      const f = fresh();
       const id = opts.mint();
       ok =
-        work.apply(
-          { op: 'splitClip', trackId: track.id, itemId: clip.id, atMs: p.a, newItemId: id },
-          opts.groupId,
-        ) &&
+        work.apply({ op: 'splitClip', trackId, itemId: clip.id, atMs: p.a, newItemId: id }, opts.groupId) &&
         work.apply(
           {
             op: 'trimClip',
-            trackId: track.id,
+            trackId,
             itemId: id,
-            sourceInMs: fresh.sourceInMs + (p.b - s),
-            sourceOutMs: fresh.sourceOutMs,
+            sourceInMs: f.sourceInMs + (p.b - s),
+            sourceOutMs: f.sourceOutMs,
             ripple: true,
           },
           opts.groupId,
@@ -266,8 +324,7 @@ export function applyCuts(
     }
     if (ok) applied.push({ startMs: p.a, endMs: p.b });
   }
-  retimeOthers(work, start, applied, opts);
-  return applied;
+  return mergeCuts(applied);
 }
 
 function retimeOthers(
@@ -281,7 +338,7 @@ function retimeOthers(
     work.conflict({ code, message: `${nameOf(item)} ${why}`, groupId: opts.groupId, itemIds: [item.id] });
   if (applied.length)
     for (const track of start.tracks) {
-      if (track.kind === 'video') continue;
+      if (track.kind === 'video' || (track.kind === 'audio' && !isMusicTrack(track))) continue;
       const items = sortByStart(track.items as TrackItem[]);
       for (const item of items) {
         const s = spanOf(item);
@@ -523,6 +580,8 @@ export function planSilenceTrim(
 export interface RecutCompile {
   groups: Array<VideoProposalGroup & { operations: VideoOperation[] }>;
   operations: VideoOperation[];
+  /** Operation counts a part of a large commit may end on: whole actions only. */
+  cutPoints: number[];
   project: VideoProjectV1;
   conflicts: VideoConflict[];
   /** A new document in another format (the original is untouched); its changes are against the original. */
@@ -574,21 +633,20 @@ export function compileRecut(
     const opsBefore = work.operations.length;
     const label = labelFor(action, before);
     if (action.kind === 'vertical_version') {
+      // A new document from the project as it is now (never from the proposal's other changes, which the person has
+      // not accepted); the remaining actions still make a proposal for this video.
+      const framed = reframeProject(project, action.formatKey, action.focus);
+      for (const c of framed.conflicts) work.conflict({ ...c, groupId });
       version = {
         formatKey: action.formatKey,
         label: `${VIDEO_FORMATS[action.formatKey].label} version`,
-        project: reframeProject(before, action.formatKey, action.focus),
+        project: framed.project,
+        changes: videoTimelineDiff(project, framed.project),
       };
-      groups.push({
-        id: groupId,
-        label,
-        operationCount: 0,
-        operations: [],
-        changes: videoTimelineDiff(project, version.project),
-      });
       return;
     }
     planAction(work, action, { ctx, scope, mint, groupId, assetVersionIds, factIds });
+    work.mark();
     const operations = work.operations.slice(opsBefore);
     if (!operations.length) return;
     groups.push({
@@ -602,6 +660,7 @@ export function compileRecut(
   return {
     groups,
     operations: [...work.operations],
+    cutPoints: [...work.cutPoints],
     project: work.project,
     conflicts: work.conflicts,
     version,
@@ -802,8 +861,23 @@ function planAction(work: WorkingProject, action: RecutAction, env: PlanEnv): vo
       );
       return;
     }
-    case 'add_captions':
-      return addCaptions(work, action.lines, env);
+    case 'add_captions': {
+      // The words are the storyboard's script (checked when the storyboard was made), never the model's.
+      const wanted = action.sceneIds ? new Set(action.sceneIds) : null;
+      const missing = [...(wanted ?? [])].filter((id) => !ctx.script.some((l) => l.sceneId === id));
+      for (const id of missing)
+        conflict('required_messaging_missing', `Scene ${id} has no script in the storyboard to caption`);
+      const byScene = ctx.script.filter((l) => l.sceneId !== null && (!wanted || wanted.has(l.sceneId)));
+      const unplaced = ctx.script.filter((l) => l.sceneId === null).map((l) => l.narration);
+      const lines =
+        byScene.length || wanted
+          ? byScene.map((l) => ({ sceneId: l.sceneId, text: l.narration }))
+          : unplaced.length
+            ? [{ sceneId: null, text: unplaced.join(' ') }]
+            : [];
+      if (!lines.length && missing.length) return;
+      return addCaptions(work, lines, env);
+    }
     case 'add_cta':
       return addCta(work, action.text, action.factIds, env);
     case 'set_transitions': {
@@ -979,11 +1053,22 @@ function addCaptions(
 function addCta(work: WorkingProject, text: string, factIds: readonly string[], env: PlanEnv): void {
   const { groupId, mint, ctx } = env;
   const clean = text.trim();
-  if (!clean) {
+  const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!clean || ctx.approvedCtas.length === 0) {
     work.conflict({
       code: 'required_messaging_missing',
       message:
         'No approved call to action was given and the brand guidance names none; write it in the request',
+      groupId,
+      itemIds: [],
+    });
+    return;
+  }
+  // Never the model's own words: only the person's call to action or a brand CTA convention is placed.
+  if (!ctx.approvedCtas.some((c) => norm(c) === norm(clean))) {
+    work.conflict({
+      code: 'cta_not_approved',
+      message: `“${clean}” is not an approved call to action (${ctx.approvedCtas.map((c) => `“${c}”`).join(', ')}); nothing was added`,
       groupId,
       itemIds: [],
     });
@@ -1044,7 +1129,14 @@ export function reframeProject(
   project: VideoProjectV1,
   formatKey: VideoVersionPlan['formatKey'],
   focus: ReadonlyArray<{ itemId: string; focalX: number; focalY: number }> = [],
-): VideoProjectV1 {
+): { project: VideoProjectV1; conflicts: VideoConflict[] } {
+  const conflicts: VideoConflict[] = [];
+  const kept = (id: string, what: string) =>
+    conflicts.push({
+      code: 'locked_item_kept',
+      message: `${what} is locked and keeps its framing in the new version; check it there`,
+      itemIds: [id],
+    });
   const preset = VIDEO_FORMATS[formatKey];
   const next = structuredClone(project);
   const w1 = project.format.width;
@@ -1056,6 +1148,10 @@ export function reframeProject(
   for (const track of next.tracks) {
     if (track.kind === 'video')
       track.items = track.items.map((c) => {
+        if (c.locked || track.locked) {
+          kept(c.id, `Clip ${nameOf(c)}`);
+          return c;
+        }
         const at = focal.get(c.id);
         return {
           ...c,
@@ -1069,6 +1165,10 @@ export function reframeProject(
     if (track.kind === 'overlay')
       track.items = track.items.map((o) => {
         const t = o.element.transform;
+        if (o.locked || track.locked) {
+          kept(o.id, nameOf(o));
+          return o;
+        }
         const safeWidth = f2.width - f2.safeArea.left - f2.safeArea.right;
         if (o.element.type === 'text') {
           const width = Math.min(t.width, safeWidth);
@@ -1090,8 +1190,11 @@ export function reframeProject(
             },
           };
         }
-        const width = t.width * s;
-        const height = t.height * s;
+        // A logo or other protected element keeps its size (its minimum width and proportions are the brand's rule);
+        // only its position follows the new frame. Other images and shapes scale with the frame.
+        const keepSize = o.element.protected || o.element.type === 'logo';
+        const width = keepSize ? t.width : t.width * s;
+        const height = keepSize ? t.height : t.height * s;
         const cx = ((t.x + t.width / 2) / w1) * f2.width;
         const cy = ((t.y + t.height / 2) / h1) * f2.height;
         // Kept inside the new safe area (a logo near an edge of the wide frame stays clear of the platform's chrome).
@@ -1113,5 +1216,5 @@ export function reframeProject(
         };
       });
   }
-  return next;
+  return { project: next, conflicts };
 }

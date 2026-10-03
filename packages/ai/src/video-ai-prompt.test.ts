@@ -106,7 +106,10 @@ describe('video AI prompt', () => {
       }),
     );
     expect(p.user).toContain('Scope: scene scene_2 only.');
-    expect(p.user).toContain('- clip_b [video] 4.0 s–7.0 s av_clip_b “B”');
+    expect(p.user).toContain('- clip_b [video] 4.0 s–7.0 s av_clip_b');
+    // People's words reach the model only as delimited, untrusted data.
+    expect(p.user).toMatch(/<<<EVIDENCE id="request"[^\n]*>>>\nShorter/);
+    expect(p.user).toMatch(/<<<EVIDENCE id="timeline-text"[^\n]*>>>\nclip_b: B/);
     expect(p.user).toContain('Sources with sound analysis (pauses can be found): av_clip_a');
     expect(videoAiTool('recut').name).toBe(RECUT_TOOL);
   });

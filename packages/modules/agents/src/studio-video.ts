@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { BudgetExhaustedError } from '@oremedia/contracts/errors';
 import type { StudioVideoJobRuntimeV1, VideoAiErrorCode } from '@oremedia/contracts/video-ai';
 import {
@@ -55,9 +56,10 @@ export function createStudioVideoRuntime(opts: StudioVideoRuntimeOptions): Studi
       });
       hooks?.heartbeat(`video-job:${input.jobId}:model:done`);
       const costMicros = estimateCostMicros(opts.modelConfig, completion.usage);
-      const callRef = videoJobModelCallRef(input.jobId, input.attempt);
-      // Incurred cost is ledgered first (once per attempt's call); exceeding the reservation fails the job.
-      await budgets.consume(
+      // One ledger key per real call: a retried activity that calls the model again is billed again.
+      const callRef = `${videoJobModelCallRef(input.jobId, input.attempt)}:${randomUUID()}`;
+      // Incurred cost is always ledgered, even if a cancel closed the reservation while the call ran.
+      const billed = await budgets.consumeIncurred(
         reservationId,
         ctx.brandId,
         'model_tokens',
@@ -73,6 +75,10 @@ export function createStudioVideoRuntime(opts: StudioVideoRuntimeOptions): Studi
       } catch (err) {
         await videoAiJobs.addSpend(input, costMicros); // a refused answer still cost what it cost
         throw err;
+      }
+      if (billed.exceeded) {
+        await videoAiJobs.addSpend(input, costMicros);
+        throw new BudgetExhaustedError('run');
       }
       return videoAiJobs.recordModelOutput(input, { output, callRef, costMicros });
     },

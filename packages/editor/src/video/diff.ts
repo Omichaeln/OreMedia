@@ -83,6 +83,27 @@ export function videoTimelineDiff(before: VideoProjectV1, after: VideoProjectV1)
         before: null,
         after: { startMs: n.startMs, endMs: n.endMs },
       });
+  for (const t of after.tracks) {
+    const b = before.tracks.find((x) => x.id === t.id);
+    if (!b) continue;
+    const what = [
+      b.locked !== t.locked ? (t.locked ? 'locked' : 'unlocked') : null,
+      'muted' in b && 'muted' in t && b.muted !== t.muted ? (t.muted ? 'muted' : 'unmuted') : null,
+      b.kind === 'caption' && t.kind === 'caption' && canonicalJson(b.style) !== canonicalJson(t.style)
+        ? 'caption style'
+        : null,
+      b.name !== t.name ? 'renamed' : null,
+    ].filter((x): x is string => x !== null);
+    if (what.length)
+      out.push({
+        kind: 'changed',
+        target: 'track',
+        id: t.id,
+        label: `${t.name}: ${what.join(', ')}`,
+        before: null,
+        after: null,
+      });
+  }
   for (const t of after.tracks)
     if (!before.tracks.some((x) => x.id === t.id))
       out.push({ kind: 'added', target: 'track', id: t.id, label: t.name, before: null, after: null });
@@ -114,6 +135,17 @@ function changeOf(b: TrackItem, a: TrackItem): TimelineChange['kind'] | null {
   if (canonicalJson(b) === canonicalJson(a)) return null;
   const sb = spanOf(b);
   const sa = spanOf(a);
+  if ('assetVersionId' in b && 'assetVersionId' in a && b.assetVersionId !== a.assetVersionId)
+    return 'replaced';
+  if (
+    'element' in b &&
+    'element' in a &&
+    b.element.type !== 'text' &&
+    'assetVersionId' in b.element &&
+    'assetVersionId' in a.element &&
+    b.element.assetVersionId !== a.element.assetVersionId
+  )
+    return 'replaced';
   const lengthChanged = sb.endMs - sb.startMs !== sa.endMs - sa.startMs;
   const sourceChanged =
     'sourceInMs' in b &&

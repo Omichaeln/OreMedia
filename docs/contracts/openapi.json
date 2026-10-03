@@ -8633,6 +8633,9 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "ctaText": {
+                                "type": "string"
                               }
                             },
                             "required": ["instruction", "scope"]
@@ -8668,6 +8671,184 @@
                   }
                 },
                 "required": ["jobId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.videoAi.saveDraft": {
+      "post": {
+        "operationId": "creative.videoAi.saveDraft",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "storyboard": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "scenes": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            },
+                            "purpose": {
+                              "type": "string"
+                            },
+                            "narration": {
+                              "type": "string"
+                            },
+                            "onScreenText": {
+                              "type": "string"
+                            },
+                            "claims": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "factIds": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": ["text", "factIds"]
+                              }
+                            },
+                            "shots": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "assetVersionId": {
+                                    "type": "string"
+                                  },
+                                  "sourceInMs": {
+                                    "type": "number"
+                                  },
+                                  "durationMs": {
+                                    "type": "number"
+                                  },
+                                  "framing": {
+                                    "type": "string",
+                                    "enum": ["fill", "fit"]
+                                  }
+                                },
+                                "required": ["id", "description", "durationMs"]
+                              }
+                            },
+                            "templateSceneId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "title", "shots"]
+                        }
+                      },
+                      "gaps": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": ["footage", "music", "voiceover"]
+                            },
+                            "sceneId": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "alternatives": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "use_still",
+                                      "generated_clip",
+                                      "ask_for_footage",
+                                      "generated_speech",
+                                      "record_voiceover",
+                                      "use_clip_sound",
+                                      "no_music"
+                                    ]
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "available": {
+                                    "type": "boolean"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  },
+                                  "costMicros": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": ["kind", "label", "available"]
+                              }
+                            }
+                          },
+                          "required": ["id", "kind", "description", "alternatives"]
+                        }
+                      },
+                      "musicAssetVersionId": {
+                        "type": "string"
+                      },
+                      "pacing": {
+                        "type": "string",
+                        "enum": ["calm", "balanced", "fast"]
+                      },
+                      "captions": {
+                        "type": "boolean"
+                      },
+                      "audio": {
+                        "type": "string",
+                        "enum": ["music", "clip_sound", "voiceover", "none"]
+                      },
+                      "logo": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["title", "scenes", "pacing", "captions", "audio", "logo"]
+                  }
+                },
+                "required": ["jobId", "expectedVersion", "storyboard"]
               }
             }
           }
@@ -8830,6 +9011,9 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "ctaText": {
+                                "type": "string"
                               }
                             },
                             "required": ["instruction", "scope"]
@@ -21789,6 +21973,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "ctaText": {
+                          "type": "string"
                         }
                       },
                       "required": ["instruction", "scope"]
@@ -21815,6 +22002,175 @@
             }
           },
           "required": ["jobId", "expectedVersion"]
+        }
+      },
+      "creative.videoAi.saveDraft": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "jobId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "storyboard": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "scenes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "purpose": {
+                        "type": "string"
+                      },
+                      "narration": {
+                        "type": "string"
+                      },
+                      "onScreenText": {
+                        "type": "string"
+                      },
+                      "claims": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "factIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": ["text", "factIds"]
+                        }
+                      },
+                      "shots": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "assetVersionId": {
+                              "type": "string"
+                            },
+                            "sourceInMs": {
+                              "type": "number"
+                            },
+                            "durationMs": {
+                              "type": "number"
+                            },
+                            "framing": {
+                              "type": "string",
+                              "enum": ["fill", "fit"]
+                            }
+                          },
+                          "required": ["id", "description", "durationMs"]
+                        }
+                      },
+                      "templateSceneId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "title", "shots"]
+                  }
+                },
+                "gaps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["footage", "music", "voiceover"]
+                      },
+                      "sceneId": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "alternatives": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "use_still",
+                                "generated_clip",
+                                "ask_for_footage",
+                                "generated_speech",
+                                "record_voiceover",
+                                "use_clip_sound",
+                                "no_music"
+                              ]
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "costMicros": {
+                              "type": "number"
+                            }
+                          },
+                          "required": ["kind", "label", "available"]
+                        }
+                      }
+                    },
+                    "required": ["id", "kind", "description", "alternatives"]
+                  }
+                },
+                "musicAssetVersionId": {
+                  "type": "string"
+                },
+                "pacing": {
+                  "type": "string",
+                  "enum": ["calm", "balanced", "fast"]
+                },
+                "captions": {
+                  "type": "boolean"
+                },
+                "audio": {
+                  "type": "string",
+                  "enum": ["music", "clip_sound", "voiceover", "none"]
+                },
+                "logo": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["title", "scenes", "pacing", "captions", "audio", "logo"]
+            }
+          },
+          "required": ["jobId", "expectedVersion", "storyboard"]
         }
       },
       "creative.videoAi.start": {
@@ -21968,6 +22324,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "ctaText": {
+                          "type": "string"
                         }
                       },
                       "required": ["instruction", "scope"]

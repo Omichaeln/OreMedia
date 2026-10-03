@@ -97,6 +97,26 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
       },
     }),
   },
+  'creative.videoAi.saveDraft': {
+    buildInput: (f) => ({
+      jobId: f['videoJobId'],
+      expectedVersion: 0,
+      storyboard: {
+        title: 'x',
+        scenes: [
+          {
+            id: 'sc_1',
+            title: 'x',
+            shots: [{ id: 'sh_1', description: 'x', assetVersionId: null, durationMs: 1000 }],
+          },
+        ],
+        pacing: 'balanced',
+        captions: false,
+        audio: 'none',
+        logo: false,
+      },
+    }),
+  },
   'creative.videoAi.accept': {
     buildInput: (f) => ({ jobId: f['videoJobId'], baseRevisionId: f['videoRevisionId'], groupIds: ['a1'] }),
   },
