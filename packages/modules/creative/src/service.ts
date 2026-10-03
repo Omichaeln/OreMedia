@@ -15,7 +15,10 @@ import {
   OperationsPropose,
   RenderGet,
   RenderManifest,
+  RenderCancel,
   RenderMarkFailed,
+  RenderMarkProgress,
+  RenderProgress,
   RenderMarkReady,
   RenderMarkRendering,
   RenderRequest,
@@ -719,6 +722,11 @@ const toExportDto = (e: ExportRow) => ({
   manifest: RenderManifest.parse(e.manifest),
   validation: RenderValidationResult.parse(e.validation),
   publishable: true,
+  // STU-2a video exports (video/mp4); null for stills.
+  durationMs: e.durationMs ?? null,
+  fps: e.fps ?? null,
+  posterStorageKey: e.posterStorageKey ?? null,
+  captionsStorageKey: e.captionsStorageKey ?? null,
   createdAt: e.createdAt.toISOString(),
 });
 /** A preview export in the same shape; its revisionId is the committed base the proposal was made against. */
@@ -737,6 +745,10 @@ const toPreviewExportDto = (e: PreviewExportRow, preview: PreviewRow): ReturnTyp
   manifest: RenderManifest.parse(e.manifest),
   validation: RenderValidationResult.parse(e.validation),
   publishable: false,
+  durationMs: null,
+  fps: null,
+  posterStorageKey: null,
+  captionsStorageKey: null,
   createdAt: e.createdAt.toISOString(),
 });
 const exportIdsOf = (j: RenderJobRow) => StringList.parse(j.exportIds ?? []);
@@ -757,6 +769,8 @@ const toRenderJobDto = (
   state: j.state,
   attempts: j.attempts,
   error: j.error,
+  /** STU-2a: phase and fraction of a long (video) render while it runs; null otherwise. */
+  progress: j.progress ? RenderProgress.parse(j.progress) : null,
   requestedByKind: j.requestedByKind,
   requestedById: j.requestedById,
   exportIds: exportIdsOf(j),
@@ -1332,9 +1346,11 @@ export const creativeService = {
       for (const e of parsed.exports) {
         // A preview's output is never a rendered export: it cannot be selected, bound or published (spec 11.4).
         const id = newId(preview ? 'previewExport' : 'renderedExport');
-        if (preview)
-          await previewExportsRepo.create({ id, brandId: job.brandId, renderJobId: job.id, ...e }, tx);
-        else await exportsRepo.create({ id, brandId: job.brandId, revisionId: revision.id, ...e }, tx);
+        if (preview) {
+          // Preview exports are stills of a proposal: the video-only fields have no columns there.
+          const { durationMs: _d, fps: _f, posterStorageKey: _p, captionsStorageKey: _c, ...still } = e;
+          await previewExportsRepo.create({ id, brandId: job.brandId, renderJobId: job.id, ...still }, tx);
+        } else await exportsRepo.create({ id, brandId: job.brandId, revisionId: revision.id, ...e }, tx);
         exportIds.push(id);
       }
       await renderJobsRepo.update(job.id, job.version, { state: toState, exportIds, error: null }, tx);
@@ -1360,6 +1376,45 @@ export const creativeService = {
         { brandId: job.brandId },
       );
       return { renderJobId: job.id, state: toState, exportIds, version: job.version + 1 };
+    },
+
+    /** STU-2a render worker: how far a long (video) job is; ignored once the job is no longer rendering. */
+    async markProgress(input: z.infer<typeof RenderMarkProgress>, tx: Tx) {
+      const parsed = RenderMarkProgress.parse(input);
+      const job = await renderJobsRepo.getById(parsed.renderJobId, tx);
+      if (job.state !== 'rendering') return { renderJobId: job.id, state: job.state, version: job.version };
+      await renderJobsRepo.update(job.id, job.version, { progress: parsed.progress }, tx);
+      return { renderJobId: job.id, state: job.state, version: job.version + 1 };
+    },
+
+    /**
+     * STU-2a: a person stops a pending or rendering job (a long video render). The job moves to `cancelled` by the
+     * render job machine; the worker reads the state at its next step and stops. Authorised as requesting a render.
+     */
+    async cancel(actor: ResolvedActor, input: z.infer<typeof RenderCancel>, tx: Tx, opts: ActorOptions = {}) {
+      const parsed = RenderCancel.parse(input);
+      const job = await renderJobsRepo.getById(parsed.renderJobId, tx);
+      const revision = await revisionsRepo.getById(job.revisionId, tx);
+      const doc = await documentsRepo.getById(revision.documentId, tx);
+      await policy.assert(actor, 'creative.render', documentResource(doc), opts, tx);
+      const toState = transition(renderJobMachine, job.state, 'cancel', 'renderJobId');
+      await renderJobsRepo.update(job.id, job.version, { state: toState, progress: null }, tx);
+      await audit.record(
+        { kind: actor.kind, id: actor.id },
+        'creative.render.cancel',
+        { type: 'render_job', id: job.id },
+        'allowed',
+        tx,
+        { brandId: job.brandId, fromState: job.state, toState, reason: parsed.reason ?? null },
+      );
+      await outbox.add(
+        'creative.render_completed',
+        { type: 'render_job', id: job.id, version: job.version + 1 },
+        { renderJobId: job.id, revisionId: job.revisionId, state: toState, exportCount: 0 },
+        tx,
+        { brandId: job.brandId },
+      );
+      return { renderJobId: job.id, state: toState, version: job.version + 1 };
     },
 
     async markFailed(input: z.infer<typeof RenderMarkFailed>, tx: Tx) {

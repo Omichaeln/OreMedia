@@ -191,6 +191,23 @@
           "response": { "status": 503, "body": "Service Unavailable" }
         }
       ]
+    },
+    "video_export_pending": {
+      "description": "STU-2a: a rendered video export posted to /videos by its signed release URL; pending while Facebook processes it.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/p_100/videos",
+            "bodyIncludes": [
+              "\"file_url\":\"https://media.oremedia.test/release/export.mp4\"",
+              "\"description\":\"Hello from Oremedia #launch\""
+            ]
+          },
+          "response": { "status": 200, "json": { "id": "vid_88" } }
+        }
+      ]
     }
   }
 }

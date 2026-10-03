@@ -20,6 +20,7 @@ import {
   type Provenance,
   type UploadIntentState,
 } from '@oremedia/contracts/assets';
+import type { MediaProbeV1 } from '@oremedia/contracts/media';
 import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { uploadIntentMachine } from '@oremedia/domain';
@@ -56,7 +57,7 @@ const derivativesRepo = new AssetDerivativeRepository();
 const intentsRepo = new UploadIntentRepository();
 const generatedRepo = new GeneratedUploadRepository();
 
-async function loadIntent(
+export async function loadIntent(
   input: AssetIngestInputV1,
   expected: UploadIntentState,
   tx?: Tx,
@@ -246,7 +247,9 @@ export const assetIngest = {
    * Step 8: asset, version and derivative rows, the intent's acceptance and the outbox event commit together.
    * `autoApprove` is decided by the caller from policy (asset.approve held by the uploader) and passed in.
    */
-  async catalogue(input: IngestCatalogueInput & { autoApprove: boolean }): Promise<IngestCatalogueResult> {
+  async catalogue(
+    input: IngestCatalogueInput & { autoApprove: boolean; probe?: MediaProbeV1 },
+  ): Promise<IngestCatalogueResult> {
     return withTransaction(async (tx) => {
       const intent = await intentsRepo.getById(input.intentId, tx);
       if (intent.brandId !== input.brandId) throw new NotFoundError('UploadIntent', input.intentId);
@@ -286,6 +289,8 @@ export const assetIngest = {
           width: input.width,
           height: input.height,
           colourProfile: input.colourProfile,
+          // STU-2a: a video or audio version keeps its duration and the ffprobe inspection.
+          ...(input.probe ? { durationMs: input.probe.durationMs, mediaInfo: input.probe } : {}),
           // ADR-11: a generated or imported upload keeps the provenance recorded with its intent; an imported
           // font also records what the file itself declared, as an upload does.
           provenance: withFontMetadata((await generatedRepo.findById(intent.id, tx))?.provenance, input) ?? {
@@ -343,7 +348,7 @@ export const assetIngest = {
    * gave no verdict) and deletes the intent's quarantine objects. Only keys under this intent's quarantine prefix
    * are deleted; anything else is refused.
    */
-  async finalise(deps: IngestDeps, input: IngestFinaliseInput): Promise<void> {
+  async finalise(deps: IngestDeps, input: IngestFinaliseInput & { detail?: string }): Promise<void> {
     await withTransaction(async (tx) => {
       const intent = await intentsRepo.getById(input.intentId, tx);
       if (intent.brandId !== input.brandId) throw new NotFoundError('UploadIntent', input.intentId);
@@ -355,6 +360,7 @@ export const assetIngest = {
           {
             state: next,
             rejectionReason: input.reason ?? null,
+            ...(input.detail ? { rejectionDetail: input.detail.slice(0, 300) } : {}),
             resultAssetId: input.duplicateOfAssetId ?? null,
           },
           tx,

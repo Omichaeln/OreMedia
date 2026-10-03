@@ -1026,6 +1026,61 @@ describe('creative module (spec 11) against MySQL 8', () => {
       ).toBe('font missing');
     });
 
+    it('STU-2a: a rendering job is cancelled with progress cleared; ready, fail and progress after it change nothing', async () => {
+      const job = await run(tenantA, (tx) =>
+        creativeService.renders.request(
+          A,
+          { documentId: docId, revisionId, formatKeys: ['square_1080'] },
+          tx,
+        ),
+      );
+      await run(tenantA, (tx) => creativeService.renders.markRendering({ renderJobId: job.renderJobId }, tx));
+      await run(tenantA, (tx) =>
+        creativeService.renders.markProgress(
+          { renderJobId: job.renderJobId, progress: { phase: 'encode', fraction: 0.4 } },
+          tx,
+        ),
+      );
+      expect(
+        (await run(tenantA, () => creativeService.renders.get(A, { renderJobId: job.renderJobId }))).progress,
+      ).toEqual({ phase: 'encode', fraction: 0.4 });
+      const cancelled = await run(tenantA, (tx) =>
+        creativeService.renders.cancel(A, { renderJobId: job.renderJobId, reason: 'wrong cut' }, tx),
+      );
+      expect(cancelled.state).toBe('cancelled');
+      // A worker that finishes anyway is refused (non-retryable): the job stays cancelled with no exports.
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.renders.markReady(
+            { renderJobId: job.renderJobId, exports: [exportFor('square_1080', 1080, 1080)] },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.renders.markFailed({ renderJobId: job.renderJobId, error: 'x' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      await run(tenantA, (tx) =>
+        creativeService.renders.markProgress(
+          { renderJobId: job.renderJobId, progress: { phase: 'encode', fraction: 0.9 } },
+          tx,
+        ),
+      );
+      const after = await run(tenantA, () =>
+        creativeService.renders.get(A, { renderJobId: job.renderJobId }),
+      );
+      expect(after).toMatchObject({ state: 'cancelled', progress: null, exportIds: [] });
+      expect((await eventsOf(tenantA, 'creative.render_completed')).map((e) => e.payload)).toContainEqual(
+        expect.objectContaining({ renderJobId: job.renderJobId, state: 'cancelled', exportCount: 0 }),
+      );
+      // Cancelling again is an illegal move.
+      await expect(
+        run(tenantA, (tx) => creativeService.renders.cancel(A, { renderJobId: job.renderJobId }, tx)),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+    });
+
     const exportFor = (formatKey: string, width: number, height: number) => ({
       pageId: 'page_1',
       formatKey,

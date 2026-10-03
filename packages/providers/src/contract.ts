@@ -28,6 +28,9 @@ export interface PublishMedia {
   bytes: number;
   altText?: string;
   contentHash: string;
+  /** A video export (STU-2a): its duration and frame rate; absent for images. */
+  durationMs?: number;
+  fps?: number;
 }
 
 export interface PublishRequest {

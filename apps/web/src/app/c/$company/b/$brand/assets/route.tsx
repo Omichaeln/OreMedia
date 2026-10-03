@@ -19,6 +19,9 @@ import {
   type AssetListFilter,
 } from '../../../../../../features/assets/use-assets';
 import { useAssetUpload } from '../../../../../../features/assets/use-upload';
+import { acceptFor, isTimeBased, mediaClock, uploadHint } from '../../../../../../features/assets/media';
+import { AudioPlayer, VideoPlayer } from '../../../../../../features/assets/media-player';
+import { useSignedUrl } from '../../../../../../features/assets/use-assets';
 import { UploadRejected } from '../../../../../../features/assets/upload-status';
 import { toUiError } from '../../../../../../lib/errors';
 
@@ -220,6 +223,7 @@ function EligibleGrid({
                 <span className="font-mono text-xs text-muted-foreground">
                   {a.kind}
                   {a.width && a.height ? ` · ${a.width}×${a.height}` : ''}
+                  {a.durationMs ? ` · ${mediaClock(a.durationMs)}` : ''}
                 </span>
               </button>
             </li>
@@ -314,7 +318,12 @@ function AllAssets({
                 <span className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className="truncate text-sm font-medium">{a.name}</span>
                   <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono text-xs text-muted-foreground">{a.kind}</span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {a.kind}
+                      {a.currentVersion?.durationMs ? (
+                        <span data-testid="asset-duration"> · {mediaClock(a.currentVersion.durationMs)}</span>
+                      ) : null}
+                    </span>
                     {a.issues.length === 0 && <Badge tone="good">Usable</Badge>}
                     {a.issues.map((issue) => (
                       <Badge
@@ -437,10 +446,47 @@ function Inspect({ assetId, timeZone }: { assetId: string; timeZone: string }) {
               </li>
             ))}
           </ul>
+          {asset.data.currentVersion && isTimeBased(asset.data.kind) && (
+            <MediaPreview
+              kind={asset.data.kind}
+              name={asset.data.name}
+              versionId={asset.data.currentVersion.id}
+              hasProxy={asset.data.derivatives.some((d) => d.purpose === 'proxy')}
+              hasPoster={asset.data.derivatives.some((d) => d.purpose === 'poster')}
+            />
+          )}
           {asset.data.currentVersion && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
               <dt className="text-muted-foreground">Version</dt>
               <dd>{asset.data.currentVersion.number}</dd>
+              {asset.data.currentVersion.durationMs ? (
+                <>
+                  <dt className="text-muted-foreground">Duration</dt>
+                  <dd>{mediaClock(asset.data.currentVersion.durationMs)}</dd>
+                </>
+              ) : null}
+              {asset.data.currentVersion.media?.video ? (
+                <>
+                  <dt className="text-muted-foreground">Video</dt>
+                  <dd>
+                    {asset.data.currentVersion.media.video.codec} ·{' '}
+                    {asset.data.currentVersion.media.video.width}×
+                    {asset.data.currentVersion.media.video.height} ·{' '}
+                    {asset.data.currentVersion.media.video.fps} fps
+                    {asset.data.currentVersion.media.video.variableFrameRate ? ' (variable)' : ''}
+                  </dd>
+                </>
+              ) : null}
+              {asset.data.currentVersion.media?.audio[0] ? (
+                <>
+                  <dt className="text-muted-foreground">Audio</dt>
+                  <dd>
+                    {asset.data.currentVersion.media.audio[0].codec} ·{' '}
+                    {asset.data.currentVersion.media.audio[0].channels} ch ·{' '}
+                    {asset.data.currentVersion.media.audio[0].sampleRate / 1000} kHz
+                  </dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Hash</dt>
               <dd>
                 <code>{asset.data.currentVersion.contentHash.slice(0, 16)}…</code>
@@ -480,20 +526,27 @@ function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
             options={AssetKind.options.map((k) => ({ value: k, label: k }))}
           />
         </Field>
-        <Field
-          label="File"
-          htmlFor="upload-file"
-          hint="Images, SVG, fonts and PDF; archives are rejected. Video and audio processing arrives in Release 2."
-        >
-          <input id="upload-file" type="file" onChange={onFile} disabled={pending} className="text-sm" />
+        <Field label="File" htmlFor="upload-file" hint={uploadHint(AssetKind.parse(kind))}>
+          <input
+            id="upload-file"
+            type="file"
+            accept={acceptFor(AssetKind.parse(kind))}
+            onChange={onFile}
+            disabled={pending}
+            className="text-sm"
+          />
         </Field>
         {step.kind === 'uploading' && <StatusBanner tone="info" busy title={`Uploading ${step.name}`} />}
         {step.kind === 'queued' && (
           <StatusBanner
             tone="info"
             busy
-            title="Processing"
-            description={`Upload accepted (intent ${step.intentId}). Scanning, sanitising, hashing and derivatives run in the ingest workflow; this updates when it settles.`}
+            title={step.timeBased ? 'Processing video or audio' : 'Processing'}
+            description={
+              step.timeBased
+                ? 'Upload received. Scanning, checking the file, then making the poster, thumbnail strip, editing proxy and waveform; a long video can take several minutes. You can close this sheet: the asset appears under All assets when it is ready.'
+                : `Upload accepted (intent ${step.intentId}). Scanning, sanitising, hashing and derivatives run in the ingest workflow; this updates when it settles.`
+            }
             data-testid="upload-queued"
           />
         )}
@@ -539,5 +592,60 @@ function Upload({ onAccepted }: { onAccepted: (assetId: string) => void }) {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * STU-2a: an ingested video plays its editing proxy (720p H.264) with the poster frame; audio plays its proxy over the
+ * waveform image. Both are signed through the media endpoint like any derivative.
+ */
+function MediaPreview({
+  kind,
+  name,
+  versionId,
+  hasProxy,
+  hasPoster,
+}: {
+  kind: string;
+  name: string;
+  versionId: string;
+  hasProxy: boolean;
+  hasPoster: boolean;
+}) {
+  const proxy = useSignedUrl(hasProxy ? versionId : null, 'proxy');
+  const poster = useSignedUrl(hasPoster ? versionId : null, 'poster');
+  const waveform = useSignedUrl(kind === 'audio' ? versionId : null, 'preview');
+  if (!hasProxy)
+    return (
+      <p className="text-xs text-muted-foreground">
+        No playable preview for this version (it was catalogued before previews were made).
+      </p>
+    );
+  return (
+    <div className="flex flex-col gap-2" data-testid="asset-media-preview">
+      {kind === 'video' ? (
+        <VideoPlayer
+          src={proxy.data?.url ?? null}
+          poster={poster.data?.url ?? null}
+          label={`Preview of ${name}`}
+        />
+      ) : (
+        <>
+          {waveform.data?.url && (
+            <img
+              src={waveform.data.url}
+              alt={`Waveform of ${name}`}
+              className="h-16 w-full rounded-sm object-cover"
+            />
+          )}
+          <AudioPlayer src={proxy.data?.url ?? null} label={`Preview of ${name}`} />
+        </>
+      )}
+      {proxy.isError && (
+        <p className="text-xs text-status-critical" role="status">
+          The preview could not be loaded.
+        </p>
+      )}
+    </div>
   );
 }

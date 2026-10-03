@@ -222,6 +222,46 @@
           }
         }
       ]
+    },
+    "video_export_pending": {
+      "description": "STU-2a: a rendered video export (video/mp4, its byte size) fetched from the signed release URL and uploaded as tweet_video.",
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "media.oremedia.test", "path": "/release/export.mp4" },
+          "response": { "status": 200, "body": "MP4-EXPORT-BYTES-0123456" }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.x.com",
+            "path": "/2/media/upload/initialize",
+            "bodyIncludes": [
+              "\"media_type\":\"video/mp4\"",
+              "\"total_bytes\":24",
+              "\"media_category\":\"tweet_video\""
+            ]
+          },
+          "response": { "status": 200, "json": { "data": { "id": "m_x", "expires_after_secs": 86400 } } }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.x.com",
+            "path": "/2/media/upload/m_x/append",
+            "bodyIncludes": ["MP4-EXPORT-BYTES-0123456"]
+          },
+          "response": { "status": 204 }
+        },
+        {
+          "request": { "method": "POST", "host": "api.x.com", "path": "/2/media/upload/m_x/finalize" },
+          "response": {
+            "status": 200,
+            "json": {
+              "data": { "id": "m_x", "processing_info": { "state": "pending", "check_after_secs": 4 } }
+            }
+          }
+        }
+      ]
     }
   }
 }
