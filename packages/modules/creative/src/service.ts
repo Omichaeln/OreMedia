@@ -430,7 +430,7 @@ async function evaluateBatch(
   base: RevisionRow,
   batch: OperationBatch,
   tx: Tx,
-  opts: { scope?: GenerationScope | null } = {},
+  opts: { scope?: GenerationScope | null; requestedOperations?: number } = {},
 ) {
   const baseDocument = CreativeDocumentV1.parse(base.snapshot);
   const snapshot = await resolveSnapshot(actor, doc.brandId, baseDocument.brandVersionId, tx);
@@ -440,9 +440,11 @@ async function evaluateBatch(
   // STU-1b: a batch made for a scope may change only what the scope holds (every origin: a person accepting it too).
   const scoped = opts.scope ? scopeState(opts.scope) : null;
   for (const [index, op] of batch.operations.entries()) {
+    // STU-1b: the leading operations a person requested of a generation (template, page copy, adaptation) are theirs.
+    const origin = index < (opts.requestedOperations ?? 0) ? 'user' : batch.origin;
     try {
-      guardProtected(next, op, batch.origin); // agents cannot touch protected elements
-      guardLocks(next, op, batch.origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
+      guardProtected(next, op, origin); // agents cannot touch protected elements
+      guardLocks(next, op, origin); // STU-1a: agents cannot touch locked elements or anything on a locked page
       if (scoped) guardScope(next, op, scoped);
       if (op.op === 'applyTemplate') {
         templates[op.templateVersionId] ??= await resolveTemplate(doc, op, next, index, tx);
@@ -451,7 +453,7 @@ async function evaluateBatch(
       // Agents cannot add logos: inserted, on a new or copied page, in a variant or from a template.
       guardLogoInsertion(
         op,
-        batch.origin,
+        origin,
         next,
         op.op === 'applyTemplate' ? templates[op.templateVersionId]?.page.elements : undefined,
       );
@@ -578,7 +580,7 @@ async function acceptedProposal(
   batch: OperationBatch,
   generation: { jobId: string; groupIds: string[] },
   tx: Tx,
-): Promise<{ scope: GenerationScope | null; inputs: GenerationInputs }> {
+): Promise<{ scope: GenerationScope | null; requestedOperations: number; inputs: GenerationInputs }> {
   const job = await generationJobsRepo.getById(generation.jobId, tx);
   if (job.documentId !== doc.id || job.brandId !== doc.brandId)
     throw new NotFoundError('StudioGenerationJob', generation.jobId);
@@ -598,8 +600,12 @@ async function acceptedProposal(
       [{ path: 'operations', issue: 'not_the_proposed_operations' }],
       'The operations are not those of the chosen proposal groups',
     );
+  const chosen = new Set(
+    proposal.groups.filter((g) => generation.groupIds.includes(g.id)).flatMap((g) => g.operationIndexes),
+  );
   return {
     scope: proposal.scope,
+    requestedOperations: [...chosen].filter((i) => i < proposal.requestedOperations).length,
     inputs: { ...proposal.inputs, acceptedGroupIds: [...generation.groupIds] },
   };
 }
@@ -1157,7 +1163,10 @@ export const creativeService = {
       await assertStale(doc, batch.baseRevisionId);
       const base = await loadRevision(doc, batch.baseRevisionId, tx);
       const accepted = generation ? await acceptedProposal(doc, batch, generation, tx) : null;
-      const evaluated = await evaluateBatch(actor, doc, base, batch, tx, { scope: accepted?.scope ?? null });
+      const evaluated = await evaluateBatch(actor, doc, base, batch, tx, {
+        scope: accepted?.scope ?? null,
+        requestedOperations: accepted?.requestedOperations ?? 0,
+      });
       assertAgentClean(batch.origin, evaluated.findings);
       return commitRevision(actor, doc, base, batch, evaluated, tx, accepted?.inputs ?? null);
     },

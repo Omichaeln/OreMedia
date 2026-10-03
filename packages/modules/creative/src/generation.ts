@@ -884,6 +884,8 @@ export const generationJobs = {
           costMicros: job.costSpentMicros,
           variation,
         };
+        // The structural operations are the person's request (checked as theirs); the fill is the model's.
+        const structural = prepared.structure.operations.length;
         // Brand validation: an edit whose element is blocked (contrast, prohibited phrase, safe area...) is refused.
         const evaluate = async (ops: Operation[], d: CreativeDocumentRow) => {
           const base = await engine.loadRevision(d, d.currentRevisionId ?? '', tx);
@@ -896,12 +898,14 @@ export const generationJobs = {
           return {
             base,
             batch,
-            evaluated: await engine.evaluateBatch(actor, d, base, batch, tx, { scope: prepared.scope }),
+            evaluated: await engine.evaluateBatch(actor, d, base, batch, tx, {
+              scope: prepared.scope,
+              requestedOperations: structural,
+            }),
           };
         };
         let first = await evaluate(operations, doc);
         const blocked = blockingElementIds(first.evaluated.findings);
-        const structural = prepared.structure.operations.length;
         if (blocked.size) {
           const keep = operations.map(
             (op, i) => i < structural || !('elementId' in op && blocked.has(op.elementId)),
@@ -931,6 +935,7 @@ export const generationJobs = {
             findings: first.evaluated.findings,
             contentHash: first.evaluated.contentHash,
             scope: prepared.scope,
+            requestedOperations: structural,
             inputs,
           };
           continue;

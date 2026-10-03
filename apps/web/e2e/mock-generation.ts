@@ -371,6 +371,7 @@ export class GenerationBackend {
           findings: [],
           contentHash: hash(after),
           scope,
+          requestedOperations: structure.operations.length,
           inputs,
         };
         continue;

@@ -263,6 +263,11 @@ export const GenerationProposal = z.object({
   contentHash: z.string(),
   /** The scope the batch was checked against; accept checks it again. */
   scope: GenerationScope.nullable(),
+  /**
+   * The first operations are the person's own request (apply a template, copy or adapt a page) and are checked as
+   * theirs (an agent may not copy a page with a logo; the person may); the rest are the model's, checked as an agent's.
+   */
+  requestedOperations: z.number().int().min(0).default(0),
   /** What produced it; recorded on the revision an accept creates (with the groups kept). */
   inputs: GenerationInputs,
 });
