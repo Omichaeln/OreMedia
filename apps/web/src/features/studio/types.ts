@@ -1,5 +1,6 @@
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import type { CreativeDocumentV1, Finding, Operation } from '@oremedia/contracts/creative';
+import type { ProposalGroup } from '@oremedia/contracts/generation';
 import type { IntentBatch, RebaseConflict, TemplateDocument } from '@oremedia/editor';
 import type { Trpc } from '../../lib/trpc';
 import type { UiError } from '../../lib/errors';
@@ -72,6 +73,8 @@ export interface Proposal {
   source: 'agent' | 'simulated';
   /** UX-07: the run and step a server-side proposal came from; decided through agents.runs.approveProposal. */
   run?: { runId: string; stepId: string };
+  /** STU-1b: a generation job's proposal; its groups are accepted or left out one by one. */
+  generation?: { jobId: string; groups: ProposalGroup[] };
 }
 
 export interface StudioState {

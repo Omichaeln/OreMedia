@@ -267,7 +267,7 @@ export function AgentPanel({
 
   return (
     <div className="flex flex-col gap-3" data-testid="agent-panel">
-      {state.proposal && proposalDiff ? (
+      {state.proposal && !state.proposal.generation && proposalDiff ? (
         <section aria-labelledby="proposal-heading" className="flex flex-col gap-2">
           <h2 id="proposal-heading" className="text-sm font-semibold">
             Agent proposal

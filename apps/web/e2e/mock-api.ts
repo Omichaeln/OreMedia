@@ -128,6 +128,8 @@ import { deniedError, Phase6Backend, phase6Routers } from './mock-phase6';
 import { CommunityBackend, communityRouters } from './mock-community';
 import { DestinationsBackend, destinationsRouters } from './mock-destinations';
 import { FactsBackend, factsRouter } from './mock-facts';
+import { GenerationBackend, generationRouter, type GenerationHost } from './mock-generation';
+import type { GenerationInputs } from '@oremedia/contracts/generation';
 import { overviewRouters } from './mock-overview';
 
 /**
@@ -327,6 +329,8 @@ interface Rev {
   operations: OperationBatch;
   snapshot: CreativeDocumentV1;
   contentHash: string;
+  /** STU-1b: what produced a generated revision (null for people's edits). */
+  generationInputs: GenerationInputs | null;
   createdAt: string;
 }
 interface Doc {
@@ -677,6 +681,8 @@ export class MockBackend {
   readonly destinations: DestinationsBackend;
   /** BSC-3 brand facts (mock-facts.ts); empty unless a suite seeds the workspace fixtures. */
   readonly facts: FactsBackend;
+  /** STU-1b generation jobs (mock-generation.ts). */
+  readonly generation: GenerationBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
@@ -932,6 +938,7 @@ export class MockBackend {
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
     this.facts = new FactsBackend(company.brandId, () => this.role);
+    this.generation = new GenerationBackend(this.generationHost());
     // R2-3: a website is a variant target (content).
     this.phase6.destinationOf = (destinationId) => {
       const d = this.destinations.destinations.find((x) => x.id === destinationId && x.kind === 'cms_site');
@@ -1042,6 +1049,7 @@ export class MockBackend {
     number: number,
     batch: OperationBatch,
     snapshot: CreativeDocumentV1,
+    generationInputs: GenerationInputs | null = null,
   ): Rev {
     return {
       id: rid('rev'),
@@ -1056,6 +1064,7 @@ export class MockBackend {
       operations: batch,
       snapshot,
       contentHash: hash(snapshot),
+      generationInputs,
       createdAt: now(),
     };
   }
@@ -1072,13 +1081,21 @@ export class MockBackend {
   }
 
   /** Spec 11.4 applyOperations, in memory: stale check, guards, reduce, validate, new revision, comment outdating. */
-  apply(input: z.infer<typeof OperationsApply>) {
-    const { documentId, ...batch } = input;
+  apply(input: z.infer<typeof OperationsApply>, inputs: GenerationInputs | null = null) {
+    const { documentId, generation, ...batch } = input;
     const doc = this.doc(documentId);
     if (doc.currentRevisionId !== batch.baseRevisionId) throw new StaleRevisionError(doc.currentRevisionId);
     const base = this.head(documentId);
     const evaluated = this.evaluate(base, batch);
-    const revision = this.revision(documentId, base, base.number + 1, batch, evaluated.snapshot);
+    const generationInputs = generation ? this.generation.inputsFor(generation) : inputs;
+    const revision = this.revision(
+      documentId,
+      base,
+      base.number + 1,
+      batch,
+      evaluated.snapshot,
+      generationInputs,
+    );
     doc.revisions.push(revision);
     doc.currentRevisionId = revision.id;
     doc.version += 1;
@@ -1114,6 +1131,30 @@ export class MockBackend {
       contentHash: hash(next),
       changedElementIds: changedElementIds(batch),
       blocking: findings.some((f) => f.severity === 'blocking'),
+    };
+  }
+
+  /** STU-1b: what the generation slice reads and writes of the document store. */
+  private generationHost(): GenerationHost {
+    return {
+      brandId: this.brandId,
+      head: (documentId) => this.head(documentId),
+      revisionsOf: (documentId) => this.doc(documentId).revisions,
+      applyGenerated: (documentId, batch, inputs) => ({
+        revisionId: this.apply({ documentId, ...batch }, inputs).revision.id,
+      }),
+      duplicateForVariation: (documentId, variation) =>
+        this.createDocument(
+          `${this.doc(documentId).title} – variation ${variation + 1}`,
+          structuredClone(this.head(documentId).snapshot),
+        ).id,
+      effectiveFacts: () =>
+        this.facts.facts
+          .map((f) => this.facts.dto(f))
+          .filter((f) => f.effective)
+          .map((f) => ({ id: f.id, statement: f.statement, kind: f.kind })),
+      eligibleAssetIds: () => ['av_photo'],
+      channelKeys: () => ['linkedin_page', 'instagram_business', 'facebook_page', 'x'],
     };
   }
 
@@ -2795,6 +2836,8 @@ export function createMockRouter(backend: MockBackend) {
           ),
         ),
       }),
+      // STU-1b: generation jobs (mock-generation.ts).
+      generation: generationRouter(backend.generation, { router: t.router, query, mutation }),
       revisions: t.router({
         list: query.input(RevisionList).query(({ input }) => ({
           items: backend

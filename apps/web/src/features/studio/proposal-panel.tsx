@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, StatusBanner, type Tone } from '@oremedia/ui';
 import type { ElementDiff } from './diff';
 import type { Proposal } from './types';
@@ -8,7 +8,10 @@ export interface ProposalPanelProps {
   diff: ElementDiff[];
   headRevisionId: string;
   hasLocalWork: boolean;
-  onAccept: () => void;
+  /** With a generation proposal, the ids of the groups the person kept. */
+  onAccept: (groupIds?: string[]) => void;
+  /** STU-1b: take a generation proposal that has blocking findings as the person's own edit (they fix them). */
+  onAcceptAsMine?: (groupIds: string[]) => void;
   onModify: () => void;
   onReject: () => void;
 }
@@ -26,6 +29,7 @@ export function ProposalPanel({
   headRevisionId,
   hasLocalWork,
   onAccept,
+  onAcceptAsMine,
   onModify,
   onReject,
 }: ProposalPanelProps) {
@@ -33,6 +37,12 @@ export function ProposalPanel({
   useEffect(() => {
     headingRef.current?.focus(); // managed focus: a pending proposal is the next thing to decide (spec 21.3)
   }, [proposal.id]);
+  const groups = proposal.generation?.groups ?? null;
+  // STU-1b selective accept: every group is kept until the person leaves one out.
+  const [kept, setKept] = useState<string[]>(() => groups?.map((g) => g.id) ?? []);
+  useEffect(() => {
+    setKept(proposal.generation?.groups.map((g) => g.id) ?? []);
+  }, [proposal.id, proposal.generation]);
   const stale = proposal.baseRevisionId !== headRevisionId;
   const blocking = proposal.result.findings.filter((f) => f.severity === 'blocking');
   const acceptReason = proposal.result.blocking
@@ -41,7 +51,9 @@ export function ProposalPanel({
       ? 'The document changed since this proposal was made; it needs to be proposed again'
       : hasLocalWork
         ? 'Save your pending changes first'
-        : undefined;
+        : groups && kept.length === 0
+          ? 'Keep at least one change'
+          : undefined;
   return (
     <div className="flex flex-col gap-3" data-testid="proposal">
       <div
@@ -64,6 +76,26 @@ export function ProposalPanel({
           }
         />
       </div>
+      {groups && (
+        <fieldset className="flex flex-col gap-1 text-sm" data-testid="proposal-groups">
+          <legend className="mb-1 text-xs font-medium text-muted-foreground">
+            Changes to keep ({kept.length} of {groups.length})
+          </legend>
+          {groups.map((g) => (
+            <label key={g.id} className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={kept.includes(g.id)}
+                onChange={(e) =>
+                  setKept((k) => (e.target.checked ? [...k, g.id] : k.filter((id) => id !== g.id)))
+                }
+              />
+              <span>{g.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
       <ul className="flex flex-col gap-1 text-sm" aria-label="Proposed changes">
         {diff.length === 0 && <li className="text-muted-foreground">No visible change.</li>}
         {diff.map((d) => (
@@ -88,9 +120,32 @@ export function ProposalPanel({
         </ul>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" size="sm" onClick={onAccept} disabledReason={acceptReason}>
-          Accept
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => onAccept(groups ? kept : undefined)}
+          disabledReason={acceptReason}
+          data-testid="proposal-accept"
+        >
+          {groups && kept.length < groups.length ? `Accept ${kept.length} of ${groups.length}` : 'Accept'}
         </Button>
+        {groups && proposal.result.blocking && onAcceptAsMine && (
+          <Button
+            size="sm"
+            onClick={() => onAcceptAsMine(kept)}
+            disabledReason={
+              stale
+                ? 'The document changed since this proposal was made'
+                : hasLocalWork
+                  ? 'Save your pending changes first'
+                  : kept.length === 0
+                    ? 'Keep at least one change'
+                    : undefined
+            }
+          >
+            Apply as my edit
+          </Button>
+        )}
         <Button size="sm" onClick={onModify}>
           Modify
         </Button>
