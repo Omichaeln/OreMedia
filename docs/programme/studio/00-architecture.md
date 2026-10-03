@@ -126,3 +126,37 @@ Graphic documents keep schemaVersion 1 and change only additively; video is a ne
   `video` entry is where STU-2b wires the video document kind.
 - Generated raster images are detected from the asset version's provenance kind, now returned by
   `assets.media.signedUrl` (`origin`).
+
+## STU-1b as built (notes for later stages)
+
+- Contracts: `packages/contracts/src/generation.ts` (brief, refine request with explicit scope and action
+  `edit | alternatives | adapt`, preflight, job DTO states, the model's strict output `ModelGenerationOutput`, proposal
+  groups, `GenerationInputs`, workflow input and activity interfaces). Job ids use the prefix `sgj`.
+- Migration `0027_studio_generation` (self-contained, drizzle-kit output renumbered; 0024-0026 are reserved
+  elsewhere): table `studio_generation_jobs` (one row per document, base revision and inputs hash; attempts update it
+  in place) and nullable `creative_revisions.generation_inputs`. Rows written before it read as null.
+- Pure parts in `packages/editor/src/generation.ts`: slots of a page (template slots or the element's role; locked,
+  protected, logo, hidden, locked-page and out-of-scope elements listed as fixed), the structural operations a request
+  implies (applyTemplate with role-bound slots, duplicatePage for alternatives, createFormatVariant for adapt), the
+  compiler from slot fills to operations (text within the slot limit with effective fact ids, eligible assets only,
+  palette tokens only, boxes inside the page, type size/weight/align; anything else refused with a reason), proposal
+  grouping for selective accept, and the preflight rules. `guardScope` (packages/editor/src/guard.ts) is ancestor-aware
+  and runs in `evaluateBatch` whenever a batch carries a scope (the job's batches and the accept of its proposal).
+- Service: `generationService` (module-creative) preflight/start/get/active/cancel/retry; start needs creative.edit
+  and agent.start_run; the outbox starts `studioGenerationWorkflowV1` on queue `agents` (workflow id
+  `studio-gen:<jobId>:<attempt>`), cancel moves the row first, releases the reservation and is relayed as a signal.
+  The model call lives in module-agents (`createStudioGenerationRuntime`, the worker's adapter and price list); the
+  prompt (`packages/ai/src/generation-prompt.ts`) renders BSC-1 guidance for the destination channel and copy type,
+  facts by id, palette, logo rules and asset descriptions as untrusted evidence, and forces one tool with a strict
+  JSON schema.
+- Revision model and variations: revisions are a linear head, so a proposal set of alternatives on one document would
+  fight the head. Variation 1 goes into the document itself; each further variation is a duplicate of the base
+  revision with its own generated revision (`resultDocumentIds`). A document whose revisions after the first are all
+  generated is "fresh" and receives the revision directly (undoable: the studio adopts it as a history entry); a
+  document a person edited, and every refinement, gets a proposal. Accept sends exactly the chosen groups' operations
+  to `operations.applyBatch` with `generation: { jobId, groupIds }`; the server checks them against the stored
+  proposal and its scope and records the inputs with `acceptedGroupIds`. A proposal with blocking findings (e.g. a
+  reflowed logo outside a story's safe area: agents may not move logos) can only be taken as the person's own edit.
+- Image generation for empty image areas: preflight and the panel gate it on `registerGenerationImageAvailability`,
+  which no deployment registers yet, because a generated image is a pending asset (rights unknown) that the
+  eligibility rule refuses to place. Wiring generation through the asset approval path is left for a later stage.
