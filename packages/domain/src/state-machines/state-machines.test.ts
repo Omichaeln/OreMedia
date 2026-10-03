@@ -126,6 +126,14 @@ describe('other machines', () => {
     expect(approvedFactMachine.can('approved', 'approve')).toBe(false);
     for (const e of approvedFactMachine.events) expect(approvedFactMachine.can('revoked', e)).toBe(false);
   });
+  it('approved fact (BSC-3): a correction or a merge supersedes a proposed or approved fact; superseded is final', () => {
+    expect(approvedFactMachine.transition('approved', 'supersede')).toBe('superseded');
+    expect(approvedFactMachine.transition('proposed', 'supersede')).toBe('superseded');
+    expect(approvedFactMachine.can('revoked', 'supersede')).toBe(false);
+    expect(approvedFactMachine.terminal).toEqual(['revoked', 'superseded']);
+    for (const e of approvedFactMachine.events) expect(approvedFactMachine.can('superseded', e)).toBe(false);
+    expect(() => approvedFactMachine.transition('superseded', 'approve')).toThrow(IllegalTransitionError);
+  });
   it('policy version: draft → active → retired; a retired policy never re-activates', () => {
     expect(policyVersionMachine.transition('draft', 'activate')).toBe('active');
     expect(policyVersionMachine.transition('active', 'retire')).toBe('retired');

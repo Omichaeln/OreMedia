@@ -13,6 +13,8 @@ import type {
   BrandSystemDocumentV1,
   DesignTokenSetV1,
   EvidenceRef,
+  FactConflict,
+  FactSource,
   PolicyDocumentV1,
 } from '@oremedia/contracts/brand';
 import { brandId, createdAt, hash, id, ref, tenantId, ts, updatedAt, version } from './_columns';
@@ -140,11 +142,48 @@ export const approvedFacts = mysqlTable(
     evidence: json('evidence').$type<EvidenceRef[]>().notNull(), // source doc/asset refs, URLs, reviewer
     validFrom: ts('valid_from'),
     validUntil: ts('valid_until'), // expired offers block release
-    state: mysqlEnum('state', ['proposed', 'approved', 'revoked']).notNull(),
+    state: mysqlEnum('state', ['proposed', 'approved', 'revoked', 'superseded']).notNull(),
     proposedByKind: mysqlEnum('proposed_by_kind', ['user', 'agent']).notNull(),
     proposedById: ref('proposed_by_id').notNull(),
     approvedByUserId: ref('approved_by_user_id'),
     revokedByUserId: ref('revoked_by_user_id'),
+    // BSC-3 (migration 0023). Nullable so a row written by the previous release during a rolling deploy is valid;
+    // readers fall back to the category of the same name as `kind` and to the origin `proposed_by_kind` implies.
+    category: mysqlEnum('category', [
+      'company',
+      'product',
+      'service',
+      'location',
+      'contact',
+      'differentiator',
+      'audience',
+      'terminology',
+      'claim',
+      'faq',
+      'offer',
+      'price',
+      'statistic',
+      'legal',
+    ]),
+    /** null: brand-wide; otherwise a channel or market note (e.g. "UK only", "LinkedIn"). */
+    scope: varchar('scope', { length: 200 }),
+    origin: mysqlEnum('origin', ['user', 'extracted', 'inferred', 'suggested']),
+    /** Sources with titles and excerpts; null on rows written before 0023 (the migration copies `evidence`). */
+    sources: json('sources').$type<FactSource[]>(),
+    reviewDueAt: ts('review_due_at'),
+    reviewedByUserId: ref('reviewed_by_user_id'),
+    reviewedAt: ts('reviewed_at'),
+    /** Set when the fact became superseded: its approved correction, or the fact it was merged into. */
+    supersededByFactId: ref('superseded_by_fact_id'),
+    /** On a correction: the approved fact it replaces once approved. */
+    supersedesFactId: ref('supersedes_fact_id'),
+    revokeReason: varchar('revoke_reason', { length: 500 }),
+    conflicts: json('conflicts').$type<FactConflict[]>(),
+    /** sha256 of the normalised statement (packages/domain/src/facts.ts); null until computed (the sweep backfills). */
+    dedupeKey: hash('dedupe_key'),
+    /** The daily sweep's markers: the review-due flag and the one expiry event (exactly once). */
+    reviewFlaggedAt: ts('review_flagged_at'),
+    expiryNotifiedAt: ts('expiry_notified_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -152,6 +191,7 @@ export const approvedFacts = mysqlTable(
   (t) => [
     uniqueIndex('uq_fact_tbi').on(t.tenantId, t.brandId, t.id),
     index('ix_fact_state').on(t.tenantId, t.brandId, t.state),
+    index('ix_fact_dedupe').on(t.tenantId, t.brandId, t.dedupeKey),
     foreignKey({
       columns: [t.tenantId, t.brandId],
       foreignColumns: [brands.tenantId, brands.id],
