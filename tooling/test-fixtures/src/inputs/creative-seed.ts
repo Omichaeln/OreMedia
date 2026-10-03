@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { emptyBrandSystemDocument } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
 import { brandVersions, brands } from '@oremedia/db/schema/brand';
@@ -145,17 +145,12 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     state: 'draft',
   });
   const renderJobId = newId('renderJob');
-  await db.insert(renderJobs).values({
-    id: renderJobId,
-    tenantId,
-    brandId,
-    revisionId: creativeRevisionId,
-    formatKeys: ['square_1080'],
-    state: 'pending',
-    attempts: 0,
-    requestedByKind: 'user',
-    requestedById: ownerUserId,
-  });
+  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0025), which the roll-forward suites'
+  // earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${renderJobs} (id, tenant_id, brand_id, revision_id, format_keys, state, attempts, requested_by_kind, requested_by_id, created_at, updated_at) values (${renderJobId}, ${tenantId}, ${brandId}, ${creativeRevisionId}, '["square_1080"]', 'pending', 0, 'user', ${ownerUserId}, ${at}, ${at})`,
+  );
   return {
     creativePublishedBrandVersionId,
     creativeDocumentId,

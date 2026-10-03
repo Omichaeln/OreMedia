@@ -430,5 +430,88 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         cleanupKeys: [quarantineKey(f)],
       }),
     },
+
+    // ---- task queue `video` (STU-2a): videoIngestWorkflowV1 and the video export store ----
+    'video.beginIngest': { buildInput: ingest },
+    'video.verifyUpload': { buildInput: ingest },
+    'video.sniffUpload': { buildInput: ingest },
+    'video.scanMediaUpload': { buildInput: ingest },
+    'video.inspectMediaUpload': {
+      buildInput: (ctx, f, own) => ({ ...ingest(ctx, f, own), mime: 'audio/mp4', group: 'audio' }),
+    },
+    'video.buildMediaDerivatives': {
+      buildInput: (ctx, f, own) => ({
+        ...ingest(ctx, f, own),
+        mime: 'audio/mp4',
+        group: 'audio',
+        probe: MEDIA_PROBE,
+      }),
+    },
+    'video.moveToImmutable': {
+      buildInput: (ctx, f, own) => ({
+        ...ingest(ctx, f, own),
+        sanitisedKey: quarantineKey(f),
+        derivatives: [],
+      }),
+    },
+    'video.catalogueMediaAsset': {
+      buildInput: (ctx, f, own) => ({
+        ...ingest(ctx, f, own),
+        assetId: f['pendingAssetId'],
+        assetVersionId: f['assetVersionId'],
+        originalKey: `assets/${f['tenantId']}/${f['brandId']}/originals/${f['assetVersionId']}`,
+        contentHash: 'b'.repeat(64),
+        mime: 'audio/mp4',
+        bytes: 1,
+        width: null,
+        height: null,
+        colourProfile: null,
+        sanitised: false,
+        derivatives: [],
+        probe: MEDIA_PROBE,
+      }),
+    },
+    'video.finaliseMediaUpload': {
+      buildInput: (ctx, f, own) => ({
+        ...ingest(ctx, f, own),
+        outcome: 'rejected',
+        reason: 'media_malformed',
+        detail: 'partial file',
+        cleanupKeys: [quarantineKey(f)],
+      }),
+    },
+    'video.storeVideoExport': {
+      buildInput: (ctx, f, own) => {
+        const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['creativeRevisionId']}/${f['renderJobId']}/page_1-reel`;
+        return {
+          ...renderJob(ctx, f),
+          brandId: own['brandId'],
+          export: {
+            pageId: 'page_1',
+            formatKey: 'reel_1080',
+            storageKey: `${base}.mp4`,
+            contentHash: 'c'.repeat(64),
+            bytes: 1,
+            width: 1080,
+            height: 1920,
+            durationMs: 1000,
+            fps: 30,
+            posterStorageKey: `${base}.poster.webp`,
+            posterContentHash: 'd'.repeat(64),
+          },
+        };
+      },
+    },
   },
+};
+
+/** An audio probe as the inspection records it (STU-2a), for the media activities' fixtures. */
+const MEDIA_PROBE = {
+  schemaVersion: 1 as const,
+  container: 'mov,mp4,m4a,3gp,3g2,mj2',
+  durationMs: 1000,
+  bitRate: null,
+  bytes: 1,
+  video: null,
+  audio: [{ codec: 'aac', channels: 2, sampleRate: 48_000, bitRate: null }],
 };

@@ -262,6 +262,10 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   publications: ['destination_id', 'remote_status', 'remote_verification', 'remote_verified_at'], // 0018, 0020
   channel_connections: ['health', 'health_checked_at'], // 0022
   destination_report_rows: ['time_zone', 'quality'], // 0021
+  asset_versions: ['media_info'], // 0025
+  upload_intents: ['rejection_detail'], // 0025
+  render_jobs: ['progress'], // 0025
+  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key'], // 0025
 };
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
