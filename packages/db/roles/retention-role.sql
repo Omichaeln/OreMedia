@@ -5,6 +5,7 @@ REVOKE ALL PRIVILEGES, GRANT OPTION FROM '__RETENTION_USER__'@'%';
 GRANT SELECT, DELETE ON `__DB_NAME__`.`agent_steps` TO '__RETENTION_USER__'@'%';
 GRANT INSERT ON `__DB_NAME__`.`audit_events` TO '__RETENTION_USER__'@'%';
 GRANT SELECT ON `__DB_NAME__`.`brand_destinations` TO '__RETENTION_USER__'@'%';
+GRANT SELECT, UPDATE ON `__DB_NAME__`.`brand_sources` TO '__RETENTION_USER__'@'%';
 GRANT SELECT, UPDATE ON `__DB_NAME__`.`customer_voice_clusters` TO '__RETENTION_USER__'@'%';
 GRANT SELECT, DELETE ON `__DB_NAME__`.`destination_report_rows` TO '__RETENTION_USER__'@'%';
 GRANT SELECT, DELETE ON `__DB_NAME__`.`link_clicks` TO '__RETENTION_USER__'@'%';

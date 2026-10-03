@@ -38,6 +38,11 @@ export { createChannelRevokeActivities, CHANNEL_REVOKE_ACTOR } from './channel-r
 export { createRenderedValidationActivities } from './rendered-validation';
 export { createDestinationRefreshActivities, DESTINATION_REFRESH_ACTOR } from './destination-refresh';
 export { createBrandFactSweepActivities } from './brand-fact-sweep';
+export {
+  createBrandAssistActivities,
+  createBrandSourceCaptureActivities,
+  createBrandSourceExtractActivities,
+} from './brand-assist';
 export { createDestinationVerifyActivities } from './destination-verify';
 export { createDestinationRevokeActivities, DESTINATION_REVOKE_ACTOR } from './destination-revoke';
 export { createDestinationReportActivities, DESTINATION_REPORTS_ACTOR } from './destination-reports';

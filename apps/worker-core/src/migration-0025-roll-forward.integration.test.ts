@@ -7,13 +7,13 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { seedTwoTenants, snapshotColumns } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0025 (STU-1b studio generation): on a database populated at the previous head (0023)
+ * Ledger 1.g4 for migration 0025 (STU-1b studio generation): on a database populated at the previous head (0024)
  * the migration adds the nullable creative_revisions.generation_inputs (null on every existing revision) and the
  * empty studio_generation_jobs table; every existing column of every row is unchanged. Additive and roll-forward
  * safe: a revision written by the previous release has no generation inputs, which reads as a person's or an agent
  * run's revision.
  */
-const PREVIOUS_HEAD = '0023_facts_workspace';
+const PREVIOUS_HEAD = '0024_brand_assist';
 const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
@@ -36,7 +36,7 @@ describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     await seedTwoTenants(tdb.db);
-    await expect(tdb.db.select().from(studioGenerationJobs)).rejects.toThrow(); // not there at 0023
+    await expect(tdb.db.select().from(studioGenerationJobs)).rejects.toThrow(); // not there at 0024
     await expect(tdb.db.select().from(creativeRevisions)).rejects.toThrow(); // generation_inputs not there yet
     before = await snapshot();
   });

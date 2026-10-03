@@ -71,6 +71,8 @@ export const RETENTION_ROLE_GRANTS: Readonly<Record<string, readonly RetentionPr
   // agent_transcripts (90 days)
   agent_steps: ['SELECT', 'DELETE'],
   tool_invocations: ['SELECT', 'DELETE'],
+  // ...and brand source text (BSC-4: prompt material), cleared in place
+  brand_sources: ['SELECT', 'UPDATE'],
   // metrics (25 months)
   metric_snapshots: ['SELECT', 'DELETE'],
   link_clicks: ['SELECT', 'DELETE'],

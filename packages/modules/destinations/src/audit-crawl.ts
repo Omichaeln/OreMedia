@@ -16,6 +16,14 @@ import {
   type SeoAuditSummaryCountsV1,
 } from '@oremedia/contracts/seo-audit';
 import { sha256Hex } from '@oremedia/domain/hash';
+import {
+  decodeEntities,
+  parseRobots,
+  robotsAllows,
+  sitemapUrls,
+  type RobotsRules as ProviderRobotsRules,
+  type SitemapListing,
+} from '@oremedia/providers';
 
 /**
  * The pure half of the technical SEO audit (ledger R2-4): what a URL must look like to be followed, the minimal
@@ -43,89 +51,20 @@ export function sameOriginUrl(href: string, pageUrl: string, origin: string): st
   return out.length > SEO_AUDIT_URL_MAX ? null : out;
 }
 
-// ---- robots.txt (RFC 9309 subset: the `*` group's Disallow rules; Allow and other agents are ignored) ----
+// ---- robots.txt and sitemaps (the shared site rules: packages/providers/src/site-rules.ts) ----
 
-export interface RobotsRules {
-  disallow: string[];
-  truncated: boolean;
-}
+export type RobotsRules = Pick<ProviderRobotsRules, 'disallow' | 'truncated'>;
 
+/** The `*` group's Disallow rules, at most SEO_AUDIT_ROBOTS_RULES of them. */
 export function robotsDisallowFor(text: string): RobotsRules {
-  const disallow: string[] = [];
-  let truncated = false;
-  let inStar = false;
-  let sawAgent = false;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/#.*$/, '').trim();
-    if (line === '') continue;
-    const sep = line.indexOf(':');
-    if (sep < 0) continue;
-    const field = line.slice(0, sep).trim().toLowerCase();
-    const value = line.slice(sep + 1).trim();
-    if (field === 'user-agent') {
-      // Consecutive user-agent lines share the group that follows; a rule line closes the agent list.
-      if (!sawAgent) inStar = false;
-      sawAgent = true;
-      if (value === '*') inStar = true;
-      continue;
-    }
-    sawAgent = false;
-    if (field !== 'disallow' || !inStar || value === '') continue;
-    if (disallow.length >= SEO_AUDIT_ROBOTS_RULES) {
-      truncated = true;
-      break;
-    }
-    disallow.push(value);
-  }
+  const { disallow, truncated } = parseRobots(text, SEO_AUDIT_ROBOTS_RULES);
   return { disallow, truncated };
 }
 
-const escapeRegex = (s: string) => s.replace(/[.+?^{}()|[\]\\]/g, '\\$&');
-
-/** Whether a URL's path (with its query) is outside every Disallow rule; `*` matches any run, `$` ends the match. */
-export function robotsAllows(disallow: readonly string[], url: string): boolean {
-  let path: string;
-  try {
-    const u = new URL(url);
-    path = `${u.pathname}${u.search}`;
-  } catch {
-    return false;
-  }
-  return !disallow.some((rule) => {
-    const anchored = rule.endsWith('$');
-    const body = anchored ? rule.slice(0, -1) : rule;
-    const pattern = `^${body.split('*').map(escapeRegex).join('.*')}${anchored ? '$' : ''}`;
-    return new RegExp(pattern).test(path);
-  });
-}
-
-// ---- sitemaps ----
-
-export interface SitemapListing {
-  urls: string[];
-  /** Nested sitemaps of an index (read one level deep by the runtime). */
-  sitemaps: string[];
-}
-
-const locsIn = (xml: string, container: 'url' | 'sitemap'): string[] =>
-  [...xml.matchAll(new RegExp(`<${container}\\b[^>]*>([\\s\\S]*?)</${container}>`, 'gi'))].flatMap((m) => {
-    const loc = /<loc\b[^>]*>\s*([^<\s]+)\s*<\/loc>/i.exec(m[1] as string);
-    return loc ? [decodeEntities(loc[1] as string)] : [];
-  });
-
-export function sitemapUrls(xml: string): SitemapListing {
-  return { urls: locsIn(xml, 'url'), sitemaps: locsIn(xml, 'sitemap') };
-}
+export { robotsAllows, sitemapUrls, type SitemapListing };
 
 // ---- HTML reading (regex over the markup, as contracts/article.ts validates a rendered page) ----
 
-const decodeEntities = (text: string): string =>
-  text
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, (_, e: string) =>
-      e === 'amp' ? '&' : e === 'lt' ? '<' : e === 'gt' ? '>' : e === 'quot' ? '"' : e === 'nbsp' ? ' ' : "'",
-    );
 const fold = (text: string): string =>
   decodeEntities(text.replace(/<[^>]+>/g, ' '))
     .replace(/\s+/g, ' ')

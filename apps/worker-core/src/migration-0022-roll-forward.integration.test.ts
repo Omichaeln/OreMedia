@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { auditEvents } from '@oremedia/db/schema/operations';
 import { channelConnections } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -20,8 +21,8 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * the two columns are in LATER_COLUMNS (seed.ts), so the earlier suites keep seeding without them.
  */
 const PREVIOUS_HEAD = '0021_report_quality_finding_work';
-/** Added by later migrations (0025). */
-const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
+/** Tables later migrations add (BSC-4, 0024; STU-1b, 0025): absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));

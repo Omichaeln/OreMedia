@@ -1511,6 +1511,244 @@
         }
       }
     },
+    "/trpc/brand.assist.answer": {
+      "post": {
+        "operationId": "brand.assist.answer",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "questionId": {
+                          "type": "string"
+                        },
+                        "answer": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["questionId", "answer"]
+                    }
+                  }
+                },
+                "required": ["brandId", "jobId", "answers"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.assist.cancel": {
+      "post": {
+        "operationId": "brand.assist.cancel",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "jobId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.assist.estimate": {
+      "get": {
+        "operationId": "brand.assist.estimate",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["setup", "section"]
+                  },
+                  "sections": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "voice",
+                        "messaging",
+                        "vocabulary",
+                        "writing",
+                        "examples",
+                        "templates",
+                        "channels",
+                        "facts"
+                      ]
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "sourceIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "preserve": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "alternativesForJobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "kind", "sections"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.assist.get": {
+      "get": {
+        "operationId": "brand.assist.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "jobId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.assist.list": {
+      "get": {
+        "operationId": "brand.assist.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.assist.start": {
+      "post": {
+        "operationId": "brand.assist.start",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["setup", "section"]
+                  },
+                  "sections": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "voice",
+                        "messaging",
+                        "vocabulary",
+                        "writing",
+                        "examples",
+                        "templates",
+                        "channels",
+                        "facts"
+                      ]
+                    }
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "sourceIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "preserve": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "alternativesForJobId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "kind", "sections"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/brand.classify": {
       "post": {
         "operationId": "brand.classify",
@@ -2322,6 +2560,93 @@
         }
       }
     },
+    "/trpc/brand.history.compare": {
+      "get": {
+        "operationId": "brand.history.compare",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "versionId": {
+                    "type": "string"
+                  },
+                  "againstVersionId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "versionId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.history.list": {
+      "get": {
+        "operationId": "brand.history.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.history.restore": {
+      "post": {
+        "operationId": "brand.history.restore",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "versionId": {
+                    "type": "string"
+                  },
+                  "basedOnVersionId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "versionId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/brand.list": {
       "get": {
         "operationId": "brand.list",
@@ -2584,6 +2909,380 @@
                     "type": "string"
                   },
                   "policyVersionId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.sources.add": {
+      "post": {
+        "operationId": "brand.sources.add",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "url"
+                      },
+                      "brandId": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "brandId", "url"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "text"
+                      },
+                      "brandId": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "brandId", "title", "text"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "document"
+                      },
+                      "brandId": {
+                        "type": "string"
+                      },
+                      "fileName": {
+                        "type": "string"
+                      },
+                      "mime": {
+                        "type": "string",
+                        "enum": [
+                          "application/pdf",
+                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                          "text/markdown",
+                          "text/plain"
+                        ]
+                      },
+                      "byteSize": {
+                        "type": "number"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "brandId", "fileName", "mime", "byteSize"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "brand_asset"
+                      },
+                      "brandId": {
+                        "type": "string"
+                      },
+                      "assetVersionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "brandId", "assetVersionId"]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.sources.get": {
+      "get": {
+        "operationId": "brand.sources.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "sourceId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "sourceId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.sources.list": {
+      "get": {
+        "operationId": "brand.sources.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.sources.remove": {
+      "post": {
+        "operationId": "brand.sources.remove",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "sourceId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "sourceId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.accept": {
+      "post": {
+        "operationId": "brand.suggestions.accept",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "suggestionIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["brandId", "suggestionIds"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.acceptAll": {
+      "post": {
+        "operationId": "brand.suggestions.acceptAll",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string",
+                    "enum": [
+                      "voice",
+                      "messaging",
+                      "vocabulary",
+                      "writing",
+                      "examples",
+                      "templates",
+                      "channels",
+                      "facts"
+                    ]
+                  }
+                },
+                "required": ["brandId", "jobId", "section"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.edit": {
+      "post": {
+        "operationId": "brand.suggestions.edit",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "suggestionId": {
+                    "type": "string"
+                  },
+                  "value": {}
+                },
+                "required": ["brandId", "suggestionId", "value"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.list": {
+      "get": {
+        "operationId": "brand.suggestions.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "type": "string"
+                  },
+                  "section": {
+                    "type": "string",
+                    "enum": [
+                      "voice",
+                      "messaging",
+                      "vocabulary",
+                      "writing",
+                      "examples",
+                      "templates",
+                      "channels",
+                      "facts"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["pending", "accepted", "edited", "rejected", "superseded"]
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.reject": {
+      "post": {
+        "operationId": "brand.suggestions.reject",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "suggestionIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["brandId", "suggestionIds"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/brand.suggestions.undo": {
+      "post": {
+        "operationId": "brand.suggestions.undo",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "batchId": {
                     "type": "string"
                   }
                 },
@@ -16338,6 +17037,190 @@
           "required": ["assetId", "page"]
         }
       },
+      "brand.assist.answer": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "answers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "questionId": {
+                    "type": "string"
+                  },
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": ["questionId", "answer"]
+              }
+            }
+          },
+          "required": ["brandId", "jobId", "answers"]
+        }
+      },
+      "brand.assist.cancel": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "jobId"]
+        }
+      },
+      "brand.assist.estimate": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["setup", "section"]
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "voice",
+                  "messaging",
+                  "vocabulary",
+                  "writing",
+                  "examples",
+                  "templates",
+                  "channels",
+                  "facts"
+                ]
+              }
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "sourceIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "preserve": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "alternativesForJobId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "kind", "sections"]
+        }
+      },
+      "brand.assist.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "jobId"]
+        }
+      },
+      "brand.assist.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "brand.assist.start": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["setup", "section"]
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "voice",
+                  "messaging",
+                  "vocabulary",
+                  "writing",
+                  "examples",
+                  "templates",
+                  "channels",
+                  "facts"
+                ]
+              }
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "sourceIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "preserve": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "alternativesForJobId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "kind", "sections"]
+        }
+      },
       "brand.classify": {
         "type": "mutation",
         "input": {
@@ -17014,6 +17897,66 @@
           "required": ["brandId", "files"]
         }
       },
+      "brand.history.compare": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "versionId": {
+              "type": "string"
+            },
+            "againstVersionId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "versionId"]
+        }
+      },
+      "brand.history.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "brand.history.restore": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "versionId": {
+              "type": "string"
+            },
+            "basedOnVersionId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "versionId"]
+        }
+      },
       "brand.list": {
         "type": "query",
         "input": null
@@ -17224,6 +18167,290 @@
               "type": "string"
             },
             "policyVersionId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "brand.sources.add": {
+        "type": "mutation",
+        "input": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "url"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "brandId", "url"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "text"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "brandId", "title", "text"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "document"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "fileName": {
+                  "type": "string"
+                },
+                "mime": {
+                  "type": "string",
+                  "enum": [
+                    "application/pdf",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "text/markdown",
+                    "text/plain"
+                  ]
+                },
+                "byteSize": {
+                  "type": "number"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "brandId", "fileName", "mime", "byteSize"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "brand_asset"
+                },
+                "brandId": {
+                  "type": "string"
+                },
+                "assetVersionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "brandId", "assetVersionId"]
+            }
+          ]
+        }
+      },
+      "brand.sources.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "sourceId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "sourceId"]
+        }
+      },
+      "brand.sources.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "brand.sources.remove": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "sourceId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "sourceId", "expectedVersion"]
+        }
+      },
+      "brand.suggestions.accept": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "suggestionIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["brandId", "suggestionIds"]
+        }
+      },
+      "brand.suggestions.acceptAll": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "voice",
+                "messaging",
+                "vocabulary",
+                "writing",
+                "examples",
+                "templates",
+                "channels",
+                "facts"
+              ]
+            }
+          },
+          "required": ["brandId", "jobId", "section"]
+        }
+      },
+      "brand.suggestions.edit": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "suggestionId": {
+              "type": "string"
+            },
+            "value": {}
+          },
+          "required": ["brandId", "suggestionId", "value"]
+        }
+      },
+      "brand.suggestions.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string",
+              "enum": [
+                "voice",
+                "messaging",
+                "vocabulary",
+                "writing",
+                "examples",
+                "templates",
+                "channels",
+                "facts"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["pending", "accepted", "edited", "rejected", "superseded"]
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "brand.suggestions.reject": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "suggestionIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["brandId", "suggestionIds"]
+        }
+      },
+      "brand.suggestions.undo": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "batchId": {
               "type": "string"
             }
           },

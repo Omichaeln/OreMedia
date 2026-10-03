@@ -131,6 +131,7 @@ import { DestinationsBackend, destinationsRouters } from './mock-destinations';
 import { FactsBackend, factsRouter } from './mock-facts';
 import { GenerationBackend, generationRouter, type GenerationHost } from './mock-generation';
 import type { GenerationInputs } from '@oremedia/contracts/generation';
+import { AssistBackend, assistRouters } from './mock-assist';
 import { overviewRouters } from './mock-overview';
 
 /**
@@ -684,6 +685,8 @@ export class MockBackend {
   readonly facts: FactsBackend;
   /** STU-1b generation jobs (mock-generation.ts). */
   readonly generation: GenerationBackend;
+  /** BSC-4/5 sources, assist jobs, suggestions and history (mock-assist.ts). */
+  readonly assist: AssistBackend;
   /** The company's brands (brand.list / brand.get); the first is the brand every seeded row belongs to. */
   readonly brands: BrandRow[];
   /** Agent runs of this company (agents.runs.*; the brand's list is agents.runs.list, newest first). */
@@ -940,6 +943,32 @@ export class MockBackend {
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
     this.facts = new FactsBackend(company.brandId, () => this.role);
     this.generation = new GenerationBackend(this.generationHost());
+    const brandId = company.brandId;
+    this.assist = new AssistBackend(
+      brandId,
+      () => this.role,
+      {
+        applied: () => this.appliedBrandDocument(brandId),
+        appliedVersionId: () => this.brands.find((b) => b.id === brandId)?.publishedVersionId ?? null,
+        proposal: () => {
+          const applied = this.brandVersions.find(
+            (v) => v.id === this.brands.find((b) => b.id === brandId)?.publishedVersionId,
+          );
+          return (
+            this.brandVersionsOf(brandId)
+              .filter(
+                (v) =>
+                  (v.state === 'draft' || v.state === 'in_review') && (!applied || v.number > applied.number),
+              )
+              .sort((a, b) => b.number - a.number)[0] ?? null
+          );
+        },
+        propose: (document) => this.proposeBrandUpdate(brandId, document),
+        apply: (document) => this.applyBrandSystem(brandId, document),
+        versions: () => this.brandVersionsOf(brandId),
+      },
+      () => this.objectStoreOrigin,
+    );
     // R2-3: a website is a variant target (content).
     this.phase6.destinationOf = (destinationId) => {
       const d = this.destinations.destinations.find((x) => x.id === destinationId && x.kind === 'cms_site');
@@ -2447,6 +2476,7 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       facts: factsRouter(backend.facts, { router: t.router, query, mutation }),
+      ...assistRouters(backend.assist, { router: t.router, query, mutation }),
       objectives: t.router({
         list: query.input(ObjectiveList).query(() => ({ items: [], nextCursor: null })),
       }),

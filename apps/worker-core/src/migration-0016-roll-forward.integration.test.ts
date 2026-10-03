@@ -5,6 +5,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import {
   brandDestinations,
   destinationReportRows,
@@ -41,6 +42,10 @@ const PREVIOUS_HEAD = '0015_brand_destinations';
 const NEW_TABLES: MySqlTable[] = [pendingDestinationGrants];
 /** Added by later migrations (0017). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,

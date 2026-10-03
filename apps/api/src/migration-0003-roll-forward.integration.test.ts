@@ -5,7 +5,12 @@ import * as schema from '@oremedia/db/schema';
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { authEvents, externalIdentities, passwordSetupTokens, users } from '@oremedia/db/schema/access';
 import { generatedUploads } from '@oremedia/db/schema/assets';
-import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
+import {
+  brandAssistJobs,
+  brandGuidelineAuthors,
+  brandSources,
+  brandSuggestions,
+} from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
@@ -32,6 +37,11 @@ const PREVIOUS_HEAD = '0002_provider_jobs_routing_previews_ledger_idempotency';
 const NEW_TABLES: MySqlTable[] = [externalIdentities, authEvents];
 /** Added by later migrations (0004 to 0013; see the migration-*-roll-forward tests in apps/worker-core/src). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   generatedUploads,
   providerReviewStatuses,
   brandGuidelineAuthors,

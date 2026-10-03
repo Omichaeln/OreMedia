@@ -4,6 +4,7 @@ import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { ARTICLE_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import { channelVariants } from '@oremedia/db/schema/content';
 import { brandDestinations, seoFindingWork } from '@oremedia/db/schema/destinations';
@@ -23,8 +24,14 @@ const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').sl
  * a value outside either enum is refused.
  */
 const PREVIOUS_HEAD = '0019_seo_audit';
-/** Added by migration 0021 (RA-11); absent at both heads this suite compares. */
-const LATER_TABLES: MySqlTable[] = [seoFindingWork, studioGenerationJobs];
+/** Added by later migrations (0021 (RA-11), BSC-4 0024, STU-1b 0025); absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+  seoFindingWork,
+  studioGenerationJobs,
+];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
   .filter((t) => !LATER_TABLES.includes(t));

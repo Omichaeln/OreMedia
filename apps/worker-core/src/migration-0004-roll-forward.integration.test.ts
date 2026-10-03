@@ -7,7 +7,12 @@ import * as schema from '@oremedia/db/schema';
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { passwordSetupTokens } from '@oremedia/db/schema/access';
 import { generatedUploads, uploadIntents } from '@oremedia/db/schema/assets';
-import { brandGuidelineAuthors } from '@oremedia/db/schema/brand';
+import {
+  brandAssistJobs,
+  brandGuidelineAuthors,
+  brandSources,
+  brandSuggestions,
+} from '@oremedia/db/schema/brand';
 import { providerReviewStatuses } from '@oremedia/db/schema/platform';
 import { pendingChannelGrants, publicationRemoteChanges } from '@oremedia/db/schema/publishing';
 import { planItems } from '@oremedia/db/schema/content';
@@ -36,6 +41,11 @@ const NEW_TABLES: MySqlTable[] = [generatedUploads];
  * 0010 to 0013: their migration-*-roll-forward tests).
  */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   providerReviewStatuses,
   brandGuidelineAuthors,
   pendingChannelGrants,
