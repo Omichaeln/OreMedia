@@ -259,10 +259,15 @@ async function assertDocumentReferences(
     ? await brandAssetVersionSource(brandId, [...new Set(pinned)], tx)
     : new Map<string, string>();
   const variants = new Set<string>();
+  // A variant named twice is refused only when the save introduces it: stored documents may already hold one.
+  const heldTwice = new Set(
+    (previous?.logoRules ?? []).map((r) => r.variant).filter((v, i, all) => all.indexOf(v) !== i),
+  );
   document.logoRules.forEach((r, i) => {
     if (kinds.get(r.assetId) !== 'logo')
       issues.push({ path: `logoRules.${i}.assetId`, issue: 'not_a_logo_of_this_brand' });
-    if (variants.has(r.variant)) issues.push({ path: `logoRules.${i}.variant`, issue: 'duplicate_variant' });
+    if (variants.has(r.variant) && !heldTwice.has(r.variant))
+      issues.push({ path: `logoRules.${i}.variant`, issue: 'duplicate_variant' });
     variants.add(r.variant);
     if (r.assetVersionId && versionAssets.get(r.assetVersionId) !== r.assetId)
       issues.push({ path: `logoRules.${i}.assetVersionId`, issue: 'not_a_version_of_this_logo' });

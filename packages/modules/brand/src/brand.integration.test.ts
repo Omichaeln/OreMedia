@@ -1224,6 +1224,11 @@ describe('brand module (spec 8) against MySQL 8', () => {
           'logoRules.1.variant duplicate_variant',
           'logoRules.1.usage.donts.0 empty',
         ]);
+        // A document stored with a variant twice (before the check) still saves unchanged; only a new duplicate is refused.
+        const twice = kit({ logoRules: [primary, { ...primary, assetId: 'ast_logo' }] });
+        await tdb.db.update(brandVersions).set({ document: twice }).where(eq(brandVersions.id, draft));
+        version = (await save(twice)).version;
+        version = (await save(kit())).version;
         // Fail closed: without a registered version source a pinned version is refused.
         resetBrandAssetVersionSource();
         expect(await issuesOf(kit({ logoRules: [secondary] }))).toEqual([
