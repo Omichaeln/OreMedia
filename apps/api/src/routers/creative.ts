@@ -17,6 +17,7 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
   TemplateRetire,
   TemplateVersionCreate,
 } from '@oremedia/contracts/creative';
@@ -135,6 +136,9 @@ export const creativeRouter = router({
     list: tenantQuery
       .input(TemplateList)
       .query(({ ctx, input }) => creativeService.templates.list(ctx.tenant.actor, input)),
+    listCurrent: tenantQuery
+      .input(TemplateListCurrent)
+      .query(({ ctx, input }) => creativeService.templates.listCurrent(ctx.tenant.actor, input)),
     get: tenantQuery
       .input(TemplateGet)
       .query(({ ctx, input }) => creativeService.templates.get(ctx.tenant.actor, input)),

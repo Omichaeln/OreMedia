@@ -475,6 +475,11 @@ export const TemplateRetire = z.object({
   expectedVersion: z.number().int(),
 });
 export const TemplateList = z.object({ brandId: z.string(), page: PageRequest });
+/**
+ * STU-1a: the brand's active templates with their current (approved) version document, in one read, for the
+ * creation gallery's previews (instead of one templates.get per card).
+ */
+export const TemplateListCurrent = z.object({ brandId: z.string(), page: PageRequest });
 export const TemplateGet = z.object({ templateId: z.string(), templateVersionId: z.string().optional() });
 
 // ---- render worker DTOs (spec 11.5: the worker reports through the creative module, never by writing state) ----

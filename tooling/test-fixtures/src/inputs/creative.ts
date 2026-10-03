@@ -84,6 +84,9 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'creative.templates.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
+  'creative.templates.listCurrent': {
+    buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }),
+  },
   'creative.templates.get': {
     buildInput: (f) => ({ templateId: f['templateId'], templateVersionId: f['templateVersionId'] }),
   },
