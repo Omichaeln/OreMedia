@@ -23,6 +23,7 @@
     "@oremedia/module-creative": "workspace:*",
     "@oremedia/module-operations": "workspace:*",
     "@oremedia/observability": "workspace:*",
+    "undici": "^8.11.0",
     "zod": "^3.25.76"
   }
 }

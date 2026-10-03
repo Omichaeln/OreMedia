@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import { ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
-import { openRouterApiKeyFromEnv, openRouterProviderPreferences } from './openrouter-adapter';
+import {
+  openRouterApiKeyFromEnv,
+  openRouterFetch,
+  openRouterProviderPreferences,
+} from './openrouter-adapter';
 import { generatedAssetSink, type GeneratedAssetSink } from './generated-asset-sink';
 import type { VideoGenerator } from './tools/services';
 
@@ -49,7 +53,7 @@ export class OpenRouterVideoGenerator implements VideoGenerator {
 
   constructor(private readonly opts: OpenRouterVideoGeneratorOptions) {
     this.baseURL = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? openRouterFetch;
     this.assets = opts.assets ?? generatedAssetSink;
     this.model = opts.model;
   }
