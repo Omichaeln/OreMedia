@@ -289,8 +289,10 @@ export const assetService = {
     if (decision.obligations?.some((o) => o.type === 'propose_only'))
       throw new PolicyDeniedError('propose_only', 'Agents may only propose uploads');
     const { id, storageKey, mime, maxBytes, expiresAt } = await issueIntent(actor, parsed, null, tx);
+    // The signature covers the declared size, so the store refuses a body of any other size (as for brand documents).
     const upload = await storage().signUploadUrl(storageKey, {
       contentType: mime,
+      contentLength: parsed.declaredBytes,
       expiresInSec: UPLOAD_INTENT_TTL_SEC,
     });
     return { intentId: id, uploadUrl: upload.url, expiresAt, maxBytes };

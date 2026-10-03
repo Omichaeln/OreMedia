@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { MockActivityEnvironment } from '@temporalio/testing';
 import type { AssetIngestInputV1, AssetKind, IngestStepRejection } from '@oremedia/contracts/assets';
@@ -101,8 +101,14 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
     });
   }
 
-  /** The workflow's steps in order, stopping at the first rejection (finalised as videoIngestWorkflowV1 does). */
-  async function ingest(intentId: string) {
+  /**
+   * The workflow's steps in order, stopping at the first rejection (finalised as videoIngestWorkflowV1 does). `between`
+   * runs after the named step: what an uploader still holding the presigned PUT could do while ingest runs.
+   */
+  async function ingest(
+    intentId: string,
+    between: { afterVerify?: () => Promise<void>; afterScan?: () => Promise<void> } = {},
+  ) {
     const input = inputFor(ownerA, tenantA, intentId);
     const begin = await run(acts.beginIngest, input);
     const cleanupKeys = [begin.storageKey];
@@ -119,11 +125,13 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
     };
     const verified = await run(acts.verifyUpload, input);
     if (!verified.ok) return reject(verified);
+    await between.afterVerify?.();
     const sniffed = await run(acts.sniffUpload, input);
     if (!sniffed.ok) return reject(sniffed);
     const group = sniffed.group as 'video' | 'audio';
     const scanned = await run(acts.scanMediaUpload, input);
     if (!scanned.ok) return reject(scanned);
+    await between.afterScan?.();
     const inspected = await run(acts.inspectMediaUpload, { ...input, mime: sniffed.mime, group });
     if (!inspected.ok) return reject(inspected);
     if (inspected.sourceKey !== begin.storageKey) cleanupKeys.push(inspected.sourceKey);
@@ -211,6 +219,24 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
       '-c:a',
       'aac',
       join(dir, 'voice.m4a'),
+    ]);
+    await ff([
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=330:sample_rate=44100',
+      '-t',
+      '2',
+      '-c:a',
+      'aac',
+      // No encoder tag, so nothing is stripped and the stored original is the upload's bytes exactly.
+      '-map_metadata',
+      '-1',
+      '-fflags',
+      '+bitexact',
+      '-flags:a',
+      '+bitexact',
+      join(dir, 'tone.m4a'),
     ]);
     const whole = await readFile(join(dir, 'landscape.mp4'));
     const { writeFile } = await import('node:fs/promises');
@@ -373,6 +399,54 @@ describe.skipIf(!hasTools)('video ingest activities (MockActivityEnvironment, My
       reason: 'duplicate_of',
       duplicateOfAssetId: expect.any(String),
     });
+  }, 120_000);
+
+  it('security review: media replaced after it was scanned is not what is stored; it is stored as verified', async () => {
+    const intentId = await upload('tone.m4a', 'audio', 'audio/mp4');
+    const actor = actorFor(ownerA, tenantA);
+    const swapped = Buffer.from('EICAR-STANDARD-ANTIVIRUS-TEST-FILE '.repeat(64));
+    const r = await ingest(intentId, {
+      afterScan: () =>
+        runInTenant(ctxFor(actor), () =>
+          mem.putObject(storageKeys.quarantine(tenantA, intentId), swapped, { contentType: 'audio/mp4' }),
+        ),
+    });
+    expect(r).toMatchObject({ ok: true, sanitised: false });
+    if (!('assetVersionId' in r)) return;
+    const [version] = await tdb.db.select().from(assetVersions).where(eq(assetVersions.id, r.assetVersionId));
+    const stored = await runInTenant(ctxFor(actor), () => mem.getObject(version!.storageKey));
+    expect(stored?.equals(await readFile(join(dir, 'tone.m4a')))).toBe(true);
+    expect(mem.keys().filter((k) => k.includes(intentId))).toEqual([]);
+  }, 120_000);
+
+  it('security review: the media scan and inspection read the verified copy, never past the cap', async () => {
+    const intentId = await upload('landscape.mp4', 'video', 'video/mp4');
+    const uploadKey = storageKeys.quarantine(tenantA, intentId);
+    const streams = vi.spyOn(mem, 'getObjectStream');
+    let cap = -1;
+    try {
+      const r = await ingest(intentId, {
+        // The upload key is replaced and the cap lowered below the verified copy's size, so the capped read is what
+        // stops the scan (a 1 GiB replacement is not needed to show it).
+        afterVerify: async () => {
+          await runInTenant(ctxFor(actorFor(ownerA, tenantA)), () =>
+            mem.putObject(uploadKey, Buffer.alloc(4096, 0x41), { contentType: 'video/mp4' }),
+          );
+          cap = 1024;
+          await tdb.db.update(uploadIntents).set({ maxBytes: cap }).where(eq(uploadIntents.id, intentId));
+        },
+      });
+      expect(r).toMatchObject({ ok: false, reason: 'exceeds_cap' });
+      const calls = streams.mock.calls.map(([key, range]) => ({ key, range }));
+      expect(calls.filter((c) => c.key === uploadKey)).toEqual([]);
+      expect(calls).toContainEqual({
+        key: storageKeys.quarantine(tenantA, intentId, 'received'),
+        range: { start: 0, end: cap },
+      });
+    } finally {
+      streams.mockRestore();
+    }
+    expect(mem.keys().filter((k) => k.includes(intentId))).toEqual([]);
   }, 120_000);
 
   it('cross-tenant inputs are NOT_FOUND before any media work', async () => {

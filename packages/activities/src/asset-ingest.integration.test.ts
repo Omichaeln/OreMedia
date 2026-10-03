@@ -251,6 +251,7 @@ describe('asset ingest activities (MockActivityEnvironment against MySQL)', () =
     const intentId = await issueAndUpload(creator, brandA1);
     const input = inputFor(creatorA, tenantA, intentId, brandA1);
     await run(acts.beginIngest, input);
+    expect(await run(acts.verifyUpload, input)).toMatchObject({ ok: true }); // sanitise reads verify's copy
     const sanitised = await run(acts.sanitiseUpload, {
       ...input,
       mime: 'image/png',
@@ -324,6 +325,7 @@ describe('asset ingest activities (MockActivityEnvironment against MySQL)', () =
     const intentId = await issueAndUpload(actorFor(ownerA, tenantA, 'owner'), brandA1);
     const input = inputFor(ownerA, tenantA, intentId, brandA1);
     await run(acts.beginIngest, input);
+    expect(await run(acts.verifyUpload, input)).toMatchObject({ ok: true }); // the scan reads verify's copy
     await expect(run(acts.scanUpload, input)).rejects.toBeInstanceOf(ScannerUnavailableError);
     await run(acts.finaliseUpload, {
       ...input,
