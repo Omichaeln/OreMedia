@@ -211,6 +211,13 @@
       "when": 1791102247854,
       "tag": "0029_document_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1791126368283,
+      "tag": "0030_tenant_kind",
+      "breakpoints": true
     }
   ]
 }

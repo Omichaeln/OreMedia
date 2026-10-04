@@ -9,9 +9,14 @@ import {
   framePage,
   framePlacement,
   frameMs,
+  gainAt,
+  lengthOf,
   overlayAnimationAt,
   pictureLayersAt,
+  scheduleGain,
+  soundWindows,
   videoFormatOf,
+  type SoundWindow,
 } from '@oremedia/editor';
 import { buildScene } from '@oremedia/editor/renderer/scene';
 import { Button } from '@oremedia/ui';
@@ -35,14 +40,15 @@ const PLAYHEAD_SYNC_MS = 100;
 /** A media element this far from where the timeline says it should be is re-seeked. */
 const DRIFT_S = 0.25;
 
-const gainToVolume = (db: number) => Math.max(0, Math.min(1, 10 ** (db / 20)));
-
 /**
  * The editor preview (architecture: "browser plays proxies with an overlay canvas using the same scene renderer"):
  * the clips under the playhead play from their editing proxies, framed with the compositor's numbers
  * (framePlacement) and blended through transitions with its timing (pictureLayersAt); audio items play from their
- * proxies; overlays and captions are drawn by the shared Konva scene with the enter/exit maths the export uses. The
- * export, not this preview, is the reference: proxies are 720p and browsers seek to the nearest decoded frame.
+ * proxies; overlays and captions are drawn by the shared Konva scene with the enter/exit maths the export uses.
+ * Sound goes through Web Audio: each sounding element feeds its own gain node, scheduled with the export's envelope
+ * (soundWindows and gainAt, through scheduleGain), so gain above 0 dB, fades, transition fades and mute sound as
+ * they will in the render, and every play, pause, seek or edit reschedules from the playhead. The export, not this
+ * preview, is the reference: proxies are 720p and browsers seek to the nearest decoded frame.
  */
 export function PreviewPlayer(props: PreviewPlayerProps) {
   const { project, media, urls, playheadMs, onSeek } = props;
@@ -54,6 +60,16 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
   const [box, setBox] = useState({ width: 0, height: 0 });
   const outerRef = useRef<HTMLDivElement>(null);
   const clock = useRef({ startWall: 0, startT: 0, lastSync: 0 });
+  // Created on the first Play (a user gesture, so the browser lets it start); null where Web Audio is missing.
+  const [audio, setAudio] = useState<AudioContext | null>(null);
+  // Changes when playback (re)starts from another point: the gains reschedule from the playhead.
+  const [epoch, setEpoch] = useState(0);
+  useEffect(
+    () => () => {
+      void audio?.close().catch(() => undefined);
+    },
+    [audio],
+  );
 
   // Follow the studio's playhead while paused (timeline clicks, keyboard steps).
   useEffect(() => {
@@ -110,23 +126,35 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
   }, [playing]);
 
   const layers = useMemo(() => pictureLayersAt(project, t), [project, t]);
-  const videoTrack = project.tracks.find((tr) => tr.kind === 'video');
-  const pictureMuted = videoTrack?.kind === 'video' && videoTrack.muted;
-  const audioItems = useMemo(
+  // What sounds, with the export's windows, gains and fades (muted items stay, silent, so unmuting is immediate).
+  const sounds = useMemo(
     () =>
-      project.tracks.flatMap((tr) =>
-        tr.kind === 'audio' && !tr.muted
-          ? tr.items.filter(
-              (a) => !a.muted && a.startMs <= t && t < a.startMs + (a.sourceOutMs - a.sourceInMs),
-            )
-          : [],
+      new Map(
+        soundWindows(project, (id) => {
+          const m = media[id];
+          return !!m && m.kind !== 'image' && m.hasAudio;
+        }).map((w) => [w.itemId, w]),
       ),
-    [project, t],
+    [project, media],
   );
+  const audioItems = [...sounds.values()].filter((w) => w.kind === 'audio' && w.startMs <= t && t < w.endMs);
 
+  const startAudio = () => {
+    if (audio) {
+      if (audio.state === 'suspended') void audio.resume().catch(() => undefined);
+      return;
+    }
+    if (typeof AudioContext === 'undefined') return;
+    try {
+      setAudio(new AudioContext({ latencyHint: 'interactive' }));
+    } catch {
+      // No Web Audio: the elements play at their (clamped) volume instead.
+    }
+  };
   const toggle = () => {
     if (playing) stop(t);
     else {
+      startAudio();
       if (t >= project.durationMs - frame) setT(0);
       setPlaying(true);
     }
@@ -135,6 +163,11 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
     const at = Math.max(0, Math.min(project.durationMs - frame, ms));
     setT(at);
     onSeek(at);
+    if (playing) {
+      // Playback continues from the new point: the clock and the scheduled gains restart there.
+      clock.current = { ...clock.current, startWall: performance.now(), startT: at };
+      setEpoch((e) => e + 1);
+    }
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === ' ' || e.key === 'k') {
@@ -179,16 +212,17 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
               scale={scale}
               output={{ width: W, height: H }}
               playing={playing}
-              muted={pictureMuted || layer.clip.muted}
+              frozen={t < layer.clip.startMs || t >= layer.clip.startMs + lengthOf(layer.clip)}
+              sound={{ audio, envelope: sounds.get(layer.clip.id) ?? null, t, epoch }}
             />
           ))}
           {audioItems.map((a) => (
             <AudioLayer
-              key={a.id}
+              key={a.itemId}
               url={urls.get(a.assetVersionId)?.proxy}
               sourceMs={a.sourceInMs + (t - a.startMs)}
-              volume={gainToVolume(a.gainDb)}
               playing={playing}
+              sound={{ audio, envelope: a, t, epoch }}
             />
           ))}
           <OverlayCanvas {...props} t={t} width={box.width} height={box.height} />
@@ -245,7 +279,8 @@ function ClipLayer({
   scale,
   output,
   playing,
-  muted,
+  frozen,
+  sound,
 }: {
   clip: VideoClipItem;
   info: VideoMediaInfo | undefined;
@@ -256,7 +291,9 @@ function ClipLayer({
   scale: number;
   output: { width: number; height: number };
   playing: boolean;
-  muted: boolean;
+  /** The playhead is in the transition beyond this clip's cut: its edge frame is held (and its sound is over). */
+  frozen: boolean;
+  sound: SoundProps;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const isImage = info?.kind === 'image';
@@ -269,15 +306,13 @@ function ClipLayer({
     const v = ref.current;
     if (!v) return;
     const want = sourceMs / 1000;
-    if (Math.abs(v.currentTime - want) > (playing ? DRIFT_S : 0.02)) v.currentTime = want;
-    if (playing && v.paused) void v.play().catch(() => undefined);
-    if (!playing && !v.paused) v.pause();
-  }, [sourceMs, playing]);
-  useEffect(() => {
-    const v = ref.current;
-    if (v) v.volume = gainToVolume(clip.gainDb);
-  }, [clip.gainDb]);
+    const run = playing && !frozen;
+    if (Math.abs(v.currentTime - want) > (run ? DRIFT_S : 0.02)) v.currentTime = want;
+    if (run && v.paused) void v.play().catch(() => undefined);
+    if (!run && !v.paused) v.pause();
+  }, [sourceMs, playing, frozen]);
   const src = isImage ? url?.image : url?.proxy;
+  useSoundGain(ref, sound, playing, src);
   return (
     <div
       className="absolute overflow-hidden"
@@ -308,8 +343,9 @@ function ClipLayer({
           <video
             ref={ref}
             src={src}
-            muted={muted || !info?.hasAudio}
+            muted
             playsInline
+            data-item-id={clip.id}
             preload="auto"
             crossOrigin="anonymous"
             className="absolute max-w-none"
@@ -333,26 +369,104 @@ function ClipLayer({
 function AudioLayer({
   url,
   sourceMs,
-  volume,
   playing,
+  sound,
 }: {
   url: string | undefined;
   sourceMs: number;
-  volume: number;
   playing: boolean;
+  sound: SoundProps;
 }) {
   const ref = useRef<HTMLAudioElement>(null);
   useEffect(() => {
     const a = ref.current;
     if (!a) return;
-    a.volume = volume;
     const want = sourceMs / 1000;
     if (Math.abs(a.currentTime - want) > (playing ? DRIFT_S : 0.05)) a.currentTime = want;
     if (playing && a.paused) void a.play().catch(() => undefined);
     if (!playing && !a.paused) a.pause();
-  }, [sourceMs, playing, volume]);
+  }, [sourceMs, playing]);
+  useSoundGain(ref, sound, playing, url);
   if (!url) return null;
-  return <audio ref={ref} src={url} preload="auto" crossOrigin="anonymous" />;
+  return (
+    <audio
+      ref={ref}
+      src={url}
+      muted
+      preload="auto"
+      crossOrigin="anonymous"
+      data-item-id={sound.envelope?.itemId}
+    />
+  );
+}
+
+interface SoundProps {
+  audio: AudioContext | null;
+  /** The element's sound (null: its source has none). */
+  envelope: SoundWindow | null;
+  /** Playhead (ms). */
+  t: number;
+  /** Bumped when playback restarts from another point. */
+  epoch: number;
+}
+
+/** Each element's Web Audio source, made once per element (a second createMediaElementSource throws). */
+const sources = new WeakMap<HTMLMediaElement, { context: AudioContext; node: MediaElementAudioSourceNode }>();
+
+/**
+ * Plays a media element's sound through its own gain node with the export's envelope: scheduled from the playhead
+ * when playback starts, restarts from a seek, or the item's sound changes (gain, fades, mute, trim, move), and set to
+ * the playhead's value while paused. Without Web Audio the element's volume follows gainAt (clamped to 1).
+ */
+function useSoundGain(
+  ref: React.RefObject<HTMLMediaElement | null>,
+  { audio, envelope: sound, t, epoch }: SoundProps,
+  playing: boolean,
+  src: string | undefined,
+): void {
+  const [gain, setGain] = useState<GainNode | null>(null);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const routed = !!sound;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !audio || !routed) return;
+    let source = sources.get(el);
+    if (source && source.context !== audio) return;
+    if (!source) {
+      try {
+        source = { context: audio, node: audio.createMediaElementSource(el) };
+      } catch {
+        return;
+      }
+      sources.set(el, source);
+    }
+    const node = audio.createGain();
+    source.node.connect(node);
+    node.connect(audio.destination);
+    el.volume = 1;
+    el.muted = false;
+    setGain(node);
+    return () => {
+      el.muted = true;
+      source.node.disconnect();
+      node.disconnect();
+      setGain(null);
+    };
+  }, [audio, routed, src]);
+  const key = sound ? JSON.stringify(sound) : '';
+  useEffect(() => {
+    if (!gain || !audio) return;
+    scheduleGain(gain.gain, sound, { atMs: tRef.current, now: audio.currentTime, playing });
+    // Playing, the schedule runs ahead on its own (the playhead is read when it is made); paused, it follows `t`.
+  }, [gain, key, playing, epoch, playing ? 0 : t]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || gain) return;
+    const g = sound ? gainAt(sound, t) : 0;
+    el.volume = Math.min(1, g);
+    el.muted = g === 0;
+  }, [gain, key, t, src]);
 }
 
 /** Overlays and captions active at `t`, drawn by the shared scene renderer at the preview's scale. */

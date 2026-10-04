@@ -1,0 +1,1 @@
+ALTER TABLE `tenants` ADD `kind` enum('live','demo') DEFAULT 'live' NOT NULL;

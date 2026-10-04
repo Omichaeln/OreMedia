@@ -22,6 +22,38 @@ const launchOptions = chromiumPath
 const brandPath = (rest: string) =>
   `/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}/${rest}`;
 
+/**
+ * Test-side instrumentation (no hook in the app): links each media element's Web Audio source to the gain node it
+ * feeds (by the element's data-item-id) and records every automation call on an AudioParam, so the test reads the
+ * envelope the preview scheduled instead of listening to audio.
+ */
+function recordGainAutomation() {
+  type Rec = { m: string; v: number; t: number };
+  const w = window as unknown as { __gainFor: Map<string, GainNode> };
+  w.__gainFor = new Map();
+  const create = AudioContext.prototype.createMediaElementSource;
+  AudioContext.prototype.createMediaElementSource = function (el: HTMLMediaElement) {
+    const node = create.call(this, el);
+    (node as unknown as { __el: HTMLMediaElement }).__el = el;
+    return node;
+  };
+  const connect = AudioNode.prototype.connect as (this: AudioNode, ...a: unknown[]) => unknown;
+  AudioNode.prototype.connect = function (this: AudioNode, ...a: unknown[]) {
+    const el = (this as unknown as { __el?: HTMLMediaElement }).__el;
+    if (el?.dataset['itemId'] && a[0] instanceof GainNode) w.__gainFor.set(el.dataset['itemId'], a[0]);
+    return connect.apply(this, a);
+  } as typeof AudioNode.prototype.connect;
+  for (const m of ['setValueAtTime', 'linearRampToValueAtTime', 'cancelScheduledValues'] as const) {
+    const orig = AudioParam.prototype[m] as (this: AudioParam, ...a: number[]) => AudioParam;
+    AudioParam.prototype[m] = function (this: AudioParam & { __calls?: Rec[] }, ...a: number[]) {
+      (this.__calls ??= []).push(
+        m === 'cancelScheduledValues' ? { m, v: NaN, t: a[0] ?? 0 } : { m, v: a[0] ?? NaN, t: a[1] ?? 0 },
+      );
+      return orig.apply(this, a);
+    } as never;
+  }
+}
+
 describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)', () => {
   const backend = new MockBackend();
   let origin = '';
@@ -46,6 +78,7 @@ describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)'
       .toBe('saved');
   const signIn = async (width: number) => {
     const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'UTC' });
+    await context.addInitScript(recordGainAutomation);
     const p = await context.newPage();
     p.on('pageerror', (err) => console.error('[page error]', err));
     await p.goto(`${origin}/sign-in`);
@@ -190,6 +223,96 @@ describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)'
       ['Audio 2', 1],
     ]);
   }, 60_000);
+
+  it('plays sound through Web Audio gains that follow the inspector: gain above 0 dB, fades, mute, seek', async () => {
+    const music = head()
+      .tracks.flatMap((t) => (t.kind === 'audio' ? t.items : []))
+      .find((i) => i.name === 'Upbeat music' || i.assetVersionId === 'av_audio_music');
+    if (!music) throw new Error('no music item');
+    expect(music.startMs).toBe(0);
+    /** The automation recorded on the music element's gain since its last cancel. */
+    const automation = () =>
+      page.evaluate((id) => {
+        const w = window as unknown as { __gainFor?: Map<string, GainNode> };
+        const param = w.__gainFor?.get(id)?.gain as
+          (AudioParam & { __calls?: Array<{ m: string; v: number; t: number }> }) | undefined;
+        const calls = param?.__calls ?? [];
+        const last = calls.map((c) => c.m).lastIndexOf('cancelScheduledValues');
+        return last < 0 ? null : calls.slice(last + 1);
+      }, music.id);
+    /** The value set at the playhead by the latest schedule (paused: the only event). */
+    const valueNow = async () => (await automation())?.[0]?.v ?? null;
+    const near = (v: number | null, want: number) => v !== null && Math.abs(v - want) < 1e-3;
+
+    // Playhead to 1 s, then Play and Pause: the first Play (a gesture) starts the audio context.
+    const stage = page.getByTestId('preview-stage');
+    await stage.focus();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect.poll(() => page.getByTestId('time-readout').textContent()).toContain('0:01.00');
+    await page.keyboard.press('Space');
+    await expect.poll(() => page.getByTestId('play-toggle').getAttribute('aria-pressed')).toBe('true');
+    await page.keyboard.press('Space');
+    await expect.poll(() => page.getByTestId('play-toggle').getAttribute('aria-pressed')).toBe('false');
+    await stage.focus();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect.poll(() => page.getByTestId('time-readout').textContent()).toContain('0:01.00');
+    const dbToGain = (db: number) => 10 ** (db / 20);
+    await expect.poll(valueNow, { timeout: 10_000 }).toBeCloseTo(dbToGain(music.gainDb), 3);
+
+    // +6 dB is about 2x: more than a media element's volume can express.
+    await page.getByRole('button', { name: /^Upbeat music/ }).click();
+    const gain = page.locator('#audio-gain');
+    await gain.fill('6');
+    await gain.press('Enter');
+    await saved();
+    await expect.poll(async () => near(await valueNow(), dbToGain(6))).toBe(true);
+    expect(await valueNow()).toBeGreaterThan(1.99);
+
+    // A 2 s fade in: at 1 s the gain is half way up.
+    const fadeIn = page.locator('#audio-fade-in');
+    await fadeIn.fill('2');
+    await fadeIn.press('Enter');
+    await saved();
+    await expect.poll(async () => near(await valueNow(), 0.5 * dbToGain(6))).toBe(true);
+
+    // Seek into the fade (15 frames, about 0.5 s): the value follows the playhead, with nothing stale ahead of it.
+    const playhead = async () => Number(await page.getByTestId('scrubber').inputValue());
+    await stage.focus();
+    await page.keyboard.press('Home');
+    for (let k = 0; k < 15; k++) await page.keyboard.press('ArrowRight');
+    await expect.poll(playhead).toBeGreaterThan(450);
+    const seekedTo = await playhead();
+    await expect.poll(async () => near(await valueNow(), (seekedTo / 2_000) * dbToGain(6))).toBe(true);
+    expect(await automation()).toHaveLength(1);
+
+    await page.keyboard.press('Space');
+    await expect.poll(() => page.getByTestId('play-toggle').getAttribute('aria-pressed')).toBe('true');
+    await expect
+      .poll(async () => (await automation())?.find((c) => c.m === 'linearRampToValueAtTime')?.v ?? null)
+      .toBeCloseTo(dbToGain(6), 3);
+    const playing = (await automation()) ?? [];
+    const start = playing[0];
+    const rampUp = playing.find((c) => c.m === 'linearRampToValueAtTime');
+    if (!start || !rampUp) throw new Error('no schedule');
+    // The fade ends at 2 s on the timeline: the ramp ends after what was left of it from where playback started.
+    const startedAt = (start.v / dbToGain(6)) * 2; // seconds into the fade
+    expect(Math.abs(rampUp.t - start.t - (2 - startedAt))).toBeLessThan(0.001);
+    await page.keyboard.press('Space');
+    await expect.poll(() => page.getByTestId('play-toggle').getAttribute('aria-pressed')).toBe('false');
+
+    // Mute silences the gain at once; unmute restores the envelope's value at the playhead.
+    const paused = await valueNow();
+    expect(paused).toBeGreaterThan(0);
+    await page.getByRole('button', { name: /^Upbeat music/ }).click();
+    await page.getByRole('button', { name: 'Mute', exact: true }).click();
+    await saved();
+    await expect.poll(valueNow).toBe(0);
+    await page.getByRole('button', { name: 'Unmute', exact: true }).click();
+    await saved();
+    await expect.poll(async () => near(await valueNow(), paused ?? NaN)).toBe(true);
+  }, 90_000);
 
   it('moves the selected clip with the keyboard (Shift+arrow: one second) and announces the playhead', async () => {
     const last = page.getByRole('button', { name: /^Beach walk, 0:06\.00 to 0:08\.00/ });

@@ -6,10 +6,13 @@ import {
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  GetBucketCorsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  PutBucketCorsCommand,
   PutObjectCommand,
   S3Client,
+  type CORSRule,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -287,6 +290,24 @@ export class S3StorageProvider extends TenantPrefixedStorage {
     return key.startsWith('releases/') ? this.cfg.buckets.releases : this.cfg.buckets.assets;
   }
 
+  /**
+   * Sets the CORS rules browsers need on every configured bucket (assets and releases; once when they are the same
+   * bucket), then reads them back and refuses when the store does not report them. PutBucketCors replaces a bucket's
+   * whole CORS configuration, so the call is idempotent and any rule set by hand is replaced.
+   */
+  async ensureCors(origins: string[]): Promise<{ buckets: string[] }> {
+    const rules = bucketCorsRules(origins);
+    const buckets = [...new Set([this.cfg.buckets.assets, this.cfg.buckets.releases])];
+    for (const Bucket of buckets) {
+      await this.client.send(new PutBucketCorsCommand({ Bucket, CORSConfiguration: { CORSRules: rules } }));
+      const read = await this.client.send(new GetBucketCorsCommand({ Bucket }));
+      const lacking = corsRulesLacking(read.CORSRules ?? [], origins);
+      if (lacking.length)
+        throw new Error(`bucket CORS not in force after PutBucketCors: ${lacking.join(', ')} (${Bucket})`);
+    }
+    return { buckets };
+  }
+
   protected async doSignUploadUrl(key: string, opts: UploadSignOptions) {
     const url = await getSignedUrl(
       this.client,
@@ -542,6 +563,91 @@ export const uploadsCapability: CapabilityCheck = {
   capability: 'uploads',
   missing: objectStoreMissingSettings,
 };
+
+/**
+ * Opt-in bucket CORS (comma-separated bare origins, e.g. the web origin). Unset, nothing is sent to the store and the
+ * buckets keep whatever CORS they have; set, the api applies the rules at start (ensureObjectStoreCors).
+ */
+export const OBJECT_STORE_CORS_SETTING = 'OBJECT_STORE_CORS_ORIGINS';
+
+/**
+ * What the web app needs from the store: PUT to a presigned upload URL (Content-Type is signed, and so is
+ * Content-Length when declared), GET and HEAD for signed downloads read by script (font files, captions tracks, ranged
+ * media). The client reads no response header today; ETag and the length headers are exposed for a resumable client.
+ */
+export function bucketCorsRules(origins: string[]): CORSRule[] {
+  return [
+    {
+      AllowedOrigins: [...origins],
+      AllowedMethods: ['GET', 'HEAD', 'PUT'],
+      AllowedHeaders: ['content-type', 'content-length', 'range'],
+      ExposeHeaders: ['ETag', 'Content-Length', 'Content-Range'],
+      MaxAgeSeconds: 3600,
+    },
+  ];
+}
+
+/** The origin and method pairs the read-back rules do not admit (empty when the configuration is in force). */
+export function corsRulesLacking(rules: CORSRule[], origins: string[]): string[] {
+  const wanted = bucketCorsRules(origins)[0] as CORSRule;
+  const lacking: string[] = [];
+  for (const origin of origins)
+    for (const method of wanted.AllowedMethods ?? []) {
+      const admitted = rules.some(
+        (r) =>
+          (r.AllowedOrigins ?? []).some((o) => o === origin || o === '*') &&
+          (r.AllowedMethods ?? []).some((m) => m.toUpperCase() === method),
+      );
+      if (!admitted) lacking.push(`${method} from ${origin}`);
+    }
+  return lacking;
+}
+
+/**
+ * The opt-in origins, or null when OBJECT_STORE_CORS_ORIGINS is unset or blank. Each entry must be a bare origin
+ * (scheme and host, no path or trailing slash), as a browser's Origin header carries it; anything else throws, so a
+ * typo stops the api at start instead of leaving uploads blocked.
+ */
+export function objectStoreCorsOrigins(env: Env): string[] | null {
+  const raw = env[OBJECT_STORE_CORS_SETTING]?.trim();
+  if (!raw) return null;
+  const origins = raw
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  for (const value of origins) {
+    let origin: string | null = null;
+    try {
+      origin = new URL(value).origin;
+    } catch {
+      origin = null;
+    }
+    if (origin !== value || !/^https?:$/.test(new URL(value).protocol))
+      throw new Error(
+        `${OBJECT_STORE_CORS_SETTING} entries must be bare http(s) origins such as https://app.example.com`,
+      );
+  }
+  return [...new Set(origins)];
+}
+
+/**
+ * Applies and verifies bucket CORS when OBJECT_STORE_CORS_ORIGINS is set (null when it is not: no store call).
+ * Throws when the opt-in is set but the object store is not configured, or when the store does not report the rules.
+ */
+export async function ensureObjectStoreCors(
+  env: Env,
+  client?: S3Client,
+): Promise<{ buckets: string[]; origins: string[] } | null> {
+  const origins = objectStoreCorsOrigins(env);
+  if (!origins) return null;
+  const cfg = readS3Config(env);
+  if (!cfg)
+    throw new Error(
+      `${OBJECT_STORE_CORS_SETTING} is set but the object store is not configured (OBJECT_STORE_*)`,
+    );
+  const { buckets } = await new S3StorageProvider(cfg, client).ensureCors(origins);
+  return { buckets, origins };
+}
 
 /**
  * Production requires the S3 configuration and fails at startup otherwise (spec 9.1: no local-disk storage in

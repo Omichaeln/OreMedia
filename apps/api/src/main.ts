@@ -1,5 +1,6 @@
 import { reportConfiguration, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
+import { ensureObjectStoreCors, objectStoreCorsOrigins } from '@oremedia/module-assets';
 import { configureDestinationConnectStateStore } from '@oremedia/module-destinations';
 import {
   RedisConnectStateStore,
@@ -33,6 +34,15 @@ try {
   log.error(
     { errorMessage: err instanceof Error ? err.message : String(err) },
     'web origin configuration invalid',
+  );
+  process.exit(2);
+}
+try {
+  objectStoreCorsOrigins(process.env);
+} catch (err) {
+  log.error(
+    { errorMessage: err instanceof Error ? err.message : String(err) },
+    'object store CORS configuration invalid',
   );
   process.exit(2);
 }
@@ -78,6 +88,27 @@ const app = createServer({
   revision: revisionFromEnv(process.env),
 });
 const server = app.listen(port, () => log.info({ status: port }, 'api listening'));
+
+// Opt-in (OBJECT_STORE_CORS_ORIGINS): the buckets' CORS rules for browser uploads and reads, applied and read back on
+// every start, so nobody handles the store's credentials to set them. Unset, nothing is sent. A failure is logged and
+// the api keeps serving (uploads from the browser stay blocked until it succeeds; the acceptance smoke names it).
+void ensureObjectStoreCors(process.env).then(
+  (applied) => {
+    if (applied)
+      log.info(
+        { count: applied.buckets.length },
+        `object store CORS applied: GET, HEAD and PUT from ${applied.origins.join(', ')}`,
+      );
+  },
+  (err: unknown) =>
+    log.error(
+      {
+        errorName: (err as Error | undefined)?.name ?? 'unknown',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      },
+      'object store CORS not applied',
+    ),
+);
 
 const shutdown = async () => {
   server.close();

@@ -51,8 +51,18 @@ export class UserDirectory extends PlatformRepository {
     const rows = await this.conn(tx).select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
     return rows[0] ?? null;
   }
+  /** The only write of `kind`: it is set here, at creation, and no other method of this directory changes it. */
   async createTenant(values: typeof tenants.$inferInsert, tx?: Tx) {
     await this.conn(tx).insert(tenants).values(values);
+  }
+  /** A tenant's kind (null for an unknown tenant): immutable, so callers may cache it. */
+  async tenantKind(id: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select({ kind: tenants.kind })
+      .from(tenants)
+      .where(eq(tenants.id, id))
+      .limit(1);
+    return rows[0]?.kind ?? null;
   }
   /** The people behind a tenant's memberships (members.list): platform rows, read by id only. */
   async usersByIds(ids: string[], tx?: Tx) {
@@ -314,6 +324,14 @@ export class UserDirectory extends PlatformRepository {
     await this.conn(tx)
       .insert(externalIdentities)
       .values({ ...values, emailAtLink: values.emailAtLink.toLowerCase() });
+  }
+  /** The companies a user is an active member of, with each company's kind (setup-link password confinement). */
+  async activeCompaniesOfUser(userId: string, tx?: Tx) {
+    return this.conn(tx)
+      .select({ tenantId: memberships.tenantId, kind: tenants.kind })
+      .from(memberships)
+      .innerJoin(tenants, eq(tenants.id, memberships.tenantId))
+      .where(and(eq(memberships.userId, userId), eq(memberships.status, 'active')));
   }
   /** Every membership of one user across tenants, whatever its status (sign-in reads invitations here). */
   async allMembershipsOfUser(userId: string, tx?: Tx) {

@@ -14,7 +14,7 @@ import { memberships, sessions, tenants, users } from '@oremedia/db/schema/acces
 import { runInTenant } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { registerSkillResolver, type ResolvedSkill } from '@oremedia/ai';
-import { seedBuiltinSkills } from '@oremedia/module-skills';
+import { loadBuiltinPackage, seedBuiltinSkills } from '@oremedia/module-skills';
 import { budgets } from '@oremedia/module-billing';
 import { resolveTenantContext } from '@oremedia/module-access';
 import { createBrandAssistRuntime, registerAssistModelGate } from '@oremedia/module-brand';
@@ -507,6 +507,63 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
       ok: false,
       reason: expect.stringContaining('no built-in skill'),
     });
+  }, 120_000);
+
+  it('model evaluation: a company copy imported from an older package gets the current package as its next version, and that version is evaluated', async () => {
+    configureRateLimiter();
+    const [, b] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [b]);
+    const owner = signedIn.get(sessionKey(b, 'owner'))!;
+    type Version = { id: string; number: number; state: string; packageHash: string };
+    type Skill = { id: string; key: string; versions: Version[] };
+    // An earlier build's package: the same key with other instructions and cases (staging's copy was imported
+    // before the brand-copywriting package and its injection case changed, and kept being graded as version 1).
+    const pkg = await loadBuiltinPackage('brand-copywriting');
+    const older = await mutate<{ skillId: string }>(owner, 'skills.import', {
+      files: pkg.files.map((f) =>
+        f.path === 'SKILL.md' ? { ...f, content: `${f.content}\n\nAn earlier revision.\n` } : f,
+      ),
+      scope: 'tenant',
+      cases: pkg.cases.map((c) => ({ ...c, title: `${c.title} (earlier)` })),
+    });
+    expect(older.status).toBe(200);
+    const skillId = older.data!.skillId;
+    const versions = async () =>
+      (await query<Skill>(owner, 'skills.get', { skillId })).data!.versions.sort(
+        (x, y) => x.number - y.number,
+      );
+    const [v1] = await versions();
+    expect(v1).toMatchObject({ number: 1, state: 'draft' });
+
+    const first = await ensureTaskKindSkill(owner, b, 'copywriting', { timeoutMs: 1, pollMs: 1 });
+    expect(first).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('(version 2 is draft'),
+    });
+    const [old, current] = await versions();
+    // Version 1 is left as it was; version 2 pins this build's package and is the one sent for grading.
+    expect(old).toMatchObject({ id: v1!.id, state: 'draft', packageHash: v1!.packageHash });
+    expect(current).toMatchObject({ number: 2, state: 'sandbox_evaluation' });
+    expect(current!.packageHash).not.toBe(v1!.packageHash);
+    // It pins the content this build ships, not the earlier revision.
+    const exported = await query<{ files: Array<{ path: string; content: string }> }>(
+      owner,
+      'skills.export',
+      {
+        skillVersionId: current!.id,
+      },
+    );
+    expect(exported.data!.files.find((f) => f.path === 'SKILL.md')!.content).not.toContain(
+      'An earlier revision.',
+    );
+
+    // A re-run finds the current version and imports nothing more.
+    const again = await ensureTaskKindSkill(owner, b, 'copywriting', { timeoutMs: 1, pollMs: 1 });
+    expect(again).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('version 2 is sandbox_evaluation'),
+    });
+    expect(await versions()).toHaveLength(2);
   }, 120_000);
 
   it('model evaluation: the budget preparation makes room for the run under a tight brand day limit', async () => {
