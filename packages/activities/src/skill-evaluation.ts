@@ -82,8 +82,20 @@ export function createSkillEvaluationActivities(deps: SkillEvaluationDeps): Skil
           const recorded = await withTransaction((tx) =>
             deps.store.recordEvaluation({ ...suite, report }, tx),
           );
+          // The record keeps a boolean per check; the reason a check failed is only in the report, so it is logged.
+          const failing = report.cases.flatMap((c) =>
+            c.deterministic
+              .filter((d) => !d.passed)
+              .map((d) => `${c.caseId}/${d.check}${d.detail ? `: ${d.detail.slice(0, 300)}` : ''}`),
+          );
           log().info(
-            { skillVersionId: input.skillVersionId, suiteId: input.suiteId, outcome: recorded.outcome },
+            {
+              skillVersionId: input.skillVersionId,
+              suiteId: input.suiteId,
+              outcome: recorded.outcome,
+              passed: report.passed,
+              failing,
+            },
             'evaluation recorded',
           );
           return recorded;

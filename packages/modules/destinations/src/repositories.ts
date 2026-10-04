@@ -725,6 +725,34 @@ export class SeoAuditRunRepository extends BrandScopedRepository<typeof seoAudit
       .where(this.destinationScope(brandId, destinationId, lt(seoAuditRuns.startedAt, cutoff)))
       .orderBy(desc(seoAuditRuns.startedAt), desc(seoAuditRuns.id));
   }
+  /**
+   * The scheduled run a plan of this key opened (the destination and the sweep's `now`, the key the weekly
+   * workflow id is derived from), still running: what a retried plan resumes instead of reading as locked.
+   */
+  async runningScheduledAt(
+    brandId: string,
+    destinationId: string,
+    startedAt: Date,
+    tx?: Tx,
+  ): Promise<SeoAuditRunRow | null> {
+    const rows = await this.conn(tx)
+      .select()
+      .from(seoAuditRuns)
+      .where(
+        this.destinationScope(
+          brandId,
+          destinationId,
+          and(
+            eq(seoAuditRuns.trigger, 'scheduled'),
+            eq(seoAuditRuns.outcome, 'running'),
+            eq(seoAuditRuns.startedAt, startedAt),
+          ) as SQL,
+        ),
+      )
+      .orderBy(desc(seoAuditRuns.id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
   /** Runs started inside [from, to): the on-demand idempotency per day and the "already ran this week" check. */
   async startedBetween(
     brandId: string,

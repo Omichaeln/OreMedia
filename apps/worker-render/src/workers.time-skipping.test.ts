@@ -16,7 +16,8 @@ import { startRenderWorkers, type RenderWorkersHandle } from './render-worker';
  * G26 smoke test: worker-render's production start function (startRenderWorkers) boots against a real Temporal
  * server (the time-skipping test server, or the CLI dev server with TEMPORAL_CLI_PATH) and each task queue it creates
  * completes a workflow: `render` a render job with no targets, `media` an image upload and `video` a video upload,
- * both refused at the size check. Only the activities those workflows call are fakes (no database, object store,
+ * both refused at the size check, plus (STU-2b) a timeline render refused at input resolution and its cancel relay.
+ * Only the activities those workflows call are fakes (no database, object store,
  * Chromium or ffmpeg); the workers, their queues, bundles and registrations are the deployed ones. ffmpeg/ffprobe
  * are reported present so the `video` queue is created wherever the test runs (production refuses to start without).
  */
@@ -57,12 +58,23 @@ function fakes(taskQueue: string): Record<string, FakeActivity> | undefined {
       completeRender: async () => ({ exportIds: [] }),
     };
   if (taskQueue === 'media') return refusedUpload(taskQueue, 'finaliseUpload');
-  if (taskQueue === 'video') return refusedUpload(taskQueue, 'finaliseMediaUpload');
+  if (taskQueue === 'video')
+    return {
+      ...refusedUpload(taskQueue, 'finaliseMediaUpload'),
+      // STU-2b: a timeline render whose inputs no longer resolve fails without drawing or encoding anything.
+      beginVideoRender: async (input: { renderJobId: string }) => {
+        ranOn.set(input.renderJobId, taskQueue);
+        return { revisionId: 'rev', documentId: 'doc', brandId: 'brd' };
+      },
+      resolveVideoRender: async () => ({ ok: false, reason: 'not_found' }),
+      failVideoRender: async () => undefined,
+    };
   return undefined;
 }
 
 let t: TestEnvironment;
 let created: string[];
+let registered: Map<string, string[]>;
 let render: RenderWorkersHandle;
 let running: Promise<void>;
 
@@ -77,6 +89,7 @@ beforeAll(async () => {
   });
   workers.restore();
   created = workers.queues;
+  registered = workers.registered;
   running = render.run();
 }, 300_000);
 
@@ -91,6 +104,24 @@ describe('worker-render on a real Temporal server (G26)', () => {
   it('creates the render, media and video queues', () => {
     expect(created).toEqual(['render', 'media', 'video']);
     expect(render.queues).toEqual(created);
+  });
+
+  it('video: registers the ingest, export and STU-2b timeline render activities', () => {
+    expect(registered.get('video')).toEqual(
+      expect.arrayContaining([
+        'beginIngest',
+        'verifyUpload',
+        'finaliseMediaUpload',
+        'storeVideoExport',
+        'beginVideoRender',
+        'resolveVideoRender',
+        'renderVideoOverlays',
+        'composeVideo',
+        'completeVideoRender',
+        'failVideoRender',
+        'discardVideoRenderWork',
+      ]),
+    );
   });
 
   it('render: a render job completes', async () => {
@@ -115,6 +146,27 @@ describe('worker-render on a real Temporal server (G26)', () => {
     });
     expect(result).toEqual({ outcome: 'rejected', reason: 'exceeds_cap' });
     expect(ranOn.get(intentId)).toBe(taskQueue);
+  });
+
+  it('video: videoRenderJobWorkflowV1 completes', async () => {
+    const result = await t.env.client.workflow.execute('videoRenderJobWorkflowV1', {
+      taskQueue: 'video',
+      workflowId: 'render:vrj_smoke',
+      args: [{ ...SMOKE_CONTEXT, renderJobId: 'vrj_smoke' }],
+    });
+    expect(result).toEqual({ outcome: 'failed', reason: 'not_found' });
+    expect(ranOn.get('vrj_smoke')).toBe('video');
+  });
+
+  it('video: videoRenderSignalRelayV1 completes for a render that already ended', async () => {
+    const handle = await t.env.client.workflow.start('videoRenderSignalRelayV1', {
+      taskQueue: 'video',
+      workflowId: 'smoke-video-render-relay',
+      args: [{ workflowId: 'render:vrj_smoke', signal: 'cancelRender' }],
+    });
+    await expect(handle.result()).resolves.toBeUndefined();
+    const { taskQueue } = await handle.describe();
+    expect(taskQueue).toBe('video');
   });
 
   it('shuts down cleanly', async () => {

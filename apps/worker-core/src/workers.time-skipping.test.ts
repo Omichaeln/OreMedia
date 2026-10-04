@@ -16,7 +16,8 @@ import { startPublishingWorkers, type PublishingWorkersHandle } from './publishi
 /**
  * G26 smoke test: worker-core's production start functions (startAgentsWorker, startPublishingWorkers) boot against
  * a real Temporal server (the time-skipping test server, or the CLI dev server with TEMPORAL_CLI_PATH) and every
- * task queue they create completes work: `agents` a skill evaluation, `core` a comment reply per provider, whose
+ * task queue they create completes work: `agents` a skill evaluation and (STU-3) a studio video AI job with its
+ * cancel relay, `core` a comment reply per provider, whose
  * send runs on that provider's `publish-<key>` queue. Only the activities those workflows call are fakes (no
  * database); the workers, their queues, bundles and registrations are the deployed ones. Every provider and CMS kind
  * is reported certified while the workers are created, so each `publish-<key>` queue exists.
@@ -42,6 +43,12 @@ function fakes(taskQueue: string): Record<string, FakeActivity> | undefined {
           resultId: 'r',
         };
       },
+      // STU-3: a video AI job whose row was already cancelled stops at begin; its reservation is still settled.
+      beginVideoJob: async (input: { jobId: string }) => {
+        ranOn.set(input.jobId, taskQueue);
+        return { proceed: false, reason: 'cancelled' };
+      },
+      settleVideoJobBudget: async () => undefined,
     };
   if (taskQueue === 'core')
     return {
@@ -65,6 +72,7 @@ function fakes(taskQueue: string): Record<string, FakeActivity> | undefined {
 
 let t: TestEnvironment;
 let created: string[];
+let registered: Map<string, string[]>;
 let agents: AgentsWorkerHandle;
 let publishing: PublishingWorkersHandle;
 let running: Promise<unknown>;
@@ -87,6 +95,7 @@ beforeAll(async () => {
   workers.restore();
   certified.forEach((s) => s.mockRestore());
   created = workers.queues;
+  registered = workers.registered;
   running = Promise.all([agents.run(), publishing.run()]);
 }, 300_000);
 
@@ -115,6 +124,40 @@ describe('worker-core on a real Temporal server (G26)', () => {
     });
     expect(result).toMatchObject({ outcome: 'recorded', skillVersionId: 'skv_smoke' });
     expect(ranOn.get('skv_smoke')).toBe('agents');
+  });
+
+  it('agents: registers the STU-3 studio video job activities', () => {
+    expect(registered.get('agents')).toEqual(
+      expect.arrayContaining([
+        'beginVideoJob',
+        'reserveVideoJobBudget',
+        'callVideoJobModel',
+        'saveVideoJob',
+        'failVideoJob',
+        'settleVideoJobBudget',
+      ]),
+    );
+  });
+
+  it('agents: studioVideoJobWorkflowV1 completes', async () => {
+    const result = await t.env.client.workflow.execute('studioVideoJobWorkflowV1', {
+      taskQueue: 'agents',
+      workflowId: 'studio-video:svj_smoke:1',
+      args: [{ ...SMOKE_CONTEXT, jobId: 'svj_smoke', attempt: 1 }],
+    });
+    expect(result).toEqual({ jobId: 'svj_smoke', state: 'stopped' });
+    expect(ranOn.get('svj_smoke')).toBe('agents');
+  });
+
+  it('agents: studioVideoJobSignalRelayV1 completes for an attempt that already ended', async () => {
+    const handle = await t.env.client.workflow.start('studioVideoJobSignalRelayV1', {
+      taskQueue: 'agents',
+      workflowId: 'smoke-studio-video-relay',
+      args: [{ workflowId: 'studio-video:svj_smoke:1', signal: 'cancel' }],
+    });
+    await expect(handle.result()).resolves.toBeUndefined();
+    const { taskQueue } = await handle.describe();
+    expect(taskQueue).toBe('agents');
   });
 
   it('core and every publish-<key> queue: a comment reply completes, sent on its provider queue', async () => {

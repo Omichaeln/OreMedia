@@ -15,6 +15,7 @@ import {
   createRenderJobActivities,
   createVideoExportActivities,
   createVideoIngestActivities,
+  createVideoRenderActivities,
 } from '@oremedia/activities';
 import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
@@ -27,10 +28,10 @@ import { creativeRenderJobStore } from './creative-store';
  * worker-render (spec 4.4, 11.5): the isolated worker pool for CPU/memory-heavy and untrusted-input work. Three
  * Temporal workers share one connection: task queue `render` (renderJobWorkflowV1: headless Chromium), task
  * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads; BSC-4 document
- * text extraction for brand assist jobs) and, STU-2a, task queue `video` (videoIngestWorkflowV1 and the video export
- * store: ffprobe/ffmpeg jobs that run for minutes, with their own concurrency, VIDEO_CONCURRENCY, so they never
- * starve still renders or image ingest). No credential broker access; egress is restricted to the object store at
- * the network layer. Workflow code is pre-bundled at build time (tsup.config.ts → dist/workflows.<queue>.js)
+ * text extraction for brand assist jobs) and, STU-2a, task queue `video` (videoIngestWorkflowV1, the video export
+ * store and STU-2b's videoRenderJobWorkflowV1 timeline renders: ffprobe/ffmpeg jobs that run for minutes, with
+ * their own concurrency, VIDEO_CONCURRENCY, so they never starve still renders or image ingest). No credential
+ * broker access; egress is restricted to the object store at the network layer. Workflow code is pre-bundled at build time (tsup.config.ts → dist/workflows.<queue>.js)
  * because production images carry no sources. The process (database, object store, health) is worker.ts.
  */
 const here = dirname(fileURLToPath(import.meta.url));
@@ -136,6 +137,16 @@ export async function startRenderWorkers(env: NodeJS.ProcessEnv = process.env): 
               : {}),
           }),
           ...createVideoExportActivities({ storage: storage() }),
+          // STU-2b: timeline renders (videoRenderJobWorkflowV1): overlays through the same Chromium renderer as
+          // stills, composition and encoding with ffmpeg (VIDEO_FFMPEG_THREADS threads, default 2).
+          ...createVideoRenderActivities({
+            store: creativeRenderJobStore(),
+            overlays: renderer,
+            rendererVersion: RENDERER_VERSION,
+            storage: storage(),
+            ...(env['MEDIA_TMP_MAX_BYTES'] ? { tmpMaxBytes: Number(env['MEDIA_TMP_MAX_BYTES']) } : {}),
+            encoder: { threads: Number(env['VIDEO_FFMPEG_THREADS'] ?? 2) },
+          }),
         },
         maxConcurrentActivityTaskExecutions: Number(env['VIDEO_CONCURRENCY'] ?? 1),
       })

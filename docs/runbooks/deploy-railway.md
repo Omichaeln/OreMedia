@@ -245,7 +245,12 @@ production keeps running with that capability degraded, and the gap is reported.
   capability names only (no setting name, no value; `/health` is public through the web origin). It stays 200 while
   degraded, so Railway's health check still passes; the smoke check (section 3a) fails on a non-empty list. The
   capability names (for example `uploads`, `channel:x`) are therefore publicly visible to anyone who requests
-  `/health`; no setting name or value ever is.
+  `/health`; no setting name or value ever is. The api's answer also carries `"revision"`: the deployed git commit
+  (`RAILWAY_GIT_COMMIT_SHA`, else `OREMEDIA_VERSION`, else `null`), which the staging acceptance job waits for
+  (`staging-acceptance.md`, "Reading the log").
+- **Log environment label.** Every log line carries `service` and `env`. `env` is `OREMEDIA_ENV` when set, else
+  Railway's `RAILWAY_ENVIRONMENT_NAME` (`staging`, `production`), else `NODE_ENV` (which every deployed image sets to
+  `production`), else `development`; filter a log search by `env` to separate staging from production.
 - **Strict mode (off by default).** `OREMEDIA_CONFIG_STRICT=1` on a service makes a degraded capability fatal: the
   same line says `refusing to start` and the process exits 2 (the deploy's health check then fails). Only the exact
   value `1` turns it on. Turn it on per service once that service's report is clean, so a later deploy that loses a
@@ -333,6 +338,18 @@ accepted as soon as the API is on the new build):
    Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish
    on worker-render, which must stay on the new build until they drain.
 
+Rollout order for video documents (migration 0027, STU-2b; no flag: a person can create a video document once the
+API is on the new build):
+
+1. Apply migration 0027 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
+   `rendered_exports.dedupe_key` with index `ix_export_dedupe`; existing documents stay graphic) with the api
+   pre-deploy command.
+2. Deploy `worker-render` first: it registers `videoRenderJobWorkflowV1` and `videoRenderSignalRelayV1` and the
+   compose activities on `video` (`VIDEO_FFMPEG_THREADS`, default 2). Graphic renders keep `renderJobWorkflowV1`.
+3. Deploy the API and the other workers. Video render requests and `creative.render_cancel_requested` events now
+   start workflows on `video`; rolling back the API leaves existing video documents readable but uneditable, and
+   video workflows already started finish on worker-render.
+
 Rollout order for plan items (migration 0014, UX-09): apply 0014 (`plan_items`, additive; the api pre-deploy
 command does it) and re-apply `app-role.sql` (the new table needs its grants); then deploy the api and workers in
 the usual order. The built-in `campaign-planning` skill gains `content.proposePlan` and an optional `briefId`
@@ -354,8 +371,9 @@ Rollout order for Google sign-in (migration 0003, D-03):
 
 ## 3. Verify
 
-1. `GET https://<web domain>/health` returns `{ "ok": true, "degraded": [] }` (served by the api through the web
-   proxy); a non-empty `degraded` names what is not configured (section 1c).
+1. `GET https://<web domain>/health` returns `{ "ok": true, "degraded": [], "revision": "<commit>" }` (served by
+   the api through the web proxy); a non-empty `degraded` names what is not configured (section 1c), and
+   `revision` is the commit the deployment was built from.
 2. `https://<web domain>/sign-in` → **Continue with Google** returns to the portfolio signed in; an account that
    was not invited returns to the sign-in page with "This Google account has not been invited".
 3. Worker logs show `worker started` for every task queue.

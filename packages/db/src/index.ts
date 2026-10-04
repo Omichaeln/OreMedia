@@ -30,7 +30,13 @@ export {
   RETENTION_ROLE_GRANTS,
   type RetentionPrivilege,
 } from './global-tables';
-export { runMigrations } from './migrate';
+export {
+  runMigrations,
+  readJournal,
+  readMigrationState,
+  type JournalEntry,
+  type MigrationState,
+} from './migrate';
 export {
   TenantPurgeRepository,
   tenantScopedTables,
