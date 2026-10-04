@@ -420,7 +420,15 @@ function baseTracks(b: VideoBrandBindings, withCaptions: boolean): Track[] {
       },
       items: [],
     } satisfies CaptionTrack);
-  tracks.push({ id: TRACK_IDS.audio, kind: 'audio', name: 'Music', locked: false, muted: false, items: [] });
+  tracks.push({
+    id: TRACK_IDS.audio,
+    kind: 'audio',
+    role: 'music',
+    name: 'Music',
+    locked: false,
+    muted: false,
+    items: [],
+  });
   return tracks;
 }
 

@@ -12,6 +12,7 @@ import {
   renderPreviews,
   renderedExports,
   studioGenerationJobs,
+  studioVideoJobs,
   templateVersions,
   templates,
 } from '@oremedia/db/schema/creative';
@@ -477,5 +478,56 @@ export class StudioGenerationJobRepository extends BrandScopedRepository<typeof 
     tx: Tx,
   ) {
     await this.updateScoped(id, expectedVersion, values, tx);
+  }
+}
+
+/** STU-3: studio video AI jobs (storyboard, recut), one row per job; a retry is a new attempt of the same row. */
+export class StudioVideoJobRepository extends BrandScopedRepository<typeof studioVideoJobs> {
+  constructor() {
+    super(studioVideoJobs);
+  }
+  async create(values: Omit<typeof studioVideoJobs.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  async update(
+    id: string,
+    expectedVersion: number,
+    values: Partial<typeof studioVideoJobs.$inferInsert>,
+    tx: Tx,
+  ) {
+    await this.updateScoped(id, expectedVersion, values, tx);
+  }
+  /** Row lock (SELECT ... FOR UPDATE): a cancel serialises with the worker's steps on the job. */
+  async lock(id: string, tx: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(studioVideoJobs)
+      .where(this.scope(eq(studioVideoJobs.id, id)))
+      .for('update');
+    const row = rows[0];
+    const ctx = requireTenant();
+    if (!row || (ctx.brandIds !== 'all' && !ctx.brandIds.has(row.brandId)))
+      throw new NotFoundError('StudioVideoJob', id);
+    return row;
+  }
+  /** The live job a start with this key already made (idempotent start: same requester, base and inputs). */
+  async findLive(documentId: string, liveKey: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(studioVideoJobs)
+      .where(
+        this.scope(and(eq(studioVideoJobs.documentId, documentId), eq(studioVideoJobs.liveKey, liveKey))),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /** A document's most recent jobs, newest first (the studio reattaches to live ones after a reload). */
+  async recentForDocument(brandId: string, documentId: string, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(studioVideoJobs)
+      .where(this.brandScope(brandId, eq(studioVideoJobs.documentId, documentId)))
+      .orderBy(desc(studioVideoJobs.id))
+      .limit(limit);
   }
 }

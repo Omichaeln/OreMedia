@@ -238,6 +238,18 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
       contentHash: hashCanonical(project),
     });
     Object.assign(video, { videoDocumentId, videoRevisionId });
+    // STU-3: a completed storyboard job on the video, so a foreign caller has a job id to try (0028 and later).
+    const jobsTable = (await db.execute(
+      sql`select table_name from information_schema.tables where table_schema = database() and table_name = 'studio_video_jobs'`,
+    )) as unknown as [unknown[]];
+    if (jobsTable[0].length) {
+      const videoJobId = newId('studioVideoJob');
+      const request = { kind: 'storyboard', brief: { objective: 'Seeded' } };
+      await db.execute(
+        sql`insert into studio_video_jobs (id, tenant_id, brand_id, document_id, base_revision_id, kind, state, progress, request, inputs_hash, requested_by_kind, requested_by_id, created_at, updated_at) values (${videoJobId}, ${tenantId}, ${brandId}, ${videoDocumentId}, ${videoRevisionId}, 'storyboard', 'completed', 100, ${JSON.stringify(request)}, ${hashCanonical(request)}, 'user', ${ownerUserId}, ${docAt}, ${docAt})`,
+      );
+      Object.assign(video, { videoJobId });
+    }
   }
   return {
     generationJobId,

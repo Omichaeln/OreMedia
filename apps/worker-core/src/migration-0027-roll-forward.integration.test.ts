@@ -7,7 +7,12 @@ import * as schema from '@oremedia/db/schema';
 import { creativeDocuments, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { creativeService } from '@oremedia/module-creative';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0027 (STU-2b video projects): on a database populated at the previous head the migration
@@ -16,7 +21,9 @@ import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../too
  * still reads with its snapshot through the new code. The columns are in LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0026_video_media';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

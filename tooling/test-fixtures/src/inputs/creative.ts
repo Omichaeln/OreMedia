@@ -63,6 +63,67 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'creative.videoTemplates.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
+  'creative.videoAi.preflight': {
+    buildInput: (f) => ({
+      documentId: f['videoDocumentId'],
+      baseRevisionId: f['videoRevisionId'],
+      request: { kind: 'storyboard', brief: { objective: 'x' } },
+    }),
+  },
+  'creative.videoAi.start': {
+    buildInput: (f) => ({
+      documentId: f['videoDocumentId'],
+      baseRevisionId: f['videoRevisionId'],
+      request: { kind: 'storyboard', brief: { objective: 'x' } },
+    }),
+  },
+  'creative.videoAi.get': { buildInput: (f) => ({ jobId: f['videoJobId'] }) },
+  'creative.videoAi.active': { buildInput: (f) => ({ documentId: f['videoDocumentId'] }) },
+  'creative.videoAi.cancel': { buildInput: (f) => ({ jobId: f['videoJobId'], expectedVersion: 0 }) },
+  'creative.videoAi.retry': { buildInput: (f) => ({ jobId: f['videoJobId'], expectedVersion: 0 }) },
+  'creative.videoAi.assemble': {
+    buildInput: (f) => ({
+      jobId: f['videoJobId'],
+      baseRevisionId: f['videoRevisionId'],
+      storyboard: {
+        title: 'x',
+        scenes: [
+          {
+            id: 'sc_1',
+            title: 'x',
+            shots: [{ id: 'sh_1', description: 'x', assetVersionId: null, durationMs: 1000 }],
+          },
+        ],
+        pacing: 'balanced',
+        captions: false,
+        audio: 'none',
+        logo: false,
+      },
+    }),
+  },
+  'creative.videoAi.saveDraft': {
+    buildInput: (f) => ({
+      jobId: f['videoJobId'],
+      expectedVersion: 0,
+      storyboard: {
+        title: 'x',
+        scenes: [
+          {
+            id: 'sc_1',
+            title: 'x',
+            shots: [{ id: 'sh_1', description: 'x', assetVersionId: null, durationMs: 1000 }],
+          },
+        ],
+        pacing: 'balanced',
+        captions: false,
+        audio: 'none',
+        logo: false,
+      },
+    }),
+  },
+  'creative.videoAi.accept': {
+    buildInput: (f) => ({ jobId: f['videoJobId'], baseRevisionId: f['videoRevisionId'], groupIds: ['a1'] }),
+  },
   'creative.comments.add': {
     buildInput: (f) => ({
       documentId: f['creativeDocumentId'],

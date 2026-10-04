@@ -206,8 +206,15 @@ export const VideoTrack = TrackBase.extend({
   muted: z.boolean().default(false),
   items: z.array(VideoClipItem).max(VIDEO_MAX_ITEMS_PER_TRACK),
 });
+/**
+ * What an audio track carries. A music bed follows a shorter picture by ending earlier; voice and other sound are
+ * cut with the picture so they stay in sync. Optional: tracks saved before it existed read through audioTrackRole.
+ */
+export const AudioTrackRole = z.enum(['music', 'voice', 'sound']);
+export type AudioTrackRole = z.infer<typeof AudioTrackRole>;
 export const AudioTrack = TrackBase.extend({
   kind: z.literal('audio'),
+  role: AudioTrackRole.optional(),
   muted: z.boolean().default(false),
   items: z.array(AudioItem).max(VIDEO_MAX_ITEMS_PER_TRACK),
 });
@@ -227,6 +234,13 @@ export type OverlayTrack = z.infer<typeof OverlayTrack>;
 export type CaptionTrack = z.infer<typeof CaptionTrack>;
 export type Track = z.infer<typeof Track>;
 export type TrackKind = Track['kind'];
+
+/**
+ * An audio track's role. A track saved before `role` existed is the music bed when it is the starter templates'
+ * music track (`trk_music`, the only audio track the product created then), otherwise sound (cut with the picture).
+ */
+export const audioTrackRole = (t: Pick<AudioTrack, 'id' | 'role'>): AudioTrackRole =>
+  t.role ?? (t.id === 'trk_music' ? 'music' : 'sound');
 export type TrackItem = VideoClipItem | AudioItem | OverlayItem | CaptionItem;
 
 /** A storyboard section: grouping for scrubbing, scene reordering and (STU-3) the scope of an AI request. */

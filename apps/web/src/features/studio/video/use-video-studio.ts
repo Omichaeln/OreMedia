@@ -56,6 +56,14 @@ export interface VideoStudioApi {
   keepMine: () => void;
   pendingItemIds: string[];
   blocker: ReturnType<typeof useBlocker>;
+  /** STU-3: adopts a revision the server wrote for this person (assembly, accepted proposal) as head and undo entry. */
+  adoptRevision: (res: {
+    revision: VideoRevisionDto;
+    /** A change above 100 operations arrives as consecutive revisions, in order (the last is `revision`). */
+    parts?: VideoRevisionDto[];
+    findings: VideoStudioState['findings'];
+    media: VideoMediaInfo[];
+  }) => void;
 }
 
 /**
@@ -306,6 +314,25 @@ export function useVideoStudio(documentId: string, initial: VideoDocumentDto): V
     [state.inFlight, state.pending],
   );
 
+  const adoptRevision = useCallback<VideoStudioApi['adoptRevision']>(
+    (res) => {
+      // A large change arrives as consecutive revisions (parts of at most 100 operations): one undo step each.
+      const parts = res.parts?.length ? res.parts : [res.revision];
+      parts.forEach((rev, k) =>
+        dispatch({
+          type: 'commit:external',
+          revision: committedOfVideo(rev),
+          operations: rev.operations.operations,
+          summary: rev.changeSummary,
+          findings: k === parts.length - 1 ? res.findings : [],
+          media: res.media,
+        }),
+      );
+      afterCommit(res.revision);
+    },
+    [afterCommit],
+  );
+
   return {
     state,
     project: local.project,
@@ -325,5 +352,6 @@ export function useVideoStudio(documentId: string, initial: VideoDocumentDto): V
     keepMine: () => dispatch({ type: 'conflict:keep-mine', key: newIntentKey() }),
     pendingItemIds,
     blocker,
+    adoptRevision,
   };
 }

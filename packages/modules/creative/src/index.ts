@@ -15,9 +15,26 @@ export {
 } from './service';
 export { registerCreativeAssetCatalog, type CreativeAssetCatalog } from './video-support';
 export {
+  videoAiService,
+  videoAiJobs,
+  videoAiErrorCode,
+  videoJobModelCallRef,
+  videoJobWorkflowId,
+  registerVideoAiAssetSource,
+  resetVideoAiAssetSource,
+  registerVideoAiCapabilitySource,
+  configureVideoAiPricing,
+  type VideoAiAssetSource,
+  type VideoAiCapabilities,
+  type VideoAiCapabilitySource,
+  type VideoAiModelContext,
+  type VideoAiJobDto,
+} from './video-ai';
+export {
   CreativeDocumentRepository,
   CreativeRevisionRepository,
   RenderJobRepository,
+  StudioVideoJobRepository,
   RenderedExportRepository,
   ElementCommentRepository,
   TemplateRepository,
@@ -33,6 +50,9 @@ export {
   VIDEO_RENDER_TASK_QUEUE,
   VIDEO_RENDER_WORKFLOW_TYPE,
   VIDEO_RENDER_SIGNAL_WORKFLOW_TYPE,
+  VIDEO_AI_TASK_QUEUE,
+  STUDIO_VIDEO_JOB_WORKFLOW_TYPE,
+  STUDIO_VIDEO_JOB_SIGNAL_RELAY_WORKFLOW_TYPE,
 } from './outbox-routes';
 // STU-1b: generation jobs (router-facing service, the worker's runtime surface and the composition hooks).
 export {
