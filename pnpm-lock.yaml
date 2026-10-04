@@ -83,6 +83,9 @@ importers:
       '@oremedia/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@oremedia/editor':
+        specifier: workspace:*
+        version: link:../../packages/editor
       '@oremedia/module-access':
         specifier: workspace:*
         version: link:../../packages/modules/access
