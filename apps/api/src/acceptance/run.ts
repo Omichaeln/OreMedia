@@ -27,6 +27,7 @@ import {
 } from './checks';
 import {
   brandSystemChecks,
+  ensurePhotoAssetVersion,
   factChecks,
   logoChecks,
   studioChecks,
@@ -78,12 +79,18 @@ async function browserSuites(
   sessions: Sessions,
   tenantA: FixtureTenant,
   tenantB: FixtureTenant,
+  store: StoreState,
 ): Promise<AcceptanceResult[]> {
   const a = sessions.get(sessionKey(tenantA, 'owner'));
   const b = sessions.get(sessionKey(tenantB, 'owner'));
   if (!a || !b) return [skip('e2e', 'the owners of both companies need a session')];
+  // The Studio suite seeds its document's text from the font and its hero image layer from the photo.
   const font = await ensureFontAssetVersion(cfg, sessions, tenantA);
-  const files = [E2E_FILES.deployed, E2E_FILES.a11y, ...(font.assetVersionId ? [E2E_FILES.studio] : [])];
+  const photo = font.assetVersionId
+    ? await ensurePhotoAssetVersion(cfg, sessions, tenantA, store)
+    : { assetVersionId: null, detail: '' };
+  const studio = Boolean(font.assetVersionId && photo.assetVersionId);
+  const files = [E2E_FILES.deployed, E2E_FILES.a11y, ...(studio ? [E2E_FILES.studio] : [])];
   const results = await runVitest(files, {
     repoDir: cfg.repoDir,
     timeoutMs: 30 * 60_000,
@@ -102,13 +109,19 @@ async function browserSuites(
       OREMEDIA_E2E_B_TENANT: tenantB.tenantId,
       OREMEDIA_E2E_B_BRAND: tenantB.brandId,
       ...(font.assetVersionId ? { OREMEDIA_E2E_FONT: font.assetVersionId } : {}),
+      ...(photo.assetVersionId ? { OREMEDIA_E2E_PHOTO: photo.assetVersionId } : {}),
       ...(cfg.e2e.chromiumPath ? { OREMEDIA_CHROMIUM_PATH: cfg.e2e.chromiumPath } : {}),
       OREMEDIA_E2E: undefined,
     },
   });
-  return font.assetVersionId
-    ? results
-    : [...results, skip('e2e:studio', `no approved font face: ${font.detail}`)];
+  if (studio) return results;
+  return [
+    ...results,
+    skip(
+      'e2e:studio',
+      font.assetVersionId ? `no approved photo: ${photo.detail}` : `no approved font face: ${font.detail}`,
+    ),
+  ];
 }
 
 async function loadTest(
@@ -224,7 +237,7 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
     });
     await guard('studio', () => studioChecks(cfg, sessions, tenantA, store, describeProviders(cfg)));
     await guard('video', () => videoChecks(cfg, sessions, tenantA, store));
-    if (cfg.e2e.enabled) await guard('e2e', () => browserSuites(cfg, sessions, tenantA, tenantB));
+    if (cfg.e2e.enabled) await guard('e2e', () => browserSuites(cfg, sessions, tenantA, tenantB, store));
     else emit([skip('e2e', 'ACCEPTANCE_E2E=0')]);
     if (cfg.load.enabled) loadOk = await loadTest(cfg, sessions, tenants, print);
     else print('LOAD_SKIP LOAD_ENABLED is not 1');

@@ -192,4 +192,8 @@ retired logos and clips; none of it is in force.
   files to the object store from the server (`storage().putObject`), so with an unreachable or placeholder
   `OBJECT_STORE_ENDPOINT` that call fails inside the api and answers `INTERNAL`; the job prints that reason and
   skips the suite (`ACCEPTANCE_SKIP e2e:studio …`). The intents the import recorded before the write stay `issued`
-  and expire. Point the store at a real bucket (`smoke:upload:put` passes) and the suite runs.
+  and expire. Point the store at a real bucket (`smoke:upload:put` passes) and the suite runs. Its hero image layer
+  needs an approved photo with recorded rights too: the job reuses an `oremedia-acceptance-photo-*` photo of
+  `Acceptance brand`, or uploads one through the upload flow, records its rights and approves it, and passes it as
+  `OREMEDIA_E2E_PHOTO`; without one it skips the suite with the reason (`ACCEPTANCE_SKIP e2e:studio no approved
+photo: …`).

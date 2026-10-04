@@ -8,6 +8,7 @@ import {
 import {
   buildBrandAssistPrompt,
   createBrandAssistModel,
+  optionalFields,
   parseModelJson,
   REMOVAL_EXAMPLE,
   SECTION_EXAMPLES,
@@ -116,6 +117,85 @@ describe('brand assist prompt (BSC-4)', () => {
         section,
       ).toBe(true);
     }
+  });
+
+  it('spelling is a suggestion like any other: the prompt says so, names what may be left out, and both answers it allows parse', () => {
+    // Staging, 4 October (after #88): voice failed both attempts with every field of `spelling` missing
+    // (value, rationale, basis, confidence, evidence) - the model wrote the brand's spelling setting bare, as the
+    // task ("spelling (locale and notes)") and the rule "Keep the brand's locale and spelling" read, though the
+    // example wraps it. The strict schema stays; the instruction now agrees with it.
+    const brand = request({
+      guidance: {
+        ...emptyBrandSystemDocument(),
+        voice: { ...emptyBrandSystemDocument().voice, spelling: { locale: 'en-GB', notes: '' } },
+      },
+      evidence: [
+        {
+          id: 'bsrc_1',
+          sourceKind: 'guideline_document',
+          ref: 'notes',
+          text: 'We write plainly and warmly, and we explain before we sell.',
+          trust: 'untrusted',
+        },
+      ],
+      instruction: 'Propose at least one voice principle drawn from the notes.',
+      preserve: [],
+      answers: [],
+      avoid: [],
+    });
+    const { system } = buildBrandAssistPrompt(brand);
+    expect(optionalFields('voice')).toEqual(['summary', 'tone', 'spelling']);
+    expect(optionalFields('messaging')).toEqual(['positioning', 'valueProposition']);
+    expect(optionalFields('facts')).toEqual([]);
+    expect(system).toContain('- Spelling: en-GB');
+    expect(system).toContain('spelling (one suggestion whose value holds the locale and notes)');
+    expect(system).toContain(
+      'Every suggestion, a single one (such as a summary) or each entry of a list, is an object of "value", "rationale", "basis", "confidence" and "evidence"',
+    );
+    expect(system).toContain(
+      'Leave out "summary", "tone", "spelling" when you have no change to suggest for it',
+    );
+    expect(system).not.toContain('Keep the brand’s locale and spelling');
+    expect(buildBrandAssistPrompt(request({ section: 'facts' })).system).not.toContain('Leave out');
+
+    const evidence = [{ sourceId: 'bsrc_1', excerpt: 'we explain before we sell' }];
+    const principle = {
+      value: { statement: 'Explain before you sell', rationale: 'The notes put explanation first.' },
+      rationale: 'The notes state it.',
+      basis: 'stated',
+      confidence: 'high',
+      evidence,
+    };
+    // As instructed with the approved spelling standing: spelling left out.
+    const keeps = parseModelJson(
+      JSON.stringify({
+        personality: [],
+        principles: [principle],
+        styleRules: [],
+        claimRules: [],
+        remove: [],
+        questions: [],
+      }),
+    );
+    const kept = MODEL_SECTION_OUTPUT.voice.safeParse(keeps.value);
+    expect(kept.success, JSON.stringify(kept.error?.issues)).toBe(true);
+    // As instructed when suggesting a spelling change: the setting inside "value".
+    const changes = {
+      ...(keeps.value as object),
+      spelling: {
+        value: { locale: 'en-GB', notes: 'British spelling: colour, organise.' },
+        rationale: 'The notes write British English.',
+        basis: 'inferred',
+        confidence: 'medium',
+        evidence,
+      },
+    };
+    const changed = MODEL_SECTION_OUTPUT.voice.safeParse(changes);
+    expect(changed.success, JSON.stringify(changed.error?.issues)).toBe(true);
+    // The schema stays strict: the bare setting is still refused, never repaired.
+    expect(
+      MODEL_SECTION_OUTPUT.voice.safeParse({ ...changes, spelling: { locale: 'en-GB', notes: '' } }).success,
+    ).toBe(false);
   });
 
   it('carries the approved guidance, the request, kept items, answers and rejections; evidence is untrusted and cannot close itself or forge a heading', () => {

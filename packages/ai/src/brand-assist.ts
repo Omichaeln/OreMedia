@@ -1,5 +1,6 @@
 import {
   ASSIST_SECTION_LABEL,
+  MODEL_SECTION_OUTPUT,
   type AssistModelGateV1,
   type AssistSection,
   type BrandAssistModelRequestV1,
@@ -148,7 +149,7 @@ export const REMOVAL_EXAMPLE = {
 
 const SECTION_TASK: Record<AssistSection, string> = {
   voice:
-    'Voice & personality: the voice summary, tone words, personality traits, principles (with why), spelling (locale and notes), style rules (topic one of numbers|dates|capitalisation|punctuation|formatting|other) and claim rules.',
+    'Voice & personality: the voice summary, tone words, personality traits, principles (with why), spelling (one suggestion whose value holds the locale and notes), style rules (topic one of numbers|dates|capitalisation|punctuation|formatting|other) and claim rules.',
   messaging:
     'Messaging: positioning, value proposition, messaging pillars (key, title, statement), key messages (optionally tied to a pillar key) and audiences (key, description, needs, objections).',
   vocabulary:
@@ -167,13 +168,35 @@ const SECTION_TASK: Record<AssistSection, string> = {
 
 const RULES = [
   'Reply with one JSON object and nothing else: no prose, no code fences. Use exactly the fields of the example; omit optional fields you do not need; use [] for empty lists.',
+  'Every suggestion, a single one (such as a summary) or each entry of a list, is an object of "value", "rationale", "basis", "confidence" and "evidence" as in the example: what you propose goes inside "value", never in its place.',
   'Every item has basis: "stated" when a source says it (quote the exact words in evidence), "inferred" when it is a pattern across examples (quote at least two passages), or "suggested" when no source supports it; and confidence "high", "medium" or "low".',
   'Never invent facts. A fact must be stated by a source and quoted exactly; anything else is basis "suggested" and will be treated as a question for a person.',
   'Cite evidence by the source id shown on its EVIDENCE block, with a short exact excerpt (at most 300 characters) copied from that block.',
   `The approved guidance below is the brand system as it is now. Suggest only additions or changes that improve it; do not repeat what it already says. To remove an item, list it under "remove" with its collection and key and the same rationale, basis, confidence and evidence as any item, e.g. ${JSON.stringify(REMOVAL_EXAMPLE)}.`,
   'An item may state its uncertainty in an optional "uncertainty" (text) and disagreements between sources in an optional "conflicts" ([{"note": "…", "sourceIds": ["…"]}]), next to its rationale; nowhere else. Ask at most two questions, only where the answer would materially change your suggestions.',
-  'Keep the brand’s locale and spelling. Never change items the person asked to keep.',
+  'Write every value in the brand’s locale and spelling. Never change items the person asked to keep.',
 ];
+
+/**
+ * The section's single suggestions the strict schema lets an answer leave out (summary, tone, spelling, …), named in
+ * the prompt from the schema itself: the example shows every field, and without this the model fills each one, even
+ * one it has nothing to suggest for, and writes an unchanged setting bare instead of as a suggestion.
+ */
+export function optionalFields(section: AssistSection): string[] {
+  const shape = (
+    MODEL_SECTION_OUTPUT[section] as unknown as { shape: Record<string, { isOptional(): boolean }> }
+  ).shape;
+  return Object.keys(shape).filter((k) => shape[k]?.isOptional());
+}
+
+const optionalLine = (section: AssistSection): string[] => {
+  const fields = optionalFields(section);
+  return fields.length
+    ? [
+        `Leave out ${fields.map((f) => `"${f}"`).join(', ')} when you have no change to suggest for it; the approved guidance stands as it is.`,
+      ]
+    : [];
+};
 
 export interface BrandAssistPrompt {
   system: string;
@@ -189,6 +212,7 @@ export function buildBrandAssistPrompt(req: BrandAssistModelRequestV1): BrandAss
     'You only suggest. People review every suggestion before anything changes.',
     ...RULES.map((r) => `- ${r}`),
     `Answer in exactly this shape (an example; replace every value): ${JSON.stringify(SECTION_EXAMPLES[req.section])}`,
+    ...optionalLine(req.section),
     '',
     '# 2. Approved brand guidance (the brand system now)',
     sanitiseBrandText(
