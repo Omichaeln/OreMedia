@@ -80,7 +80,12 @@ export {
   createAnalystSweepActivities,
   createBaselineComparisonActivities,
 } from './intelligence';
-export { createDeletionActivities, createRetentionActivities, RETENTION_ACTOR } from './operations';
+export {
+  createDeletionActivities,
+  createIdempotencyKeyPurgeActivities,
+  createRetentionActivities,
+  RETENTION_ACTOR,
+} from './operations';
 export {
   ensureScheduleReconciled,
   scheduleDrift,

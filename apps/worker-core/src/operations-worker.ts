@@ -1,11 +1,14 @@
 import { ScheduleOverlapPolicy, type Client } from '@temporalio/client';
 import {
   createDeletionActivities,
+  createIdempotencyKeyPurgeActivities,
   createRetentionActivities,
   ensureScheduleReconciled,
 } from '@oremedia/activities';
 import type { RetentionSweepArgsV1 } from '@oremedia/contracts/operations';
 import {
+  IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID,
+  IDEMPOTENCY_KEY_PURGE_WORKFLOW_TYPE,
   OPERATIONS_TASK_QUEUE,
   RETENTION_SCHEDULE_ID,
   RETENTION_SWEEP_WORKFLOW_TYPE,
@@ -33,7 +36,29 @@ export function operationsActivities() {
       applyRetention: (input) =>
         runWithDatabaseRole('retention', () => runtime.retention.applyRetention(input)),
     }),
+    // idempotencyKeyPurgeWorkflowV1 (spec 7.3): expired idempotency records, on the application role (it owns them)
+    ...createIdempotencyKeyPurgeActivities(runtime.idempotencyPurge),
   };
+}
+
+/** Spec 7.3: every hour, expired idempotency records are deleted (it always applies; no dry run). */
+export const IDEMPOTENCY_KEY_PURGE_INTERVAL = '1 hour';
+
+/**
+ * The idempotency purge schedule: created once per namespace, and reconciled with the code (interval, action and
+ * policies) when it already exists (G20).
+ */
+export async function ensureIdempotencyKeyPurgeScheduleRunning(client: Client): Promise<void> {
+  await ensureScheduleReconciled(client, {
+    scheduleId: IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID,
+    spec: { intervals: [{ every: IDEMPOTENCY_KEY_PURGE_INTERVAL }] },
+    action: {
+      workflowType: IDEMPOTENCY_KEY_PURGE_WORKFLOW_TYPE,
+      taskQueue: OPERATIONS_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
+  });
 }
 
 /** Daily at 02:30 UTC, outside the top-of-hour publishing burst. */

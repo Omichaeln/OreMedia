@@ -13,6 +13,7 @@ import {
   ReviewRequestGet,
   ReviewRequestMedia,
 } from '@oremedia/contracts/review';
+import { withTransaction } from '@oremedia/db';
 import { idempotent } from '@oremedia/module-operations';
 import { reviewService } from '@oremedia/module-review';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
@@ -57,10 +58,14 @@ export const reviewRouter = router({
   }),
 
   externalLinks: router({
+    /**
+     * Deliberately not idempotent: the reviewer token is returned exactly once and a replayed response would have to
+     * be stored with it. A retry issues a second link (each is listed on the request and can be revoked).
+     */
     create: tenantMutation
       .input(ExternalLinkCreate)
       .mutation(({ ctx, input }) =>
-        idempotent(mutationCtx(ctx), (tx) => reviewService.externalLinks.create(ctx.tenant.actor, input, tx)),
+        withTransaction((tx) => reviewService.externalLinks.create(ctx.tenant.actor, input, tx)),
       ),
     revoke: tenantMutation
       .input(ExternalLinkRevoke)

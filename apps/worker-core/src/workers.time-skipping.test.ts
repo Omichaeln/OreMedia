@@ -17,8 +17,8 @@ import { startPublishingWorkers, type PublishingWorkersHandle } from './publishi
  * G26 smoke test: worker-core's production start functions (startAgentsWorker, startPublishingWorkers) boot against
  * a real Temporal server (the time-skipping test server, or the CLI dev server with TEMPORAL_CLI_PATH) and every
  * task queue they create completes work: `agents` a skill evaluation and (STU-3) a studio video AI job with its
- * cancel relay, `core` a comment reply per provider, whose
- * send runs on that provider's `publish-<key>` queue. Only the activities those workflows call are fakes (no
+ * cancel relay, `core` the idempotency purge and a comment reply per provider, whose send runs on that provider's
+ * `publish-<key>` queue. Only the activities those workflows call are fakes (no
  * database); the workers, their queues, bundles and registrations are the deployed ones. Every provider and CMS kind
  * is reported certified while the workers are created, so each `publish-<key>` queue exists.
  */
@@ -52,6 +52,11 @@ function fakes(taskQueue: string): Record<string, FakeActivity> | undefined {
     };
   if (taskQueue === 'core')
     return {
+      // Spec 7.3 (#69): the hourly purge of expired idempotency records, keyed here by its correlation id.
+      purgeExpiredIdempotencyKeys: async (input: { correlationId: string }) => {
+        ranOn.set(input.correlationId, taskQueue);
+        return { rows: 0 };
+      },
       // The draft id names the provider the reply goes to.
       readReplyRoute: async (input: { responseDraftId: string }) => ({ providerKey: input.responseDraftId }),
       recordReplyOutcome: async (input: { result: { outcome: string } }) => ({
@@ -158,6 +163,17 @@ describe('worker-core on a real Temporal server (G26)', () => {
     await expect(handle.result()).resolves.toBeUndefined();
     const { taskQueue } = await handle.describe();
     expect(taskQueue).toBe('agents');
+  });
+
+  it('core: registers the idempotency purge activity, and idempotencyKeyPurgeWorkflowV1 completes', async () => {
+    expect(registered.get('core')).toEqual(expect.arrayContaining(['purgeExpiredIdempotencyKeys']));
+    const result = await t.env.client.workflow.execute('idempotencyKeyPurgeWorkflowV1', {
+      taskQueue: 'core',
+      workflowId: 'smoke-idempotency-key-purge',
+      args: [{ correlationId: 'purge_smoke' }],
+    });
+    expect(result).toEqual({ rows: 0 });
+    expect(ranOn.get('purge_smoke')).toBe('core');
   });
 
   it('core and every publish-<key> queue: a comment reply completes, sent on its provider queue', async () => {
