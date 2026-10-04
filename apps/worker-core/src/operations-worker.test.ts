@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ScheduleAlreadyRunning, type Client } from '@temporalio/client';
-import { RETENTION_SCHEDULE_ID } from '@oremedia/module-operations';
-import { ensureRetentionScheduleRunning } from './operations-worker';
+import { IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID, RETENTION_SCHEDULE_ID } from '@oremedia/module-operations';
+import {
+  ensureIdempotencyKeyPurgeScheduleRunning,
+  ensureRetentionScheduleRunning,
+  operationsActivities,
+} from './operations-worker';
 
 /** A schedule client that either creates, or already holds a schedule started with `existingArgs`. */
 function scheduleClient(existingArgs: unknown[] | null) {
@@ -49,5 +53,38 @@ describe('ensureRetentionScheduleRunning (spec 17.5: the apply mode follows the 
     const same = scheduleClient([{ dryRun: true }]);
     await ensureRetentionScheduleRunning(same.client, {});
     expect(same.calls).toEqual([]);
+  });
+});
+
+describe('ensureIdempotencyKeyPurgeScheduleRunning (spec 7.3: expired idempotency records are deleted hourly)', () => {
+  it('creates an hourly schedule of idempotencyKeyPurgeWorkflowV1 on core, and joins one that exists', async () => {
+    const created: unknown[] = [];
+    const client = (exists: boolean) =>
+      ({
+        schedule: {
+          create: async (opts: unknown) => {
+            if (exists) throw new ScheduleAlreadyRunning('already', IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID);
+            created.push(opts);
+          },
+        },
+      }) as unknown as Client;
+    await ensureIdempotencyKeyPurgeScheduleRunning(client(false));
+    expect(created).toEqual([
+      expect.objectContaining({
+        scheduleId: 'idempotency-key-purge',
+        spec: { intervals: [{ every: '1 hour' }] },
+        action: expect.objectContaining({
+          workflowType: 'idempotencyKeyPurgeWorkflowV1',
+          taskQueue: 'core',
+          args: [{}],
+        }),
+      }),
+    ]);
+    await expect(ensureIdempotencyKeyPurgeScheduleRunning(client(true))).resolves.toBeUndefined();
+    expect(created).toHaveLength(1);
+  });
+
+  it('its activity is registered on the core worker', () => {
+    expect(typeof operationsActivities().purgeExpiredIdempotencyKeys).toBe('function');
   });
 });
