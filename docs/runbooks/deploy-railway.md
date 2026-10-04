@@ -15,7 +15,7 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OREMEDIA_APP` (api | worker-core | worker-ingest | redirector);
    - `api`: `AUTH_ISSUER_URL` (optional, default `https://accounts.google.com`), `AUTH_CLIENT_ID`,
      `AUTH_CLIENT_SECRET` (sealed variable), `AUTH_REDIRECT_URI`, optional `AUTH_ALLOWED_DOMAINS` (section 1a),
-     `PORT` (e.g. `3001`), `WEB_ORIGIN` (required in production), optional `PASSWORD_HASH_CONCURRENCY` (password
+     `PORT` (e.g. `3001`), `WEB_ORIGIN` (required in production), `REDIS_URL` (listed above; the api refuses to start in production without it, as rate limits and the password lockout must be shared by every replica), optional `PASSWORD_HASH_CONCURRENCY` (password
      hashes run at once, default 4; each needs about 128 MiB, so size the service's memory for 4 × 128 MiB = 512 MiB
      on top of its baseline, or lower it; section 1a step 6), `REVIEW_PORTAL_ORIGIN`, `KMS_KEY_ID_CREDENTIALS`
      (wrap-only permission), `OBJECT_STORE_*`, `LINK_REDIRECT_DOMAIN`, per-provider `PROVIDER_<KEY>_CLIENT_ID_REF` and
