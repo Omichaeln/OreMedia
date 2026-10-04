@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import type {
   BrandSystemDocumentV1,
   EvidenceRef,
@@ -349,6 +350,17 @@ function shapeValue(path: string, value: unknown, existing: unknown, ctx: Conver
  */
 export function parseSectionOutput(section: AssistSection, raw: unknown): ModelSectionOutput {
   return MODEL_SECTION_OUTPUT[section].parse(raw) as ModelSectionOutput;
+}
+
+const MAX_SHAPE_ISSUES = 5;
+/**
+ * Where an answer left the section's schema, as `path: code` (e.g. `spelling.value.notes: invalid_type`), or the
+ * JSON parse error: the schema's own words only, never the model's text, so a failed attempt says what to fix.
+ */
+export function shapeIssues(err: unknown): string[] {
+  if (err instanceof ZodError)
+    return err.issues.slice(0, MAX_SHAPE_ISSUES).map((i) => `${i.path.join('.') || '(answer)'}: ${i.code}`);
+  return err instanceof Error ? [err.message] : [];
 }
 
 export function suggestionsFromOutput(output: ModelSectionOutput, ctx: ConvertContext): DraftSuggestion[] {

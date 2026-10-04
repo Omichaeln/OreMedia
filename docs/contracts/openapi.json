@@ -749,6 +749,9 @@
                   },
                   "expectedVersion": {
                     "type": "number"
+                  },
+                  "confirmStopsRuns": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["policy"]
@@ -19721,6 +19724,9 @@
             },
             "expectedVersion": {
               "type": "number"
+            },
+            "confirmStopsRuns": {
+              "type": "boolean"
             }
           },
           "required": ["policy"]

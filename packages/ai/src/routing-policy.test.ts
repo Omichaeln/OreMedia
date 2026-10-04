@@ -11,7 +11,9 @@ import {
   assertRoutingAllowed,
   configureModelRegion,
   modelRegion,
+  modelRouteConfigured,
   registerRoutingPolicySource,
+  routeDenial,
   resetRoutingPolicies,
   routingPolicyFromEnv,
   setTenantRoutingPolicy,
@@ -46,6 +48,53 @@ describe('model routing policy (spec 12.7)', () => {
     // The deployment policy still names only its own gateway.
     await expect(assertRoutingAllowed('ten_A', 'anthropic', DEFAULT_MODEL_ID)).rejects.toThrow(
       /vendor anthropic is not permitted/,
+    );
+  });
+
+  it('a service that holds no key names the gateway with OREMEDIA_MODEL_PROVIDER, and its policy agrees with its route', async () => {
+    // The api: no OPENROUTER_API_KEY_REF (it makes no model call), the deployment's route named in configuration.
+    const env = { OREMEDIA_MODEL_PROVIDER: 'openrouter', OREMEDIA_MODEL_ID: 'vendor/model-x' };
+    const cfg = modelConfigFromEnv(env);
+    expect(cfg).toMatchObject({ provider: 'openrouter', model: 'vendor/model-x' });
+    expect(routingPolicyFromEnv(env).permittedVendors).toEqual([cfg.provider]);
+    expect(() => routingPolicyFromEnv({ OREMEDIA_MODEL_PROVIDER: 'openrouter' })).toThrow(
+      /OREMEDIA_MODEL_ID is required on the OpenRouter gateway/,
+    );
+    vi.stubEnv('OREMEDIA_MODEL_PROVIDER', 'openrouter');
+    vi.stubEnv('OREMEDIA_MODEL_ID', 'vendor/model-x');
+    resetRoutingPolicies();
+    await expect(assertRoutingAllowed('ten_A', 'openrouter', 'vendor/model-x')).resolves.toMatchObject({
+      permittedVendors: ['openrouter'],
+    });
+  });
+
+  it('a process knows the deployment’s route only when it is configured: a key, the gateway name or a mounted policy', () => {
+    expect(modelRouteConfigured({})).toBe(false);
+    expect(modelRouteConfigured({ OREMEDIA_MODEL_ID: 'vendor/model-x' })).toBe(false);
+    expect(modelRouteConfigured({ MODEL_ROUTING_POLICY_REF: '/nonexistent/routing.json' })).toBe(false);
+    expect(modelRouteConfigured({ OPENROUTER_API_KEY_REF: 'k', OREMEDIA_MODEL_ID: 'v/m' })).toBe(true);
+    expect(modelRouteConfigured({ ANTHROPIC_API_KEY_REF: 'k' })).toBe(true);
+    expect(modelRouteConfigured({ OREMEDIA_MODEL_PROVIDER: 'openrouter' })).toBe(true);
+  });
+
+  it('routeDenial names what a policy refuses of a route, as assertRoutingAllowed enforces it', () => {
+    const anthropicOnly = ModelRoutingPolicy.parse({
+      schemaVersion: 1,
+      defaultModel: 'claude-opus-5',
+      permittedVendors: ['anthropic'],
+    });
+    expect(routeDenial(anthropicOnly, 'openrouter', 'vendor/model-x', null)).toBe(
+      'Model vendor openrouter is not permitted for this company',
+    );
+    expect(routeDenial(anthropicOnly, 'anthropic', 'claude-opus-5', null)).toBeNull();
+    expect(
+      routeDenial({ ...anthropicOnly, deniedModels: ['claude-opus-5'] }, 'anthropic', 'claude-opus-5', null),
+    ).toBe('Model claude-opus-5 is not permitted for this company');
+    expect(routeDenial({ ...anthropicOnly, permittedRegions: ['eu'] }, 'anthropic', 'm', null)).toMatch(
+      /region is not configured/,
+    );
+    expect(routeDenial({ ...anthropicOnly, permittedRegions: ['eu'] }, 'anthropic', 'm', 'us')).toBe(
+      'Region us is not permitted for this company',
     );
   });
 
