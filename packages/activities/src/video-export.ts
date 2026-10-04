@@ -40,7 +40,8 @@ export function videoExportStorageKeys(
 
 /**
  * Content hash of everything a video render depends on: the project snapshot's hash, the renderer version, the
- * output format and frame rate, and the content hashes of every pinned asset (order-free). Two renders with the
+ * output format and frame rate, the content hashes of every pinned asset (order-free) and, for the compositor, its encoder
+ * settings and ffmpeg version. Two renders with the
  * same key produce the same file, so the compositor reuses an existing export instead of rendering again.
  */
 export function videoExportDedupeKey(input: {
@@ -49,6 +50,8 @@ export function videoExportDedupeKey(input: {
   formatKey: string;
   fps: number;
   assetContentHashes: readonly string[];
+  /** STU-2b: the encoder settings and ffmpeg build; a change to either renders anew instead of reusing. */
+  encoder?: string;
 }): string {
   return hashCanonical({
     v: 1,
@@ -57,6 +60,7 @@ export function videoExportDedupeKey(input: {
     format: input.formatKey,
     fps: input.fps,
     assets: [...new Set(input.assetContentHashes)].sort(),
+    ...(input.encoder ? { encoder: input.encoder } : {}),
   });
 }
 

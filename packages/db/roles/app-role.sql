@@ -104,6 +104,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`skills` TO '__APP_USER__'
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`source_use_policies` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`spend_limits` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`studio_generation_jobs` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`studio_video_jobs` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`subscriptions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`support_sessions` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`template_versions` TO '__APP_USER__'@'%';

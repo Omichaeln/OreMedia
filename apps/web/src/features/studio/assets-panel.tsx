@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { LogoRuleV1, LogoVariant } from '@oremedia/contracts/brand';
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import type { CreativePage, Element } from '@oremedia/contracts/creative';
 import { findElement, type IntentBatch } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Input, Skeleton } from '@oremedia/ui';
@@ -105,7 +106,8 @@ export function AssetsPanel({
 }: AssetsPanelProps) {
   const [query, setQuery] = useState('');
   const ground = pageGround(page);
-  const search = useAssetSearch(brandId, 'creative', query);
+  // Graphic layers take still images (STU-2b: the creative purpose also covers video and audio for timelines).
+  const search = useAssetSearch(brandId, 'creative', query, IMAGE_CREATIVE_KINDS);
   const selected = selection[0] ? findElement(page, selection[0]) : null;
   const replaceable =
     selected &&

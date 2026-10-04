@@ -10,6 +10,18 @@ export {
   videoExportStorageKeys,
 } from './video-export';
 export {
+  createVideoRenderActivities,
+  encodeProject,
+  runFfmpeg,
+  RenderCancelledError,
+  VIDEO_COMPOSITOR_VERSION,
+  VIDEO_PAGE_ID,
+  type OverlayRenderer,
+  type VideoRenderDeps,
+  type VideoRenderStore,
+} from './video-render';
+export { buildComposePlan, demuxerFor, posterArgs, AUDIO_RATE, type ComposePlan } from './video-filter-graph';
+export {
   createRenderJobActivities,
   RenderIntegrityError,
   exportStorageKey,
@@ -24,6 +36,7 @@ export {
 } from './render-job';
 export { createAgentRunActivities, toActivityFailure } from './agent-run';
 export { createStudioGenerationActivities } from './studio-generation';
+export { createStudioVideoActivities } from './studio-video';
 export {
   createSkillEvaluationActivities,
   loadSkillEvaluationGrants,

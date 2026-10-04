@@ -5,8 +5,22 @@ import type { IntentBatch, RebaseConflict, TemplateDocument } from '@oremedia/ed
 import type { Trpc } from '../../lib/trpc';
 import type { UiError } from '../../lib/errors';
 
-export type DocumentDto = inferOutput<Trpc['creative']['documents']['get']>;
-export type RevisionDto = inferOutput<Trpc['creative']['revisions']['get']>;
+/** documents.get for either kind (STU-2b): `revision.kind` says graphic (pages) or video (timeline). */
+export type AnyDocumentDto = inferOutput<Trpc['creative']['documents']['get']>;
+type AnyRevisionDto = inferOutput<Trpc['creative']['revisions']['get']>;
+export type RevisionDto = Extract<AnyRevisionDto, { kind: 'graphic' }>;
+export type VideoRevisionDto = Extract<AnyRevisionDto, { kind: 'video' }>;
+/** A graphic document as the page studio edits it. */
+export type DocumentDto = Omit<AnyDocumentDto, 'revision'> & { revision: RevisionDto };
+/** A video document as the timeline studio edits it (with what is known about its sources). */
+export type VideoDocumentDto = Omit<AnyDocumentDto, 'revision'> & { revision: VideoRevisionDto };
+export const isGraphicDocument = (d: AnyDocumentDto): d is DocumentDto => d.revision.kind === 'graphic';
+export const isVideoDocument = (d: AnyDocumentDto): d is VideoDocumentDto => d.revision.kind === 'video';
+/** A graphic document or a refusal: the page studio never adopts a video head. */
+export function graphicDocument(d: AnyDocumentDto): DocumentDto {
+  if (!isGraphicDocument(d)) throw new Error('This document is a video; reopen it to edit its timeline.');
+  return d;
+}
 export type RevisionSummaryDto = inferOutput<Trpc['creative']['revisions']['list']>['items'][number];
 export type ApplyResult = inferOutput<Trpc['creative']['operations']['applyBatch']>;
 export type ProposeResult = inferOutput<Trpc['creative']['operations']['propose']>;

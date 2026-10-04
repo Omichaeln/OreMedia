@@ -8,7 +8,12 @@ import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { approvedFacts, brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0023 (BSC-3 facts workspace): on a database populated at the previous head (0022) the
@@ -24,7 +29,8 @@ const PREVIOUS_HEAD = '0022_channel_health';
 const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !LATER_TABLES.includes(t));
+  .filter((t) => !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
