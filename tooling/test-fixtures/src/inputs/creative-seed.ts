@@ -111,8 +111,8 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
   const document = seedCreativeDocument(creativePublishedBrandVersionId, creativeElementId);
   const creativeDocumentId = newId('creativeDocument');
   const creativeRevisionId = newId('creativeRevision');
-  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0027), which the roll-forward suites'
-  // earlier heads do not have; at 0027 and later the column takes its default, graphic.
+  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0027) and archived_at (0029), which the
+  // roll-forward suites' earlier heads do not have; at later heads kind takes its default, graphic, and archived_at null.
   const docAt = new Date();
   await db.execute(
     sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at, version) values (${creativeDocumentId}, ${tenantId}, ${brandId}, 'Seeded document', ${creativeRevisionId}, 1, ${docAt}, ${docAt}, 0)`,

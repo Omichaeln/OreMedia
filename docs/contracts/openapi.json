@@ -205,6 +205,30 @@
         }
       }
     },
+    "/trpc/access.brandGrants.remove": {
+      "post": {
+        "operationId": "access.brandGrants.remove",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "membershipId": {
+                    "type": "string"
+                  },
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["membershipId", "brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/access.brandGrants.set": {
       "post": {
         "operationId": "access.brandGrants.set",
@@ -255,6 +279,54 @@
       "get": {
         "operationId": "access.me",
         "x-trpc-type": "query"
+      }
+    },
+    "/trpc/access.members.disable": {
+      "post": {
+        "operationId": "access.members.disable",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "membershipId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["membershipId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/access.members.enable": {
+      "post": {
+        "operationId": "access.members.enable",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "membershipId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["membershipId", "expectedVersion"]
+              }
+            }
+          }
+        }
       }
     },
     "/trpc/access.members.invite": {
@@ -6881,6 +6953,30 @@
         }
       }
     },
+    "/trpc/content.campaigns.close": {
+      "post": {
+        "operationId": "content.campaigns.close",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "campaignId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["campaignId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/content.campaigns.create": {
       "post": {
         "operationId": "content.campaigns.create",
@@ -6962,6 +7058,42 @@
                   }
                 },
                 "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/content.campaigns.update": {
+      "post": {
+        "operationId": "content.campaigns.update",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "campaignId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "objectiveId": {
+                    "type": "string"
+                  },
+                  "startsAt": {
+                    "type": "string"
+                  },
+                  "endsAt": {
+                    "type": "string"
+                  }
+                },
+                "required": ["campaignId", "expectedVersion"]
               }
             }
           }
@@ -8024,6 +8156,30 @@
         }
       }
     },
+    "/trpc/creative.documents.archive": {
+      "post": {
+        "operationId": "creative.documents.archive",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["documentId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/creative.documents.create": {
       "post": {
         "operationId": "creative.documents.create",
@@ -8291,6 +8447,9 @@
                   "contentPackageId": {
                     "type": "string"
                   },
+                  "archived": {
+                    "type": "boolean"
+                  },
                   "page": {
                     "type": "object",
                     "properties": {
@@ -8329,6 +8488,30 @@
                   }
                 },
                 "required": ["documentId", "title"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/creative.documents.unarchive": {
+      "post": {
+        "operationId": "creative.documents.unarchive",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["documentId", "expectedVersion"]
               }
             }
           }
@@ -19135,6 +19318,21 @@
           "required": ["apiClientId"]
         }
       },
+      "access.brandGrants.remove": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "membershipId": {
+              "type": "string"
+            },
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["membershipId", "brandId"]
+        }
+      },
       "access.brandGrants.set": {
         "type": "mutation",
         "input": {
@@ -19173,6 +19371,36 @@
       "access.me": {
         "type": "query",
         "input": null
+      },
+      "access.members.disable": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "membershipId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["membershipId", "expectedVersion"]
+        }
+      },
+      "access.members.enable": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "membershipId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["membershipId", "expectedVersion"]
+        }
       },
       "access.members.invite": {
         "type": "mutation",
@@ -24932,6 +25160,21 @@
           "required": ["brandId", "from", "to"]
         }
       },
+      "content.campaigns.close": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "campaignId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["campaignId", "expectedVersion"]
+        }
+      },
       "content.campaigns.create": {
         "type": "mutation",
         "input": {
@@ -24990,6 +25233,33 @@
             }
           },
           "required": ["brandId", "page"]
+        }
+      },
+      "content.campaigns.update": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "campaignId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "objectiveId": {
+              "type": "string"
+            },
+            "startsAt": {
+              "type": "string"
+            },
+            "endsAt": {
+              "type": "string"
+            }
+          },
+          "required": ["campaignId", "expectedVersion"]
         }
       },
       "content.packages.create": {
@@ -25888,6 +26158,21 @@
           "required": ["documentId", "commentId", "expectedVersion"]
         }
       },
+      "creative.documents.archive": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["documentId", "expectedVersion"]
+        }
+      },
       "creative.documents.create": {
         "type": "mutation",
         "input": {
@@ -26123,6 +26408,9 @@
             "contentPackageId": {
               "type": "string"
             },
+            "archived": {
+              "type": "boolean"
+            },
             "page": {
               "type": "object",
               "properties": {
@@ -26152,6 +26440,21 @@
             }
           },
           "required": ["documentId", "title"]
+        }
+      },
+      "creative.documents.unarchive": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "documentId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["documentId", "expectedVersion"]
         }
       },
       "creative.generation.active": {

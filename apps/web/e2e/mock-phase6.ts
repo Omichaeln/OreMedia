@@ -5,9 +5,11 @@ import {
   BriefCreate,
   BriefGet,
   BriefList,
+  CampaignClose,
   CampaignCreate,
   CampaignGet,
   CampaignList,
+  CampaignUpdate,
   ChannelVariantGenerate,
   ChannelVariantUpdate,
   ContentPackageCreate,
@@ -615,6 +617,26 @@ export class Phase6Backend {
       });
     }
     return out;
+  }
+
+  /** G12: a completed or archived campaign takes no new briefs or content (the API's message and issue). */
+  assertCampaignOpen(campaignId: string | null | undefined, path: string): void {
+    const c = campaignId ? this.campaigns.get(campaignId) : undefined;
+    if (c && (c.state === 'completed' || c.state === 'archived'))
+      throw new ValidationFailedError(
+        [{ path, issue: `campaign_is_${c.state}` }],
+        `The campaign "${c.name}" is closed: it takes no new briefs or content`,
+      );
+  }
+
+  /** A campaign that may still change (G12): stale versions conflict, closed campaigns refuse. */
+  openCampaign(campaignId: string, expectedVersion: number): Campaign {
+    const c = this.campaigns.get(campaignId);
+    if (!c) throw new NotFoundError('Campaign', campaignId);
+    if (c.state === 'completed' || c.state === 'archived')
+      throw new ValidationFailedError([{ path: 'campaignId', issue: `campaign_is_${c.state}` }]);
+    if (c.version !== expectedVersion) throw new ConflictError('Campaign', c.id, expectedVersion);
+    return c;
   }
 
   /** Seeds a campaign (a second company's own rows). */
@@ -1591,6 +1613,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
   /** As the server's packages.create: revision 1 carries the copy; the first package moves an accepted brief on. */
   const createPackage = (input: z.infer<typeof ContentPackageCreate>) => {
     brandOf(input.brandId);
+    if (input.briefId) b.assertCampaignOpen(b.brief(input.briefId).campaignId, 'briefId');
     const id = rid('pkg');
     const revisionId = rid('cr');
     const copy = { ...input.copy, master: { ...input.copy.master } };
@@ -1677,6 +1700,28 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         });
         return { campaignId: id, state: 'draft' as const, version: 0 };
       }),
+      // G12: as the API: version-checked; a completed or archived campaign is final.
+      update: mutation.input(CampaignUpdate).mutation(({ input }) => {
+        const c = b.openCampaign(input.campaignId, input.expectedVersion);
+        const startsAt = input.startsAt ?? c.startsAt;
+        const endsAt = input.endsAt ?? c.endsAt;
+        if (new Date(endsAt) < new Date(startsAt))
+          throw new ValidationFailedError([{ path: 'endsAt', issue: 'must not be before startsAt' }]);
+        Object.assign(c, {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.objectiveId !== undefined ? { objectiveId: input.objectiveId } : {}),
+          startsAt,
+          endsAt,
+          updatedAt: now(),
+          version: c.version + 1,
+        });
+        return { ...c };
+      }),
+      close: mutation.input(CampaignClose).mutation(({ input }) => {
+        const c = b.openCampaign(input.campaignId, input.expectedVersion);
+        Object.assign(c, { state: 'completed', updatedAt: now(), version: c.version + 1 });
+        return { ...c };
+      }),
     }),
     briefs: router({
       list: query.input(BriefList).query(({ input }) => {
@@ -1689,6 +1734,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       get: query.input(BriefGet).query(({ input }) => b.brief(input.briefId)),
       create: mutation.input(BriefCreate).mutation(({ input }) => {
         brandOf(input.brandId);
+        b.assertCampaignOpen(input.campaignId, 'campaignId');
         const id = rid('brf');
         b.briefs.set(id, {
           id,
@@ -1712,6 +1758,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       }),
       accept: mutation.input(BriefAccept).mutation(({ input }) => {
         const brief = b.brief(input.briefId);
+        b.assertCampaignOpen(brief.campaignId, 'briefId');
         if (brief.version !== input.expectedVersion)
           throw new ConflictError('Brief', brief.id, input.expectedVersion);
         if (brief.state !== 'draft')
@@ -1752,6 +1799,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         const brief = b.brief(input.briefId);
         if (brief.state !== 'draft')
           throw new ValidationFailedError([{ path: 'briefId', issue: `brief is ${brief.state}` }]);
+        b.assertCampaignOpen(brief.campaignId, 'briefId');
         const ids: string[] = [];
         for (const item of input.items) {
           const id = rid('pli');
@@ -1816,6 +1864,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       }),
       restore: mutation.input(PlanItemRestore).mutation(({ input }) => {
         const item = b.planItem(input.planItemId);
+        b.assertCampaignOpen(b.brief(item.briefId).campaignId, 'briefId');
         if (item.version !== input.expectedVersion)
           throw new ConflictError('PlanItem', item.id, input.expectedVersion);
         if (item.state !== 'dropped')

@@ -334,6 +334,33 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     expect(head().pages.map((p) => p.name)).toEqual(['Post', 'Page 2']);
   }, 60_000);
 
+  it('archives a document from its menu in the index (G12): hidden by default, listed with the filter, restored', async () => {
+    const doc = backend.createDocument('Old flyer');
+    await openStudioIndex();
+    const documents = page.getByTestId('documents');
+    const row = documents.getByRole('listitem').filter({ hasText: 'Old flyer' });
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    await row.getByRole('button', { name: 'Actions for Old flyer' }).click();
+    await page.getByRole('menuitem', { name: 'Archive' }).click();
+    await expect.poll(() => backend.doc(doc.id).archivedAt, { timeout: 15_000 }).not.toBeNull();
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(0);
+    // The filter lists the archived documents only, each marked and restorable.
+    await page.getByTestId('show-archived-documents').check();
+    const archived = page.getByRole('list', { name: 'Archived documents' }).getByRole('listitem');
+    await expect.poll(() => archived.filter({ hasText: 'Old flyer' }).count(), { timeout: 15_000 }).toBe(1);
+    expect(await archived.filter({ hasText: 'Old flyer' }).textContent()).toContain('Archived');
+    expect(await archived.filter({ hasText: 'Spring offer' }).count()).toBe(0);
+    await archived
+      .filter({ hasText: 'Old flyer' })
+      .getByRole('button', { name: 'Actions for Old flyer' })
+      .click();
+    await page.getByRole('menuitem', { name: 'Restore from archive' }).click();
+    await expect.poll(() => backend.doc(doc.id).archivedAt, { timeout: 15_000 }).toBeNull();
+    await page.getByTestId('show-archived-documents').uncheck();
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    expect(backend.doc(doc.id).version).toBe(3);
+  }, 45_000);
+
   it('keyboard: content type tiles and starts work without a pointer; marquee and arrow keys work on the canvas', async () => {
     await openStudioIndex();
     const carousel = page

@@ -5,10 +5,12 @@ import {
   CommentList,
   CommentResolve,
   CreativeDocumentV1,
+  DocumentArchive,
   DocumentCreate,
   DocumentDuplicate,
   DocumentGet,
   DocumentList,
+  DocumentUnarchive,
   DocumentRename,
   type OperationBatch,
   OperationsApply,
@@ -873,6 +875,7 @@ const toDocumentDto = (d: DocumentRow) => ({
   schemaVersion: d.schemaVersion,
   /** STU-2b: graphic (pages) or video (timeline). */
   kind: d.kind,
+  archivedAt: d.archivedAt?.toISOString() ?? null,
   createdAt: d.createdAt.toISOString(),
   updatedAt: d.updatedAt.toISOString(),
   version: d.version,
@@ -1352,6 +1355,35 @@ async function insertVideoDocument(
   return { ...created, findings };
 }
 
+/** G12: archive or restore under the row lock; a document already in the asked state is answered as it is. */
+async function setDocumentArchived(
+  actor: ResolvedActor,
+  input: { documentId: string; expectedVersion: number },
+  archived: boolean,
+  tx: Tx,
+  opts: ActorOptions,
+) {
+  const doc = await documentsRepo.lock(input.documentId, tx);
+  await policy.assert(actor, 'creative.edit', documentResource(doc), opts, tx);
+  if ((doc.archivedAt !== null) === archived)
+    return { documentId: doc.id, archivedAt: doc.archivedAt?.toISOString() ?? null, version: doc.version };
+  const archivedAt = archived ? new Date() : null;
+  await documentsRepo.setArchived(doc.id, input.expectedVersion, archivedAt, tx);
+  await audit.record(
+    actorRef(actor),
+    archived ? 'creative.document.archive' : 'creative.document.unarchive',
+    { type: 'creative_document', id: doc.id },
+    'allowed',
+    tx,
+    { brandId: doc.brandId, expectedVersion: input.expectedVersion },
+  );
+  return {
+    documentId: doc.id,
+    archivedAt: archivedAt?.toISOString() ?? null,
+    version: input.expectedVersion + 1,
+  };
+}
+
 export const creativeService = {
   documents: {
     /**
@@ -1534,6 +1566,27 @@ export const creativeService = {
       return { documentId: doc.id, title: parsed.title, version: doc.version + 1 };
     },
 
+    /**
+     * G12: archives a document (it leaves the Studio's default index) or restores it. Only the row's archivedAt
+     * changes: revisions, approvals and exports stay, and the document still opens. Version-checked; creative.edit.
+     */
+    async archive(
+      actor: ResolvedActor,
+      input: z.infer<typeof DocumentArchive>,
+      tx: Tx,
+      opts: ActorOptions = {},
+    ) {
+      return setDocumentArchived(actor, DocumentArchive.parse(input), true, tx, opts);
+    },
+    async unarchive(
+      actor: ResolvedActor,
+      input: z.infer<typeof DocumentUnarchive>,
+      tx: Tx,
+      opts: ActorOptions = {},
+    ) {
+      return setDocumentArchived(actor, DocumentUnarchive.parse(input), false, tx, opts);
+    },
+
     /** Save/reopen: the document row plus the committed snapshot of its current revision. */
     async get(actor: ResolvedActor, input: z.infer<typeof DocumentGet>, tx?: Tx) {
       const parsed = DocumentGet.parse(input);
@@ -1551,13 +1604,16 @@ export const creativeService = {
     },
 
     /** The brand's documents, newest first, without their revisions (get returns the current one); creative.read. */
-    async list(actor: ResolvedActor, input: z.infer<typeof DocumentList>, tx?: Tx) {
+    async list(actor: ResolvedActor, input: z.input<typeof DocumentList>, tx?: Tx) {
       const parsed = DocumentList.parse(input);
       const brand = await brandService.get(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'creative.read', brandResource(brand.id), {}, tx);
       const page = await documentsRepo.list(
         brand.id,
-        parsed.contentPackageId ? { contentPackageId: parsed.contentPackageId } : {},
+        {
+          archived: parsed.archived,
+          ...(parsed.contentPackageId ? { contentPackageId: parsed.contentPackageId } : {}),
+        },
         parsed.page,
         tx,
       );

@@ -35,6 +35,11 @@ export const creativeDocuments = mysqlTable(
     schemaVersion: int('schema_version').notNull(),
     // STU-2b: graphic (CreativeDocumentV1 snapshots) or video (VideoProjectV1 snapshots); existing rows are graphic.
     kind: mysqlEnum('kind', ['graphic', 'video']).notNull().default('graphic'),
+    /**
+     * G12: when the document was archived (hidden from the Studio's default index, still readable and restorable);
+     * null while it is in use. Added in 0029, nullable, so every existing document stays in use.
+     */
+    archivedAt: ts('archived_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

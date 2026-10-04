@@ -143,6 +143,8 @@ export interface VideoDoc {
   currentRevisionId: string;
   schemaVersion: 1;
   kind: 'video';
+  /** G12: when the document was archived; null while in use. */
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -259,6 +261,7 @@ export class VideoMockBackend {
       currentRevisionId: rev.id,
       schemaVersion: 1,
       kind: 'video',
+      archivedAt: null,
       createdAt: now(),
       updatedAt: now(),
       version: 1,

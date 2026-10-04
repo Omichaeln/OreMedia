@@ -208,6 +208,230 @@ function IssuePasswordLink({ membershipId, who }: { membershipId: string; who: s
   );
 }
 
+type MemberRow = NonNullable<ReturnType<typeof useMembers>['data']>['items'][number];
+
+/**
+ * G03: a member's role and brand scope (access.members.setRole, access.brandGrants.set / remove). The role and the
+ * every-brand switch are saved together and sign the person out of every session; a brand is granted or taken away
+ * as its box is ticked. The API decides who may change whom (an owner's or admin's role only from an owner).
+ */
+function ManageMember({ member, who }: { member: MemberRow; who: string }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const roleIntent = useIntentKey();
+  const grantIntent = useIntentKey();
+  const brands = useBrands();
+  const [open, setOpen] = useState(false);
+  const [role, setRole] = useState<string>(member.role);
+  const [allBrands, setAllBrands] = useState(member.allBrands);
+  const refresh = () => void queryClient.invalidateQueries(trpc.access.members.pathFilter());
+  const saveRole = useMutation(
+    trpc.access.members.setRole.mutationOptions({
+      ...mutationIntent(roleIntent.key),
+      onSuccess: () => {
+        roleIntent.renew();
+        refresh();
+      },
+    }),
+  );
+  const onGrantSettled = () => {
+    grantIntent.renew();
+    refresh();
+  };
+  const grant = useMutation(
+    trpc.access.brandGrants.set.mutationOptions({
+      ...mutationIntent(grantIntent.key),
+      onSettled: onGrantSettled,
+    }),
+  );
+  const ungrant = useMutation(
+    trpc.access.brandGrants.remove.mutationOptions({
+      ...mutationIntent(grantIntent.key),
+      onSettled: onGrantSettled,
+    }),
+  );
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      setRole(member.role);
+      setAllBrands(member.allBrands);
+      saveRole.reset();
+      grant.reset();
+      ungrant.reset();
+    }
+  };
+  const changed = role !== member.role || allBrands !== member.allBrands;
+  const grantError = grant.error ?? ungrant.error;
+  const roleUi = saveRole.isError ? toUiError(saveRole.error) : null;
+  const grantUi = grantError ? toUiError(grantError) : null;
+  const grantPending = grant.isPending || ungrant.isPending;
+  const toggleBrand = (brandId: string, granted: boolean) =>
+    granted
+      ? ungrant.mutate({ membershipId: member.membershipId, brandId })
+      : grant.mutate({ membershipId: member.membershipId, brandId, roles: [] });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <Button size="sm" variant="secondary" onClick={() => onOpenChange(true)} aria-label={`Manage ${who}`}>
+        Manage
+      </Button>
+      <DialogContent
+        title={`Manage ${who}`}
+        description="Saving a role or the every-brand switch signs them out of every session. Brands restricted one by one change as you tick them."
+      >
+        <div className="flex flex-col gap-3">
+          <Field label="Role" htmlFor={`member-role-${member.membershipId}`}>
+            <Select
+              id={`member-role-${member.membershipId}`}
+              value={role}
+              onValueChange={setRole}
+              options={MembershipRole.options.map((r) => ({ value: r, label: roleLabel(r) }))}
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={allBrands} onChange={(e) => setAllBrands(e.target.checked)} />
+            Every brand of the company
+          </label>
+          {roleUi && (
+            <StatusBanner
+              tone="critical"
+              title={roleUi.kind === 'forbidden' ? 'Permission denied' : 'The role did not change'}
+              description={roleUi.message}
+            />
+          )}
+          {saveRole.isSuccess && !changed && (
+            <p className="text-xs text-muted-foreground" role="status">
+              Saved. They were signed out of every session.
+            </p>
+          )}
+          <div>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={!changed || saveRole.isPending}
+              data-testid="save-member-role"
+              onClick={() =>
+                saveRole.mutate({
+                  membershipId: member.membershipId,
+                  expectedVersion: member.version,
+                  role: MembershipRole.parse(role),
+                  allBrands,
+                })
+              }
+            >
+              {saveRole.isPending ? 'Saving…' : 'Save role'}
+            </Button>
+          </div>
+          {!member.allBrands && (
+            <fieldset className="flex flex-col gap-1 border-t border-border pt-3" disabled={grantPending}>
+              <legend className="text-xs font-medium text-muted-foreground">Brands they can see</legend>
+              {(brands.data ?? []).map((b) => {
+                const granted = member.brandIds.includes(b.id);
+                return (
+                  <label key={b.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={granted}
+                      onChange={() => toggleBrand(b.id, granted)}
+                      data-testid={`member-brand-${b.id}`}
+                    />
+                    {b.name}
+                  </label>
+                );
+              })}
+              {grantUi && (
+                <StatusBanner
+                  tone="critical"
+                  title={grantUi.kind === 'forbidden' ? 'Permission denied' : 'The brand did not change'}
+                  description={grantUi.message}
+                />
+              )}
+            </fieldset>
+          )}
+        </div>
+        <DialogActions>
+          <DialogClose asChild>
+            <Button variant="ghost">Done</Button>
+          </DialogClose>
+        </DialogActions>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * G03: switches a member's access to this company off (access.members.disable, behind a confirmation: their sessions
+ * end at once) or back on (access.members.enable). Never offered on your own row; the API also keeps the last owner.
+ */
+function MemberStatusAction({ member, who }: { member: MemberRow; who: string }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [open, setOpen] = useState(false);
+  const kind = member.status === 'disabled' ? 'enable' : 'disable';
+  const onSuccess = () => {
+    intent.renew();
+    setOpen(false);
+    void queryClient.invalidateQueries(trpc.access.members.pathFilter());
+  };
+  const disable = useMutation(
+    trpc.access.members.disable.mutationOptions({ ...mutationIntent(intent.key), onSuccess }),
+  );
+  const enable = useMutation(
+    trpc.access.members.enable.mutationOptions({ ...mutationIntent(intent.key), onSuccess }),
+  );
+  const m = kind === 'disable' ? disable : enable;
+  const ui = m.isError ? toUiError(m.error) : null;
+  const input = { membershipId: member.membershipId, expectedVersion: member.version };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) m.reset();
+      }}
+    >
+      <Button
+        size="sm"
+        variant={kind === 'disable' ? 'danger' : 'secondary'}
+        onClick={() => setOpen(true)}
+        aria-label={`${kind === 'disable' ? 'Disable' : 'Enable'} ${who}`}
+      >
+        {kind === 'disable' ? 'Disable' : 'Enable'}
+      </Button>
+      <DialogContent
+        role="alertdialog"
+        title={kind === 'disable' ? `Disable ${who}?` : `Enable ${who}?`}
+        description={
+          kind === 'disable'
+            ? 'They are signed out of every session at once and cannot open this company until enabled again. Their work stays; their other companies are not affected.'
+            : 'They can sign in to this company again with their role and brands as they were.'
+        }
+      >
+        {ui && (
+          <StatusBanner
+            tone="critical"
+            title={ui.kind === 'forbidden' ? 'Permission denied' : 'Nothing changed'}
+            description={ui.message}
+          />
+        )}
+        <DialogActions>
+          <DialogClose asChild>
+            <Button variant="ghost">Cancel</Button>
+          </DialogClose>
+          <Button
+            variant={kind === 'disable' ? 'danger' : 'primary'}
+            disabled={m.isPending}
+            data-testid={`confirm-${kind}-member`}
+            onClick={() => (kind === 'disable' ? disable.mutate(input) : enable.mutate(input))}
+          >
+            {m.isPending ? 'Saving…' : kind === 'disable' ? 'Disable' : 'Enable'}
+          </Button>
+        </DialogActions>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Settings → Members (owners and admins): who belongs to the company, their role, status and brand scope. */
 export function Members() {
   const members = useMembers(true);
@@ -218,8 +442,9 @@ export function Members() {
   return (
     <Section id="members-heading" title="Members" testId="members">
       <p className="text-xs text-muted-foreground">
-        Everyone with access to this company. A role change signs the person out of every session. A password
-        link lets a member set or reset a password for signing in with their email address.
+        Everyone with access to this company. A role change signs the person out of every session, and
+        disabling a member ends their sessions at once. A password link lets a member set or reset a password
+        for signing in with their email address.
       </p>
       {members.isPending && <Skeleton label="Loading members" lines={4} />}
       {members.isError && <RequestError error={members.error} onRetry={() => void members.refetch()} />}
@@ -249,6 +474,10 @@ export function Members() {
                 <Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{roleLabel(m.status)}</Badge>
                 {m.status !== 'disabled' && m.userId !== me && (
                   <IssuePasswordLink membershipId={m.membershipId} who={m.name ?? m.email ?? m.userId} />
+                )}
+                {m.userId !== me && <ManageMember member={m} who={m.name ?? m.email ?? m.userId} />}
+                {m.userId !== me && m.status !== 'invited' && (
+                  <MemberStatusAction member={m} who={m.name ?? m.email ?? m.userId} />
                 )}
                 {m.userId === me && (
                   <Link

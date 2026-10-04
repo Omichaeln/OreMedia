@@ -13,6 +13,10 @@ export const CONTENT_INPUTS: Record<string, CrossTenantFixture> = {
   },
   'content.campaigns.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'content.campaigns.get': { buildInput: (f) => ({ campaignId: f['campaignId'] }) },
+  'content.campaigns.update': {
+    buildInput: (f) => ({ campaignId: f['campaignId'], expectedVersion: 0, name: 'Foreign rename' }),
+  },
+  'content.campaigns.close': { buildInput: (f) => ({ campaignId: f['campaignId'], expectedVersion: 0 }) },
   'content.briefs.create': {
     buildInput: (f) => ({ brandId: f['brandId'], audience: 'x', message: 'x', campaignId: f['campaignId'] }),
   },

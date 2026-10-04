@@ -417,6 +417,60 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await noHorizontalOverflow()).toBe(true);
   }, 45_000);
 
+  it('a campaign is edited and closed from the planner (G12); a closed campaign offers neither again', async () => {
+    const spring = p6.campaigns.get(P6.campaigns.spring);
+    if (!spring) throw new Error('seeded campaign missing');
+    const saved = structuredClone(spring);
+    await open(`campaigns?campaign=${P6.campaigns.spring}`);
+    const summary = page.getByTestId('campaign-summary');
+    await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('Spring launch');
+    await summary.getByRole('button', { name: 'Edit Spring launch' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Edit campaign' });
+    await dialog.getByLabel('Campaign name').fill('Spring relaunch');
+    // An end before the start is refused by the API and shown on the field; nothing changes.
+    await dialog.getByLabel('Ends').fill('2020-01-01T09:00');
+    await dialog.getByTestId('save-campaign').click();
+    await expect
+      .poll(() => dialog.textContent(), { timeout: 15_000 })
+      .toContain('must not be before startsAt');
+    expect(spring.name).toBe('Spring launch');
+    await dialog.getByLabel('Ends').fill('2030-06-30T18:00');
+    await dialog.getByTestId('save-campaign').click();
+    await expect.poll(() => spring.name, { timeout: 15_000 }).toBe('Spring relaunch');
+    expect(spring.version).toBe(saved.version + 1);
+    expect(requestsTo('content.campaigns.update').length).toBe(2);
+    await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('Spring relaunch');
+    expect(await text(`campaign-${P6.campaigns.spring}`)).toContain('Spring relaunch');
+
+    await summary.getByRole('button', { name: 'Close Spring relaunch' }).click();
+    await page.getByTestId('confirm-close-campaign').click();
+    await expect.poll(() => spring.state, { timeout: 15_000 }).toBe('completed');
+    await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('Completed');
+    expect(await summary.getByRole('button').count()).toBe(0);
+
+    // A closed campaign takes no new brief: the form says so, and the API's reason is shown when tried anyway.
+    await page.getByRole('button', { name: /new brief/ }).click();
+    expect(await page.getByTestId('briefs').textContent()).toContain(
+      'The selected campaign is closed: it takes no new briefs.',
+    );
+    const briefsBefore = p6.briefs.size;
+    await page.getByLabel('Audience').fill('Late joiners');
+    await page.getByRole('button', { name: 'Create brief' }).click();
+    const closedBanner = page.getByTestId('campaign-closed');
+    await expect.poll(() => closedBanner.count(), { timeout: 15_000 }).toBe(1);
+    expect(await closedBanner.textContent()).toContain(
+      'The campaign "Spring relaunch" is closed: it takes no new briefs or content',
+    );
+    expect(p6.briefs.size).toBe(briefsBefore);
+    // Nor is content attached to one of its briefs: accepting it into packages is refused with the same reason.
+    await open(`campaigns?campaign=${P6.campaigns.spring}&brief=${P6.briefs.awaiting}`);
+    await page.getByRole('button', { name: 'Accept brief' }).click();
+    await expect.poll(() => page.getByTestId('campaign-closed').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('campaign-closed').textContent()).toContain('This campaign is closed');
+    expect(p6.briefs.get(P6.briefs.awaiting)?.state).toBe('draft');
+    Object.assign(spring, saved);
+  }, 45_000);
+
   it('a brief awaiting acceptance is accepted, keeping its intent key across a failed attempt', async () => {
     await open(`campaigns?brief=${P6.briefs.awaiting}`);
     await expect.poll(() => count('brief-awaiting'), { timeout: 15_000 }).toBe(1);

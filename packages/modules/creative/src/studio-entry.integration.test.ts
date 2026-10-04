@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1, Element, Operation } from '@oremedia/contracts/creative';
-import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
+import {
+  ConflictError,
+  NotFoundError,
+  PolicyDeniedError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
@@ -497,6 +502,95 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
           creativeService.templates.retire(A, { ...foreignTemplate, expectedVersion: 1 }, tx),
         ),
       ).rejects.toBeInstanceOf(NotFoundError);
+    });
+  });
+
+  describe('archive and unarchive (G12)', () => {
+    const listIds = async (archived?: boolean) =>
+      (
+        await run(tenantA, () =>
+          creativeService.documents.list(A, {
+            brandId: brandA,
+            ...(archived === undefined ? {} : { archived }),
+            page: { limit: 200 },
+          }),
+        )
+      ).items.map((d) => d.id);
+
+    it('an archived document leaves the default index, is listed with the filter, still opens, and comes back', async () => {
+      const created = await run(tenantA, (tx) =>
+        creativeService.documents.create(A, { brandId: brandA, title: 'Old flyer' }, tx),
+      );
+      expect(await listIds()).toContain(created.documentId);
+      const archived = await run(tenantA, (tx) =>
+        creativeService.documents.archive(A, { documentId: created.documentId, expectedVersion: 1 }, tx),
+      );
+      expect(archived).toMatchObject({ documentId: created.documentId, version: 2 });
+      expect(archived.archivedAt).not.toBeNull();
+      expect(await listIds()).not.toContain(created.documentId);
+      expect(await listIds(false)).not.toContain(created.documentId);
+      expect(await listIds(true)).toEqual(expect.arrayContaining([created.documentId]));
+      const got = await run(tenantA, () =>
+        creativeService.documents.get(A, { documentId: created.documentId }),
+      );
+      expect(got.archivedAt).toBe(archived.archivedAt);
+      expect(got.revision.id).toBe(created.revisionId); // revisions are untouched
+      expect(
+        (await auditOf(tenantA, 'creative.document.archive')).some(
+          (e) => e.resourceId === created.documentId,
+        ),
+      ).toBe(true);
+      // Archiving again answers the stored state and writes nothing.
+      const again = await run(tenantA, (tx) =>
+        creativeService.documents.archive(A, { documentId: created.documentId, expectedVersion: 2 }, tx),
+      );
+      expect(again).toEqual(archived);
+      const restored = await run(tenantA, (tx) =>
+        creativeService.documents.unarchive(A, { documentId: created.documentId, expectedVersion: 2 }, tx),
+      );
+      expect(restored).toEqual({ documentId: created.documentId, archivedAt: null, version: 3 });
+      expect(await listIds()).toContain(created.documentId);
+      expect(await listIds(true)).not.toContain(created.documentId);
+      expect(
+        (await auditOf(tenantA, 'creative.document.unarchive')).some(
+          (e) => e.resourceId === created.documentId,
+        ),
+      ).toBe(true);
+    });
+
+    it('is version-checked and needs creative.edit; a foreign document is NOT_FOUND', async () => {
+      const created = await run(tenantA, (tx) =>
+        creativeService.documents.create(A, { brandId: brandA, title: 'Guarded' }, tx),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.documents.archive(A, { documentId: created.documentId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ConflictError);
+      const reviewer = { ...manager(tenantA), role: 'reviewer' } as ResolvedActor;
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.documents.archive(
+            reviewer,
+            { documentId: created.documentId, expectedVersion: 1 },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      const foreign = await run(tenantB, (tx) =>
+        creativeService.documents.create(manager(tenantB), { brandId: brandB, title: 'B' }, tx),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.documents.archive(A, { documentId: foreign.documentId, expectedVersion: 1 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        run(tenantA, (tx) =>
+          creativeService.documents.unarchive(A, { documentId: foreign.documentId, expectedVersion: 1 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(await listIds()).toContain(created.documentId);
     });
   });
 

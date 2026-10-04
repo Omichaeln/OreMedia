@@ -11,11 +11,21 @@ export function useDocument(documentId: string) {
 /** Documents a page at a time (spec 7.4); the home and the package forms show more on request. */
 const DOCUMENTS_PAGE = 50;
 
-/** The brand's documents, newest first, page by page; optionally only those created for one content package. */
-export function useDocuments(brandId: string, opts: { contentPackageId?: string; enabled?: boolean } = {}) {
+/**
+ * The brand's documents, newest first, page by page; optionally only those created for one content package. Archived
+ * documents are left out unless `archived` asks for them (then only they are listed).
+ */
+export function useDocuments(
+  brandId: string,
+  opts: { contentPackageId?: string; enabled?: boolean; archived?: boolean } = {},
+) {
   const trpc = useTRPC();
   const client = useTRPCClient();
-  const input = { brandId, ...(opts.contentPackageId ? { contentPackageId: opts.contentPackageId } : {}) };
+  const input = {
+    brandId,
+    ...(opts.contentPackageId ? { contentPackageId: opts.contentPackageId } : {}),
+    ...(opts.archived ? { archived: true } : {}),
+  };
   return useCursorPages({
     queryKey: trpc.creative.documents.list.queryKey(input),
     fetchPage: (cursor) =>

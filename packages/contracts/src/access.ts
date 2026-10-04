@@ -279,3 +279,22 @@ export const PasswordSetupLink = z.object({ url: z.string(), expiresAt: z.string
 export type PasswordSetupLink = z.infer<typeof PasswordSetupLink>;
 /** How long a password setup link stays valid. */
 export const PASSWORD_SETUP_TTL_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * access.members.disable / enable (G03): a member's access to this company is switched off or back on, version-checked
+ * like a role change. Disabling ends every session of the person in the same transaction, and their next request to
+ * this company is refused (membership_inactive). Owners and admins (membership.manage), people only; an owner or
+ * admin only by an owner; never your own membership, and never the company's last active owner. Membership status is
+ * per company; the person's account (users.status) and their other companies are untouched.
+ */
+export const MemberDisable = z.object({ membershipId: z.string(), expectedVersion: z.number().int() });
+export const MemberEnable = MemberDisable;
+export const MemberStatusResult = z.object({
+  membershipId: z.string(),
+  status: MembershipStatus,
+  version: z.number().int(),
+});
+export type MemberStatusResult = z.infer<typeof MemberStatusResult>;
+
+/** access.brandGrants.remove (G03): the member no longer sees the brand (a member granted every brand is unaffected). */
+export const BrandGrantRemove = z.object({ membershipId: z.string(), brandId: z.string() });
