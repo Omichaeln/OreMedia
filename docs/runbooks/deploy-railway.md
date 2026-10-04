@@ -10,7 +10,10 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
 2. Add plugins: **MySQL** (application), **Redis**. If self-hosting Temporal, add a **second MySQL** for it.
 3. Create a Cloudflare R2 bucket pair (`assets`, `releases`), private, with versioning and lifecycle rules.
 4. For each application service: "New service → GitHub repo" (this repository), leave **Root Directory** at the
-   repository root, set **Config-as-code path** to `infra/railway/<service>/railway.json`, and set the variables:
+   repository root, and apply the settings in `infra/railway/<service>/railway.json` to the service directly (Dockerfile
+   path, watch patterns, health check, restart policy, the api's pre-deploy migration). Railway refuses config-as-code
+   paths (it asks for `.railway/railway.ts`; build ledger R.2, `docs/progress/build-ledger.md`), so those files are
+   only the reference. Then set the variables:
    - all services: `DATABASE_URL`, `REDIS_URL`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TLS_CERT_REF`,
      `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OREMEDIA_APP` (api | worker-core | worker-ingest | redirector);
    - `api`: `AUTH_ISSUER_URL` (optional, default `https://accounts.google.com`), `AUTH_CLIENT_ID`,

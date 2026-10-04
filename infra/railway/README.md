@@ -1,6 +1,6 @@
 # Railway deployment (spec 17.1)
 
-Application services, plus a short-lived approval monitor, each use the repository root as their root directory and a config-as-code path under `infra/railway/<service>/railway.json`:
+Application services, plus a short-lived approval monitor, each use the repository root as their root directory. Railway refuses config-as-code paths (it asks for `.railway/railway.ts`; build ledger R.2, `docs/progress/build-ledger.md`), so each service's settings (health check, restart policy, pre-deploy migration, Dockerfile path, watch patterns, and the approval monitor's cron schedule) are applied to the service directly in Railway settings. The `infra/railway/<service>/railway.json` files are only the reference for those settings:
 
 | Service            | Image                                 | `OREMEDIA_APP` variable | Ports / health                                                                       |
 | ------------------ | ------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
