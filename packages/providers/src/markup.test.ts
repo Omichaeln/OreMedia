@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scanMarkup } from './markup';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { decodeEntities, robotsAllows, sitemapUrls } from './site-rules';
-import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from './testing/linear-time';
 
 /** Inputs that sent the earlier regular expressions quadratic (or worse) must take time linear in their size. */
 const linear = <T>(input: (size: number) => T, run: (input: T) => unknown, size: number) => {
@@ -9,55 +8,6 @@ const linear = <T>(input: (size: number) => T, run: (input: T) => unknown, size:
   expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
   expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
 };
-const N = 10_000;
-
-describe('scanMarkup', () => {
-  it('yields text, tags with attributes, and raw-text contents; skips comments and doctypes', () => {
-    const tokens = [
-      ...scanMarkup(
-        '<!doctype html><!-- x --><P class="a > b" data-x=1 hidden>Hi<br/><script>if (a<b) "</p>"</SCRIPT>&amp;</p>',
-      ),
-    ];
-    expect(tokens).toEqual([
-      {
-        type: 'open',
-        name: 'p',
-        attrs: new Map([
-          ['class', 'a > b'],
-          ['data-x', '1'],
-          ['hidden', ''],
-        ]),
-        selfClosing: false,
-      },
-      { type: 'text', text: 'Hi' },
-      { type: 'open', name: 'br', attrs: new Map(), selfClosing: true },
-      { type: 'open', name: 'script', attrs: new Map(), selfClosing: false },
-      { type: 'text', text: 'if (a<b) "</p>"' },
-      { type: 'close', name: 'script' },
-      { type: 'text', text: '&amp;' },
-      { type: 'close', name: 'p' },
-    ]);
-  });
-
-  it('a stray `<` stays text', () => {
-    expect([...scanMarkup('a < b <c d')]).toEqual([{ type: 'text', text: 'a < b <c d' }]);
-  });
-
-  it.each([
-    ['unclosed tags', (n: number) => '<a '.repeat(n)],
-    ['bare angle brackets', (n: number) => '<'.repeat(n)],
-    ['unclosed quotes', (n: number) => '<a "'.repeat(n)],
-    ['unclosed comments', (n: number) => '<!--'.repeat(n)],
-    ['unclosed raw text', (n: number) => '<script>'.repeat(n)],
-    ['deep nesting', (n: number) => '<div aria-hidden=true>'.repeat(n / 10)],
-  ])(
-    'stays linear on %s',
-    (_, input) => {
-      linear(input, (markup) => [...scanMarkup(markup)].length, N);
-    },
-    30_000,
-  );
-});
 
 describe('site rules on hostile input', () => {
   it('decodes numeric references outside Unicode to U+FFFD instead of throwing', () => {
@@ -81,7 +31,7 @@ describe('site rules on hostile input', () => {
     linear(
       (n) => '<url><loc>'.repeat(n),
       (xml) => sitemapUrls(xml),
-      N / 10,
+      1_000,
     );
     expect(
       sitemapUrls(

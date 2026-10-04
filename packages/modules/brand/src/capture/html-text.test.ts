@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/providers/testing/linear-time';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { htmlToText, sameSiteUrl, tidyText } from './html-text';
 import { choosePages } from './site-crawl';
 

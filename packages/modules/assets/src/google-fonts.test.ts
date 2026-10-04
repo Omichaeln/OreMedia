@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
-import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/providers/testing/linear-time';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { karlaTtf, toWoff2 } from './ingest/font.fixtures';
 import { configureGoogleFonts, css2Url, fetchGoogleFontFiles, parseCss2 } from './google-fonts';
 

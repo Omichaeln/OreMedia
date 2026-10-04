@@ -15,6 +15,7 @@ import {
   type SeoAuditSeverity,
   type SeoAuditSummaryCountsV1,
 } from '@oremedia/contracts/seo-audit';
+import { scanMarkup } from '@oremedia/contracts/markup';
 import { sha256Hex } from '@oremedia/domain/hash';
 import {
   decodeEntities,
@@ -63,36 +64,74 @@ export function robotsDisallowFor(text: string): RobotsRules {
 
 export { robotsAllows, sitemapUrls, type SitemapListing };
 
-// ---- HTML reading (regex over the markup, as contracts/article.ts validates a rendered page) ----
+// ---- HTML reading (one pass of the linear markup scanner per view; no regular expression runs over the page) ----
 
-const fold = (text: string): string =>
-  decodeEntities(text.replace(/<[^>]+>/g, ' '))
-    .replace(/\s+/g, ' ')
-    .trim();
-const tags = (html: string, tag: string): string[] =>
-  [...html.matchAll(new RegExp(`<${tag}\\b[^>]*>`, 'gi'))].map((m) => m[0]);
-const attr = (tag: string, name: string): string | null => {
-  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i').exec(tag);
-  return m ? decodeEntities((m[1] ?? m[2] ?? m[3] ?? '').trim()) : null;
+/** A start tag as the scanner read it: lower-cased name and attributes (first occurrence of each name kept). */
+interface StartTag {
+  name: string;
+  attrs: Map<string, string>;
+}
+/** The parts of a page the checks read, from packages/contracts/src/markup.ts (linear in the page's length). */
+interface PageMarkup {
+  /** Every start tag, those inside scripts, styles, noscript and templates included (subresources, metas, links). */
+  all: StartTag[];
+  /** The start tags outside scripts, styles, noscript and templates (headings, images, the page's links). */
+  visible: StartTag[];
+  /** The first `<title>`'s contents as written, or null when the page has none. */
+  title: string | null;
+  /** The contents of each `<script type="application/ld+json">`, as written. */
+  ldJson: string[];
+}
+const HIDDEN_BLOCKS = new Set(['script', 'style', 'noscript', 'template']);
+
+function readMarkup(html: string): PageMarkup {
+  const all: StartTag[] = [];
+  for (const t of scanMarkup(html, { rawText: false }))
+    if (t.type === 'open') all.push({ name: t.name, attrs: t.attrs });
+  const visible: StartTag[] = [];
+  const ldJson: string[] = [];
+  let title: string | null = null;
+  // Raw-text elements (script, style, title...) come as open, their contents as one text token, then close.
+  let rawOpen: StartTag | null = null;
+  for (const t of scanMarkup(html)) {
+    if (t.type === 'close') rawOpen = null;
+    else if (t.type === 'text') {
+      if (rawOpen?.name === 'title' && title === null) title = t.text;
+      else if (rawOpen?.name === 'script' && isLdJson(rawOpen)) ldJson.push(t.text);
+    } else {
+      rawOpen = t.selfClosing ? null : { name: t.name, attrs: t.attrs };
+      if (!HIDDEN_BLOCKS.has(t.name)) visible.push({ name: t.name, attrs: t.attrs });
+    }
+  }
+  return { all, visible, title, ldJson };
+}
+const isLdJson = (tag: StartTag): boolean =>
+  (tag.attrs.get('type') ?? '').toLowerCase().startsWith('application/ld+json');
+
+/** Markup reduced to its text: tags become spaces, entities are decoded, whitespace is folded. */
+const fold = (markup: string): string => {
+  const parts: string[] = [];
+  for (const t of scanMarkup(markup, { rawText: false })) parts.push(t.type === 'text' ? t.text : ' ');
+  return decodeEntities(parts.join('')).replace(/\s+/g, ' ').trim();
 };
-const hasAttr = (tag: string, name: string): boolean =>
-  new RegExp(`(?:^|\\s)${name}(?:\\s*=|\\s|/|>|$)`, 'i').test(tag);
-const metaContent = (html: string, name: string): string | null => {
-  for (const tag of tags(html, 'meta')) {
+const named = (tags: readonly StartTag[], name: string): StartTag[] => tags.filter((t) => t.name === name);
+const attr = (tag: StartTag | undefined, name: string): string | null => {
+  const value = tag?.attrs.get(name);
+  return value === undefined ? null : decodeEntities(value.trim());
+};
+const metaContent = (markup: PageMarkup, name: string): string | null => {
+  for (const tag of named(markup.all, 'meta')) {
     const n = attr(tag, 'name') ?? attr(tag, 'property');
     if (n && n.toLowerCase() === name) return attr(tag, 'content');
   }
   return null;
 };
-const linkRel = (html: string, rel: string): string[] =>
-  tags(html, 'link').filter((t) => (attr(t, 'rel') ?? '').toLowerCase().split(/\s+/).includes(rel));
-const withoutScripts = (html: string): string =>
-  html.replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+const linkRel = (markup: PageMarkup, rel: string): StartTag[] =>
+  named(markup.all, 'link').filter((t) => (attr(t, 'rel') ?? '').toLowerCase().split(/\s+/).includes(rel));
 
-/** Same-origin links on a page: `<a href>`, absolute, without fragments, deduplicated, capped. */
-export function extractLinks(html: string, pageUrl: string, origin: string): string[] {
+function linksIn(visible: readonly StartTag[], pageUrl: string, origin: string): string[] {
   const seen = new Set<string>();
-  for (const tag of tags(withoutScripts(html), 'a')) {
+  for (const tag of named(visible, 'a')) {
     const href = attr(tag, 'href');
     if (href === null) continue;
     const url = sameOriginUrl(href, pageUrl, origin);
@@ -100,6 +139,11 @@ export function extractLinks(html: string, pageUrl: string, origin: string): str
     if (seen.size >= SEO_AUDIT_LINKS_PER_PAGE) break;
   }
   return [...seen];
+}
+
+/** Same-origin links on a page: `<a href>`, absolute, without fragments, deduplicated, capped. */
+export function extractLinks(html: string, pageUrl: string, origin: string): string[] {
+  return linksIn(readMarkup(html).visible, pageUrl, origin);
 }
 
 export const isHtml = (contentType: string | null): boolean =>
@@ -149,46 +193,45 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
   if (page.status !== 200 || !isHtml(page.contentType))
     return { checks, titleHash: null, metaDescriptionHash: null, links: [] };
 
-  const html = page.html;
-  const head = withoutScripts(html);
-  const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  const title = titleTag ? fold(titleTag[1] as string) : '';
+  const markup = readMarkup(page.html);
+  const title = markup.title === null ? '' : fold(markup.title);
   if (title === '') checks.push(fail('title', 'major', 'missing'));
   else if (title.length > SEO_TITLE_HARD_MAX) checks.push(fail('title', 'major', `length=${title.length}`));
   else if (title.length > SEO_TITLE_MAX) checks.push(fail('title', 'minor', `length=${title.length}`));
   else checks.push(pass('title'));
 
-  const description = (metaContent(html, 'description') ?? '').replace(/\s+/g, ' ').trim();
+  const description = (metaContent(markup, 'description') ?? '').replace(/\s+/g, ' ').trim();
   if (description === '') checks.push(fail('meta_description', 'major', 'missing'));
   else if (description.length < SEO_DESCRIPTION_MIN || description.length > SEO_DESCRIPTION_MAX)
     checks.push(fail('meta_description', 'minor', `length=${description.length}`));
   else checks.push(pass('meta_description'));
 
-  const h1s = tags(head, 'h1').length;
+  const h1s = named(markup.visible, 'h1').length;
   checks.push(
     h1s === 1 ? pass('h1') : h1s === 0 ? fail('h1', 'major', 'count=0') : fail('h1', 'minor', `count=${h1s}`),
   );
 
-  const canonical = linkRel(html, 'canonical').map((t) => attr(t, 'href') ?? '')[0] ?? '';
+  const canonical = linkRel(markup, 'canonical').map((t) => attr(t, 'href') ?? '')[0] ?? '';
   if (canonical === '') checks.push(fail('canonical', 'minor', 'missing'));
   else {
     const target = sameOriginUrl(canonical, page.url, page.origin);
     checks.push(target ? pass('canonical') : fail('canonical', 'major', 'other_origin'));
   }
 
-  const robots = `${metaContent(html, 'robots') ?? ''} ${metaContent(html, 'googlebot') ?? ''}`.toLowerCase();
+  const robots =
+    `${metaContent(markup, 'robots') ?? ''} ${metaContent(markup, 'googlebot') ?? ''}`.toLowerCase();
   if (/\bnoindex\b/.test(robots)) checks.push(fail('robots_meta', 'critical', 'noindex'));
   else if (/\bnofollow\b/.test(robots)) checks.push(fail('robots_meta', 'minor', 'nofollow'));
   else checks.push(pass('robots_meta'));
 
-  checks.push(metaContent(html, 'viewport') ? pass('viewport') : fail('viewport', 'minor', 'missing'));
-  const htmlTag = tags(html, 'html')[0] ?? '';
+  checks.push(metaContent(markup, 'viewport') ? pass('viewport') : fail('viewport', 'minor', 'missing'));
+  const htmlTag = named(markup.all, 'html')[0];
   checks.push((attr(htmlTag, 'lang') ?? '') !== '' ? pass('lang') : fail('lang', 'minor', 'missing'));
 
-  const missingAlt = tags(head, 'img').filter((t) => !hasAttr(t, 'alt')).length;
+  const missingAlt = named(markup.visible, 'img').filter((t) => !t.attrs.has('alt')).length;
   checks.push(missingAlt === 0 ? pass('image_alt') : fail('image_alt', 'minor', `count=${missingAlt}`));
 
-  const hreflangs = linkRel(html, 'alternate').filter((t) => attr(t, 'hreflang') !== null);
+  const hreflangs = linkRel(markup, 'alternate').filter((t) => attr(t, 'hreflang') !== null);
   if (hreflangs.length === 0) checks.push(pass('hreflang'));
   else {
     const hrefs = hreflangs.map((t) => attr(t, 'href') ?? '');
@@ -203,9 +246,7 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
     );
   }
 
-  const ldJson = [
-    ...html.matchAll(/<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi),
-  ].map((m) => m[1] as string);
+  const ldJson = markup.ldJson;
   if (ldJson.length === 0) checks.push(fail('structured_data', 'minor', 'absent'));
   else {
     const valid = ldJson.every((block) => {
@@ -226,8 +267,8 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
   let mixed = 0;
   if (page.url.startsWith('https://')) {
     for (const tagName of SUBRESOURCE_TAGS)
-      for (const t of tags(html, tagName)) if (/^http:\/\//i.test(attr(t, 'src') ?? '')) mixed++;
-    for (const t of linkRel(html, 'stylesheet')) if (/^http:\/\//i.test(attr(t, 'href') ?? '')) mixed++;
+      for (const t of named(markup.all, tagName)) if (/^http:\/\//i.test(attr(t, 'src') ?? '')) mixed++;
+    for (const t of linkRel(markup, 'stylesheet')) if (/^http:\/\//i.test(attr(t, 'href') ?? '')) mixed++;
   }
   checks.push(mixed === 0 ? pass('mixed_content') : fail('mixed_content', 'major', `count=${mixed}`));
 
@@ -235,7 +276,7 @@ export function auditPage(page: FetchedPageFacts): PageAudit {
     checks,
     titleHash: textHash(title),
     metaDescriptionHash: textHash(description),
-    links: extractLinks(html, page.url, page.origin),
+    links: linksIn(markup.visible, page.url, page.origin),
   };
 }
 

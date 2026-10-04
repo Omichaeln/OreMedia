@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/providers/testing/linear-time';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { SOURCE_TEXT_MAX_CHARS } from '@oremedia/contracts/brand-assist';
 import { docx, docxBomb, pdfWithText, zip } from '../testing';
 import { DocumentRefusal, capText, docxXmlToText, extractDocument } from './documents';
