@@ -549,7 +549,8 @@ export const experimentsService = {
   async assign(actor: ResolvedActor, input: z.infer<typeof ExperimentAssign>, tx: Tx) {
     const parsed = ExperimentAssign.parse(input);
     const x = await experimentsRepo.getById(parsed.experimentId, tx);
-    await policy.assert(actor, 'insight.read', experimentResource(x), {}, tx);
+    // A write that shapes the results: the right to manage experiments, not to read insights.
+    await policy.assert(actor, 'experiment.manage', experimentResource(x), {}, tx);
     if (x.state !== 'running')
       throw new ValidationFailedError([
         { path: 'experimentId', issue: `experiment is ${x.state}, not running` },

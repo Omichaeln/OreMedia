@@ -142,6 +142,46 @@ const authEvent = (
   userAgentHash: origin.userAgentHash,
 });
 
+type UserActor = Extract<ResolvedActor, { kind: 'user' }>;
+
+/**
+ * Membership, brand-grant and API-key changes outlive the request that makes them, so only a person of the company
+ * makes them: never an agent, and never a support session (an escalated one is time-boxed; what it grants is not).
+ */
+function requirePerson(actor: ResolvedActor, message: string): UserActor {
+  if (actor.kind !== 'user') throw new PolicyDeniedError('agent_never', message);
+  return actor;
+}
+
+/**
+ * The brand scope a member hands out never exceeds their own: every brand (`allBrands`, a grant on `'all'`) only from
+ * an owner or a member who sees every brand; a named brand only from someone who sees it (NOT_FOUND otherwise, as
+ * brand.get answers for a brand the caller cannot see).
+ */
+function assertBrandScopeWithin(
+  actor: UserActor,
+  scope: { allBrands?: boolean; brandIds?: readonly string[] },
+): void {
+  if (actor.role === 'owner' || actor.allBrands) return;
+  if (scope.allBrands)
+    throw new PolicyDeniedError(
+      'all_brands_required',
+      'Only an owner or a member with access to every brand can grant every brand',
+    );
+  const visible = new Set(actor.brandGrants.map((g) => g.brandId));
+  const hidden = scope.brandIds?.find((b) => !visible.has(b));
+  if (hidden) throw new NotFoundError('Brand', hidden);
+}
+
+/** The brands a service principal's grants reach, in the shape assertBrandScopeWithin takes. */
+const grantsBrandScope = (grants: ReadonlyArray<{ brandIds: 'all' | string[] }>) => ({
+  allBrands: grants.some((g) => g.brandIds === 'all'),
+  brandIds: [...new Set(grants.flatMap((g) => (g.brandIds === 'all' ? [] : g.brandIds)))],
+});
+
+/** Brand-level roles that manage members: only an owner grants them, as only an owner makes an owner or admin. */
+const MEMBER_MANAGING_ROLES: readonly string[] = DEFAULT_ROLE_GRANTS['membership.manage'];
+
 type MembershipRow = Awaited<ReturnType<UserDirectory['allMembershipsOfUser']>>[number];
 type UserRow = NonNullable<Awaited<ReturnType<UserDirectory['findById']>>>;
 
@@ -657,7 +697,20 @@ export const accessService = {
         // Changed by another request since it was verified: this one must not overwrite it.
         if (!locked || locked.passwordHash !== user.passwordHash)
           throw new ConflictError('User', user.id, user.version);
-        await directory.setPasswordHash(user.id, { hash: passwordHash, origin: 'self' }, tx);
+        // Knowing a setup-link password proves only that the caller held the link (possibly the admin who issued
+        // it), so a change keeps it confined to the issuing company. A first password is the person's own only from
+        // a session not opened with a password: one opened with a setup-link password that was then removed must
+        // not launder it into a password of their own.
+        const confined =
+          locked.passwordOrigin === 'setup_link' ||
+          (!locked.passwordHash &&
+            (await directory.signInProviderOfSession(user.id, principal.sessionId, tx)) ===
+              PASSWORD_PROVIDER);
+        await directory.setPasswordHash(
+          user.id,
+          { hash: passwordHash, origin: confined ? 'setup_link' : 'self' },
+          tx,
+        );
         await directory.revokeOtherSessionsForUser(user.id, principal.sessionId, tx);
         await directory.recordAuthEvent(
           authEvent(origin, {
@@ -699,6 +752,8 @@ export const accessService = {
         if ((await directory.identitiesOfUser(locked.id, tx)).length === 0)
           throw new ValidationFailedError([{ path: 'password', issue: 'only_sign_in_method' }]);
         await directory.setPasswordHash(locked.id, null, tx);
+        // Sessions opened with the password end with it (it may be why it is being removed); this one stays.
+        await directory.revokeOtherSessionsForUser(locked.id, principal.sessionId, tx);
         await directory.recordAuthEvent(
           authEvent(origin, {
             action: 'auth.password_remove',
@@ -939,8 +994,10 @@ export const accessService = {
   async inviteMember(actor: ResolvedActor, input: z.infer<typeof MemberInvite>, tx: Tx) {
     const parsed = MemberInvite.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
-    if (parsed.role === 'owner' && actor.kind === 'user' && actor.role !== 'owner')
+    const person = requirePerson(actor, 'Only a person can invite a member');
+    if (parsed.role === 'owner' && person.role !== 'owner')
       throw new PolicyDeniedError('owner_required', 'Only an owner can invite another owner');
+    assertBrandScopeWithin(person, { allBrands: parsed.allBrands });
     const existingUser = await runAsPlatform('invite', requireTenant().correlationId, () =>
       directory.findByEmail(parsed.email, tx),
     );
@@ -1004,9 +1061,11 @@ export const accessService = {
   async setRole(actor: ResolvedActor, input: z.infer<typeof MemberSetRole>, tx: Tx) {
     const parsed = MemberSetRole.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+    const person = requirePerson(actor, 'Only a person can change a role');
     const m = await membershipsRepo.getById(parsed.membershipId, tx);
-    if ((m.role === 'owner' || parsed.role === 'owner') && actor.kind === 'user' && actor.role !== 'owner')
+    if ((m.role === 'owner' || parsed.role === 'owner') && person.role !== 'owner')
       throw new PolicyDeniedError('owner_required');
+    if (parsed.allBrands && !m.allBrands) assertBrandScopeWithin(person, { allBrands: true });
     await membershipsRepo.update(
       m.id,
       parsed.expectedVersion,
@@ -1137,6 +1196,13 @@ export const accessService = {
       {},
       tx,
     );
+    const person = requirePerson(actor, 'Only a person can grant a brand');
+    assertBrandScopeWithin(person, { brandIds: [parsed.brandId] });
+    if (parsed.roles.some((r) => MEMBER_MANAGING_ROLES.includes(r)) && person.role !== 'owner')
+      throw new PolicyDeniedError(
+        'owner_required',
+        'Only an owner can grant the owner or admin role on a brand',
+      );
     const m = await membershipsRepo.getById(parsed.membershipId, tx);
     const id = await grantsRepo.set(
       { id: newId('brandGrant'), membershipId: m.id, brandId: parsed.brandId, roles: parsed.roles },
@@ -1184,12 +1250,10 @@ export const accessService = {
   async createServicePrincipal(actor: ResolvedActor, input: z.infer<typeof ServicePrincipalCreate>, tx: Tx) {
     const parsed = ServicePrincipalCreate.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
-    if (actor.kind !== 'user')
-      throw new PolicyDeniedError('agent_never', 'Only a person can create a service principal');
-    const grantBrandIds = [
-      ...new Set(parsed.grants.flatMap((g) => (g.brandIds === 'all' ? [] : g.brandIds))),
-    ];
-    await brands().assertValidGrantBrands(grantBrandIds, tx);
+    const person = requirePerson(actor, 'Only a person can create a service principal');
+    const scope = grantsBrandScope(parsed.grants);
+    await brands().assertValidGrantBrands(scope.brandIds, tx);
+    assertBrandScopeWithin(person, scope);
     const id = newId('servicePrincipal');
     await principalsRepo.create(
       {
@@ -1271,9 +1335,12 @@ export const accessService = {
   async createApiClient(actor: ResolvedActor, input: z.infer<typeof ApiClientCreate>, tx: Tx) {
     const parsed = ApiClientCreate.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+    const person = requirePerson(actor, 'Only a person can create an API key');
     const sp = await principalsRepo.getById(parsed.servicePrincipalId, tx);
     if (sp.status !== 'active')
       throw new ValidationFailedError([{ path: 'servicePrincipalId', issue: 'revoked' }]);
+    // A key acts with the principal's grants: minting one is handing out those brands.
+    assertBrandScopeWithin(person, grantsBrandScope(sp.grants));
     const { token, hash, prefixForLookup } = newOpaqueToken('ak');
     const id = newId('apiClient');
     await apiClientsRepo.create(
@@ -1301,7 +1368,14 @@ export const accessService = {
   async rotateApiClient(actor: ResolvedActor, input: z.infer<typeof ApiClientRotate>, tx: Tx) {
     const parsed = ApiClientRotate.parse(input);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+    const person = requirePerson(actor, 'Only a person can rotate an API key');
     const old = await apiClientsRepo.getById(parsed.apiClientId, tx);
+    // Only the live key is rotated: rotating a revoked one again would start a second key beside its successor.
+    if (old.status !== 'active')
+      throw new ValidationFailedError([{ path: 'apiClientId', issue: 'not_active' }]);
+    const sp = await principalsRepo.getById(old.servicePrincipalId, tx);
+    if (sp.status !== 'active') throw new ValidationFailedError([{ path: 'apiClientId', issue: 'revoked' }]);
+    assertBrandScopeWithin(person, grantsBrandScope(sp.grants));
     await apiClientsRepo.update(old.id, old.version, { status: 'revoked' }, tx);
     const { token, hash, prefixForLookup } = newOpaqueToken('ak');
     const id = newId('apiClient');

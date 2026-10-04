@@ -25,10 +25,11 @@ export const MemberSetRole = z.object({
   role: MembershipRole,
   allBrands: z.boolean().optional(),
 });
+/** Brand-level roles are membership roles (the policy engine reads them as such); owner and admin only from an owner. */
 export const BrandGrantSet = z.object({
   membershipId: z.string(),
   brandId: z.string(),
-  roles: z.array(z.string()).max(10),
+  roles: z.array(MembershipRole).max(10),
 });
 export const ServicePrincipalCreate = z.object({
   kind: ServicePrincipalKind,
@@ -50,7 +51,8 @@ export const ServicePrincipalRevoke = z.object({
  * `<area>:<read|write>`: `read` covers queries, `write` covers mutations of that area. Scopes narrow a key; they
  * never widen the service principal's grants (the policy engine still decides every action). A key with an empty
  * scope list (every key issued before scopes were enforced) keeps read access only: every `*:read`, no `*:write`,
- * and never `community:read` (customer comments and their authors are personal data: an explicit scope only).
+ * and never `community:read` (customer comments and their authors are personal data: an explicit scope only). A new
+ * key names at least one scope.
  */
 export const API_SCOPE_AREAS = [
   'access',
@@ -81,10 +83,12 @@ export type ApiScope = z.infer<typeof ApiScope>;
 
 export const ApiClientCreate = z.object({
   servicePrincipalId: z.string(),
-  scopes: z.array(ApiScope).max(50),
+  scopes: z.array(ApiScope).min(1).max(50),
   expiresAt: z.string().datetime().optional(),
 });
 export const ApiClientRotate = z.object({ apiClientId: z.string() });
+/** The longest an external reviewer link may stay valid; a later `expiresAt` is VALIDATION_FAILED. */
+export const EXTERNAL_LINK_MAX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const ExternalLinkCreate = z.object({
   reviewRequestId: z.string(),
   email: z.string().email(),

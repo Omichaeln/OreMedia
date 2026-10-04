@@ -12,6 +12,7 @@ import { outbox } from './outbox';
 import { audit } from './audit';
 import { killSwitch } from './kill-switch';
 import { evaluateFlag, FLAG_DEFINITIONS } from './feature-flags';
+import { createOperationsRuntime } from './runtime';
 
 const ctx = (tenantId: string): TenantContext => ({
   tenantId,
@@ -191,6 +192,50 @@ describe('operations module against MySQL 8', () => {
       await expect(
         runInTenant(ctx(tenantA), () => idempotent(mctx('k8', 'h2'), async () => 'dup')),
       ).rejects.toBeInstanceOf(IdempotencyKeyReusedError);
+    });
+  });
+
+  describe('idempotency purge (idempotencyKeyPurgeWorkflowV1)', () => {
+    it('deletes expired records in every tenant, completed or abandoned, and keeps live ones', async () => {
+      const at = new Date();
+      const row = (tenantId: string, key: string, expiresAt: Date, state: 'completed' | 'in_progress') => ({
+        tenantId,
+        principalId: 'usr_purge',
+        key,
+        path: 'test.create',
+        requestHash: 'h',
+        state,
+        responseBody: state === 'completed' ? { key: 'ak_would_be_secret' } : null,
+        expiresAt,
+      });
+      await tdb.db
+        .insert(idempotencyKeys)
+        .values([
+          row(tenantA, 'p-old', new Date(at.getTime() - 3600_000), 'completed'),
+          row(tenantB, 'p-old', new Date(at.getTime() - 1000), 'completed'),
+          row(tenantA, 'p-lease', new Date(at.getTime() - 1000), 'in_progress'),
+          row(tenantA, 'p-live', new Date(at.getTime() + 3600_000), 'completed'),
+          row(tenantB, 'p-live', new Date(at.getTime() + 60_000), 'in_progress'),
+        ]);
+      const purge = createOperationsRuntime().idempotencyPurge;
+      const result = await purge.purgeExpiredIdempotencyKeys({
+        correlationId: 'corr_purge',
+        now: at.toISOString(),
+      });
+      expect(result.rows).toBeGreaterThanOrEqual(3); // other tests' records expire too
+      const left = (
+        await tdb.db.select().from(idempotencyKeys).where(eq(idempotencyKeys.principalId, 'usr_purge'))
+      )
+        .map((r) => `${r.tenantId === tenantA ? 'A' : 'B'}:${r.key}`)
+        .sort();
+      expect(left).toEqual(['A:p-live', 'B:p-live']);
+      expect(
+        (await tdb.db.select().from(idempotencyKeys)).every((r) => r.expiresAt.getTime() >= at.getTime()),
+      ).toBe(true);
+      // Nothing left to do: a second run removes nothing.
+      expect(
+        await purge.purgeExpiredIdempotencyKeys({ correlationId: 'corr_purge', now: at.toISOString() }),
+      ).toEqual({ rows: 0 });
     });
   });
 
