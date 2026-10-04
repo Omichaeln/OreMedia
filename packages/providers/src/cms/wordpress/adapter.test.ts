@@ -367,6 +367,18 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
     await expect(adapter.fetchRendered(site, io, 'http://site.example/x', 1024)).rejects.toMatchObject({
       name: 'BlockedAddressError',
     });
+    // PR-04: the robots and canonical headers travel with the page; absent ones are null.
+    load('rendered_headers');
+    expect(
+      await adapter.fetchRendered(site, io, 'https://site.example/why-ore-and-tar/', 1024 * 1024),
+    ).toMatchObject({
+      status: 200,
+      headers: {
+        xRobotsTag: 'noindex, nofollow',
+        link: '<https://site.example/why-ore-and-tar/>; rel="canonical"',
+      },
+    });
+    expect(page.headers).toEqual({ xRobotsTag: null, link: null });
     load('rendered_large');
     const large = await adapter.fetchRendered(site, io, 'https://site.example/big/', 16);
     expect(large).toMatchObject({ status: 200, truncated: true, bytes: 16 });

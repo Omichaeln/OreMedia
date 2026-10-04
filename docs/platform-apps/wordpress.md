@@ -60,6 +60,36 @@ Source of truth: `packages/providers/src/cms/wordpress/adapter.ts`.
 The rendered page is fetched without credentials for validation (bounded size, the site's own host, redirects
 re-checked hop by hop).
 
+## Rendered-article verification (PR-04)
+
+The read-back through the API (`GET /posts/{id}?context=edit`) stays the proof that the CMS holds what was sent. The
+public page is then checked against the whole approved content, not only its first and last paragraph:
+
+- **Manifest.** The text of every block (headings, paragraphs, list items, quotes, captions, FAQ questions and
+  answers) and the alt text of every image of the HTML the site was sent: the approved revision's own rendering, or
+  the body of the latest edit that went through. The revision is immutable, so the manifest is the one its approval
+  fixed. Text is compared entities decoded, whitespace and case folded, and with the typography WordPress applies on
+  output (`wptexturize`: curly quotes, en and em dashes, the ellipsis) folded back.
+- **Article region.** The page's article body is located by the destination's own selector when one is set
+  (Settings → Destinations, "Article region selector": simple selectors such as `div.post-body`), then by the common
+  theme defaults: `.entry-content`, `.wp-block-post-content`, `.post-content`, `[itemprop=articleBody]`, `article`,
+  `main`. The first selector that names an element decides; a later one is never consulted, so a paragraph that only
+  appears outside the region (a sidebar, a related-posts excerpt) does not count. Every manifest block must be in the
+  region in order (extra blocks such as sharing buttons are tolerated) and every image alt must be there (lazy-loading
+  attributes, `srcset` and `<noscript>` copies do not matter). An interior paragraph changed or removed fails.
+- **Canonical identity.** The `<link rel="canonical">` and any HTTP `Link: <…>; rel="canonical"` header must each name
+  the article (its address, or its slug's path on the site).
+- **Live visibility.** A live article must not carry `noindex`/`none` in its robots or googlebot meta tags
+  (`indexable`) nor in an `X-Robots-Tag` header (`header_indexable`, recognised even when the meta tags say `index`; a
+  directive scoped to another crawler is ignored, one scoped to googlebot or bingbot counts). A draft is expected to be
+  hidden.
+- **States.** The publication screen shows four separately: write acknowledged (the CMS accepted the write), CMS
+  read-back verified, rendered article verified, live visibility. A validation's outcome is `verified`, `failed` (the
+  page answered and contradicts the approved content, the canonical or the visibility) or `unverified`: the page did
+  not answer (a timeout, a transport failure, 5xx, 429, 408), was cut at the 2 MiB cap before the article was complete,
+  or has no recognisable article region. `unverified` never counts as a pass; the publication's verification then
+  reads unverified. The fetch is bounded to 2 MiB and 15 seconds through the SSRF-safe page fetch.
+
 ## Security questions
 
 The application password is the only secret and is stored sealed; it is never returned by the API or logged. From

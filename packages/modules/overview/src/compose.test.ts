@@ -99,6 +99,7 @@ const destination = (over: Partial<DestinationV1>): DestinationV1 => ({
   currencyCode: null,
   writeSafety: 'unknown',
   writeSafetyCheckedAt: null,
+  articleSelector: null,
   version: 1,
   createdAt: '2026-09-01T00:00:00.000Z',
   updatedAt: '2026-09-01T00:00:00.000Z',

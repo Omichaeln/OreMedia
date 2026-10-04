@@ -24,6 +24,7 @@ import {
   actionsFor,
   articleConflictOf,
   compareArticleBlocks,
+  articleVerificationStages,
   channelOutcomeSummary,
   holdReasonText,
   isoToZonedInput,
@@ -35,6 +36,7 @@ import {
   remoteChangeStatus,
   remoteVerificationChip,
   CHANNEL_CHIP,
+  type VerificationStage,
 } from './publication-state';
 import {
   useChannelVariant,
@@ -553,11 +555,27 @@ const EVIDENCE_KIND_TEXT: Record<string, string> = {
 const RENDERED_CHECK_TEXT: Record<string, string> = {
   status_ok: 'The page answered 200',
   title_present: 'The title is in the page title or its heading',
-  canonical_present: 'A canonical link is present',
-  indexable: 'No noindex (a draft is allowed one)',
+  canonical_present: 'A canonical link is present (in the page or its Link header)',
+  indexable: 'No noindex in the robots meta tags (a draft is allowed one)',
   body_present: 'The first paragraph is in the page',
   canonical_matches: 'The canonical link names this page (its address or its slug)',
   last_paragraph_present: 'The last paragraph is in the page',
+  article_region_found: 'The article’s region was found on the page',
+  content_complete: 'Every block of the approved content is in the article, in order',
+  images_present: 'Every image of the article is in it',
+  header_indexable: 'No noindex in the X-Robots-Tag header (a draft is allowed one)',
+};
+const STAGE_TONE: Record<VerificationStage['state'], 'good' | 'critical' | 'neutral' | 'info'> = {
+  verified: 'good',
+  failed: 'critical',
+  unverified: 'neutral',
+  not_applicable: 'info',
+};
+const STAGE_TEXT: Record<VerificationStage['state'], string> = {
+  verified: 'Verified',
+  failed: 'Failed',
+  unverified: 'Not verified',
+  not_applicable: 'Not applicable',
 };
 
 /** RA-04: what the read-back proved, as the server recorded it in the read-back evidence (read as data). */
@@ -614,11 +632,18 @@ function ArticlePanel({
         toast(
           res.ok
             ? { tone: 'good', title: 'The page checks out' }
-            : {
-                tone: 'warning',
-                title: 'The page did not pass every check',
-                description: 'See the checks below.',
-              },
+            : res.outcome === 'unverified'
+              ? {
+                  tone: 'warning',
+                  title: 'The page could not be verified',
+                  description:
+                    'It did not answer, was cut short or has no recognisable article region; try again later.',
+                }
+              : {
+                  tone: 'warning',
+                  title: 'The page did not pass every check',
+                  description: 'See the checks below.',
+                },
         );
       },
       onError,
@@ -632,6 +657,7 @@ function ArticlePanel({
   const remoteStatus = publicationChip(p.state, p.remoteStatus);
   const verification = remoteVerificationChip(p.remoteVerification);
   const readbackVerification = readback ? readbackVerificationOf(readback) : null;
+  const stages = articleVerificationStages(p, readback, validation);
   return (
     <section
       aria-labelledby={`article-${p.id}`}
@@ -671,11 +697,37 @@ function ArticlePanel({
             Page not validated
           </Badge>
         ) : (
-          <Badge tone={ok ? 'good' : 'critical'} data-testid="article-validation">
-            {ok ? 'Page validated' : 'Page validation failed'}
+          <Badge
+            tone={ok ? 'good' : validation?.['outcome'] === 'unverified' ? 'neutral' : 'critical'}
+            data-testid="article-validation"
+          >
+            {ok
+              ? 'Page validated'
+              : validation?.['outcome'] === 'unverified'
+                ? 'Page not verified'
+                : 'Page validation failed'}
           </Badge>
         )}
       </div>
+      <ol
+        className="flex flex-col gap-1 text-xs"
+        aria-label="What the verification proved"
+        data-testid="article-stages"
+      >
+        {stages.map((stage) => (
+          <li
+            key={stage.key}
+            className="flex flex-wrap items-baseline gap-2"
+            data-testid={`article-stage-${stage.key}`}
+            data-state={stage.state}
+          >
+            <Badge tone={STAGE_TONE[stage.state]}>
+              {stage.label}: {STAGE_TEXT[stage.state]}
+            </Badge>
+            <span className="text-muted-foreground">{stage.detail}</span>
+          </li>
+        ))}
+      </ol>
       {p.remoteStatus && (
         <p className="text-xs text-muted-foreground" data-testid="article-remote-status-detail">
           {remoteStatus.detail}

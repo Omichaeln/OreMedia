@@ -31,7 +31,7 @@ import {
 import { brandDestinations } from '@oremedia/db/schema/destinations';
 import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
-import type { RenderedValidationV1 } from '@oremedia/contracts/article';
+import { articleManifest, renderArticleHtml, type RenderedValidationV1 } from '@oremedia/contracts/article';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { idempotent } from '@oremedia/module-operations';
@@ -2559,11 +2559,22 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         url: 'https://blog.acme.example/why-ore-and-tar-last/',
         title: article.title,
         slug: article.slug,
-        firstParagraph: 'Ore is heavy.',
-        lastParagraph: 'Yes, mostly.',
+        // PR-04: the whole approved revision's rendering is the manifest the article region must carry.
+        manifest: articleManifest(renderArticleHtml(article)),
         draft: false, // a live article must be indexable
       });
       expect(await row(pub.id)).toMatchObject({ remoteVerification: 'failed', remoteVerifiedAt: null });
+      // PR-04: a page that cannot be read (a 503, a timeout) proves nothing: unverified, never verified or kept.
+      validateResult = {
+        ...validationOf(false),
+        outcome: 'unverified',
+        reason: 'page_unavailable_503',
+        status: 503,
+      };
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({ outcome: 'validated', ok: false, verification: 'unverified' });
+      expect(await row(pub.id)).toMatchObject({ remoteVerification: 'unverified', remoteVerifiedAt: null });
       validateResult = validationOf(true);
       expect(
         await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
@@ -2573,7 +2584,7 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         verification: 'verified',
       });
       expect((await row(pub.id)).remoteVerification).toBe('verified');
-      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(3);
+      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(4);
       // The on-demand validation records the same way.
       validateResult = validationOf(false);
       await run(tenantA, (tx) => publicationService.validateRendered(A, { publicationId: pub.id }, tx));
@@ -2834,6 +2845,15 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         errorCode: 'conflict_overwritten',
       });
       expect(dto.remote.currentText).toBe('<p>Written over the window.</p>');
+      // PR-04: once an edit went through, the page is verified against the edited body, not the revision.
+      validateResult = validationOf(true);
+      await inTenant(tenantA, () =>
+        runtime.renderedValidation.validateRenderedPublication({
+          ...wfInput(pub.id),
+          publishedAt: new Date().toISOString(),
+        }),
+      );
+      expect(validateInputs.at(-1)?.manifest).toEqual(articleManifest('<p>Written over the window.</p>'));
     });
 
     it('edit (PR-03): the stored write token is the precondition; a refusal keeps the remote body and the refused text for the comparison; limited mode is refused and audited like a conflict', async () => {

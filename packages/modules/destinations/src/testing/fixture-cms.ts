@@ -1,5 +1,6 @@
 import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import {
+  ProviderTransportError,
   classifyByStatus,
   textFingerprint,
   type CmsAdapter,
@@ -67,8 +68,14 @@ export class FixtureCmsAdapter implements CmsAdapter {
   verifyBehaviour: VerifyBehaviour = { kind: 'ok', canPublish: true };
   /** What the next write does: succeed, or fail as the platform would. */
   writeBehaviour: 'ok' | 'forbidden' | 'outage' = 'ok';
-  /** The rendered page the site serves for an article's URL (status and HTML); absent: a 404. */
-  readonly pages = new Map<string, { status: number; html: string }>();
+  /**
+   * The rendered page the site serves for an article's URL (status, HTML and, PR-04, the X-Robots-Tag and Link
+   * headers); absent: a 404. `unreachable` throws as a transport failure (a timeout) would.
+   */
+  readonly pages = new Map<
+    string,
+    { status: number; html: string; xRobotsTag?: string; link?: string; unreachable?: true }
+  >();
   /**
    * RA-12 / PR-03 test hook: a change someone makes on the site between an update's pre-write read and its write.
    * Applied once, then cleared. It advances the article's write counter as any save on the site does, so the
@@ -315,8 +322,20 @@ export class FixtureCmsAdapter implements CmsAdapter {
     maxBytes: number,
   ): Promise<CmsRenderedPage> {
     const page = this.pages.get(url) ?? { status: 404, html: '<html><title>Not found</title></html>' };
+    if (page.unreachable)
+      throw new ProviderTransportError(
+        Object.assign(new Error('timeout'), { name: 'TimeoutError' }),
+        'after_send',
+      );
     const html = page.html.slice(0, maxBytes);
-    return { status: page.status, html, bytes: html.length, truncated: html.length < page.html.length, url };
+    return {
+      status: page.status,
+      html,
+      bytes: html.length,
+      truncated: html.length < page.html.length,
+      url,
+      headers: { xRobotsTag: page.xRobotsTag ?? null, link: page.link ?? null },
+    };
   }
 
   classifyError(input: {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActivityHooks } from './agents';
 import type { ErrorDetail } from './errors';
+import { ArticleRegionSelector } from './article';
 import { TenantContextInput } from './tenancy';
 
 /**
@@ -82,6 +83,8 @@ export interface DestinationV1 {
    */
   writeSafety: DestinationWriteSafety;
   writeSafetyCheckedAt: string | null;
+  /** PR-04: the website's own article-region selector for rendered-article verification; null: the defaults. */
+  articleSelector: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -119,6 +122,13 @@ export const DestinationSetHealth = z.object({
   brandId: z.string(),
   destinationId: z.string(),
   health: DestinationHealth,
+  expectedVersion: z.number().int(),
+});
+/** PR-04: a website's article-region selector, or null to use the defaults only (destination.manage). */
+export const DestinationSetArticleSelector = z.object({
+  brandId: z.string(),
+  destinationId: z.string(),
+  articleSelector: ArticleRegionSelector.nullable(),
   expectedVersion: z.number().int(),
 });
 export const DestinationDisconnect = z.object({

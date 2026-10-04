@@ -154,6 +154,8 @@ export interface CmsRenderedPage {
   truncated: boolean;
   /** The URL the page was finally read from (after re-checked redirects). */
   url: string;
+  /** PR-04: the `X-Robots-Tag` and `Link` response headers (live visibility, canonical identity); null when absent. */
+  headers: { xRobotsTag: string | null; link: string | null };
 }
 
 /**

@@ -57,6 +57,11 @@ export const brandDestinations = mysqlTable(
       .notNull()
       .default('unknown'),
     writeSafetyCheckedAt: ts('write_safety_checked_at'),
+    /**
+     * PR-04: where a website's theme puts an article's body (simple CSS selectors, contracts ArticleRegionSelector),
+     * tried before the common WordPress defaults when a rendered article is verified; null: the defaults only.
+     */
+    articleSelector: varchar('article_selector', { length: 200 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

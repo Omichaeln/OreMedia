@@ -13,6 +13,7 @@ import {
   DestinationGet,
   DestinationList,
   DestinationRegister,
+  DestinationSetArticleSelector,
   DestinationSetHealth,
   SourceUse,
   SourceUseCheck,
@@ -318,6 +319,7 @@ const toDestinationDto = (d: DestinationRow): DestinationV1 => ({
   currencyCode: d.currencyCode,
   writeSafety: d.writeSafety,
   writeSafetyCheckedAt: d.writeSafetyCheckedAt ? d.writeSafetyCheckedAt.toISOString() : null,
+  articleSelector: d.articleSelector,
   version: d.version,
   createdAt: d.createdAt.toISOString(),
   updatedAt: d.updatedAt.toISOString(),
@@ -686,6 +688,41 @@ export const destinationService = {
       'allowed',
       tx,
       { brandId: row.brandId, fromState: row.health, toState: parsed.health },
+    );
+    return toDestinationDto(await destinationsRepo.getById(row.id, tx));
+  },
+
+  /**
+   * PR-04: where the website's theme puts an article's body, tried before the defaults when a rendered article is
+   * verified (destination.manage, a write-capable kind only, under the row version); null clears it.
+   */
+  async setArticleSelector(
+    actor: ResolvedActor,
+    input: z.infer<typeof DestinationSetArticleSelector>,
+    tx: Tx,
+  ) {
+    const parsed = DestinationSetArticleSelector.parse(input);
+    const row = await destinationOf(
+      parsed.brandId,
+      parsed.destinationId,
+      await destinationsRepo.lock(parsed.destinationId, tx),
+    );
+    await policy.assert(actor, 'destination.manage', destinationResource(row), {}, tx);
+    if (!cmsWritable(row.kind))
+      throw new ValidationFailedError(
+        [{ path: 'destinationId', issue: `destination_not_writable:${row.kind}` }],
+        'Only a website destination has an article region',
+      );
+    if (row.version !== parsed.expectedVersion)
+      throw new ConflictError('Destination', row.id, parsed.expectedVersion);
+    await destinationsRepo.update(row.id, row.version, { articleSelector: parsed.articleSelector }, tx);
+    await audit.record(
+      actorRef(actor),
+      'destination.article_selector',
+      { type: 'brand_destination', id: row.id },
+      'allowed',
+      tx,
+      { brandId: row.brandId, kind: row.kind, reason: parsed.articleSelector === null ? 'cleared' : 'set' },
     );
     return toDestinationDto(await destinationsRepo.getById(row.id, tx));
   },

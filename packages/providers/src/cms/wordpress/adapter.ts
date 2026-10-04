@@ -631,6 +631,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
       bytes: page.bytes,
       truncated: page.truncated,
       url: page.url,
+      headers: { xRobotsTag: page.xRobotsTag, link: page.link },
     };
   }
 

@@ -12,6 +12,7 @@ import {
   DestinationReportOpportunities,
   DestinationReportRows,
   DestinationReportSummary,
+  DestinationSetArticleSelector,
   DestinationSetHealth,
   OPPORTUNITY_RATE_FRACTION,
   OPPORTUNITY_WINDOW_DAYS,
@@ -64,7 +65,7 @@ import type { MockBuilders, t } from './mock-api';
 
 /**
  * Brand destinations slice of the UI-only transport (see mock-api.ts): destinations.list/get/register/setHealth/
- * disconnect, destinations.sourceUse.list/set/check, (R2-1) destinations.sources.list and
+ * setArticleSelector/disconnect, destinations.sourceUse.list/set/check, (R2-1) destinations.sources.list and
  * destinations.connect.start/complete/select/cancel, and (R2-1 part B) destinations.reports.summary/rows/
  * opportunities over seeded report rows, with the same paths, DTO shapes, role gates, dictionary rules (the
  * contracts' webMetricSums / webMetricValues) and error envelope as apps/api (packages/modules/destinations).
@@ -491,6 +492,7 @@ export class DestinationsBackend {
         currencyCode: 'ZAR',
         writeSafety: 'unknown',
         writeSafetyCheckedAt: null,
+        articleSelector: null,
         version: 1,
         createdAt: at,
         updatedAt: at,
@@ -511,6 +513,7 @@ export class DestinationsBackend {
         currencyCode: null,
         writeSafety: 'unknown',
         writeSafetyCheckedAt: null,
+        articleSelector: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -532,6 +535,7 @@ export class DestinationsBackend {
         // PR-03: the site has no conditional-write plugin (the verification found it in limited mode).
         writeSafety: 'limited',
         writeSafetyCheckedAt: '2026-09-30T06:00:00.000Z',
+        articleSelector: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -552,6 +556,7 @@ export class DestinationsBackend {
         currencyCode: null,
         writeSafety: 'unknown',
         writeSafetyCheckedAt: null,
+        articleSelector: null,
         version: 0,
         createdAt: at,
         updatedAt: at,
@@ -855,6 +860,7 @@ export function destinationsRouters(
         currencyCode: null,
         writeSafety: 'unknown',
         writeSafetyCheckedAt: null,
+        articleSelector: null,
         version: 0,
         createdAt: now(),
         updatedAt: now(),
@@ -873,6 +879,15 @@ export function destinationsRouters(
         updatedAt: now(),
         version: d.version + 1,
       });
+      return d;
+    }),
+    /** PR-04: the website's article-region selector (the API validates it with the same contract). */
+    setArticleSelector: mutation.input(DestinationSetArticleSelector).mutation(({ input }) => {
+      const d = destinationOf(input.brandId, input.destinationId);
+      if (!CONNECTORS.has(b.role())) throw new PolicyDeniedError('role_missing');
+      if (d.version !== input.expectedVersion)
+        throw new ConflictError('Destination', d.id, input.expectedVersion);
+      Object.assign(d, { articleSelector: input.articleSelector, updatedAt: now(), version: d.version + 1 });
       return d;
     }),
     sources: router({ list: query.query(() => ({ items: [...SOURCES] })) }),
@@ -948,6 +963,7 @@ export function destinationsRouters(
           currencyCode: null,
           writeSafety: 'unknown',
           writeSafetyCheckedAt: null,
+          articleSelector: null,
           version: 0,
           createdAt: now(),
           updatedAt: now(),
@@ -991,6 +1007,7 @@ export function destinationsRouters(
           currencyCode: null,
           writeSafety: 'unknown',
           writeSafetyCheckedAt: null,
+          articleSelector: null,
           version: 0,
           createdAt: now(),
           updatedAt: now(),

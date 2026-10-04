@@ -718,18 +718,37 @@ export class Phase5Backend {
     return this.renderedEvidence(publicationId, this.renderedResult(publicationId, ok, at), at);
   }
 
-  /** What the API's rendered-page check returns (RenderedValidationV1), passing or not. */
+  /**
+   * What the API's rendered-page check returns (RenderedValidationV1, PR-04): passing (the article region carries
+   * every block, indexable), or failing as a changed page does (an interior block missing and an X-Robots-Tag
+   * noindex the meta tags do not show).
+   */
   private renderedResult(publicationId: string, ok: boolean, at: string): RenderedValidationV1 {
     const p = this.publication(publicationId);
+    const failing = new Set(['content_complete', 'header_indexable']);
     return {
       url: p.remoteUrl ?? '',
       fetchedAt: at,
-      status: ok ? 200 : 404,
-      bytes: ok ? 2048 : 512,
+      status: 200,
+      bytes: 2048,
       truncated: false,
       ok,
-      checks: RenderedCheckKey.options.map((key) => ({ key, ok: ok || key === 'title_present' })),
+      checks: RenderedCheckKey.options
+        .filter((key) => key !== 'body_present' && key !== 'last_paragraph_present')
+        .map((key) => ({ key, ok: ok || !failing.has(key) })),
       error: null,
+      outcome: ok ? 'verified' : 'failed',
+      reason: ok ? null : 'content_changed',
+      content: {
+        selector: '.entry-content',
+        expectedBlocks: 4,
+        matchedBlocks: ok ? 4 : 3,
+        missingBlocks: ok ? [] : [{ index: 1, text: 'ore is heavy & tar is <sticky>.' }],
+        expectedImages: 0,
+        missingImages: [],
+        manifestVersion: 1,
+      },
+      indexability: { meta: 'index', header: ok ? 'index' : 'noindex' },
     };
   }
 

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ArticleRegionSelector,
   articleFirstParagraph,
   articleHtmlBlocks,
+  articleManifest,
+  canonicalFromLinkHeader,
+  compareArticleRegion,
+  robotsHeaderNoindex,
   articleHtmlChars,
   articleLastParagraph,
   articlePlainText,
@@ -140,16 +145,17 @@ describe('article document (ledger R2-3)', () => {
     expect(safeArticleUrl('&#47;&#47;cdn.example/x')).toBeNull();
   });
 
-  it('rendered-page checks: status, title in <title> or h1, canonical, noindex only for a draft, first paragraph', () => {
+  it('rendered-page checks: status, title in <title> or h1, canonical, noindex only for a draft, the article content', () => {
     const page = (
       extra: string,
       body = '<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p><p>Yes, &quot;mostly&quot;.</p>',
     ) =>
-      `<html><head><title>Why ore &amp; tar | Site</title>${extra}</head><body><h1>Other</h1>${body}</body></html>`;
+      `<html><head><title>Why ore &amp; tar | Site</title>${extra}</head><body><h1>Other</h1><article>${body}</article></body></html>`;
     const live = {
       title: article.title,
-      firstParagraph: articleFirstParagraph(article),
-      lastParagraph: articleLastParagraph(article),
+      manifest: articleManifest(
+        '<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p><p>Yes, &quot;mostly&quot;.</p>',
+      ),
       slug: article.slug,
       remoteUrl: 'https://site.example/why-ore-and-tar/',
       draft: false,
@@ -159,62 +165,65 @@ describe('article document (ledger R2-3)', () => {
       html: page('<link rel="canonical" href="https://site.example/why-ore-and-tar/">'),
       ...live,
     });
-    expect(ok.every((c) => c.ok)).toBe(true);
+    expect(ok.checks.every((c) => c.ok)).toBe(true);
+    expect(ok.outcome).toBe('verified');
     const bad = validateRenderedPage({
       status: 404,
       html: page('<meta name="robots" content="noindex">', '<p>Nothing</p>'),
       ...live,
     });
-    expect(bad.map((c) => `${c.key}:${c.ok}`)).toEqual([
+    expect(bad.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
       'status_ok:false',
       'title_present:true',
       'canonical_present:false',
       'indexable:false',
-      'body_present:false',
       'canonical_matches:false',
-      'last_paragraph_present:false',
+      'article_region_found:true',
+      'content_complete:false',
+      'images_present:true',
+      'header_indexable:true',
     ]);
-    expect(renderedValidationOk(bad)).toBe(false);
+    expect(bad.outcome).toBe('failed');
+    expect(renderedValidationOk(bad.checks)).toBe(false);
     const draft = validateRenderedPage({
       status: 200,
       html: page('<meta name="robots" content="noindex, nofollow">'),
       ...live,
       draft: true,
     });
-    expect(draft.find((c) => c.key === 'indexable')?.ok).toBe(true);
+    expect(draft.checks.find((c) => c.key === 'indexable')?.ok).toBe(true);
     expect(pageText('<p>A&nbsp;<b>B</b></p><script>x</script>')).toBe('a b');
   });
 
-  it('rendered-page checks (RA-04): the canonical must name this page and the last paragraph must be present', () => {
+  it('rendered-page checks (RA-04, PR-04): the canonical must name this page and every block must be present', () => {
     const live = {
       title: article.title,
-      firstParagraph: articleFirstParagraph(article),
-      lastParagraph: articleLastParagraph(article),
+      manifest: articleManifest(renderArticleHtml(article)),
       slug: article.slug,
       remoteUrl: 'https://site.example/?p=42',
       draft: false,
     };
     const page = (canonical: string, body: string) =>
-      `<html><head><title>Why ore &amp; tar</title><link rel="canonical" href="${canonical}"></head><body>${body}</body></html>`;
+      `<html><head><title>Why ore &amp; tar</title><link rel="canonical" href="${canonical}"></head><body><div class="entry-content">${body}</div></body></html>`;
     const full = renderArticleHtml(article);
     const checksOf = (html: string) =>
-      Object.fromEntries(validateRenderedPage({ status: 200, html, ...live }).map((c) => [c.key, c.ok]));
+      Object.fromEntries(
+        validateRenderedPage({ status: 200, html, ...live }).checks.map((c) => [c.key, c.ok]),
+      );
     expect(checksOf(page('https://site.example/why-ore-and-tar/', full))).toMatchObject({
       canonical_present: true,
       canonical_matches: true, // the slug's path on the site
-      body_present: true,
-      last_paragraph_present: true,
+      content_complete: true,
     });
     expect(checksOf(page('https://site.example/?p=42', full))).toMatchObject({ canonical_matches: true });
     expect(checksOf(page('https://other.example/why-ore-and-tar/', full))).toMatchObject({
       canonical_present: true,
       canonical_matches: false, // another site
     });
-    // A later paragraph changed on the page: the first paragraph still passes, the last does not.
+    // A later paragraph changed on the page: the content check fails, whatever the first paragraph shows.
     const changed = full.replace('Yes, &quot;mostly&quot;.', 'No, never.');
     expect(checksOf(page('https://site.example/why-ore-and-tar/', changed))).toMatchObject({
-      body_present: true,
-      last_paragraph_present: false,
+      content_complete: false,
     });
     expect(articleLastParagraph(article)).toBe('Yes, "mostly".');
     expect(articleLastParagraph({ blocks: [{ type: 'list', ordered: false, items: ['a', 'b'] }] })).toBe('b');
@@ -472,12 +481,11 @@ describe('character references that are not Unicode scalar values (crafted pages
   });
 
   it.each(refs)('the canonical check reads %s in the canonical href as U+FFFD instead of throwing', (ref) => {
-    const checks = validateRenderedPage({
+    const { checks } = validateRenderedPage({
       status: 200,
       html: `<html><head><title>T</title><link rel="canonical" href="https://site.example/a${ref}b"></head><body><p>p</p></body></html>`,
       title: 'T',
-      firstParagraph: 'p',
-      lastParagraph: 'p',
+      manifest: articleManifest('<p>p</p>'),
       draft: false,
       remoteUrl: 'https://site.example/a%EF%BF%BDb',
       slug: 'other',
@@ -502,8 +510,7 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
       status: 200,
       html,
       title: 't',
-      firstParagraph: 'p',
-      lastParagraph: 'q',
+      manifest: articleManifest('<p>p</p><p>q</p>'),
       draft: false,
     });
 
@@ -628,19 +635,18 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     const input = {
       status: 200,
       title: 'Ore & Tar',
-      firstParagraph: 'First paragraph here.',
-      lastParagraph: 'Last one.',
+      manifest: articleManifest('<p>First paragraph here.</p><p>Last one.</p>'),
       draft: false,
       remoteUrl: 'https://site.example/blog/post',
       slug: 'post',
     };
     const failing = (html: string) =>
       validateRenderedPage({ ...input, html })
-        .filter((c) => !c.ok)
+        .checks.filter((c) => !c.ok)
         .map((c) => c.key);
     const live = page(
       '<title>Ore &amp; Tar | Blog</title><link rel="canonical" href="https://site.example/blog/post"><meta name="robots" content="index, follow">',
-      '<header><nav><a href="/">Home</a></nav></header><h1>Post <em>title</em></h1><p>First paragraph &nbsp; here.</p><script>var x = "<h1>not</h1>";</script><style>p{}</style><p>Last one.</p>',
+      '<header><nav><a href="/">Home</a></nav></header><main><h1>Post <em>title</em></h1><p>First paragraph &nbsp; here.</p><script>var x = "<h1>not</h1>";</script><style>p{}</style><p>Last one.</p></main>',
     );
     expect(pageText(live)).toBe('ore & tar | blog home post title first paragraph here. last one.');
     expect(failing(live)).toEqual([]);
@@ -652,9 +658,10 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     expect(failing(draft)).toEqual([
       'title_present',
       'indexable',
-      'body_present',
       'canonical_matches',
-      'last_paragraph_present',
+      'article_region_found',
+      'content_complete',
+      'images_present',
     ]);
     const googlebot = page(
       '<meta name="googlebot" content="NOINDEX"><link href="https://site.example/post" rel="canonical">',
@@ -664,13 +671,195 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     expect(failing(googlebot)).toEqual([
       'title_present',
       'indexable',
-      'body_present',
-      'last_paragraph_present',
+      'article_region_found',
+      'content_complete',
+      'images_present',
     ]);
-    expect(validateRenderedPage({ ...input, html: googlebot, title: 'A B' })[1]).toEqual({
+    expect(validateRenderedPage({ ...input, html: googlebot, title: 'A B' }).checks[1]).toEqual({
       key: 'title_present',
       ok: true,
     });
+  });
+});
+
+describe('rendered article verification (PR-04): the manifest against the article region', () => {
+  const sent =
+    '<h2>The question</h2>\n<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p>\n<p>The weighbridge reads 40 t -- every "morning" at 6.</p>\n<figure><img src="https://site.example/wp-content/uploads/bridge.png" alt="The weighbridge"><figcaption>The bridge at the north gate.</figcaption></figure>\n<ul><li>one</li><li>two</li></ul>\n<p>Yes, it\'s mostly safe...</p>';
+  const manifest = articleManifest(sent);
+  // What WordPress serves: wptexturize typography, lazy-loading attributes, a noscript copy, theme wrappers, a
+  // sharing block inside the content after it, related posts and a sidebar outside it.
+  const served = (
+    body: string,
+    head = '<link rel="canonical" href="https://site.example/why-ore-and-tar/">',
+  ) =>
+    `<!doctype html><html><head><title>Why ore &amp; tar &#8211; Site</title>${head}</head><body class="single"><div id="page" class="site"><header class="site-header"><nav><a href="/">Home</a></nav></header><main id="main"><article id="post-42" class="post-42 post type-post"><header class="entry-header"><h1 class="entry-title">Why ore &amp; tar</h1></header><div class="entry-content">${body}<div class="sharedaddy sd-sharing-enabled"><h3 class="sd-title">Share this:</h3><ul><li><a href="#">X</a></li></ul></div></div></article><section class="related-posts"><article class="post"><h2>Another post</h2><p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p></article></section></main><aside class="widget-area"><p>The weighbridge reads 40 t – every “morning” at 6.</p></aside></div></body></html>`;
+  const texturized =
+    '<h2>The question</h2>\n<p>Ore is heavy &amp; tar is &lt;sticky&gt;.</p>\n<p>The weighbridge reads 40&nbsp;t &#8211; every &#8220;morning&#8221; at 6.</p>\n<figure class="wp-block-image"><img loading="lazy" decoding="async" width="1200" height="800" src="data:image/gif;base64,R0lGOD" data-src="https://site.example/wp-content/uploads/bridge-1200x800.png" srcset="https://site.example/a.png 1200w" class="lazyload wp-image-77" alt="The weighbridge"><noscript><img src="https://site.example/wp-content/uploads/bridge.png" alt="The weighbridge"></noscript><figcaption class="wp-element-caption">The bridge at the north gate.</figcaption></figure>\n<ul class="wp-block-list"><li>one</li><li>two</li></ul>\n<p>Yes, it&#8217;s mostly safe&#8230;</p>';
+  const check = (html: string, over: Partial<Parameters<typeof validateRenderedPage>[0]> = {}) =>
+    validateRenderedPage({
+      status: 200,
+      html,
+      title: 'Why ore & tar',
+      slug: 'why-ore-and-tar',
+      remoteUrl: 'https://site.example/why-ore-and-tar/',
+      draft: false,
+      manifest,
+      ...over,
+    });
+
+  it('the manifest is every block of the HTML sent, folded, and every image alt', () => {
+    expect(manifest).toEqual({
+      version: 1,
+      blocks: [
+        'the question',
+        'ore is heavy & tar is <sticky>.',
+        'the weighbridge reads 40 t - every "morning" at 6.',
+        'the bridge at the north gate.',
+        'one',
+        'two',
+        "yes, it's mostly safe...",
+      ],
+      images: ['the weighbridge'],
+    });
+    expect(articleManifest(sent)).toEqual(manifest); // deterministic
+  });
+
+  it('a page with the theme’s wrappers, WordPress typography, lazy-loaded images and sharing and related-post blocks passes', () => {
+    const result = check(served(texturized));
+    expect(result.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(result).toMatchObject({
+      outcome: 'verified',
+      reason: null,
+      content: {
+        selector: '.entry-content',
+        expectedBlocks: 7,
+        matchedBlocks: 7,
+        missingBlocks: [],
+        missingImages: [],
+      },
+      indexability: { meta: 'index', header: 'index' },
+    });
+  });
+
+  it('an interior paragraph altered or removed fails, even when its text still appears outside the article region', () => {
+    const altered = check(served(texturized.replace('40&nbsp;t', '41&nbsp;t')));
+    expect(altered).toMatchObject({
+      outcome: 'failed',
+      reason: 'content_changed',
+      content: {
+        matchedBlocks: 6,
+        missingBlocks: [{ index: 2, text: 'the weighbridge reads 40 t - every "morning" at 6.' }],
+      },
+    });
+    expect(altered.checks.find((c) => c.key === 'content_complete')?.ok).toBe(false);
+    // Removed from the article; the sidebar still carries the sentence: it does not count.
+    const removed = check(served(texturized.replace(/<p>The weighbridge[^]*?<\/p>/, '')));
+    expect(removed).toMatchObject({ outcome: 'failed', content: { missingBlocks: [{ index: 2 }] } });
+    // A paragraph moved out of order is a changed article too.
+    const reordered = check(
+      served(
+        '<p>Yes, it&#8217;s mostly safe&#8230;</p>' +
+          texturized.replace('<p>Yes, it&#8217;s mostly safe&#8230;</p>', ''),
+      ),
+    );
+    expect(reordered.outcome).toBe('failed');
+    // An image dropped from the article fails the image check.
+    const noImage = check(
+      served(
+        texturized.replace(
+          /<figure[^]*?<\/figure>/,
+          '<figure><figcaption class="wp-element-caption">The bridge at the north gate.</figcaption></figure>',
+        ),
+      ),
+    );
+    expect(noImage).toMatchObject({ outcome: 'failed', content: { missingImages: ['the weighbridge'] } });
+  });
+
+  it('a header-only noindex is recognised (the meta tags say index); a draft is expected to be hidden', () => {
+    const hidden = check(served(texturized), { headers: { xRobotsTag: 'noindex', link: null } });
+    expect(hidden).toMatchObject({ outcome: 'failed', indexability: { meta: 'index', header: 'noindex' } });
+    expect(hidden.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual(['header_indexable']);
+    expect(
+      check(served(texturized), { headers: { xRobotsTag: 'noindex', link: null }, draft: true }).outcome,
+    ).toBe('verified');
+    expect(robotsHeaderNoindex('noindex')).toBe(true);
+    expect(robotsHeaderNoindex('NONE')).toBe(true);
+    expect(robotsHeaderNoindex('noarchive, NOINDEX, nofollow')).toBe(true);
+    expect(robotsHeaderNoindex('googlebot: noindex')).toBe(true);
+    expect(robotsHeaderNoindex('otherbot: noindex, nofollow')).toBe(false);
+    expect(robotsHeaderNoindex('unavailable_after: Monday, 25-Jun-2026 15:00:00 GMT')).toBe(false);
+    expect(robotsHeaderNoindex('noarchive, nosnippet')).toBe(false);
+    expect(robotsHeaderNoindex(null)).toBe(false);
+    expect(
+      check(
+        served(
+          texturized,
+          '<link rel="canonical" href="https://site.example/why-ore-and-tar/"><meta name="robots" content="none">',
+        ),
+      ).indexability,
+    ).toEqual({ meta: 'noindex', header: 'index' });
+  });
+
+  it('the canonical identity: an HTTP Link canonical counts, and one naming another page fails', () => {
+    expect(
+      check(served(texturized, ''), {
+        headers: { xRobotsTag: null, link: '<https://site.example/why-ore-and-tar/>; rel="canonical"' },
+      }).outcome,
+    ).toBe('verified');
+    const other = check(served(texturized), {
+      headers: { xRobotsTag: null, link: '<https://site.example/another-post/>; rel=canonical' },
+    });
+    expect(other.checks.find((c) => c.key === 'canonical_matches')?.ok).toBe(false);
+    expect(other.outcome).toBe('failed');
+    expect(
+      canonicalFromLinkHeader(
+        '<https://cdn.example/x.css>; rel="preload", <https://site.example/a/>; rel="canonical"',
+      ),
+    ).toBe('https://site.example/a/');
+  });
+
+  it('an unavailable page (timeout, 503, 429) or one cut before the article ends stays unverified, never passing', () => {
+    for (const status of [null, 503, 429, 408]) {
+      const result = check(status === null ? '' : '<html><body>Service unavailable</body></html>', {
+        status,
+      });
+      expect(result.outcome).toBe('unverified');
+      expect(result.checks.some((c) => !c.ok)).toBe(true);
+    }
+    const page = served(texturized);
+    const cut = page.slice(0, page.indexOf('<ul class="wp-block-list">'));
+    expect(check(cut, { truncated: true })).toMatchObject({
+      outcome: 'unverified',
+      reason: 'page_truncated',
+    });
+    // A page with no recognisable article region proves nothing either.
+    expect(
+      check('<html><head><title>Why ore &amp; tar</title></head><body><p>Ore</p></body></html>'),
+    ).toMatchObject({
+      outcome: 'unverified',
+      reason: 'article_region_not_found',
+    });
+  });
+
+  it('a destination’s own selector is tried first; the selector grammar is simple selectors only', () => {
+    const custom = `<html><head><title>Why ore &amp; tar</title><link rel="canonical" href="https://site.example/why-ore-and-tar/"></head><body><div class="layout"><div class="post-body" data-x="1">${texturized}</div><article class="teaser"><p>Unrelated.</p></article></div></body></html>`;
+    expect(check(custom).outcome).toBe('failed'); // the default `article` names the teaser
+    expect(check(custom, { regionSelector: 'div.post-body' })).toMatchObject({
+      outcome: 'verified',
+      content: { selector: 'div.post-body' },
+    });
+    expect(compareArticleRegion(custom, manifest, ['[data-x=1]']).matchedBlocks).toBe(7);
+    for (const ok of [
+      '.entry-content',
+      'div.post-body',
+      '#content',
+      '[itemprop=articleBody]',
+      'main, article',
+      'div.a.b[data-x="y z"]',
+    ])
+      expect(ArticleRegionSelector.safeParse(ok).success).toBe(true);
+    for (const bad of ['div p', 'div > p', 'a:hover', '', '*', '.a,', 'x'.repeat(201)])
+      expect(ArticleRegionSelector.safeParse(bad).success).toBe(false);
   });
 });
 

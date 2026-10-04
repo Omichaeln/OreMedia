@@ -465,6 +465,22 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       'Oremedia conditional-write plugin',
     );
     expect(await ga4.getByTestId('destination-write-safety').count()).toBe(0);
+    // PR-04: a website's article region selector is set (and validated) on its row; other kinds have none.
+    const selector = cms.getByLabel('Article region selector');
+    await selector.fill('div p');
+    await cms.getByRole('button', { name: 'Save selector' }).click();
+    await expect
+      .poll(() => cms.getByTestId('article-selector-form').textContent())
+      .toContain('simple selectors only');
+    await selector.fill('div.post-body');
+    await cms.getByRole('button', { name: 'Save selector' }).click();
+    await expect
+      .poll(() => backend.destinations.destinations.find((d) => d.id === 'dst_e2e_cms')?.articleSelector)
+      .toBe('div.post-body');
+    await expect
+      .poll(() => cms.getByTestId('destination-article-selector').textContent())
+      .toContain('div.post-body');
+    expect(await ga4.getByTestId('article-selector-form').count()).toBe(0);
     // Register a Search Console site: it joins the list under its own kind, owned by the signed-in person.
     await page.locator('#destination-kind').click();
     await page.getByRole('option', { name: 'Search Console site' }).click();
@@ -1713,6 +1729,12 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       'matched what was sent',
     );
     expect(await panel.getByTestId('article-validation').textContent()).toContain('Page validated');
+    // PR-04: each thing the verification proves is shown on its own.
+    for (const key of ['write', 'readback', 'rendered', 'visibility'])
+      expect(await panel.getByTestId(`article-stage-${key}`).getAttribute('data-state')).toBe('verified');
+    expect(await panel.getByTestId('article-stage-rendered').textContent()).toContain(
+      'All 4 blocks of the approved content are on the page (in .entry-content)',
+    );
     const dayList = page.getByTestId('day-list');
     expect(await dayList.textContent()).toContain('Live');
     await panel.getByTestId('validate-article').click();
@@ -1723,6 +1745,12 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect
       .poll(() => panel.getByTestId('article-verification').textContent(), { timeout: 15_000 })
       .toContain('Verification failed');
+    // PR-04: the changed interior block is named, and the header-only noindex shows as the live visibility failing.
+    expect(await panel.getByTestId('article-stage-rendered').getAttribute('data-state')).toBe('failed');
+    expect(await panel.getByTestId('article-stage-rendered').textContent()).toContain('first block 2');
+    expect(await panel.getByTestId('article-stage-visibility').getAttribute('data-state')).toBe('failed');
+    expect(await panel.getByTestId('article-stage-visibility').textContent()).toContain('X-Robots-Tag');
+    expect(await panel.getByTestId('article-stage-readback').getAttribute('data-state')).toBe('verified');
     expect(
       backend.phase5.evidence.filter(
         (e) => e.publicationId === 'pub_article' && e.kind === 'rendered_validation',

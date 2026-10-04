@@ -1,5 +1,5 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
-import { renderedValidationOk } from '@oremedia/contracts/article';
+import { renderedOutcomeOf, type RenderedOutcome } from '@oremedia/contracts/article';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
 import { ARTICLE_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import {
@@ -715,12 +715,13 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
    */
   const verificationOf = (
     readback: ArticleReadbackVerificationV1 | undefined,
-    validationOk: boolean | null,
+    rendered: RenderedOutcome | null,
   ): PublicationRemoteVerification => {
     if (!readback || readback.outcome === 'unverified') return 'unverified';
     if (readback.outcome === 'mismatch') return 'failed';
-    // A matching read-back alone proves the article, not the page: without a page check nothing is verified.
-    return validationOk === null ? 'unverified' : validationOk ? 'verified' : 'failed';
+    // A matching read-back alone proves the article, not the page: without a page check nothing is verified, and a
+    // page that could not be read (PR-04) proves nothing either.
+    return rendered ?? 'unverified';
   };
 
   /** A fresh `remote_readback` evidence row: the remote revision as last read, with what it proved (RA-04). */
@@ -773,7 +774,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       const locked = await publicationsRepo.lock(row.id, tx);
       const verification = verificationOf(
         result.readbackVerification,
-        result.validation ? renderedValidationOk(result.validation.checks) : null,
+        result.validation ? renderedOutcomeOf(result.validation) : null,
       );
       await publicationsRepo.update(
         locked.id,
@@ -1751,7 +1752,8 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         if (locked.state !== 'published' || locked.remoteStatus !== 'live')
           return { outcome: 'skipped', reason: `moved_before_record:${locked.state}` };
         await recordRenderedValidation(locked, result, tx);
-        const ok = renderedValidationOk(result.checks);
+        const outcome = renderedOutcomeOf(result);
+        const ok = outcome === 'verified';
         await audit.record(
           workflowActor(),
           'publication.validate_rendered',
@@ -1765,7 +1767,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             reason: failedChecksReason(result),
           },
         );
-        return { outcome: 'validated', ok, verification: ok ? 'verified' : 'failed' };
+        return { outcome: 'validated', ok, verification: outcome };
       });
     },
   };
