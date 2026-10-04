@@ -122,7 +122,7 @@ source can never be approved as-is: approval requires a source or an explicit re
   checked against strict per-section schemas (`contracts/brand-assist.ts`) and never repaired. A fact suggestion
   becomes a proposed fact only when a person accepts it.
 - History is a read over applied versions; restore calls `brand.system.save` with the earlier document.
-- Untrusted markup is read with a linear-time scanner (`packages/providers/src/markup.ts`), never with regular
+- Untrusted markup is read with a linear-time scanner (`packages/contracts/src/markup.ts`), never with regular
   expressions over the markup; robots rules are matched without building a regular expression. Pages and documents
   are parsed in a worker thread (`capture/isolate.ts`, bundled as `capture-worker.js` next to worker-ingest and
   worker-render) with a memory ceiling (resourceLimits, plus heap sampling because a process-wide
