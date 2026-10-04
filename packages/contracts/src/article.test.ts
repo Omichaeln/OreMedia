@@ -93,6 +93,51 @@ describe('article document (ledger R2-3)', () => {
     expect(safeArticleUrl('mailto:a@b.example')).toBe('mailto:a@b.example');
   });
 
+  it.each([
+    ['a decimal reference for the colon', 'javascript&#58;alert(1)'],
+    ['a decimal reference without its semicolon', 'javascript&#58alert(1)'],
+    ['a hex reference for the colon', 'javascript&#x3a;alert(1)'],
+    ['the named colon reference', 'javascript&colon;alert(1)'],
+    ['a tab reference inside the scheme', 'java&#x09;script:alert(1)'],
+    ['the named tab reference inside the scheme', 'java&Tab;script:alert(1)'],
+    ['a newline reference inside the scheme', 'java&NewLine;script:alert(1)'],
+    ['a raw tab inside the scheme', 'java\tscript:alert(1)'],
+    ['a raw newline inside the scheme', 'java\nscript:alert(1)'],
+    ['a leading NUL', '\u0000javascript:alert(1)'],
+    ['a leading NUL reference', '&#0;javascript:alert(1)'],
+    ['a zero-width space inside the scheme', 'java​script:alert(1)'],
+    ['mixed case', 'JaVaScRiPt:alert(1)'],
+    ['an encoded letter in the scheme', '&#106;avascript:alert(1)'],
+    ['a data URL behind a reference', 'data&#58;text/html,x'],
+  ])('refuses a script URL hidden by %s, in a link and an image', (_, url) => {
+    expect(safeArticleUrl(url)).toBeNull();
+    const html = sanitizeArticleHtml(`<p><a href="${url}">x</a><img src="${url}" alt="i"></p>`);
+    expect(html).toBe('<p><a>x</a><img alt="i"></p>');
+    expect(html).not.toMatch(/href|src/);
+  });
+
+  it('keeps http, https, mailto and relative URLs exactly as before, escaping what it emits', () => {
+    for (const [input, expected] of [
+      ['https://example.com/a?b=1&amp;c=2#f', 'https://example.com/a?b=1&amp;c=2#f'],
+      ['http://example.com/p', 'http://example.com/p'],
+      ['HTTPS://Example.com/P', 'HTTPS://Example.com/P'],
+      ['mailto:a@b.example', 'mailto:a@b.example'],
+      ['/relative/path?x=1&amp;y=2', '/relative/path?x=1&amp;y=2'],
+      ['relative/page', 'relative/page'],
+      ['#section', '#section'],
+      ['https://example.com/a?b=1&c=2', 'https://example.com/a?b=1&amp;c=2'],
+      ['https&#58;//example.com/p', 'https://example.com/p'],
+      ['https://example.com/&copy;', 'https://example.com/&amp;copy;'],
+    ] as const) {
+      expect(sanitizeArticleHtml(`<a href="${input}">x</a>`)).toBe(
+        `<a href="${expected}" rel="noopener">x</a>`,
+      );
+      expect(sanitizeArticleHtml(`<img src="${input}">`)).toBe(`<img src="${expected}">`);
+    }
+    expect(safeArticleUrl('/relative/path')).toBe('/relative/path');
+    expect(safeArticleUrl('&#47;&#47;cdn.example/x')).toBeNull();
+  });
+
   it('rendered-page checks: status, title in <title> or h1, canonical, noindex only for a draft, first paragraph', () => {
     const page = (
       extra: string,
@@ -410,5 +455,206 @@ describe('rich article documents (RA-08)', () => {
       });
     expect(ArticleDocumentV1.safeParse({ ...base, v: 1 }).success).toBe(false);
     expect(ArticleDocumentV1.safeParse({ ...base, v: 2 }).success).toBe(true);
+  });
+});
+
+describe('character references that are not Unicode scalar values (crafted pages)', () => {
+  const refs = ['&#99999999;', '&#x110000;', '&#xD800;', '&#55296;', '&#0;', '&#x0;'];
+
+  it.each(refs)('pageText reads %s as U+FFFD instead of throwing', (ref) => {
+    expect(pageText(`<p>a${ref}b</p>`)).toBe('a�b');
+  });
+
+  it.each(refs)('articleHtmlChars counts %s as one character instead of throwing', (ref) => {
+    expect(articleHtmlChars(`<p>a${ref}b</p>`)).toBe(3);
+  });
+
+  it.each(refs)('the canonical check reads %s in the canonical href as U+FFFD instead of throwing', (ref) => {
+    const checks = validateRenderedPage({
+      status: 200,
+      html: `<html><head><title>T</title><link rel="canonical" href="https://site.example/a${ref}b"></head><body><p>p</p></body></html>`,
+      title: 'T',
+      firstParagraph: 'p',
+      lastParagraph: 'p',
+      draft: false,
+      remoteUrl: 'https://site.example/a%EF%BF%BDb',
+      slug: 'other',
+    });
+    expect(checks.find((c) => c.key === 'canonical_present')?.ok).toBe(true);
+    expect(checks.find((c) => c.key === 'canonical_matches')?.ok).toBe(true);
+  });
+});
+
+describe('reading untrusted markup in linear time (the sanitiser and the rendered-page checks)', () => {
+  /** A generous bound: the regular expressions these replace took seconds (or, for attributes, forever) here. */
+  const fast = (run: () => unknown) => {
+    const started = performance.now();
+    run();
+    expect(performance.now() - started).toBeLessThan(250);
+  };
+  const N = 100_000;
+  const check = (html: string) =>
+    validateRenderedPage({
+      status: 200,
+      html,
+      title: 't',
+      firstParagraph: 'p',
+      lastParagraph: 'q',
+      draft: false,
+    });
+
+  it.each([
+    ['unclosed comments', '<!--'.repeat(N / 4)],
+    ['unclosed tags', '<a x'.repeat(N / 4)],
+    ['bare angle brackets', '<'.repeat(N)],
+    ['unclosed quotes', '<a "'.repeat(N / 4)],
+    ['a URL of character references', `<a href="${'&#x3a'.repeat(N / 5)}&#">x</a>`],
+  ])('sanitises %s in linear time', (_, input) => {
+    fast(() => sanitizeArticleHtml(input));
+  });
+
+  it('sanitises a tag with many empty attributes and no `>` (exponential for the earlier pattern)', () => {
+    // 2^40 backtracking steps for the earlier token pattern; one pass for the scanner.
+    fast(() => expect(sanitizeArticleHtml(`<a${' x=""'.repeat(40)}`)).toBe(`&lt;a${' x=""'.repeat(40)}`));
+    fast(() => sanitizeArticleHtml(`<a${' x=""'.repeat(N / 5)}`));
+  });
+
+  it.each([
+    ['bare angle brackets', '<'.repeat(N)],
+    ['unclosed tags', '<a '.repeat(N / 3)],
+    ['unclosed scripts', '<script>'.repeat(N / 8)],
+    ['unclosed titles', '<title>'.repeat(N / 7)],
+    ['unclosed headings', '<h1>'.repeat(N / 4)],
+    ['unclosed metas', '<meta '.repeat(N / 6)],
+    ['unclosed links', '<link '.repeat(N / 6)],
+  ])('reads a rendered page of %s in linear time', (_, input) => {
+    fast(() => check(input));
+    fast(() => pageText(input));
+    fast(() => articleHtmlChars(input));
+  });
+
+  it('sanitises well-formed article markup exactly as before', () => {
+    // Expected values are the earlier implementation's output for the same input.
+    const cases: Array<[string, string, number]> = [
+      [
+        '<h2 id="x" class="y">Title</h2><p>Text with <a href="https://example.com/a?b=1&amp;c=2" title="T" target="_blank" onclick="x()">link</a>.</p>',
+        '<h2>Title</h2><p>Text with <a href="https://example.com/a?b=1&amp;c=2" title="T" rel="noopener">link</a>.</p>',
+        20,
+      ],
+      [
+        '<ul><li>One</li><li>Two<br/>lines</li></ul><img src="/a.png" alt="A &quot;q&quot;" width="10" height="5" style="x">',
+        '<ul><li>One</li><li>Two<br>lines</li></ul><img src="/a.png" alt="A &quot;q&quot;" width="10" height="5">',
+        11,
+      ],
+      [
+        '<section class="faq"><h3>Q?</h3><p>A.</p></section><figure><img src="https://cdn.example/x.jpg" alt="x"><figcaption>Cap</figcaption></figure>',
+        '<section class="faq"><h3>Q?</h3><p>A.</p></section><figure><img src="https://cdn.example/x.jpg" alt="x"><figcaption>Cap</figcaption></figure>',
+        7,
+      ],
+      [
+        '<table><thead><tr><th>A</th></tr></thead><tbody><tr><td>1 &lt; 2</td></tr></tbody></table>',
+        '<table><thead><tr><th>A</th></tr></thead><tbody><tr><td>1 &lt; 2</td></tr></tbody></table>',
+        6,
+      ],
+      ['<p>a < b and c > d, AT&T</p>', '<p>a &lt; b and c &gt; d, AT&amp;T</p>', 21],
+      [
+        '<div><span>kept text</span><script>alert("<p>x</p>")</script><iframe src="https://x"></iframe></div><p>end',
+        'kept text<p>end</p>',
+        12,
+      ],
+      [
+        '<P CLASS="x">Upper</P><A HREF="javascript:alert(1)">bad</A><a href="mailto:a@b.c">mail</a>',
+        '<p>Upper</p><a>bad</a><a href="mailto:a@b.c" rel="noopener">mail</a>',
+        12,
+      ],
+      [
+        '<!-- note --><blockquote>Quote</blockquote><pre><code>if (a &amp;&amp; b) {}</code></pre>',
+        '<blockquote>Quote</blockquote><pre><code>if (a &amp;&amp; b) {}</code></pre>',
+        19,
+      ],
+      [
+        "<p>single 'quotes' <a href='/rel/path' title='it&#39;s'>r</a></p>",
+        '<p>single \'quotes\' <a href="/rel/path" title="it&#39;s" rel="noopener">r</a></p>',
+        17,
+      ],
+      [
+        '<dl><dt>T</dt><dd>D</dd></dl><hr><p>x<svg><circle/></svg>y</p>',
+        '<dl><dt>T</dt><dd>D</dd></dl><hr><p>xy</p>',
+        4,
+      ],
+      ['<p>\n  Multi\n  line <b\n  >bold</b>\n</p>', '<p>\n  Multi\n  line <b>bold</b>\n</p>', 21],
+      [
+        '<a href="//evil.example/x">proto</a><img src="data:image/png;base64,AA" alt="d"><a href="#frag">f</a>',
+        '<a>proto</a><img alt="d"><a href="#frag" rel="noopener">f</a>',
+        6,
+      ],
+      [
+        '<p>unclosed <em>em <strong>strong</p> after',
+        '<p>unclosed <em>em <strong>strong</strong></em></p> after',
+        24,
+      ],
+      ['<p><a title="1<2" href="/x">t</a></p>', '<p><a title="1&lt;2" href="/x" rel="noopener">t</a></p>', 1],
+    ];
+    for (const [input, output, chars] of cases) {
+      expect(sanitizeArticleHtml(input)).toBe(output);
+      expect(articleHtmlChars(output)).toBe(chars);
+    }
+  });
+
+  it('drops a tag named after an Object property instead of passing it through or throwing', () => {
+    expect(sanitizeArticleHtml('<constructor>x</constructor><constructor onclick="y">z</constructor>')).toBe(
+      'xz',
+    );
+  });
+
+  it('reads well-formed rendered pages exactly as before', () => {
+    const page = (head: string, body: string) =>
+      `<!doctype html><html lang="en"><head><meta charset="utf-8">${head}</head><body>${body}</body></html>`;
+    const input = {
+      status: 200,
+      title: 'Ore & Tar',
+      firstParagraph: 'First paragraph here.',
+      lastParagraph: 'Last one.',
+      draft: false,
+      remoteUrl: 'https://site.example/blog/post',
+      slug: 'post',
+    };
+    const failing = (html: string) =>
+      validateRenderedPage({ ...input, html })
+        .filter((c) => !c.ok)
+        .map((c) => c.key);
+    const live = page(
+      '<title>Ore &amp; Tar | Blog</title><link rel="canonical" href="https://site.example/blog/post"><meta name="robots" content="index, follow">',
+      '<header><nav><a href="/">Home</a></nav></header><h1>Post <em>title</em></h1><p>First paragraph &nbsp; here.</p><script>var x = "<h1>not</h1>";</script><style>p{}</style><p>Last one.</p>',
+    );
+    expect(pageText(live)).toBe('ore & tar | blog home post title first paragraph here. last one.');
+    expect(failing(live)).toEqual([]);
+    const draft = page(
+      '<title>\n  Draft\n</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/a.css"><link rel="canonical" href="https://site.example/x/">',
+      '<h1>Draft</h1><p>Body</p>',
+    );
+    expect(pageText(draft)).toBe('draft draft body');
+    expect(failing(draft)).toEqual([
+      'title_present',
+      'indexable',
+      'body_present',
+      'canonical_matches',
+      'last_paragraph_present',
+    ]);
+    const googlebot = page(
+      '<meta name="googlebot" content="NOINDEX"><link href="https://site.example/post" rel="canonical">',
+      '<div><h1 class="t">A <span>B</span></h1></div><p>A &amp; B &#39;c&#39; &#x41;</p>',
+    );
+    expect(pageText(googlebot)).toBe("a b a & b 'c' a");
+    expect(failing(googlebot)).toEqual([
+      'title_present',
+      'indexable',
+      'body_present',
+      'last_paragraph_present',
+    ]);
+    expect(validateRenderedPage({ ...input, html: googlebot, title: 'A B' })[1]).toEqual({
+      key: 'title_present',
+      ok: true,
+    });
   });
 });
