@@ -173,3 +173,46 @@ export interface RenderJobActivitiesV1 {
   completeRender(input: RenderCompleteInput): Promise<RenderCompleteResult>;
   failRender(input: RenderFailInput): Promise<void>;
 }
+
+// ---- STU-2a video exports: the store path the timeline compositor (STU-2b) calls -----------------------------
+
+/**
+ * A rendered MP4 the compositor wrote under the export key, with its poster frame (and WebVTT captions sidecar when
+ * the project has captions). storeVideoExport streams the object back, checks it hashes to `contentHash`, is H.264 +
+ * AAC with the moov box before the media data (faststart), and that its duration and frame rate are the ones
+ * recorded; then the export can be completed like a still's.
+ */
+export const VideoExportStoreInput = RenderJobInputV1.extend({
+  brandId: z.string(),
+  export: z.object({
+    pageId: z.string(),
+    formatKey: z.string(),
+    storageKey: z.string(),
+    contentHash: z.string().length(64),
+    bytes: z.number().int().positive(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    durationMs: z.number().int().positive(),
+    fps: z.number().int().positive(),
+    posterStorageKey: z.string(),
+    posterContentHash: z.string().length(64),
+    captionsStorageKey: z.string().optional(),
+  }),
+});
+export type VideoExportStoreInput = z.infer<typeof VideoExportStoreInput>;
+
+export const VideoExportStoreResult = z.object({
+  storageKey: z.string(),
+  contentHash: z.string().length(64),
+  bytes: z.number().int().positive(),
+  durationMs: z.number().int().positive(),
+  fps: z.number().int().positive(),
+  posterStorageKey: z.string(),
+  captionsStorageKey: z.string().optional(),
+});
+export type VideoExportStoreResult = z.infer<typeof VideoExportStoreResult>;
+
+/** Activity surface for the video export store (registered on task queue `video`; STU-2b's workflow calls it). */
+export interface VideoExportActivitiesV1 {
+  storeVideoExport(input: VideoExportStoreInput): Promise<VideoExportStoreResult>;
+}

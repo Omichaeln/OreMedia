@@ -15,6 +15,7 @@ import type {
   CreativeDocumentV1,
   OperationBatch,
   RenderManifest,
+  RenderProgress,
   RenderValidationResult,
 } from '@oremedia/contracts/creative';
 import { brandId, createdAt, hash, id, micros, ref, tenantId, ts, updatedAt, version } from './_columns';
@@ -99,6 +100,11 @@ export const renderedExports = mysqlTable(
     rendererVersion: varchar('renderer_version', { length: 40 }).notNull(),
     manifest: json('manifest').$type<RenderManifest>().notNull(), // fonts + asset versions + hashes
     validation: json('validation').$type<RenderValidationResult>().notNull(),
+    // STU-2a video exports (video/mp4): null for stills.
+    durationMs: int('duration_ms'),
+    fps: int('fps'),
+    posterStorageKey: varchar('poster_storage_key', { length: 300 }),
+    captionsStorageKey: varchar('captions_storage_key', { length: 300 }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -199,9 +205,12 @@ export const renderJobs = mysqlTable(
     brandId: brandId(),
     revisionId: ref('revision_id').notNull(),
     formatKeys: json('format_keys').$type<string[]>().notNull(),
-    state: mysqlEnum('state', ['pending', 'rendering', 'ready', 'failed']).notNull().default('pending'),
+    state: mysqlEnum('state', ['pending', 'rendering', 'ready', 'failed', 'cancelled'])
+      .notNull()
+      .default('pending'),
     attempts: int('attempts').notNull().default(0),
     error: varchar('error', { length: 2000 }),
+    progress: json('progress').$type<RenderProgress>(), // STU-2a: phase and fraction of a long (video) render
     requestedByKind: mysqlEnum('requested_by_kind', ['user', 'agent', 'system']).notNull(),
     requestedById: ref('requested_by_id').notNull(),
     exportIds: json('export_ids').$type<string[]>(),

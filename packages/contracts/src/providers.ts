@@ -106,6 +106,8 @@ export const ChannelVariantInput = z.object({
       height: z.number().int(),
       bytes: z.number().int(),
       durationMs: z.number().int().optional(),
+      /** STU-2a: a video's frame rate, carried with its duration so a capability can check both. */
+      fps: z.number().positive().optional(),
     }),
   ),
   settings: z.record(z.unknown()),

@@ -156,6 +156,67 @@
           "response": { "status": 503, "body": "Service Unavailable" }
         }
       ]
+    },
+    "video_pending": {
+      "description": "STU-2a: a rendered video export fetched from the signed release URL, registered with its byte size, uploaded part by part and finalised with the part ETags; pending while LinkedIn processes it.",
+      "exchanges": [
+        {
+          "request": { "method": "GET", "host": "media.oremedia.test", "path": "/release/export.mp4" },
+          "response": {
+            "status": 200,
+            "headers": { "content-type": "video/mp4" },
+            "body": "MP4-EXPORT-BYTES-0123456"
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/videos",
+            "query": { "action": "initializeUpload" },
+            "bodyIncludes": ["\"owner\":\"urn:li:organization:2001\"", "\"fileSizeBytes\":24"]
+          },
+          "response": {
+            "status": 200,
+            "json": {
+              "value": {
+                "video": "urn:li:video:V1",
+                "uploadToken": "tok_1",
+                "uploadInstructions": [
+                  {
+                    "uploadUrl": "https://www.linkedin.com/dms-uploads/V1/part1?ck=1",
+                    "firstByte": 0,
+                    "lastByte": 23
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "host": "www.linkedin.com",
+            "path": "/dms-uploads/V1/part1",
+            "bodyIncludes": ["MP4-EXPORT-BYTES-0123456"]
+          },
+          "response": { "status": 200, "headers": { "etag": "etag-1" }, "body": "" }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "host": "api.linkedin.com",
+            "path": "/rest/videos",
+            "query": { "action": "finalizeUpload" },
+            "bodyIncludes": [
+              "\"video\":\"urn:li:video:V1\"",
+              "\"uploadToken\":\"tok_1\"",
+              "\"uploadedPartIds\":[\"etag-1\"]"
+            ]
+          },
+          "response": { "status": 200, "json": {} }
+        }
+      ]
     }
   }
 }

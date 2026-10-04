@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
-import type { AssetKind, AssetPurpose } from '@oremedia/contracts/assets';
+import type { AssetKind, AssetPurpose, DerivativePurpose } from '@oremedia/contracts/assets';
 import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
@@ -94,7 +94,7 @@ export function useAssetVersions(assetId: string, enabled = true) {
 /** Spec 9.3: a 5-minute signed GET; refreshed before it expires. */
 export function useSignedUrl(
   assetVersionId: string | null,
-  derivative: 'thumbnail' | 'preview' | 'web' | 'original' = 'preview',
+  derivative: DerivativePurpose | 'original' = 'preview',
 ) {
   const trpc = useTRPC();
   return useQuery({

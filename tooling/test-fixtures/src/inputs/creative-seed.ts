@@ -138,17 +138,11 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     state: 'draft',
   });
   const renderJobId = newId('renderJob');
-  await db.insert(renderJobs).values({
-    id: renderJobId,
-    tenantId,
-    brandId,
-    revisionId: creativeRevisionId,
-    formatKeys: ['square_1080'],
-    state: 'pending',
-    attempts: 0,
-    requestedByKind: 'user',
-    requestedById: ownerUserId,
-  });
+  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0026), which the roll-forward suites'
+  // earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
+  await db.execute(
+    sql`insert into ${renderJobs} (id, tenant_id, brand_id, revision_id, format_keys, state, attempts, requested_by_kind, requested_by_id, created_at, updated_at) values (${renderJobId}, ${tenantId}, ${brandId}, ${creativeRevisionId}, '["square_1080"]', 'pending', 0, 'user', ${ownerUserId}, ${at}, ${at})`,
+  );
   // STU-1b (migration 0025): a failed generation job of the document (retry and cancel need a job id to try).
   const generationJobId = newId('studioGenerationJob');
   const generationAtHead = await db.execute(

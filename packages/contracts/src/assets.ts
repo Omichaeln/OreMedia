@@ -70,7 +70,9 @@ export const UPLOAD_CAPS_BYTES: Record<string, number> = {
   image: 50 * 1024 * 1024,
   svg: 2 * 1024 * 1024,
   font: 10 * 1024 * 1024,
-  video: 2 * 1024 * 1024 * 1024,
+  // Architecture (Studio, video v1): a source video is at most 1 GiB; audio at most 200 MiB. Generated clips are far
+  // below both, so the generated path keeps working unchanged.
+  video: 1024 * 1024 * 1024,
   audio: 200 * 1024 * 1024,
   pdf: 100 * 1024 * 1024,
 };
@@ -88,8 +90,8 @@ export const ACCEPTED_MIMES: Record<string, readonly string[]> = {
     'application/x-font-ttf',
     'application/x-font-otf',
   ],
-  video: ['video/mp4', 'video/quicktime'],
-  audio: ['audio/mpeg', 'audio/wav', 'audio/mp4'],
+  video: ['video/mp4', 'video/quicktime', 'video/webm'],
+  audio: ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac'],
   pdf: ['application/pdf'],
 };
 
@@ -163,6 +165,8 @@ export interface AssetRef {
   contentHash: string;
   width: number | null;
   height: number | null;
+  /** Video and audio: the duration ffprobe measured at ingest. */
+  durationMs?: number | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -186,17 +190,63 @@ export const KIND_MIME_GROUPS: Readonly<Record<AssetKind, readonly MimeGroup[]>>
 };
 
 /**
- * Kinds a person may not upload until Release 2 (spec 9.1): their intents are refused, not queued. Generated media
- * (ADR-11, D-06) is the exception: a generated video or audio upload is validated structurally (no transcoding) and
- * catalogued without derivatives.
+ * Longest generated clip ingest accepts, in seconds, per mime group (ADR-11, D-06): a generated video or audio upload
+ * keeps these caps when it is probed by the video ingest workflow.
  */
-export const KINDS_NOT_PROCESSABLE: readonly AssetKind[] = ['video', 'audio'];
-
-/** Longest generated clip ingest accepts, in seconds, per mime group (a structural check reads the duration). */
 export const MEDIA_DURATION_CAPS_SECONDS: Readonly<Record<'video' | 'audio', number>> = {
   video: 120,
   audio: 600,
 };
+
+/**
+ * Studio architecture, video v1: what a person's own video or audio upload may be. Video and audio are processed by
+ * videoIngestWorkflowV1 on task queue `video` (ffprobe inspection, poster, thumbnail strip, editing proxy, waveform).
+ * Bytes are capped by UPLOAD_CAPS_BYTES at the intent; these are the limits ffprobe checks.
+ */
+export const PERSON_MEDIA_LIMITS = {
+  /** Longest source, in seconds, per group. */
+  durationSeconds: { video: 600, audio: 600 } as Readonly<Record<'video' | 'audio', number>>,
+  /** Largest side of a source frame after rotation (8K UHD). */
+  maxDimension: 7680,
+  /** Smallest side of a source frame. */
+  minDimension: 16,
+  /** Frame rates outside this range are refused (average over the stream). */
+  minFps: 1,
+  maxFps: 240,
+  /**
+   * Variable frame rate is accepted (phones record it) unless it is extreme: the nominal rate (r_frame_rate) more
+   * than this many times the average means frames are missing or bunched beyond what an edit can follow.
+   */
+  maxVfrRatio: 3,
+} as const;
+
+/** Codecs ffmpeg 6.1 in the render image decodes and the video pipeline accepts (architecture: video v1 limits). */
+export const ACCEPTED_VIDEO_CODECS: readonly string[] = [
+  'h264',
+  'hevc',
+  'vp8',
+  'vp9',
+  'av1',
+  'prores',
+  'mpeg4',
+];
+export const ACCEPTED_AUDIO_CODECS: readonly string[] = [
+  'aac',
+  'mp3',
+  'opus',
+  'vorbis',
+  'flac',
+  'alac',
+  'ac3',
+  'eac3',
+  'pcm_s16le',
+  'pcm_s16be',
+  'pcm_s24le',
+  'pcm_s24be',
+  'pcm_s32le',
+  'pcm_f32le',
+  'pcm_u8',
+];
 
 /** Archives are rejected in Release 1 (spec 9.1); named explicitly so the rejection reason is specific. */
 export const ARCHIVE_MIMES: readonly string[] = [
@@ -233,10 +283,23 @@ export const PURPOSE_KINDS: Readonly<Record<AssetPurpose, readonly AssetKind[]>>
 export const PURPOSES_REQUIRING_RIGHTS: readonly AssetPurpose[] = ['creative', 'logo'];
 
 /**
- * Renditions kept for a version at ingest. `png` (BSC-2) is a transparent PNG of an SVG, for destinations that accept
- * rasters only (website articles); raster uploads have none, their original already is one.
+ * Renditions kept for a version at ingest. Raster sources get thumbnail, preview and web; `png` (BSC-2) is a
+ * transparent PNG of an SVG, for destinations that accept rasters only (website articles); raster uploads have none,
+ * their original already is one. Video and audio (STU-2a video ingest) get thumbnail and preview (a poster frame, or
+ * the waveform drawn for audio), plus poster (full-size WebP frame), strip (thumbnail sprite) with strip_map (its JSON
+ * timings), proxy (720p H.264/AAC faststart MP4, or 128k AAC for audio) and waveform (peaks JSON).
  */
-export const DerivativePurpose = z.enum(['thumbnail', 'preview', 'web', 'png']);
+export const DerivativePurpose = z.enum([
+  'thumbnail',
+  'preview',
+  'web',
+  'png',
+  'poster',
+  'strip',
+  'strip_map',
+  'proxy',
+  'waveform',
+]);
 export type DerivativePurpose = z.infer<typeof DerivativePurpose>;
 
 export const UploadIntentComplete = z.object({ intentId: z.string() });
@@ -365,6 +428,14 @@ export const IngestRejectionReason = z.enum([
   'duplicate_of',
   'media_malformed',
   'duration_exceeds_cap',
+  // Video ingest (Studio video v1; appended): actionable reasons from ffprobe/ffmpeg, surfaced to the uploader.
+  'media_no_video_stream',
+  'media_no_audio_stream',
+  'media_codec_unsupported',
+  'media_undecodable',
+  'media_frame_rate_unsupported',
+  'media_dimensions_unsupported',
+  'media_processing_failed',
 ]);
 export type IngestRejectionReason = z.infer<typeof IngestRejectionReason>;
 
@@ -375,7 +446,7 @@ export type IngestRejectionReason = z.infer<typeof IngestRejectionReason>;
 export const INGEST_REJECTION_MESSAGES: Readonly<Record<IngestRejectionReason, string>> = {
   object_missing: 'The upload did not arrive. Try uploading the file again.',
   exceeds_cap:
-    'The file is larger than allowed for its type (2 MB for SVG, 50 MB for images, 10 MB for fonts). Export a smaller file and upload it again.',
+    'The file is larger than allowed for its type (2 MB for SVG, 50 MB for images, 10 MB for fonts, 1 GB for video, 200 MB for audio). Export a smaller file and upload it again.',
   type_unrecognised: 'The file type could not be recognised. Upload SVG, PNG, WebP or JPEG.',
   type_mismatch:
     'This type of file cannot be used here. Logos and icons take SVG, PNG or WebP; photos take PNG, JPEG or WebP.',
@@ -412,8 +483,20 @@ export const INGEST_REJECTION_MESSAGES: Readonly<Record<IngestRejectionReason, s
   image_undecodable: 'The image could not be decoded. Re-export it and upload it again.',
   format_unsupported: 'This file format is not supported here.',
   duplicate_of: 'This file is already in the brand’s assets. Use the existing asset instead.',
-  media_malformed: 'The media file is damaged or incomplete.',
-  duration_exceeds_cap: 'The media is longer than allowed.',
+  media_malformed:
+    'The file is damaged or incomplete (for example an upload cut short, or a length that does not match its contents). Export it again and upload the new file.',
+  duration_exceeds_cap:
+    'The media is longer than allowed (10 minutes for video and audio). Trim it and upload it again.',
+  media_no_video_stream: 'The file has no video picture. Upload it as audio, or choose a video file.',
+  media_no_audio_stream: 'The file has no sound. Upload an audio file with an audio track.',
+  media_codec_unsupported:
+    'The file uses a codec that cannot be processed. Export it as H.264 (video) with AAC (audio) and upload it again.',
+  media_undecodable: 'The file could not be decoded. Export it again and upload the new file.',
+  media_frame_rate_unsupported:
+    'The frame rate cannot be edited reliably. Re-export at a constant frame rate (24, 25, 30 or 60 fps) and upload it again.',
+  media_dimensions_unsupported:
+    'The picture size is outside what can be processed (at most 8K, at least 16 pixels per side). Export a smaller version and upload it again.',
+  media_processing_failed: 'Processing failed. Try again; if it keeps failing, export the file again.',
 };
 
 /** The message for a stored rejection reason, or null when the stored value is not a known reason. */
