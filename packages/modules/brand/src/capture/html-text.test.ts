@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/providers/testing/linear-time';
 import { htmlToText, sameSiteUrl, tidyText } from './html-text';
 import { choosePages } from './site-crawl';
 
@@ -98,20 +99,24 @@ describe('choosePages (BSC-4 crawl order)', () => {
 });
 
 describe('htmlToText on hostile markup (BSC-4)', () => {
-  const N = 20_000;
+  // Time grows with the input, not its square: 8× the input takes well under 64× the CPU time.
   it.each([
-    ['unclosed headings', '<h1>'.repeat(N)],
-    ['mismatched headings', '<h1>x</h2>'.repeat(N)],
-    ['hidden attributes without closes', '<p hidden>'.repeat(N)],
-    ['drop blocks without closes', '<svg><iframe>'.repeat(N)],
-    ['tags without ends', '<a href="/x"'.repeat(N)],
-    ['bare brackets', '<'.repeat(N * 4)],
-    ['list items', '<li>'.repeat(N)],
-  ])('stays linear on %s', (_, html) => {
-    const started = performance.now();
-    htmlToText(html, 'https://ore.example/');
-    expect(performance.now() - started).toBeLessThan(200);
-  });
+    ['unclosed headings', (n: number) => '<h1>'.repeat(n)],
+    ['mismatched headings', (n: number) => '<h1>x</h2>'.repeat(n)],
+    ['hidden attributes without closes', (n: number) => '<p hidden>'.repeat(n)],
+    ['drop blocks without closes', (n: number) => '<svg><iframe>'.repeat(n)],
+    ['tags without ends', (n: number) => '<a href="/x"'.repeat(n)],
+    ['bare brackets', (n: number) => '<'.repeat(n * 4)],
+    ['list items', (n: number) => '<li>'.repeat(n)],
+  ])(
+    'stays linear on %s',
+    (_, html) => {
+      const growth = timeGrowth(html, (h) => htmlToText(h, 'https://ore.example/'), { size: 10_000 });
+      expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
+      expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
+    },
+    30_000,
+  );
 
   it('skips hidden and aria-hidden elements, nested in themselves, and keeps what follows', () => {
     const out = htmlToText(
