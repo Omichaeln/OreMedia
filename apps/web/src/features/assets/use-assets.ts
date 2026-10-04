@@ -125,6 +125,14 @@ export function useAssetUrls(
   assetVersionIds: string[],
   derivative: 'web' | 'original' = 'web',
 ): Map<string, string> {
+  return useAssetUrlState(assetVersionIds, derivative).urls;
+}
+
+/** As useAssetUrls, with the versions whose signed URL could not be issued (so a caller can say so, not wait). */
+export function useAssetUrlState(
+  assetVersionIds: string[],
+  derivative: 'web' | 'original' = 'web',
+): { urls: Map<string, string>; failed: Set<string> } {
   const trpc = useTRPC();
   const results = useQueries({
     queries: assetVersionIds.map((assetVersionId) => ({
@@ -134,12 +142,14 @@ export function useAssetUrls(
       retry: false,
     })),
   });
-  const map = new Map<string, string>();
+  const urls = new Map<string, string>();
+  const failed = new Set<string>();
   results.forEach((r, i) => {
     const id = assetVersionIds[i];
-    if (id && r.data?.url) map.set(id, r.data.url);
+    if (id && r.data?.url) urls.set(id, r.data.url);
+    else if (id && r.isError) failed.add(id);
   });
-  return map;
+  return { urls, failed };
 }
 
 /**
