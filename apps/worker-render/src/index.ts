@@ -5,3 +5,4 @@ export {
   type ChromiumRenderer,
 } from './chromium-renderer';
 export { creativeRenderJobStore } from './creative-store';
+export { startRenderWorkers, type RenderWorkersHandle } from './render-worker';

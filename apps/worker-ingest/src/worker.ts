@@ -55,7 +55,7 @@ try {
   );
   log.info({ count: seeded }, 'metric definitions seeded');
   ingestWorkers = await startIngestWorkers(temporalConfig);
-  // Ledger R2-1 part B: the daily sweep of GA4 and Search Console reports (one schedule per namespace, joined).
+  // Ledger R2-1 part B: the daily sweep of GA4 and Search Console reports (one schedule per namespace, reconciled).
   const client = await connectTemporal(temporalConfig);
   await ensureDestinationReportSweepScheduled(client);
   // Ledger R2-4: the weekly technical SEO audit of website destinations (Mondays 05:00 UTC, overlap skipped).

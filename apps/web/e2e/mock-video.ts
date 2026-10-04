@@ -12,7 +12,7 @@ import type {
   VideoOperationsApply,
   VideoProjectV1,
 } from '@oremedia/contracts/video';
-import type { Finding } from '@oremedia/contracts/creative';
+import type { Finding, RenderManifest, RenderValidationResult } from '@oremedia/contracts/creative';
 import {
   VIDEO_AI_PROGRESS,
   VideoAiRequest,
@@ -131,6 +131,8 @@ interface VideoRev {
   operations: VideoOperationBatch;
   snapshot: VideoProjectV1;
   contentHash: string;
+  /** As the service's revisionBase: generation inputs are graphic only, so a video revision carries null. */
+  generationInputs: null;
   createdAt: string;
 }
 export interface VideoDoc {
@@ -149,6 +151,30 @@ export interface VideoDoc {
   revisions: VideoRev[];
 }
 
+/** A video export as the service's toExportDto answers it: storage keys and hashes, with the STU-2a video fields. */
+interface VideoExport {
+  id: string;
+  revisionId: string;
+  pageId: string;
+  formatKey: string;
+  mime: string;
+  width: number;
+  height: number;
+  bytes: number;
+  storageKey: string;
+  contentHash: string;
+  rendererVersion: string;
+  manifest: RenderManifest;
+  validation: RenderValidationResult;
+  publishable: boolean;
+  durationMs: number | null;
+  fps: number | null;
+  posterStorageKey: string | null;
+  captionsStorageKey: string | null;
+  dedupeKey: string | null;
+  createdAt: string;
+}
+
 export interface VideoJob {
   id: string;
   brandId: string;
@@ -161,7 +187,7 @@ export interface VideoJob {
   requestedByKind: 'user';
   requestedById: string;
   exportIds: string[];
-  exports: unknown[];
+  exports: VideoExport[];
   preview: null;
   createdAt: string;
   updatedAt: string;
@@ -266,6 +292,7 @@ export class VideoMockBackend {
       operations: batch,
       snapshot,
       contentHash: hash(snapshot),
+      generationInputs: null,
       createdAt: now(),
     };
   }
@@ -844,7 +871,8 @@ export class VideoAiMockBackend {
       summary,
       origin,
     });
-    return res;
+    // As the service's commitInParts: a change within one batch is one revision, listed as the only part.
+    return { ...res, parts: [res.revision] };
   }
 
   saveDraft(input: z.infer<typeof VideoAiSaveDraft>) {
@@ -952,6 +980,7 @@ export class VideoAiMockBackend {
       proposal: { ...proposal, acceptedRevisionId: res.revision.id },
     };
     job.version += 1;
-    return { ...res, job: this.dto(job) };
+    // As the service: what was applied, recomputed for the groups kept (a partial accept differs from the proposal).
+    return { ...res, changes: videoTimelineDiff(head.snapshot, res.revision.snapshot), job: this.dto(job) };
   }
 }

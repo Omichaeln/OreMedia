@@ -246,6 +246,7 @@ const OPERATION_LABEL: Readonly<Record<string, string>> = {
   addPage: 'Add a page',
   createFormatVariant: 'Create a format variant',
   setLock: 'Lock or unlock an element',
+  setVisibility: 'Show or hide an element',
   groupElements: 'Group elements',
   ungroupElement: 'Ungroup a group',
   setRotation: 'Rotate an element',

@@ -44,6 +44,7 @@ const EDIT_SCHEMA = {
     sizePx: { type: 'number', exclusiveMinimum: 0, maximum: 1000 },
     weight: { type: 'integer', minimum: 100, maximum: 900 },
     align: { type: 'string', enum: ['left', 'center', 'right'] },
+    hidden: { type: 'boolean', description: 'true hides the element (it is kept, only not drawn).' },
   },
 } as const;
 

@@ -1,6 +1,6 @@
 # Railway deployment (spec 17.1)
 
-Application services, plus a short-lived approval monitor, each use the repository root as their root directory and a config-as-code path under `infra/railway/<service>/railway.json`:
+Application services, plus a short-lived approval monitor, each use the repository root as their root directory. Railway refuses config-as-code paths (it asks for `.railway/railway.ts`; build ledger R.2, `docs/progress/build-ledger.md`), so each service's settings (health check, restart policy, pre-deploy migration, Dockerfile path, watch patterns, and the approval monitor's cron schedule) are applied to the service directly in Railway settings. The `infra/railway/<service>/railway.json` files are only the reference for those settings:
 
 | Service            | Image                                 | `OREMEDIA_APP` variable | Ports / health                                                                       |
 | ------------------ | ------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
@@ -25,7 +25,7 @@ The step-by-step procedure, rollback and the kill switches are in `docs/runbooks
 service exists only in the staging project: `docs/runbooks/staging-acceptance.md` (it provisions its own fixtures and
 prints `ACCEPTANCE_*` lines).
 
-`approval-monitor` is a separate Railway cron service. Configure its Cron Schedule as `0 */6 * * *` (UTC), set `OREMEDIA_APP=approval-monitor`, and reference the API service's `DATABASE_URL` in the monitor service. It also requires sealed `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` variables. The monitor records Meta and LinkedIn review evidence in the global `provider_review_statuses` table; an approval email does not auto-certify a provider because the certification runbook still requires real publish/read-back and metrics checks.
+`approval-monitor` is a separate Railway cron service. Its Cron Schedule is `*/5 * * * *` (UTC, every five minutes; what production and staging run, completion ledger). The schedule is applied in the service's Railway settings (Settings → Cron Schedule), not in config-as-code: `approval-monitor/railway.json` deliberately has no `cronSchedule`, so a change to the schedule is a settings change, recorded in the completion ledger. Set `OREMEDIA_APP=approval-monitor`, and reference the API service's `DATABASE_URL` in the monitor service. It also requires sealed `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` variables. The monitor records Meta and LinkedIn review evidence in the global `provider_review_statuses` table; an approval email does not auto-certify a provider because the certification runbook still requires real publish/read-back and metrics checks.
 
 ## worker-render resources for video (STU-2a)
 
@@ -53,8 +53,10 @@ for ffmpeg and 300 MB for the worker process. Ordinary camera footage encodes fa
 for one job; raise the plan or attach a volume and point `MEDIA_TMP_DIR` at it before raising concurrency. The clamav
 service's `StreamMaxLength` must cover the video cap (1 GiB) or every video upload stays quarantined with
 `scanner_unavailable` (the scan names the setting). `infra/railway/clamav/` builds that service from the official
-image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; point the clamav service at the repo with
-config file `infra/railway/clamav/railway.json` (staging first) before the video rollout. See the runbook rollout
+image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; before the video rollout (staging first), connect the
+clamav service to this repository and apply the settings in `infra/railway/clamav/railway.json` to it directly
+(Dockerfile path `infra/railway/clamav/Dockerfile`, watch patterns, restart policy). Railway refuses config-as-code
+paths (build ledger R.2), so that file is only the reference. See the runbook rollout
 order for STU-2a.
 
 ### Video export (STU-2b)

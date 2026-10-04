@@ -9,8 +9,9 @@ import {
   type ArticleDocumentV1,
   type CopyDocumentV1,
 } from '@oremedia/contracts/content';
-import { RenderedCheckKey, renderArticleHtml } from '@oremedia/contracts/article';
+import { RenderedCheckKey, renderArticleHtml, type RenderedValidationV1 } from '@oremedia/contracts/article';
 import { articleImages } from '@oremedia/contracts/content';
+import type { ApprovalBindingV1 } from '@oremedia/contracts/approval';
 import type { ManifestChange } from '@oremedia/contracts/review';
 import {
   ConflictError,
@@ -155,7 +156,7 @@ export interface Revision {
   updatedAt: string;
   version: number;
 }
-export interface Variant {
+export type Variant = {
   id: string;
   tenantId: string;
   brandId: string;
@@ -173,6 +174,18 @@ export interface Variant {
   article: ArticleDocumentV1 | null;
   capabilityVersion: number;
   validation: { ok: boolean; issues: Array<{ path?: string; issue: string }> };
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+};
+/** A content package as content.calendar.range lists it (phase 6 owns the packages). */
+export interface CalendarPackage {
+  id: string;
+  brandId: string;
+  briefId: string | null;
+  title: string;
+  currentRevisionId: string | null;
+  state: 'draft' | 'in_review' | 'approved' | 'scheduled' | 'published' | 'archived';
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -238,7 +251,7 @@ export interface Publication {
   remoteStatus: 'draft' | 'live' | 'reverted' | null;
   remoteVerification: 'unverified' | 'verified' | 'failed' | null;
   remoteVerifiedAt: string | null;
-  fencingToken: number | null;
+  fencingToken: number;
   claimedAt: string | null;
   scheduledByKind: 'user';
   scheduledById: string;
@@ -313,7 +326,7 @@ interface Approval {
   approverKind: 'user' | 'external_reviewer';
   approverId: string;
   bindingHash: string;
-  binding: Record<string, unknown>;
+  binding: ApprovalBindingV1;
   validUntil: string | null;
   state: 'valid' | 'consumed' | 'invalidated' | 'expired';
   invalidatedReason: string | null;
@@ -513,7 +526,7 @@ export class Phase5Backend {
   /** Test hook: fail the next schedule with an INTERNAL envelope (the UI retries the same intent). */
   failNextSchedule = false;
   /** Packages the calendar range reports (phase 6 registers its content packages here). */
-  calendarPackages: (from: number, to: number) => unknown[] = () => [];
+  calendarPackages: (from: number, to: number) => CalendarPackage[] = () => [];
   /** Tells phase 6 that a revision moved, so its content package follows (review requested, approved, …). */
   packageStateChanged: (contentPackageId: string, state: 'draft' | 'in_review' | 'approved') => void =
     () => {};
@@ -647,8 +660,13 @@ export class Phase5Backend {
 
   /** R2-3: a rendered-page validation as the server records it (`rendered_validation` evidence). */
   renderedValidation(publicationId: string, ok: boolean, at = now()): Evidence {
+    return this.renderedEvidence(publicationId, this.renderedResult(publicationId, ok, at), at);
+  }
+
+  /** What the API's rendered-page check returns (RenderedValidationV1), passing or not. */
+  private renderedResult(publicationId: string, ok: boolean, at: string): RenderedValidationV1 {
     const p = this.publication(publicationId);
-    const payload = {
+    return {
       url: p.remoteUrl ?? '',
       fetchedAt: at,
       status: ok ? 200 : 404,
@@ -658,6 +676,11 @@ export class Phase5Backend {
       checks: RenderedCheckKey.options.map((key) => ({ key, ok: ok || key === 'title_present' })),
       error: null,
     };
+  }
+
+  private renderedEvidence(publicationId: string, result: RenderedValidationV1, at: string): Evidence {
+    const p = this.publication(publicationId);
+    const payload = { ...result };
     return {
       id: rid('ev'),
       publicationId,
@@ -682,13 +705,14 @@ export class Phase5Backend {
     const previous = [...this.evidence]
       .reverse()
       .find((e) => e.publicationId === p.id && e.kind === 'rendered_validation');
-    const row = this.renderedValidation(p.id, previous ? previous.payload['ok'] !== true : true);
+    const at = now();
+    const result = this.renderedResult(p.id, previous ? previous.payload['ok'] !== true : true, at);
+    const row = this.renderedEvidence(p.id, result, at);
     this.evidence.push(row);
     // RA-04: the verification follows the latest check.
-    const ok = row.payload['ok'] === true;
-    p.remoteVerification = ok ? 'verified' : 'failed';
-    p.remoteVerifiedAt = ok ? row.capturedAt : null;
-    return row.payload;
+    p.remoteVerification = result.ok ? 'verified' : 'failed';
+    p.remoteVerifiedAt = result.ok ? row.capturedAt : null;
+    return result;
   }
 
   /** The preconditions the API checks under the row lock before a remote edit or delete is recorded. */
@@ -970,7 +994,7 @@ export class Phase5Backend {
       remoteStatus: null,
       remoteVerification: null,
       remoteVerifiedAt: null,
-      fencingToken: null,
+      fencingToken: 0,
       claimedAt: null,
       scheduledByKind: 'user',
       scheduledById: 'usr_e2e',
@@ -1009,6 +1033,27 @@ export class Phase5Backend {
       version: 1,
     });
   }
+  /** What an approval binds, as review's bindingForRevision computes it from the revision's variants. */
+  bindingFor(contentRevisionId: string, timing: ApprovalBindingV1['timing']): ApprovalBindingV1 {
+    return {
+      v: 1,
+      tenantId: this.tenantId,
+      brandId: this.brandId,
+      contentRevisionId,
+      brandVersionId: 'bv_e2e',
+      policyVersionId: 'pv_e2e',
+      targets: [...this.variants.values()]
+        .filter((v) => v.contentRevisionId === contentRevisionId)
+        .map((v) => ({
+          ...targetOf(v),
+          textHash: hashText(v.text),
+          altTextHashes: v.altTexts.map(hashText),
+          settingsHash: hash(v.settings),
+          exportHashes: [...v.exportHashes],
+        })),
+      timing,
+    };
+  }
   private approval(requestId: string, state: Approval['state'], invalidatedReason: string | null = null) {
     const r = this.request(requestId);
     this.approvals.push({
@@ -1019,7 +1064,7 @@ export class Phase5Backend {
       approverKind: 'user',
       approverId: 'usr_reviewer',
       bindingHash: hash(r.manifestHash),
-      binding: { v: 1, timing: r.frozenManifest.timing },
+      binding: this.bindingFor(r.contentRevisionId, r.frozenManifest.timing),
       validUntil: null,
       state,
       invalidatedReason,
@@ -1333,7 +1378,7 @@ export class Phase5Backend {
       approverKind: 'user',
       approverId: 'usr_reviewer',
       bindingHash: hash(P5.approvalId),
-      binding: { v: 1, timing: { kind: 'exact', at: daysFromNow(1) } },
+      binding: this.bindingFor(P5.revisions.one, { kind: 'exact', at: daysFromNow(1) }),
       validUntil: null,
       state: 'valid',
       invalidatedReason: null,
@@ -1407,10 +1452,17 @@ export interface Phase5Extensions {
   channels?: Record<string, AnyTRPCProcedure | ReturnType<typeof t.router>>;
 }
 
-export function phase5Routers(
+/**
+ * Generic over the extensions so the procedures phase 6 adds keep their types: the mock contract test checks every
+ * mock procedure's output against the real router's.
+ */
+export function phase5Routers<
+  V extends NonNullable<Phase5Extensions['variants']> = Record<never, never>,
+  C extends NonNullable<Phase5Extensions['channels']> = Record<never, never>,
+>(
   b: Phase5Backend,
   { router, query, mutation }: Phase5Builders,
-  extensions: Phase5Extensions = {},
+  extensions: { variants?: V; channels?: C } = {},
 ) {
   const brandOf = (brandId: string) => {
     if (brandId !== b.brandId) throw new NotFoundError('Brand', brandId);
@@ -1455,7 +1507,7 @@ export function phase5Routers(
         if (!v) throw new NotFoundError('ChannelVariant', i.variantId);
         return v;
       }),
-      ...extensions.variants,
+      ...(extensions.variants ?? ({} as V)),
     }),
     revisions: router({
       get: query.input(ContentRevisionGet).query(({ input }) => {
@@ -1478,7 +1530,7 @@ export function phase5Routers(
         brandOf(input.brandId);
         return { items: CHANNEL_LIMITS };
       }),
-      ...extensions.channels,
+      ...(extensions.channels ?? ({} as C)),
     }),
     publications: router({
       schedule: mutation.input(ScheduleCommand).mutation(({ ctx, input }) => {
@@ -1516,7 +1568,7 @@ export function phase5Routers(
           remoteStatus: null,
           remoteVerification: null,
           remoteVerifiedAt: null,
-          fencingToken: null,
+          fencingToken: 0,
           claimedAt: null,
           scheduledByKind: 'user',
           scheduledById: ctx.member?.userId ?? 'usr_e2e',
@@ -1624,7 +1676,13 @@ export function phase5Routers(
           reason: input.reason,
         });
         const p = b.publication(input.publicationId);
-        return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
+        // requestRemoteChange refused a publication with no live post, so the remote id is set here.
+        return {
+          accepted: true,
+          publicationId: p.id,
+          remotePostId: p.remotePostId as string,
+          changeId: change.id,
+        };
       }),
       /** R2-3 rollback: the article is set back to a draft on its website (publication.delete_remote). */
       unpublishRemote: mutation.input(PublicationUnpublishRemote).mutation(({ ctx, input }) => {
@@ -1644,7 +1702,13 @@ export function phase5Routers(
           },
         );
         const p = b.publication(input.publicationId);
-        return { accepted: true, publicationId: p.id, remotePostId: p.remotePostId, changeId: change.id };
+        // requestRemoteChange refused a publication with no live post, so the remote id is set here.
+        return {
+          accepted: true,
+          publicationId: p.id,
+          remotePostId: p.remotePostId as string,
+          changeId: change.id,
+        };
       }),
       /** R2-3: the page fetched again and checked; the result is recorded as evidence. */
       validateRendered: mutation
@@ -1682,7 +1746,7 @@ export function phase5Routers(
     const m = b.mandates.get(id);
     if (!m) throw new NotFoundError('PublishingMandate', id);
     Object.assign(m, { state: to, version: expectedVersion + 1, updatedAt: now() });
-    return m;
+    return { mandateId: m.id, state: m.state, version: m.version };
   };
   const review = router({
     mandates: router({
@@ -1888,7 +1952,7 @@ export function phase5Routers(
             approverKind: ctx.reviewer ? 'external_reviewer' : 'user',
             approverId: ctx.reviewer ? ctx.reviewer.id : (ctx.member?.userId ?? 'usr_e2e'),
             bindingHash: hash(r.manifestHash),
-            binding: { v: 1, timing: r.frozenManifest.timing },
+            binding: b.bindingFor(r.contentRevisionId, r.frozenManifest.timing),
             validUntil: i.validUntil ?? null,
             state: 'valid',
             invalidatedReason: null,

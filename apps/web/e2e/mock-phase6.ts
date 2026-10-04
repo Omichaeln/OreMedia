@@ -77,6 +77,9 @@ import type { MockBuilders, t } from './mock-api';
 import type { Channel, Phase5Backend, Phase5Extensions } from './mock-phase5';
 import { P5 } from './mock-phase5';
 
+/** The engagement-quality components packages/modules/measurement scores (spec 15.3). */
+type QualityComponent = 'saves' | 'shares' | 'substantive_comments' | 'repeat_engagers' | 'negative_feedback';
+
 /**
  * Phase 6 slice of the UI-only transport (see mock-api.ts): the intelligence workspace, experiments, campaigns,
  * briefs, content packages and channel connections with the same procedure paths, DTO shapes and error envelope as
@@ -324,7 +327,7 @@ export class Phase6Backend {
     signal: string;
     baseline: number;
     observed: number;
-    severity: string;
+    severity: 'low' | 'medium' | 'high';
     detectedAt: string;
     state: 'open';
     version: number;
@@ -723,7 +726,13 @@ export class Phase6Backend {
         evidenceRef: r.insightIds.join(','),
         hypothesis,
         action: r.proposedAction,
-        humanDecision: null,
+        // As the API's learning record: pending until a person accepts (accepted) or dismisses (rejected) it.
+        humanDecision:
+          r.state === 'proposed'
+            ? ('pending' as const)
+            : r.state === 'dismissed'
+              ? ('rejected' as const)
+              : ('accepted' as const),
         executedRevisionId: null,
         observedOutcomeRef: null,
         verdict: 'pending' as const,
@@ -810,7 +819,7 @@ export class Phase6Backend {
           sources: metricKeys,
           competitors: [],
           languages: [],
-          periodStart: changes.length ? changes.map((i) => i.periodStart).sort()[0] : iso(at),
+          periodStart: changes.length ? (changes.map((i) => i.periodStart).sort()[0] as string) : iso(at),
           periodEnd: freshness(changes.map((i) => i.periodEnd)).asOf ?? iso(at),
           statement: changes.length
             ? `Metric movements for ${metricKeys.length} metric key(s); missing snapshots are reported as gaps, never as zero`
@@ -1542,7 +1551,12 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       if (x.version !== input.expectedVersion)
         throw new ConflictError('Experiment', x.id, input.expectedVersion);
       Object.assign(x, { state: 'running', startedAt: now(), updatedAt: now(), version: x.version + 1 });
-      return { experimentId: x.id, state: 'running' as const, version: x.version };
+      // As the API: a hashed-visitor experiment gets an entry link the redirector assigns visitors on.
+      const entryLink =
+        x.design.allocationMethod === 'hashed_visitor'
+          ? { shortCode: `e2e${x.id.slice(-6)}`, shortUrl: null }
+          : null;
+      return { experimentId: x.id, state: 'running' as const, version: x.version, entryLink };
     }),
     stop: mutation.input(ExperimentStop).mutation(({ input }) => {
       const x = b.experiment(input.experimentId);
@@ -2244,7 +2258,9 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       return {
         ...c,
         heldPublicationIds: held,
-        remoteRevoke: P6.withoutRemoteRevoke.includes(c.providerKey) ? 'not_supported' : 'requested',
+        remoteRevoke: P6.withoutRemoteRevoke.includes(c.providerKey)
+          ? ('not_supported' as const)
+          : ('requested' as const),
       };
     }),
   };
@@ -2406,7 +2422,7 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
         const of = (key: string) =>
           b.metricSnapshots.find((m) => m.subjectId === pub.id && m.metricKey === key)?.value ?? null;
         const impressions = of('impression_count') ?? of('impressions');
-        const component = (name: string, value: number | null, weight = 1) => ({
+        const component = (name: QualityComponent, value: number | null, weight = 1) => ({
           component: name,
           weight,
           value,
@@ -2457,7 +2473,8 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
               (!input.variantId || l.variantId === input.variantId),
           )
           .map((l) => ({ ...l, brandId: b.brandId }));
-        return { items, nextCursor: null };
+        // The fixtures record one click per visitor, so the distinct visitors are the clicks.
+        return { items, nextCursor: null, uniqueVisitors: items.reduce((n, l) => n + l.clicks, 0) };
       }),
     }),
     attributes: router({

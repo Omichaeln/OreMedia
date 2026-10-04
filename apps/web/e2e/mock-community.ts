@@ -257,7 +257,7 @@ export function communityRouters(b: CommunityBackend, { router, query, mutation 
             brandId: b.brandId,
             state: 'open' as const,
             channel: channelOf(c),
-            publicationId: `pub_${c.id}` as string | null,
+            publicationId: `pub_${c.id}`,
             postExcerpt: c.postExcerpt as string | null,
             postUrl: 'https://www.linkedin.com/feed/update/urn:li:share:1' as string | null,
             lastMessageAt: b.lastActivity(c.id) as string | null,

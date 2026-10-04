@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CreativePage } from '@oremedia/contracts/creative';
-import { toggleSelection } from '@oremedia/editor';
+import { findWithAncestors, isLockedInContext, toggleSelection } from '@oremedia/editor';
 import { Badge, EmptyState, cn } from '@oremedia/ui';
 import { elementTypeLabel, layerRows } from './document-helpers';
 
@@ -10,13 +10,24 @@ export interface LayersPanelProps {
   onSelect: (ids: string[]) => void;
   /** Enter on a row: select and move focus to the properties panel (spec 21.3 managed focus). */
   onActivate: (elementId: string) => void;
+  readOnly?: boolean;
+  /** The eye toggle (click) or H on the focused row: shows or hides that layer. */
+  onToggleVisibility?: (elementId: string) => void;
 }
 
 /**
  * Spec 21.3: the keyboard path to selection. A listbox with roving focus; every row is labelled for screen
- * readers. Options carry no interactive children (lock, order and removal live in the properties panel).
+ * readers. Options carry no interactive children (lock, order and removal live in the properties panel): the eye
+ * on a row is a pointer target only, and its keyboard path is H on the focused row (announced as a shortcut).
  */
-export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPanelProps) {
+export function LayersPanel({
+  page,
+  selection,
+  onSelect,
+  onActivate,
+  readOnly = false,
+  onToggleVisibility,
+}: LayersPanelProps) {
   const rows = layerRows(page);
   const selected = selection[0] ?? null;
   const [active, setActive] = useState<string | null>(selected ?? rows[0]?.element.id ?? null);
@@ -31,6 +42,13 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
   const focusRow = (id: string) => {
     setActive(id);
     listRef.current?.querySelector<HTMLElement>(`[data-element-id="${id}"]`)?.focus();
+  };
+
+  /** Locked layers (or ones in a locked group) keep their visibility, as they keep their place. */
+  const canToggle = (id: string): boolean => {
+    if (readOnly || !onToggleVisibility || page.locked) return false;
+    const found = findWithAncestors(page, id);
+    return found !== null && !isLockedInContext(found.element, found.ancestors);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLUListElement>) => {
@@ -54,6 +72,9 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
       e.preventDefault();
       // Shift+Space adds the focused layer to the selection (or takes it out): the keyboard path to multi-select.
       if (active) onSelect(e.shiftKey ? toggleSelection(selection, active) : [active]);
+    } else if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (active && canToggle(active)) onToggleVisibility?.(active);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (active) {
@@ -96,6 +117,7 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
             aria-selected={isSelected}
             aria-label={`${el.name}, ${elementTypeLabel[el.type]}${status ? `, ${status}` : ''}`}
             data-element-id={el.id}
+            aria-keyshortcuts={canToggle(el.id) ? 'H' : undefined}
             tabIndex={active === el.id ? 0 : -1}
             onClick={(e) =>
               onSelect(e.shiftKey || e.metaKey || e.ctrlKey ? toggleSelection(selection, el.id) : [el.id])
@@ -131,6 +153,30 @@ export function LayersPanel({ page, selection, onSelect, onActivate }: LayersPan
               <Badge tone="neutral" glyph={false}>
                 Locked
               </Badge>
+            )}
+            {onToggleVisibility && (
+              <span
+                aria-hidden="true"
+                data-testid={`layer-visibility-${el.id}`}
+                title={
+                  canToggle(el.id)
+                    ? `${el.visible ? 'Hide' : 'Show'} ${el.name} (H)`
+                    : el.visible
+                      ? 'Shown'
+                      : 'Hidden'
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (canToggle(el.id)) onToggleVisibility(el.id);
+                }}
+                className={cn(
+                  'w-5 shrink-0 select-none rounded text-center text-xs',
+                  el.visible ? 'text-muted-foreground' : 'text-foreground line-through',
+                  canToggle(el.id) ? 'cursor-pointer hover:bg-muted' : 'cursor-not-allowed',
+                )}
+              >
+                {el.visible ? '◉' : '○'}
+              </span>
             )}
           </li>
         );

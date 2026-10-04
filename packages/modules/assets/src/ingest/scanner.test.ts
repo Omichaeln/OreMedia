@@ -7,12 +7,16 @@ import {
   ScannerUnavailableError,
   createScannerFromEnv,
 } from './scanner';
+import { scan } from './steps';
 
 const EICAR_MARKER = 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE';
 
-/** A clamd stand-in speaking INSTREAM: reads the length-prefixed chunks and answers OK or FOUND. */
+/**
+ * A clamd stand-in speaking INSTREAM: reads the length-prefixed chunks and answers OK or FOUND, or `reply` when given
+ * (what clamd says for a file it could not scan whole).
+ */
 function fakeClamd(
-  opts: { silent?: boolean; limit?: number } = {},
+  opts: { silent?: boolean; limit?: number; reply?: string } = {},
 ): Promise<{ server: Server; port: number }> {
   const server = createServer((socket: Socket) => {
     let buffer = Buffer.alloc(0);
@@ -30,6 +34,7 @@ function fakeClamd(
           if (opts.silent) return;
           const body = Buffer.concat(parts).toString('latin1');
           answered = true;
+          if (opts.reply !== undefined) return void socket.end(opts.reply);
           socket.end(body.includes(EICAR_MARKER) ? 'stream: Win.Test.EICAR_HDB-1 FOUND\0' : 'stream: OK\0');
           return;
         }
@@ -110,6 +115,37 @@ describe('ClamAvScanner (clamd INSTREAM over TCP)', () => {
     expect(await fake.scanStream([Buffer.alloc(10_000), Buffer.from(EICAR_MARKER)])).toMatchObject({
       clean: true,
     });
+  });
+  it("clamd's limit-exceeded heuristic (AlertExceedsMax) is not clean: the upload is refused as malware_detected", async () => {
+    for (const limit of ['MaxFileSize', 'MaxScanSize', 'MaxRecursion']) {
+      const exceeded = await fakeClamd({ reply: `stream: Heuristics.Limits.Exceeded.${limit} FOUND\0` });
+      try {
+        const scanner = new ClamAvScanner({ host: '127.0.0.1', port: exceeded.port, timeoutMs: 5000 });
+        expect(await scanner.scan(Buffer.from('a file larger than clamd scans'))).toEqual({
+          clean: false,
+          engine: 'clamav',
+          signature: `Heuristics.Limits.Exceeded.${limit}`,
+        });
+        expect(await scan(scanner, Buffer.from('x'))).toEqual({
+          ok: false,
+          reason: 'malware_detected',
+          detail: `Heuristics.Limits.Exceeded.${limit}`,
+        });
+      } finally {
+        exceeded.server.close();
+      }
+    }
+  });
+  it("a reply that only ends in OK, not clamd's `stream: OK`, is no verdict", async () => {
+    const odd = await fakeClamd({
+      reply: 'stream: Heuristics.Limits.Exceeded.MaxFileSize ERROR, retry: OK\0',
+    });
+    try {
+      const scanner = new ClamAvScanner({ host: '127.0.0.1', port: odd.port, timeoutMs: 5000 });
+      await expect(scanner.scan(Buffer.from('x'))).rejects.toBeInstanceOf(ScannerUnavailableError);
+    } finally {
+      odd.server.close();
+    }
   });
   it('a refused connection is ScannerUnavailableError', async () => {
     const scanner = new ClamAvScanner({ host: '127.0.0.1', port: 1, timeoutMs: 2000 });
