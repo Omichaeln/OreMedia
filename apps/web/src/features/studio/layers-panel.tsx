@@ -172,7 +172,7 @@ export function LayersPanel({
                 className={cn(
                   'w-5 shrink-0 select-none rounded text-center text-xs',
                   el.visible ? 'text-muted-foreground' : 'text-foreground line-through',
-                  canToggle(el.id) ? 'cursor-pointer hover:bg-muted' : 'opacity-50',
+                  canToggle(el.id) ? 'cursor-pointer hover:bg-muted' : 'cursor-not-allowed',
                 )}
               >
                 {el.visible ? '◉' : '○'}
