@@ -343,6 +343,26 @@ API is on the new build):
    start workflows on `video`; rolling back the API leaves existing video documents readable but uneditable, and
    video workflows already started finish on worker-render.
 
+Rollout order for the upload hardening (security review; no migration, no flag):
+
+1. Rebuild the clamav service from `infra/railway/clamav/railway.json`, staging first, then production. The image now
+   also sets `AlertExceedsMax yes` (the build fails unless the line is in clamd.conf, as for the three 1100M limits),
+   so a file clamd cannot scan whole (over `MaxFileSize`/`MaxScanSize`, or nested too deep) is answered
+   `Heuristics.Limits.Exceeded.* FOUND` instead of `OK`. The scanner treats that reply as a detection: the upload is
+   rejected as `malware_detected` with the heuristic's name as the detail (fail closed). A reply that is neither `stream: OK` nor `FOUND` is no verdict (`scanner_unavailable`).
+   To check after the deploy: in staging, upload an image of about 30 MB; it is accepted (the limits cover it).
+2. Deploy `worker-render` (task queues `media` and `video`) and the API. Ingest now copies the upload to
+   `quarantine/{tenant}/{intent}/received` at the verify step and every later step reads only that copy, so bytes
+   PUT to the upload URL after verify are never read or stored; finalise deletes the copy with the other quarantine
+   objects. An ingest whose verify step ran on the previous build and whose later steps run on this one finds no
+   copy and is rejected as `object_missing` (the uploader uploads again): deploy when the ingest queues are quiet.
+3. The API now signs each upload URL with the declared size (`Content-Length`), as brand documents already are; a
+   browser sends the file's exact size, so the web upload needs no change and the bucket's CORS rules stay as they are.
+   A client that declares one size and sends another is refused by the store (HTTP 403).
+4. The redirector with `TRUST_PROXY=1` now trusts one proxy hop (Railway's edge): the visitor hash uses the address
+   that edge appended to `X-Forwarded-For`, not the client-written leftmost entry. If another proxy (a CDN) is ever put
+   in front of the redirector, the hop count must be raised with it, or every visitor behind one CDN node hashes alike.
+
 Rollout order for plan items (migration 0014, UX-09): apply 0014 (`plan_items`, additive; the api pre-deploy
 command does it) and re-apply `app-role.sql` (the new table needs its grants); then deploy the api and workers in
 the usual order. The built-in `campaign-planning` skill gains `content.proposePlan` and an optional `briefId`

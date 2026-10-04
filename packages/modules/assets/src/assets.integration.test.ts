@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
@@ -37,6 +37,7 @@ import { karlaTtf, notoNaskhTtf, toWoff2, woff2Bomb } from './ingest/font.fixtur
 import { assetIngest, type IngestDeps } from './ingest/pipeline';
 import { mp4 } from './ingest/media.fixtures';
 import { FakeScanner } from './ingest/scanner';
+import { sanitise as sanitiseStep } from './ingest/steps';
 import { assetService } from './service';
 import { MemoryStorageProvider, configureStorage, storageKeys } from './storage';
 
@@ -153,8 +154,15 @@ describe('assets module against MySQL 8 (spec 9)', () => {
     await tdb?.drop();
   });
 
-  /** Runs the pipeline exactly as the workflow does (packages/workflows asset-ingest.workflow.v1). */
-  async function runPipeline(input: AssetIngestInputV1, autoApprove: boolean) {
+  /**
+   * Runs the pipeline exactly as the workflow does (packages/workflows asset-ingest.workflow.v1). `between` runs after
+   * the named step: what an uploader still holding the presigned PUT could do while ingest runs.
+   */
+  async function runPipeline(
+    input: AssetIngestInputV1,
+    autoApprove: boolean,
+    between: { afterVerify?: () => Promise<void>; afterScan?: () => Promise<void> } = {},
+  ) {
     const begin = await assetIngest.begin(input);
     const cleanupKeys = [begin.storageKey];
     const finish = async (
@@ -173,10 +181,12 @@ describe('assets module against MySQL 8 (spec 9)', () => {
     };
     const verified = await assetIngest.verify(deps, input);
     if (!verified.ok) return finish(verified.reason, 'rejected');
+    await between.afterVerify?.();
     const sniffed = await assetIngest.sniff(deps, input);
     if (!sniffed.ok) return finish(sniffed.reason, 'rejected');
     const scanned = await assetIngest.scan(deps, input);
     if (!scanned.ok) return finish(scanned.reason, scanned.retryable ? 'quarantined' : 'rejected');
+    await between.afterScan?.();
     const sanitised: IngestStepResult<IngestSanitiseResult> = await assetIngest.sanitise(deps, {
       ...input,
       ...sniffed,
@@ -619,6 +629,122 @@ describe('assets module against MySQL 8 (spec 9)', () => {
           ),
         ).rejects.toBeInstanceOf(NotFoundError);
       });
+    });
+  });
+
+  describe('security review: the upload cannot change under ingest', () => {
+    const EICAR_MARKER = 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE';
+    const inputFor = (intentId: string): AssetIngestInputV1 => ({
+      tenantId: tenantA,
+      actor: { kind: 'user', id: ownerA.id },
+      correlationId: 'corr_swap',
+      intentId,
+      brandId: brandA1,
+    });
+    const solid = (width: number, height: number, background: string) =>
+      sharp({ create: { width, height, channels: 3, background } })
+        .png()
+        .toBuffer();
+
+    it('createIntent signs the upload URL with the declared size as its Content-Length', async () => {
+      const sign = vi.spyOn(mem, 'signUploadUrl');
+      try {
+        const bytes = await solid(5, 5, '#010203');
+        await uploadAs(ownerA, brandA1, 'photo', 'image/png', bytes, 'sized.png');
+        expect(sign).toHaveBeenCalledTimes(1);
+        expect(sign.mock.calls[0]?.[1]).toMatchObject({
+          contentType: 'image/png',
+          contentLength: bytes.length,
+        });
+      } finally {
+        sign.mockRestore();
+      }
+    });
+
+    it('an upload replaced after it was scanned does not change what is stored', async () => {
+      const clean = await solid(40, 30, '#3355aa');
+      const intentId = await uploadAs(ownerA, brandA1, 'photo', 'image/png', clean, 'swap.png');
+      // What the uploader PUTs with the URL it still holds: another image, carrying the EICAR marker.
+      const swapped = Buffer.concat([await solid(32, 32, '#ff0000'), Buffer.from(EICAR_MARKER)]);
+      const result = await runInTenant(ctxFor(ownerA), () =>
+        runPipeline(inputFor(intentId), true, {
+          afterScan: () =>
+            mem.putObject(storageKeys.quarantine(tenantA, intentId), swapped, { contentType: 'image/png' }),
+        }),
+      );
+      expect(result.outcome).toBe('accepted');
+      if (result.outcome !== 'accepted') return;
+      const stored = await runInTenant(ctxFor(ownerA), () =>
+        mem.getObject(storageKeys.original(tenantA, brandA1, result.assetId, result.assetVersionId)),
+      );
+      expect(stored).not.toBeNull();
+      expect(stored?.includes(EICAR_MARKER)).toBe(false);
+      // The stored original is the re-encoded upload that was scanned, not the replacement.
+      const expected = await sanitiseStep(clean, 'image/png', 'image');
+      expect(expected.ok).toBe(true);
+      if (!expected.ok) return;
+      expect(stored?.equals(expected.bytes)).toBe(true);
+      expect(await sharp(stored as Buffer).metadata()).toMatchObject({ width: 40, height: 30 });
+      expect(mem.keys().filter((k) => k.startsWith(`quarantine/${tenantA}/${intentId}`))).toEqual([]);
+    });
+
+    it('an oversized replacement after verify is never read, and reads of the checked copy stop at the cap', async () => {
+      const clean = await solid(24, 18, '#77aa33');
+      const intentId = await uploadAs(ownerA, brandA1, 'photo', 'image/png', clean, 'big-swap.png');
+      const [row] = await tdb.db.select().from(uploadIntents).where(eq(uploadIntents.id, intentId));
+      const maxBytes = row?.maxBytes as number;
+      const uploadKey = storageKeys.quarantine(tenantA, intentId);
+      const receivedKey = storageKeys.quarantine(tenantA, intentId, 'received');
+      const reads = vi.spyOn(mem, 'getObject');
+      try {
+        const result = await runInTenant(ctxFor(ownerA), () =>
+          runPipeline(inputFor(intentId), true, {
+            afterVerify: () =>
+              mem.putObject(uploadKey, Buffer.alloc(maxBytes + 1, 0x41), { contentType: 'image/png' }),
+          }),
+        );
+        expect(result.outcome).toBe('accepted');
+        const calls = reads.mock.calls.map(([key, range]) => ({ key, range }));
+        expect(calls.filter((c) => c.key === uploadKey)).toEqual([]);
+        const received = calls.filter((c) => c.key === receivedKey);
+        expect(received.length).toBeGreaterThanOrEqual(3); // sniff, scan, sanitise
+        for (const { range } of received) {
+          expect(range).toBeDefined();
+          expect(range?.start).toBe(0);
+          expect(range?.end).toBeLessThanOrEqual(maxBytes);
+        }
+      } finally {
+        reads.mockRestore();
+      }
+
+      // Even a checked copy that is somehow over the cap is refused from a capped read, never read whole.
+      const second = await uploadAs(
+        ownerA,
+        brandA1,
+        'photo',
+        'image/png',
+        await solid(9, 9, '#123123'),
+        'x.png',
+      );
+      const capped = vi.spyOn(mem, 'getObject');
+      try {
+        const result = await runInTenant(ctxFor(ownerA), () =>
+          runPipeline(inputFor(second), true, {
+            afterVerify: () =>
+              mem.putObject(
+                storageKeys.quarantine(tenantA, second, 'received'),
+                Buffer.concat([clean, Buffer.alloc(maxBytes, 0x41)]),
+                { contentType: 'image/png' },
+              ),
+          }),
+        );
+        expect(result).toMatchObject({ outcome: 'rejected', reason: 'exceeds_cap' });
+        const served = await Promise.all(capped.mock.results.map((r) => r.value as Promise<Buffer | null>));
+        for (const bytes of served) expect(bytes?.length ?? 0).toBeLessThanOrEqual(maxBytes + 1);
+      } finally {
+        capped.mockRestore();
+      }
+      expect(mem.keys().filter((k) => k.startsWith(`quarantine/${tenantA}/${second}`))).toEqual([]);
     });
   });
 

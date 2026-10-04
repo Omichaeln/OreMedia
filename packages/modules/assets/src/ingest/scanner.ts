@@ -79,9 +79,12 @@ export class ClamAvScanner implements Scanner {
         if (settled) return;
         settled = true;
         const reply = Buffer.concat(chunks).toString('utf8').replace(/\0+$/, '').trim();
-        if (/\bOK$/.test(reply)) return resolve({ clean: true, engine: this.engine });
+        // A detection is read first. With AlertExceedsMax (infra/railway/clamav/Dockerfile) a file clamd could not
+        // scan whole is reported as `Heuristics.Limits.Exceeded.* FOUND`: not clean, so it is refused (fail closed).
         const found = /^stream:\s*(.+?)\s+FOUND$/.exec(reply);
         if (found) return resolve({ clean: false, engine: this.engine, signature: found[1] as string });
+        // Clean is exactly clamd's INSTREAM answer; anything else that merely ends in OK is no verdict.
+        if (/^stream:\s*OK$/.test(reply)) return resolve({ clean: true, engine: this.engine });
         if (/size limit exceeded/i.test(reply))
           return reject(
             new ScannerUnavailableError(
