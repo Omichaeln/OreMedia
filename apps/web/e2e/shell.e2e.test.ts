@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
-import { createMockHandler, E2E, MockBackend } from './mock-api';
+import { createMockHandler, E2E, MockBackend, type MockMemberRow } from './mock-api';
 import { startStaticServer, watchCspViolations, type CspViolation } from './static-server';
 import { zip } from './zip-writer';
 
@@ -1180,6 +1180,52 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await kofiContext.close();
     await page.close();
   }, 60_000);
+
+  it('settings (G03): demoting the last active owner is refused and the dialog says why', async () => {
+    const me = backend.members.find((m) => m.membershipId === 'mem_owner');
+    if (!me) throw new Error('seeded owner missing');
+    const ama: MockMemberRow = {
+      membershipId: 'mem_owner_two',
+      userId: 'usr_owner_two',
+      name: 'Ama Owusu',
+      email: 'ama@example.test',
+      role: 'owner',
+      status: 'active',
+      allBrands: true,
+      brandIds: [],
+      createdAt: '2026-09-01T09:00:00.000Z',
+      version: 0,
+    };
+    backend.members.push(ama);
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=members')}`);
+    const row = page
+      .getByRole('list', { name: 'Members' })
+      .getByRole('listitem')
+      .filter({ hasText: 'Ama Owusu' });
+    await expect.poll(() => row.textContent(), { timeout: 15_000 }).toContain('Owner');
+
+    // Ama demotes you while your request to demote her is in flight: hers commits first, so yours would leave the
+    // company without an owner and is refused.
+    backend.delays.set('access.members.setRole', 1_500);
+    await row.getByRole('button', { name: 'Manage Ama Owusu' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Manage Ama Owusu' });
+    await dialog.getByRole('combobox', { name: 'Role' }).click();
+    await page.getByRole('option', { name: 'Admin' }).click();
+    await dialog.getByTestId('save-member-role').click();
+    Object.assign(me, { role: 'admin', version: me.version + 1 });
+    const banner = dialog.getByRole('alert');
+    await expect
+      .poll(() => banner.textContent(), { timeout: 15_000 })
+      .toContain('The company must keep at least one active owner');
+    expect(await banner.textContent()).toContain('Permission denied');
+    expect(ama).toMatchObject({ role: 'owner', status: 'active', version: 0 });
+
+    backend.delays.delete('access.members.setRole');
+    backend.members.splice(backend.members.indexOf(ama), 1);
+    Object.assign(me, { role: 'owner', version: me.version - 1 });
+    await page.close();
+  }, 45_000);
 
   it('settings: a brand manager sees neither the kill switches nor model routing', async () => {
     backend.role = 'brand_manager';
