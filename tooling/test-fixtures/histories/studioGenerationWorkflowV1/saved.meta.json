@@ -1,0 +1,12 @@
+{
+  "workflowType": "studioGenerationWorkflowV1",
+  "case": "saved",
+  "description": "Begin, reserve, the model call and the save: completed, budget settled.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:53.632Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "b765b75f3d080a660edb2d640669cd811a7be4f0bb967466160e984b68dd17cd"
+}

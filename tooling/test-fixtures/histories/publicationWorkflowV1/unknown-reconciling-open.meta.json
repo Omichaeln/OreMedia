@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationWorkflowV1",
+  "case": "unknown-reconciling-open",
+  "description": "In flight: the send failed with an unknown outcome; marked outcome_unknown, waiting on the first reconcile delay.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:07:18.124Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "c3c1135f0eb16dad7faa322f55e878949826ecc094e19588f464ac4facb6b6dd"
+}

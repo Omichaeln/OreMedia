@@ -1,0 +1,12 @@
+{
+  "workflowType": "seoAuditWorkflowV2",
+  "case": "skipped",
+  "description": "The site was audited this week already: skipped at the plan.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:16:17.203Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "e15b23fb13c4e6f8126b688a104f5e4730fb6a5770135be987a52edd588a634b"
+}

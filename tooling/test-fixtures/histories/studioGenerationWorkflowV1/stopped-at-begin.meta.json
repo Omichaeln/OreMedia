@@ -1,0 +1,12 @@
+{
+  "workflowType": "studioGenerationWorkflowV1",
+  "case": "stopped-at-begin",
+  "description": "The job already finished elsewhere: begin says stop; nothing else runs but the settle.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:56.352Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "1104635cc395baed45838eca01f219418408fe0e1e01ebf3f395df43e58c3193"
+}

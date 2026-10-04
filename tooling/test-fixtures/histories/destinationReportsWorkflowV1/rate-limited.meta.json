@@ -1,0 +1,12 @@
+{
+  "workflowType": "destinationReportsWorkflowV1",
+  "case": "rate-limited",
+  "description": "The second report is rate limited: stop there, the destination is degraded for today.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:15:15.630Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "d163ddc50c413d24a8f4cdf65f55836a09fb8c460b22f1dfb4f32c1ccd11515e"
+}

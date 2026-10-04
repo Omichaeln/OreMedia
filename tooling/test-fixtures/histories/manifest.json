@@ -1,0 +1,321 @@
+{
+  "workflows": [
+    {
+      "workflowType": "baselineComparisonWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["one-target-fails"]
+    },
+    {
+      "workflowType": "brandAnalystSweepWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["two-targets"]
+    },
+    {
+      "workflowType": "brandAnalystWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["run-completed", "polled-then-completed", "skipped", "polling-open"]
+    },
+    {
+      "workflowType": "brandChangeImpactWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["version-published", "fact-revoked"]
+    },
+    {
+      "workflowType": "brandFactSweepWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["one-brand-fails"]
+    },
+    {
+      "workflowType": "channelRevokeWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["revoked", "not-found-fails"]
+    },
+    {
+      "workflowType": "communityReplyWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["accepted", "unsupported-channel", "send-failed-unknown", "retryable-backoff-open"]
+    },
+    {
+      "workflowType": "connectChoicePurgeWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["scheduled", "explicit-args"]
+    },
+    {
+      "workflowType": "deletionRequestWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["completed", "operator-actions"]
+    },
+    {
+      "workflowType": "destinationRevokeWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["revoked", "platform-failed"]
+    },
+    {
+      "workflowType": "destinationTokenRefreshWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["mixed-results"]
+    },
+    {
+      "workflowType": "destinationVerifyWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["verified", "reconnect-required"]
+    },
+    {
+      "workflowType": "idempotencyKeyPurgeWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["scheduled"]
+    },
+    {
+      "workflowType": "publicationReconcileWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["waiting-open", "found-after-first-delay", "absent-after-first-delay"]
+    },
+    {
+      "workflowType": "publicationRemoteDeleteWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["done", "skipped", "retryable-backoff-open"]
+    },
+    {
+      "workflowType": "publicationRemoteEditWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["done", "activity-rejected", "retryable-then-done"]
+    },
+    {
+      "workflowType": "publicationSignalRelayV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["relay-cancel", "relay-reschedule"]
+    },
+    {
+      "workflowType": "publicationSweeperWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["continued-as-new", "default-open"]
+    },
+    {
+      "workflowType": "publicationWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": [
+        "published-immediately",
+        "published-after-wait",
+        "cancelled-during-wait",
+        "rescheduled-during-wait",
+        "waiting-open",
+        "not-scheduled",
+        "claim-refused",
+        "held-by-release-gate",
+        "rejected",
+        "pending-finalized",
+        "pending-polled-then-failed",
+        "retryable-retried-then-published",
+        "unknown-reconciling-open"
+      ]
+    },
+    {
+      "workflowType": "remoteChangeSweepWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["swept"]
+    },
+    {
+      "workflowType": "renderedValidationWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["both-checks-due", "skipped", "waiting-open"]
+    },
+    {
+      "workflowType": "retentionSweepWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": ["dry-run-default", "apply-one-tenant-fails"]
+    },
+    {
+      "workflowType": "tokenRefreshWorkflowV1",
+      "queue": "core",
+      "status": "supported",
+      "histories": [
+        "refreshed-continued-as-new",
+        "waiting-open",
+        "not-active",
+        "reconnect-needed",
+        "transient-retry-open"
+      ]
+    },
+    {
+      "workflowType": "agentRunSignalRelayV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["relay-decision", "relay-cancel"]
+    },
+    {
+      "workflowType": "agentRunWorkflowV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": [
+        "completed",
+        "proposal-accepted",
+        "cancelled-while-waiting",
+        "waiting-for-decision-open",
+        "budget-exhausted"
+      ]
+    },
+    {
+      "workflowType": "brandAssistSignalRelayV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["relay-cancel"]
+    },
+    {
+      "workflowType": "brandAssistWorkflowV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": [
+        "full-run",
+        "skipped",
+        "source-and-section-failures",
+        "prepare-failed",
+        "cancelled-by-signal",
+        "workflow-cancelled"
+      ]
+    },
+    {
+      "workflowType": "skillEvaluationWorkflowV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["recorded", "failed-recorded"]
+    },
+    {
+      "workflowType": "studioGenerationSignalRelayV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["relay-cancel"]
+    },
+    {
+      "workflowType": "studioGenerationWorkflowV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": [
+        "saved",
+        "stopped-at-begin",
+        "begin-retried-then-saved",
+        "budget-exhausted",
+        "model-failed",
+        "cancelled-by-signal"
+      ]
+    },
+    {
+      "workflowType": "studioVideoJobSignalRelayV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["relay-cancel", "target-gone"]
+    },
+    {
+      "workflowType": "studioVideoJobWorkflowV1",
+      "queue": "agents",
+      "status": "supported",
+      "histories": ["saved", "validation-failed", "cancelled-by-signal"]
+    },
+    {
+      "workflowType": "commentIngestionWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["all-pulls-due-paged", "comments-not-readable", "waiting-open"]
+    },
+    {
+      "workflowType": "destinationReportSweepWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["two-targets"]
+    },
+    {
+      "workflowType": "destinationReportsWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["fetched", "rate-limited", "plan-skipped", "fetch-failed-prune-failed", "unreachable"]
+    },
+    {
+      "workflowType": "metricCollectionWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["all-pulls-due-with-comments", "not-collectable", "waiting-open"]
+    },
+    {
+      "workflowType": "seoAuditSweepWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["two-targets"]
+    },
+    {
+      "workflowType": "seoAuditSweepWorkflowV2",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["two-targets"]
+    },
+    {
+      "workflowType": "seoAuditWorkflowV1",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["stuck-at-first-activity"]
+    },
+    {
+      "workflowType": "seoAuditWorkflowV2",
+      "queue": "ingest",
+      "status": "supported",
+      "histories": ["crawled", "skipped", "page-failed-prune-failed", "closed-elsewhere"]
+    },
+    {
+      "workflowType": "assetIngestWorkflowV1",
+      "queue": "media",
+      "status": "supported",
+      "histories": [
+        "accepted",
+        "verify-retried-then-accepted",
+        "rejected-at-sniff",
+        "quarantined-scanner-unavailable",
+        "rejected-duplicate"
+      ]
+    },
+    {
+      "workflowType": "renderJobWorkflowV1",
+      "queue": "render",
+      "status": "supported",
+      "histories": ["ready", "resolve-rejected", "render-failed"]
+    },
+    {
+      "workflowType": "videoIngestWorkflowV1",
+      "queue": "video",
+      "status": "supported",
+      "histories": ["accepted", "type-mismatch", "quarantined-scanner-unavailable", "rejected-at-inspect"]
+    },
+    {
+      "workflowType": "videoRenderJobWorkflowV1",
+      "queue": "video",
+      "status": "supported",
+      "histories": ["ready", "reused", "cancelled-during-compose", "too-large"]
+    },
+    {
+      "workflowType": "videoRenderSignalRelayV1",
+      "queue": "video",
+      "status": "supported",
+      "histories": ["relay-cancel", "target-gone"]
+    }
+  ],
+  "retired": []
+}

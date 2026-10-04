@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoRenderJobWorkflowV1",
+  "case": "reused",
+  "description": "The same render exists: the export is reused without overlays or compose.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:17:30.793Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "9cbc02e2f1ff12d57e84e2f40cbf80b5567dc5b6841a76b81e23110ed83c6445"
+}

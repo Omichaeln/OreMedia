@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationRemoteDeleteWorkflowV1",
+  "case": "retryable-backoff-open",
+  "description": "In flight: a retryable error, the workflow waits on its 30 s backoff timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:09:41.040Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "44d6d452d16cfa145d4e3f041d76f27aea1e96d0121a410a4d5d9273b29359bc"
+}
