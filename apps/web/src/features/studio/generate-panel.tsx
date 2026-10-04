@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import type { ContentType, CreativePage } from '@oremedia/contracts/creative';
 import type { GenerationBriefInput, GenerationRequest } from '@oremedia/contracts/generation';
 import { applyBatch, changedElementIds, findElement, formatFor, FORMAT_DEFINITIONS } from '@oremedia/editor';
@@ -627,7 +628,8 @@ function BriefForm({
   const audiences = brandVersion.data?.document.voice.audiences ?? [];
   const channels = useChannelLimits(brandId);
   const facts = useFacts(brandId, { effective: true });
-  const assets = useAssetSearch(brandId, 'creative');
+  // Generation fills image areas: stills only (STU-2b: the creative purpose also covers video and audio).
+  const assets = useAssetSearch(brandId, 'creative', undefined, IMAGE_CREATIVE_KINDS);
   const templates = useTemplates(brandId);
   const approvedTemplates = (templates.data?.items ?? []).filter(
     (t) => t.state === 'active' && t.currentVersionId,
@@ -756,7 +758,11 @@ function BriefForm({
             onValueChange={(v) => setContentType(v === '__doc' ? '' : (v as ContentType))}
             options={[
               { value: '__doc', label: 'As the document' },
-              ...CONTENT_TYPES.filter((c) => c.available).map((c) => ({ value: c.key, label: c.label })),
+              // A video (no page formats) is not a generation target.
+              ...CONTENT_TYPES.filter((c) => c.available && c.formats.length > 0).map((c) => ({
+                value: c.key,
+                label: c.label,
+              })),
             ]}
             size="sm"
           />
@@ -970,7 +976,8 @@ function RefineForm({
   onStarted: (job: GenerationJobDto) => void;
 }) {
   const { brandId } = useBrandContext();
-  const assets = useAssetSearch(brandId, 'creative');
+  // Generation fills image areas: stills only (STU-2b: the creative purpose also covers video and audio).
+  const assets = useAssetSearch(brandId, 'creative', undefined, IMAGE_CREATIVE_KINDS);
   const [instruction, setInstruction] = useState('');
   const [action, setAction] = useState<'edit' | 'alternatives' | 'adapt'>('edit');
   const [count, setCount] = useState('2');

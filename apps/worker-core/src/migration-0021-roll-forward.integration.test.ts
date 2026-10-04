@@ -12,7 +12,12 @@ import {
   seoFindingWork,
 } from '@oremedia/db/schema/destinations';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 
@@ -31,7 +36,8 @@ const NEW_TABLES: MySqlTable[] = [seoFindingWork];
 const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0021 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

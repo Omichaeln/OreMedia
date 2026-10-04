@@ -2,3 +2,5 @@
 // render image; long jobs on their own queue and concurrency so they never starve `render` or `media`). Bundled at
 // build time by apps/worker-render (bundleWorkflowCode) into dist/workflows.video.js.
 export { videoIngestWorkflowV1 } from '../video-ingest.workflow.v1';
+// STU-2b: timeline renders (ffmpeg compositor + Chromium overlays) and the cancel relay.
+export { videoRenderJobWorkflowV1, videoRenderSignalRelayV1 } from '../video-render.workflow.v1';

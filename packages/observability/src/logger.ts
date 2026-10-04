@@ -39,6 +39,24 @@ function wrap(p: PinoLogger): Logger {
   };
 }
 
+/**
+ * The `env` label on every log line: the caller's, else OREMEDIA_ENV, else Railway's RAILWAY_ENVIRONMENT_NAME
+ * (`staging`, `production`), else NODE_ENV, else `development`. NODE_ENV comes last because every deployed image
+ * sets it to `production`, staging's included. Empty values are skipped.
+ */
+export function logEnvironment(
+  explicit: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return (
+    explicit?.trim() ||
+    env['OREMEDIA_ENV']?.trim() ||
+    env['RAILWAY_ENVIRONMENT_NAME']?.trim() ||
+    env['NODE_ENV']?.trim() ||
+    'development'
+  );
+}
+
 let root: PinoLogger | null = null;
 export function createLogger(opts: {
   service: string;
@@ -49,7 +67,7 @@ export function createLogger(opts: {
   root = pino(
     {
       level: opts.level ?? process.env['LOG_LEVEL'] ?? 'info',
-      base: { service: opts.service, env: opts.env ?? process.env['NODE_ENV'] ?? 'development' },
+      base: { service: opts.service, env: logEnvironment(opts.env) },
       messageKey: 'msg',
       // Level as its label ('error', not 50): log platforms such as Railway read severity from this field.
       formatters: { level: (label) => ({ level: label }) },

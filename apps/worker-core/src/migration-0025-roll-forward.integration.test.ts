@@ -4,7 +4,7 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import * as schema from '@oremedia/db/schema';
 import { creativeRevisions, studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { seedTwoTenants, snapshotColumns } from '../../../tooling/test-fixtures/src/seed';
+import { LATER_TABLE_NAMES, seedTwoTenants, snapshotColumns } from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0025 (STU-1b studio generation): on a database populated at the previous head (0024)
@@ -17,7 +17,8 @@ const PREVIOUS_HEAD = '0024_brand_assist';
 const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !LATER_TABLES.includes(t));
+  .filter((t) => !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0025 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
