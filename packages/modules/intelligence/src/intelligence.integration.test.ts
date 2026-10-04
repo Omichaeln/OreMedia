@@ -1392,6 +1392,23 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
         }),
       );
       expect(noMetrics.skippedReason).toBe('metrics_source_not_registered');
+      // G05: the activity checks the flag too (a schedule that outlives a flag turned off starts nothing).
+      const analystFlag = eq(featureFlags.key, 'intelligence.brand_analyst');
+      await tdb.db.update(featureFlags).set({ targeting: {} }).where(analystFlag);
+      const prepFlagOff = await runInTenant(ctx(tenantA, { kind: 'service_principal', id: spA }), () =>
+        runtime.analyst.prepareAnalysis({
+          ...base,
+          tenantId: tenantA,
+          actor: { kind: 'service_principal', id: spA },
+          brandId: brandA1,
+          servicePrincipalId: spA,
+        }),
+      );
+      await tdb.db
+        .update(featureFlags)
+        .set({ targeting: { tenantIds: [tenantA] } })
+        .where(analystFlag);
+      expect(prepFlagOff).toMatchObject({ runId: null, skippedReason: 'flag_off', changeInsightIds: [] });
       await expect(
         runA((tx) =>
           intelligenceService.analyst.run(

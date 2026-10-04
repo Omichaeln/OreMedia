@@ -15,12 +15,13 @@ works for people with a role on the app:
 1. Configure the app (below) and set the credentials on Railway.
 2. Certify both adapters with test accounts that hold a role on the app (`docs/runbooks/certify-a-provider.md`, steps
    2 to 12). This sets `certifiedAt` and records D-04.
-3. Setting `certifiedAt` opens both providers to every tenant. The `publishing.channel.*` flags are defined, but
-   connect does not check them yet (open). Until it does, development mode is the gate: only people with a role on
-   the app can complete the login.
+3. Setting `certifiedAt` opens both providers to every tenant. There is no per-tenant channel flag (the unread
+   `publishing.channel.*` flags were removed, G05), so development mode is the gate: only people with a role on the
+   app can complete the login.
 4. Record the screencasts in the review tenant (below), complete Business Verification, and submit App Review.
-5. Before switching the app to live, make connect enforce the `publishing.channel.*` flags (then allowlist tenants
-   in the `feature_flags` row one by one), or accept that every tenant can connect from that moment.
+5. Before switching the app to live, either accept that every tenant can connect from that moment, or add a
+   per-channel flag together with the connect check that reads it (then allowlist tenants one by one with
+   `operations.flags.set`, `docs/runbooks/feature-flags.md`).
 
 ## App settings
 

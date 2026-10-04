@@ -137,22 +137,34 @@ interface GmailMessageResponse {
   payload?: { headers?: Array<{ name?: string; value?: string }> };
 }
 
-async function fetchReviewMessages(accessToken: string): Promise<ReviewMessage[]> {
+/** The Gmail reads the monitor makes (users/me/<path>); a stub in the unit tests. */
+export interface GmailClient {
+  get<T>(path: string, params: Record<string, string | string[]>): Promise<T>;
+}
+
+const gmailClient = (accessToken: string): GmailClient => ({
+  get: (path, params) => gmailJson(accessToken, path, params),
+});
+
+/** Message ids are listed page by page (newest first) until the pages run out or this many are collected. */
+export const MAX_REVIEW_MESSAGES = 300;
+
+export async function fetchReviewMessages(gmail: GmailClient): Promise<ReviewMessage[]> {
   const ids: string[] = [];
   let pageToken: string | undefined;
   do {
-    const page = await gmailJson<GmailListResponse>(accessToken, 'messages', {
+    const page = await gmail.get<GmailListResponse>('messages', {
       q: monitoredQuery,
       maxResults: '100',
       ...(pageToken ? { pageToken } : {}),
     });
     ids.push(...(page.messages ?? []).map((m) => m.id));
     pageToken = page.nextPageToken;
-  } while (pageToken && ids.length < 300);
+  } while (pageToken && ids.length < MAX_REVIEW_MESSAGES);
 
   const messages: ReviewMessage[] = [];
   for (const id of ids) {
-    const message = await gmailJson<GmailMessageResponse>(accessToken, `messages/${encodeURIComponent(id)}`, {
+    const message = await gmail.get<GmailMessageResponse>(`messages/${encodeURIComponent(id)}`, {
       format: 'metadata',
       metadataHeaders: ['From', 'Subject', 'Date'],
     });
@@ -167,9 +179,29 @@ async function fetchReviewMessages(accessToken: string): Promise<ReviewMessage[]
   return messages.sort((a, b) => b.internalDate - a.internalDate);
 }
 
-async function persistStatuses(messages: ReviewMessage[], checkedAt: Date): Promise<number> {
-  const db = getDb();
-  const current = await db.select().from(providerReviewStatuses);
+/** The provider_review_statuses reads and writes of one run; a stub in the unit tests. */
+export interface ReviewStatusStore {
+  current(): Promise<Array<{ providerKey: string; status: ReviewStatus }>>;
+  upsert(values: typeof providerReviewStatuses.$inferInsert): Promise<void>;
+}
+
+const databaseStore: ReviewStatusStore = {
+  current: () => getDb().select().from(providerReviewStatuses),
+  async upsert(values) {
+    await getDb().insert(providerReviewStatuses).values(values).onDuplicateKeyUpdate({ set: values });
+  },
+};
+
+/**
+ * One row per monitored provider: the newest classified message of its mail family, or, when none matched this run,
+ * the previous status with only the check time moved. Returns how many providers matched a message.
+ */
+export async function persistStatuses(
+  messages: ReviewMessage[],
+  checkedAt: Date,
+  store: ReviewStatusStore = databaseStore,
+): Promise<number> {
+  const current = await store.current();
   const currentByProvider = new Map(current.map((row) => [row.providerKey, row]));
   const latest = new Map<MonitoredProvider, { message: ReviewMessage; match: ReviewMatch }>();
 
@@ -208,7 +240,7 @@ async function persistStatuses(messages: ReviewMessage[], checkedAt: Date): Prom
           lastCheckedAt: checkedAt,
           updatedAt: checkedAt,
         };
-    await db.insert(providerReviewStatuses).values(values).onDuplicateKeyUpdate({ set: values });
+    await store.upsert(values);
   }
   return latest.size;
 }
@@ -219,8 +251,7 @@ export async function runApprovalMonitor(): Promise<{ messages: number; matchedP
   // Migrations need DDL the application role lacks (D-25): the admin connection when set, as apps/api/src/migrate.ts.
   await runMigrations(process.env['DATABASE_URL_MIGRATE'] ?? databaseUrl);
   configureDatabase({ url: databaseUrl, connectionLimit: 2 });
-  const accessToken = await gmailAccessToken();
-  const messages = await fetchReviewMessages(accessToken);
+  const messages = await fetchReviewMessages(gmailClient(await gmailAccessToken()));
   const matchedProviders = await persistStatuses(messages, new Date());
   return { messages: messages.length, matchedProviders };
 }

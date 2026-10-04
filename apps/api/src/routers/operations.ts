@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AuditQuery,
   DeletionRequestCreate,
+  FeatureFlagSet,
   KillSwitchScope,
   OutboxReplay,
 } from '@oremedia/contracts/operations';
@@ -42,6 +43,18 @@ export const operationsRouter = router({
   }),
   flags: router({
     snapshot: tenantQuery.query(({ ctx }) => featureFlag.snapshot(ctx.tenant.context.tenantId)),
+    /**
+     * G05: platform operators only (a support session on the tenant; never a member, API key or agent). `list` gives
+     * each flag's global default, this tenant's entry and the row version; `set` changes one flag globally or for
+     * this tenant, needs an escalated session, and is version-checked, idempotent and audited
+     * (docs/runbooks/feature-flags.md).
+     */
+    list: tenantQuery.query(({ ctx }) => featureFlag.list(ctx.tenant.actor)),
+    set: tenantMutation
+      .input(FeatureFlagSet)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => featureFlag.set(ctx.tenant.actor, input, tx)),
+      ),
   }),
   /**
    * RA-01: every registered provider (channel, source, CMS) with its activation state on this deployment:

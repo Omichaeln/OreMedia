@@ -10,7 +10,10 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
 2. Add plugins: **MySQL** (application), **Redis**. If self-hosting Temporal, add a **second MySQL** for it.
 3. Create a Cloudflare R2 bucket pair (`assets`, `releases`), private, with versioning and lifecycle rules.
 4. For each application service: "New service → GitHub repo" (this repository), leave **Root Directory** at the
-   repository root, set **Config-as-code path** to `infra/railway/<service>/railway.json`, and set the variables:
+   repository root, and apply the settings in `infra/railway/<service>/railway.json` to the service directly (Dockerfile
+   path, watch patterns, health check, restart policy, the api's pre-deploy migration). Railway refuses config-as-code
+   paths (it asks for `.railway/railway.ts`; build ledger R.2, `docs/progress/build-ledger.md`), so those files are
+   only the reference. Then set the variables:
    - all services: `DATABASE_URL`, `REDIS_URL`, `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TLS_CERT_REF`,
      `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OREMEDIA_APP` (api | worker-core | worker-ingest | redirector);
    - `api`: `AUTH_ISSUER_URL` (optional, default `https://accounts.google.com`), `AUTH_CLIENT_ID`,
@@ -29,6 +32,12 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`, and `PROVIDER_GBP_LOCATION_*` with `OREMEDIA_ENABLE_GBP=1` where the Business Profile kind is enabled (R2-2);
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
+   - `approval-monitor`: `OREMEDIA_APP=approval-monitor`, `DATABASE_URL` (referenced from the api), sealed
+     `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. Its **Cron Schedule** is `*/5 * * * *` (UTC,
+     every five minutes, as both environments run it) and is set in the service's Railway settings (Settings → Cron
+     Schedule): it is not config-as-code, and `infra/railway/approval-monitor/railway.json` deliberately carries no
+     `cronSchedule`. Without real Gmail credentials (staging today) every run fails with `invalid_client`: set them
+     or remove the schedule there;
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OBJECT_STORE_PUBLIC_ORIGIN`
      (runtime: the object store origin allowed in `font-src` and `connect-src`, section 1b; uploads fail without it), `OREMEDIA_DEPLOYMENT_BRAND`
      (runtime, D-12: the brand pack in `apps/web/deployment-brands`, `ore-and-tar` for this deployment; unset is the
@@ -293,7 +302,7 @@ worker understands them:
    (Railway → worker-render → Deployments shows only the new one; worker logs show `worker started` from it).
 3. Deploy the API (and the other workers) as usual. With the flag still off, `operations.propose` with
    `previewRender` returns the scene preview only and queues nothing.
-4. Enable `creative.preview_render` (feature_flags row: tenant allowlist first, then `enabled_default`). To roll back
+4. Enable `creative.preview_render` with `operations.flags.set` ([feature flags](feature-flags.md): one tenant first, then global). To roll back
    `worker-render` to a build without previews, disable the flag first and let queued preview jobs finish.
 
 Rollout order for video generation (migration 0007, flag `creative.video_generation`, default off; ADR-11, ledger 4.25):
@@ -305,14 +314,14 @@ Rollout order for video generation (migration 0007, flag `creative.video_generat
    the chosen model produces at its longest duration; a clip above it fails the scan and stays quarantined. Raise it
    on the clamav service first if needed.
 3. Set `VIDEO_GEN_PROVIDER=openrouter` and `OREMEDIA_VIDEO_MODEL_ID` on `worker-core` and deploy it.
-4. Enable `creative.video_generation` (feature_flags row: tenant allowlist first, then `enabled_default`). A skill
+4. Enable `creative.video_generation` with `operations.flags.set` ([feature flags](feature-flags.md): one tenant first, then global). A skill
    that should generate video lists both `videos.generate` and `videos.status` in its allowed tools. Turning the
    flag off stops new generations; `videos.status` still collects clips already paid for.
 
 Rollout order for speech generation (migration 0008, flag `creative.audio_generation`, default off; ADR-11, ledger
 4.26): apply migration 0008 (adds `audio_generation` to `usage_ledger.kind`, appended, metadata only) before the
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
-`worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
+`worker-core` and deploy it; then enable the flag per tenant with `operations.flags.set` ([feature flags](feature-flags.md)). A skill that should narrate lists `speech.generate`.
 
 Rollout order for video and audio uploads (migration 0026, STU-2a; no flag: a person's video or audio upload is
 accepted as soon as the API is on the new build):
@@ -321,9 +330,11 @@ accepted as soon as the API is on the new build):
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
 2. Before the merge that ships this (the api deploys on merge and accepts video at once), raise the clamav service's
-   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: point the service at this repository with config
-   file `infra/railway/clamav/railway.json` (the official image plus the raised limits; the build fails if clamd's
-   config file moves), in staging first, then production. Video uploads are up to 1 GiB and are streamed to clamd;
+   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: connect the service to this repository and apply the
+   settings in `infra/railway/clamav/railway.json` to it directly (Dockerfile path `infra/railway/clamav/Dockerfile`:
+   the official image plus the raised limits, and the build fails if clamd's config file moves; watch patterns;
+   restart policy), in staging first, then production. Railway refuses config-as-code paths (build ledger R.2,
+   `docs/progress/build-ledger.md`), so that file is only the reference. Video uploads are up to 1 GiB and are streamed to clamd;
    below the limit clamd gives no verdict and the upload stays quarantined (`scanner_unavailable`, the detail names
    `StreamMaxLength`).
 3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
