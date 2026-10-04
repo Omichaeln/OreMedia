@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { EvidenceItem, type Budget } from '@oremedia/contracts/agents';
-import type { AssetPurpose, AssetRef, EligibilityQuery } from '@oremedia/contracts/assets';
+import {
+  IMAGE_CREATIVE_KINDS,
+  type AssetPurpose,
+  type AssetRef,
+  type EligibilityQuery,
+} from '@oremedia/contracts/assets';
 import type { BrandSnapshot, FactKind } from '@oremedia/contracts/brand';
 import type { Finding } from '@oremedia/contracts/creative';
 import { BudgetExhaustedError, ValidationFailedError } from '@oremedia/contracts/errors';
@@ -273,8 +278,15 @@ export async function resolveContextSnapshot(
     tenantPolicy.maxAutonomy,
     entitlementAutonomy(ent),
   );
+  const purpose = purposeForTask(taskKind.data);
+  // STU-2b: `creative` also covers video and audio now; agent context keeps the still images it always carried.
   const eligible = await deps.findEligibleAssets(
-    { brandId: input.brandId, purpose: purposeForTask(taskKind.data), channelConnectionIds: [] },
+    {
+      brandId: input.brandId,
+      purpose,
+      channelConnectionIds: [],
+      ...(purpose === 'creative' ? { kinds: [...IMAGE_CREATIVE_KINDS] } : {}),
+    },
     { limit: 200 },
     tx,
   );

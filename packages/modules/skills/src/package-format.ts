@@ -116,11 +116,11 @@ const MARKDOWN_IMAGE = /!\[[^\]]*\]\(\s*<?([^\s)>]+)/g;
 const MARKDOWN_LINK = /(?<!!)\[[^\]]*\]\(\s*<?([^\s)>]+)/g;
 const REFERENCE_DEFINITION = /^\s{0,3}\[[^\]]+\]:\s*<?([^\s>]+)/gm;
 const AUTOLINK = /<([a-z][a-z0-9+.-]*:[^\s>]*)>/gi;
-const HTML_ANCHOR = /<\s*a\s[^>]*?\bhref\s*=\s*["']?\s*([^"'\s>]+)/gi;
+const HTML_ANCHOR = /<\s*a\s[^>]*?\bhref\s*=\s*(?:["']\s*)?([^"'\s>]+)/gi;
 /** Attributes a renderer fetches on sight (an anchor's href is a citation and goes through HTML_ANCHOR instead). */
 const HTML_FETCH_ATTRIBUTE =
-  /\s(?:src|srcset|data|poster|action|background|formaction)\s*=\s*["']?\s*([^"'\s>]+)/gi;
-const CSS_FETCH = /(?:@import\s+|url\(\s*)["']?\s*([a-z][a-z0-9+.-]*:|\/\/)/i;
+  /\s(?:src|srcset|data|poster|action|background|formaction)\s*=\s*(?:["']\s*)?([^"'\s>]+)/gi;
+const CSS_FETCH = /(?:@import\s+|url\(\s*)(?:["']\s*)?([a-z][a-z0-9+.-]*:|\/\/)/i;
 const ACTIVE_TAG = /<\s*(script|iframe|object|embed|base|meta|link|frame|frameset|applet)\b/i;
 const SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 const SAFE_LINK_SCHEMES = new Set(['http', 'https', 'mailto']);

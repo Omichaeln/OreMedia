@@ -6,6 +6,7 @@ import type {
   Finding,
   TextElement,
 } from '@oremedia/contracts/creative';
+import { videoFormatFor } from '@oremedia/contracts/video';
 import { formatFor } from './formats';
 
 /** Relative luminance and WCAG contrast ratio for #rrggbb values. */
@@ -61,6 +62,23 @@ export function prohibitedPhrasesIn(text: string, prohibited: readonly string[])
   return prohibited.map((p) => p.toLowerCase()).filter((p) => p && lower.includes(p));
 }
 
+/**
+ * Whether short copy (a call to action, a title) reads as a claim that needs an approved fact behind it: a measured
+ * number (a percentage, a multiplier such as "2x" or "3 times", a price), a comparison or superlative, a ranking or a
+ * guarantee. Plain imperative CTA words ("Try it free", "Book your first lesson") and bare digits such as a phone
+ * number or a date are not claims.
+ */
+export function looksLikeClaim(text: string): boolean {
+  const measured =
+    /\d\s*(%|percent\b|x\b|×|times\b)/i.test(text) || /[$€£¥]\s*\d/.test(text) || /\d\s*[$€£¥]/.test(text);
+  const compared =
+    /\b(best|better|fastest|faster|cheapest|cheaper|strongest|stronger|lightest|lighter|longest|longer|most|leading|unbeatable|guaranteed?|proven|than|twice|double|half the)\b/i.test(
+      text,
+    );
+  const ranked = /(^|\s)#\s?1\b|\bno\.?\s?1\b|\bnumber one\b/i.test(text);
+  return measured || compared || ranked;
+}
+
 export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSnapshot): Finding[] {
   const findings: Finding[] = [];
   const colours = new Map(snapshot.document.tokens.colours.map((c) => [c.key, c]));
@@ -72,7 +90,8 @@ export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSna
     target === 'AAA' ? (sizePx >= 24 ? 4.5 : 7) : sizePx >= 24 ? 3 : 4.5;
 
   for (const page of doc.pages) {
-    const format = formatFor(page.formatKey);
+    // Video overlays are checked on a page at the project's output preset (STU-2b).
+    const format = formatFor(page.formatKey) ?? videoFormatFor(page.formatKey);
     const all = flat(page.elements);
     const background = page.elements.find(
       (e): e is Extract<Element, { type: 'background' }> => e.type === 'background',

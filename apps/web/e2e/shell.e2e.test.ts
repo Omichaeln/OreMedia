@@ -1519,6 +1519,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     // The featured image comes from the asset picker (the eligibility search), with the asset's alt text prefilled.
     await page.getByTestId('pkg-article-featured-choose').click();
     await page.getByTestId('asset-picker').waitFor({ timeout: 15_000 });
+    await page.getByTestId('asset-pick-av_photo').waitFor({ timeout: 15_000 });
+    // STU-2b: an article image is a still; the brand's videos and music are not offered.
+    expect(
+      await page
+        .getByTestId('asset-picker')
+        .locator('[data-testid^="asset-pick-av_vid"], [data-testid^="asset-pick-av_aud"]')
+        .count(),
+    ).toBe(0);
     await page.getByTestId('asset-pick-av_photo').click();
     await expect
       .poll(() => page.locator('#pkg-article-featured-alt').inputValue(), { timeout: 15_000 })

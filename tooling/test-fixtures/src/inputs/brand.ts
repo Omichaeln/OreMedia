@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { emptyBrandSystemDocument } from '@oremedia/contracts/brand';
-import type { CrossTenantFixture } from '../cross-tenant-inputs';
+import type { CrossTenantFixture, OwnTenantFixture } from '../cross-tenant-inputs';
 
 /** Every id points at the foreign tenant (brand ids from the base seed, version/fact/objective/policy ids from BRAND_SEED). */
 export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
@@ -176,5 +177,29 @@ export const BRAND_INPUTS: Record<string, CrossTenantFixture> = {
       versionId: f['brandVersionId'],
       servicePrincipalId: f['servicePrincipalId'],
     }),
+  },
+};
+
+/**
+ * Ledger G14: the brand.* procedures above whose fixture is `buildInput: null` take no foreign reference, so there is
+ * no foreign id to try. Each is called as the caller's own tenant instead (OwnTenantFixture), and must answer only
+ * that tenant's data and leave the other tenant unchanged. A block of its own, apart from the fixtures above.
+ */
+export const BRAND_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
+  'brand.create': {
+    why: "takes a name, a time zone, a locale and a classification (no id): the brand is created in the caller's tenant",
+    input: () => ({
+      name: `Own tenant brand ${randomUUID().slice(0, 8)}`,
+      timezone: 'UTC',
+      defaultLocale: 'en',
+    }),
+  },
+  'brand.list': {
+    why: "takes no input: lists the brands the caller's verified membership may see",
+    input: () => undefined,
+  },
+  'brand.summary': {
+    why: "takes no input: counts per brand the caller's verified membership may see",
+    input: () => undefined,
   },
 };

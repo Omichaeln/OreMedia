@@ -193,6 +193,26 @@ function serveObjectStore(
       res.end(VTT_TEXT);
       return true;
     }
+    // STU-2b: a source's thumbnail strip map (one frame of the 2×2 strip) and waveform peaks (a 20 s swell).
+    if (url.pathname.endsWith('-strip_map.json')) {
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          schemaVersion: 1,
+          frameWidth: 2,
+          frameHeight: 2,
+          columns: 1,
+          frames: [{ index: 0, timeMs: 0 }],
+        }),
+      );
+      return true;
+    }
+    if (url.pathname.endsWith('-waveform.json')) {
+      res.setHeader('content-type', 'application/json');
+      const peaks = Array.from({ length: 400 }, (_, i) => Math.round(500 + 450 * Math.sin(i / 7)));
+      res.end(JSON.stringify({ schemaVersion: 1, peaksPerSecond: 20, durationMs: 20_000, peaks }));
+      return true;
+    }
     res.setHeader('content-type', 'font/ttf');
     createReadStream(FONT_FILE).pipe(res);
     return true;

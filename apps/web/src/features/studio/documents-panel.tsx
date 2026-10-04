@@ -147,6 +147,7 @@ export function Documents() {
               {d.title}
             </Link>
             <span className="flex shrink-0 items-center gap-2">
+              {d.kind === 'video' && <Badge glyph={false}>Video</Badge>}
               {d.archivedAt && <Badge tone="neutral">Archived</Badge>}
               <span className="font-mono text-xs text-muted-foreground">
                 {new Date(d.updatedAt).toLocaleDateString()}

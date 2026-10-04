@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RIGHTS_PROCESSING_WINDOW_MS } from '@oremedia/contracts/assets';
+import { IMAGE_CREATIVE_KINDS, RIGHTS_PROCESSING_WINDOW_MS } from '@oremedia/contracts/assets';
 import {
   compatibleKinds,
   evaluateEligibility,
@@ -24,7 +24,14 @@ describe('spec 9.2 eligibility rule', () => {
   it('kinds compatible with each purpose, narrowed by an explicit filter', () => {
     expect(compatibleKinds('logo')).toEqual(['logo']);
     expect(compatibleKinds('font')).toEqual(['font']);
-    expect(compatibleKinds('creative')).toEqual(['photo', 'illustration', 'icon', 'logo']);
+    // STU-2b: the creative purpose also takes video and audio (timeline clips and sound); graphics narrow to stills.
+    expect(compatibleKinds('creative')).toEqual(['photo', 'illustration', 'icon', 'logo', 'video', 'audio']);
+    expect(compatibleKinds('creative', IMAGE_CREATIVE_KINDS)).toEqual([
+      'photo',
+      'illustration',
+      'icon',
+      'logo',
+    ]);
     expect(compatibleKinds('reference').length).toBe(9);
     expect(compatibleKinds('creative', ['photo', 'font'])).toEqual(['photo']);
   });

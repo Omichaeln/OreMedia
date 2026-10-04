@@ -1,4 +1,5 @@
-import type { CrossTenantFixture } from '../cross-tenant-inputs';
+import { randomUUID } from 'node:crypto';
+import type { CrossTenantFixture, OwnTenantFixture } from '../cross-tenant-inputs';
 
 export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
   'access.me': { buildInput: null, reason: 'no resource ids; tenant comes from the verified membership' },
@@ -63,5 +64,47 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
       supportSessionId: f['supportSessionId'],
       reason: 'escalate a foreign support session',
     }),
+  },
+};
+
+/**
+ * Ledger G14: the access.* procedures above whose fixture is `buildInput: null` take no foreign reference, so there is
+ * no foreign id to try. Each is called as the caller's own tenant instead (OwnTenantFixture), and must answer only
+ * that tenant's data and leave the other tenant unchanged. A block of its own, apart from the fixtures above.
+ */
+export const ACCESS_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
+  'access.me': {
+    why: 'takes no input: the tenant and the actor come from the verified membership, never from the request',
+    input: () => undefined,
+  },
+  'access.session': {
+    why: 'takes no input: answers the signed-in person of the session itself (a user, not a tenant resource)',
+    input: () => undefined,
+  },
+  'access.listCompanies': {
+    why: "takes no input: a projection over the signed-in person's own memberships",
+    input: () => undefined,
+  },
+  'access.members.list': {
+    why: "takes no input: lists the memberships of the caller's verified tenant",
+    input: () => undefined,
+  },
+  'access.members.invite': {
+    why: "takes an email, a role and allBrands (no id, no brand): the membership is created in the caller's tenant",
+    input: () => ({ email: `own-tenant-${randomUUID()}@example.test`, role: 'creator', allBrands: false }),
+  },
+  'access.account.signInMethods': {
+    why: "takes no input: the signed-in person's own sign-in methods (a person's, not a tenant's)",
+    input: () => undefined,
+  },
+  'access.account.setPassword': {
+    why: "takes the signed-in person's own current and new password: no id and no tenant",
+    input: () => ({ newPassword: `own tenant passphrase ${randomUUID()}` }),
+  },
+  'access.account.removePassword': {
+    why: "takes the signed-in person's own current password: no id and no tenant",
+    // The seeded owner signs in with Google only, so the password is refused (nobody locks themselves out).
+    input: () => ({ currentPassword: `not the password ${randomUUID()}` }),
+    expectError: 'VALIDATION_FAILED',
   },
 };

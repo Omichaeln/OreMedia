@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "b44c511e-a5c7-43b3-87a5-06ef344c7042",
+  "id": "fb2afdc2-f9bc-456d-87ae-5443a3d003c2",
   "prevId": "20939bda-4b27-4c67-97e2-1e81f61133c8",
   "tables": {
     "api_clients": {
@@ -4323,12 +4323,13 @@
           "notNull": true,
           "autoincrement": false
         },
-        "archived_at": {
-          "name": "archived_at",
-          "type": "datetime(3)",
+        "kind": {
+          "name": "kind",
+          "type": "enum('graphic','video')",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'graphic'"
         },
         "created_at": {
           "name": "created_at",
@@ -5303,6 +5304,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "datetime(3)",
@@ -5318,6 +5326,15 @@
             "tenant_id",
             "revision_id",
             "format_key"
+          ],
+          "isUnique": false
+        },
+        "ix_export_dedupe": {
+          "name": "ix_export_dedupe",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "dedupe_key"
           ],
           "isUnique": false
         },
