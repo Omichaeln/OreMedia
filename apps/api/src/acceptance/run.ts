@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readMigrationState } from '@oremedia/db';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
 import { runK6, runVitest } from '../../../../tooling/scripts/acceptance/processes';
@@ -12,6 +13,7 @@ import {
   summarize,
   type AcceptanceResult,
 } from '../../../../tooling/scripts/acceptance/report';
+import { waitForSettled, type SettleProbes } from '../../../../tooling/scripts/acceptance/settle';
 import { signOut } from './client';
 import {
   ensureFontAssetVersion,
@@ -23,11 +25,19 @@ import {
   smokeChecks,
   type Sessions,
 } from './checks';
+import {
+  brandSystemChecks,
+  factChecks,
+  logoChecks,
+  studioChecks,
+  videoChecks,
+  type StoreState,
+} from './feature-checks';
 import { provisionFixtures, providerAvailability, teardownFixtures, type FixtureTenant } from './fixtures';
 
 /**
  * The staging acceptance job (docs/runbooks/staging-acceptance.md): fixtures, the smoke checks, the browser suites,
- * the api journeys, then (each behind its flag) the top-of-hour load test and the bounded model evaluation. Prints
+ * the api journeys (the content journey, then brand system, facts, SVG logo, Studio and video), then (each behind its flag) the top-of-hour load test and the bounded model evaluation. Prints
  * the ACCEPTANCE_* / LOAD_* / MODEL_EVAL_* lines through `print` and returns whether everything that ran passed.
  */
 export interface RunOptions {
@@ -49,6 +59,19 @@ const describeProviders = (cfg: AcceptanceConfig): string => {
     ? `certified providers: ${p.usable.join(', ')}`
     : `no certified provider in this registry (uncertified: ${p.uncertified.join(', ') || 'none'}; disabled: ${p.disabled.join(', ') || 'none'})`;
 };
+
+/** The settle step's probes against the deployment: the api's /health through the web origin, and the database. */
+const settleProbes = (cfg: AcceptanceConfig, f: FetchLike): SettleProbes => ({
+  health: async () => {
+    const res = await f(`${cfg.webOrigin}/health`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = (await res.json().catch(() => null)) as { revision?: unknown } | null;
+    return { status: res.status, revision: typeof body?.revision === 'string' ? body.revision : null };
+  },
+  migrations: () => readMigrationState(),
+});
 
 async function browserSuites(
   cfg: AcceptanceConfig,
@@ -149,6 +172,19 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
     }
   };
 
+  // The job redeploys on the same push as the api: nothing is provisioned until the api serves this commit with
+  // every bundled migration applied (docs/runbooks/staging-acceptance.md, "Reading the log").
+  const settled = await waitForSettled(settleProbes(cfg, opts.fetch ?? fetch), {
+    revision: cfg.settle.revision,
+    timeoutMs: cfg.settle.timeoutMs,
+    print,
+  });
+  emit([settled]);
+  if (settled.outcome !== 'pass') {
+    print(formatDone(summarize(results)));
+    return false;
+  }
+
   let tenants: FixtureTenant[];
   try {
     tenants = await provisionFixtures(fixtureOptions);
@@ -176,6 +212,18 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
     await guard('smoke', () => smokeChecks(cfg, tenantA, opts.fetch ?? fetch));
     await guard('isolation', () => isolationChecks(sessions, tenantA, tenantB));
     await guard('journey', () => journeyChecks(sessions, tenantA, describeProviders(cfg)));
+    // The journeys of the features shipped after RA-14, in this order: the brand system journey restores what it
+    // changes, the logo journey finds whether the object store takes uploads, and Studio and video depend on that.
+    await guard('brand-system', () => brandSystemChecks(cfg, sessions, tenantA));
+    await guard('facts', () => factChecks(sessions, tenantA));
+    let store: StoreState = { usable: false, reason: 'the SVG logo upload did not finish' };
+    await guard('logo', async () => {
+      const logo = await logoChecks(cfg, sessions, tenantA);
+      store = logo.store;
+      return logo.results;
+    });
+    await guard('studio', () => studioChecks(cfg, sessions, tenantA, store, describeProviders(cfg)));
+    await guard('video', () => videoChecks(cfg, sessions, tenantA, store));
     if (cfg.e2e.enabled) await guard('e2e', () => browserSuites(cfg, sessions, tenantA, tenantB));
     else emit([skip('e2e', 'ACCEPTANCE_E2E=0')]);
     if (cfg.load.enabled) loadOk = await loadTest(cfg, sessions, tenants, print);

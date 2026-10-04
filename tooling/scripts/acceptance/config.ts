@@ -28,6 +28,19 @@ export interface AcceptanceConfig {
     vus?: number;
   };
   modelEval: { enabled: boolean; taskKinds: string[]; timeoutMs: number; budgetMicros: number };
+  /**
+   * The settle step before the fixtures (tooling/scripts/acceptance/settle.ts): the commit this job was built from
+   * (RAILWAY_GIT_COMMIT_SHA; null = unknown, the revision condition is skipped) and how long to wait for the api to
+   * serve it with every migration applied (ACCEPTANCE_SETTLE_TIMEOUT_MS, default 20 minutes).
+   */
+  settle: { revision: string | null; timeoutMs: number };
+  /**
+   * The api journeys of the features shipped after RA-14 (apps/api/src/acceptance/feature-checks.ts). The ones that
+   * call the model (AI-assisted brand setup, Studio generation) spend at most `modelBudgetMicros` each, through the
+   * fixture brand's day limit (ACCEPTANCE_MODEL_BUDGET_MICROS, default 200000; 0 skips them); every job they wait for
+   * (assist, generation, ingest, render) is given `timeoutMs` (ACCEPTANCE_JOURNEY_TIMEOUT_MS, default 10 minutes).
+   */
+  journeys: { modelBudgetMicros: number; timeoutMs: number };
 }
 
 const flag = (value: string | undefined): boolean => value?.trim() === '1';
@@ -36,6 +49,13 @@ const positive = (name: string, value: string | undefined, fallback: number): nu
   if (value === undefined || value.trim() === '') return fallback;
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number`);
+  return n;
+};
+
+const nonNegative = (name: string, value: string | undefined, fallback: number): number => {
+  if (value === undefined || value.trim() === '') return fallback;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name} must be a whole number of 0 or more`);
   return n;
 };
 
@@ -135,6 +155,18 @@ export function acceptanceConfigFromEnv(
       taskKinds: taskKinds.length ? taskKinds : ['copywriting'],
       timeoutMs: positive('MODEL_EVAL_TIMEOUT_MS', env['MODEL_EVAL_TIMEOUT_MS'], 600_000),
       budgetMicros: positive('MODEL_EVAL_BUDGET_MICROS', env['MODEL_EVAL_BUDGET_MICROS'], 250_000),
+    },
+    settle: {
+      revision: env['RAILWAY_GIT_COMMIT_SHA']?.trim() || null,
+      timeoutMs: positive('ACCEPTANCE_SETTLE_TIMEOUT_MS', env['ACCEPTANCE_SETTLE_TIMEOUT_MS'], 20 * 60_000),
+    },
+    journeys: {
+      modelBudgetMicros: nonNegative(
+        'ACCEPTANCE_MODEL_BUDGET_MICROS',
+        env['ACCEPTANCE_MODEL_BUDGET_MICROS'],
+        200_000,
+      ),
+      timeoutMs: positive('ACCEPTANCE_JOURNEY_TIMEOUT_MS', env['ACCEPTANCE_JOURNEY_TIMEOUT_MS'], 600_000),
     },
   };
 }
