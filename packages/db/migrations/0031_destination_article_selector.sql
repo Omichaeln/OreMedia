@@ -1,0 +1,1 @@
+ALTER TABLE `brand_destinations` ADD `article_selector` varchar(200);

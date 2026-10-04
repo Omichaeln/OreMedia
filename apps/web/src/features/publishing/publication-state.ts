@@ -116,6 +116,144 @@ export function remoteVerificationChip(remoteVerification: string | null | undef
 }
 
 /**
+ * PR-04: the four things a website article's verification proves, each on its own: the website acknowledged the
+ * write, the CMS read-back matched what was sent, the rendered article region carries the whole approved content,
+ * and the live page may be indexed (meta robots and the X-Robots-Tag header). Read from the evidence payloads as
+ * data; anything not proven reads `unverified`, never as a pass.
+ */
+export type VerificationStageKey = 'write' | 'readback' | 'rendered' | 'visibility';
+export interface VerificationStage {
+  key: VerificationStageKey;
+  label: string;
+  state: 'verified' | 'failed' | 'unverified' | 'not_applicable';
+  detail: string;
+}
+
+const obj = (v: unknown): Record<string, unknown> | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+export function articleVerificationStages(
+  p: { remotePostId: string | null; remoteStatus?: string | null },
+  readback: Record<string, unknown> | null,
+  validation: Record<string, unknown> | null,
+): VerificationStage[] {
+  const write: VerificationStage = p.remotePostId
+    ? {
+        key: 'write',
+        label: 'Write acknowledged',
+        state: 'verified',
+        detail: `The website accepted the write (post ${p.remotePostId}).`,
+      }
+    : {
+        key: 'write',
+        label: 'Write acknowledged',
+        state: 'unverified',
+        detail: 'No write has been acknowledged yet.',
+      };
+  const rb = obj(readback?.['verification'])?.['outcome'];
+  const readbackStage: VerificationStage = {
+    key: 'readback',
+    label: 'CMS read-back',
+    ...(rb === 'verified'
+      ? { state: 'verified' as const, detail: 'The article read back from the CMS matched what was sent.' }
+      : rb === 'mismatch'
+        ? {
+            state: 'failed' as const,
+            detail: 'The article read back from the CMS differs from what was sent.',
+          }
+        : { state: 'unverified' as const, detail: 'The CMS read-back has not proven the write.' }),
+  };
+  const overall =
+    validation === null
+      ? null
+      : typeof validation['outcome'] === 'string'
+        ? validation['outcome']
+        : validation['ok'] === true
+          ? 'verified'
+          : 'failed';
+  // The rendered stage reads the page's own checks without the two visibility ones (shown as their own stage).
+  const checks = Array.isArray(validation?.['checks']) ? (validation['checks'] as unknown[]).map(obj) : [];
+  const VISIBILITY = ['indexable', 'header_indexable'];
+  const pageChecks = checks.filter((c) => c && !VISIBILITY.includes(String(c['key'])));
+  const outcome =
+    overall === 'failed' && pageChecks.length > 0 && pageChecks.every((c) => c?.['ok'] === true)
+      ? 'verified'
+      : overall;
+  const content = obj(validation?.['content']);
+  const missing = Array.isArray(content?.['missingBlocks']) ? (content['missingBlocks'] as unknown[]) : [];
+  const firstMissing = obj(missing[0]);
+  const missingImages = Array.isArray(content?.['missingImages'])
+    ? (content['missingImages'] as unknown[])
+    : [];
+  const reason = typeof validation?.['reason'] === 'string' ? validation['reason'] : null;
+  const rendered: VerificationStage = {
+    key: 'rendered',
+    label: 'Rendered article',
+    ...(outcome === 'verified'
+      ? {
+          state: 'verified' as const,
+          detail:
+            content && typeof content['expectedBlocks'] === 'number'
+              ? `All ${content['expectedBlocks']} blocks of the approved content are on the page${typeof content['selector'] === 'string' ? ` (in ${content['selector']})` : ''}.`
+              : 'The page passed every check.',
+        }
+      : outcome === 'failed'
+        ? {
+            state: 'failed' as const,
+            detail: firstMissing
+              ? `${missing.length === 1 ? 'A block' : `${missing.length} blocks`} of the approved content ${missing.length === 1 ? 'is' : 'are'} missing or changed on the page, first block ${Number(firstMissing['index']) + 1}: “${String(firstMissing['text'] ?? '')}”.`
+              : missingImages.length > 0
+                ? `${missingImages.length} image${missingImages.length === 1 ? ' is' : 's are'} missing from the article: ${missingImages.map(String).join(', ')}.`
+                : `The page did not pass every check${reason ? ` (${reason})` : ''}.`,
+          }
+        : {
+            state: 'unverified' as const,
+            detail:
+              outcome === null
+                ? 'The page has not been checked yet.'
+                : `The page could not be verified${reason ? ` (${reason})` : ''}; it is not counted as verified.`,
+          }),
+  };
+  const indexability = obj(validation?.['indexability']);
+  const visibility: VerificationStage =
+    p.remoteStatus !== 'live'
+      ? {
+          key: 'visibility',
+          label: 'Live visibility',
+          state: 'not_applicable',
+          detail: 'Not live: a draft is expected to be hidden from search.',
+        }
+      : outcome === null || outcome === 'unverified' || !indexability
+        ? {
+            key: 'visibility',
+            label: 'Live visibility',
+            state: 'unverified',
+            detail: 'Whether search engines may index the page is not proven.',
+          }
+        : indexability['header'] === 'noindex'
+          ? {
+              key: 'visibility',
+              label: 'Live visibility',
+              state: 'failed',
+              detail: 'The page’s X-Robots-Tag header tells search engines not to index it.',
+            }
+          : indexability['meta'] === 'noindex'
+            ? {
+                key: 'visibility',
+                label: 'Live visibility',
+                state: 'failed',
+                detail: 'The page’s robots meta tag tells search engines not to index it.',
+              }
+            : {
+                key: 'visibility',
+                label: 'Live visibility',
+                state: 'verified',
+                detail: 'Nothing on the page or in its headers stops search engines indexing it.',
+              };
+  return [write, readbackStage, rendered, visibility];
+}
+
+/**
  * The calendar source types `state` as a string; anything outside the enum is shown as such, never guessed. A
  * published article shows what the website holds (RA-02) when the server says it.
  */

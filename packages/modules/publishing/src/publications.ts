@@ -26,9 +26,10 @@ import {
   type PublicationState,
 } from '@oremedia/contracts/publishing';
 import {
-  articleFirstParagraph,
-  articleLastParagraph,
-  renderedValidationOk,
+  articleManifest,
+  renderArticleHtml,
+  renderedOutcomeOf,
+  sanitizeArticleHtml,
   type RenderedValidationV1,
 } from '@oremedia/contracts/article';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
@@ -386,7 +387,9 @@ async function requestRemoval(
 
 /**
  * R2-3 / RA-04: the published page fetched again without a credential and checked against the article (title,
- * slug, canonical, first and last paragraph; indexable when the article is live). The caller records the result.
+ * slug, canonical; indexable when the article is live). PR-04: the article region must carry the manifest of what
+ * the site holds by right: the body of the latest edit that went through, else the approved revision's own
+ * rendering (immutable, so the manifest is the one fixed at approval). The caller records the result.
  */
 export async function fetchRenderedValidation(row: PublicationRow, tx?: Tx): Promise<RenderedValidationV1> {
   if (!row.destinationId || row.state !== 'published' || !row.remoteUrl)
@@ -403,8 +406,11 @@ export async function fetchRenderedValidation(row: PublicationRow, tx?: Tx): Pro
     url: row.remoteUrl,
     title: variant.article.title,
     slug: variant.article.slug,
-    firstParagraph: articleFirstParagraph(variant.article),
-    lastParagraph: articleLastParagraph(variant.article),
+    manifest: articleManifest(
+      sanitizeArticleHtml(
+        (await changesRepo.latestSucceededEdit(row.id, tx))?.text ?? renderArticleHtml(variant.article),
+      ),
+    ),
     // A draft (or a reverted article) is expected to be hidden; only a live page must be indexable (RA-02). A row
     // published before the status column existed (null) is read from its latest read-back, never assumed a draft.
     draft: row.remoteStatus ? row.remoteStatus !== 'live' : await readbackSaysDraft(row.id, tx),
@@ -416,8 +422,9 @@ const readbackSaysDraft = async (publicationId: string, tx?: Tx): Promise<boolea
 
 /**
  * Records what the page showed as insert-only `rendered_validation` evidence and sets the publication's
- * verification from it: `verified` with the instant when every check passed, `failed` otherwise (RA-04). The
- * caller holds the row lock.
+ * verification from it: `verified` with the instant when every check passed, `failed` when the page contradicted
+ * one (RA-04), `unverified` when nothing could be proven (PR-04: the page did not answer, was cut, or has no article
+ * region): never a pass by default. The caller holds the row lock.
  */
 export async function recordRenderedValidation(
   row: PublicationRow,
@@ -440,21 +447,29 @@ export async function recordRenderedValidation(
     },
     tx,
   );
-  const ok = renderedValidationOk(result.checks);
+  const outcome = renderedOutcomeOf(result);
   await publicationsRepo.update(
     row.id,
     row.version,
-    { remoteVerification: ok ? 'verified' : 'failed', remoteVerifiedAt: ok ? at : null },
+    { remoteVerification: outcome, remoteVerifiedAt: outcome === 'verified' ? at : null },
     tx,
   );
 }
 
-/** The failed check keys as the audit reason, or null when every check passed. */
-export const failedChecksReason = (result: RenderedValidationV1): string | null =>
-  result.checks
-    .filter((c) => !c.ok)
-    .map((c) => c.key)
-    .join(',') || null;
+/**
+ * The failed check keys as the audit reason (PR-04: led by `unverified:` when nothing could be proven), or null
+ * when every check passed.
+ */
+export const failedChecksReason = (result: RenderedValidationV1): string | null => {
+  const failed =
+    result.checks
+      .filter((c) => !c.ok)
+      .map((c) => c.key)
+      .join(',') || null;
+  return renderedOutcomeOf(result) === 'unverified'
+    ? `unverified:${result.reason ?? failed ?? ''}`.slice(0, 120)
+    : failed;
+};
 
 export const publicationService = {
   /**
@@ -1124,7 +1139,7 @@ export const publicationService = {
       actorRef(actor),
       'publication.validate_rendered',
       { type: 'publication', id: row.id },
-      renderedValidationOk(result.checks) ? 'allowed' : 'denied',
+      renderedOutcomeOf(result) === 'verified' ? 'allowed' : 'denied',
       tx,
       {
         brandId: row.brandId,

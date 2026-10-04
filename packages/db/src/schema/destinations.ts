@@ -47,6 +47,11 @@ export const brandDestinations = mysqlTable(
     currencyCode: varchar('currency_code', { length: 3 }),
     /** When the zone was last read from the platform; the sweep asks again after REPORTING_ZONE_RECHECK_DAYS. */
     reportingZoneCheckedAt: ts('reporting_zone_checked_at'),
+    /**
+     * PR-04: where a website's theme puts an article's body (simple CSS selectors, contracts ArticleRegionSelector),
+     * tried before the common WordPress defaults when a rendered article is verified; null: the defaults only.
+     */
+    articleSelector: varchar('article_selector', { length: 200 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),

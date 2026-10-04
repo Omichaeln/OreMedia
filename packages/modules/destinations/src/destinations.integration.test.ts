@@ -34,7 +34,7 @@ import {
 import { CmsRegistry, SourceRegistry, textFingerprint } from '@oremedia/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { ArticleDocumentV1 } from '@oremedia/contracts/content';
-import { renderArticleHtml } from '@oremedia/contracts/article';
+import { articleManifest, renderArticleHtml } from '@oremedia/contracts/article';
 import { destinationArticles, effectivePublishMode } from './articles';
 import { configureDestinationCms } from './cms';
 import { providerService } from './providers';
@@ -1436,7 +1436,7 @@ describe('destinations module against MySQL 8', () => {
       cms.calls.length = 0;
       cms.pages.set(`${SITE}/?p=100`, {
         status: 200,
-        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><h3>Is it safe?</h3><p>Yes, mostly.</p></body></html>',
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><article><h1>Why ore and tar last</h1><div class="entry-content"><p>Ore is heavy.</p><section class="faq"><h3>Is it safe?</h3><p>Yes, mostly.</p></section></div></article></body></html>',
       });
       const result = await inTenant(tenantA, () =>
         destinationArticles.publish(input, undefined, async () => void sent++),
@@ -1463,22 +1463,31 @@ describe('destinations module against MySQL 8', () => {
         reason: null,
         sentHash: textFingerprint(renderArticleHtml(article)),
       });
-      expect(result.validation).toMatchObject({ ok: true, status: 200, truncated: false, error: null });
+      expect(result.validation).toMatchObject({
+        ok: true,
+        outcome: 'verified',
+        status: 200,
+        truncated: false,
+        error: null,
+        content: { selector: '.entry-content', expectedBlocks: 3, matchedBlocks: 3, missingBlocks: [] },
+      });
       expect(result.validation?.checks.map((c) => `${c.key}:${c.ok}`)).toEqual([
         'status_ok:true',
         'title_present:true',
         'canonical_present:true',
         'indexable:true', // a draft may carry noindex
-        'body_present:true',
         'canonical_matches:true', // the canonical names the slug's path on the site
-        'last_paragraph_present:true',
+        'article_region_found:true',
+        'content_complete:true',
+        'images_present:true',
+        'header_indexable:true',
       ]);
     });
 
-    it('a page that stops after the first paragraph fails the last-paragraph check (RA-04), everything else passing', async () => {
+    it('a page that stops after the first paragraph fails the content check (RA-04, PR-04), everything else passing', async () => {
       cms.pages.set(`${SITE}/?p=101`, {
         status: 200,
-        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p></body></html>',
+        html: '<html><head><title>Why ore and tar last – Blog</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"></head><body><article><h1>Why ore and tar last</h1><div class="entry-content"><p>Ore is heavy.</p></div></article></body></html>',
       });
       const result = await inTenant(tenantA, () =>
         destinationArticles.publish({
@@ -1492,10 +1501,109 @@ describe('destinations module against MySQL 8', () => {
       );
       expect(result).toMatchObject({ outcome: 'accepted', remotePostId: '101' });
       if (result.outcome !== 'accepted') return;
-      expect(result.validation?.ok).toBe(false);
-      expect(result.validation?.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual([
-        'last_paragraph_present',
-      ]);
+      expect(result.validation).toMatchObject({ ok: false, outcome: 'failed', reason: 'content_changed' });
+      expect(result.validation?.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual(['content_complete']);
+    });
+
+    it('rendered verification (PR-04): a header-only noindex fails live visibility; a page that times out or answers 503 stays unverified; the destination’s own article selector is used first', async () => {
+      const manifest = articleManifest(renderArticleHtml(article));
+      const validate = (url: string) =>
+        inTenant(tenantA, () =>
+          destinationArticles.validateRendered({
+            tenantId: tenantA,
+            destinationId: siteId,
+            url,
+            title: article.title,
+            slug: article.slug,
+            manifest,
+            draft: false,
+          }),
+        );
+      const html = (body: string) =>
+        `<html><head><title>Why ore and tar last</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="index, follow"></head><body>${body}</body></html>`;
+      const body = renderArticleHtml(article);
+      cms.pages.set(`${SITE}/hidden`, {
+        status: 200,
+        html: html(`<article><div class="entry-content">${body}</div></article>`),
+        xRobotsTag: 'noindex',
+      });
+      expect(await validate(`${SITE}/hidden`)).toMatchObject({
+        ok: false,
+        outcome: 'failed',
+        indexability: { meta: 'index', header: 'noindex' },
+      });
+      cms.pages.set(`${SITE}/slow`, { status: 0, html: '', unreachable: true });
+      expect(await validate(`${SITE}/slow`)).toMatchObject({
+        ok: false,
+        outcome: 'unverified',
+        reason: 'page_unavailable_transport_after_send',
+      });
+      cms.pages.set(`${SITE}/down`, { status: 503, html: '<html><body>Maintenance</body></html>' });
+      expect(await validate(`${SITE}/down`)).toMatchObject({ ok: false, outcome: 'unverified' });
+      // A theme whose body sits in its own element, next to a teaser the default `article` would take.
+      cms.pages.set(`${SITE}/custom`, {
+        status: 200,
+        html: html(
+          `<article class="teaser"><p>Another post.</p></article><div class="story-body">${body}</div>`,
+        ),
+      });
+      expect(await validate(`${SITE}/custom`)).toMatchObject({
+        outcome: 'failed',
+        reason: 'content_changed',
+      });
+      const dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          destinationService.setArticleSelector(
+            owner(),
+            {
+              brandId: brandA,
+              destinationId: siteId,
+              articleSelector: 'div p',
+              expectedVersion: dto.version,
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toThrow();
+      const saved = await run(tenantA, (tx) =>
+        destinationService.setArticleSelector(
+          owner(),
+          {
+            brandId: brandA,
+            destinationId: siteId,
+            articleSelector: 'div.story-body',
+            expectedVersion: dto.version,
+          },
+          tx,
+        ),
+      );
+      expect(saved).toMatchObject({ articleSelector: 'div.story-body', version: dto.version + 1 });
+      expect(await validate(`${SITE}/custom`)).toMatchObject({
+        outcome: 'verified',
+        content: { selector: 'div.story-body' },
+      });
+      // A stale version is a conflict; null clears the selector.
+      await expect(
+        run(tenantA, (tx) =>
+          destinationService.setArticleSelector(
+            owner(),
+            { brandId: brandA, destinationId: siteId, articleSelector: null, expectedVersion: dto.version },
+            tx,
+          ),
+        ),
+      ).rejects.toThrow();
+      expect(
+        await run(tenantA, (tx) =>
+          destinationService.setArticleSelector(
+            owner(),
+            { brandId: brandA, destinationId: siteId, articleSelector: null, expectedVersion: saved.version },
+            tx,
+          ),
+        ),
+      ).toMatchObject({ articleSelector: null });
     });
 
     it('publish (RA-04): with no read allowed the write is recorded as unverified with the reason, never as proof; a read-back that differs is a mismatch', async () => {
@@ -1614,7 +1722,7 @@ describe('destinations module against MySQL 8', () => {
       cms.calls.length = 0;
       const page = {
         status: 200,
-        html: '<html><head><title>Why ore and tar last</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><h1>Why ore and tar last</h1><p>Ore is heavy.</p><figure><img src="x" alt="The weighbridge"><figcaption>North gate</figcaption></figure><p><a href="https://acme.example/scales">Our scales</a></p></body></html>',
+        html: '<html><head><title>Why ore and tar last</title><link rel="canonical" href="https://blog.acme.example/why-ore-and-tar-last/"><meta name="robots" content="noindex"></head><body><main><h1>Why ore and tar last</h1><p>Ore is heavy.</p><figure><img src="x" alt="The weighbridge"><figcaption>North gate</figcaption></figure><p><a href="https://acme.example/scales">Our scales</a></p></main></body></html>',
       };
       for (const id of [102, 103, 104, 105, 106]) cms.pages.set(`${SITE}/?p=${id}`, page);
       const result = await inTenant(tenantA, () =>
@@ -1850,8 +1958,7 @@ describe('destinations module against MySQL 8', () => {
           url: `${SITE}/missing`,
           title: article.title,
           slug: article.slug,
-          firstParagraph: 'Ore is heavy.',
-          lastParagraph: 'Yes, mostly.',
+          manifest: articleManifest(renderArticleHtml(article)),
           draft: false,
         }),
       );

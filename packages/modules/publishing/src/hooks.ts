@@ -1,5 +1,5 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
-import type { RenderedValidationV1 } from '@oremedia/contracts/article';
+import type { ArticleManifestV1, RenderedValidationV1 } from '@oremedia/contracts/article';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
@@ -359,8 +359,11 @@ export interface DestinationValidateInput {
   url: string;
   title: string;
   slug: string;
-  firstParagraph: string;
-  lastParagraph: string;
+  /**
+   * PR-04: what the article region must carry: the manifest of the HTML the site was sent (the approved revision's
+   * rendering, or the body of the latest edit that went through), replacing the first/last-paragraph check.
+   */
+  manifest: ArticleManifestV1;
   draft: boolean;
 }
 export interface DestinationPublisher {

@@ -3,12 +3,10 @@ import {
   RENDERED_PAGE_MAX_BYTES,
   RENDERED_PAGE_TIMEOUT_MS,
   RenderedCheckKey,
-  articleFirstParagraph,
   articleHtmlChars,
-  articleLastParagraph,
+  articleManifest,
   articlePlainText,
   renderArticleHtml,
-  renderedValidationOk,
   sanitizeArticleHtml,
   validateRenderedPage,
   type RenderedValidationV1,
@@ -250,26 +248,41 @@ const siteOf = (row: DestinationRow, creds: DecryptedCredentials): CmsSite => ({
   username: creds.extra?.['username'] ?? '',
 });
 
-const failedValidation = (url: string, error: string): RenderedValidationV1 => ({
-  url,
-  fetchedAt: new Date().toISOString(),
-  status: null,
-  bytes: 0,
-  truncated: false,
-  ok: false,
-  checks: RenderedCheckKey.options.map((key) => ({ key, ok: false })),
-  error,
-});
+/**
+ * A page that could not be read at all. PR-04: nothing was proven, so it is `unverified` (a timeout, a transport
+ * failure, an address the policy refuses), never a pass; a redirect off the site's host or past the hop limit is the
+ * site answering with another page, so it is `failed`.
+ */
+const failedValidation = (url: string, error: string): RenderedValidationV1 => {
+  const outcome = error === 'other_host' || error === 'redirect_limit' ? 'failed' : 'unverified';
+  return {
+    url,
+    fetchedAt: new Date().toISOString(),
+    status: null,
+    bytes: 0,
+    truncated: false,
+    ok: false,
+    checks: RenderedCheckKey.options
+      .filter((key) => key !== 'body_present' && key !== 'last_paragraph_present')
+      .map((key) => ({ key, ok: false })),
+    error,
+    outcome,
+    reason: outcome === 'failed' ? error : `page_unavailable_${error}`,
+  };
+};
 
-/** Fetches the page without credentials and runs the pure checks; a page that cannot be read is a failed result. */
+/**
+ * Fetches the page without credentials (bounded in bytes and time, SSRF-checked per hop) and runs the pure checks:
+ * PR-04, the manifest against the article region (the destination's own selector first), the canonical identity and
+ * the live visibility from the meta tags and the X-Robots-Tag header. A page that cannot be read is `unverified`.
+ */
 async function validateWith(
   adapter: CmsAdapter,
   site: CmsSite,
   tenantId: string,
-  input: Pick<
-    DestinationValidateInput,
-    'url' | 'title' | 'slug' | 'firstParagraph' | 'lastParagraph' | 'draft'
-  >,
+  input: Pick<DestinationValidateInput, 'url' | 'title' | 'slug' | 'manifest' | 'draft'> & {
+    regionSelector: string | null;
+  },
   hooks?: ActivityHooks,
 ): Promise<RenderedValidationV1> {
   const io = cmsIO(adapter.key, tenantId, {
@@ -278,15 +291,17 @@ async function validateWith(
   });
   try {
     const page = await adapter.fetchRendered(site, io, input.url, RENDERED_PAGE_MAX_BYTES);
-    const checks = validateRenderedPage({
+    const result = validateRenderedPage({
       status: page.status,
       html: page.html,
       title: input.title,
       slug: input.slug,
       remoteUrl: input.url,
-      firstParagraph: input.firstParagraph,
-      lastParagraph: input.lastParagraph,
+      manifest: input.manifest,
       draft: input.draft,
+      regionSelector: input.regionSelector,
+      headers: page.headers,
+      truncated: page.truncated,
     });
     return {
       url: page.url,
@@ -294,9 +309,13 @@ async function validateWith(
       status: page.status,
       bytes: page.bytes,
       truncated: page.truncated,
-      ok: renderedValidationOk(checks),
-      checks,
+      ok: result.outcome === 'verified',
+      checks: result.checks,
       error: null,
+      outcome: result.outcome,
+      reason: result.reason,
+      content: result.content,
+      indexability: result.indexability,
     };
   } catch (err) {
     if (err instanceof RenderedPageError) return failedValidation(input.url, err.code);
@@ -470,9 +489,10 @@ export const destinationArticles: DestinationPublisher = {
             url: remote.remoteUrl,
             title: article.title,
             slug: article.slug,
-            firstParagraph: articleFirstParagraph(article),
-            lastParagraph: articleLastParagraph(article),
+            // PR-04: the page must carry every block of what was sent (the approved revision's rendering).
+            manifest: articleManifest(sent.html),
             draft: remote.status !== 'publish',
+            regionSelector: row.articleSelector,
           },
           hooks,
         );
@@ -670,7 +690,7 @@ export const destinationArticles: DestinationPublisher = {
         adapter,
         { siteUrl: row.externalId, username: '' },
         input.tenantId,
-        input,
+        { ...input, regionSelector: row.articleSelector },
         hooks,
       );
     } catch (err) {

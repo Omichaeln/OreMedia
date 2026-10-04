@@ -10,6 +10,11 @@ import {
   type SourceUse,
 } from '@oremedia/contracts/destinations';
 import type { ErrorDetail } from '@oremedia/contracts/errors';
+import {
+  ARTICLE_SELECTOR_MAX_CHARS,
+  ArticleRegionSelector,
+  DEFAULT_ARTICLE_REGION_SELECTORS,
+} from '@oremedia/contracts/article';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, type Tone } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
@@ -128,6 +133,72 @@ function DisconnectButton({ destination }: { destination: DestinationDto }) {
   );
 }
 
+/**
+ * PR-04: where this website's theme puts an article's body, for rendered-article verification (simple selectors
+ * such as `.entry-content` or `div.post-body`; empty uses the common WordPress defaults). destination.manage.
+ */
+function ArticleSelectorForm({ destination }: { destination: DestinationDto }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [value, setValue] = useState(destination.articleSelector ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation(
+    trpc.destinations.setArticleSelector.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setError(null);
+        void queryClient.invalidateQueries(trpc.destinations.pathFilter());
+      },
+      onError: (err) => setError(toUiError(err).message),
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (trimmed !== '' && !ArticleRegionSelector.safeParse(trimmed).success) {
+      setError(
+        'Use simple selectors only, separated by commas: a tag, #id, .class or [attribute], e.g. div.post-body.',
+      );
+      return;
+    }
+    save.mutate({
+      brandId: destination.brandId,
+      destinationId: destination.id,
+      articleSelector: trimmed === '' ? null : trimmed,
+      expectedVersion: destination.version,
+    });
+  };
+  const id = `article-selector-${destination.id}`;
+  return (
+    <form
+      onSubmit={submit}
+      className="flex flex-wrap items-end gap-2"
+      noValidate
+      data-testid="article-selector-form"
+    >
+      <Field
+        label="Article region selector"
+        htmlFor={id}
+        hint={`Where the theme puts an article's body, checked first when a published page is verified; empty uses the defaults (${DEFAULT_ARTICLE_REGION_SELECTORS.join(', ')}).`}
+        error={error ?? undefined}
+      >
+        <Input
+          id={id}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          maxLength={ARTICLE_SELECTOR_MAX_CHARS}
+          placeholder=".entry-content"
+        />
+      </Field>
+      <Button type="submit" size="sm" variant="secondary" disabled={save.isPending}>
+        {save.isPending ? 'Saving…' : 'Save selector'}
+      </Button>
+    </form>
+  );
+}
+
 function DestinationRow({
   destination,
   canManageDestinations,
@@ -155,6 +226,14 @@ function DestinationRow({
           ` · checked ${new Date(destination.healthCheckedAt).toLocaleString()}`}
         {destination.grantedScopes.length > 0 && ` · scopes: ${destination.grantedScopes.join(', ')}`}
       </p>
+      {destination.kind === 'cms_site' && destination.articleSelector && (
+        <p className="text-xs text-muted-foreground" data-testid="destination-article-selector">
+          Article region: <code>{destination.articleSelector}</code>
+        </p>
+      )}
+      {canManageDestinations && destination.status === 'active' && destination.kind === 'cms_site' && (
+        <ArticleSelectorForm destination={destination} />
+      )}
       {canManageDestinations && destination.status === 'active' && (
         <div className="flex flex-wrap items-start gap-2">
           <DisconnectButton destination={destination} />

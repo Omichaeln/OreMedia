@@ -11,6 +11,7 @@ import {
   DestinationReportOpportunities,
   DestinationReportRows,
   DestinationReportSummary,
+  DestinationSetArticleSelector,
   DestinationSetHealth,
   SourceUseCheck,
   SourceUsePolicyList,
@@ -66,6 +67,14 @@ export const destinationsRouter = router({
     .input(DestinationSetHealth)
     .mutation(({ ctx, input }) =>
       idempotent(mutationCtx(ctx), (tx) => destinationService.setHealth(ctx.tenant.actor, input, tx)),
+    ),
+  /** PR-04: a website's article-region selector for rendered-article verification (destination.manage). */
+  setArticleSelector: tenantMutation
+    .input(DestinationSetArticleSelector)
+    .mutation(({ ctx, input }) =>
+      idempotent(mutationCtx(ctx), (tx) =>
+        destinationService.setArticleSelector(ctx.tenant.actor, input, tx),
+      ),
     ),
   disconnect: tenantMutation
     .input(DestinationDisconnect)

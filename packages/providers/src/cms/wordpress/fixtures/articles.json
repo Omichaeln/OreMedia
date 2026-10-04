@@ -628,7 +628,7 @@
             "headers": {
               "content-type": "text/html"
             },
-            "body": "<html><head><title>Why ore &amp; tar \u2013 Site</title><link rel=\"canonical\" href=\"https://site.example/why-ore-and-tar/\"></head><body><h1>Why ore &amp; tar</h1><p>Ore is heavy.</p></body></html>"
+            "body": "<html><head><title>Why ore &amp; tar – Site</title><link rel=\"canonical\" href=\"https://site.example/why-ore-and-tar/\"></head><body><h1>Why ore &amp; tar</h1><p>Ore is heavy.</p></body></html>"
           }
         }
       ]
@@ -1016,6 +1016,27 @@
               "content-type": "text/html"
             },
             "body": "<html>not an image</html>"
+          }
+        }
+      ]
+    },
+    "rendered_headers": {
+      "description": "PR-04: the page's X-Robots-Tag and Link headers travel with it (live visibility, canonical identity).",
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "host": "site.example",
+            "path": "/why-ore-and-tar/"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "x-robots-tag": "noindex, nofollow",
+              "link": "<https://site.example/why-ore-and-tar/>; rel=\"canonical\""
+            },
+            "body": "<html><body><article><p>Ore is heavy.</p></article></body></html>"
           }
         }
       ]
