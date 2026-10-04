@@ -13,6 +13,7 @@ import {
   startTelemetry,
   stopTelemetry,
 } from '@oremedia/observability';
+import { composeModules } from './composition';
 import { startRenderWorkers } from './render-worker';
 
 /**
@@ -40,6 +41,8 @@ const config = reportConfiguration(log, [uploadsCapability]);
 if (config.refuse) process.exit(2);
 configureDatabase({ url: databaseUrl, connectionLimit: Number(process.env['DATABASE_POOL'] ?? 4) });
 configureStorage(createStorageFromEnv());
+// Architecture §4.4: provider I/O refuses a demo company; unwired, it would refuse every company in production.
+composeModules();
 
 // Media jobs work in private temp directories (MEDIA_TMP_DIR); a container killed mid-job leaves them behind.
 const swept = await sweepStaleTempDirs({ olderThanMs: 6 * 3_600_000 });
