@@ -532,6 +532,16 @@ export function reduce(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContex
       parent[index] = { ...element, locked: op.locked };
       return next;
     }
+    case 'setVisibility': {
+      const page = pageOf(next, op.pageId, op.op);
+      // Refused wherever a move or a removal is: a locked page, or a locked element (or a group holding one, or one
+      // inside a locked group). Unlock first.
+      assertPageUnlocked(page, op.op);
+      const { parent, index, element, ancestors } = requireElement(page, op.elementId, op.op);
+      assertMovable(element, op.op, ancestors);
+      parent[index] = { ...element, visible: op.visible };
+      return next;
+    }
     case 'groupElements': {
       const page = pageOf(next, op.pageId, op.op);
       if (locate(page.elements, op.groupId)) throw new OperationError('duplicate_element_id', op.op);

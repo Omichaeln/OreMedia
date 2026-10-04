@@ -91,6 +91,8 @@ export function describeOp(op: Operation): string {
       return 'changed the crop';
     case 'setLock':
       return op.locked ? 'locked it' : 'unlocked it';
+    case 'setVisibility':
+      return op.visible ? 'showed it' : 'hid it';
     case 'applyTemplate':
       return 'applied a template to the page';
     case 'addPage':
