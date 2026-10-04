@@ -1585,11 +1585,6 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       members: t.router({
-        list: query.query(({ ctx }) => {
-          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
-            throw new PolicyDeniedError('membership.manage');
-          return { items: backend.members.map((m) => ({ ...m, brandIds: [...m.brandIds] })) };
-        }),
         // As the API (G03): owners and admins; an owner's role only from an owner; sessions end; version-checked.
         setRole: mutation.input(MemberSetRole).mutation(({ ctx, input }) => {
           const m = manageableMember(ctx.member, input.membershipId);
@@ -1611,6 +1606,11 @@ export function createMockRouter(backend: MockBackend) {
         enable: mutation
           .input(MemberEnable)
           .mutation(({ ctx, input }) => setMemberStatus(ctx.member, input, 'active')),
+        list: query.query(({ ctx }) => {
+          if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
+            throw new PolicyDeniedError('membership.manage');
+          return { items: backend.members.map((m) => ({ ...m, brandIds: [...m.brandIds] })) };
+        }),
         invite: mutation
           .input(
             z.object({ email: z.string().email(), role: z.string(), allBrands: z.boolean().default(false) }),
