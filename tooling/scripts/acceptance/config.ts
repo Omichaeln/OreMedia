@@ -28,6 +28,12 @@ export interface AcceptanceConfig {
     vus?: number;
   };
   modelEval: { enabled: boolean; taskKinds: string[]; timeoutMs: number; budgetMicros: number };
+  /**
+   * The settle step before the fixtures (tooling/scripts/acceptance/settle.ts): the commit this job was built from
+   * (RAILWAY_GIT_COMMIT_SHA; null = unknown, the revision condition is skipped) and how long to wait for the api to
+   * serve it with every migration applied (ACCEPTANCE_SETTLE_TIMEOUT_MS, default 20 minutes).
+   */
+  settle: { revision: string | null; timeoutMs: number };
 }
 
 const flag = (value: string | undefined): boolean => value?.trim() === '1';
@@ -135,6 +141,10 @@ export function acceptanceConfigFromEnv(
       taskKinds: taskKinds.length ? taskKinds : ['copywriting'],
       timeoutMs: positive('MODEL_EVAL_TIMEOUT_MS', env['MODEL_EVAL_TIMEOUT_MS'], 600_000),
       budgetMicros: positive('MODEL_EVAL_BUDGET_MICROS', env['MODEL_EVAL_BUDGET_MICROS'], 250_000),
+    },
+    settle: {
+      revision: env['RAILWAY_GIT_COMMIT_SHA']?.trim() || null,
+      timeoutMs: positive('ACCEPTANCE_SETTLE_TIMEOUT_MS', env['ACCEPTANCE_SETTLE_TIMEOUT_MS'], 20 * 60_000),
     },
   };
 }
