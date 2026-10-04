@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
+import { WaveformV1 } from '@oremedia/contracts/media';
+import type { VideoMediaInfo } from '@oremedia/contracts/video';
 import {
   ACCEPTED_MIMES,
   ARCHIVE_MIMES,
@@ -140,6 +142,20 @@ const fontFileRow = (r: { asset: AssetRow; version: AssetVersionRow }): FontFile
   bytes: r.version.bytes,
   provenance: r.version.provenance,
 });
+
+/** STU-3: an asset a storyboard may use, as the creative module reads it (StoryboardAsset in the editor). */
+export interface StoryboardCandidate {
+  assetVersionId: string;
+  kind: AssetKind;
+  name: string | null;
+  altText: string | null;
+  semanticRole: string | null;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  hasAudio: boolean;
+  derivatives: string[];
+}
 
 /** Provenance a server-side upload records with its intent (generated media, imported files). */
 type IntentProvenance = Extract<Provenance, { kind: 'generated' | 'imported' }>;
@@ -571,6 +587,120 @@ export const assetService = {
       height: v.height,
       storageKey: v.storageKey,
     };
+  },
+
+  /**
+   * STU-2b: what the timeline editor, the reducer and the compositor need to know about sources: kind (a video, an
+   * audio file or a still image), duration and displayed size from the ingest probe, whether it has sound, and the
+   * derivatives the editor can fetch (proxy, strip, waveform…). Tenant-scoped; ids not found are left out. Callers
+   * authorise use separately (authoriseUse); this is a description, not a permission.
+   */
+  async mediaSummaries(assetVersionIds: readonly string[], tx?: Tx): Promise<VideoMediaInfo[]> {
+    const out: VideoMediaInfo[] = [];
+    const unique = [...new Set(assetVersionIds)];
+    // Three queries per ID_LIST_MAX ids (a project holds up to 8 × 200 items), whatever the number of sources.
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX) {
+      const versions = await versionsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx);
+      const owners = new Map(
+        (await assetsRepo.listInTenant([...new Set(versions.map((v) => v.assetId))], tx)).map((a) => [
+          a.id,
+          a,
+        ]),
+      );
+      const purposes = new Map<string, string[]>();
+      for (const d of await derivativesRepo.purposesForVersions(
+        versions.map((v) => v.id),
+        tx,
+      ))
+        purposes.set(d.assetVersionId, [...(purposes.get(d.assetVersionId) ?? []), d.purpose]);
+      for (const v of versions) {
+        const a = owners.get(v.assetId);
+        if (!a) continue;
+        out.push({
+          assetVersionId: v.id,
+          kind: a.kind === 'video' ? 'video' : a.kind === 'audio' ? 'audio' : 'image',
+          mime: v.mime,
+          durationMs: v.durationMs ?? v.mediaInfo?.durationMs ?? null,
+          width: v.width,
+          height: v.height,
+          hasAudio: (v.mediaInfo?.audio.length ?? 0) > 0,
+          derivatives: [...new Set(purposes.get(v.id) ?? [])].sort().slice(0, 12),
+        });
+      }
+    }
+    return out;
+  },
+
+  /**
+   * STU-3: the waveform peaks (STU-2a `waveform` derivative) of each version that has one, read from storage and
+   * checked against the WaveformV1 contract; versions without one (or with an unreadable one) are left out. A
+   * description for pause detection, not a permission.
+   */
+  async waveforms(assetVersionIds: readonly string[], tx?: Tx): Promise<Record<string, WaveformV1>> {
+    const out: Record<string, WaveformV1> = {};
+    for (const id of [...new Set(assetVersionIds)].slice(0, ID_LIST_MAX)) {
+      const d = await derivativesRepo.find(id, 'waveform', tx);
+      if (!d) continue;
+      const bytes = await storage().getObject(d.storageKey);
+      if (!bytes) continue;
+      try {
+        out[id] = WaveformV1.parse(JSON.parse(bytes.toString('utf8')));
+      } catch {
+        logger().warn({ assetVersionId: id }, 'waveform derivative unreadable');
+      }
+    }
+    return out;
+  },
+
+  /**
+   * STU-3: what a storyboard may use: the brand's assets eligible for creative use now (spec 9.2: approved, rights
+   * recorded and in force), as footage, stills or audio, supplied by people (generated media is left out: it is
+   * offered only as an explicit alternative), with names, alt text, duration, size, sound and derivatives.
+   */
+  async storyboardCandidates(brandId: string, tx?: Tx): Promise<StoryboardCandidate[]> {
+    const eligible = await assetService.findEligibleAssets(
+      {
+        brandId,
+        purpose: 'creative',
+        channelConnectionIds: [],
+        kinds: ['video', 'photo', 'illustration', 'icon', 'audio'],
+      },
+      { limit: 200 },
+      tx,
+    );
+    const ids = eligible.items.map((a) => a.assetVersionId);
+    const versions = new Map((await versionsRepo.listInTenant(ids, tx)).map((v) => [v.id, v]));
+    const owners = new Map(
+      (await assetsRepo.listInTenant([...new Set(eligible.items.map((a) => a.assetId))], tx)).map((a) => [
+        a.id,
+        a,
+      ]),
+    );
+    const media = new Map((await assetService.mediaSummaries(ids, tx)).map((m) => [m.assetVersionId, m]));
+    return eligible.items
+      .filter((a) => versions.get(a.assetVersionId)?.provenance.kind !== 'generated')
+      .map((a) => ({
+        assetVersionId: a.assetVersionId,
+        kind: a.kind,
+        name: owners.get(a.assetId)?.name ?? null,
+        altText: a.altText,
+        semanticRole: a.semanticRole,
+        durationMs: media.get(a.assetVersionId)?.durationMs ?? a.durationMs ?? null,
+        width: a.width,
+        height: a.height,
+        hasAudio: media.get(a.assetVersionId)?.hasAudio ?? false,
+        derivatives: media.get(a.assetVersionId)?.derivatives ?? [],
+      }));
+  },
+
+  /** STU-2b: the current version of each asset found in the tenant (templates bind brand fonts and logos by asset). */
+  async currentVersionIds(assetIds: readonly string[], tx?: Tx): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const unique = [...new Set(assetIds)];
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX)
+      for (const a of await assetsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx))
+        if (a.currentVersionId && a.state !== 'retired') out[a.id] = a.currentVersionId;
+    return out;
   },
 
   /** Any asset id from a client is loaded through the scoped repository first; a foreign id is NOT_FOUND. */

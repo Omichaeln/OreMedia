@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { karlaTtf, toWoff2 } from './ingest/font.fixtures';
 import { configureGoogleFonts, css2Url, fetchGoogleFontFiles, parseCss2 } from './google-fonts';
 
@@ -256,20 +257,27 @@ describe('Google Fonts client (css2 + font files, loopback fixtures)', () => {
       ).toThrow(ValidationFailedError);
   });
 
-  it('parses a hostile answer in linear time (no catastrophic backtracking)', () => {
-    const run = 'a'.repeat(200_000);
-    const hostile = [
-      `@font-face { ${run} }`,
-      `/* latin */ @font-face { font-family: ${run}; src: url(${run}`,
-      `@font-face {`.repeat(20_000),
-      `/*${'x'.repeat(100_000)}`,
-    ];
-    for (const css of hostile) {
-      const started = Date.now();
-      expect(parseCss2(css, 'https://fonts.gstatic.com')).toEqual([]);
-      expect(Date.now() - started).toBeLessThan(500);
-    }
-  });
+  it.each([
+    ['an unterminated rule body', (n: number) => `@font-face { ${'a'.repeat(n)} }`],
+    [
+      'unterminated descriptors',
+      (n: number) => `/* latin */ @font-face { font-family: ${'a'.repeat(n)}; src: url(${'a'.repeat(n)}`,
+    ],
+    ['repeated rule openers', (n: number) => `@font-face {`.repeat(n / 10)],
+    ['an unterminated comment', (n: number) => `/*${'x'.repeat(n / 2)}`],
+  ])(
+    'parses %s in linear time (no catastrophic backtracking)',
+    (_, hostile) => {
+      expect(parseCss2(hostile(200_000), 'https://fonts.gstatic.com')).toEqual([]);
+      // 8× the input takes well under 64× the CPU time.
+      const growth = timeGrowth(hostile, (css) => parseCss2(css, 'https://fonts.gstatic.com'), {
+        size: 25_000,
+      });
+      expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
+      expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
+    },
+    30_000,
+  );
 
   it('parses a css2 answer without a subset comment only when it is the family’s one file', () => {
     const single = `@font-face { font-family: 'Solo'; font-style: normal; font-weight: 400; src: url(https://fonts.gstatic.com/s/solo/a.woff2) format('woff2'); }`;

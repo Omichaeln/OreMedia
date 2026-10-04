@@ -362,8 +362,10 @@ export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok
       ? { ok: false, detail: 'entity_declaration' }
       : { ok: true, text };
   const before = text.slice(0, match.index);
-  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own.
-  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*$/.test(before))
+  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own. One greedy
+  // `<!--…-->` accepts exactly what a repeated lazy comment group did (that group could already run across `-->`),
+  // without the exponential backtracking the repetition cost on a run of comments followed by anything else.
+  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*-->\s*)?$/.test(before))
     return { ok: false, detail: 'entity_declaration' };
   const rest = text.slice(match.index + match[0].length);
   if (/<!DOCTYPE|<!ENTITY/i.test(rest)) return { ok: false, detail: 'entity_declaration' };

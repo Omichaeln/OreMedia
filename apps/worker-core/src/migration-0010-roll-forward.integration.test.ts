@@ -34,7 +34,12 @@ import {
   registerProviderClients,
 } from '@oremedia/module-publishing';
 import { ProviderRegistry } from '@oremedia/providers';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+  LATER_TABLE_NAMES,
+} from '../../../tooling/test-fixtures/src/seed';
 import { composeModules } from './composition';
 
 /**
@@ -66,7 +71,8 @@ const LATER_TABLES: MySqlTable[] = [
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0010 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

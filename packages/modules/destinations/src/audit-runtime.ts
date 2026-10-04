@@ -202,10 +202,18 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
         reason: decision.reason as 'no_policy' | 'review_overdue' | 'not_allowed',
       };
     }
-    if (!(await takeLock())) return { outcome: 'skipped', reason: 'locked' };
+    // A retried scheduled plan whose earlier attempt already opened its run (then failed, or its result was lost
+    // with the lock still held): the run of this plan's key is its own, resumed rather than refused as locked.
+    // Any other run (another key, or an on-demand one) still holds the destination.
+    const resumed =
+      input.trigger === 'scheduled' && !input.runId
+        ? await runsRepo.runningScheduledAt(row.brandId, row.id, at)
+        : null;
+    if (!(await takeLock()) && !resumed) return { outcome: 'skipped', reason: 'locked' };
+    const ownRunId = input.runId ?? resumed?.id;
     // A run still open: in progress (skip) or abandoned by a dead worker (closed as failed, then on we go).
     const open = await runsRepo.latest(row.brandId, row.id, 'running');
-    if (open && open.id !== input.runId) {
+    if (open && open.id !== ownRunId) {
       if (at.getTime() - open.startedAt.getTime() < SEO_AUDIT_RUN_STALE_MS)
         return { outcome: 'skipped', reason: 'locked' };
       await withTransaction(async (tx) => {
@@ -226,11 +234,11 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
         new Date(at.getTime() - SCHEDULED_REPEAT_MS),
         new Date(at.getTime() + DAY_MS),
       );
-      if (recent.some((r) => r.id !== input.runId && r.outcome !== 'failed'))
+      if (recent.some((r) => r.id !== ownRunId && r.outcome !== 'failed'))
         return { outcome: 'skipped', reason: 'already_ran' };
     }
     // The run row: the API created an on-demand one when the person asked; a scheduled run creates its own.
-    let runId = input.runId ?? null;
+    let runId = ownRunId ?? null;
     if (runId) {
       const existing = await runsRepo.getById(runId);
       if (existing.destinationId !== row.id)
@@ -285,7 +293,10 @@ export function createSeoAuditRuntime(opts: SeoAuditRuntimeOptions = {}): SeoAud
     const id = runId;
     await withTransaction(async (tx) => {
       const locked = await runsRepo.lock(id, tx);
+      // A resumed run whose earlier plan got this far (its version moved past the create's) is audited already.
+      const audited = resumed !== null && locked.version > 0;
       await runsRepo.update(locked.id, locked.version, { robotsDisallow: robots.disallow, limitsHit }, tx);
+      if (audited) return;
       await audit.record(
         workflowActor(),
         'seo_audit.started',
