@@ -1,4 +1,10 @@
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
+import {
+  capabilityCertificationStatuses,
+  type CapabilityCertificationStatusV1,
+  type CertifiableCapability,
+} from '@oremedia/contracts/providers';
+import { assertCapabilityCertified } from './capability';
 import type { SourceAdapter, SourceCapabilityV1 } from './source-contract';
 import { ga4PropertyAdapter } from './sources/ga4_property/adapter';
 import { gbpLocationAdapter } from './sources/gbp_location/adapter';
@@ -20,13 +26,28 @@ export class SourceRegistry {
     return this;
   }
 
-  /** Certified adapters only (tenant-facing); the same refusals as ProviderRegistry.get, on `kind`. */
-  get(kind: string): SourceAdapter {
+  /**
+   * Certified adapters only (tenant-facing); the same refusals as ProviderRegistry.get, on `kind`, including a
+   * supported `capability` without its own certification record (PR-06).
+   */
+  get(kind: string, capability?: CertifiableCapability): SourceAdapter {
     const a = this.adapters.get(kind);
     if (!a) throw new CapabilityUnsupportedError([{ path: 'kind', issue: `unknown_provider:${kind}` }]);
     if (!a.capability.certifiedAt)
       throw new CapabilityUnsupportedError([{ path: 'kind', issue: `provider_not_certified:${kind}` }]);
+    if (capability) assertCapabilityCertified('kind', kind, capability, this.certifications(kind));
     return a;
+  }
+
+  /** PR-06: every certifiable capability's state on a registered adapter; empty for an unknown kind. */
+  certifications(kind: string): CapabilityCertificationStatusV1[] {
+    const a = this.adapters.get(kind);
+    return a ? capabilityCertificationStatuses(sourceCapabilitySupport(a), a.capability.certifications) : [];
+  }
+
+  /** PR-06: whether the capability is supported here but carries no certification record (refused or labelled). */
+  isUncertified(kind: string, capability: CertifiableCapability): boolean {
+    return this.certifications(kind).find((s) => s.capability === capability)?.state === 'uncertified';
   }
 
   forCertification(kind: string): SourceAdapter | undefined {
@@ -51,6 +72,16 @@ export class SourceRegistry {
       capability: a.capability,
     }));
   }
+}
+
+/**
+ * PR-06: the certifiable capabilities a source adapter offers: connect, the target picker, token refresh,
+ * reconnect, and analytics when it declares reports. It publishes nothing.
+ */
+export function sourceCapabilitySupport(adapter: SourceAdapter): Set<CertifiableCapability> {
+  const supported = new Set<CertifiableCapability>(['connect', 'page_picker', 'token_refresh', 'reconnect']);
+  if (adapter.capability.reports.length > 0) supported.add('analytics');
+  return supported;
 }
 
 /**

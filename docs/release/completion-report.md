@@ -106,7 +106,9 @@ SUCCESS from `aa2c5d8` apart from the approval monitor, which crashes on its Gma
 
 ## 4. Connection inventory
 
-Names and states only, as recorded in section 1 of the ledger and corrected by its later findings.
+Names and states only, as recorded in section 1 of the ledger and corrected by its later findings. Certification
+per provider and capability (PR-06) is in `docs/release/connection-inventory.md`: 0 certified, 60 uncertified and
+28 not supported of 88 provider × capability pairs.
 
 | Capability                                               | Production                                        | Staging              | State                                                                                          |
 | -------------------------------------------------------- | ------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------- |

@@ -1,4 +1,5 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
+import type { CertifiableCapability } from '@oremedia/contracts/providers';
 import {
   MemoryProviderRateLimiter,
   createProviderIO,
@@ -42,8 +43,12 @@ export const configurePublishingProviders = (opts: PublishingProviderOptions): v
 
 export const registry = (): ProviderRegistry => options.registry;
 
-/** Certified adapters only; an unknown or uncertified key is CAPABILITY_UNSUPPORTED (spec 14.6). */
-export const adapterFor = (providerKey: string): ProviderAdapter => options.registry.get(providerKey);
+/**
+ * Certified adapters only; an unknown or uncertified key is CAPABILITY_UNSUPPORTED (spec 14.6). With `capability`
+ * (PR-06), a supported capability without its own certification record is refused the same way.
+ */
+export const adapterFor = (providerKey: string, capability?: CertifiableCapability): ProviderAdapter =>
+  options.registry.get(providerKey, capability);
 
 function rateLimiter(): RateLimiter {
   return (limiter ??=

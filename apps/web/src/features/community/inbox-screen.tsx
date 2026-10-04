@@ -203,8 +203,14 @@ function Conversation({ view, refetch }: { view: ConversationViewDto; refetch: (
             Read only: answering comments and seeing who wrote them needs the inbox permission.
           </p>
         )}
-        {view.canRespond && !c.channel.replySupported && (
+        {view.canRespond && !c.channel.replySupported && !c.channel.replyUncertified && (
           <p className="text-xs text-muted-foreground">This channel does not support replies to comments.</p>
+        )}
+        {view.canRespond && c.channel.replyUncertified && (
+          <p className="text-xs text-muted-foreground" data-testid="reply-uncertified">
+            Replies on this channel are not certified yet: they have not been exercised against the platform,
+            so Oremedia does not send them.
+          </p>
         )}
         {inFlight && (
           <div>
