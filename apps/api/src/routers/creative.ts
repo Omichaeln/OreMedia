@@ -9,6 +9,7 @@ import {
   DocumentRename,
   OperationsApply,
   OperationsPropose,
+  RenderCancel,
   RenderGet,
   RenderRequest,
   RevisionGet,
@@ -29,7 +30,19 @@ import {
   GenerationRetry,
   GenerationStart,
 } from '@oremedia/contracts/generation';
-import { creativeService, generationService } from '@oremedia/module-creative';
+import { VideoOperationsApply, VideoOperationsPropose, VideoTemplateList } from '@oremedia/contracts/video';
+import {
+  VideoAiAccept,
+  VideoAiActive,
+  VideoAiAssemble,
+  VideoAiCancel,
+  VideoAiGet,
+  VideoAiPreflight,
+  VideoAiRetry,
+  VideoAiSaveDraft,
+  VideoAiStart,
+} from '@oremedia/contracts/video-ai';
+import { creativeService, generationService, videoAiService } from '@oremedia/module-creative';
 import { idempotent } from '@oremedia/module-operations';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
 
@@ -89,6 +102,22 @@ export const creativeRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => creativeService.operations.propose(ctx.tenant.actor, input, tx)),
       ),
+    /** STU-2b: timeline operations on a video document (same flow as applyBatch). */
+    applyVideo: tenantMutation
+      .input(VideoOperationsApply)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.videoOperations.apply(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    /** STU-2b: the dry run of timeline operations; nothing is committed. */
+    proposeVideo: tenantMutation
+      .input(VideoOperationsPropose)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.videoOperations.propose(ctx.tenant.actor, input, tx),
+        ),
+      ),
   }),
 
   renders: router({
@@ -100,6 +129,67 @@ export const creativeRouter = router({
     get: tenantQuery
       .input(RenderGet)
       .query(({ ctx, input }) => creativeService.renders.get(ctx.tenant.actor, input)),
+    /** STU-2b: signed URLs of a ready job's exports (video, poster, captions) to play or download. */
+    exportMedia: tenantQuery
+      .input(RenderGet)
+      .query(({ ctx, input }) => creativeService.renders.exportMedia(ctx.tenant.actor, input)),
+    /** STU-2a/2b: stop a pending or rendering job; a running video render is signalled and ffmpeg stops. */
+    cancel: tenantMutation
+      .input(RenderCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.renders.cancel(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+
+  /** STU-2b: the built-in starter video templates (the creation screen lists them). */
+  videoTemplates: router({
+    list: tenantQuery
+      .input(VideoTemplateList)
+      .query(({ ctx, input }) => creativeService.videoTemplates.list(ctx.tenant.actor, input)),
+  }),
+
+  /**
+   * STU-3: AI storyboards and recuts of a video document as durable jobs (preflight, start, reattach, cancel, retry),
+   * assembly of a storyboard into the timeline, and accept of a proposal per change group.
+   */
+  videoAi: router({
+    preflight: tenantQuery
+      .input(VideoAiPreflight)
+      .query(({ ctx, input }) => videoAiService.preflight(ctx.tenant.actor, input)),
+    start: tenantMutation
+      .input(VideoAiStart)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.start(ctx.tenant.actor, input, tx)),
+      ),
+    get: tenantQuery.input(VideoAiGet).query(({ ctx, input }) => videoAiService.get(ctx.tenant.actor, input)),
+    active: tenantQuery
+      .input(VideoAiActive)
+      .query(({ ctx, input }) => videoAiService.active(ctx.tenant.actor, input)),
+    cancel: tenantMutation
+      .input(VideoAiCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.cancel(ctx.tenant.actor, input, tx)),
+      ),
+    retry: tenantMutation
+      .input(VideoAiRetry)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.retry(ctx.tenant.actor, input, tx)),
+      ),
+    saveDraft: tenantMutation
+      .input(VideoAiSaveDraft)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.saveDraft(ctx.tenant.actor, input, tx)),
+      ),
+    assemble: tenantMutation
+      .input(VideoAiAssemble)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.assemble(ctx.tenant.actor, input, tx)),
+      ),
+    accept: tenantMutation
+      .input(VideoAiAccept)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => videoAiService.accept(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   comments: router({

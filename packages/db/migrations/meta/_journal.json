@@ -190,6 +190,20 @@
       "when": 1791058825628,
       "tag": "0026_video_media",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1791066043056,
+      "tag": "0027_video_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1791076231377,
+      "tag": "0028_studio_video_jobs",
+      "breakpoints": true
     }
   ]
 }

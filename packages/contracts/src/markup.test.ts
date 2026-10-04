@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { scanMarkup } from './markup';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from './testing/linear-time';
 
-/** Inputs that sent the earlier regular expressions quadratic (or worse) must finish in linear time. */
-const fast = (run: () => unknown) => {
-  const started = performance.now();
-  run();
-  expect(performance.now() - started).toBeLessThan(200);
+/** Inputs that sent the earlier regular expressions quadratic (or worse) must take time linear in their size. */
+const linear = (input: (size: number) => string, size = 10_000) => {
+  const growth = timeGrowth(input, (markup) => [...scanMarkup(markup)].length, { size });
+  expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
+  expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
 };
-const N = 50_000;
 
 describe('scanMarkup', () => {
   it('yields text, tags with attributes, and raw-text contents; skips comments and doctypes', () => {
@@ -42,15 +42,19 @@ describe('scanMarkup', () => {
   });
 
   it.each([
-    ['unclosed tags', '<a '.repeat(N)],
-    ['bare angle brackets', '<'.repeat(N)],
-    ['unclosed quotes', '<a "'.repeat(N)],
-    ['unclosed comments', '<!--'.repeat(N)],
-    ['unclosed raw text', '<script>'.repeat(N)],
-    ['deep nesting', '<div aria-hidden=true>'.repeat(N / 10)],
-  ])('stays linear on %s', (_, input) => {
-    fast(() => [...scanMarkup(input)].length);
-  });
+    ['unclosed tags', (n: number) => '<a '.repeat(n)],
+    ['bare angle brackets', (n: number) => '<'.repeat(n)],
+    ['unclosed quotes', (n: number) => '<a "'.repeat(n)],
+    ['unclosed comments', (n: number) => '<!--'.repeat(n)],
+    ['unclosed raw text', (n: number) => '<script>'.repeat(n)],
+    ['deep nesting', (n: number) => '<div aria-hidden=true>'.repeat(n / 10)],
+  ])(
+    'stays linear on %s',
+    (_, input) => {
+      linear(input);
+    },
+    30_000,
+  );
 
   it('a quoted attribute value may hold `<` (as older serialisers write `alt="a < b"`); outside quotes it ends the tag', () => {
     expect([...scanMarkup('<img alt="a < b" src=x.png><a title=\'1<2\'>t</a>')]).toEqual([
@@ -75,10 +79,14 @@ describe('scanMarkup', () => {
   });
 
   it.each([
-    ['alternating quotes', '<a "<a \'<a '.repeat(N / 11)],
-    ['alternating quotes, closed', '<a "<a \'<a "<a \'>'.repeat(N / 17)],
-    ['one unclosed quote before many tags', `<a "${'<a '.repeat(N / 3)}`],
-  ])('stays linear on %s inside quoted values', (_, input) => {
-    fast(() => [...scanMarkup(input)].length);
-  });
+    ['alternating quotes', (n: number) => '<a "<a \'<a '.repeat(n / 11)],
+    ['alternating quotes, closed', (n: number) => '<a "<a \'<a "<a \'>'.repeat(n / 17)],
+    ['one unclosed quote before many tags', (n: number) => `<a "${'<a '.repeat(n / 3)}`],
+  ])(
+    'stays linear on %s inside quoted values',
+    (_, input) => {
+      linear(input);
+    },
+    30_000,
+  );
 });

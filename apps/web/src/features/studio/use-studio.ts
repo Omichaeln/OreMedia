@@ -25,6 +25,7 @@ import {
 import {
   committedOf,
   committedOfRevision,
+  graphicDocument,
   type CommitMode,
   type Committed,
   type DocumentDto,
@@ -118,12 +119,13 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
   const rebase = useCallback(
     async (localOps: Operation[], baseNumber: number) => {
       try {
-        const head = await client.creative.documents.get.query({ documentId });
+        const head = graphicDocument(await client.creative.documents.get.query({ documentId }));
         const list = await client.creative.revisions.list.query({ documentId, page: { limit: 200 } });
         const since = list.items.filter((r) => r.number > baseNumber).sort((a, b) => a.number - b.number);
         const remoteOps = await Promise.all(
           since.map(async (r) => {
             const rev = await client.creative.revisions.get.query({ documentId, revisionId: r.id });
+            if (rev.kind !== 'graphic') throw new Error('not a graphic revision');
             return rev.operations.operations;
           }),
         );
@@ -363,7 +365,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
   }, [client, documentId]);
 
   const refreshHead = useCallback(async () => {
-    const head = await client.creative.documents.get.query({ documentId });
+    const head = graphicDocument(await client.creative.documents.get.query({ documentId }));
     afterCommit(committedOf(head), head.revision);
     dispatch({ type: 'head:refresh', head: committedOf(head) });
   }, [afterCommit, client, documentId]);
@@ -397,7 +399,7 @@ export function useStudio(documentId: string, initial: DocumentDto): StudioApi {
   );
 
   const adoptHead = useCallback(async () => {
-    const head = await client.creative.documents.get.query({ documentId });
+    const head = graphicDocument(await client.creative.documents.get.query({ documentId }));
     const s = stateRef.current;
     const next = committedOf(head);
     afterCommit(next, head.revision);
