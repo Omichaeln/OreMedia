@@ -42,7 +42,8 @@ brand by a person. The job never connects a channel itself.
    settings set the builder to Dockerfile with the path `infra/railway/acceptance/Dockerfile`, the restart policy to
    **never**, and the region to **us-west2** (the database's region). Name it `acceptance`. Turn **off** automatic
    deploys on push unless every push to the branch should run the acceptance. (`infra/railway/acceptance/railway.json`
-   records the same settings for reference only: Railway no longer reads config-as-code files; the
+   is only the reference for these settings: Railway refuses config-as-code paths (it asks for `.railway/railway.ts`;
+   build ledger R.2, `docs/progress/build-ledger.md`), so every service's settings are applied directly; the
    `backup-and-restore.md` services were set up by hand the same way.)
 2. Start command: leave the image's default, `node apps/api/dist/acceptance-run.js`. For the teardown (section 5)
    set the start command to `node apps/api/dist/acceptance-run.js --teardown` for one deployment and put it back.

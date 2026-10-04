@@ -53,6 +53,8 @@ for ffmpeg and 300 MB for the worker process. Ordinary camera footage encodes fa
 for one job; raise the plan or attach a volume and point `MEDIA_TMP_DIR` at it before raising concurrency. The clamav
 service's `StreamMaxLength` must cover the video cap (1 GiB) or every video upload stays quarantined with
 `scanner_unavailable` (the scan names the setting). `infra/railway/clamav/` builds that service from the official
-image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; point the clamav service at the repo with
-config file `infra/railway/clamav/railway.json` (staging first) before the video rollout. See the runbook rollout
+image with `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` set to 1100M; before the video rollout (staging first), connect the
+clamav service to this repository and apply the settings in `infra/railway/clamav/railway.json` to it directly
+(Dockerfile path `infra/railway/clamav/Dockerfile`, watch patterns, restart policy). Railway refuses config-as-code
+paths (build ledger R.2), so that file is only the reference. See the runbook rollout
 order for STU-2a.

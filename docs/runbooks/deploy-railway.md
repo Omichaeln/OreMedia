@@ -318,9 +318,11 @@ accepted as soon as the API is on the new build):
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
 2. Before the merge that ships this (the api deploys on merge and accepts video at once), raise the clamav service's
-   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: point the service at this repository with config
-   file `infra/railway/clamav/railway.json` (the official image plus the raised limits; the build fails if clamd's
-   config file moves), in staging first, then production. Video uploads are up to 1 GiB and are streamed to clamd;
+   `StreamMaxLength`, `MaxScanSize` and `MaxFileSize` to 1100M: connect the service to this repository and apply the
+   settings in `infra/railway/clamav/railway.json` to it directly (Dockerfile path `infra/railway/clamav/Dockerfile`:
+   the official image plus the raised limits, and the build fails if clamd's config file moves; watch patterns;
+   restart policy), in staging first, then production. Railway refuses config-as-code paths (build ledger R.2,
+   `docs/progress/build-ledger.md`), so that file is only the reference. Video uploads are up to 1 GiB and are streamed to clamd;
    below the limit clamd gives no verdict and the upload stays quarantined (`scanner_unavailable`, the detail names
    `StreamMaxLength`).
 3. Deploy `worker-render` on the new image (ffmpeg in the image, task queue `video` polled; `VIDEO_CONCURRENCY`
