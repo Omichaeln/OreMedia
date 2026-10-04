@@ -308,10 +308,28 @@ enabled for scans that exceed set maximums`. It was merged after confirming the 
 - **Staging acceptance (service `acceptance`, tracks `main`).** Since #71 added the new journeys (first run 09:19 UTC):
   `ACCEPTANCE_DONE 94/96 (24 skipped)`. The two failures: `smoke:upload:csp` (the staging object store is still the
   `REPLACE_ME` placeholder: owner action) and `brand-system:assist … ended failed: model_routing_denied; spent 0 µUSD
-of the 200000 cap`, which is being root-caused (whether it is a staging fixture gap or would deny AI-assisted Brand
-  System setup for real users). The copywriting model evaluation still reports `graded below the bar` with no failing
-  check since #63, because the `injection_reported` rubric scores 0 to 3.3 of 10; the staging fixture company still
-  evaluates skill version 1, not the version #63 seeded. Both are recorded here as open and are not counted as passing.
+of the 200000 cap`.
+- **Root cause of `model_routing_denied`: a product defect that also affects production.** `assertRoutingAllowed`
+  (`packages/ai/src/routing-policy.ts`) checks every model call against the tenant's stored policy or, without one,
+  the platform policy; the platform policy was hard-coded to Anthropic only and `configureRoutingPolicy` is never
+  called by a composition root, while `modelConfigFromEnv` selects the `openrouter` provider wherever
+  `OPENROUTER_API_KEY_REF` is set. worker-core has that variable (and `OREMEDIA_MODEL_ID`) in both environments and the
+  api has neither, so the api's start check passes and worker-core then denies the call before reserving any budget.
+  Every worker-side model call (brand assist, agent runs, Studio and video generation, the image, video and speech
+  tools) is therefore denied for any company without a stored routing policy, which is every company onboarded
+  normally. The skill evaluation runner has no routing gate, which is why staging gradings still reach the model.
+  Production impact is established from code and from production variable names (no production model run is
+  recorded either way). Fix: PR #82 makes the platform fallback the deployment's own policy (`routingPolicyFromEnv`:
+  OpenRouter with the configured default model on an OpenRouter deployment, Anthropic only otherwise); a stored
+  tenant policy still wins. Three regression tests fail on `main` and pass with the fix.
+- **Copywriting evaluation below the bar with no failing check.** A version passes only when every deterministic check
+  passes and every rubric mean reaches its case's `minScore`; `injection_reported` (minimum 8) scored 0 to 3.3. The
+  staging fixture company imported the built-in package once (2 October, version 1) and reuses it; #63's corrected
+  package was seeded for the platform skill only. Version 1's `copy-injection-and-superlative` case contains no
+  evidence, yet its rubric asks the model to report the embedded instruction, so nothing can score well: a defect in
+  the old case. Fix: PR #83 makes the acceptance fixture import the current package as the copy's next version when no
+  version matches its hash (the built-in seeder's rule). Whether that version clears the bar on the real model is not
+  yet observed.
 
 ### Inventory gaps closed in this increment (from the 3 October inventory at f3ba12f)
 
@@ -333,8 +351,7 @@ replay of histories recorded from a deployed version.
 4. Retention apply mode in production (`RETENTION_SWEEP_APPLY`, D-09).
 5. An alert destination (Slack, Discord or email webhook) for missed backups, crashes and deploy failures.
 6. Staging approval monitor: real staging Gmail credentials, or disable its cron.
-7. Import the brand-copywriting skill version seeded by #63 into the staging fixture company, so the model evaluation
-   grades the current package.
+7. (Superseded by PR #83, which imports the current package automatically; no owner action once it merges.)
 
 ### Residual risks added
 
