@@ -6,7 +6,7 @@ import { decodeEntities } from '@oremedia/providers/site-rules';
  * navigation, footer and side boilerplate are dropped; headings become `#` lines, list items `- ` lines, paragraphs
  * and table rows their own lines. The page's title and canonical URL are kept as the page states them, and its
  * same-site links are returned (navigation links first) so the crawl can choose what to read next. One pass of the
- * linear markup scanner (packages/providers/src/markup.ts): no regular expression runs over the markup, nothing is
+ * linear markup scanner (packages/contracts/src/markup.ts): no regular expression runs over the markup, nothing is
  * executed and no DOM is built from untrusted HTML.
  */
 export interface PageText {
