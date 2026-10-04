@@ -26,6 +26,7 @@ import {
   type SourceReportRow,
   type SourceTarget,
 } from '@oremedia/providers';
+import { allCapabilitiesCertifiedForTest } from '@oremedia/providers/testing/certified';
 
 /**
  * Test fixture only (never registered in production): an in-memory source whose grant, targets and refresh answer
@@ -49,6 +50,7 @@ export const fixtureSourceCapability = (
     ? { presentation: sourceRegistry.capability(kind)?.presentation }
     : {}),
   certifiedAt: '2026-01-01T00:00:00.000Z',
+  certifications: allCapabilitiesCertifiedForTest('2026-01-01T00:00:00.000Z'),
   ...over,
 });
 

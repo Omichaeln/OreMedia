@@ -1,0 +1,12 @@
+{
+  "workflowType": "metricCollectionWorkflowV1",
+  "case": "all-pulls-due-with-comments",
+  "description": "Published long ago: the comment ingestion child is started on ingest-comments and every scheduled pull is due at once; one pull fails permanently and is counted.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:37.174Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "d4b2b685eef1bc49b58a5c06811ae8d96017d93235d5db02c57d86f71e4d0b36"
+}

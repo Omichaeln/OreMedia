@@ -123,7 +123,12 @@ import {
 } from '@oremedia/editor';
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
-import { providerActivationState, type ProviderActivationV1 } from '@oremedia/contracts/providers';
+import {
+  CertifiableCapability,
+  capabilityCertificationStatuses,
+  providerActivationState,
+  type ProviderActivationV1,
+} from '@oremedia/contracts/providers';
 import { PageRequest } from '@oremedia/contracts/pagination';
 import {
   SkillBindingSet,
@@ -635,11 +640,26 @@ function provider(
   disabled: boolean,
   present: string[],
   missing: string[],
+  uncertified: CertifiableCapability[] = [],
 ): ProviderActivationV1 {
   const credentialRefs = [
     ...present.map((name) => ({ name, present: true })),
     ...missing.map((name) => ({ name, present: false })),
   ];
+  // PR-06: a certified provider here has every capability certified except `uncertified`; publish_video and
+  // comment_reply are not supported by the mock's CMS and sources, as the real registries say for those kinds.
+  const supported = new Set(
+    CertifiableCapability.options.filter(
+      (c) => kind === 'channel' || !['publish_video', 'comment_reply'].includes(c),
+    ),
+  );
+  const records = certifiedAt
+    ? Object.fromEntries(
+        CertifiableCapability.options
+          .filter((c) => !uncertified.includes(c))
+          .map((c) => [c, { certifiedAt, environment: 'staging', evidence: 'mock' }]),
+      )
+    : {};
   const facts = {
     key,
     kind,
@@ -649,6 +669,7 @@ function provider(
     certifiedAt,
     disabled,
     credentialRefs,
+    capabilities: capabilityCertificationStatuses(supported, records),
   };
   return { ...facts, ...providerActivationState(facts) };
 }
@@ -917,6 +938,7 @@ export class MockBackend {
       false,
       ['PROVIDER_LINKEDIN_PAGE_CLIENT_ID_REF', 'PROVIDER_LINKEDIN_PAGE_SECRET_REF'],
       [],
+      ['publish_video'],
     ),
     provider(
       'channel',

@@ -29,6 +29,7 @@ import {
   rememberConnect,
   unavailableReason,
 } from '../publishing/channel-connect';
+import { CapabilityCertifications } from '../settings/capability-certifications';
 import { useProviders, type ProviderActivationDto } from '../settings/use-settings';
 import {
   useDestinationSources,
@@ -177,6 +178,7 @@ function ActivationNote({ activation }: { activation: ProviderActivationDto | nu
   return (
     <>
       <Badge tone={chip.tone}>{chip.label}</Badge>
+      <CapabilityCertifications activation={activation} />
       {reason && (
         <p className="basis-full text-xs text-muted-foreground" data-testid="unavailable-reason">
           {reason}

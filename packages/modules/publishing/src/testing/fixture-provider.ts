@@ -27,6 +27,7 @@ import {
   type PublishMedia,
   type PublishRequest,
 } from '@oremedia/providers';
+import { allCapabilitiesCertifiedForTest } from '@oremedia/providers/testing/certified';
 import type { ChannelConnectResult } from '../channels';
 
 /**
@@ -78,6 +79,7 @@ export const fixtureCapability = (over: Partial<ProviderCapabilityV1> = {}): Pro
   rateLimits: [],
   requiredScopes: ['w_post'],
   certifiedAt: '2026-01-01T00:00:00.000Z',
+  certifications: allCapabilitiesCertifiedForTest('2026-01-01T00:00:00.000Z'),
   ...over,
 });
 

@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandFactSweepWorkflowV1",
+  "case": "one-brand-fails",
+  "description": "Three brands swept as the platform job; one fails non-retryably and is counted.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:11:22.164Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "6f36ae43485c99474fa9298d78f88afcd67e830ff17fc741a5c17add7bc6d649"
+}

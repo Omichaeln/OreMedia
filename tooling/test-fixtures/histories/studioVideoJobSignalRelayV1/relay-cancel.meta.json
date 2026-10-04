@@ -1,0 +1,12 @@
+{
+  "workflowType": "studioVideoJobSignalRelayV1",
+  "case": "relay-cancel",
+  "description": "The outbox relays a cancel to a running video AI job (external signal).",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:23.423Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "4ee73ee97478c60c21ed63a4ef4985aac4612ad7843d0cb2dea8e911a68e2b96"
+}

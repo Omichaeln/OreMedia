@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAssistWorkflowV1",
+  "case": "source-and-section-failures",
+  "description": "The capture fails (recorded per source) and one section proposal fails (recorded per section); the job still finishes.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:36.166Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "6f93f51833479718e5a90ac3c56c02a5be20f119a2d1590fb3050cec40a1e689"
+}

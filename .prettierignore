@@ -5,4 +5,5 @@ pnpm-lock.yaml
 docs/spec
 docs/progress/index.html
 packages/db/migrations
-tooling/test-fixtures/histories
+# Retained workflow histories are byte-frozen (sha256 in each <case>.meta.json); never reformat them.
+tooling/test-fixtures/histories/*/

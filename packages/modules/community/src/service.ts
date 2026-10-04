@@ -24,6 +24,7 @@ import {
   PublicationRepository,
   adapterFor,
   channelService,
+  providerRegistryInUse,
 } from '@oremedia/module-publishing';
 import { communityReplyWorkflowId } from './outbox-routes';
 import { InboxConversationRepository, InboxMessageRepository, ResponseDraftRepository } from './repositories';
@@ -74,12 +75,16 @@ function channelOf(connection: ConnectionRow) {
   } catch {
     capability = null;
   }
+  // PR-06: a reply the channel supports but nobody certified is refused, and the inbox says so.
+  const replyUncertified =
+    capability !== null && providerRegistryInUse().isUncertified(connection.providerKey, 'comment_reply');
   return {
     id: connection.id,
     providerKey: connection.providerKey,
     displayName: connection.displayName,
     status: connection.status,
-    replySupported: capability?.comments.reply ?? false,
+    replySupported: (capability?.comments.reply ?? false) && !replyUncertified,
+    replyUncertified,
     replyMaxLength: capability?.text.maxLength ?? null,
   };
 }
@@ -257,7 +262,7 @@ export const communityService = {
     if (message.direction !== 'inbound')
       throw new ValidationFailedError([{ path: 'messageId', issue: 'not_an_inbound_comment' }]);
     const connection = await connectionsRepo.getById(conversation.channelConnectionId, tx);
-    const adapter = adapterFor(connection.providerKey);
+    const adapter = adapterFor(connection.providerKey, 'comment_reply'); // PR-06: refused while uncertified
     if (!adapter.capability.comments.reply || !adapter.comment)
       throw new CapabilityUnsupportedError([{ path: 'messageId', issue: 'channel_cannot_reply' }]);
     if (!(await channelService.channelUsable(connection.id, tx)))
