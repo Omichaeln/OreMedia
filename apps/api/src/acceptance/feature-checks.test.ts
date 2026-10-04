@@ -35,6 +35,7 @@ class Refusal {
     readonly status: number,
     readonly code: string,
     readonly message: string,
+    readonly details?: Array<{ path: string; issue: string }>,
   ) {}
 }
 type Handler = (input: Record<string, unknown>) => unknown;
@@ -88,7 +89,12 @@ async function fakeDeployment(handlers: Record<string, Handler>, store: { putSta
       const out = handler(input);
       if (out instanceof Refusal)
         return json(out.status, {
-          error: { json: { message: out.message, data: { envelope: { code: out.code } } } },
+          error: {
+            json: {
+              message: out.message,
+              data: { envelope: { code: out.code, ...(out.details ? { details: out.details } : {}) } },
+            },
+          },
         });
       return json(200, { result: { data: { json: out } } });
     } catch (err) {
@@ -162,9 +168,11 @@ const brandDocument = (over: Partial<BrandSystemDocumentV1> = {}): BrandSystemDo
 };
 
 /** The budget procedures over a day/month position; `limits` records what was set. */
-function budgetWorld(start: { dayCommitted?: number; monthLimit?: number; monthCommitted?: number } = {}) {
+function budgetWorld(
+  start: { dayLimit?: number; dayCommitted?: number; monthLimit?: number; monthCommitted?: number } = {},
+) {
   const state = {
-    day: { limitMicros: 1_000_000, committedMicros: start.dayCommitted ?? 0 },
+    day: { limitMicros: start.dayLimit ?? 1_000_000, committedMicros: start.dayCommitted ?? 0 },
     month: { limitMicros: start.monthLimit ?? 5_000_000, committedMicros: start.monthCommitted ?? 0 },
     set: [] as string[],
   };
@@ -711,8 +719,15 @@ interface FakeAsset {
   derivatives: Array<{ purpose: string }>;
 }
 
-/** Upload intents and assets: an accepted upload becomes a pending asset of the declared kind. */
-function assetWorld(storeOrigin: () => string, opts: { reject?: string; existing?: FakeAsset[] } = {}) {
+/**
+ * Upload intents and assets: an accepted upload becomes an asset of the declared kind, pending review, or approved
+ * when the uploader holds asset.approve (`uploaderApproves`, spec 9.1 step 8, as the owner does on a deployment).
+ * Approve is the asset machine's pending_review transition only, refused otherwise as the service refuses it.
+ */
+function assetWorld(
+  storeOrigin: () => string,
+  opts: { reject?: string; existing?: FakeAsset[]; uploaderApproves?: boolean } = {},
+) {
   const assets = new Map<string, FakeAsset>((opts.existing ?? []).map((a) => [a.id, a]));
   const intents = new Map<string, { kind: string; mime: string; name: string }>();
   let n = 0;
@@ -737,7 +752,7 @@ function assetWorld(storeOrigin: () => string, opts: { reject?: string; existing
           id,
           kind: intent.kind,
           name: intent.name,
-          state: 'pending_review',
+          state: opts.uploaderApproves ? 'approved' : 'pending_review',
           rightsState: 'unknown',
           version: 1,
           currentVersion: {
@@ -765,6 +780,10 @@ function assetWorld(storeOrigin: () => string, opts: { reject?: string; existing
     },
     'assets.approve': (i) => {
       const a = assets.get(i['assetId'] as string)!;
+      if (a.state !== 'pending_review')
+        return new Refusal(400, 'VALIDATION_FAILED', 'Validation failed', [
+          { path: 'assetId', issue: `asset_${a.state}` },
+        ]);
       Object.assign(a, { state: 'approved', version: a.version + 1 });
       return { state: 'approved' };
     },
@@ -861,6 +880,43 @@ describe('logoChecks', () => {
     expect(results[2]!.detail).toContain('(was ast_old); retired earlier acceptance logo(s) ast_old');
     expect(assets.assets.get('ast_old')!.state).toBe('retired');
     noSecrets(results);
+  });
+
+  it('an owner’s upload is approved at ingest: the journey records rights and does not approve it again', async () => {
+    let store = '';
+    const assets = assetWorld(() => store, { uploaderApproves: true });
+    const system = systemWorld(brandDocument());
+    const d = await fakeDeployment({ ...assets.handlers, ...system.handlers });
+    store = d.storeOrigin;
+    const { results } = await logoChecks(config(), sessionsFor(d.origin), tenant, { pollMs: 1 });
+    expect(outcomes(results), JSON.stringify(results)).toEqual([
+      ['logo:upload', 'pass'],
+      ['logo:approve', 'pass'],
+      ['logo:primary', 'pass'],
+    ]);
+    expect(results[1]!.detail).toBe(
+      'ast_upi_1 approved at ingest (the uploader holds asset.approve) with its rights recorded',
+    );
+    expect(d.calls).not.toContain('assets.approve');
+    expect(assets.assets.get('ast_upi_1')).toMatchObject({ state: 'approved', rightsState: 'recorded' });
+  });
+
+  it('a refused approve fails with the validation issue the api named', async () => {
+    let store = '';
+    const assets = assetWorld(() => store);
+    const d = await fakeDeployment({
+      ...assets.handlers,
+      'assets.approve': () =>
+        new Refusal(400, 'VALIDATION_FAILED', 'Validation failed', [
+          { path: 'assetId', issue: 'asset_rejected' },
+        ]),
+    });
+    store = d.storeOrigin;
+    const { results } = await logoChecks(config(), sessionsFor(d.origin), tenant, { pollMs: 1 });
+    expect(results.at(-1)).toMatchObject({ name: 'logo:approve', outcome: 'fail' });
+    expect(results.at(-1)!.detail).toMatch(
+      /^assets\.approve \(the asset read pending_review at version 1\): HTTP 400 VALIDATION_FAILED: Validation failed \[assetId: asset_rejected\] \(HTTP 400/,
+    );
   });
 
   it('a store that refuses the PUT skips every step with the exact reason and marks the store unusable', async () => {
@@ -962,8 +1018,17 @@ describe('videoChecks', () => {
 // ---- Studio ------------------------------------------------------------------------------------------------
 
 /** The creative side: documents and revisions, generation jobs, renders, packages and review requests. */
-function studioWorld(opts: { proposal?: boolean; renderFails?: boolean } = {}) {
-  const b = budgetWorld();
+function studioWorld(
+  opts: {
+    proposal?: boolean;
+    renderFails?: boolean;
+    estimateMicros?: number;
+    budget?: Parameters<typeof budgetWorld>[0];
+    blocking?: { code: string; message: string };
+  } = {},
+) {
+  const b = budgetWorld(opts.budget);
+  const estimate = opts.estimateMicros ?? 6_000;
   const system = systemWorld(
     brandDocument({
       tokens: {
@@ -1037,7 +1102,26 @@ function studioWorld(opts: { proposal?: boolean; renderFails?: boolean } = {}) {
           : null,
       );
     },
-    'creative.generation.preflight': () => ({ blocking: false, issues: [], cost: { totalMicros: 6_000 } }),
+    // As the service answers: no channel in the brief is a warning; the estimate above what the brand's day or
+    // month has left blocks (budget_insufficient).
+    'creative.generation.preflight': () => {
+      const left = Math.min(
+        b.state.day.limitMicros - b.state.day.committedMicros,
+        b.state.month.limitMicros - b.state.month.committedMicros,
+      );
+      const issues = [
+        { code: 'no_destination', severity: 'warning', message: 'No destination channel' },
+        ...(opts.blocking ? [{ ...opts.blocking, severity: 'blocking' }] : []),
+        ...(estimate > left
+          ? [{ code: 'budget_insufficient', severity: 'blocking', message: 'More than what remains' }]
+          : []),
+      ];
+      return {
+        blocking: issues.some((i) => i.severity === 'blocking'),
+        issues,
+        cost: { totalMicros: estimate },
+      };
+    },
     'creative.generation.start': () => ({ id: 'sgj_1', state: 'queued' }),
     'creative.generation.get': () => ({
       id: 'sgj_1',
@@ -1120,6 +1204,57 @@ describe('studioChecks', () => {
     // The brand's own font was resolved into the starter's text layers.
     const first = w.revisions.get('crev_1')!.snapshot.pages[0]!.elements.filter((e) => e.type === 'text');
     expect(first.every((e) => e.type === 'text' && e.style.fontAssetVersionId === 'av_font')).toBe(true);
+  });
+
+  it('an earlier journey’s spend under today’s limit does not block generation: the cap is applied, then the preflight asked again', async () => {
+    // As on staging: brand assist set today's limit to committed + cap and spent part of it, leaving less than the
+    // generation estimate; the preflight blocks with budget_insufficient until the cap is applied again.
+    const w = studioWorld({
+      estimateMicros: 162_400,
+      budget: { dayLimit: 258_395, dayCommitted: 120_110 },
+    });
+    const d = await fakeDeployment(w.handlers);
+    const results = await studioChecks(config(), sessionsFor(d.origin), tenant, usable, 'fixture', {
+      pollMs: 1,
+    });
+    const by = Object.fromEntries(results.map((r) => [r.name, r]));
+    expect(by['studio:generate'], JSON.stringify(results)).toMatchObject({ outcome: 'pass' });
+    expect(by['studio:generate']!.detail).toContain('estimate 162400 µUSD, cap 200000, day limit 320110');
+    expect(d.calls.filter((c) => c === 'creative.generation.preflight')).toHaveLength(2);
+    expect(w.budget.set).toEqual(['day=320110']);
+  });
+
+  it('a preflight block other than the budget fails before any limit is changed', async () => {
+    const w = studioWorld({
+      estimateMicros: 162_400,
+      budget: { dayLimit: 258_395, dayCommitted: 120_110 },
+      blocking: { code: 'brief_missing_message', message: 'Say what the graphic should achieve' },
+    });
+    const d = await fakeDeployment(w.handlers);
+    const results = await studioChecks(config(), sessionsFor(d.origin), tenant, usable, 'fixture', {
+      pollMs: 1,
+    });
+    expect(results.at(-1)).toMatchObject({ name: 'studio:generate', outcome: 'fail' });
+    expect(results.at(-1)!.detail).toContain('brief_missing_message (Say what the graphic should achieve)');
+    expect(w.budget.set).toEqual([]);
+    expect(d.calls).not.toContain('creative.generation.start');
+  });
+
+  it('a budget the cap cannot make room for still fails, naming the preflight and the cap', async () => {
+    const w = studioWorld({ estimateMicros: 162_400, budget: { monthLimit: 100_000 } });
+    const d = await fakeDeployment({
+      ...w.handlers,
+      // A month limit the api holds at the entitlement: the raise does not take.
+      'agents.budgets.setLimit': (i) =>
+        i['period'] === 'month'
+          ? new Refusal(400, 'VALIDATION_FAILED', 'above the entitlement')
+          : w.handlers['agents.budgets.setLimit']!(i),
+    });
+    const results = await studioChecks(config(), sessionsFor(d.origin), tenant, usable, 'fixture', {
+      pollMs: 1,
+    });
+    expect(results.at(-1)).toMatchObject({ name: 'studio:generate', outcome: 'fail' });
+    expect(d.calls).not.toContain('creative.generation.start');
   });
 
   it('without a channel the review request skips; with the store unusable the render skips; model off skips generation', async () => {

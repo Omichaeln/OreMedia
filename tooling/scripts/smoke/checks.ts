@@ -64,6 +64,59 @@ export function cspDirectives(policy: string): Record<string, string[]> {
 }
 
 /** A URL as it may be printed: origin and path, never the query (a signed URL's signature lives there). */
+/** What a CORS preflight answered (the four response headers the Fetch standard's CORS-preflight check reads). */
+export interface PreflightAnswer {
+  allowOrigin: string | null;
+  allowMethods: string | null;
+  allowHeaders: string | null;
+  allowCredentials: string | null;
+}
+
+/** Methods and request headers a browser never asks a preflight about (Fetch standard: CORS-safelisted). */
+const SAFELISTED_METHODS = new Set(['GET', 'HEAD', 'POST']);
+const csvTokens = (value: string | null): string[] =>
+  (value ?? '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+/**
+ * Why a browser would refuse the request after this preflight, or null when it would send it: the Fetch standard's
+ * CORS check and CORS-preflight fetch. Without credentials (a presigned PUT carries none: the signature is in the
+ * URL), `*` is a wildcard in Access-Control-Allow-Origin, -Methods and -Headers; with credentials the origin must be
+ * echoed exactly with Access-Control-Allow-Credentials: true, and `*` is a literal name only. Methods are matched
+ * case-sensitively (as the browser does, after normalising the request's own method), header names
+ * case-insensitively. A missing Access-Control-Allow-Methods admits only the safelisted methods.
+ */
+export function corsPreflightRefusal(
+  answer: PreflightAnswer,
+  request: { origin: string; method: string; headers: string[]; credentials: boolean },
+): string | null {
+  const origin = answer.allowOrigin?.trim() ?? null;
+  if (origin === null) return 'no access-control-allow-origin';
+  if (origin === '*') {
+    if (request.credentials) return 'access-control-allow-origin * does not admit a credentialed request';
+  } else if (origin !== request.origin)
+    return `access-control-allow-origin ${origin} is not ${request.origin}`;
+  if (request.credentials && answer.allowCredentials?.trim() !== 'true')
+    return 'a credentialed request needs access-control-allow-credentials: true';
+  const methods = csvTokens(answer.allowMethods);
+  const method = request.method.toUpperCase();
+  const methodAdmitted =
+    SAFELISTED_METHODS.has(method) ||
+    methods.includes(method) ||
+    (!request.credentials && methods.includes('*'));
+  if (!methodAdmitted)
+    return `access-control-allow-methods ${answer.allowMethods?.trim() || '(none)'} does not admit ${method}`;
+  const allowed = csvTokens(answer.allowHeaders).map((h) => h.toLowerCase());
+  const missing = request.headers
+    .map((h) => h.toLowerCase())
+    .filter((h) => !allowed.includes(h) && (request.credentials || !allowed.includes('*')));
+  if (missing.length)
+    return `access-control-allow-headers ${answer.allowHeaders?.trim() || '(none)'} does not admit ${missing.join(', ')}`;
+  return null;
+}
+
 export const printable = (url: string): string => {
   try {
     const u = new URL(url);
@@ -319,17 +372,24 @@ export async function checkUpload(
         'access-control-request-headers': 'content-type',
       },
     });
-    const allowOrigin = preflight.headers.get('access-control-allow-origin');
-    const allowMethods = (preflight.headers.get('access-control-allow-methods') ?? '').toUpperCase();
-    if (
-      preflight.status >= 300 ||
-      (allowOrigin !== origin && allowOrigin !== '*') ||
-      (allowMethods && !allowMethods.includes('PUT'))
-    ) {
+    // The browser's PUT (apps/web use-upload.ts) is a credential-less fetch with a non-safelisted content type.
+    const refusal =
+      preflight.status >= 300
+        ? `HTTP ${preflight.status}`
+        : corsPreflightRefusal(
+            {
+              allowOrigin: preflight.headers.get('access-control-allow-origin'),
+              allowMethods: preflight.headers.get('access-control-allow-methods'),
+              allowHeaders: preflight.headers.get('access-control-allow-headers'),
+              allowCredentials: preflight.headers.get('access-control-allow-credentials'),
+            },
+            { origin, method: 'PUT', headers: ['content-type'], credentials: false },
+          );
+    if (refusal) {
       out.push(
         fail(
           'upload:cors',
-          `preflight HTTP ${preflight.status}, allow-origin ${allowOrigin ?? '(none)'}, allow-methods ${allowMethods || '(none)'}: the bucket CORS must admit PUT from ${origin}`,
+          `preflight HTTP ${preflight.status}, allow-origin ${preflight.headers.get('access-control-allow-origin') ?? '(none)'}, allow-methods ${preflight.headers.get('access-control-allow-methods') ?? '(none)'}, allow-headers ${preflight.headers.get('access-control-allow-headers') ?? '(none)'}: ${refusal}; the bucket CORS must admit PUT from ${origin}`,
         ),
       );
       return out;

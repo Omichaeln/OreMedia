@@ -38,6 +38,7 @@ export const SECTION_EXAMPLES: Record<AssistSection, unknown> = {
     tone: { value: ['warm', 'direct'], ...COMMON },
     personality: [{ value: { trait: 'Curious', note: 'We ask before we assume.' }, ...COMMON }],
     principles: [{ value: { statement: 'Say what it does', rationale: 'Readers decide fast.' }, ...COMMON }],
+    spelling: { value: { locale: 'en-GB', notes: 'British spelling: colour, organise, centre.' }, ...COMMON },
     styleRules: [
       { value: { topic: 'numbers', rule: 'Write numbers as digits from 10 upwards.' }, ...COMMON },
     ],
@@ -47,6 +48,7 @@ export const SECTION_EXAMPLES: Record<AssistSection, unknown> = {
   },
   messaging: {
     positioning: { value: 'The roastery for people who care where coffee comes from.', ...COMMON },
+    valueProposition: { value: 'Coffee you can trace to the farm, roasted to order.', ...COMMON },
     pillars: [
       { value: { key: 'traceable', title: 'Traceable', statement: 'Every bag names its farm.' }, ...COMMON },
     ],
@@ -134,9 +136,19 @@ export const SECTION_EXAMPLES: Record<AssistSection, unknown> = {
   },
 };
 
+/** How a removal is written (the strict schema's `remove` entries): shown in the rules, valid against every section. */
+export const REMOVAL_EXAMPLE = {
+  collection: 'principles',
+  key: 'Say what it does',
+  rationale: 'The sources no longer support it.',
+  basis: 'inferred',
+  confidence: 'medium',
+  evidence: [],
+};
+
 const SECTION_TASK: Record<AssistSection, string> = {
   voice:
-    'Voice & personality: the voice summary, tone words, personality traits, principles (with why), spelling locale, style rules (numbers, dates, capitalisation, punctuation, formatting) and claim rules.',
+    'Voice & personality: the voice summary, tone words, personality traits, principles (with why), spelling (locale and notes), style rules (topic one of numbers|dates|capitalisation|punctuation|formatting|other) and claim rules.',
   messaging:
     'Messaging: positioning, value proposition, messaging pillars (key, title, statement), key messages (optionally tied to a pillar key) and audiences (key, description, needs, objections).',
   vocabulary:
@@ -155,11 +167,11 @@ const SECTION_TASK: Record<AssistSection, string> = {
 
 const RULES = [
   'Reply with one JSON object and nothing else: no prose, no code fences. Use exactly the fields of the example; omit optional fields you do not need; use [] for empty lists.',
-  'Every item has basis: "stated" when a source says it (quote the exact words in evidence), "inferred" when it is a pattern across examples (quote at least two passages), or "suggested" when no source supports it.',
+  'Every item has basis: "stated" when a source says it (quote the exact words in evidence), "inferred" when it is a pattern across examples (quote at least two passages), or "suggested" when no source supports it; and confidence "high", "medium" or "low".',
   'Never invent facts. A fact must be stated by a source and quoted exactly; anything else is basis "suggested" and will be treated as a question for a person.',
   'Cite evidence by the source id shown on its EVIDENCE block, with a short exact excerpt (at most 300 characters) copied from that block.',
-  'The approved guidance below is the brand system as it is now. Suggest only additions or changes that improve it; do not repeat what it already says. To remove an item, list it under "remove" with its collection and key.',
-  'State uncertainty in "uncertainty" and disagreements between sources in "conflicts". Ask at most two questions, only where the answer would materially change your suggestions.',
+  `The approved guidance below is the brand system as it is now. Suggest only additions or changes that improve it; do not repeat what it already says. To remove an item, list it under "remove" with its collection and key and the same rationale, basis, confidence and evidence as any item, e.g. ${JSON.stringify(REMOVAL_EXAMPLE)}.`,
+  'An item may state its uncertainty in an optional "uncertainty" (text) and disagreements between sources in an optional "conflicts" ([{"note": "…", "sourceIds": ["…"]}]), next to its rationale; nowhere else. Ask at most two questions, only where the answer would materially change your suggestions.',
   'Keep the brand’s locale and spelling. Never change items the person asked to keep.',
 ];
 

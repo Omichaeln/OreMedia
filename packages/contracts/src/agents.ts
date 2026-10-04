@@ -331,4 +331,10 @@ export const RoutingPolicySet = z.object({
   policy: ModelRoutingPolicy,
   /** The stored row's version; omitted only when the tenant has no stored policy yet. */
   expectedVersion: z.number().int().min(0).optional(),
+  /**
+   * The administrator's explicit choice to store a policy that refuses the deployment's model in use (it stops
+   * every model call for the company). Without it such a policy is refused with VALIDATION_FAILED
+   * `policy: stops_model_in_use`, so the only configured gateway is never excluded silently.
+   */
+  confirmStopsRuns: z.boolean().optional(),
 });

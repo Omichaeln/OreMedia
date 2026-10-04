@@ -46,6 +46,8 @@ export {
   resetRoutingPolicies,
   routingPolicyFor,
   assertRoutingAllowed,
+  routeDenial,
+  modelRouteConfigured,
   configureModelRegion,
   modelRegion,
   type RoutingPolicySource,

@@ -8,7 +8,7 @@ import superjson from 'superjson';
 import type { Operation } from '@oremedia/contracts/creative';
 import { fixtureDocument, ids } from '@oremedia/editor/fixtures';
 import type { AppRouter } from '@oremedia/api';
-import { deployedWebOrigin, signInWithPasswordForm } from './deployed';
+import { deployedWebOrigin, outOfBandFetch, signInWithPasswordForm } from './deployed';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
 
@@ -67,13 +67,14 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
       close = served.close;
     }
     if (realApi) {
+      const transport = outOfBandFetch();
       const client = createTRPCClient<AppRouter>({
         links: [
           httpLink({
             url: `${realApi}/trpc`,
             transformer: superjson,
             fetch: async (input, init) => {
-              const res = await fetch(input, init);
+              const res = await transport(input, init);
               if (!res.ok && process.env['OREMEDIA_E2E_DEBUG'])
                 console.error(
                   '[e2e] out-of-band request failed',

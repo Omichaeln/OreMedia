@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { nodeHttpFetch, type FetchLike } from '../../../tooling/scripts/acceptance/http';
 
 /**
  * Real-origin mode of the browser suites (docs/runbooks/staging-acceptance.md): `OREMEDIA_E2E_WEB_ORIGIN` names a
@@ -8,6 +9,17 @@ import type { Page } from 'playwright';
  * are typed into the form only; nothing prints them.
  */
 export const deployedWebOrigin = (): string | null => process.env['OREMEDIA_E2E_WEB_ORIGIN']?.trim() || null;
+
+/**
+ * The transport for a suite's own requests (not the browser's) when it runs against a deployed origin: Node's HTTP
+ * client (the acceptance job's node-https client), never the image's global fetch. On the staging acceptance image
+ * that fetch sees no response headers (ACCEPTANCE_INFO probe `fetch … headers=[]`), so a gzip-encoded answer from the
+ * edge reaches the caller still compressed (`Unexpected token '\x1f' … is not valid JSON` in the studio suite's
+ * out-of-band tRPC client); Node's HTTP client sends no Accept-Encoding and reads every header. Local runs (the mock
+ * transport, or OREMEDIA_E2E_API_URL) keep the global fetch.
+ */
+export const outOfBandFetch = (): FetchLike =>
+  deployedWebOrigin() ? nodeHttpFetch : (input, init) => globalThis.fetch(input, init);
 
 export interface DeployedPerson {
   email: string;

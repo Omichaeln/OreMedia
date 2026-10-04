@@ -31,6 +31,13 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`, and `PROVIDER_GBP_LOCATION_*` with `OREMEDIA_ENABLE_GBP=1` where the Business Profile kind is enabled (R2-2);
+   - `api`: `OREMEDIA_MODEL_PROVIDER` (`openrouter` where the workers hold `OPENROUTER_API_KEY_REF`) and
+     `OREMEDIA_MODEL_ID` (the workers' value; on Railway a reference such as `${{worker-core.OREMEDIA_MODEL_ID}}`),
+     plus `OREMEDIA_MODEL_REGION` where the workers set it. The api makes no model call and holds no model key; these
+     non-secret names tell it the deployment's route, which Settings → Model routing shows as the model in use and
+     checks a stored policy against (a policy that refuses it is stored only on an explicit confirmation), and which
+     `agents.runs.start` checks. Without them Settings shows that the model in use is not known and offers no
+     editing;
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
    - `approval-monitor`: `OREMEDIA_APP=approval-monitor`, `DATABASE_URL` (referenced from the api), sealed
      `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. Its **Cron Schedule** is `*/5 * * * *` (UTC,
@@ -425,7 +432,10 @@ password, no session token and no signed URL query string.
 | `upload:*`                             | with the smoke user's credentials: sign in, upload intent, the CSP admits the signed URL's origin, the store answers the CORS preflight for the web origin (bucket CORS), PUT a small PNG, complete, then ingest accepts it (`assets.uploads.get`) within `SMOKE_INGEST_TIMEOUT_MS` (default 120 s), and `upload:cleanup` retires the accepted asset (`assets.retire`) |
 
 The upload stops at the first failing step and names it (`upload:cors` means the R2 bucket's CORS policy must allow
-`PUT` and `GET` from the web origin with the `content-type` header). It signs the smoke user out at the end. The
+`PUT` and `GET` from the web origin with the `content-type` header; the preflight is judged as the Fetch standard's
+CORS-preflight check: the presigned `PUT` carries no credentials, so `*` in `Access-Control-Allow-Origin`, `-Methods`
+and `-Headers` admits it, and a missing `Access-Control-Allow-Methods` admits only GET, HEAD and POST). It signs the
+smoke user out at the end. The
 upload uses a person's password sign-in, not a REST API key: an API key acts as a service principal, which may only
 propose uploads (`asset.upload` is propose-only for agents), so `assets.uploads.createIntent` refuses it.
 

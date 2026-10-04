@@ -1,7 +1,15 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { formatResult, printable, randomPng, runSmoke, smokeConfigFromEnv, type SmokeConfig } from './checks';
+import {
+  corsPreflightRefusal,
+  formatResult,
+  printable,
+  randomPng,
+  runSmoke,
+  smokeConfigFromEnv,
+  type SmokeConfig,
+} from './checks';
 
 /**
  * The smoke check's logic against a local fake deployment: a web origin (health, CSP, legal pages, brand pack,
@@ -16,7 +24,8 @@ interface FakeOptions {
   storeInCsp?: boolean;
   legal?: boolean;
   brand?: unknown;
-  storeCors?: boolean;
+  /** false: no CORS headers; 'wildcard': `*` for origin, methods and headers (as the staging store answers). */
+  storeCors?: boolean | 'wildcard';
   ingest?: Array<{ state: string; assetId?: string; rejectionReason?: string }>;
   retireDenied?: boolean;
 }
@@ -44,9 +53,14 @@ async function fakeDeployment(o: FakeOptions = {}) {
   const ingest = [...(o.ingest ?? [{ state: 'quarantined' }, { state: 'accepted', assetId: 'ast_smoke' }])];
   let web = '';
   const store = await listen(async (req, res) => {
-    if (o.storeCors !== false && req.headers.origin === web) {
+    if (o.storeCors === 'wildcard') {
+      res.setHeader('access-control-allow-origin', '*');
+      res.setHeader('access-control-allow-methods', '*');
+      res.setHeader('access-control-allow-headers', '*');
+    } else if (o.storeCors !== false && req.headers.origin === web) {
       res.setHeader('access-control-allow-origin', web);
       res.setHeader('access-control-allow-methods', 'GET, PUT');
+      res.setHeader('access-control-allow-headers', 'content-type');
     }
     if (req.method === 'OPTIONS') return res.writeHead(204).end();
     if (req.method === 'PUT') {
@@ -222,6 +236,14 @@ describe('production smoke check', () => {
     noSecrets(results.map(formatResult).join('\n'));
   });
 
+  it('a store answering the preflight with * (no credentials on a presigned PUT) admits the PUT', async () => {
+    const d = await fakeDeployment({ storeCors: 'wildcard' });
+    const by = Object.fromEntries((await runSmoke(d.config)).map((r) => [r.name, r]));
+    expect(by['upload:cors']).toMatchObject({ outcome: 'pass' });
+    expect(by['upload:put']).toMatchObject({ outcome: 'pass' });
+    expect(d.seen.puts).toBe(1);
+  });
+
   it('a CSP that does not admit the signed URL origin stops the upload there', async () => {
     const d = await fakeDeployment({ storeInCsp: false });
     const results = await runSmoke(d.config);
@@ -303,6 +325,69 @@ describe('smoke helpers', () => {
     expect(
       smokeConfigFromEnv({ SMOKE_BASE_URL: 'https://a.example', SMOKE_EMAIL: 'x' }).upload,
     ).toBeUndefined();
+  });
+
+  it('judges a CORS preflight as the Fetch standard does: * is a wildcard only without credentials', () => {
+    const web = 'https://app.example.com';
+    const put = { origin: web, method: 'PUT', headers: ['content-type'], credentials: false };
+    const answer = (o: Partial<Parameters<typeof corsPreflightRefusal>[0]>) => ({
+      allowOrigin: null,
+      allowMethods: null,
+      allowHeaders: null,
+      allowCredentials: null,
+      ...o,
+    });
+    const wildcard = answer({ allowOrigin: '*', allowMethods: '*', allowHeaders: '*' });
+    expect(corsPreflightRefusal(wildcard, put)).toBeNull();
+    expect(
+      corsPreflightRefusal(
+        answer({ allowOrigin: web, allowMethods: 'GET, PUT', allowHeaders: 'Content-Type' }),
+        put,
+      ),
+    ).toBeNull();
+    // With credentials * is a literal name, never a wildcard, and the origin must be echoed with credentials true.
+    const credentialed = { ...put, credentials: true };
+    expect(corsPreflightRefusal(wildcard, credentialed)).toContain('does not admit a credentialed request');
+    expect(
+      corsPreflightRefusal(answer({ allowOrigin: web, allowMethods: '*', allowHeaders: '*' }), credentialed),
+    ).toContain('access-control-allow-credentials: true');
+    expect(
+      corsPreflightRefusal(
+        answer({ allowOrigin: web, allowMethods: '*', allowHeaders: '*', allowCredentials: 'true' }),
+        credentialed,
+      ),
+    ).toContain('access-control-allow-methods * does not admit PUT');
+    expect(
+      corsPreflightRefusal(
+        answer({ allowOrigin: web, allowMethods: 'PUT', allowHeaders: '*', allowCredentials: 'true' }),
+        credentialed,
+      ),
+    ).toContain('access-control-allow-headers * does not admit content-type');
+    expect(
+      corsPreflightRefusal(
+        answer({
+          allowOrigin: web,
+          allowMethods: 'PUT',
+          allowHeaders: 'content-type',
+          allowCredentials: 'true',
+        }),
+        credentialed,
+      ),
+    ).toBeNull();
+    // Another origin, no methods (only the safelisted ones), a lower-case method name, a missing header.
+    expect(corsPreflightRefusal(answer({ allowOrigin: 'https://other.example' }), put)).toContain(
+      'is not https://app.example.com',
+    );
+    expect(corsPreflightRefusal(answer({ allowOrigin: '*', allowHeaders: '*' }), put)).toContain(
+      'access-control-allow-methods (none) does not admit PUT',
+    );
+    expect(
+      corsPreflightRefusal(answer({ allowOrigin: '*', allowMethods: 'put', allowHeaders: '*' }), put),
+    ).toContain('does not admit PUT');
+    expect(corsPreflightRefusal(answer({ allowOrigin: '*', allowMethods: 'PUT' }), put)).toContain(
+      'access-control-allow-headers (none) does not admit content-type',
+    );
+    expect(corsPreflightRefusal(answer({}), put)).toBe('no access-control-allow-origin');
   });
 
   it('prints URLs without their query, and makes a distinct valid PNG each time', () => {
