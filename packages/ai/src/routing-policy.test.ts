@@ -1,9 +1,10 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelRoutingPolicy } from '@oremedia/contracts/agents';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
+import { brandAssistModelGate } from './brand-assist';
 import { estimateCostMicros, modelConfigFromEnv } from './model-adapter';
 import {
   DEFAULT_MODEL_ID,
@@ -16,7 +17,10 @@ import {
   setTenantRoutingPolicy,
 } from './routing-policy';
 
-afterEach(() => resetRoutingPolicies());
+afterEach(() => {
+  resetRoutingPolicies();
+  vi.unstubAllEnvs();
+});
 
 describe('model routing policy (spec 12.7)', () => {
   it('the built-in policy permits the configured Anthropic model and denies other vendors', async () => {
@@ -25,6 +29,63 @@ describe('model routing policy (spec 12.7)', () => {
     });
     await expect(assertRoutingAllowed('ten_A', 'fake', 'x')).rejects.toBeInstanceOf(PolicyDeniedError);
     await expect(assertRoutingAllowed('ten_A', 'openai', 'gpt')).rejects.toThrow(/not permitted/);
+  });
+
+  it('a company with no stored policy runs under the deployment policy: an OpenRouter deployment permits its gateway', async () => {
+    // Staging and production worker-core: OPENROUTER_API_KEY_REF with OREMEDIA_MODEL_ID, no MODEL_ROUTING_POLICY_REF.
+    vi.stubEnv('OPENROUTER_API_KEY_REF', 'or-key');
+    vi.stubEnv('OREMEDIA_MODEL_ID', 'vendor/model-x');
+    resetRoutingPolicies();
+    const cfg = modelConfigFromEnv();
+    expect(cfg).toMatchObject({ provider: 'openrouter', model: 'vendor/model-x' });
+    await expect(assertRoutingAllowed('ten_A', cfg.provider, cfg.model)).resolves.toMatchObject({
+      permittedVendors: ['openrouter'],
+    });
+    // The gate an assist job's prepare step and start read (BSC-4) passes for the configured route.
+    await expect(brandAssistModelGate().assertRouting('ten_A')).resolves.toBeUndefined();
+    // The deployment policy still names only its own gateway.
+    await expect(assertRoutingAllowed('ten_A', 'anthropic', DEFAULT_MODEL_ID)).rejects.toThrow(
+      /vendor anthropic is not permitted/,
+    );
+  });
+
+  it('a stored company policy still decides over the deployment policy', async () => {
+    vi.stubEnv('OPENROUTER_API_KEY_REF', 'or-key');
+    vi.stubEnv('OREMEDIA_MODEL_ID', 'vendor/model-x');
+    resetRoutingPolicies();
+    registerRoutingPolicySource(async (tenantId) =>
+      tenantId === 'ten_S'
+        ? {
+            schemaVersion: 1,
+            defaultModel: 'claude-opus-5',
+            permittedVendors: ['anthropic'],
+            permittedRegions: [],
+            deniedModels: [],
+          }
+        : null,
+    );
+    await expect(assertRoutingAllowed('ten_S', 'openrouter', 'vendor/model-x')).rejects.toThrow(
+      /vendor openrouter is not permitted/,
+    );
+    await expect(assertRoutingAllowed('ten_A', 'openrouter', 'vendor/model-x')).resolves.toBeDefined();
+  });
+
+  it('a mounted MODEL_ROUTING_POLICY_REF is the deployment policy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oremedia-routing-'));
+    const file = join(dir, 'routing.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        defaultModel: 'm',
+        permittedVendors: ['openrouter'],
+        deniedModels: ['bad'],
+      }),
+    );
+    vi.stubEnv('MODEL_ROUTING_POLICY_REF', file);
+    resetRoutingPolicies();
+    await expect(assertRoutingAllowed('ten_A', 'openrouter', 'm')).resolves.toBeDefined();
+    await expect(assertRoutingAllowed('ten_A', 'openrouter', 'bad')).rejects.toThrow(/Model bad/);
   });
 
   it('a tenant policy narrows vendors, models and regions', async () => {
