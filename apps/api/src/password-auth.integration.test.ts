@@ -632,6 +632,42 @@ describe('password sign-in: sign-in route, setup links, account password', () =>
         expect(await liveSessions(p.id)).toEqual([]);
       });
 
+      // M2 (demo workspace stage 1): opening a demo used to count as joining a second company, so it removed the
+      // password and ended every session of anyone whose password came from a setup link.
+      it('opening a demo workspace keeps it and every session; a second live company still clears it', async () => {
+        const p = await linkedMember();
+        const other = await sessionFor(p.id);
+        const before = (await liveSessions(p.id)).map((x) => x.id).sort();
+        expect(before).toContain(other.id);
+        const demo = await accessService.createTenantWithOwner(
+          { name: 'Demo workspace', slug: `demo-${randomUUID().slice(0, 8)}` },
+          p.id,
+          `test-${randomUUID()}`,
+          undefined,
+          'demo',
+        );
+        const [kept] = await tdb.db.select().from(users).where(eq(users.id, p.id));
+        expect(kept?.passwordOrigin).toBe('setup_link');
+        expect(kept?.passwordHash).not.toBeNull();
+        expect((await liveSessions(p.id)).map((x) => x.id).sort()).toEqual(before);
+        expect((await authEventsOf(p.id)).map((e) => e.action)).not.toContain('auth.password_remove');
+        expect(
+          (await callPath({ bearer: other.token, tenantId: demo.tenantId }, 'access.me', undefined)).error,
+        ).toBeUndefined();
+        expect((await signIn(p.email, PASSWORD)).status).toBe(200);
+
+        // The demo does not make a later live company the person's first: B plus a new live company is two.
+        await accessService.createTenantWithOwner(
+          { name: 'Second live', slug: `second-${randomUUID().slice(0, 8)}` },
+          p.id,
+          `test-${randomUUID()}`,
+        );
+        const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
+        expect(row).toMatchObject({ passwordHash: null, passwordOrigin: null });
+        expect(await liveSessions(p.id)).toEqual([]);
+        expect((await signIn(p.email, PASSWORD)).status).toBe(401);
+      });
+
       const linkGoogle = (p: { id: string; email: string }) =>
         tdb.db.insert(externalIdentities).values({
           id: newId('externalIdentity'),
