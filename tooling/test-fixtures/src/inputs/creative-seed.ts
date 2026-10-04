@@ -81,14 +81,12 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
   const document = seedCreativeDocument(creativePublishedBrandVersionId, creativeElementId);
   const creativeDocumentId = newId('creativeDocument');
   const creativeRevisionId = newId('creativeRevision');
-  await db.insert(creativeDocuments).values({
-    id: creativeDocumentId,
-    tenantId,
-    brandId,
-    title: 'Seeded document',
-    currentRevisionId: creativeRevisionId,
-    schemaVersion: 1,
-  });
+  // sql``, not insert(creativeDocuments).values(): Drizzle would name archived_at (0027), which the roll-forward
+  // suites' earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
+  const documentAt = new Date();
+  await db.execute(
+    sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at) values (${creativeDocumentId}, ${tenantId}, ${brandId}, 'Seeded document', ${creativeRevisionId}, 1, ${documentAt}, ${documentAt})`,
+  );
   // sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0025), which the
   // roll-forward suites' earlier heads do not have; the columns named here exist at every head, later ones are null.
   const initialBatch = {

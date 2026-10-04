@@ -4,9 +4,12 @@ import {
   AccountSetPassword,
   ApiClientCreate,
   ApiClientRotate,
+  BrandGrantRemove,
   BrandGrantSet,
   ExternalLinkCreate,
   ExternalLinkRevoke,
+  MemberDisable,
+  MemberEnable,
   MemberInvite,
   MemberIssuePasswordSetup,
   MemberSetRole,
@@ -23,6 +26,7 @@ import {
   googleIsAuthoritativeFor,
   passwordPolicyIssue,
   type AccountSignInMethods,
+  type MemberStatusResult,
   type PasswordSetupLink,
   type SignInRefusalReason,
 } from '@oremedia/contracts/access';
@@ -264,6 +268,52 @@ export interface SignInOptions {
   allowedDomains: readonly string[] | null;
   /** The session this browser held before: ended in the same transaction that creates the new one. */
   replaces?: { userId: string; sessionId: string } | null;
+}
+
+/**
+ * The membership a disable or enable names, after the rules both share: membership.manage, a person (never an agent or
+ * a support session), never your own membership, and an owner or admin only by an owner.
+ */
+async function loadManageableMember(
+  actor: ResolvedActor,
+  membershipId: string,
+  verb: 'disable' | 'enable',
+  tx: Tx,
+) {
+  await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
+  if (actor.kind !== 'user') throw new PolicyDeniedError('agent_never', `Only a person can ${verb} a member`);
+  const m = await membershipsRepo.getById(membershipId, tx);
+  if (m.userId === actor.id)
+    throw new PolicyDeniedError(`self_${verb}`, `You cannot ${verb} your own membership`);
+  if (DEFAULT_ROLE_GRANTS['membership.manage'].includes(m.role) && actor.role !== 'owner')
+    throw new PolicyDeniedError('owner_required', `Only an owner can ${verb} an owner or admin`);
+  return m;
+}
+
+/** The audit event and outbox message of a membership status change, and what the procedure answers. */
+async function recordMemberStatus(
+  actor: ResolvedActor,
+  membershipId: string,
+  expectedVersion: number,
+  fromState: 'active' | 'disabled',
+  toState: 'active' | 'disabled',
+  tx: Tx,
+): Promise<MemberStatusResult> {
+  await audit.record(
+    { kind: actor.kind, id: actor.id },
+    toState === 'disabled' ? 'membership.disable' : 'membership.enable',
+    { type: 'membership', id: membershipId },
+    'allowed',
+    tx,
+    { fromState, toState },
+  );
+  await outbox.add(
+    'membership.changed',
+    { type: 'membership', id: membershipId, version: expectedVersion + 1 },
+    { membershipId, change: toState === 'disabled' ? 'disabled' : 'enabled' },
+    tx,
+  );
+  return { membershipId, status: toState, version: expectedVersion + 1 };
 }
 
 export const accessService = {
@@ -984,6 +1034,39 @@ export const accessService = {
   },
 
   /**
+   * G03: switches a member's access to this company off. Their sessions end in the same transaction (as a role change
+   * does) and every later request of theirs to this company is refused at tenant resolution (membership_inactive);
+   * their account and their other companies are untouched. Owners and admins (membership.manage), people only; an
+   * owner or admin only by an owner; never yourself, and never the company's last active owner.
+   */
+  async disableMember(actor: ResolvedActor, input: z.infer<typeof MemberDisable>, tx: Tx) {
+    const parsed = MemberDisable.parse(input);
+    const m = await loadManageableMember(actor, parsed.membershipId, 'disable', tx);
+    if (m.status !== 'active')
+      throw new ValidationFailedError([{ path: 'membershipId', issue: `membership_is_${m.status}` }]);
+    if (m.role === 'owner') {
+      const owners = await membershipsRepo.lockActiveOwners(tx);
+      if (!owners.some((o) => o.id !== m.id))
+        throw new PolicyDeniedError('last_owner', 'The company must keep at least one active owner');
+    }
+    await membershipsRepo.update(m.id, parsed.expectedVersion, { status: 'disabled' }, tx);
+    await runAsPlatform('disable-member', requireTenant().correlationId, () =>
+      directory.revokeSessionsForUser(m.userId, tx),
+    );
+    return recordMemberStatus(actor, m.id, parsed.expectedVersion, 'active', 'disabled', tx);
+  },
+
+  /** G03: gives a disabled member their access back (same rules as disable; the seat entitlement applies). */
+  async enableMember(actor: ResolvedActor, input: z.infer<typeof MemberEnable>, tx: Tx) {
+    const parsed = MemberEnable.parse(input);
+    const m = await loadManageableMember(actor, parsed.membershipId, 'enable', tx);
+    if (m.status !== 'disabled')
+      throw new ValidationFailedError([{ path: 'membershipId', issue: `membership_is_${m.status}` }]);
+    await membershipsRepo.update(m.id, parsed.expectedVersion, { status: 'active' }, tx);
+    return recordMemberStatus(actor, m.id, parsed.expectedVersion, 'disabled', 'active', tx);
+  },
+
+  /**
    * A one-time link for a member of this company to set a password (there is no mailer; the owner or admin hands it
    * over). Owners and admins (membership.manage), people only; a link for an owner or admin only from an owner, and never for
    * yourself (Settings → Account is the way, behind its own checks). Refused for a
@@ -1068,6 +1151,34 @@ export const accessService = {
       { brandId: parsed.brandId },
     );
     return { grantId: id };
+  },
+
+  /**
+   * G03: takes one brand away from a member restricted to some brands (the grant row goes; a member granted every
+   * brand is unaffected until their role says otherwise). Same gate as granting it: membership.manage on that brand.
+   */
+  async removeBrandGrant(actor: ResolvedActor, input: z.infer<typeof BrandGrantRemove>, tx: Tx) {
+    const parsed = BrandGrantRemove.parse(input);
+    await brands().assertExist([parsed.brandId], tx);
+    await policy.assert(
+      actor,
+      'membership.manage',
+      { type: 'brand', tenantId: actor.tenantId, brandId: parsed.brandId },
+      {},
+      tx,
+    );
+    const m = await membershipsRepo.getById(parsed.membershipId, tx);
+    const removed = await grantsRepo.remove(m.id, parsed.brandId, tx);
+    if (removed)
+      await audit.record(
+        { kind: actor.kind, id: actor.id },
+        'brand_grant.remove',
+        { type: 'membership', id: m.id },
+        'allowed',
+        tx,
+        { brandId: parsed.brandId },
+      );
+    return { removed };
   },
 
   async createServicePrincipal(actor: ResolvedActor, input: z.infer<typeof ServicePrincipalCreate>, tx: Tx) {

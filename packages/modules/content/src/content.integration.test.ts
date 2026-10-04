@@ -18,7 +18,7 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { runInTenant, withTransaction, type TenantContext, type Tx } from '@oremedia/db';
 import { tenants } from '@oremedia/db/schema/access';
 import { assetVersions, assets, usageRights } from '@oremedia/db/schema/assets';
-import { brands } from '@oremedia/db/schema/brand';
+import { brandObjectives, brands } from '@oremedia/db/schema/brand';
 import {
   briefs,
   channelVariants,
@@ -470,6 +470,255 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
           details: [{ path: 'offerFactIds.1', issue: 'fact_not_effective' }],
         });
       expect((await brief([live])).state).toBe('draft');
+    });
+  });
+
+  describe('campaign update and close (G12)', () => {
+    const reviewer = (tenantId: string) => ({ ...manager(tenantId), role: 'reviewer' }) as ResolvedActor;
+    const newCampaign = async (name: string) =>
+      (
+        await run(tenantA, (tx) =>
+          contentService.campaigns.create(
+            A,
+            {
+              brandId: brandA2,
+              name,
+              startsAt: '2031-03-01T00:00:00.000Z',
+              endsAt: '2031-03-31T00:00:00.000Z',
+            },
+            tx,
+          ),
+        )
+      ).campaignId;
+
+    it('updates only the fields sent, version-checked and audited; the run cannot end before it starts', async () => {
+      const id = await newCampaign('March');
+      const updated = await run(tenantA, (tx) =>
+        contentService.campaigns.update(
+          A,
+          { campaignId: id, expectedVersion: 0, name: 'March sale', endsAt: '2031-04-15T00:00:00.000Z' },
+          tx,
+        ),
+      );
+      expect(updated).toMatchObject({
+        name: 'March sale',
+        startsAt: '2031-03-01T00:00:00.000Z',
+        endsAt: '2031-04-15T00:00:00.000Z',
+        state: 'draft',
+        version: 1,
+      });
+      const [audited] = await auditOf(tenantA, 'content.campaign.update');
+      expect(audited).toMatchObject({ resourceId: id });
+      // A stale version is CONFLICT; nothing changes.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.update(A, { campaignId: id, expectedVersion: 0, name: 'Stale' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ConflictError);
+      // Ending before the (stored) start is refused, as at creation.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.update(
+            A,
+            { campaignId: id, expectedVersion: 1, endsAt: '2031-02-01T00:00:00.000Z' },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      expect((await run(tenantA, () => contentService.campaigns.get(A, { campaignId: id }))).name).toBe(
+        'March sale',
+      );
+    });
+
+    it('an objective must be the brand’s; null clears it', async () => {
+      const id = await newCampaign('Objective');
+      const objectiveA2 = newId('brandObjective');
+      const objectiveA = newId('brandObjective');
+      await tdb.db.insert(brandObjectives).values(
+        [
+          [objectiveA2, brandA2],
+          [objectiveA, brandA],
+        ].map(([oid, bid]) => ({
+          id: oid as string,
+          tenantId: tenantA,
+          brandId: bid as string,
+          name: 'Enquiries',
+          primaryMetricKey: 'qualified_enquiries',
+          guardrailMetricKeys: [],
+          activeFrom: new Date('2031-01-01T00:00:00.000Z'),
+        })),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.update(
+            A,
+            { campaignId: id, expectedVersion: 0, objectiveId: objectiveA },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      const set = await run(tenantA, (tx) =>
+        contentService.campaigns.update(
+          A,
+          { campaignId: id, expectedVersion: 0, objectiveId: objectiveA2 },
+          tx,
+        ),
+      );
+      expect(set.objectiveId).toBe(objectiveA2);
+      const cleared = await run(tenantA, (tx) =>
+        contentService.campaigns.update(A, { campaignId: id, expectedVersion: 1, objectiveId: null }, tx),
+      );
+      expect(cleared).toMatchObject({ objectiveId: null, name: 'Objective', version: 2 });
+    });
+
+    it('closes draft → completed through the machine, once; a closed campaign is not edited; its briefs stay', async () => {
+      const id = await newCampaign('Close me');
+      const brief = await run(tenantA, (tx) =>
+        contentService.briefs.create(
+          A,
+          {
+            brandId: brandA2,
+            campaignId: id,
+            audience: 'a',
+            message: 'm',
+            offerFactIds: [],
+            channelConnectionIds: [],
+            constraints: [],
+          },
+          tx,
+        ),
+      );
+      await expect(
+        run(tenantA, (tx) => contentService.campaigns.close(A, { campaignId: id, expectedVersion: 5 }, tx)),
+      ).rejects.toBeInstanceOf(ConflictError);
+      const closed = await run(tenantA, (tx) =>
+        contentService.campaigns.close(A, { campaignId: id, expectedVersion: 0 }, tx),
+      );
+      expect(closed).toMatchObject({ state: 'completed', version: 1 });
+      const audits = await auditOf(tenantA, 'content.campaign.close');
+      expect(audits.find((e) => e.resourceId === id)).toBeDefined();
+      await expect(
+        run(tenantA, (tx) => contentService.campaigns.close(A, { campaignId: id, expectedVersion: 1 }, tx)),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.update(A, { campaignId: id, expectedVersion: 1, name: 'Reopened' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(ValidationFailedError);
+      expect((await run(tenantA, () => contentService.briefs.get(A, { briefId: brief.briefId }))).state).toBe(
+        'draft',
+      );
+    });
+
+    it('a closed campaign takes no new brief, and nothing is attached to its briefs; a standalone brief is unaffected', async () => {
+      const id = await newCampaign('Closed to new work');
+      const briefInput = (campaignId?: string) => ({
+        brandId: brandA2,
+        ...(campaignId ? { campaignId } : {}),
+        audience: 'a',
+        message: 'm',
+        offerFactIds: [],
+        channelConnectionIds: [],
+        constraints: [],
+      });
+      const before = await run(tenantA, (tx) => contentService.briefs.create(A, briefInput(id), tx));
+      await run(tenantA, (tx) =>
+        contentService.campaigns.close(A, { campaignId: id, expectedVersion: 0 }, tx),
+      );
+      const closed = { details: [{ path: 'briefId', issue: 'campaign_is_completed' }] };
+      // A new brief on it (the router, REST, the agent tool and an accepted recommendation all create through here).
+      await expect(
+        run(tenantA, (tx) => contentService.briefs.create(A, briefInput(id), tx)),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        message: 'The campaign "Closed to new work" is closed: it takes no new briefs or content',
+        details: [{ path: 'campaignId', issue: 'campaign_is_completed' }],
+      });
+      // Plan items proposed on a brief it already had, accepting that brief into packages, or a package under it.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.propose(
+            A,
+            {
+              briefId: before.briefId,
+              items: [
+                {
+                  date: '2031-03-02',
+                  channelKey: 'fixture_provider',
+                  theme: 'x',
+                  formatKey: 'post',
+                  factIds: [],
+                },
+              ],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject(closed);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: before.briefId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toMatchObject(closed);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            {
+              brandId: brandA2,
+              briefId: before.briefId,
+              title: 'Late',
+              copy: copy('x'),
+              creativeDocumentIds: [],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject(closed);
+      const kept = await run(tenantA, () => contentService.briefs.get(A, { briefId: before.briefId }));
+      expect(kept).toMatchObject({ state: 'draft', version: 0, campaignId: id });
+      expect(
+        (
+          await tdb.db
+            .select()
+            .from(briefs)
+            .where(and(eq(briefs.tenantId, tenantA), eq(briefs.campaignId, id)))
+        ).length,
+      ).toBe(1);
+      // A brief without a campaign is not affected.
+      const standalone = await run(tenantA, (tx) => contentService.briefs.create(A, briefInput(), tx));
+      expect(
+        await run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: standalone.briefId, expectedVersion: 0 }, tx),
+        ),
+      ).toMatchObject({ state: 'accepted' });
+    });
+
+    it('needs content.plan on the brand; another tenant’s campaign is NOT_FOUND', async () => {
+      const id = await newCampaign('Guarded');
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.update(
+            reviewer(tenantA),
+            { campaignId: id, expectedVersion: 0, name: 'x' },
+            tx,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.campaigns.close(reviewer(tenantA), { campaignId: id, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      await expect(
+        run(tenantB, (tx) => contentService.campaigns.close(B, { campaignId: id, expectedVersion: 0 }, tx)),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      await expect(
+        run(tenantB, (tx) =>
+          contentService.campaigns.update(B, { campaignId: id, expectedVersion: 0, name: 'x' }, tx),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect((await run(tenantA, () => contentService.campaigns.get(A, { campaignId: id }))).version).toBe(0);
     });
   });
 

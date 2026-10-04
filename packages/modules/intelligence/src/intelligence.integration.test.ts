@@ -10,7 +10,7 @@ import { runInTenant, withTransaction, type TenantContext, type Tx } from '@orem
 import { memberships, servicePrincipals, tenants, users } from '@oremedia/db/schema/access';
 import { agentRuns } from '@oremedia/db/schema/agents';
 import { brandObjectives, brands } from '@oremedia/db/schema/brand';
-import { briefs } from '@oremedia/db/schema/content';
+import { briefs, campaigns } from '@oremedia/db/schema/content';
 import {
   customerVoiceClusters,
   insights,
@@ -518,6 +518,45 @@ describe('intelligence module (spec 16) against MySQL 8', () => {
         humanDecision: 'accepted',
         action: 'create_brief',
       });
+    });
+
+    it('G12: create_brief into a completed campaign is refused with the reason; the recommendation stays proposed', async () => {
+      const rec = await recommendationFor(tenantA, brandA1, spA, 'brief');
+      const closedCampaignId = newId('campaign');
+      await tdb.db.insert(campaigns).values({
+        id: closedCampaignId,
+        tenantId: tenantA,
+        brandId: brandA1,
+        name: 'Finished',
+        startsAt: new Date('2026-01-01T00:00:00.000Z'),
+        endsAt: new Date('2026-01-31T00:00:00.000Z'),
+        state: 'completed',
+      });
+      await expect(
+        runA((tx) =>
+          intelligenceService.recommendations.accept(
+            manager.actor,
+            {
+              recommendationId: rec.recommendationId,
+              expectedVersion: 0,
+              action: 'create_brief',
+              brief: {
+                campaignId: closedCampaignId,
+                audience: 'a',
+                message: 'm',
+                offerFactIds: [],
+                channelConnectionIds: [],
+              },
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        details: [{ path: 'campaignId', issue: 'campaign_is_completed' }],
+      });
+      expect(await recRow(rec.recommendationId)).toMatchObject({ state: 'proposed' });
+      expect(await tdb.db.select().from(briefs).where(eq(briefs.campaignId, closedCampaignId))).toEqual([]);
     });
 
     it('accepting prepare_test designs the experiment through the hook; milestones close the chain with a verdict', async () => {

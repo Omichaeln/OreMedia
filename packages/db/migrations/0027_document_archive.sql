@@ -1,0 +1,1 @@
+ALTER TABLE `creative_documents` ADD `archived_at` datetime(3);

@@ -5,9 +5,11 @@ import {
   BriefGet,
   BriefList,
   CalendarRange,
+  CampaignClose,
   CampaignCreate,
   CampaignGet,
   CampaignList,
+  CampaignUpdate,
   CHANNEL_VARIANT_TEXT_MAX_CHARS,
   ChannelVariantGenerate,
   ChannelVariantGet,
@@ -46,6 +48,7 @@ import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { briefMachine } from '@oremedia/domain/state-machines/brief';
+import { campaignMachine } from '@oremedia/domain/state-machines/campaign';
 import { contentPackageMachine } from '@oremedia/domain/state-machines/content-package';
 import {
   contentRevisionMachine,
@@ -285,6 +288,23 @@ async function loadCampaign(brandId: string, campaignId: string, tx?: Tx) {
   const c = await campaignsRepo.getById(campaignId, tx);
   if (c.brandId !== brandId) throw new NotFoundError('Campaign', campaignId);
   return c;
+}
+/**
+ * G12: a completed or archived campaign takes no new briefs and no new content (a plan item proposed or restored, a
+ * brief accepted into packages, a package created under one of its briefs). VALIDATION_FAILED with the campaign's
+ * state as the issue, so the caller can say why.
+ */
+function assertCampaignOpen(campaign: CampaignRow, path = 'campaignId'): void {
+  if (campaignMachine.terminal.includes(campaign.state))
+    throw new ValidationFailedError(
+      [{ path, issue: `campaign_is_${campaign.state}` }],
+      `The campaign "${campaign.name}" is closed: it takes no new briefs or content`,
+    );
+}
+/** The same rule for content linked to a campaign through its brief (a standalone brief has none). */
+async function assertBriefCampaignOpen(brief: BriefRow, tx: Tx): Promise<void> {
+  if (brief.campaignId)
+    assertCampaignOpen(await loadCampaign(brief.brandId, brief.campaignId, tx), 'briefId');
 }
 async function loadBrief(brandId: string, briefId: string, tx?: Tx) {
   const b = await briefsRepo.getById(briefId, tx);
@@ -785,6 +805,7 @@ async function movePlanItem(
   const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
   await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
   assertBriefDraft(brief);
+  if (to === 'proposed') await assertBriefCampaignOpen(brief, tx);
   if (item.state !== from)
     throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
   await planItemsRepo.update(item.id, parsed.expectedVersion, { state: to }, tx);
@@ -852,6 +873,68 @@ export const contentService = {
       await policy.assert(actor, 'brand.read', brandResource(campaign.brandId), {}, tx);
       return toCampaignDto(campaign);
     },
+
+    /**
+     * G12: the fields create accepts (name, run dates, objective), version-checked; only those sent change. The run
+     * may not end before it starts, the objective must be the brand's, and a completed or archived campaign is final.
+     */
+    async update(actor: ResolvedActor, input: z.infer<typeof CampaignUpdate>, tx: Tx) {
+      const parsed = CampaignUpdate.parse(input);
+      const campaign = await campaignsRepo.getById(parsed.campaignId, tx);
+      await policy.assert(actor, 'content.plan', brandResource(campaign.brandId), {}, tx);
+      if (campaignMachine.terminal.includes(campaign.state))
+        throw new ValidationFailedError(
+          [{ path: 'campaignId', issue: `campaign_is_${campaign.state}` }],
+          'A closed campaign is not edited',
+        );
+      const startsAt = parsed.startsAt ? new Date(parsed.startsAt) : campaign.startsAt;
+      const endsAt = parsed.endsAt ? new Date(parsed.endsAt) : campaign.endsAt;
+      if (endsAt.getTime() < startsAt.getTime())
+        throw new ValidationFailedError([{ path: 'endsAt', issue: 'must not be before startsAt' }]);
+      if (parsed.objectiveId) {
+        const objective = await objectivesRepo.getById(parsed.objectiveId, tx);
+        if (objective.brandId !== campaign.brandId)
+          throw new NotFoundError('BrandObjective', parsed.objectiveId);
+      }
+      await campaignsRepo.update(
+        campaign.id,
+        parsed.expectedVersion,
+        {
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.objectiveId !== undefined ? { objectiveId: parsed.objectiveId } : {}),
+          startsAt,
+          endsAt,
+        },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'content.campaign.update',
+        { type: 'campaign', id: campaign.id },
+        'allowed',
+        tx,
+        { brandId: campaign.brandId, expectedVersion: parsed.expectedVersion },
+      );
+      return toCampaignDto(await campaignsRepo.getById(campaign.id, tx));
+    },
+
+    /** G12: draft or active → completed by campaignMachine, version-checked and audited; its briefs are untouched. */
+    async close(actor: ResolvedActor, input: z.infer<typeof CampaignClose>, tx: Tx) {
+      const parsed = CampaignClose.parse(input);
+      const campaign = await campaignsRepo.getById(parsed.campaignId, tx);
+      await policy.assert(actor, 'content.plan', brandResource(campaign.brandId), {}, tx);
+      const toState = transition(campaignMachine, campaign.state, 'close', 'campaignId');
+      await campaignsRepo.update(campaign.id, parsed.expectedVersion, { state: toState }, tx);
+      await audit.record(
+        actorRef(actor),
+        'content.campaign.close',
+        { type: 'campaign', id: campaign.id },
+        'allowed',
+        tx,
+        { brandId: campaign.brandId, fromState: campaign.state, toState },
+      );
+      return toCampaignDto(await campaignsRepo.getById(campaign.id, tx));
+    },
   },
 
   briefs: {
@@ -874,7 +957,7 @@ export const contentService = {
         { autonomyMode: opts.autonomyMode },
         tx,
       );
-      if (parsed.campaignId) await loadCampaign(brand.id, parsed.campaignId, tx);
+      if (parsed.campaignId) assertCampaignOpen(await loadCampaign(brand.id, parsed.campaignId, tx));
       // BSC-3: a new brief offers only facts in effect now (approved, inside their validity window). Stored briefs
       // are not re-checked here; the copy and release checks hold whatever a brief carries.
       for (const [i, factId] of parsed.offerFactIds.entries()) {
@@ -948,6 +1031,7 @@ export const contentService = {
       const parsed = BriefAccept.parse(input);
       const brief = await briefsRepo.getById(parsed.briefId, tx);
       await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+      await assertBriefCampaignOpen(brief, tx);
       const toState = transition(briefMachine, brief.state, 'accept', 'briefId');
       await briefsRepo.update(brief.id, parsed.expectedVersion, { state: toState }, tx);
       await audit.record(
@@ -1017,6 +1101,7 @@ export const contentService = {
         tx,
       );
       assertBriefDraft(brief);
+      await assertBriefCampaignOpen(brief, tx);
       const ids: string[] = [];
       for (const [i, item] of parsed.items.entries()) {
         await assertFactsInBrand(brief.brandId, item.factIds, `items.${i}.factIds`, tx);
@@ -1132,6 +1217,7 @@ export const contentService = {
         tx,
       );
       const brief = parsed.briefId ? await loadBrief(brand.id, parsed.briefId, tx) : null;
+      if (brief) await assertBriefCampaignOpen(brief, tx);
       const snapshot = await resolveSnapshot(actor, brand.id, tx);
       assertFactsEffective(parsed.copy, snapshot);
       await assertArticleAssetsUsable(parsed.copy, brand.id, tx);

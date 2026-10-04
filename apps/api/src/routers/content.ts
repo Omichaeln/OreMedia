@@ -4,9 +4,11 @@ import {
   BriefGet,
   BriefList,
   CalendarRange,
+  CampaignClose,
   CampaignCreate,
   CampaignGet,
   CampaignList,
+  CampaignUpdate,
   ChannelVariantGenerate,
   ChannelVariantGet,
   ChannelVariantUpdate,
@@ -45,6 +47,18 @@ export const contentRouter = router({
     get: tenantQuery
       .input(CampaignGet)
       .query(({ ctx, input }) => contentService.campaigns.get(ctx.tenant.actor, input)),
+    /** G12: name, run dates and objective, version-checked. */
+    update: tenantMutation
+      .input(CampaignUpdate)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.campaigns.update(ctx.tenant.actor, input, tx)),
+      ),
+    /** G12: draft or active → completed, version-checked and audited. */
+    close: tenantMutation
+      .input(CampaignClose)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => contentService.campaigns.close(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   briefs: router({

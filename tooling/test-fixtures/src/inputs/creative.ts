@@ -7,6 +7,12 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
   'creative.documents.get': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
   'creative.documents.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'creative.documents.duplicate': { buildInput: (f) => ({ documentId: f['creativeDocumentId'] }) },
+  'creative.documents.archive': {
+    buildInput: (f) => ({ documentId: f['creativeDocumentId'], expectedVersion: 1 }),
+  },
+  'creative.documents.unarchive': {
+    buildInput: (f) => ({ documentId: f['creativeDocumentId'], expectedVersion: 1 }),
+  },
   'creative.documents.rename': {
     buildInput: (f) => ({ documentId: f['creativeDocumentId'], title: 'Foreign rename' }),
   },

@@ -378,6 +378,17 @@ export class MembershipRepository extends TenantScopedRepository<typeof membersh
       .where(this.scope(or(eq(memberships.status, 'active'), eq(memberships.status, 'invited')) as SQL));
     return rows.length;
   }
+  /**
+   * The company's active owners, row-locked (SELECT ... FOR UPDATE) so two requests that would each leave one owner
+   * cannot both commit: the second waits and then reads the first one's change.
+   */
+  async lockActiveOwners(tx: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(memberships)
+      .where(this.scope(and(eq(memberships.role, 'owner'), eq(memberships.status, 'active')) as SQL))
+      .for('update');
+  }
 }
 
 export class BrandGrantRepository extends TenantScopedRepository<typeof brandGrants> {
@@ -413,10 +424,12 @@ export class BrandGrantRepository extends TenantScopedRepository<typeof brandGra
       .values({ ...values, tenantId });
     return values.id;
   }
-  async remove(membershipId: string, brandId: string, tx?: Tx) {
-    await this.conn(tx)
+  /** Whether a grant was there to remove. */
+  async remove(membershipId: string, brandId: string, tx?: Tx): Promise<boolean> {
+    const res = await this.conn(tx)
       .delete(brandGrants)
       .where(this.scope(and(eq(brandGrants.membershipId, membershipId), eq(brandGrants.brandId, brandId))));
+    return affectedRows(res) > 0;
   }
 }
 

@@ -415,8 +415,16 @@ export const DocumentGet = z.object({ documentId: z.string() });
 export const DocumentList = z.object({
   brandId: z.string(),
   contentPackageId: z.string().optional(),
+  /** G12: archived documents are left out unless asked for; `true` lists only the archived ones. */
+  archived: z.boolean().default(false),
   page: PageRequest,
 });
+/**
+ * G12: an archived document leaves the Studio's default index (documents.list) and can be restored; nothing else
+ * changes (its revisions, approvals and exports stay, and it still opens). Version-checked; creative.edit.
+ */
+export const DocumentArchive = z.object({ documentId: z.string(), expectedVersion: z.number().int() });
+export const DocumentUnarchive = DocumentArchive;
 export const RevisionList = z.object({ documentId: z.string(), page: PageRequest });
 export const RevisionGet = z.object({ documentId: z.string(), revisionId: z.string() });
 /** Spec 11.4 applyOperations(docId, batch): the batch plus the document it targets. */

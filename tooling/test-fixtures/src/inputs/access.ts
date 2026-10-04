@@ -21,6 +21,12 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: (f) => ({ membershipId: f['membershipId'], expectedVersion: 0, role: 'admin' }),
   },
   'access.members.issuePasswordSetup': { buildInput: (f) => ({ membershipId: f['membershipId'] }) },
+  'access.members.disable': {
+    buildInput: (f) => ({ membershipId: f['membershipId'], expectedVersion: 0 }),
+  },
+  'access.members.enable': {
+    buildInput: (f) => ({ membershipId: f['membershipId'], expectedVersion: 0 }),
+  },
   'access.account.signInMethods': { buildInput: null, reason: "the caller's own user; takes no ids" },
   'access.account.setPassword': {
     buildInput: null,
@@ -32,6 +38,9 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
   },
   'access.brandGrants.set': {
     buildInput: (f) => ({ membershipId: f['membershipId'], brandId: f['brandId'], roles: [] }),
+  },
+  'access.brandGrants.remove': {
+    buildInput: (f) => ({ membershipId: f['membershipId'], brandId: f['brandId'] }),
   },
   'access.servicePrincipals.list': { buildInput: (f) => ({ brandId: f['brandId'], page: { limit: 50 } }) },
   'access.servicePrincipals.create': {

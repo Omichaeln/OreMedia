@@ -13,7 +13,15 @@ import { useDestinationMap } from '../destinations/use-destinations';
 import { localInputToIso } from '../publishing/publication-state';
 import { useChannels, type ChannelDto } from '../publishing/use-publishing';
 import { BriefDetail } from './brief-detail';
-import { briefChip, briefGaps, campaignChip, isSuggested, missedDate } from './content-helpers';
+import { CampaignSummary, ContentWriteError } from './campaign-actions';
+import {
+  briefChip,
+  briefGaps,
+  campaignChip,
+  campaignIsClosed,
+  isSuggested,
+  missedDate,
+} from './content-helpers';
 import { PackageDetail } from './package-detail';
 import { useBriefs, useCampaigns, usePackages } from './use-content';
 
@@ -98,11 +106,13 @@ function CreateCampaignForm({ brandId, onCreated }: { brandId: string; onCreated
 function CreateBriefForm({
   brandId,
   campaignId,
+  campaignClosed,
   channels,
   onCreated,
 }: {
   brandId: string;
   campaignId: string | null;
+  campaignClosed: boolean;
   channels: readonly ChannelDto[];
   onCreated: (id: string) => void;
 }) {
@@ -151,9 +161,11 @@ function CreateBriefForm({
       noValidate
     >
       <p className="text-xs text-muted-foreground">
-        {campaignId
-          ? 'The brief belongs to the selected campaign.'
-          : 'No campaign selected: the brief stands alone.'}
+        {campaignClosed
+          ? 'The selected campaign is closed: it takes no new briefs.'
+          : campaignId
+            ? 'The brief belongs to the selected campaign.'
+            : 'No campaign selected: the brief stands alone.'}
       </p>
       <Field label="Audience" htmlFor="brief-audience">
         <Input
@@ -194,7 +206,7 @@ function CreateBriefForm({
         />
       )}
       {ui && ui.kind !== 'forbidden' && (
-        <RequestError error={create.error} title="The brief was not created" />
+        <ContentWriteError error={create.error} title="The brief was not created" />
       )}
       <div>
         <Button type="submit" size="sm" disabled={create.isPending}>
@@ -235,6 +247,7 @@ export function CampaignsScreen() {
   };
   const forbidden = campaigns.isError && toUiError(campaigns.error).kind === 'forbidden';
   const [creating, setCreating] = useState<'campaign' | 'brief' | null>(null);
+  const selectedCampaign = campaignId ? campaigns.items.find((c) => c.id === campaignId) : undefined;
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -359,10 +372,12 @@ export function CampaignsScreen() {
             )
           }
         />
+        {selectedCampaign && <CampaignSummary campaign={selectedCampaign} canPlan={!forbidden} />}
         {creating === 'brief' && (
           <CreateBriefForm
             brandId={brandId}
             campaignId={campaignId}
+            campaignClosed={selectedCampaign ? campaignIsClosed(selectedCampaign.state) : false}
             channels={channels.data ?? []}
             onCreated={(id) => {
               setCreating(null);

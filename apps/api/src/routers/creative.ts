@@ -2,11 +2,13 @@ import {
   CommentAdd,
   CommentList,
   CommentResolve,
+  DocumentArchive,
   DocumentCreate,
   DocumentDuplicate,
   DocumentGet,
   DocumentList,
   DocumentRename,
+  DocumentUnarchive,
   OperationsApply,
   OperationsPropose,
   RenderGet,
@@ -64,6 +66,19 @@ export const creativeRouter = router({
       .input(DocumentRename)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => creativeService.documents.rename(ctx.tenant.actor, input, tx)),
+      ),
+    /** G12: archived documents leave the default index (documents.list) and can be restored. */
+    archive: tenantMutation
+      .input(DocumentArchive)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.documents.archive(ctx.tenant.actor, input, tx)),
+      ),
+    unarchive: tenantMutation
+      .input(DocumentUnarchive)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.documents.unarchive(ctx.tenant.actor, input, tx),
+        ),
       ),
   }),
 

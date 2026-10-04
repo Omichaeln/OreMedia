@@ -12,8 +12,10 @@ import {
   DocumentCreate,
   DocumentDuplicate,
   DocumentGet,
+  DocumentArchive,
   DocumentList,
   DocumentRename,
+  DocumentUnarchive,
   OperationsApply,
   OperationsPropose,
   RenderGet,
@@ -118,10 +120,16 @@ import {
 } from '@oremedia/contracts/skills';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import {
+  BrandGrantRemove,
+  BrandGrantSet,
+  MemberDisable,
+  MemberEnable,
+  MemberSetRole,
   passwordPolicyIssue,
   PasswordSetup,
   PasswordSignIn,
   ServicePrincipalList,
+  type MemberStatusResult,
   type PasswordAuthResponse,
 } from '@oremedia/contracts/access';
 import { Phase5Backend, phase5Routers, type ReviewerLink } from './mock-phase5';
@@ -342,6 +350,8 @@ interface Doc {
   title: string;
   currentRevisionId: string;
   schemaVersion: 1;
+  /** G12: when the document was archived; null while in use. */
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -911,6 +921,8 @@ export class MockBackend {
    * belong to several. The default `E2E.token` session stays the single-company owner the other suites use.
    */
   sessions = new Map<string, MockSession>();
+  /** access.members.* (G03): role, status and brand scope change through setRole, brandGrants.* and disable/enable. */
+  readonly members: MockMemberRow[] = seedMembers();
   /** The other companies served next to this one; requests are routed by their X-Oremedia-Tenant header. */
   readonly companies: MockBackend[] = [];
   /** Procedure paths the policy engine refuses for this person (FORBIDDEN envelope), e.g. `publishing.channels.list`. */
@@ -1099,6 +1111,37 @@ export class MockBackend {
     return session && membership ? { userId: session.userId, ...membership } : null;
   }
 
+  /**
+   * A member signs in again (G03): a new session token whose membership is the member's current role and brand scope,
+   * or null when the membership is not active (sign-in refuses a disabled member).
+   */
+  signInMember(membershipId: string): string | null {
+    const m = this.members.find((x) => x.membershipId === membershipId);
+    if (!m || m.status !== 'active') return null;
+    const token = `ses_e2e_${m.userId}_${randomUUID().slice(0, 8)}`;
+    this.sessions.set(token, {
+      userId: m.userId,
+      memberships: { [this.tenantId]: { role: m.role, brandIds: m.allBrands ? null : [...m.brandIds] } },
+    });
+    return token;
+  }
+
+  /** As the API on a role change or a disable: every session of the person ends. */
+  revokeSessionsOf(userId: string): void {
+    for (const [token, session] of this.sessions) if (session.userId === userId) this.sessions.delete(token);
+  }
+
+  /** creative.documents.archive / unarchive (G12). */
+  setDocumentArchived(input: { documentId: string; expectedVersion: number }, archived: boolean) {
+    const doc = this.doc(input.documentId);
+    if ((doc.archivedAt !== null) !== archived) {
+      if (doc.version !== input.expectedVersion)
+        throw new ConflictError('CreativeDocument', doc.id, input.expectedVersion);
+      Object.assign(doc, { archivedAt: archived ? now() : null, version: doc.version + 1, updatedAt: now() });
+    }
+    return { documentId: doc.id, archivedAt: doc.archivedAt, version: doc.version };
+  }
+
   createDocument(title: string, snapshot = fixtureDocument()): Doc {
     const id = rid('doc');
     const revision = this.revision(
@@ -1120,6 +1163,7 @@ export class MockBackend {
       title,
       currentRevisionId: revision.id,
       schemaVersion: 1,
+      archivedAt: null,
       createdAt: now(),
       updatedAt: now(),
       version: 1,
@@ -1319,6 +1363,48 @@ const MEMBER_ACCOUNTS: Record<string, { email: string; userId: string; role: Mem
   mem_invited: { email: 'lina@example.test', userId: 'usr_invited', role: 'reviewer' },
 };
 
+/** A row of access.members.list, as the mock keeps it. */
+export interface MockMemberRow {
+  membershipId: string;
+  userId: string;
+  name: string | null;
+  email: string;
+  role: MembershipRole;
+  status: 'active' | 'invited' | 'disabled';
+  allBrands: boolean;
+  brandIds: string[];
+  createdAt: string;
+  version: number;
+}
+function seedMembers(): MockMemberRow[] {
+  const row = (
+    membershipId: string,
+    name: string | null,
+    status: MockMemberRow['status'],
+    allBrands: boolean,
+    brandIds: string[],
+  ): MockMemberRow => {
+    const account = MEMBER_ACCOUNTS[membershipId] as (typeof MEMBER_ACCOUNTS)[string];
+    return {
+      membershipId,
+      userId: account.userId,
+      name,
+      email: account.email,
+      role: account.role,
+      status,
+      allBrands,
+      brandIds,
+      createdAt: '2026-09-01T09:00:00.000Z',
+      version: 0,
+    };
+  };
+  return [
+    row('mem_owner', 'E2E person', 'active', true, []),
+    row('mem_creator', 'Kofi Asare', 'active', false, [E2E.brandId]),
+    row('mem_invited', null, 'invited', false, []),
+  ];
+}
+
 /**
  * The caller's credential as the API reads it (apps/api/src/context.ts): an Authorization bearer, else the session
  * cookie a password sign-in set, presented the same way.
@@ -1420,6 +1506,41 @@ export function createMockRouter(backend: MockBackend) {
   const { query, mutation, authedOnly } = createBuilders(backend);
   const summaryOf = ({ document: _doc, ...rest }: MockBrandVersion) => rest;
 
+  /** The membership a member-management call names, after membership.manage (owners and admins). */
+  const manageableMember = (caller: MockMember | null | undefined, membershipId: string) => {
+    if (caller?.role !== 'owner' && caller?.role !== 'admin')
+      throw new PolicyDeniedError('membership.manage');
+    const m = backend.members.find((x) => x.membershipId === membershipId);
+    if (!m) throw new NotFoundError('Membership', membershipId);
+    return m;
+  };
+  /** access.members.disable / enable as the API decides them (G03). */
+  const setMemberStatus = (
+    caller: MockMember | null | undefined,
+    input: { membershipId: string; expectedVersion: number },
+    to: 'active' | 'disabled',
+  ): MemberStatusResult => {
+    const m = manageableMember(caller, input.membershipId);
+    const verb = to === 'disabled' ? 'disable' : 'enable';
+    if (m.userId === caller?.userId)
+      throw new PolicyDeniedError(`self_${verb}`, `You cannot ${verb} your own membership`);
+    if ((m.role === 'owner' || m.role === 'admin') && caller?.role !== 'owner')
+      throw new PolicyDeniedError('owner_required', `Only an owner can ${verb} an owner or admin`);
+    if (m.status !== (to === 'disabled' ? 'active' : 'disabled'))
+      throw new ValidationFailedError([{ path: 'membershipId', issue: `membership_is_${m.status}` }]);
+    if (
+      to === 'disabled' &&
+      m.role === 'owner' &&
+      !backend.members.some((o) => o !== m && o.role === 'owner' && o.status === 'active')
+    )
+      throw new PolicyDeniedError('last_owner', 'The company must keep at least one active owner');
+    if (m.version !== input.expectedVersion)
+      throw new ConflictError('Membership', m.membershipId, input.expectedVersion);
+    Object.assign(m, { status: to, version: m.version + 1 });
+    if (to === 'disabled') backend.revokeSessionsOf(m.userId);
+    return { membershipId: m.membershipId, status: to, version: m.version };
+  };
+
   const p6 = phase6Routers(backend.phase6, { router: t.router, query, mutation });
   const p5 = phase5Routers(
     backend.phase5,
@@ -1464,36 +1585,31 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       members: t.router({
+        // As the API (G03): owners and admins; an owner's role only from an owner; sessions end; version-checked.
+        setRole: mutation.input(MemberSetRole).mutation(({ ctx, input }) => {
+          const m = manageableMember(ctx.member, input.membershipId);
+          if ((m.role === 'owner' || input.role === 'owner') && ctx.member?.role !== 'owner')
+            throw new PolicyDeniedError('owner_required');
+          if (m.version !== input.expectedVersion)
+            throw new ConflictError('Membership', m.membershipId, input.expectedVersion);
+          Object.assign(m, {
+            role: input.role,
+            ...(input.allBrands !== undefined ? { allBrands: input.allBrands } : {}),
+            version: m.version + 1,
+          });
+          backend.revokeSessionsOf(m.userId);
+          return { ok: true };
+        }),
+        disable: mutation
+          .input(MemberDisable)
+          .mutation(({ ctx, input }) => setMemberStatus(ctx.member, input, 'disabled')),
+        enable: mutation
+          .input(MemberEnable)
+          .mutation(({ ctx, input }) => setMemberStatus(ctx.member, input, 'active')),
         list: query.query(({ ctx }) => {
           if (ctx.member?.role !== 'owner' && ctx.member?.role !== 'admin')
             throw new PolicyDeniedError('membership.manage');
-          return {
-            items: [
-              ['mem_owner', 'usr_e2e', 'E2E person', 'e2e.person@example.test', 'owner', 'active', true, []],
-              [
-                'mem_creator',
-                'usr_creator',
-                'Kofi Asare',
-                'kofi@example.test',
-                'creator',
-                'active',
-                false,
-                [E2E.brandId],
-              ],
-              ['mem_invited', 'usr_invited', null, 'lina@example.test', 'reviewer', 'invited', false, []],
-            ].map(([membershipId, userId, name, email, role, status, allBrands, brandIds]) => ({
-              membershipId: membershipId as string,
-              userId: userId as string,
-              name: name as string | null,
-              email: email as string,
-              role: role as MembershipRole,
-              status: status as 'active' | 'invited' | 'disabled',
-              allBrands: allBrands as boolean,
-              brandIds: brandIds as string[],
-              createdAt: '2026-09-01T09:00:00.000Z',
-              version: 0,
-            })),
-          };
+          return { items: backend.members.map((m) => ({ ...m, brandIds: [...m.brandIds] })) };
         }),
         invite: mutation
           .input(
@@ -1537,6 +1653,23 @@ export function createMockRouter(backend: MockBackend) {
               expiresAt: new Date(Date.now() + 72 * 3600_000).toISOString(),
             };
           }),
+      }),
+      brandGrants: t.router({
+        set: mutation.input(BrandGrantSet).mutation(({ ctx, input }) => {
+          const m = manageableMember(ctx.member, input.membershipId);
+          if (!backend.brands.some((b) => b.id === input.brandId))
+            throw new NotFoundError('Brand', input.brandId);
+          if (!m.brandIds.includes(input.brandId)) m.brandIds.push(input.brandId);
+          return { grantId: `bgr_${m.membershipId}_${input.brandId}` };
+        }),
+        remove: mutation.input(BrandGrantRemove).mutation(({ ctx, input }) => {
+          const m = manageableMember(ctx.member, input.membershipId);
+          if (!backend.brands.some((b) => b.id === input.brandId))
+            throw new NotFoundError('Brand', input.brandId);
+          const removed = m.brandIds.includes(input.brandId);
+          m.brandIds = m.brandIds.filter((b) => b !== input.brandId);
+          return { removed };
+        }),
       }),
       account: t.router({
         signInMethods: authedOnly.query(() => ({
@@ -2938,6 +3071,13 @@ export function createMockRouter(backend: MockBackend) {
           doc.updatedAt = now();
           return { documentId: doc.id, title: doc.title, version: doc.version };
         }),
+        // G12: as the API: version-checked; a document already in the asked state is answered as it is.
+        archive: mutation
+          .input(DocumentArchive)
+          .mutation(({ input }) => backend.setDocumentArchived(input, true)),
+        unarchive: mutation
+          .input(DocumentUnarchive)
+          .mutation(({ input }) => backend.setDocumentArchived(input, false)),
         get: query.input(DocumentGet).query(({ input }) => {
           const { revisions: _r, ...doc } = backend.doc(input.documentId);
           return { ...doc, revision: backend.head(input.documentId) };
@@ -2948,6 +3088,7 @@ export function createMockRouter(backend: MockBackend) {
               .filter(
                 (d) =>
                   d.brandId === input.brandId &&
+                  (d.archivedAt !== null) === input.archived &&
                   (input.contentPackageId === undefined || d.contentPackageId === input.contentPackageId),
               )
               .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))

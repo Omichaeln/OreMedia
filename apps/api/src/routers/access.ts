@@ -4,7 +4,10 @@ import {
   AccountSetPassword,
   ApiClientCreate,
   ApiClientRotate,
+  BrandGrantRemove,
   BrandGrantSet,
+  MemberDisable,
+  MemberEnable,
   MemberInvite,
   MemberIssuePasswordSetup,
   MemberSetRole,
@@ -109,6 +112,17 @@ export const accessRouter = router({
         return { ok: true };
       }),
     ),
+    /** G03: switches a member's access to this company off (their sessions end) or back on; audited. */
+    disable: tenantMutation
+      .input(MemberDisable)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => accessService.disableMember(ctx.tenant.actor, input, tx)),
+      ),
+    enable: tenantMutation
+      .input(MemberEnable)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => accessService.enableMember(ctx.tenant.actor, input, tx)),
+      ),
     /**
      * A one-time password setup link for a member, shown once to the owner or admin. Deliberately not idempotent: a
      * replayed response would have to be stored with the live token in it. A retry issues a new link, which expires
@@ -148,6 +162,11 @@ export const accessRouter = router({
       .input(BrandGrantSet)
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => accessService.setBrandGrant(ctx.tenant.actor, input, tx)),
+      ),
+    remove: tenantMutation
+      .input(BrandGrantRemove)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => accessService.removeBrandGrant(ctx.tenant.actor, input, tx)),
       ),
   }),
 

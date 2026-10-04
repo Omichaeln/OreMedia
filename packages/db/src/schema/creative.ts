@@ -31,6 +31,11 @@ export const creativeDocuments = mysqlTable(
     title: varchar('title', { length: 200 }).notNull(),
     currentRevisionId: ref('current_revision_id'),
     schemaVersion: int('schema_version').notNull(),
+    /**
+     * G12: when the document was archived (hidden from the Studio's default index, still readable and restorable);
+     * null while it is in use. Added in 0027, nullable, so every existing document stays in use.
+     */
+    archivedAt: ts('archived_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
