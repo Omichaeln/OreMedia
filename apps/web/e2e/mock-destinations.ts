@@ -129,6 +129,13 @@ const SOURCES: readonly DestinationSourceV1[] = [
 ];
 
 /** Spec 5.5 default grants of destination.connect / destination.manage and source_use.manage. */
+/** RA-01: the kinds whose adapter revokes the grant at the platform on disconnect (the others are shredded at once). */
+const REMOTE_REVOKE_KINDS: ReadonlySet<string> = new Set([
+  'ga4_property',
+  'search_console_site',
+  'gbp_location',
+  'cms_site',
+]);
 const CONNECTORS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin', 'publisher']);
 /** insight.manage (RA-11 create work): managers and analysts. */
 const WORK_CREATORS: ReadonlySet<MembershipRole> = new Set(['owner', 'admin', 'brand_manager', 'analyst']);
@@ -996,7 +1003,11 @@ export function destinationsRouters(
       if (d.version !== input.expectedVersion)
         throw new ConflictError('Destination', d.id, input.expectedVersion);
       Object.assign(d, { status: 'disconnected', updatedAt: now(), version: d.version + 1 });
-      return d;
+      // RA-01, as the API: where the kind's adapter revokes the grant at the platform the worker does it later.
+      return {
+        ...d,
+        remoteRevoke: REMOTE_REVOKE_KINDS.has(d.kind) ? ('requested' as const) : ('not_supported' as const),
+      };
     }),
     reports: router({
       summary: query.input(DestinationReportSummary).query(({ input }): DestinationReportSummaryV1 => {

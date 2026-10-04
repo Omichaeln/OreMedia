@@ -26,6 +26,7 @@ import {
   type SuggestionEvidence,
   type SuggestionOp,
   type SuggestionStatus,
+  type AssistBlockerCode,
 } from '@oremedia/contracts/brand-assist';
 import {
   ConflictError,
@@ -186,7 +187,7 @@ export class AssistBackend {
   readonly suggestions: MockSuggestion[] = [];
   readonly restores: string[] = [];
   /** Tests: the blockers the next estimate and start report (cost, budget, kill switch). */
-  blockers: Array<{ code: string; message: string }> = [];
+  blockers: Array<{ code: AssistBlockerCode; message: string }> = [];
   private seq = 0;
 
   constructor(
