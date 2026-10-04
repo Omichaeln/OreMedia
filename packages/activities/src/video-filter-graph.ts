@@ -1,13 +1,13 @@
-import type {
-  AudioItem,
-  OverlayItem,
-  VideoClipItem,
-  VideoProjectV1,
-  VideoTransition,
-} from '@oremedia/contracts/video';
+import type { OverlayItem, VideoProjectV1, VideoTransition } from '@oremedia/contracts/video';
+import {
+  soundWindows,
+  transitionHalfFrames,
+  transitionInOf,
+  type SoundWindow,
+} from '@oremedia/editor/video/audio';
 import { framePlacement } from '@oremedia/editor/video/frame';
 import { SLIDE_FRACTION } from '@oremedia/editor/video/overlays';
-import { frameOf, lengthOf, previousAdjacent } from '@oremedia/editor/video/time';
+import { frameOf, lengthOf } from '@oremedia/editor/video/time';
 
 /**
  * STU-2b compositor: a VideoProjectV1 as one ffmpeg invocation (inputs + a filter_complex script). Pure, so the graph
@@ -24,7 +24,8 @@ import { frameOf, lengthOf, previousAdjacent } from '@oremedia/editor/video/time
  * PNG for the gaps) retimed to its windows and held with fps, so ffmpeg decodes one frame per lane at a time however
  * many titles and captions there are; enter/exit animations use the formulas of overlayAnimationAt. Sound: clip sound and audio items are
  * resampled to 48 kHz stereo, trimmed, gained, faded and placed to the sample, then mixed without normalisation
- * and padded or cut to the exact duration.
+ * and padded or cut to the exact duration. Their windows, gains and fades are editor/video/audio.ts's soundWindows,
+ * the same statement the preview schedules (gainAt is what these filters apply).
  */
 
 export const AUDIO_RATE = 48_000;
@@ -188,13 +189,31 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
   const videoTrack = project.tracks.find((t) => t.kind === 'video');
   const clips =
     videoTrack?.kind === 'video' ? [...videoTrack.items].sort((a, b) => a.startMs - b.startMs) : [];
-  const pictureMuted = videoTrack?.kind === 'video' && videoTrack.muted;
   const segments: Segment[] = [];
   const audioLabels: string[] = [];
-  const halfOf = (t: VideoTransition | undefined) =>
-    t && t.kind !== 'cut' && t.durationMs > 0 ? Math.max(1, Math.round((t.durationMs * F) / 2000)) : 0;
-  const transitionOf = (clip: VideoClipItem): VideoTransition | undefined =>
-    clip.transitionIn && previousAdjacent(clips, clip) ? clip.transitionIn : undefined;
+  const halfOf = (t: VideoTransition | undefined) => transitionHalfFrames(t, F);
+  const transitionOf = (clip: (typeof clips)[number]) => transitionInOf(clips, clip);
+  const sounds = soundWindows(project, (id, kind) => {
+    const source = input.sources[id];
+    if (kind === 'clip') return source?.kind === 'video' && source.hasAudio;
+    return !!source && source.kind !== 'image' && (source.kind !== 'video' || source.hasAudio);
+  }).filter((w) => !w.muted);
+  // Gain then fades, on a stream whose sample 0 is the window start: what gainAt states. Clip windows are on the
+  // frame grid (written to the microsecond); audio items are whole milliseconds.
+  const shaped = (w: SoundWindow): string[] => {
+    const s = (ms: number) => (w.kind === 'clip' ? (ms / 1000).toFixed(6) : ms3(ms));
+    const len = w.endMs - w.startMs;
+    return [
+      `atrim=end_sample=${Math.round((len * AUDIO_RATE) / 1000)}`,
+      `volume=${w.gainDb}dB`,
+      ...(w.fadeInMs ? [`afade=t=in:st=0:d=${s(w.fadeInMs)}`] : []),
+      ...(w.fadeOutMs ? [`afade=t=out:st=${s(len - w.fadeOutMs)}:d=${s(w.fadeOutMs)}`] : []),
+      // Placed by timestamp (in samples) and padded with silence from 0: adelay's leading silence carries no
+      // timestamps in ffmpeg 6.1, which the AAC path then drops (the sound would land early).
+      `asetpts=PTS+${Math.round((w.startMs * AUDIO_RATE) / 1000)}`,
+      `aresample=${AUDIO_RATE}:async=1:first_pts=0`,
+    ];
+  };
   let cursor = 0;
   clips.forEach((clip, idx) => {
     const f0 = frameOf(clip.startMs, F);
@@ -259,26 +278,17 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
     segments.push({ frames: n, label, padIn, padOut, transitionIn: padIn ? (tIn?.kind ?? null) : null });
     cursor = f1;
 
-    // The clip's own sound, on the frame grid of its picture.
-    if (source.kind === 'video' && source.hasAudio && !clip.muted && !pictureMuted) {
+    // The clip's own sound, on the frame grid of its picture, fading over its half of any transition.
+    const sound = sounds.find((w) => w.kind === 'clip' && w.itemId === clip.id);
+    if (sound) {
       const a = `ca${audioLabels.length}`;
-      // The clip's sound fades over its half of any transition (inside its own frames).
-      const fadeIn = hIn ? sec(hIn, F) : null;
-      const fadeOut = hOut ? sec(hOut, F) : null;
       graph.push(
         [
           // Timestamps are kept (the seek point is 0): sound that starts after it (an edit list's empty edit,
           // encoder priming) is padded with silence from 0 instead of being pulled earlier.
           `[${k}:a]aresample=${AUDIO_RATE}:async=1:first_pts=0`,
           'aformat=sample_fmts=fltp:channel_layouts=stereo',
-          `atrim=end_sample=${Math.round((n * AUDIO_RATE) / F)}`,
-          `volume=${clip.gainDb}dB`,
-          ...(fadeIn ? [`afade=t=in:st=0:d=${fadeIn}`] : []),
-          ...(fadeOut ? [`afade=t=out:st=${sec(n - hOut, F)}:d=${fadeOut}`] : []),
-          // Placed by timestamp (in samples) and padded with silence from 0: adelay's leading silence carries no
-          // timestamps in ffmpeg 6.1, which the AAC path then drops (the sound would land early).
-          `asetpts=PTS+${Math.round((f0 * AUDIO_RATE) / F)}`,
-          `aresample=${AUDIO_RATE}:async=1:first_pts=0`,
+          ...shaped(sound),
         ].join(',') + `[${a}]`,
       );
       audioLabels.push(a);
@@ -397,31 +407,26 @@ export function buildComposePlan(input: ComposePlanInput): ComposePlan {
   graph.push(`[${picture}]trim=end_frame=${totalFrames},settb=1/${F},setpts=N,format=yuv420p[vout]`);
 
   // ---- sound -------------------------------------------------------------------------------------------------
-  for (const track of project.tracks) {
-    if (track.kind !== 'audio' || track.muted) continue;
-    for (const item of track.items as AudioItem[]) {
-      if (item.muted) continue;
-      const source = input.sources[item.assetVersionId];
-      if (!source || (source.kind === 'video' && !source.hasAudio) || source.kind === 'image') continue;
-      const len = lengthOf(item);
-      const k = addInput(source.path, source.mime, ['-ss', ms3(item.sourceInMs), '-t', ms3(len + 100)]);
-      const a = `au${audioLabels.length}`;
-      graph.push(
-        [
-          // Timestamps are kept (the seek point is 0): sound that starts after it (an edit list's empty edit,
-          // encoder priming) is padded with silence from 0 instead of being pulled earlier.
-          `[${k}:a]aresample=${AUDIO_RATE}:async=1:first_pts=0`,
-          'aformat=sample_fmts=fltp:channel_layouts=stereo',
-          `atrim=end_sample=${Math.round((len * AUDIO_RATE) / 1000)}`,
-          `volume=${item.gainDb}dB`,
-          ...(item.fadeInMs ? [`afade=t=in:st=0:d=${ms3(item.fadeInMs)}`] : []),
-          ...(item.fadeOutMs ? [`afade=t=out:st=${ms3(len - item.fadeOutMs)}:d=${ms3(item.fadeOutMs)}`] : []),
-          `asetpts=PTS+${Math.round((item.startMs * AUDIO_RATE) / 1000)}`,
-          `aresample=${AUDIO_RATE}:async=1:first_pts=0`,
-        ].join(',') + `[${a}]`,
-      );
-      audioLabels.push(a);
-    }
+  for (const w of sounds) {
+    if (w.kind !== 'audio') continue;
+    const source = input.sources[w.assetVersionId] as ComposeSourceFile;
+    const k = addInput(source.path, source.mime, [
+      '-ss',
+      ms3(w.sourceInMs),
+      '-t',
+      ms3(w.endMs - w.startMs + 100),
+    ]);
+    const a = `au${audioLabels.length}`;
+    graph.push(
+      [
+        // Timestamps are kept (the seek point is 0): sound that starts after it (an edit list's empty edit,
+        // encoder priming) is padded with silence from 0 instead of being pulled earlier.
+        `[${k}:a]aresample=${AUDIO_RATE}:async=1:first_pts=0`,
+        'aformat=sample_fmts=fltp:channel_layouts=stereo',
+        ...shaped(w),
+      ].join(',') + `[${a}]`,
+    );
+    audioLabels.push(a);
   }
   const totalSamples = Math.round((totalFrames * AUDIO_RATE) / F);
   if (audioLabels.length === 0)

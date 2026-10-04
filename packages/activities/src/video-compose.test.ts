@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MediaProbeV1 } from '@oremedia/contracts/media';
-import type { VideoProjectV1 } from '@oremedia/contracts/video';
+import type { AudioItem, VideoProjectV1 } from '@oremedia/contracts/video';
+import { dbToGain, gainAt, soundWindows } from '@oremedia/editor/video/audio';
 import { mediaToolsAvailable, probeFile, runTool, withTempDir } from '@oremedia/module-assets';
 import { buildComposePlan, demuxerFor, overlayLanes, type ComposeSourceFile } from './video-filter-graph';
 import { encodeProject } from './video-render';
@@ -529,6 +530,177 @@ describe.skipIf(!hasTools)('compositor on real ffmpeg', { timeout: 300_000 }, ()
         ).toBeLessThanOrEqual(15);
       }
     }
+  });
+
+  it('applies gain and linear fades exactly as gainAt states (RMS of a tone at fade start, midpoint and end)', async () => {
+    // A 1 kHz stereo tone at amplitude 0.1: as a clip's sound (with a crossfade out of it) and as audio items.
+    const A = 0.1;
+    const tone = `aevalsrc=exprs='${A}*sin(2*PI*1000*t)|${A}*sin(2*PI*1000*t)':s=48000:d=12`;
+    await ff(['-f', 'lavfi', '-i', tone, '-c:a', 'pcm_s16le', join(dir, 'tone.wav')]);
+    await ff([
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=gray:s=320x240:r=30',
+      '-f',
+      'lavfi',
+      '-i',
+      tone,
+      '-t',
+      '6',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '256k',
+      join(dir, 'tone-clip.mp4'),
+    ]);
+    const toned: Record<string, ComposeSourceFile> = {
+      ...sources,
+      TONE: {
+        path: join(dir, 'tone.wav'),
+        kind: 'audio',
+        mime: 'audio/wav',
+        hasAudio: true,
+        width: null,
+        height: null,
+      },
+      TCLIP: {
+        path: join(dir, 'tone-clip.mp4'),
+        kind: 'video',
+        mime: 'video/mp4',
+        hasAudio: true,
+        width: 320,
+        height: 240,
+      },
+    };
+    const item = (id: string, startMs: number, lenMs: number, over: Partial<AudioItem>): AudioItem => ({
+      id,
+      assetVersionId: 'TONE',
+      sourceInMs: 500,
+      sourceOutMs: 500 + lenMs,
+      startMs,
+      gainDb: 0,
+      fadeInMs: 0,
+      fadeOutMs: 0,
+      muted: false,
+      locked: false,
+      ...over,
+    });
+    const p = project((x) => {
+      x.durationMs = 12_000;
+      const v = x.tracks[0];
+      if (v?.kind !== 'video') return;
+      // The clip's sound at +6 dB fades out over the outgoing half of a 1 s crossfade into B (2.5 s to 3.0 s).
+      v.items = [
+        {
+          ...v.items[0]!,
+          assetVersionId: 'TCLIP',
+          sourceInMs: 0,
+          sourceOutMs: 3_000,
+          startMs: 0,
+          muted: false,
+          gainDb: 6,
+        },
+        { ...v.items[1]!, sourceInMs: 0, sourceOutMs: 2_000, startMs: 3_000 },
+      ];
+      x.tracks = [
+        v,
+        {
+          id: 'm1',
+          kind: 'audio',
+          name: 'Music',
+          locked: false,
+          muted: false,
+          items: [item('fades', 4_000, 6_000, { gainDb: 6, fadeInMs: 2_000, fadeOutMs: 2_000 })],
+        },
+        {
+          id: 'm2',
+          kind: 'audio',
+          name: 'Voice',
+          locked: false,
+          muted: false,
+          items: [item('quiet', 10_500, 1_000, { gainDb: -12 })],
+        },
+        // Muted at +12 dB over everything: contributes nothing.
+        {
+          id: 'm3',
+          kind: 'audio',
+          name: 'Muted',
+          locked: false,
+          muted: false,
+          items: [item('muted', 4_000, 7_500, { gainDb: 12, muted: true })],
+        },
+      ];
+    });
+    const saved = sources;
+    sources = toned;
+    const out = await render(p).finally(() => {
+      sources = saved;
+    });
+    const pcm = await runTool(
+      'ffmpeg',
+      ['-v', 'error', '-i', out.output, '-map', '0:a:0', '-ar', '48000', '-f', 'f32le', '-'],
+      { timeoutMs: 60_000, maxStdoutBytes: 64 * 1024 * 1024 },
+    );
+    const stereo = new Float32Array(
+      pcm.stdout.buffer,
+      pcm.stdout.byteOffset,
+      Math.floor(pcm.stdout.length / 4),
+    );
+    const windows = soundWindows(p, (id) => id === 'TONE' || id === 'TCLIP');
+    // Left channel RMS over [fromMs, fromMs + 20 ms) (20 cycles of the tone), and what gainAt says it should be.
+    const measured = (fromMs: number) => {
+      let sum = 0;
+      const s0 = Math.round(fromMs * 48);
+      for (let s = s0; s < s0 + 960; s++) sum += (stereo[2 * s] ?? 0) ** 2;
+      return Math.sqrt(sum / 960);
+    };
+    const expected = (fromMs: number) => {
+      let sum = 0;
+      for (let k = 0; k < 960; k++) {
+        const g = windows.reduce((acc, w) => acc + gainAt(w, fromMs + k / 48), 0);
+        sum += (g * A) ** 2;
+      }
+      return Math.sqrt(sum / 960 / 2); // the mean of sin² is 1/2
+    };
+    const points: Array<[string, number]> = [
+      ['clip at +6 dB', 1_500],
+      ['clip fade out start', 2_500],
+      ['clip fade out midpoint', 2_740],
+      ['clip fade out end', 2_980],
+      ['silence after the clip', 3_500],
+      ['fade in start', 4_000],
+      ['fade in midpoint', 4_990],
+      ['fade in end', 5_980],
+      ['+6 dB between the fades', 7_000],
+      ['fade out start', 8_000],
+      ['fade out midpoint', 8_990],
+      ['fade out end', 9_980],
+      ['silence after the item (muted item under it)', 10_200],
+      ['after the gain change to -12 dB', 11_000],
+    ];
+    const results = points.map(([what, ms]) => ({
+      what,
+      ms,
+      measured: measured(ms),
+      expected: expected(ms),
+    }));
+    for (const r of results)
+      expect(
+        Math.abs(r.measured - r.expected),
+        `${r.what} at ${r.ms} ms: RMS ${r.measured.toFixed(5)}, gainAt says ${r.expected.toFixed(5)}`,
+      ).toBeLessThanOrEqual(Math.max(0.001, 0.03 * r.expected));
+    // The anchors in absolute terms: +6 dB is 2x the tone (RMS 0.141), a fade's midpoint half of it, -12 dB a quarter.
+    const rms = (what: string) => results.find((r) => r.what === what)?.measured ?? NaN;
+    expect(rms('+6 dB between the fades')).toBeCloseTo((dbToGain(6) * A) / Math.SQRT2, 2);
+    expect(rms('after the gain change to -12 dB')).toBeCloseTo((dbToGain(-12) * A) / Math.SQRT2, 2);
+    expect(rms('silence after the item (muted item under it)')).toBeLessThan(0.001);
   });
 
   it('frames a clip with fit (black bars) or fill (cropped to cover)', async () => {
