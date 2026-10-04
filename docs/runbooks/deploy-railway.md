@@ -210,6 +210,22 @@ shows previews of the brand's own font files in the browser.
 3. **Verify:** in a brand kit draft, Typography → Import from Google Fonts → `Inter`, weights 400 and 700; the
    banner reports four files importing and, after ingest, the list shows Inter 400 and 700 from Google Fonts. Assign
    one to Body: the preview line is drawn in Inter (no CSP violation in the browser console).
+4. **Bucket CORS as code (`api`, opt-in):** set `OBJECT_STORE_CORS_ORIGINS` to the comma-separated bare origins the
+   browser uses (normally `${{WEB_ORIGIN}}`, a reference to the api's own variable). At every start the api sends
+   PutBucketCors to the assets and releases buckets (once when they are the same bucket): `GET`, `HEAD` and `PUT`
+   from those origins, request headers `content-type`, `content-length` and `range`, exposing `ETag`,
+   `Content-Length` and `Content-Range`, cached 3600 s; then it reads the rules back with GetBucketCors. The log says
+   `object store CORS applied: GET, HEAD and PUT from <origins>`, or `object store CORS not applied` with the store's
+   error (the api keeps serving; browser uploads stay blocked until it succeeds, and `upload:cors` in the smoke run
+   names it). PutBucketCors replaces a bucket's whole CORS configuration, so rules set by hand are replaced. A value
+   that is not a list of bare http(s) origins stops the api at start. Unset (production today), nothing is sent and
+   the buckets keep the CORS they have.
+5. **One bucket for assets and releases** is supported (Railway Storage Buckets issue one key pair per bucket, the
+   code uses one pair): point `OBJECT_STORE_BUCKET_ASSETS` and `OBJECT_STORE_BUCKET_RELEASES` at the same bucket.
+   Every key carries its own prefix (`quarantine/`, `assets/`, `releases/`, then the tenant), every operation
+   addresses one exact key (nothing lists a bucket), and the release copy (`assets/` to `releases/`) is then a
+   same-bucket copy under the one key pair. Railway buckets have no versioning, object lock or lifecycle rules,
+   whichever layout is chosen.
 
 ## 1c. Configuration report: what each service can do with its variables
 
@@ -431,11 +447,11 @@ password, no session token and no signed URL query string.
 | `brand.json`                           | `/deployment-brand/brand.json` is a pack the web app accepts                                                                                                                                                                                                                                                                                                           |
 | `upload:*`                             | with the smoke user's credentials: sign in, upload intent, the CSP admits the signed URL's origin, the store answers the CORS preflight for the web origin (bucket CORS), PUT a small PNG, complete, then ingest accepts it (`assets.uploads.get`) within `SMOKE_INGEST_TIMEOUT_MS` (default 120 s), and `upload:cleanup` retires the accepted asset (`assets.retire`) |
 
-The upload stops at the first failing step and names it (`upload:cors` means the R2 bucket's CORS policy must allow
-`PUT` and `GET` from the web origin with the `content-type` header; the preflight is judged as the Fetch standard's
-CORS-preflight check: the presigned `PUT` carries no credentials, so `*` in `Access-Control-Allow-Origin`, `-Methods`
-and `-Headers` admits it, and a missing `Access-Control-Allow-Methods` admits only GET, HEAD and POST). It signs the
-smoke user out at the end. The
+The upload stops at the first failing step and names it (`upload:cors` means the bucket's CORS policy must allow
+`PUT` and `GET` from the web origin with the `content-type` header; section 1b step 4 sets it from the api; the
+preflight is judged as the Fetch standard's CORS-preflight check: the presigned `PUT` carries no credentials, so `*`
+in `Access-Control-Allow-Origin`, `-Methods` and `-Headers` admits it, and a missing `Access-Control-Allow-Methods`
+admits only GET, HEAD and POST). It signs the smoke user out at the end. The
 upload uses a person's password sign-in, not a REST API key: an API key acts as a service principal, which may only
 propose uploads (`asset.upload` is propose-only for agents), so `assets.uploads.createIntent` refuses it.
 
