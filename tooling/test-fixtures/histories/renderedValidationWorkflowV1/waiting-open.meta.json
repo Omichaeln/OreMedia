@@ -1,0 +1,12 @@
+{
+  "workflowType": "renderedValidationWorkflowV1",
+  "case": "waiting-open",
+  "description": "In flight: published just now, the workflow waits on the two-minute timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:27.954Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "02733eefbca5112bc18bd2d3fc76587fc98fc16af84cc6d0bc87713990badbcd"
+}

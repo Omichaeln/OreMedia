@@ -1,0 +1,12 @@
+{
+  "workflowType": "seoAuditWorkflowV2",
+  "case": "closed-elsewhere",
+  "description": "The run was closed by a later run: the crawl stops and the audit returns failed without finishing it.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:16:28.636Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "531a0905797e57581aa2b85291ab9432c3329af785da48cd0f12587b7f2c2f45"
+}

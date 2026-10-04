@@ -1,0 +1,12 @@
+{
+  "workflowType": "seoAuditWorkflowV2",
+  "case": "crawled",
+  "description": "Two seeds and one discovered link crawled 250 ms apart (timers); finished and pruned.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:15:51.249Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "0259477f480996fd39876507cfba1e1d2612f735fb4731a3520004d78fcb4c45"
+}

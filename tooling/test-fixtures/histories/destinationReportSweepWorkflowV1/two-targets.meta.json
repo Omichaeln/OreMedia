@@ -1,0 +1,12 @@
+{
+  "workflowType": "destinationReportSweepWorkflowV1",
+  "case": "two-targets",
+  "description": "The daily sweep starts one abandoned child per destination with the day in its id.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:15:04.511Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "8d2f73b4addb6e5bfea7a59247c5431fd447d87c14f3c5907eb7703228239c51"
+}

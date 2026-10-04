@@ -12,7 +12,7 @@ export {
   type FixtureScenario,
   type RecordedRequest,
 } from './fixture-server';
-export { certifiedForTest } from './certified';
+export { allCapabilitiesCertifiedForTest, certifiedForTest } from './certified';
 export {
   FakeWordPressSite,
   type FakeWordPressPlugin,

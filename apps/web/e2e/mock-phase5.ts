@@ -700,6 +700,7 @@ export class Phase5Backend {
     return {
       ...rules,
       allowed: { edit: allowed, delete: allowed, unpublish: allowed },
+      uncertified: [] as Array<'edit' | 'delete' | 'unpublish'>,
       currentText: p.currentText,
       changes: p.remoteChanges.map(({ text: _text, ...c }) => c),
       article: p.destinationId

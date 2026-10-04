@@ -317,6 +317,8 @@ export interface DestinationTargetDescription {
   usable: boolean;
   /** The remote actions the kind's adapter offers on a live article. */
   actions: { edit: boolean; delete: boolean; unpublish: boolean };
+  /** PR-06: the supported actions whose capability is not certified on the kind's adapter (refused). */
+  uncertifiedActions?: Array<'edit' | 'delete' | 'unpublish'>;
 }
 export interface DestinationPublishInput {
   tenantId: string;

@@ -1,7 +1,9 @@
 # Runbook: certify a provider (channel, source or CMS)
 
 **Purpose:** move a provider adapter from `certifiedAt: null` (its registry refuses it for tenants) to certified
-(spec 14.6). One procedure for the three kinds (RA-01): a channel (`linkedin_page`, `instagram_business`,
+(spec 14.6), and certify each of its capabilities on its own (PR-06, "Certification per capability" below): a
+provider-level `certifiedAt` opens the registry, and every capability it offers stays refused or labelled until
+its own record exists. One procedure for the three kinds (RA-01): a channel (`linkedin_page`, `instagram_business`,
 `facebook_page`, `x`), a source (`ga4_property`, `search_console_site`, `gbp_location`, read-only under D-17) and a
 CMS destination (`cms_site`, WordPress). Certification means: the connect proven with a test account, a read, a
 write where the kind writes with its read-back, refresh and reconnect, revoke, rate-limit behaviour, error fixtures
@@ -14,6 +16,59 @@ Code lives in `packages/providers/src/<key>/` (channels), `packages/providers/sr
 `packages/providers/src/cms/wordpress/`; handwritten fixtures in each `fixtures/*.json` are served by
 `packages/providers/src/testing/fixture-server.ts` through the real `ProviderIO`. Platform apps and credentials:
 `docs/platform-apps/` (`meta.md`, `linkedin.md`, `x.md`, `google.md`, `wordpress.md`).
+
+## Certification per capability (PR-06)
+
+A provider marked certified says nothing about which capabilities were exercised, so each capability is certified on
+its own, with its own evidence. The certifiable capabilities are `connect`, `page_picker`, `publish_text`,
+`publish_image`, `publish_video`, `edit`, `delete`, `comment_reply`, `analytics`, `token_refresh` and `reconnect`
+(`CertifiableCapability` in `packages/contracts/src/providers.ts`). Which of them a provider offers is derived
+from its capability register and adapter methods (`channelCapabilitySupport`, `sourceCapabilitySupport`,
+`cmsCapabilitySupport` beside each registry); the others are `not supported` whatever is recorded.
+
+Rules for every run:
+
+- **Designated test resources only.** Use the test accounts, test pages, test properties and the test site named
+  for certification (`docs/platform-apps/`). Never a client's account, page, property or site, never a client's
+  content (posts, images, videos, comments) and never the pilot's live site: every post, reply, edit and delete
+  the harness makes is test material written for the run.
+- **One capability, one proof.** A capability is attested only when its own steps passed (`CAPABILITY_STEPS` in
+  `tooling/scripts/certify/harness.ts`); a run that exercises text publishing certifies `publish_text` and nothing
+  else. A failed step replaces an earlier pass.
+- **Unknown means uncertified.** A capability without a record is uncertified; nobody adds a record without the
+  attested run behind it.
+
+| Capability      | Channel harness command (step)                         | Source (step)                  | CMS (step)                                                       |
+| --------------- | ------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------------- |
+| `connect`       | `exchange` with every required scope (`connect`)       | `exchange` (`connect`)         | `connect` (`connect`)                                            |
+| `page_picker`   | `select-account` (`page_picker`)                       | `targets --target` (`targets`) | not supported                                                    |
+| `publish_text`  | `publish --text` without media (`publish_text`)        | not supported                  | `write` (`write`)                                                |
+| `publish_image` | `publish --image` (`publish_image`)                    | not supported                  | no harness command yet: stays uncertified                        |
+| `publish_video` | `publish --video` (`publish_video`)                    | not supported                  | not supported                                                    |
+| `edit`          | `edit-post`, read back by reconciliation (`edit`)      | not supported                  | `update` and `unpublish`, each read back (`update`, `unpublish`) |
+| `delete`        | `delete-post`, proven absent (`delete`)                | not supported                  | `delete`, proven absent (`delete`)                               |
+| `comment_reply` | `comments --reply` accepted (`comment_reply`)          | not supported                  | not supported                                                    |
+| `analytics`     | `metrics` with at least one point (`metrics`)          | `read` (`read`)                | not supported                                                    |
+| `token_refresh` | `refresh` (`refresh`)                                  | `refresh` (`refresh`)          | not supported (an Application Password does not expire)          |
+| `reconnect`     | `exchange` passing after the revoke step (`reconnect`) | the same (`reconnect`)         | `connect` passing after the revoke step (`reconnect`)            |
+
+`attest --environment <name>` (step 12) writes, beside the provider record, one entry per capability whose steps
+passed: `{ certifiedAt, environment, evidence }`. Copy each into the adapter capability's `certifications`
+(`capability.ts`), adding the decision log entry to `evidence` (for example
+`DECISIONS.md D-04 run 2026-10-12; recordings 2026-10-12T09-14-03-512Z-publish.json`), and update the row in
+`docs/release/connection-inventory.md` in the same change: `tooling/scripts/certify/inventory.test.ts` fails while
+the two disagree. `environment` names the deployment whose platform app the run used (`staging`, `production`).
+
+What the product does with a capability that is not certified on a certified provider (the same refusal as an
+uncertified provider, `CAPABILITY_UNSUPPORTED` with `capability_not_certified:<key>:<capability>`):
+
+- `connect`, `page_picker`, each publish kind, `edit`, `delete` (an article unpublish counts as `edit`) and
+  `comment_reply` are **blocked** server side: connect start and completion, the account or target choice, variant
+  validation (so the release check `capability_valid` fails), `publication.edit_remote` / `delete_remote` and the
+  inbox reply all refuse.
+- `analytics`, `token_refresh` and `reconnect` are **labelled**: Settings → Channels and Settings → Destinations
+  show every capability's state (`operations.providers.list`), but metrics collection, report reads and token
+  refresh keep running, since stopping them would break a live connection rather than protect it.
 
 ## What a provider's evidence must contain
 
@@ -70,12 +125,15 @@ latest run counts.
 11. Revoke: `revoke` asks the platform through the adapter's `revokeAccess` (Meta `DELETE /me/permissions`,
     LinkedIn `/oauth/v2/revoke`, X `/2/oauth2/revoke`, Google `/revoke`, WordPress
     `/users/me/application-passwords`); then `refresh` (`verify`) proves `reconnect_required`.
-12. `status` shows every required step with what its run established; `attest` writes
-    `.certify/<provider>/certification.json` with the steps and a `certifiedAt`, and refuses while a step is
-    missing. Record the run in `docs/decisions/DECISIONS.md` (D-04 channels, D-16 CMS, the Google rows) and set
-    `certifiedAt` in the adapter's `capability.ts` to the attested value by hand: the harness never edits code. Only
-    then does the registry's `get(key)` hand the adapter to tenants, and `operations.providers.list` reads `ready`
-    once the deployment has the credentials set and the key is not disabled.
+12. `status` shows every required step with what its run established, and every capability with whether its
+    steps passed; `attest --environment <name>` writes `.certify/<provider>/certification.json` with the steps, a
+    `certifiedAt`, the environment and one entry per capability whose steps passed, and refuses while a required
+    step is missing. Record the run in `docs/decisions/DECISIONS.md` (D-04 channels, D-16 CMS, the Google rows), set
+    `certifiedAt` in the adapter's `capability.ts` to the attested value and copy the capability entries into its
+    `certifications` by hand (the harness never edits code), and update `docs/release/connection-inventory.md`.
+    Only then does the registry's `get(key)` hand the adapter to tenants, each capability only once it has its
+    record, and `operations.providers.list` reads `ready` once `connect` is certified, the deployment has the
+    credentials set and the key is not disabled.
 
 ## Running the certification harness
 
@@ -103,16 +161,16 @@ Setup, once per provider:
 
 Commands, by runbook step (`pnpm certify <provider> …`):
 
-| Step | Channel                                                                                                                                                                                                                                     | Source                                                                                                            | CMS                                                                                                                          |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 3    | `auth-url --redirect-uri <uri>`, open the URL, approve, then `exchange --code <code> --state <state>`; the output lists granted and missing scopes and the other pages the login can address (`select-account --account <id>` switches)     | `auth-url --redirect-uri <uri>`, `exchange --code <code> --state <state>`, then `targets [--target <externalId>]` | `connect --site https://… --username <u> --secret <application password>` (runs `verify`)                                    |
-| 4    | `publish --text "…"` (add `--image url,mime,width,height,bytes[,alt]` for media; the image must be at a public HTTPS URL), then `pending-status` and `finalize` while pending; `pending-status` again after `finalize` must say `completed` | n/a (read-only)                                                                                                   | `write --title "…" --html "<p>…</p>"` (a draft; `--publish` only on a test site), `update --html "…"`, `unpublish`, `delete` |
-| 5    | `find` after publishing (`found`), after deleting the post on the platform (`definitely_absent`), after removing the read permission (`cannot_determine`)                                                                                   | `read [--report <key>] [--days <n>]`                                                                              | the read-backs of step 4                                                                                                     |
-| 7    | `refresh`                                                                                                                                                                                                                                   | `refresh`                                                                                                         | `verify`                                                                                                                     |
-| 9    | `metrics --hours 1` and `metrics --hours 24` (post), `metrics --account-metrics`; the output lists declared metrics not returned and those reported unavailable                                                                             | n/a                                                                                                               | n/a                                                                                                                          |
-| 10   | `comments` (add `--cursor` to page), `comments --reply "…"`                                                                                                                                                                                 | n/a                                                                                                               | n/a                                                                                                                          |
-| 11   | `revoke`, then `refresh` (must report `reconnect_required`)                                                                                                                                                                                 | `revoke`, then `refresh`                                                                                          | `revoke`, then `verify`                                                                                                      |
-| 12   | `status`, `attest`                                                                                                                                                                                                                          | `status`, `attest`                                                                                                | `status`, `attest`                                                                                                           |
+| Step | Channel                                                                                                                                                                                                                                                                                                                              | Source                                                                                                            | CMS                                                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 3    | `auth-url --redirect-uri <uri>`, open the URL, approve, then `exchange --code <code> --state <state>`; the output lists granted and missing scopes and the other pages the login can address (`select-account --account <id>` switches)                                                                                              | `auth-url --redirect-uri <uri>`, `exchange --code <code> --state <state>`, then `targets [--target <externalId>]` | `connect --site https://… --username <u> --secret <application password>` (runs `verify`)                                    |
+| 4    | `publish --text "…"` alone (`publish_text`), with `--image url,mime,width,height,bytes[,alt]` (`publish_image`) or `--video url,mime,width,height,bytes,durationMs` (`publish_video`), media at a public HTTPS URL; then `pending-status` and `finalize` while pending; `pending-status` again after `finalize` must say `completed` | n/a (read-only)                                                                                                   | `write --title "…" --html "<p>…</p>"` (a draft; `--publish` only on a test site), `update --html "…"`, `unpublish`, `delete` |
+| 5    | `find` after publishing (`found`), after deleting the post on the platform (`definitely_absent`), after removing the read permission (`cannot_determine`); `edit-post --text "…"` (`edit`) and `delete-post` (`delete`) on the last publish, each read back                                                                          | `read [--report <key>] [--days <n>]`                                                                              | the read-backs of step 4                                                                                                     |
+| 7    | `refresh`                                                                                                                                                                                                                                                                                                                            | `refresh`                                                                                                         | `verify`                                                                                                                     |
+| 9    | `metrics --hours 1` and `metrics --hours 24` (post), `metrics --account-metrics`; the output lists declared metrics not returned and those reported unavailable                                                                                                                                                                      | n/a                                                                                                               | n/a                                                                                                                          |
+| 10   | `comments` (add `--cursor` to page), `comments --reply "…"`                                                                                                                                                                                                                                                                          | n/a                                                                                                               | n/a                                                                                                                          |
+| 11   | `revoke`, then `refresh` (must report `reconnect_required`); then `auth-url` and `exchange` again (`reconnect`)                                                                                                                                                                                                                      | `revoke`, then `refresh`                                                                                          | `revoke`, then `verify`                                                                                                      |
+| 12   | `status`, `attest --environment <name>`                                                                                                                                                                                                                                                                                              | `status`, `attest --environment <name>`                                                                           | `status`, `attest --environment <name>`                                                                                      |
 
 Every request and response is recorded under `.certify/<provider>/recordings/<time>-<command>.json`, with credential
 query parameters and token fields redacted and only rate-limit and request-id headers kept: copy the exchanges the

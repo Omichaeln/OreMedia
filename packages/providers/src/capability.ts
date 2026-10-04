@@ -1,7 +1,11 @@
-import type {
-  ChannelVariantInput,
-  ProviderCapabilityV1,
-  ValidationResult,
+import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
+import {
+  capabilityNotCertifiedIssue,
+  type CapabilityCertificationStatusV1,
+  type CertifiableCapability,
+  type ChannelVariantInput,
+  type ProviderCapabilityV1,
+  type ValidationResult,
 } from '@oremedia/contracts/providers';
 
 /**
@@ -80,3 +84,31 @@ export const plainMeasure = (limit: number) => (text: string) => ({
   length: [...text.normalize('NFC')].length,
   limit,
 });
+
+/**
+ * PR-06: the refusal the three registries share for a capability the provider supports but nobody certified
+ * (CAPABILITY_UNSUPPORTED, like an uncertified provider). A capability the provider does not support passes here:
+ * the caller's own support check refuses it with its established code (`edit_not_supported`, ...).
+ */
+export function assertCapabilityCertified(
+  path: string,
+  key: string,
+  capability: CertifiableCapability,
+  statuses: readonly CapabilityCertificationStatusV1[],
+): void {
+  if (statuses.find((s) => s.capability === capability)?.state === 'uncertified')
+    throw new CapabilityUnsupportedError([{ path, issue: capabilityNotCertifiedIssue(key, capability) }]);
+}
+
+/**
+ * PR-06: the publish capabilities a variant exercises: `publish_image` for images, `publish_video` for a video
+ * (both for mixed media), `publish_text` for text alone (the text of a media post rides on the media publish).
+ */
+export function publishCapabilitiesOf(
+  variant: Pick<ChannelVariantInput, 'media'>,
+): Array<Extract<CertifiableCapability, 'publish_text' | 'publish_image' | 'publish_video'>> {
+  const needed: Array<Extract<CertifiableCapability, 'publish_image' | 'publish_video'>> = [];
+  if (variant.media.some((m) => m.mime.startsWith('image/'))) needed.push('publish_image');
+  if (variant.media.some((m) => m.mime.startsWith('video/'))) needed.push('publish_video');
+  return needed.length > 0 ? needed : ['publish_text'];
+}

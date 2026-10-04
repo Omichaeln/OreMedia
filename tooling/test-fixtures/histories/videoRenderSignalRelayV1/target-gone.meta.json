@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoRenderSignalRelayV1",
+  "case": "target-gone",
+  "description": "The render is no longer running: the external signal fails and the relay completes anyway.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:18:33.318Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "730cc1c2bece1ab007f71c35e2a28ba841e5cf199ec7f3911b84979b9d56c071"
+}

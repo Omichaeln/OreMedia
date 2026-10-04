@@ -1,0 +1,12 @@
+{
+  "workflowType": "metricCollectionWorkflowV1",
+  "case": "waiting-open",
+  "description": "In flight: published just now (comments not readable), waiting on the timer for the first pull.",
+  "queue": "ingest",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:48.192Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "72786bbd876ac0a17aadff74ae732b4e4880c37d0a24b1a5a295c7b37f770999"
+}

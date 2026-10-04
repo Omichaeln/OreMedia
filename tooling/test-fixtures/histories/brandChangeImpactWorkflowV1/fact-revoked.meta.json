@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandChangeImpactWorkflowV1",
+  "case": "fact-revoked",
+  "description": "A revoked fact invalidates approvals and applies the fact policy (hold).",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:11:28.040Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "a1bc38240a22b402fb6dac4ab6741d57eb48238c501c6d504956e233caa2e52a"
+}

@@ -103,7 +103,7 @@ describe('certification harness against the fixture adapters (RA-01, CI)', () =>
     });
     adapter.behaviour = { kind: 'accept' };
     const deps: CertifyDeps = { ...base('channel', adapter.key), adapter };
-    expect(() => attest(deps, () => undefined)).toThrow(/cannot be attested/);
+    expect(() => attest(deps, () => undefined, 'test')).toThrow(/cannot be attested/);
     await authUrl(deps, 'https://app.test/certify-callback');
     await exchange(deps, 'code_1', deps.load().auth!.state);
     await publish(deps, { text: 'Certification run', media: [] });
@@ -117,16 +117,21 @@ describe('certification harness against the fixture adapters (RA-01, CI)', () =>
     await metrics(deps, 'post', 24);
     await comments(deps, {});
     expect(missingSteps('channel', deps.load())).toEqual(['revoke']);
-    expect(() => attest(deps, () => undefined)).toThrow(/revoke has not passed/);
+    expect(() => attest(deps, () => undefined, 'test')).toThrow(/revoke has not passed/);
     await revoke(deps);
     expect(adapter.calls.at(-1)).toMatch(/^revokeAccess:/);
     await refresh(deps); // the revoked grant is refused: the proof of the revoke step
     expect(missingSteps('channel', deps.load())).toEqual([]);
     status(deps);
     expect(lines.at(-1)).toContain('Every required step passed.');
-    const record = attest(deps, (r) => written.push(r));
+    const record = attest(deps, (r) => written.push(r), 'test');
     expect(Object.keys(record.steps)).toEqual([...REQUIRED_STEPS.channel]);
     expect(Object.values(record.steps).every((s) => s.ok)).toBe(true);
+    // PR-06: only the capabilities this run exercised are attested; the rest stay uncertified.
+    expect(Object.keys(record.capabilities).sort()).toEqual(
+      ['analytics', 'connect', 'publish_text', 'token_refresh'].sort(),
+    );
+    expect(record.capabilities.connect?.environment).toBe('test');
     // The session file never leaves its owner, and the record goes beside it.
     const store = fileStore(root, adapter.key);
     store.writeCertification(record);
@@ -151,12 +156,12 @@ describe('certification harness against the fixture adapters (RA-01, CI)', () =>
     await sourceRead(deps, 'ga4.engagement', 7);
     await sourceRefresh(deps);
     expect(missingSteps('source', deps.load())).toEqual(['revoke']);
-    expect(() => attest(deps, () => undefined)).toThrow(/revoke has not passed/);
+    expect(() => attest(deps, () => undefined, 'test')).toThrow(/revoke has not passed/);
     await sourceRevoke(deps);
     expect(adapter.revokeCalls).toHaveLength(1);
     await sourceRefresh(deps);
     expect(missingSteps('source', deps.load())).toEqual([]);
-    const record = attest(deps, (r) => written.push(r));
+    const record = attest(deps, (r) => written.push(r), 'test');
     expect(record).toMatchObject({ key: 'ga4_property', kind: 'source' });
     expect(Object.keys(record.steps)).toEqual([...REQUIRED_STEPS.source]);
   });
@@ -176,11 +181,11 @@ describe('certification harness against the fixture adapters (RA-01, CI)', () =>
     await cmsDelete(deps);
     expect(adapter.articles.has(article!.remoteId)).toBe(false);
     expect(missingSteps('cms', deps.load())).toEqual(['revoke']);
-    expect(() => attest(deps, () => undefined)).toThrow(/revoke has not passed/);
+    expect(() => attest(deps, () => undefined, 'test')).toThrow(/revoke has not passed/);
     await cmsRevoke(deps);
     await cmsVerify(deps);
     expect(missingSteps('cms', deps.load())).toEqual([]);
-    const record = attest(deps, (r) => written.push(r));
+    const record = attest(deps, (r) => written.push(r), 'test');
     expect(record).toMatchObject({ key: 'cms_site', kind: 'cms' });
     expect(Object.keys(record.steps)).toEqual([...REQUIRED_STEPS.cms]);
   });
@@ -204,6 +209,8 @@ describe('certification harness against the fixture adapters (RA-01, CI)', () =>
     adapter.articles.set(remoteId, { ...current, html: '<p>edited on the site</p>', contentHash: 'moved' });
     await cmsUpdate(deps, '<p>y</p>');
     expect(deps.load().evidence?.['update']).toMatchObject({ ok: false, detail: 'conflict' });
-    expect(() => attest(deps, () => undefined)).toThrow(/update, unpublish, delete, revoke have not passed/);
+    expect(() => attest(deps, () => undefined, 'test')).toThrow(
+      /update, unpublish, delete, revoke have not passed/,
+    );
   });
 });

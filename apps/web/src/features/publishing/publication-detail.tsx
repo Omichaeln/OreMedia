@@ -363,10 +363,21 @@ function Loaded({
       {p.remote.article && (
         <ArticlePanel publication={p} onDone={refresh} onError={fail('Validation failed')} />
       )}
-      {p.state === 'published' && !p.remote.edit && !p.remote.delete && !p.remote.unpublish && (
-        <p className="text-xs text-muted-foreground" data-testid="remote-change-unsupported">
-          This channel does not let Oremedia edit or delete a published post; change or delete it on the
-          platform itself.
+      {p.state === 'published' &&
+        !p.remote.edit &&
+        !p.remote.delete &&
+        !p.remote.unpublish &&
+        p.remote.uncertified.length === 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="remote-change-unsupported">
+            This channel does not let Oremedia edit or delete a published post; change or delete it on the
+            platform itself.
+          </p>
+        )}
+      {p.state === 'published' && p.remote.uncertified.length > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="remote-change-uncertified">
+          Not certified on this {p.destinationId ? 'website' : 'channel'} yet:{' '}
+          {p.remote.uncertified.join(', ')}. Oremedia refuses these changes until they have been exercised
+          against the platform; make them on the platform itself.
         </p>
       )}
       {lastError !== null && <RequestError error={lastError} />}

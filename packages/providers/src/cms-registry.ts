@@ -1,4 +1,10 @@
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
+import {
+  capabilityCertificationStatuses,
+  type CapabilityCertificationStatusV1,
+  type CertifiableCapability,
+} from '@oremedia/contracts/providers';
+import { assertCapabilityCertified } from './capability';
 import type { CmsAdapter, CmsCapabilityV1 } from './cms-contract';
 import { wordpressCmsAdapter } from './cms/wordpress/adapter';
 
@@ -18,13 +24,28 @@ export class CmsRegistry {
     return this;
   }
 
-  /** Certified adapters only (tenant-facing); the same refusals as ProviderRegistry.get, on `kind`. */
-  get(kind: string): CmsAdapter {
+  /**
+   * Certified adapters only (tenant-facing); the same refusals as ProviderRegistry.get, on `kind`, including a
+   * supported `capability` without its own certification record (PR-06).
+   */
+  get(kind: string, capability?: CertifiableCapability): CmsAdapter {
     const a = this.adapters.get(kind);
     if (!a) throw new CapabilityUnsupportedError([{ path: 'kind', issue: `unknown_provider:${kind}` }]);
     if (!a.capability.certifiedAt)
       throw new CapabilityUnsupportedError([{ path: 'kind', issue: `provider_not_certified:${kind}` }]);
+    if (capability) assertCapabilityCertified('kind', kind, capability, this.certifications(kind));
     return a;
+  }
+
+  /** PR-06: every certifiable capability's state on a registered adapter; empty for an unknown kind. */
+  certifications(kind: string): CapabilityCertificationStatusV1[] {
+    const a = this.adapters.get(kind);
+    return a ? capabilityCertificationStatuses(cmsCapabilitySupport(a), a.capability.certifications) : [];
+  }
+
+  /** PR-06: whether the capability is supported here but carries no certification record (refused or labelled). */
+  isUncertified(kind: string, capability: CertifiableCapability): boolean {
+    return this.certifications(kind).find((s) => s.capability === capability)?.state === 'uncertified';
   }
 
   forCertification(kind: string): CmsAdapter | undefined {
@@ -49,6 +70,19 @@ export class CmsRegistry {
       capability: a.capability,
     }));
   }
+}
+
+/**
+ * PR-06: the certifiable capabilities a CMS adapter offers: connect (the identity verified), reconnect, writing an
+ * article (text, and its featured image through `uploadMedia`), and changing (update and unpublish) or deleting a
+ * live one where its capability allows. An application password does not expire, so there is no token refresh.
+ */
+export function cmsCapabilitySupport(adapter: CmsAdapter): Set<CertifiableCapability> {
+  const cap = adapter.capability;
+  const supported = new Set<CertifiableCapability>(['connect', 'reconnect', 'publish_text', 'publish_image']);
+  if (cap.edit || cap.unpublish) supported.add('edit');
+  if (cap.delete) supported.add('delete');
+  return supported;
 }
 
 /**

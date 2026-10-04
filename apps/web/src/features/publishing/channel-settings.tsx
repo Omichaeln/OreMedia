@@ -11,6 +11,7 @@ import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import { useTRPC, type Trpc } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { CapabilityCertifications } from '../settings/capability-certifications';
 import { useProviders, type ProviderActivationDto } from '../settings/use-settings';
 import {
   ACTIVATION_CHIP,
@@ -524,6 +525,7 @@ export function ChannelSettings() {
                       .
                     </p>
                   )}
+                  {p.activation && <CapabilityCertifications activation={p.activation} />}
                   {reason && (
                     <p className="text-xs text-muted-foreground" data-testid="unavailable-reason">
                       {reason}

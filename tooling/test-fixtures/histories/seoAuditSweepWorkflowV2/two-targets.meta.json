@@ -1,0 +1,12 @@
+{
+  "workflowType": "seoAuditSweepWorkflowV2",
+  "case": "two-targets",
+  "description": "The weekly v2 sweep starts one abandoned seoAuditWorkflowV2 child per website.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:16:33.378Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "b661e1de9a7f51fa0408bc482cb9de016e0b5162fc42fc95de19e0a8044037cc"
+}

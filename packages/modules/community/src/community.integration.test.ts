@@ -553,4 +553,33 @@ describe('community module (comment inbox) against MySQL 8', () => {
       configurePublishingProviders({ registry, insecureAllowLoopback: true });
     }
   });
+
+  it('PR-06: a reply the channel supports but nobody certified is refused, and the inbox labels the channel', async () => {
+    const uncertifiedReplies = new ProviderRegistry();
+    const { comment_reply: _withdrawn, ...others } = fixture.capability.certifications ?? {};
+    const notCertified = new ReplyingFixture({ ...fixture.capability, certifications: others });
+    uncertifiedReplies.register(notCertified);
+    configurePublishingProviders({ registry: uncertifiedReplies, insecureAllowLoopback: true });
+    try {
+      const err = await reply(ids['c1']!, 'Hi').then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(CapabilityUnsupportedError);
+      expect((err as CapabilityUnsupportedError).details?.[0]?.issue).toBe(
+        `capability_not_certified:${FIXTURE_PROVIDER_KEY}:comment_reply`,
+      );
+      expect(notCertified.replies).toEqual([]);
+      const page = await inTenant(tenantA, () =>
+        communityService.conversations.list(member(tenantA, 'community'), { brandId: brandA }),
+      );
+      expect(page.items[0]?.channel).toMatchObject({ replySupported: false, replyUncertified: true });
+    } finally {
+      configurePublishingProviders({ registry, insecureAllowLoopback: true });
+    }
+    const page = await inTenant(tenantA, () =>
+      communityService.conversations.list(member(tenantA, 'community'), { brandId: brandA }),
+    );
+    expect(page.items[0]?.channel).toMatchObject({ replySupported: true, replyUncertified: false });
+  });
 });

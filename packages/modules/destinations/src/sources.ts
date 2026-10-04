@@ -1,3 +1,4 @@
+import type { CertifiableCapability } from '@oremedia/contracts/providers';
 import {
   MemoryProviderRateLimiter,
   createProviderIO,
@@ -40,8 +41,12 @@ export const configureDestinationSources = (opts: DestinationSourceOptions): voi
 
 export const registry = (): SourceRegistry => options.registry;
 
-/** Certified source adapters only; an unknown or uncertified kind is CAPABILITY_UNSUPPORTED (spec 14.6). */
-export const sourceAdapterFor = (kind: string): SourceAdapter => options.registry.get(kind);
+/**
+ * Certified source adapters only; an unknown or uncertified kind is CAPABILITY_UNSUPPORTED (spec 14.6), and so is
+ * a supported `capability` without its own certification record (PR-06).
+ */
+export const sourceAdapterFor = (kind: string, capability?: CertifiableCapability): SourceAdapter =>
+  options.registry.get(kind, capability);
 
 function rateLimiter(): RateLimiter {
   return (limiter ??=

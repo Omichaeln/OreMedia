@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ProviderAdapter, ProviderIO } from '@oremedia/providers';
 import { facebookPageCapability } from '@oremedia/providers';
 import {
+  CAPABILITY_STEPS,
   REQUIRED_STEPS,
   attest,
+  capabilitySteps,
+  comments,
+  deletePost,
+  editPost,
   authUrl,
   exchange,
   fileStore,
@@ -19,6 +24,7 @@ import {
   redactUrl,
   refresh,
   revoke,
+  selectAccount,
   status,
   type CertificationRecord,
   type CertifyDeps,
@@ -90,6 +96,18 @@ function fakeAdapter(calls: string[]): ProviderAdapter {
           completeness: 'complete' as const,
         },
       ];
+    },
+    async editPost(req) {
+      calls.push(`editPost:${req.remotePostId}:${req.text}`);
+      return { outcome: 'done' };
+    },
+    async deletePost(req) {
+      calls.push(`deletePost:${req.remotePostId}`);
+      return { outcome: 'done' };
+    },
+    async comment(req) {
+      calls.push(`comment:${req.remotePostId}:${req.text}`);
+      return { outcome: 'accepted', remotePostId: 'reply_1', remoteUrl: 'https://platform.test/reply_1' };
     },
     classifyError: () => ({ kind: 'unknown' }),
   };
@@ -164,7 +182,7 @@ describe('certification harness commands', () => {
   it('every command records its step as evidence; attest refuses until every required step passed and never touches code', async () => {
     const h = harness();
     expect(missingSteps('channel', h.session())).toEqual([...REQUIRED_STEPS.channel]);
-    expect(() => attest(h.deps, () => undefined)).toThrow(/cannot be attested: connect, publish/);
+    expect(() => attest(h.deps, () => undefined, 'staging')).toThrow(/cannot be attested: connect, publish/);
     await authUrl(h.deps, 'https://app.test/cb');
     await exchange(h.deps, 'c', h.session().auth!.state);
     // The fake grant misses read_insights: the connect step is recorded as failed, not skipped.
@@ -194,7 +212,9 @@ describe('certification harness commands', () => {
     });
     status(h.deps);
     expect(h.lines.at(-1)).toContain('Not attestable: connect, refresh, comments still to pass.');
-    expect(() => attest(h.deps, () => undefined)).toThrow(/connect, refresh, comments have not passed/);
+    expect(() => attest(h.deps, () => undefined, 'staging')).toThrow(
+      /connect, refresh, comments have not passed/,
+    );
     expect(h.lines.join('\n')).not.toContain(TOKEN);
   });
 
@@ -209,7 +229,7 @@ describe('certification harness commands', () => {
         },
       });
     const written: CertificationRecord[] = [];
-    const record = attest(h.deps, (r) => written.push(r));
+    const record = attest(h.deps, (r) => written.push(r), 'staging');
     expect(written).toEqual([record]);
     expect(record).toMatchObject({
       key: 'facebook_page',
@@ -219,6 +239,98 @@ describe('certification harness commands', () => {
     expect(Object.keys(record.steps)).toEqual([...REQUIRED_STEPS.channel]);
     expect(JSON.stringify(record)).not.toContain(TOKEN);
     expect(h.lines.at(-1)).toContain('set certifiedAt to this value');
+  });
+
+  it('PR-06: attest needs the environment and records each capability whose steps passed, the others left out', async () => {
+    const h = harness();
+    const pass = (...steps: string[]) =>
+      h.deps.save({
+        ...h.session(),
+        evidence: {
+          ...(h.session().evidence ?? {}),
+          ...Object.fromEntries(
+            steps.map((step) => [
+              step,
+              { at: '2026-09-25T12:00:00.000Z', ok: true, detail: step, recordings: `/x/${step}.json` },
+            ]),
+          ),
+        },
+      });
+    pass(...REQUIRED_STEPS.channel, 'publish_text');
+    expect(() => attest(h.deps, () => undefined, '')).toThrow(/--environment/);
+    const record = attest(h.deps, () => undefined, 'staging');
+    expect(record.environment).toBe('staging');
+    // connect, text publish, metrics (analytics) and refresh passed; video, edit, reply... were never run.
+    expect(Object.keys(record.capabilities).sort()).toEqual(
+      ['analytics', 'connect', 'publish_text', 'token_refresh'].sort(),
+    );
+    expect(record.capabilities.publish_text).toEqual({
+      certifiedAt: '2026-09-25T12:00:00.000Z',
+      environment: 'staging',
+      evidence: '.certify/facebook_page/certification.json; recordings publish_text.json',
+    });
+    expect(record.capabilities.publish_video).toBeUndefined();
+    expect(record.capabilityEvidence['publish_text']).toMatchObject({ ok: true });
+    expect(h.lines.at(-1)).toContain('Capabilities not listed stay uncertified');
+    status(h.deps);
+    expect(h.lines.at(-1)).toContain('missing  publish_video (publish_video)');
+    expect(h.lines.at(-1)).toContain('passed   publish_text (publish_text)');
+  });
+
+  it('PR-06: each publish kind, the page picker, edit, delete, a reply and a reconnect record their own evidence', async () => {
+    const h = harness();
+    await authUrl(h.deps, 'https://app.test/cb');
+    await exchange(h.deps, 'c', h.session().auth!.state);
+    await publish(h.deps, {
+      text: 'Hello',
+      media: [{ url: 'https://cdn.test/a.jpg', mime: 'image/jpeg', width: 800, height: 800, bytes: 1000 }],
+    });
+    expect(h.session().lastPublish?.capabilities).toEqual(['publish_image']);
+    expect(h.session().evidence?.['publish_image']).toBeUndefined(); // pending until finalized
+    await pendingStep(h.deps, 'finalize');
+    expect(h.session().evidence?.['publish_image']).toMatchObject({ ok: true, detail: 'post post_9' });
+    expect(h.session().evidence?.['publish_text']).toBeUndefined(); // an image post is not a text publish
+    await editPost(h.deps, 'Edited');
+    expect(h.calls).toContain('editPost:post_9:Edited');
+    expect(h.session().evidence?.['edit']).toMatchObject({ ok: true });
+    await comments(h.deps, { reply: 'Thanks' });
+    expect(h.session().evidence?.['comment_reply']).toMatchObject({ ok: true, detail: 'reply reply_1' });
+    await deletePost(h.deps);
+    // The fake platform still finds the post after the delete: the delete is not proven.
+    expect(h.session().evidence?.['delete']).toMatchObject({ ok: false, detail: 'deleted, read back found' });
+    // Revoke, proven by the refused refresh; a connect that then passes is the reconnect.
+    await revoke(h.deps);
+    await refresh(h.deps);
+    expect(h.session().evidence?.['reconnect']).toBeUndefined();
+    h.deps.save({
+      ...h.session(),
+      grant: { ...h.session().grant!, grantedScopes: [...facebookPageCapability.requiredScopes] },
+    });
+    h.deps.adapter = {
+      ...h.deps.adapter,
+      exchangeCode: async () => ({ ...h.session().grant! }),
+      selectAccount: async (_c, id) => ({ ...h.session().grant!, remoteAccountId: id }),
+    };
+    await authUrl(h.deps, 'https://app.test/cb');
+    await exchange(h.deps, 'c2', h.session().auth!.state);
+    expect(h.session().evidence?.['reconnect']).toMatchObject({ ok: true });
+    await selectAccount(h.deps, 'page_2');
+    expect(h.session().evidence?.['page_picker']).toMatchObject({ ok: true, detail: 'switched to page_2' });
+    const passed = capabilitySteps('channel', h.session())
+      .filter((c) => c.passed)
+      .map((c) => c.capability);
+    expect(passed).toEqual(
+      expect.arrayContaining([
+        'connect',
+        'page_picker',
+        'publish_image',
+        'edit',
+        'comment_reply',
+        'reconnect',
+      ]),
+    );
+    expect(passed).not.toContain('delete');
+    expect(Object.keys(CAPABILITY_STEPS.channel)).toHaveLength(11);
   });
 
   it('commands that need an account or a publish say which step to run first', async () => {

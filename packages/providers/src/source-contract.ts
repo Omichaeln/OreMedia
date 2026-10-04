@@ -7,6 +7,7 @@ import type {
   SourceTargetMetadataV1,
 } from '@oremedia/contracts/destinations';
 import type {
+  CapabilityCertifications,
   ClientConfig,
   DecryptedCredentials,
   ProviderCapabilityV1,
@@ -44,6 +45,8 @@ export interface SourceCapabilityV1 {
    */
   optInSetting?: string;
   certifiedAt: string | null;
+  /** PR-06: the capabilities certified one by one; absent or without an entry means uncertified. */
+  certifications?: CapabilityCertifications;
 }
 
 /**

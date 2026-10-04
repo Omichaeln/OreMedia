@@ -1,0 +1,12 @@
+{
+  "workflowType": "metricCollectionWorkflowV1",
+  "case": "not-collectable",
+  "description": "The provider cannot report metrics for this publication: nothing is collected.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:41.921Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "2125a450f1b5dee38a2ffa0abb8f45750f535faa4c3ca4fd15782547ac459178"
+}

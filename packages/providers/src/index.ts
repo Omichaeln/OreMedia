@@ -31,8 +31,13 @@ export {
   retryAfterMs,
   missingScopes,
 } from './base';
-export { validateVariantAgainstCapability, plainMeasure } from './capability';
-export { ProviderRegistry, providerRegistry } from './registry';
+export {
+  assertCapabilityCertified,
+  plainMeasure,
+  publishCapabilitiesOf,
+  validateVariantAgainstCapability,
+} from './capability';
+export { ProviderRegistry, channelCapabilitySupport, providerRegistry } from './registry';
 // Ledger R2-1: read-only source adapters behind brand destinations, with their own certification-gated registry.
 export type {
   SourceAdapter,
@@ -44,7 +49,7 @@ export type {
   SourceReportRequest,
   SourceReportPage,
 } from './source-contract';
-export { SourceRegistry, sourceRegistry } from './source-registry';
+export { SourceRegistry, sourceCapabilitySupport, sourceRegistry } from './source-registry';
 export { SOURCE_ACCESS_REQUIRED } from './source-contract';
 // Ledger R2-3: CMS write adapters behind `cms_site` destinations, with their own certification-gated registry.
 export type {
@@ -65,7 +70,7 @@ export type {
   CmsWriteSafety,
 } from './cms-contract';
 export { CMS_MEDIA_MAX_BYTES } from './cms-contract';
-export { CmsRegistry, cmsRegistry } from './cms-registry';
+export { CmsRegistry, cmsCapabilitySupport, cmsRegistry } from './cms-registry';
 export { WordPressCmsAdapter, wordpressCmsAdapter } from './cms/wordpress/adapter';
 // The one bounded public-page fetch (D-16 validation, R2-4 audit crawl): SSRF-checked per hop, pinned to a host.
 export { fetchPageBounded, RenderedPageError, type FetchedPage, type FetchPageOptions } from './page-fetch';

@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationWorkflowV1",
+  "case": "pending-polled-then-failed",
+  "description": "An asynchronous publish polled after its 15 s timer, then failed remotely.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:07:12.570Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "428720cfdfd36f231b9305a70e369efca3c44e99fa3de659d26f945329dd5c30"
+}

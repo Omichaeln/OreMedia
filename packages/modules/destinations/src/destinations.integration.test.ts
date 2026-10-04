@@ -671,6 +671,48 @@ describe('destinations module against MySQL 8', () => {
       ).rejects.toBeInstanceOf(PolicyDeniedError);
     });
 
+    it('PR-06: providers.list carries every capability state; a source whose connect or picker is not certified is refused', async () => {
+      configureSourceAvailability(() => true);
+      const listed = async () =>
+        (await inTenant(tenantA, () => providerService.list(owner()))).items.find(
+          (p) => p.kind === 'source' && p.key === 'ga4_property',
+        )!;
+      const before = await listed();
+      expect(before.capabilities.map((c) => [c.capability, c.state])).toEqual([
+        ['connect', 'certified'],
+        ['page_picker', 'certified'],
+        ['publish_text', 'not_supported'],
+        ['publish_image', 'not_supported'],
+        ['publish_video', 'not_supported'],
+        ['edit', 'not_supported'],
+        ['delete', 'not_supported'],
+        ['comment_reply', 'not_supported'],
+        ['analytics', 'certified'],
+        ['token_refresh', 'certified'],
+        ['reconnect', 'certified'],
+      ]);
+      const saved = fixture.capability.certifications;
+      const { connect: _connect, ...withoutConnect } = saved ?? {};
+      Object.assign(fixture.capability, { certifications: withoutConnect });
+      try {
+        expect(await listed()).toMatchObject({
+          state: 'uncertified',
+          reason: 'capability_not_certified:ga4_property:connect',
+        });
+        expect((await listed()).capabilities.find((c) => c.capability === 'connect')).toEqual({
+          capability: 'connect',
+          state: 'uncertified',
+          certification: null,
+        });
+        await expect(start(owner())).rejects.toMatchObject({
+          code: 'CAPABILITY_UNSUPPORTED',
+          details: [{ path: 'kind', issue: 'capability_not_certified:ga4_property:connect' }],
+        });
+      } finally {
+        Object.assign(fixture.capability, { certifications: saved });
+      }
+    });
+
     it('sources.list names each registered kind with its certification and whether it is enabled here', async () => {
       configureSourceAvailability((kind) => kind === 'ga4_property');
       const { items } = await destinationService.sources.list();
@@ -1443,6 +1485,47 @@ describe('destinations module against MySQL 8', () => {
       );
       expect(effectivePublishMode({}, ['articles:write', 'articles:publish'])).toBe('draft');
       await expect(inTenant(tenantB, () => destinationArticles.describe(siteId))).resolves.toBeNull();
+    });
+
+    it('PR-06: an article write, an edit or a delete the site supports but nobody certified is refused, and connect too', async () => {
+      const saved = cms.capability.certifications;
+      const withdraw = (...capabilities: string[]) =>
+        Object.assign(cms.capability, {
+          certifications: Object.fromEntries(
+            Object.entries(saved ?? {}).filter(([c]) => !capabilities.includes(c)),
+          ),
+        });
+      try {
+        withdraw('publish_text', 'delete');
+        expect(await inTenant(tenantA, () => destinationArticles.validateVariant(variant(siteId)))).toEqual({
+          ok: false,
+          issues: [{ path: 'destinationId', issue: 'capability_not_certified:cms_site:publish_text' }],
+        });
+        expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+          actions: { edit: true, delete: true, unpublish: true },
+          uncertifiedActions: ['delete'],
+        });
+        withdraw('edit');
+        expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+          uncertifiedActions: ['edit', 'unpublish'], // an unpublish changes the live article: it is an edit
+        });
+        withdraw('connect');
+        const err = await connect(member(tenantA, 'publisher'), {
+          siteUrl: 'https://other.acme.example',
+        }).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(CapabilityUnsupportedError);
+        expect((err as CapabilityUnsupportedError).details?.[0]?.issue).toBe(
+          'capability_not_certified:cms_site:connect',
+        );
+      } finally {
+        Object.assign(cms.capability, { certifications: saved });
+      }
+      expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+        uncertifiedActions: [],
+      });
     });
 
     it('publish is refused without a source-use policy allowing write (default deny); with it the article lands as a draft, is read back and its page validated', async () => {

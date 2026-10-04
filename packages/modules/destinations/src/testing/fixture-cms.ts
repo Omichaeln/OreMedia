@@ -18,6 +18,7 @@ import {
   type CmsWriteSafety,
   type ProviderIO,
 } from '@oremedia/providers';
+import { allCapabilitiesCertifiedForTest } from '@oremedia/providers/testing/certified';
 
 /**
  * Test fixture only (never registered in production): an in-memory website whose articles live in a map, so what
@@ -36,6 +37,7 @@ export const fixtureCmsCapability = (over: Partial<CmsCapabilityV1> = {}): CmsCa
   unpublish: true,
   conditionalWrite: 'extension',
   certifiedAt: '2026-01-01T00:00:00.000Z',
+  certifications: allCapabilitiesCertifiedForTest('2026-01-01T00:00:00.000Z'),
   ...over,
 });
 

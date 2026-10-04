@@ -20,6 +20,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import path from 'node:path';
 import type {
   AccountGrant,
+  CapabilityCertificationV1,
+  CertifiableCapability,
   ClientConfig,
   DecryptedCredentials,
   PendingState,
@@ -32,6 +34,7 @@ import {
   cmsRegistry,
   createProviderIO,
   providerRegistry,
+  publishCapabilitiesOf,
   redactBody,
   sourceRegistry,
   textFingerprint,
@@ -56,6 +59,44 @@ export const REQUIRED_STEPS: Readonly<Record<CertifyKind, readonly string[]>> = 
   cms: ['connect', 'write', 'update', 'unpublish', 'delete', 'revoke'],
 };
 
+/**
+ * PR-06: the steps that certify each capability a kind can offer, so certification is attested capability by
+ * capability (`attest` records each one whose steps passed). `reconnect` is recorded when a connect passes after the
+ * revoke step passed (the grant was gone and the same flow brought it back). A capability absent here has no
+ * harness command yet and stays uncertified.
+ */
+export const CAPABILITY_STEPS: Readonly<
+  Record<CertifyKind, Readonly<Partial<Record<CertifiableCapability, readonly string[]>>>>
+> = {
+  channel: {
+    connect: ['connect'],
+    page_picker: ['page_picker'],
+    publish_text: ['publish_text'],
+    publish_image: ['publish_image'],
+    publish_video: ['publish_video'],
+    edit: ['edit'],
+    delete: ['delete'],
+    comment_reply: ['comment_reply'],
+    analytics: ['metrics'],
+    token_refresh: ['refresh'],
+    reconnect: ['reconnect'],
+  },
+  source: {
+    connect: ['connect'],
+    page_picker: ['targets'],
+    analytics: ['read'],
+    token_refresh: ['refresh'],
+    reconnect: ['reconnect'],
+  },
+  cms: {
+    connect: ['connect'],
+    publish_text: ['write'],
+    edit: ['update', 'unpublish'],
+    delete: ['delete'],
+    reconnect: ['reconnect'],
+  },
+};
+
 /** What one step's run established: the time, whether it passed, what was seen and the recording it came from. */
 export interface EvidenceEntry {
   at: string;
@@ -64,12 +105,20 @@ export interface EvidenceEntry {
   recordings?: string;
 }
 
-/** What `attest` writes: the record a person sets `certifiedAt` from (never written by the harness into code). */
+/**
+ * What `attest` writes: the record a person sets `certifiedAt` from (never written by the harness into code), with
+ * the environment the run used and, per capability whose steps passed, the entry a person copies into the
+ * capability's `certifications` (PR-06).
+ */
 export interface CertificationRecord {
   key: string;
   kind: CertifyKind;
   certifiedAt: string;
+  environment: string;
   steps: Record<string, EvidenceEntry>;
+  /** The evidence of every step the attested capabilities rest on. */
+  capabilityEvidence: Record<string, EvidenceEntry>;
+  capabilities: Partial<Record<CertifiableCapability, CapabilityCertificationV1>>;
 }
 
 /** What a certification session keeps between commands (one file per provider). */
@@ -88,6 +137,8 @@ export interface CertifySession {
     outcome: PublishOutcome;
     pending?: PendingState;
     remotePostId?: string;
+    /** PR-06: the publish capabilities this publish exercises (text, image, video). */
+    capabilities?: string[];
   };
   /** A source's grant and the target chosen among those it can read (source.ts). */
   source?: { grant: SourceGrant; target?: SourceTarget };
@@ -138,8 +189,30 @@ export function recordEvidence(deps: CertifyBaseDeps, step: string, ok: boolean,
     detail,
     ...(deps.recordingsFile ? { recordings: deps.recordingsFile } : {}),
   };
-  deps.save({ ...session, evidence: { ...(session.evidence ?? {}), [step]: entry } });
+  // PR-06: a connect that passes after the revoke step passed proves the reconnect.
+  const reconnect = step === 'connect' && ok && session.evidence?.['revoke']?.ok === true;
+  deps.save({
+    ...session,
+    evidence: {
+      ...(session.evidence ?? {}),
+      [step]: entry,
+      ...(reconnect ? { reconnect: { ...entry, detail: `connected again after revoke: ${detail}` } } : {}),
+    },
+  });
   deps.out(`Evidence: ${step} ${ok ? 'passed' : 'FAILED'} (${detail})`);
+  if (reconnect) deps.out('Evidence: reconnect passed (connected again after revoke)');
+}
+
+/** PR-06: the capabilities of the kind whose steps have all passed, and those still missing a step. */
+export function capabilitySteps(
+  kind: CertifyKind,
+  session: CertifySession,
+): Array<{ capability: CertifiableCapability; steps: readonly string[]; passed: boolean }> {
+  return Object.entries(CAPABILITY_STEPS[kind]).map(([capability, steps]) => ({
+    capability: capability as CertifiableCapability,
+    steps,
+    passed: steps.every((step) => session.evidence?.[step]?.ok === true),
+  }));
 }
 
 /** The steps the kind requires that have not passed yet. */
@@ -155,10 +228,13 @@ export function status(deps: CertifyBaseDeps): void {
     return `${e ? (e.ok ? 'passed ' : 'FAILED ') : 'missing'}  ${step}${e ? `  ${e.at}  ${e.detail}` : ''}`;
   });
   const missing = missingSteps(deps.kind, session);
+  const capabilities = capabilitySteps(deps.kind, session).map(
+    (c) => `${c.passed ? 'passed ' : 'missing'}  ${c.capability} (${c.steps.join(', ')})`,
+  );
   deps.out(
     `Certification evidence for ${deps.key} (${deps.kind})\n${lines.join('\n')}\n${
       missing.length ? `Not attestable: ${missing.join(', ')} still to pass.` : 'Every required step passed.'
-    }`,
+    }\nCapabilities (PR-06):\n${capabilities.join('\n')}`,
   );
 }
 
@@ -170,23 +246,50 @@ export function status(deps: CertifyBaseDeps): void {
 export function attest(
   deps: CertifyBaseDeps,
   write: (record: CertificationRecord) => void,
+  environment: string,
 ): CertificationRecord {
+  if (!/^[a-z][a-z0-9_-]{0,39}$/.test(environment))
+    throw new Error(
+      'attest needs --environment: the environment whose platform app the run used (e.g. staging)',
+    );
   const session = deps.load();
   const missing = missingSteps(deps.kind, session);
   if (missing.length)
     throw new Error(
       `${deps.key} cannot be attested: ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} not passed (run status)`,
     );
+  const certifiedAt = deps.now().toISOString();
+  const passed = capabilitySteps(deps.kind, session).filter((c) => c.passed);
   const steps = Object.fromEntries(REQUIRED_STEPS[deps.kind].map((s) => [s, session.evidence![s]!]));
+  const capabilityEvidence = Object.fromEntries(
+    [...new Set(passed.flatMap((c) => c.steps))].map((s) => [s, session.evidence![s]!]),
+  );
+  const capabilities = Object.fromEntries(
+    passed.map((c) => [
+      c.capability,
+      {
+        certifiedAt,
+        environment,
+        evidence: `.certify/${deps.key}/certification.json; recordings ${c.steps
+          .map((s) => path.basename(session.evidence![s]!.recordings ?? 'none'))
+          .join(', ')}`.slice(0, 300),
+      },
+    ]),
+  );
   const record: CertificationRecord = {
     key: deps.key,
     kind: deps.kind,
-    certifiedAt: deps.now().toISOString(),
+    certifiedAt,
+    environment,
     steps,
+    capabilityEvidence,
+    capabilities,
   };
   write(record);
   deps.out(
-    `Attested ${deps.key} (${deps.kind}) at ${record.certifiedAt}: set certifiedAt to this value in the adapter's capability and record the run in docs/decisions/DECISIONS.md.`,
+    `Attested ${deps.key} (${deps.kind}) at ${record.certifiedAt} in ${environment}: set certifiedAt to this value in the adapter's capability, copy each entry of "capabilities" (${
+      passed.map((c) => c.capability).join(', ') || 'none'
+    }) into its certifications with the decision log entry added to the evidence, and record the run in docs/decisions/DECISIONS.md. Capabilities not listed stay uncertified.`,
   );
   return record;
 }
@@ -284,6 +387,7 @@ export async function selectAccount(deps: CertifyDeps, remoteAccountId: string):
   );
   deps.save({ ...session, grant: next });
   reportGrant(deps, next);
+  recordEvidence(deps, 'page_picker', true, `switched to ${next.remoteAccountId}`);
 }
 
 /**
@@ -345,7 +449,16 @@ export async function revoke(deps: CertifyDeps): Promise<void> {
 
 export interface PublishInput {
   text: string;
-  media: Array<{ url: string; mime: string; width: number; height: number; bytes: number; altText?: string }>;
+  media: Array<{
+    url: string;
+    mime: string;
+    width: number;
+    height: number;
+    bytes: number;
+    altText?: string;
+    /** A video's measured duration (PR-06 publish_video): the capability refuses a video without one. */
+    durationMs?: number;
+  }>;
 }
 
 /**
@@ -358,13 +471,20 @@ export async function publish(deps: CertifyDeps, input: PublishInput): Promise<v
   const validation = deps.adapter.validateVariant({
     text: input.text,
     altTexts: input.media.map((m) => m.altText ?? ''),
-    media: input.media.map(({ mime, width, height, bytes }) => ({ mime, width, height, bytes })),
+    media: input.media.map(({ mime, width, height, bytes, durationMs }) => ({
+      mime,
+      width,
+      height,
+      bytes,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    })),
     settings: {},
   });
   if (!validation.ok) {
     print(deps, 'Refused by the capability before sending', validation);
     return;
   }
+  const exercised = publishCapabilitiesOf(input);
   const publicationId = `cert_${randomBytes(8).toString('hex')}`;
   const attemptStartedAt = deps.now();
   const mediaFingerprints = input.media.map((m) => createHash('sha256').update(m.url).digest('hex'));
@@ -397,12 +517,18 @@ export async function publish(deps: CertifyDeps, input: PublishInput): Promise<v
       outcome,
       ...(outcome.outcome === 'pending' ? { pending: outcome.pending } : {}),
       ...(outcome.outcome === 'accepted' ? { remotePostId: outcome.remotePostId } : {}),
+      capabilities: exercised,
     },
   });
   print(deps, 'Publish outcome', outcome);
-  if (outcome.outcome === 'accepted') recordEvidence(deps, 'publish', true, `post ${outcome.remotePostId}`);
+  if (outcome.outcome === 'accepted') recordPublish(deps, exercised, true, `post ${outcome.remotePostId}`);
   else if (outcome.outcome !== 'pending')
-    recordEvidence(deps, 'publish', false, `${outcome.outcome}: ${outcome.code}`);
+    recordPublish(deps, exercised, false, `${outcome.outcome}: ${outcome.code}`);
+}
+
+/** The publish step and (PR-06) each publish capability the post exercised share one outcome. */
+function recordPublish(deps: CertifyDeps, exercised: readonly string[], ok: boolean, detail: string): void {
+  for (const step of ['publish', ...exercised]) recordEvidence(deps, step, ok, detail);
 }
 
 /** Runbook step 4: checkStatus / finalize on the last pending publish; after finalize, status must be completed. */
@@ -417,9 +543,10 @@ export async function pendingStep(deps: CertifyDeps, step: 'status' | 'finalize'
   if (result.status === 'completed')
     deps.save({ ...session, lastPublish: { ...last, remotePostId: result.remotePostId } });
   print(deps, step === 'status' ? 'Status' : 'Finalize', result);
-  if (result.status === 'completed') recordEvidence(deps, 'publish', true, `post ${result.remotePostId}`);
+  const exercised = last.capabilities ?? [];
+  if (result.status === 'completed') recordPublish(deps, exercised, true, `post ${result.remotePostId}`);
   else if (result.status === 'failed')
-    recordEvidence(deps, 'publish', false, `${result.code}: ${result.message}`);
+    recordPublish(deps, exercised, false, `${result.code}: ${result.message}`);
 }
 
 /**
@@ -512,6 +639,12 @@ export async function comments(
       deps.io,
     );
     print(deps, 'Reply outcome', outcome);
+    recordEvidence(
+      deps,
+      'comment_reply',
+      outcome.outcome === 'accepted',
+      outcome.outcome === 'accepted' ? `reply ${outcome.remotePostId}` : outcome.outcome,
+    );
     return;
   }
   if (!deps.adapter.fetchComments) throw new Error(`${deps.adapter.key} has no comment reading`);
@@ -522,6 +655,89 @@ export async function comments(
   );
   print(deps, 'Comments', page);
   recordEvidence(deps, 'comments', true, `${page.items.length} comments read`);
+}
+
+/**
+ * PR-06: changes the text of the last published post through the adapter's `editPost` (what publication.edit_remote
+ * does), then reads it back through reconciliation by the new text's fingerprint.
+ */
+export async function editPost(deps: CertifyDeps, text: string): Promise<void> {
+  const session = deps.load();
+  const grant = requireGrant(session);
+  const last = requirePublish(session);
+  if (!last.remotePostId) throw new Error('no remote post id: finish the last publish first');
+  if (!deps.adapter.editPost) throw new Error(`${deps.adapter.key} cannot edit a live post`);
+  const outcome = await deps.adapter.editPost(
+    { remotePostId: last.remotePostId, text, idempotencyKey: `cert_${randomBytes(8).toString('hex')}` },
+    grant.credentials,
+    deps.io,
+  );
+  print(deps, 'Edit outcome', outcome);
+  if (outcome.outcome !== 'done') {
+    recordEvidence(deps, 'edit', false, `${outcome.outcome}: ${'code' in outcome ? outcome.code : ''}`);
+    return;
+  }
+  deps.save({ ...session, lastPublish: { ...last, text, textFingerprint: textFingerprint(text) } });
+  const readBack = await deps.adapter.findRemotePost(
+    {
+      publicationId: last.publicationId,
+      attemptStartedAt: new Date(last.attemptStartedAt),
+      textFingerprint: textFingerprint(text),
+      mediaFingerprints: last.mediaFingerprints,
+      remoteAccountId: grant.remoteAccountId,
+    },
+    grant.credentials,
+    deps.io,
+  );
+  print(deps, 'Read back', readBack);
+  recordEvidence(
+    deps,
+    'edit',
+    readBack.status === 'found',
+    readBack.status === 'found'
+      ? `edited and found by ${readBack.matchedBy}`
+      : `edited, read back ${readBack.status}`,
+  );
+}
+
+/**
+ * PR-06: deletes the last published post through the adapter's `deletePost` (what publication.delete_remote does),
+ * then proves it absent through reconciliation.
+ */
+export async function deletePost(deps: CertifyDeps): Promise<void> {
+  const session = deps.load();
+  const grant = requireGrant(session);
+  const last = requirePublish(session);
+  if (!last.remotePostId) throw new Error('no remote post id: finish the last publish first');
+  if (!deps.adapter.deletePost) throw new Error(`${deps.adapter.key} cannot delete a live post`);
+  const outcome = await deps.adapter.deletePost(
+    { remotePostId: last.remotePostId },
+    grant.credentials,
+    deps.io,
+  );
+  print(deps, 'Delete outcome', outcome);
+  if (outcome.outcome !== 'done' && outcome.outcome !== 'already_absent') {
+    recordEvidence(deps, 'delete', false, `${outcome.outcome}: ${outcome.code}`);
+    return;
+  }
+  const readBack = await deps.adapter.findRemotePost(
+    {
+      publicationId: last.publicationId,
+      attemptStartedAt: new Date(last.attemptStartedAt),
+      textFingerprint: last.textFingerprint,
+      mediaFingerprints: last.mediaFingerprints,
+      remoteAccountId: grant.remoteAccountId,
+    },
+    grant.credentials,
+    deps.io,
+  );
+  print(deps, 'Read back', readBack);
+  recordEvidence(
+    deps,
+    'delete',
+    readBack.status === 'definitely_absent',
+    `deleted, read back ${readBack.status}`,
+  );
 }
 
 // ---- wiring: session files, client credentials, recording IO ----
