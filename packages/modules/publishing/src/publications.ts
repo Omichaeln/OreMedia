@@ -978,6 +978,9 @@ export const publicationService = {
    * has no held → published move, and recording a confirmation that leaves the row held would misreport it.
    */
   async reconcile(actor: ResolvedActor, input: z.infer<typeof ReconcileCommand>, tx: Tx) {
+    // A human resolution by definition: an agent or API key never confirms an outcome or spends an approval here.
+    if (actor.kind !== 'user')
+      throw new PolicyDeniedError('agent_never', 'Only a person can reconcile a publication');
     const cmd = ReconcileCommand.parse(input);
     const row = await publicationsRepo.lock(cmd.publicationId, tx);
     await policy.assert(actor, 'publication.schedule', publicationResource(row), {}, tx);

@@ -176,4 +176,59 @@ describe('budgets (spec 12.6) against MySQL 8', () => {
       ).resolves.toBeDefined();
     });
   });
+  it('a cost incurred after the reservation closed is ledgered, counts toward the caps and is charged once per key', async () => {
+    const brandC = newId('brand');
+    await tdb.db.insert(brands).values({
+      id: brandC,
+      tenantId: tenantA,
+      name: 'C',
+      timezone: 'UTC',
+      defaultLocale: 'en',
+      status: 'active',
+    });
+    await runInTenant(ctx(tenantA), async () => {
+      await budgets.setLimit(brandC, 'day', 5_000_000);
+      const runId = newId('agentRun');
+      const r = await budgets.reserveSpend(brandC, runId, 2_000_000, deadline);
+      await budgets.consume(r.id, brandC, 'model_tokens', 10, 'tokens', 1_000_000, 'step_1');
+      await budgets.release(runId);
+      // A model call that was already under way when the run was cancelled: the closed reservation still takes it.
+      await expect(budgets.consume(r.id, brandC, 'model_tokens', 10, 'tokens', 1, 'late')).rejects.toThrow(
+        BudgetExhaustedError,
+      );
+      const late = await budgets.consumeIncurred(
+        r.id,
+        brandC,
+        'model_tokens',
+        20,
+        'tokens',
+        1_500_000,
+        'step_2',
+        'late_key',
+      );
+      expect(late).toEqual({ closed: true, exceeded: false });
+      // A replay of the same charge is not doubled.
+      await budgets.consumeIncurred(
+        r.id,
+        brandC,
+        'model_tokens',
+        20,
+        'tokens',
+        1_500_000,
+        'step_2',
+        'late_key',
+      );
+      const ledgerRows = await tdb.db.select().from(usageLedger).where(eq(usageLedger.reservationId, r.id));
+      expect(ledgerRows.map((l) => l.costMicros).sort()).toEqual([1_000_000, 1_500_000]);
+      const summary = await budgets.summary(brandC);
+      expect(summary.day.committedMicros).toBe(2_500_000);
+      expect(summary.day.remainingMicros).toBe(2_500_000);
+      await expect(
+        budgets.reserveSpend(brandC, newId('agentRun'), 2_500_001, deadline),
+      ).rejects.toBeInstanceOf(BudgetExhaustedError);
+      await expect(
+        budgets.reserveSpend(brandC, newId('agentRun'), 2_500_000, deadline),
+      ).resolves.toBeDefined();
+    });
+  });
 });
