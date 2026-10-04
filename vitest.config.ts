@@ -44,7 +44,11 @@ export default defineConfig({
         test: {
           ...shared,
           name: 'time-skipping',
-          include: ['packages/workflows/time-skipping/**/*.time-skipping.test.ts'],
+          include: [
+            'packages/workflows/time-skipping/**/*.time-skipping.test.ts',
+            // G26: each worker app's production start function against the same server, one workflow per queue.
+            'apps/**/*.time-skipping.test.ts',
+          ],
           exclude: ['**/node_modules/**', '**/dist/**'],
           fileParallelism: false,
           testTimeout: 300_000,

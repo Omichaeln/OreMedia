@@ -226,6 +226,13 @@ production keeps running with that capability degraded, and the gap is reported.
   only under a `cms.audit` source-use policy allowing reads; docs/contracts/seo-audit.md) and an admin or publisher
   can run one from the Performance screen (once per website per day); the adapter is uncertified (`certifiedAt: null`, D-16) until its read-back tests ran on the
   pilot site, so tenants are refused the connect until then.
+- **Temporal schedules follow the code.** worker-core and worker-ingest create their schedules at start and, when one
+  already exists, compare its spec (calendar or interval), action (workflow type, task queue, args) and policies
+  (overlap, catch-up window) with the code and update only what differs (`ensureScheduleReconciled`,
+  `packages/activities/src/schedules.ts`; one `schedule reconciled` line naming the schedule and the parts, never
+  values). A schedule is never deleted and recreated, so its history stays; an operator's pause and note survive the
+  update, and the update takes no extra run (no trigger or backfill is sent; the next times follow the new spec). A
+  `temporal schedule update` by hand of a spec, action or policy therefore holds only until the next worker start.
 - The `web` service (Caddy) has no report: its `OBJECT_STORE_PUBLIC_ORIGIN` is checked by the production smoke check
   (section 3a) through the CSP it serves. The `redirector` has none either: both its settings (`DATABASE_URL`,
   `LINK_HASH_SECRET_REF`) already stop it at start when missing.

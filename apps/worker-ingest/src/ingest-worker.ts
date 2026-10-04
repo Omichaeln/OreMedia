@@ -3,18 +3,14 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NativeConnection, Worker, type WorkerOptions } from '@temporalio/worker';
-import {
-  ScheduleAlreadyRunning,
-  ScheduleNotFoundError,
-  ScheduleOverlapPolicy,
-  type Client,
-} from '@temporalio/client';
+import { ScheduleNotFoundError, ScheduleOverlapPolicy, type Client } from '@temporalio/client';
 import {
   createCommentIngestionActivities,
   createDestinationReportActivities,
   createMetricCollectionActivities,
   createSeoAuditActivities,
   createBrandSourceCaptureActivities,
+  ensureScheduleReconciled,
 } from '@oremedia/activities';
 import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import {
@@ -112,27 +108,20 @@ export const DESTINATION_REPORT_SWEEP_CALENDAR = { hour: 4, minute: 0 } as const
 
 /**
  * Ledger R2-1 part B: destinationReportSweepWorkflowV1 once a day on `ingest-metrics` (one schedule per namespace,
- * joined if it exists; copied from worker-core's ensureDestinationTokenRefreshScheduled): every active GA4 and
+ * reconciled if it exists; copied from worker-core's ensureDestinationTokenRefreshScheduled): every active GA4 and
  * Search Console destination reads its reports incrementally under the source-use policy.
  */
 export async function ensureDestinationReportSweepScheduled(client: Client): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId: DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
-      spec: { calendars: [{ ...DESTINATION_REPORT_SWEEP_CALENDAR }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
-        taskQueue: INGEST_METRICS_TASK_QUEUE,
-        args: [{}],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: DESTINATION_REPORT_SWEEP_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: DESTINATION_REPORT_SWEEP_SCHEDULE_ID,
+    spec: { calendars: [{ ...DESTINATION_REPORT_SWEEP_CALENDAR }] },
+    action: {
+      workflowType: DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE,
+      taskQueue: INGEST_METRICS_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
 }
 
 /**
@@ -153,27 +142,20 @@ async function removeSeoAuditSweepV1Schedule(client: Client): Promise<void> {
 export const SEO_AUDIT_SWEEP_CALENDAR = { dayOfWeek: 'MONDAY', hour: 5, minute: 0 } as const;
 
 /**
- * Ledger R2-4: seoAuditSweepWorkflowV2 once a week on `ingest-metrics` (one schedule per namespace, joined if it
+ * Ledger R2-4: seoAuditSweepWorkflowV2 once a week on `ingest-metrics` (one schedule per namespace, reconciled if it
  * exists; as ensureDestinationReportSweepScheduled): every active website destination whose `cms.audit` policy
  * allows reads gets one bounded crawl, overlap skipped.
  */
 export async function ensureSeoAuditSweepScheduled(client: Client): Promise<void> {
   await removeSeoAuditSweepV1Schedule(client);
-  try {
-    await client.schedule.create({
-      scheduleId: SEO_AUDIT_SWEEP_SCHEDULE_ID,
-      spec: { calendars: [{ ...SEO_AUDIT_SWEEP_CALENDAR }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: SEO_AUDIT_SWEEP_WORKFLOW_TYPE,
-        taskQueue: INGEST_METRICS_TASK_QUEUE,
-        args: [{}],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: SEO_AUDIT_SWEEP_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: SEO_AUDIT_SWEEP_SCHEDULE_ID,
+    spec: { calendars: [{ ...SEO_AUDIT_SWEEP_CALENDAR }] },
+    action: {
+      workflowType: SEO_AUDIT_SWEEP_WORKFLOW_TYPE,
+      taskQueue: INGEST_METRICS_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
 }
