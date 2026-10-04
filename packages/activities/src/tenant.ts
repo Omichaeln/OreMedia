@@ -30,6 +30,15 @@ export function inTenant<T>(
   });
 }
 
+/** The current Temporal attempt (1-based), or undefined outside an activity. */
+export function activityAttempt(): number | undefined {
+  try {
+    return Context.current().info.attempt;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Heartbeat details live on the per-activity context, never on a shared singleton (spec 20.3). */
 export function heartbeat(detail: string): void {
   try {

@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
+import { ASSIST_SECTION_LABEL, type AssistSection } from '@oremedia/contracts/brand-assist';
 import { Badge, Button, EmptyState, Field, Input, Panel, Skeleton, StatusBanner, cn } from '@oremedia/ui';
 import { RequestError } from '../../../../../../components/request-state';
 import { useToast } from '../../../../../../components/toast';
@@ -12,15 +13,24 @@ import {
   ChannelsView,
   changedSections,
   ColourView,
+  ExamplesView,
   GuidelinesView,
   ImageryView,
   LogoView,
+  MessagingView,
   OverviewView,
   PatternsView,
+  TemplatesView,
   TypographyView,
+  VocabularyView,
   VoiceView,
+  WritingView,
 } from '../../../../../../features/brand/brand-read-views';
 import { BrandSkillImport } from '../../../../../../features/brand/brand-skill-import';
+import { BrandHistory } from '../../../../../../features/brand/brand-history';
+import { AssistJobBlock, AssistSetup, useStartAssist } from '../../../../../../features/brand/assist-setup';
+import { AssistantDialog } from '../../../../../../features/brand/section-assistant';
+import { useAssistJobs } from '../../../../../../features/brand/use-assist';
 import { FactsWorkspace } from '../../../../../../features/brand/facts-workspace';
 import { VoiceExtraction } from '../../../../../../features/brand/voice-extraction';
 import {
@@ -44,15 +54,28 @@ type SectionKey =
   | 'colour'
   | 'typography'
   | 'voice'
+  | 'messaging'
+  | 'vocabulary'
+  | 'writing'
+  | 'examples'
+  | 'templates'
   | 'imagery'
   | 'patterns'
   | 'channels'
   | 'guidelines'
   | 'facts'
-  | 'objectives';
+  | 'objectives'
+  | 'history';
 
 /** The system's parts in the order the prototype reads them; each lives at `?section=`. */
-const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit?: KitSection }> = [
+const SECTIONS: Array<{
+  key: SectionKey;
+  label: string;
+  description: string;
+  kit?: KitSection;
+  /** BSC-5: the section the "Ask AI" assistant proposes for. */
+  assist?: AssistSection;
+}> = [
   {
     key: 'overview',
     label: 'Overview',
@@ -78,9 +101,47 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   },
   {
     key: 'voice',
-    label: 'Voice & writing',
-    description: 'How the brand sounds: tone, audiences, terms, banned phrases and examples.',
+    label: 'Voice & personality',
+    description:
+      'How the brand sounds: tone, personality, principles, terms, banned phrases, spelling and style rules.',
     kit: 'voice',
+    assist: 'voice',
+  },
+  {
+    key: 'messaging',
+    label: 'Messaging',
+    description:
+      'Positioning, value proposition, pillars proved by approved facts, key messages and audiences.',
+    kit: 'messaging',
+    assist: 'messaging',
+  },
+  {
+    key: 'vocabulary',
+    label: 'Vocabulary',
+    description: 'Terms the brand prefers, allows, avoids or never uses, with what to write instead.',
+    kit: 'vocabulary',
+    assist: 'vocabulary',
+  },
+  {
+    key: 'writing',
+    label: 'Writing patterns',
+    description: 'How headlines, introductions, body copy, calls to action and long-form pieces are written.',
+    kit: 'writing',
+    assist: 'writing',
+  },
+  {
+    key: 'examples',
+    label: 'Examples',
+    description: 'On-brand and off-brand copy with why, and the on-brand rewrite.',
+    kit: 'examples',
+    assist: 'examples',
+  },
+  {
+    key: 'templates',
+    label: 'Templates',
+    description: 'Copy templates: the parts a piece of copy follows, in order, per content type and channel.',
+    kit: 'templates',
+    assist: 'templates',
   },
   {
     key: 'imagery',
@@ -90,15 +151,16 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
   },
   {
     key: 'patterns',
-    label: 'Patterns & templates',
-    description: 'Named layouts and the templates that implement them.',
+    label: 'Visual patterns',
+    description: 'Named visual layouts and the creative templates that implement them.',
     kit: 'patterns',
   },
   {
     key: 'channels',
     label: 'Channel guidance',
-    description: 'Caption style, formats and calls to action per channel.',
+    description: "Defaults for every channel and what changes per channel, beside each platform's limits.",
     kit: 'channels',
+    assist: 'channels',
   },
   {
     key: 'guidelines',
@@ -111,11 +173,17 @@ const SECTIONS: Array<{ key: SectionKey; label: string; description: string; kit
     label: 'Facts',
     description:
       'What copy may state, by category, with sources and review dates: proposed by anyone, approved by a brand manager.',
+    assist: 'facts',
   },
   {
     key: 'objectives',
     label: 'Objectives',
     description: 'The metric the brand is steering by, with its guardrails.',
+  },
+  {
+    key: 'history',
+    label: 'History',
+    description: 'Each time the brand system was applied: who, when and what changed; compare and restore.',
   },
 ];
 
@@ -145,17 +213,69 @@ export function BrandSystemRoute() {
   const proposal = pendingProposal(versions.data?.items ?? [], appliedId);
   const proposed = useBrandVersion(brandId, proposal?.id ?? null);
   const [editing, setEditing] = useState<Editing>(null);
+  // BSC-4/5: the guided setup (`?assist=setup`, with the job to show), the assistant dialog and the jobs it started.
+  const assistJobs = useAssistJobs(brandId);
+  const [assistant, setAssistant] = useState<AssistSection | 'all' | null>(null);
+  const [sectionJobs, setSectionJobs] = useState<
+    Array<{ jobId: string; scope: AssistSection | 'all'; sections: AssistSection[] }>
+  >([]);
   // Bumped by a conflict's Reload so the editor reopens on the brand system as it is now.
   const [generation, setGeneration] = useState(0);
-  const set = (key: string, value: string | null) => {
-    const p = new URLSearchParams(params);
-    if (value === null) p.delete(key);
-    else p.set(key, value);
-    setParams(p, { replace: true });
-  };
   const open = (key: string) => {
     setEditing(null);
-    set('section', key === 'overview' ? null : key);
+    const p = new URLSearchParams(params);
+    p.delete('assist');
+    if (key === 'overview') p.delete('section');
+    else p.set('section', key);
+    setParams(p, { replace: true });
+  };
+  const setupOpen = params.get('assist') === 'setup';
+  const openSetup = (jobId?: string) => {
+    setEditing(null);
+    const p = new URLSearchParams(params);
+    p.set('assist', 'setup');
+    if (jobId) p.set('job', jobId);
+    else p.delete('job');
+    setParams(p, { replace: true });
+  };
+  const closeSetup = () => {
+    const p = new URLSearchParams(params);
+    p.delete('assist');
+    p.delete('job');
+    setParams(p, { replace: true });
+  };
+  // A setup job that is still running or has suggestions waiting for a person.
+  const waitingJob =
+    assistJobs.data?.items.find(
+      (j) =>
+        j.kind === 'setup' &&
+        (!['ready', 'partially_ready', 'failed', 'cancelled'].includes(j.state) ||
+          j.suggestionCounts.pending > 0),
+    ) ?? null;
+  // "Request alternatives" from the section assistant: the same sources, the rejected suggestions not repeated.
+  const pendingScope = useRef<{ scope: AssistSection | 'all'; sections: AssistSection[] } | null>(null);
+  const startAlt = useStartAssist((jobId) => {
+    const p = pendingScope.current;
+    if (p) setSectionJobs((all) => [{ jobId, ...p }, ...all]);
+  });
+  const startAlternatives = async (fromJobId: string, sec: AssistSection) => {
+    const from = sectionJobs.find((j) => j.jobId === fromJobId);
+    pendingScope.current = { scope: from?.scope ?? sec, sections: [sec] };
+    const job = await queryClient.fetchQuery(
+      trpc.brand.assist.get.queryOptions({ brandId, jobId: fromJobId }),
+    );
+    startAlt.mutate({
+      brandId,
+      kind: 'section',
+      sections: [sec],
+      sourceIds: job.sourceIds,
+      alternativesForJobId: fromJobId,
+      instruction: 'Offer different alternatives to the suggestions that were rejected.',
+    });
+  };
+  const reviewProposal = () => {
+    closeSetup();
+    void queryClient.invalidateQueries(trpc.brand.pathFilter()).then(() => setEditing({ kind: 'proposal' }));
   };
   const reload = () => {
     void queryClient.invalidateQueries(trpc.brand.pathFilter()).then(() => setGeneration((g) => g + 1));
@@ -164,7 +284,7 @@ export function BrandSystemRoute() {
   const appliedDoc: Doc | null = applied.data?.document ?? null;
   // The editor starts from the applied brand system, or an empty one before the first save.
   const startDoc = appliedId === null ? emptyBrandSystemDocument() : appliedDoc;
-  const contentSection = section.key !== 'facts' && section.key !== 'objectives';
+  const contentSection = section.key !== 'facts' && section.key !== 'objectives' && section.key !== 'history';
   const editingSection = editing?.kind === 'section' && editing.section === section.key;
   const reviewing = editing?.kind === 'proposal' && proposal !== null;
   // Guidelines are imported, not written here: the section is editable (to remove them) once there are some.
@@ -216,8 +336,44 @@ export function BrandSystemRoute() {
       <div className="min-w-0 flex-1">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-8">
           <h1 className="text-xl font-semibold">{brand.name}</h1>
+          {canSave && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => setAssistant('all')} disabled={!startDoc}>
+                Ask AI
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => openSetup()}>
+                Import sources
+              </Button>
+            </div>
+          )}
         </header>
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
+          {waitingJob && !setupOpen && !reviewing && (
+            <StatusBanner
+              tone="info"
+              title="Suggestions from your sources"
+              description={
+                waitingJob.suggestionCounts.pending > 0
+                  ? `${waitingJob.suggestionCounts.pending} suggestion${waitingJob.suggestionCounts.pending === 1 ? ' is' : 's are'} waiting for review.`
+                  : 'Your sources are being read.'
+              }
+              actions={
+                <Button size="sm" variant="primary" onClick={() => openSetup(waitingJob.id)}>
+                  Review suggestions
+                </Button>
+              }
+              data-testid="assist-waiting"
+            />
+          )}
+          {setupOpen && !reviewing && (
+            <AssistSetup
+              key={params.get('job') ?? 'new'}
+              initialJobId={params.get('job')}
+              canDecide={canSave}
+              onApply={reviewProposal}
+              onClose={closeSetup}
+            />
+          )}
           {proposal && !reviewing && (
             <ProposalBanner
               brandId={brandId}
@@ -238,21 +394,76 @@ export function BrandSystemRoute() {
               onReload={reload}
             />
           )}
-          {!reviewing && (
+          {!reviewing && !setupOpen && (
             <>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">{section.label}</h2>
                   <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
                 </div>
-                {editable && !editingSection && startDoc && (
-                  <Button size="sm" onClick={() => setEditing({ kind: 'section', section: section.key })}>
-                    Edit<span className="sr-only"> {section.label}</span>
-                  </Button>
-                )}
+                <div className="flex flex-wrap gap-2">
+                  {canSave && section.assist && !editingSection && startDoc && (
+                    <Button size="sm" onClick={() => setAssistant(section.assist ?? null)}>
+                      Ask AI<span className="sr-only"> about {section.label}</span>
+                    </Button>
+                  )}
+                  {editable && !editingSection && startDoc && (
+                    <Button size="sm" onClick={() => setEditing({ kind: 'section', section: section.key })}>
+                      Edit<span className="sr-only"> {section.label}</span>
+                    </Button>
+                  )}
+                </div>
               </div>
+              {sectionJobs
+                .filter((j) => j.scope === 'all' || j.scope === section.assist)
+                .map((j) => (
+                  <section
+                    key={j.jobId}
+                    aria-label={
+                      j.scope === 'all'
+                        ? 'AI suggestions'
+                        : `AI suggestions for ${ASSIST_SECTION_LABEL[j.scope]}`
+                    }
+                    className="rounded-md border border-border p-3"
+                    data-testid="section-assistant-results"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold">AI suggestions</h3>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSectionJobs((all) => all.filter((x) => x.jobId !== j.jobId))}
+                      >
+                        Hide
+                      </Button>
+                    </div>
+                    <AssistJobBlock
+                      jobId={j.jobId}
+                      canDecide={canSave}
+                      sections={j.scope === 'all' ? j.sections : [j.scope]}
+                      onFollowUp={(next) => setSectionJobs((all) => [{ ...j, jobId: next }, ...all])}
+                      onAlternatives={(sec) => void startAlternatives(j.jobId, sec)}
+                      onApply={reviewProposal}
+                    />
+                  </section>
+                ))}
+              {section.key === 'history' && (
+                <BrandHistory canRestore={canSave} appliedVersionId={appliedId} />
+              )}
               {section.key === 'facts' && <FactsWorkspace />}
               {section.key === 'objectives' && <Objectives />}
+              {assistant !== null && startDoc && (
+                <AssistantDialog
+                  scope={assistant}
+                  doc={startDoc}
+                  onClose={() => setAssistant(null)}
+                  onStarted={(jobId, sections) => {
+                    const scope = assistant;
+                    setAssistant(null);
+                    setSectionJobs((all) => [{ jobId, scope, sections }, ...all]);
+                  }}
+                />
+              )}
               {contentSection && (
                 <>
                   {appliedId === null && !editingSection && (
@@ -265,13 +476,17 @@ export function BrandSystemRoute() {
                       }
                       action={
                         canSave && (
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            onClick={() => setEditing({ kind: 'section', section: section.key })}
-                          >
-                            Set up the brand system
-                          </Button>
+                          <div className="flex flex-wrap justify-center gap-2">
+                            <Button size="sm" variant="primary" onClick={() => openSetup()}>
+                              Set up from your website and documents
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => setEditing({ kind: 'section', section: section.key })}
+                            >
+                              Set up the brand system
+                            </Button>
+                          </div>
                         )
                       }
                     />
@@ -297,7 +512,7 @@ export function BrandSystemRoute() {
                       section={section.key}
                       doc={appliedDoc}
                       brandName={brand.name}
-                      factCount={effectiveFacts.data?.items.length}
+                      facts={effectiveFacts.data?.items}
                       onOpen={open}
                     />
                   )}
@@ -321,18 +536,18 @@ function SectionView({
   section,
   doc,
   brandName,
-  factCount,
+  facts,
   onOpen,
 }: {
   section: SectionKey;
   doc: Doc;
   brandName: string;
-  factCount: number | undefined;
+  facts: Array<{ id: string; statement: string }> | undefined;
   onOpen: (key: string) => void;
 }) {
   switch (section) {
     case 'overview':
-      return <OverviewView doc={doc} brandName={brandName} factCount={factCount} onOpen={onOpen} />;
+      return <OverviewView doc={doc} brandName={brandName} factCount={facts?.length} onOpen={onOpen} />;
     case 'logo':
       return <LogoView doc={doc} />;
     case 'colour':
@@ -341,6 +556,16 @@ function SectionView({
       return <TypographyView doc={doc} />;
     case 'voice':
       return <VoiceView doc={doc} />;
+    case 'messaging':
+      return <MessagingView doc={doc} facts={facts} />;
+    case 'vocabulary':
+      return <VocabularyView doc={doc} />;
+    case 'writing':
+      return <WritingView doc={doc} />;
+    case 'examples':
+      return <ExamplesView doc={doc} />;
+    case 'templates':
+      return <TemplatesView doc={doc} />;
     case 'imagery':
       return <ImageryView doc={doc} />;
     case 'patterns':

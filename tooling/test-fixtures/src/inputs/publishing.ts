@@ -25,6 +25,7 @@ export const PUBLISHING_INPUTS: Record<string, CrossTenantFixture> = {
       'a pending account choice is tenant-, brand- and actor-bound (covered with real rows in the publishing suite); an unknown or foreign one is VALIDATION_FAILED',
   },
   'publishing.channels.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
+  'publishing.channels.limits': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'publishing.channels.disconnect': {
     buildInput: (f) => ({ channelConnectionId: f['publishingChannelConnectionId'], expectedVersion: 0 }),
   },

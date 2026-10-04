@@ -1,25 +1,29 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
+import { asc, getTableColumns, getTableName } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
-import { runInTenant, withTransaction } from '@oremedia/db';
+import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { assetVersions, uploadIntents } from '@oremedia/db/schema/assets';
-import { renderJobs, renderedExports } from '@oremedia/db/schema/creative';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
-import { assetService } from '@oremedia/module-assets';
-import { creativeService } from '@oremedia/module-creative';
+import { brandAssistService } from '@oremedia/module-brand';
 import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0024 (STU-2a video media): on a database populated at the previous head the migration
- * adds nullable asset_versions.media_info, upload_intents.rejection_detail, render_jobs.progress and the video
- * columns of rendered_exports, and appends `cancelled` to render_jobs.state; every existing row is unchanged and
- * reads null. On the migrated data the seeded version reads with no media info, the seeded intent's status has no
- * detail, and the seeded pending render job can be cancelled. The columns are in LATER_COLUMNS (seed.ts).
+ * Ledger 1.g4 for migration 0024 (BSC-4 sources and AI assist): on a database populated at the previous head (0023)
+ * the migration only creates brand_sources, brand_assist_jobs and brand_suggestions; every existing column of every
+ * row is unchanged and the new tables start empty. On the migrated data a person adds a source and lists it, and the
+ * history lists what was applied before the migration. Additive and roll-forward safe: the previous release never
+ * reads the new tables.
  */
 const PREVIOUS_HEAD = '0023_facts_workspace';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+const NEW_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions];
+/** Added by a later migration (STU-1b, 0025): absent at the previous head. */
+const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
 
 describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
@@ -39,32 +43,20 @@ describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(assetVersions)).rejects.toThrow(); // media_info not there yet
+    await expect(tdb.db.select().from(brandSources)).rejects.toThrow(); // not there yet
     before = await snapshot();
   });
   afterAll(async () => {
     await tdb?.drop();
   });
 
-  it('adds the nullable columns, null on every existing row, and leaves every existing row unchanged', async () => {
+  it('creates the three tables empty and leaves every existing row unchanged', async () => {
     await tdb.migrateToHead();
     expect(await snapshot()).toBe(before);
-    expect((await tdb.db.select().from(assetVersions)).every((v) => v.mediaInfo === null)).toBe(true);
-    expect((await tdb.db.select().from(uploadIntents)).every((i) => i.rejectionDetail === null)).toBe(true);
-    const jobs = await tdb.db.select().from(renderJobs);
-    expect(jobs.length).toBeGreaterThan(0);
-    expect(jobs.every((j) => j.progress === null)).toBe(true);
-    expect(
-      (await tdb.db.select().from(renderedExports)).every(
-        (e) => e.durationMs === null && e.fps === null && e.posterStorageKey === null,
-      ),
-    ).toBe(true);
-    await expect(
-      tdb.db.execute(sql`update ${renderJobs} set state = 'paused' where id = ${jobs[0]!.id}`),
-    ).rejects.toMatchObject({ cause: { code: 'WARN_DATA_TRUNCATED' } });
+    for (const t of NEW_TABLES) expect(await tdb.db.select().from(t)).toEqual([]);
   });
 
-  it('the seeded rows work with the new code: upload status, and a pending render job is cancelled', async () => {
+  it('on the migrated data a source is added and listed; the history lists the brand system as it was', async () => {
     const owner: ResolvedActor = {
       kind: 'user',
       id: tenantA.ownerUserId,
@@ -82,19 +74,22 @@ describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', (
       brandIds: 'all' as const,
       correlationId: 'corr_roll_forward_0024',
     };
-    const intentId = tenantA.ids['uploadIntentId'] as string;
-    expect(await runInTenant(ctx, () => assetService.uploadStatus(owner, { intentId }))).toMatchObject({
-      state: 'issued',
-      rejectionDetail: null,
-      kind: 'photo',
-    });
-    const renderJobId = tenantA.ids['renderJobId'] as string;
-    expect(
-      await runInTenant(ctx, () =>
-        withTransaction((tx) => creativeService.renders.cancel(owner, { renderJobId }, tx)),
+    const brandId = tenantA.brandIds[0]!;
+    const run = <T>(fn: (tx: Tx) => Promise<T>) => runInTenant(ctx, () => withTransaction(fn));
+    const added = await run((tx) =>
+      brandAssistService.sources.add(
+        owner,
+        { kind: 'text', brandId, title: 'Notes', text: 'We write plainly.' },
+        tx,
       ),
-    ).toMatchObject({ state: 'cancelled' });
-    const [job] = await tdb.db.select().from(renderJobs).where(eq(renderJobs.id, renderJobId));
-    expect(job?.state).toBe('cancelled');
+    );
+    const listed = await runInTenant(ctx, () =>
+      brandAssistService.sources.list(owner, { brandId, page: { limit: 10 } }),
+    );
+    expect(listed.items.map((s) => [s.id, s.status])).toEqual([[added.sourceId, 'captured']]);
+    const history = await runInTenant(ctx, () =>
+      brandAssistService.history.list(owner, { brandId, page: { limit: 10 } }),
+    );
+    expect(history.items.every((h) => h.appliedAt !== null)).toBe(true);
   });
 });

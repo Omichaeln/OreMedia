@@ -1,11 +1,16 @@
 import { useState } from 'react';
-import type { CreativePage } from '@oremedia/contracts/creative';
-import { applyBatch, type IntentBatch, type TemplateDocument } from '@oremedia/editor';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
+import { applyBatch, isLockedDeep, type IntentBatch, type TemplateDocument } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Field, Skeleton, StatusBanner } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { Select } from '../../components/select';
 import { RequestError } from '../../components/request-state';
-import { useTemplates } from './use-document';
+import { useTemplate, useTemplates } from './use-document';
+import { useTRPC, useTRPCClient } from '../../lib/trpc';
+import { intentContext, newIntentKey } from '../../lib/intent-key';
+import { toUiError } from '../../lib/errors';
+import { SaveAsTemplateDialog } from './save-as-template';
 import { layerRows } from './document-helpers';
 import type { TemplateDto } from './types';
 
@@ -16,6 +21,8 @@ export interface TemplatesPanelProps {
   resolveTemplate: (templateId: string, templateVersionId: string) => Promise<TemplateDocument | null>;
   onIntent: (batch: IntentBatch) => void;
   templates: Record<string, TemplateDocument>;
+  /** STU-1a "Save as template": the committed document and its title; null while local changes are unsaved. */
+  saveSource: { title: string; document: CreativeDocumentV1 } | null;
 }
 
 /** Spec 11.3 applyTemplate: slot bindings map template slots to the page's existing elements. */
@@ -26,8 +33,17 @@ export function TemplatesPanel({
   resolveTemplate,
   onIntent,
   templates,
+  saveSource,
 }: TemplatesPanelProps) {
   const list = useTemplates(brandId);
+  const [saving, setSaving] = useState(false);
+  // STU-1a: a template replaces every element of the page, so it never replaces a locked page or locked elements.
+  const lockedReason = page.locked
+    ? 'This page is locked: unlock it in the page strip to apply a template'
+    : page.elements.some(isLockedDeep)
+      ? 'This page holds locked elements: a template would replace them, so unlock them first'
+      : undefined;
+  const [open, setOpen] = useState<string | null>(null);
   const [applying, setApplying] = useState<{ template: TemplateDto; doc: TemplateDocument } | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
 
@@ -41,6 +57,27 @@ export function TemplatesPanel({
 
   return (
     <div className="flex flex-col gap-2 p-2">
+      <Button
+        size="sm"
+        disabled={readOnly}
+        disabledReason={saveSource ? undefined : 'Wait for your changes to save first'}
+        onClick={() => setSaving(true)}
+      >
+        Save as template…
+      </Button>
+      {saving && saveSource && (
+        <SaveAsTemplateDialog
+          brandId={brandId}
+          title={saveSource.title}
+          document={saveSource.document}
+          onClose={() => setSaving(false)}
+        />
+      )}
+      {lockedReason && (
+        <p className="text-xs text-muted-foreground" data-testid="template-lock-note">
+          {lockedReason}.
+        </p>
+      )}
       {list.isPending && <Skeleton label="Loading templates" lines={2} />}
       {list.isError && <RequestError error={list.error} onRetry={() => void list.refetch()} />}
       {list.isSuccess && list.data.items.length === 0 && (
@@ -53,26 +90,40 @@ export function TemplatesPanel({
         list.data.items.map((t) => (
           <div
             key={t.id}
-            className="flex items-center justify-between gap-2 rounded-md border border-border p-2 text-sm"
+            className="flex flex-col gap-2 rounded-md border border-border p-2 text-sm"
+            data-testid="template-row"
           >
-            <div className="min-w-0">
-              <p className="truncate font-medium">{t.name}</p>
-              <Badge tone={t.state === 'active' ? 'good' : t.state === 'retired' ? 'neutral' : 'info'}>
-                {t.state}
-              </Badge>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate font-medium">{t.name}</p>
+                <Badge tone={t.state === 'active' ? 'good' : t.state === 'retired' ? 'neutral' : 'info'}>
+                  {t.state}
+                </Badge>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-expanded={open === t.id}
+                  onClick={() => setOpen((o) => (o === t.id ? null : t.id))}
+                >
+                  Versions
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={readOnly || loading === t.id}
+                  disabledReason={
+                    t.state !== 'active' || !t.currentVersionId
+                      ? 'Only templates with an approved version can be applied'
+                      : lockedReason
+                  }
+                  onClick={() => void start(t)}
+                >
+                  {loading === t.id ? 'Loading…' : 'Apply'}
+                </Button>
+              </div>
             </div>
-            <Button
-              size="sm"
-              disabled={readOnly || loading === t.id}
-              disabledReason={
-                t.state !== 'active' || !t.currentVersionId
-                  ? 'Only templates with an approved version can be applied'
-                  : undefined
-              }
-              onClick={() => void start(t)}
-            >
-              {loading === t.id ? 'Loading…' : 'Apply'}
-            </Button>
+            {open === t.id && <TemplateVersions template={t} />}
           </div>
         ))}
       {applying && (
@@ -206,5 +257,99 @@ function ApplyDialog({
         </DialogActions>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * STU-1a template governance: the versions of a template with their states; a brand manager approves a draft
+ * (brand.edit_standards) or retires a version or the whole template. Agents cannot make these decisions.
+ */
+function TemplateVersions({ template }: { template: TemplateDto }) {
+  const trpc = useTRPC();
+  const client = useTRPCClient();
+  const queryClient = useQueryClient();
+  const detail = useTemplate(template.id);
+  const decide = useMutation({
+    mutationFn: async (req: { kind: 'approve' | 'retire'; templateVersionId?: string }): Promise<void> => {
+      const ctx = intentContext(newIntentKey());
+      const expectedVersion = detail.data?.version ?? template.version;
+      if (req.kind === 'approve')
+        await client.creative.templates.approve.mutate(
+          { templateId: template.id, templateVersionId: req.templateVersionId ?? '', expectedVersion },
+          ctx,
+        );
+      else
+        await client.creative.templates.retire.mutate(
+          {
+            templateId: template.id,
+            ...(req.templateVersionId ? { templateVersionId: req.templateVersionId } : {}),
+            expectedVersion,
+          },
+          ctx,
+        );
+    },
+    onSuccess: () => void queryClient.invalidateQueries(trpc.creative.templates.pathFilter()),
+  });
+  if (detail.isPending) return <Skeleton label="Loading versions" lines={2} />;
+  if (detail.isError) return <RequestError error={detail.error} onRetry={() => void detail.refetch()} />;
+  const retired = detail.data.state === 'retired';
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-2" data-testid="template-versions">
+      <ul className="flex flex-col gap-1" aria-label={`Versions of ${template.name}`}>
+        {detail.data.versions.map((v) => (
+          <li key={v.id} className="flex flex-wrap items-center gap-2">
+            <span className="text-xs">Version {v.number}</span>
+            <Badge tone={v.state === 'approved' ? 'good' : v.state === 'retired' ? 'neutral' : 'info'}>
+              {v.state}
+            </Badge>
+            {v.id === detail.data.currentVersionId && <Badge glyph={false}>current</Badge>}
+            <span className="ml-auto flex gap-1">
+              {v.state === 'draft' && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ kind: 'approve', templateVersionId: v.id })}
+                >
+                  Approve version {v.number}
+                </Button>
+              )}
+              {v.state !== 'retired' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ kind: 'retire', templateVersionId: v.id })}
+                >
+                  Retire version {v.number}
+                </Button>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {!retired && (
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={decide.isPending}
+          onClick={() => decide.mutate({ kind: 'retire' })}
+        >
+          Retire template
+        </Button>
+      )}
+      {decide.isError && (
+        <StatusBanner
+          tone="critical"
+          title="The decision was not recorded"
+          description={`${toUiError(decide.error).message} Approving and retiring templates needs a brand manager.`}
+        />
+      )}
+      {decide.isSuccess && (
+        <p role="status" className="text-xs text-muted-foreground">
+          Recorded.
+        </p>
+      )}
+    </div>
   );
 }

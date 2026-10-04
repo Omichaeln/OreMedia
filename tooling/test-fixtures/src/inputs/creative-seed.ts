@@ -8,6 +8,7 @@ import {
   creativeRevisions,
   elementComments,
   renderJobs,
+  studioGenerationJobs,
   templateVersions,
   templates,
 } from '@oremedia/db/schema/creative';
@@ -110,32 +111,24 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
   const document = seedCreativeDocument(creativePublishedBrandVersionId, creativeElementId);
   const creativeDocumentId = newId('creativeDocument');
   const creativeRevisionId = newId('creativeRevision');
-  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0025), which the roll-forward suites'
-  // earlier heads do not have; at 0025 and later the column takes its default, graphic.
+  // sql``, not insert(creativeDocuments).values(): Drizzle would name kind (0027), which the roll-forward suites'
+  // earlier heads do not have; at 0027 and later the column takes its default, graphic.
   const docAt = new Date();
   await db.execute(
     sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at, version) values (${creativeDocumentId}, ${tenantId}, ${brandId}, 'Seeded document', ${creativeRevisionId}, 1, ${docAt}, ${docAt}, 0)`,
   );
-  await db.insert(creativeRevisions).values({
-    id: creativeRevisionId,
-    tenantId,
-    brandId,
-    documentId: creativeDocumentId,
-    parentRevisionId: null,
-    number: 1,
-    brandVersionId: creativePublishedBrandVersionId,
-    authorKind: 'user',
-    authorId: ownerUserId,
-    changeSummary: 'Initial document',
-    operations: {
-      baseRevisionId: '',
-      operations: document.pages.map((page, index) => ({ op: 'addPage', page, index })),
-      summary: 'Initial document',
-      origin: 'user',
-    },
-    snapshot: document,
-    contentHash: hashCanonical(document),
-  });
+  // sql``, not insert(creativeRevisions).values(): Drizzle would name generation_inputs (0025), which the
+  // roll-forward suites' earlier heads do not have; the columns named here exist at every head, later ones are null.
+  const initialBatch = {
+    baseRevisionId: '',
+    operations: document.pages.map((page, index) => ({ op: 'addPage', page, index })),
+    summary: 'Initial document',
+    origin: 'user',
+  };
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${creativeRevisions} (id, tenant_id, brand_id, document_id, parent_revision_id, number, brand_version_id, author_kind, author_id, change_summary, operations, snapshot, content_hash, created_at) values (${creativeRevisionId}, ${tenantId}, ${brandId}, ${creativeDocumentId}, null, 1, ${creativePublishedBrandVersionId}, 'user', ${ownerUserId}, 'Initial document', ${JSON.stringify(initialBatch)}, ${JSON.stringify(document)}, ${hashCanonical(document)}, ${at})`,
+  );
   const commentId = newId('elementComment');
   await db.insert(elementComments).values({
     id: commentId,
@@ -173,14 +166,46 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     state: 'draft',
   });
   const renderJobId = newId('renderJob');
-  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0024), which the roll-forward suites'
+  // sql``, not insert(renderJobs).values(): Drizzle would name progress (0026), which the roll-forward suites'
   // earlier heads do not have; the columns named here exist at every head, later ones take their defaults.
-  const at = new Date();
   await db.execute(
     sql`insert into ${renderJobs} (id, tenant_id, brand_id, revision_id, format_keys, state, attempts, requested_by_kind, requested_by_id, created_at, updated_at) values (${renderJobId}, ${tenantId}, ${brandId}, ${creativeRevisionId}, '["square_1080"]', 'pending', 0, 'user', ${ownerUserId}, ${at}, ${at})`,
   );
+  // STU-1b (migration 0025): a failed generation job of the document (retry and cancel need a job id to try).
+  const generationJobId = newId('studioGenerationJob');
+  const generationAtHead = await db.execute(
+    sql`select 1 as present from information_schema.tables where table_schema = database() and table_name = 'studio_generation_jobs'`,
+  );
+  const generationRequest = {
+    kind: 'refine' as const,
+    refine: {
+      instruction: 'Seeded request',
+      scope: { pageId: 'page_1', elementIds: [] },
+      action: { kind: 'edit' as const },
+      factIds: [],
+      assetVersionIds: [],
+    },
+  };
+  if (Array.isArray(generationAtHead[0]) && generationAtHead[0].length > 0)
+    await db.insert(studioGenerationJobs).values({
+      id: generationJobId,
+      tenantId,
+      brandId,
+      documentId: creativeDocumentId,
+      baseRevisionId: creativeRevisionId,
+      kind: 'refine',
+      state: 'failed',
+      progress: 100,
+      request: generationRequest,
+      inputsHash: hashCanonical(generationRequest),
+      attempt: 1,
+      errorCode: 'model_failed',
+      error: 'Seeded failure',
+      requestedByKind: 'user',
+      requestedById: ownerUserId,
+    });
   // STU-2b: a video document with revision 1 (one clip-less picture track, a caption track and a caption), so a
-  // foreign caller has timeline ids to try. Only where creative_documents.kind exists (0025 and later).
+  // foreign caller has timeline ids to try. Only where creative_documents.kind exists (0027 and later).
   const kindColumn = (await db.execute(
     sql`select column_name from information_schema.columns where table_schema = database() and table_name = 'creative_documents' and column_name = 'kind'`,
   )) as unknown as [unknown[]];
@@ -215,6 +240,7 @@ export const CREATIVE_SEED: SeedExtension = async (db, { tenantId, brandIds, own
     Object.assign(video, { videoDocumentId, videoRevisionId });
   }
   return {
+    generationJobId,
     ...video,
     creativePublishedBrandVersionId,
     creativeDocumentId,

@@ -20,6 +20,183 @@ export const BrandGuidelinesV1 = z.object({
 });
 export type BrandGuidelinesV1 = z.infer<typeof BrandGuidelinesV1>;
 
+/** Evidence behind an approved fact: source document/asset refs, URLs, reviewer. */
+export const EvidenceRef = z.object({
+  kind: z.enum([
+    'asset',
+    'document',
+    'url',
+    'reviewer',
+    'metric_snapshot',
+    'experiment_result',
+    'comment',
+    'other',
+  ]),
+  ref: z.string().max(1000),
+  note: z.string().max(500).optional(),
+  capturedAt: z.string().datetime().optional(),
+});
+export type EvidenceRef = z.infer<typeof EvidenceRef>;
+
+// ---- BSC-1 guidance model: additive, optional, bounded; no defaults, so stored documents parse and hash unchanged ----
+
+/**
+ * Where a guidance item came from: typed by a person (`user`), taken verbatim from a supplied document (`imported`),
+ * a pattern drawn from supplied examples, which are cited (`inferred`), or an AI proposal with no direct source
+ * (`suggested`). An item a person edits becomes `user`. Absent on items written before provenance existed.
+ */
+export const GuidanceOrigin = z.enum(['user', 'imported', 'inferred', 'suggested']);
+export type GuidanceOrigin = z.infer<typeof GuidanceOrigin>;
+export const GuidanceProvenance = z.object({
+  origin: GuidanceOrigin,
+  evidence: z.array(EvidenceRef).max(10).optional(),
+  confidence: z.enum(['high', 'medium', 'low']).optional(),
+  suggestionId: z.string().min(1).max(64).optional(),
+});
+export type GuidanceProvenance = z.infer<typeof GuidanceProvenance>;
+
+const provenance = { provenance: GuidanceProvenance.optional() };
+/** A short line of guidance: a do, a don't, a need, an objection. */
+const Line = z.string().min(1).max(300);
+const Lines = (max: number) => z.array(Line).max(max);
+const Prose = z.string().max(1000);
+
+/** What a piece of copy is; copy templates and examples say which they apply to. */
+export const CopyContentType = z.enum(['social_post', 'article', 'email', 'ad', 'landing_section', 'other']);
+export type CopyContentType = z.infer<typeof CopyContentType>;
+
+export const VoicePersonalityTrait = z.object({
+  trait: z.string().min(1).max(60),
+  note: z.string().max(300).optional(),
+  ...provenance,
+});
+export const VoicePrinciple = z.object({
+  statement: z.string().min(1).max(300),
+  rationale: Prose,
+  ...provenance,
+});
+export const VoiceSpelling = z.object({ locale: z.string().min(2).max(20), notes: Prose });
+export const StyleRuleTopic = z.enum([
+  'numbers',
+  'dates',
+  'capitalisation',
+  'punctuation',
+  'formatting',
+  'other',
+]);
+export type StyleRuleTopic = z.infer<typeof StyleRuleTopic>;
+export const VoiceStyleRule = z.object({
+  topic: StyleRuleTopic,
+  rule: z.string().min(1).max(500),
+  ...provenance,
+});
+/** How the brand may (and may not) make claims: superlatives, comparisons, guarantees, regulated words. */
+export const VoiceClaimRule = z.object({ rule: z.string().min(1).max(500), ...provenance });
+
+export const MessagingPillar = z.object({
+  key: z.string().min(1).max(60),
+  title: z.string().min(1).max(120),
+  statement: Prose,
+  /** Approved facts of this brand that prove the pillar (checked on save). */
+  proofFactIds: z.array(z.string().min(1).max(64)).max(10),
+  ...provenance,
+});
+export const KeyMessage = z.object({
+  text: z.string().min(1).max(500),
+  pillarKey: z.string().min(1).max(60).optional(),
+  ...provenance,
+});
+export const BrandMessaging = z.object({
+  positioning: z.string().max(2000),
+  valueProposition: z.string().max(2000),
+  pillars: z.array(MessagingPillar).max(8),
+  keyMessages: z.array(KeyMessage).max(20),
+});
+export type BrandMessaging = z.infer<typeof BrandMessaging>;
+
+export const VocabularyUsage = z.enum(['preferred', 'allowed', 'avoid', 'prohibited']);
+export type VocabularyUsage = z.infer<typeof VocabularyUsage>;
+export const VocabularyTerm = z.object({
+  term: z.string().min(1).max(120),
+  definition: z.string().max(500).optional(),
+  usage: VocabularyUsage,
+  /** What to write instead (for avoid and prohibited terms) or equivalents (for preferred ones). */
+  alternatives: z.array(z.string().min(1).max(120)).max(10),
+  note: z.string().max(500).optional(),
+  ...provenance,
+});
+export type VocabularyTerm = z.infer<typeof VocabularyTerm>;
+
+export const WRITING_PARTS = ['headline', 'introduction', 'body', 'cta', 'long_form'] as const;
+export type WritingPart = (typeof WRITING_PARTS)[number];
+export const WritingPattern = z.object({
+  guidance: z.string().max(2000),
+  dos: Lines(12),
+  donts: Lines(12),
+  examples: z.array(z.string().min(1).max(1000)).max(6),
+  ...provenance,
+});
+export type WritingPattern = z.infer<typeof WritingPattern>;
+export const WritingPatterns = z.object({
+  headline: WritingPattern.optional(),
+  introduction: WritingPattern.optional(),
+  body: WritingPattern.optional(),
+  cta: WritingPattern.optional(),
+  long_form: WritingPattern.optional(),
+});
+
+export const CopyTemplateSlot = z.object({
+  slot: z.string().min(1).max(60),
+  guidance: Prose,
+  maxLength: z.number().int().positive().max(100_000).optional(),
+});
+/** A copy structure (hook, proof, call to action...), not a visual layout: layout templates are creative rows. */
+export const CopyTemplate = z.object({
+  key: z.string().min(1).max(60),
+  name: z.string().min(1).max(120),
+  contentType: CopyContentType,
+  /** The channels it is for; none means any channel. */
+  channelKeys: z.array(z.string().min(1).max(40)).max(20),
+  purpose: Prose,
+  structure: z.array(CopyTemplateSlot).min(1).max(12),
+  example: z.string().max(4000).optional(),
+  ...provenance,
+});
+export type CopyTemplate = z.infer<typeof CopyTemplate>;
+
+/**
+ * The brand-wide channel defaults each channel entry inherits. A channel entry overrides a field by setting it;
+ * `captionStyle` and `ctaConventions` (the entry's original fields) are its `toneAdaptation` and `cta`.
+ */
+export const CHANNEL_GUIDANCE_FIELDS = [
+  'objectives',
+  'toneAdaptation',
+  'conventions',
+  'cta',
+  'accessibility',
+  'hashtags',
+  'mentions',
+  'links',
+  'frequency',
+] as const;
+export type ChannelGuidanceField = (typeof CHANNEL_GUIDANCE_FIELDS)[number];
+export const ChannelBaseline = z.object({
+  objectives: Prose.optional(),
+  toneAdaptation: Prose.optional(),
+  conventions: Prose.optional(),
+  cta: Prose.optional(),
+  accessibility: Prose.optional(),
+  hashtags: Prose.optional(),
+  mentions: Prose.optional(),
+  links: Prose.optional(),
+  frequency: Prose.optional(),
+});
+export type ChannelBaseline = z.infer<typeof ChannelBaseline>;
+export const ChannelExample = z.object({
+  text: z.string().min(1).max(1000),
+  note: z.string().max(500).optional(),
+});
+
 /** The lock-ups a brand system names (BSC-2 adds `secondary`, an alternative lock-up such as a stacked version). */
 export const LogoVariant = z.enum(['primary', 'secondary', 'reversed', 'mono', 'mark_only']);
 export type LogoVariant = z.infer<typeof LogoVariant>;
@@ -56,13 +233,37 @@ export const BrandSystemDocumentV1 = z.object({
   voice: z.object({
     summary: z.string().max(2000),
     tone: z.array(z.string()).max(12),
-    audiences: z.array(z.object({ key: z.string(), description: z.string() })),
+    audiences: z.array(
+      z.object({
+        key: z.string(),
+        description: z.string(),
+        needs: Lines(10).optional(),
+        objections: Lines(10).optional(),
+        ...provenance,
+      }),
+    ),
     preferredTerms: z.array(z.object({ use: z.string(), avoid: z.array(z.string()) })),
     prohibitedPhrases: z.array(z.string()),
     locales: z.array(z.string()),
     examples: z.array(
-      z.object({ text: z.string(), verdict: z.enum(['on_brand', 'off_brand']), note: z.string() }),
+      z.object({
+        text: z.string(),
+        verdict: z.enum(['on_brand', 'off_brand']),
+        note: z.string(),
+        channelKey: z.string().min(1).max(40).optional(),
+        contentType: CopyContentType.optional(),
+        /** Why it is (or is not) on brand. */
+        rationale: Prose.optional(),
+        /** For an off-brand example: the same message written on brand. */
+        rewrite: z.string().max(1000).optional(),
+        ...provenance,
+      }),
     ),
+    personality: z.array(VoicePersonalityTrait).max(12).optional(),
+    principles: z.array(VoicePrinciple).max(12).optional(),
+    spelling: VoiceSpelling.optional(),
+    styleRules: z.array(VoiceStyleRule).max(40).optional(),
+    claimRules: z.array(VoiceClaimRule).max(20).optional(),
   }),
   tokens: z.object({
     colours: z.array(
@@ -100,8 +301,28 @@ export const BrandSystemDocumentV1 = z.object({
       captionStyle: z.string(),
       preferredFormats: z.array(z.string()),
       ctaConventions: z.string(),
+      // BSC-1 overrides of the baseline (captionStyle and ctaConventions are its toneAdaptation and cta).
+      objectives: Prose.optional(),
+      conventions: Prose.optional(),
+      accessibility: Prose.optional(),
+      hashtags: Prose.optional(),
+      mentions: Prose.optional(),
+      links: Prose.optional(),
+      frequency: Prose.optional(),
+      /** Who the brand reaches on this channel. */
+      audience: Prose.optional(),
+      /** Format notes beyond the preferred formats (lengths, carousel size, video length). */
+      formats: Prose.optional(),
+      examples: z.array(ChannelExample).max(6).optional(),
+      ...provenance,
     }),
   ),
+  /** Brand-wide channel defaults; each channel entry inherits what it does not set. */
+  channelBaseline: ChannelBaseline.optional(),
+  messaging: BrandMessaging.optional(),
+  vocabulary: z.array(VocabularyTerm).max(200).optional(),
+  writingPatterns: WritingPatterns.optional(),
+  copyTemplates: z.array(CopyTemplate).max(40).optional(),
   /**
    * The brand's written guidelines (an imported brand skill: SKILL.md and its references), carried with the version
    * and given to agents with the brand constraints. Absent on versions that have none. The last author of the
@@ -110,6 +331,30 @@ export const BrandSystemDocumentV1 = z.object({
   guidelines: BrandGuidelinesV1.optional(),
 });
 export type BrandSystemDocumentV1 = z.infer<typeof BrandSystemDocumentV1>;
+
+export type ChannelGuidanceEntry = BrandSystemDocumentV1['channelGuidance'][number];
+
+/** The entry field that holds a channel's own value for a baseline field. */
+export const CHANNEL_OVERRIDE_KEY = {
+  objectives: 'objectives',
+  toneAdaptation: 'captionStyle',
+  conventions: 'conventions',
+  cta: 'ctaConventions',
+  accessibility: 'accessibility',
+  hashtags: 'hashtags',
+  mentions: 'mentions',
+  links: 'links',
+  frequency: 'frequency',
+} as const satisfies Record<ChannelGuidanceField, keyof ChannelGuidanceEntry>;
+
+/** A channel entry's own value for a baseline field; blank (or absent) means it inherits the baseline. */
+export function channelOverride(
+  entry: ChannelGuidanceEntry,
+  field: ChannelGuidanceField,
+): string | undefined {
+  const value = entry[CHANNEL_OVERRIDE_KEY[field]];
+  return value?.trim() ? value : undefined;
+}
 
 /** A draft with no published predecessor starts from this document (spec 8.2). */
 export const emptyBrandSystemDocument = (): BrandSystemDocumentV1 => ({
@@ -196,24 +441,6 @@ export type FactProposedByKind = z.infer<typeof FactProposedByKind>;
 
 export const PolicyVersionState = z.enum(['draft', 'active', 'retired']);
 export type PolicyVersionState = z.infer<typeof PolicyVersionState>;
-
-/** Evidence behind an approved fact: source document/asset refs, URLs, reviewer. */
-export const EvidenceRef = z.object({
-  kind: z.enum([
-    'asset',
-    'document',
-    'url',
-    'reviewer',
-    'metric_snapshot',
-    'experiment_result',
-    'comment',
-    'other',
-  ]),
-  ref: z.string().max(1000),
-  note: z.string().max(500).optional(),
-  capturedAt: z.string().datetime().optional(),
-});
-export type EvidenceRef = z.infer<typeof EvidenceRef>;
 
 /**
  * BSC-3: a source behind a fact: an evidence reference with an optional title and the excerpt that supports the

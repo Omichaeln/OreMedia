@@ -71,9 +71,13 @@ describe.skipIf(!enabled)('video studio (built app in Chromium, mock transport)'
 
   it('creates a 9:16 video at 30 fps and opens the timeline studio', async () => {
     await page.goto(`${origin}${brandPath('studio')}`);
+    // STU-1a's creation screen: the "Video or reel" content type opens the video start.
+    await page
+      .getByRole('group', { name: 'Content type' })
+      .getByRole('button', { name: /Video or reel/ })
+      .click();
+    expect(await page.getByRole('dialog').getByLabel('Format').textContent()).toContain('Vertical 9:16');
     await page.getByLabel('New document title').fill('Launch reel');
-    await page.getByLabel('Kind').click();
-    await page.getByRole('option', { name: 'Video (timeline)' }).click();
     await page.getByRole('button', { name: 'Create and open' }).click();
     await page.waitForURL('**/studio/doc_*', { timeout: 15_000 });
     documentId = decodeURIComponent(page.url().split('/studio/')[1]?.split('?')[0] ?? '');

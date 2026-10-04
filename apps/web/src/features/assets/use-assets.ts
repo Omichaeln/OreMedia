@@ -142,6 +142,28 @@ export function useAssetUrls(
   return map;
 }
 
+/**
+ * STU-1a: the asset versions among `assetVersionIds` whose file was generated (provenance), read from the same signed
+ * URL queries the studio already makes (shared cache), so a generated raster image can be labelled honestly.
+ */
+export function useGeneratedAssetIds(assetVersionIds: string[]): Set<string> {
+  const trpc = useTRPC();
+  const results = useQueries({
+    queries: assetVersionIds.map((assetVersionId) => ({
+      ...trpc.assets.media.signedUrl.queryOptions({ assetVersionId, derivative: 'web' as const }),
+      staleTime: 4 * 60_000,
+      refetchInterval: 4 * 60_000,
+      retry: false,
+    })),
+  });
+  const out = new Set<string>();
+  results.forEach((r, i) => {
+    const id = assetVersionIds[i];
+    if (id && r.data?.origin === 'generated') out.add(id);
+  });
+  return out;
+}
+
 /** Brand kit typography: the brand's font faces (an imported face's subset files are one face). */
 export function useBrandFonts(brandId: string) {
   const trpc = useTRPC();

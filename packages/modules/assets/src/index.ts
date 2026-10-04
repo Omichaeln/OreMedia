@@ -64,6 +64,7 @@ export {
   type S3StorageConfig,
   type SignedUrl,
   type StorageObjectHead,
+  type UploadSignOptions,
 } from './storage';
 export {
   compatibleKinds,

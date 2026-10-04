@@ -91,3 +91,54 @@ source can never be approved as-is: approval requires a source or an explicit re
 | BSC-4 | Sources and setup: brand_sources, capture (URL, PDF, DOCX, text, assets), assist jobs, workflow, suggestion generation, setup wizard and review by section, re-import preservation                                                |
 | BSC-5 | Collaboration: section assistant and overall assistant on BSC-4 jobs, compare with current, selective accept, undo, history and restore                                                                                           |
 | BSC-6 | Staging journeys and release evidence                                                                                                                                                                                             |
+
+### BSC-1 as built
+
+- Status: implemented on `claude/bsc-1-guidance-model` (document additions, save-time reference checks, prompt
+  rendering, skills, Brand System sections, platform limits read-only).
+- A channel entry's original `captionStyle` and `ctaConventions` are its `toneAdaptation` and `cta` overrides (blank
+  inherits the baseline), so entries do not carry two fields for the same thing; `effectiveChannelGuidance`
+  (packages/domain) and `channelOverride` (contracts) encode the mapping.
+- Platform limits reach the UI through `publishing.channels.limits` (certified providers' capability values, gated by
+  `brand.read`); the UI never writes them.
+- The prompt renders guidance within a 12,000-character budget in a fixed order, the run's channel only, and cites a
+  pillar's proof facts only while they are effective facts of the snapshot (BSC-3: approved, in their validity
+  window, not superseded); a save refuses newly cited facts that are not in effect.
+
+### BSC-4 / BSC-5 as built
+
+- Tables (migration 0024, created only): `brand_sources`, `brand_assist_jobs`, `brand_suggestions`. Extracted text is
+  kept in a bounded column (400,000 characters); an uploaded document is deleted from the object store once read
+  (quarantine prefix, never served); an asset's original is read in place and never deleted.
+- `brandAssistWorkflowV1` (`brand-assist:<jobId>`, queue `agents`) spans three workers: websites on
+  `ingest-metrics` (worker-ingest: outbound fetch), documents on `media` (worker-render: untrusted parsers, object
+  store), budget, model calls and suggestions on `agents` (worker-core). Cancel is a signal relayed by
+  `brandAssistSignalRelayV1` from `brand.assist_cancel_requested`. Activities run as the requester (grants reloaded);
+  closing the job and settling the reservation run tenant-wide.
+- Robots and sitemap rules moved to `packages/providers/src/site-rules.ts` (shared with the SEO audit). PDF text
+  through unpdf (MIT, pinned 1.8.1, loaded only on worker-render); `.docx` through a bounded zip reader rather than a
+  library, so a zip bomb stops at a hard inflate cap.
+- Suggestion paths and document comparison live in `packages/domain/src/brand-suggestions.ts`; model output is
+  checked against strict per-section schemas (`contracts/brand-assist.ts`) and never repaired. A fact suggestion
+  becomes a proposed fact only when a person accepts it.
+- History is a read over applied versions; restore calls `brand.system.save` with the earlier document.
+- Untrusted markup is read with a linear-time scanner (`packages/providers/src/markup.ts`), never with regular
+  expressions over the markup; robots rules are matched without building a regular expression. Pages and documents
+  are parsed in a worker thread (`capture/isolate.ts`, bundled as `capture-worker.js` next to worker-ingest and
+  worker-render) with a memory ceiling (resourceLimits, plus heap sampling because a process-wide
+  `--max-old-space-size` overrides worker limits) and a hard timer (10 s a page, 90 s a document); a stopped parse is
+  the `processing_limit` refusal. A page that fails past the start page is skipped, never the whole source.
+- An upload's size is read from the store before anything is downloaded and the download is ranged at the limit;
+  the presigned PUT signs the declared Content-Length. Websites are read on the standard https port only, robots.txt
+  in its first 512 KiB, and every fetch gets no more than the crawl's remaining time.
+- A suggestion records what its item was when it was made (`brand_suggestions.based_on`); accept and edit refuse
+  with `changed_since` when the item changed or a person wrote it since. A proposal in review takes no suggestions
+  (`proposal_in_review`). Undo walks its batch in reverse and re-runs the document reference checks.
+- A fact counts as stated only when its cited passage says it (at least 30 characters, every figure and name
+  verbatim, 60% of its content words); otherwise it is a suggestion that says why.
+- Section calls heartbeat through the model call (heartbeat timeout 1 minute) and insert their suggestions only
+  while the section is still running, under the job's lock: an attempt that outlived its timeout adds nothing; each
+  attempt is charged once (`brand-assist:<job>:<section>:a<attempt>`). A cancelled workflow ends the job cancelled.
+- Retention: captured source text follows the tenant's `agent_transcripts` class (90 days by default) through the
+  retention sweep (`brand.source_text`, retention role: SELECT and UPDATE on `brand_sources`). A website or asset
+  goes back to pending and is read again when next used; uploaded or pasted text becomes `expired`.

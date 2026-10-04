@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CreativeDocumentV1, CreativePage } from '@oremedia/contracts/creative';
 import {
   TRANSITION_KINDS,
@@ -16,7 +16,9 @@ import {
 import { applyBatch, type IntentBatch } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Field, Input, Textarea } from '@oremedia/ui';
 import { Select } from '../../../components/select';
-import { PropertiesPanel } from '../properties-panel';
+import { useBrandFonts } from '../../assets/use-assets';
+import { useBrandContext } from '../../brand/brand-context';
+import { PropertiesPanel, toFontOption } from '../properties-panel';
 import { parseTimecode, timecode } from './timecode';
 import { duplicateIntent, itemLabel, removeIntent, splitIntent, transitionBlocked } from './video-actions';
 import type { VideoIntent } from './video-state';
@@ -738,6 +740,9 @@ const ANIMATIONS = [
   { value: 'slide_up', label: 'Slide up' },
 ];
 
+/** An overlay is one element: nothing in it is a generated image, and the selection is that element. */
+const NO_IDS: ReadonlySet<string> = new Set();
+
 function OverlayFields({
   project,
   track,
@@ -746,6 +751,9 @@ function OverlayFields({
   colourTokens,
   onIntent,
 }: InspectorProps & { track: Track; item: OverlayItem; locked: boolean }) {
+  const { brandId } = useBrandContext();
+  const brandFonts = useBrandFonts(brandId);
+  const fonts = useMemo(() => (brandFonts.data?.items ?? []).map(toFontOption), [brandFonts.data]);
   const set = (overlay: OverlayItem, summary: string) =>
     onIntent({ operations: [{ op: 'setOverlay', trackId: track.id, overlay }], summary });
   const anim = (which: 'enter' | 'exit', kind: string, durationMs?: number) => {
@@ -773,7 +781,8 @@ function OverlayFields({
     elements: [item.element],
     layoutConstraints: [],
   };
-  const onGraphic = (batch: IntentBatch) => {
+  /** The properties panel's intent on the overlay's element; false when the graphic reducer refuses it. */
+  const onGraphic = (batch: IntentBatch): boolean => {
     const doc: CreativeDocumentV1 = {
       schemaVersion: 1,
       brandVersionId: project.brandVersionId,
@@ -782,9 +791,11 @@ function OverlayFields({
     };
     try {
       const next = applyBatch(doc, batch).pages[0]?.elements[0];
-      if (next) set({ ...item, element: next }, batch.summary);
+      if (!next) return false;
+      set({ ...item, element: next }, batch.summary);
+      return true;
     } catch {
-      // The graphic reducer refused it; the panel keeps the old value.
+      return false; // the graphic reducer refused it; the panel keeps the old value
     }
   };
   return (
@@ -825,10 +836,14 @@ function OverlayFields({
       </div>
       <PropertiesPanel
         page={page}
-        elementId={item.element.id}
+        selection={[item.element.id]}
         readOnly={locked}
         colourTokens={colourTokens}
+        fonts={fonts}
+        generatedIds={NO_IDS}
+        resolveAssetUrl={() => null}
         onIntent={onGraphic}
+        onSelect={() => undefined}
         focusTextRequest={0}
       />
     </>

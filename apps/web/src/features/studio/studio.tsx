@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { changedElementIds, findElement } from '@oremedia/editor';
+import { changedElementIds, findElement, findWithAncestors, isLockedInContext } from '@oremedia/editor';
 import { Badge, Button, EmptyState, Panel, StatusBanner } from '@oremedia/ui';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { useBrandVersion } from '../brand/use-brand';
 import { brandPath, useBrandContext } from '../brand/brand-context';
-import { useAssetUrls } from '../assets/use-assets';
+import { useAssetUrls, useBrandFonts, useGeneratedAssetIds } from '../assets/use-assets';
+import { useStarterBrand } from './create/use-starter-brand';
+import { DocumentTitle } from './document-title';
+import { InsertToolbar } from './insert-toolbar';
+import { newElementId } from '../../lib/ids';
 import { useTheme } from '../../lib/theme';
 import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
@@ -15,8 +19,9 @@ import { assetVersionIdsOf, fontRefsOf, logoVersionIdsOf } from './document-help
 import { FormatStrip } from './format-strip';
 import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
-import { PropertiesPanel } from './properties-panel';
+import { PropertiesPanel, toFontOption, type FontOption } from './properties-panel';
 import { AgentPanel } from './agent-panel';
+import { GeneratePanel } from './generate-panel';
 import { RenderPanel } from './render-panel';
 import { ReviewPanel } from './review-panel';
 import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
@@ -31,7 +36,7 @@ import type { DocumentDto } from './types';
 const devTools = (): boolean =>
   import.meta.env.DEV || new URLSearchParams(window.location.search).has('devtools');
 
-type RightTab = 'agent' | 'comments' | 'checks' | 'history';
+type RightTab = 'generate' | 'agent' | 'comments' | 'checks' | 'history';
 
 /** A tab's count, read as part of its name ("Comments, 2 open"); nothing is shown at zero. */
 function TabCount({ n, label }: { n: number; label: string }) {
@@ -71,8 +76,9 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const { theme, toggle } = useTheme();
   const readOnly = false;
   const [focusText, setFocusText] = useState(0);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const [rightTab, setRightTab] = useState<RightTab>('agent');
+  const [rightTab, setRightTab] = useState<RightTab>('generate');
   const [reviewOpen, setReviewOpen] = useState(false);
   const { panels, toggle: togglePanel } = useStudioPanels();
   const comments = useCommentPages(documentId);
@@ -89,6 +95,19 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const logoUrls = useAssetUrls(logoIds, 'original');
   const assetUrls = new Map([...imageUrls, ...logoUrls]);
   const fontFamilyFor = useDocumentFonts(useMemo(() => fontRefsOf(doc), [doc]));
+  // STU-1a: the brand pieces new text and shapes are made of, the font picker and honest labels for generated images.
+  const starterBrand = useStarterBrand(brandId, state.committed.snapshot.brandVersionId);
+  const kit = starterBrand.brand
+    ? { colours: starterBrand.brand.colours, typeRoles: starterBrand.brand.typeRoles }
+    : null;
+  const brandFonts = useBrandFonts(brandId);
+  const fontOptions: FontOption[] = useMemo(
+    () => (brandFonts.data?.items ?? []).map(toFontOption),
+    [brandFonts.data],
+  );
+  const generatedIds = useGeneratedAssetIds(
+    useMemo(() => assetVersionIdsOf(doc).filter((id) => !logoIds.includes(id)), [doc, logoIds]),
+  );
   const resolverVersion = `${[...assetUrls.keys()].join(',')}|${[...assetUrls.values()].join(',').length}|${colourTokens.map((c) => c.key + c.value).join(',')}|${fontRefsOf(doc).map(fontFamilyFor).join(',')}`;
 
   const proposalDiff = useMemo(
@@ -105,23 +124,65 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
   const dirty = hasLocalWork(state);
   // A proposal needs a decision before anything else in the document moves, so it brings its tab forward.
   const hasProposal = state.proposal !== null;
+  const generationProposal = Boolean(state.proposal?.generation);
   useEffect(() => {
-    if (hasProposal) setRightTab('agent');
-  }, [hasProposal]);
+    if (hasProposal) setRightTab(generationProposal ? 'generate' : 'agent');
+  }, [hasProposal, generationProposal]);
 
   const selectPage = (id: string) => {
     studio.setPage(id);
     canvasRef.current?.querySelector<HTMLElement>('[data-testid="canvas"]')?.focus(); // managed focus on panel change
   };
   const deleteSelected = () => {
-    const id = state.selection[0];
-    const el = page && id ? findElement(page, id) : null;
-    if (!page || !el || el.locked) return;
+    if (!page) return;
+    // Locked elements (or ones in a locked group, or groups holding one) are not removed (STU-1a).
+    const removable = state.selection
+      .map((id) => findWithAncestors(page, id))
+      .filter((f): f is NonNullable<typeof f> => f !== null && !isLockedInContext(f.element, f.ancestors))
+      .map((f) => f.element);
+    if (removable.length === 0) return;
     studio.applyIntent({
-      operations: [{ op: 'removeElement', pageId: page.id, elementId: el.id }],
-      summary: `Remove ${el.name}`,
+      operations: removable.map((el) => ({
+        op: 'removeElement' as const,
+        pageId: page.id,
+        elementId: el.id,
+      })),
+      summary:
+        removable.length === 1 ? `Remove ${removable[0]?.name}` : `Remove ${removable.length} elements`,
       origin: 'user',
     });
+  };
+  /** Selects ids that may not be in this render's page yet (a just-inserted element, a new group). */
+  const selectNew = (ids: string[]) => studio.dispatch({ type: 'select', ids });
+  const groupSelection = () => {
+    if (!page || state.selection.length < 2) return;
+    const groupId = newElementId();
+    if (
+      studio.applyIntent({
+        operations: [{ op: 'groupElements', pageId: page.id, elementIds: state.selection, groupId }],
+        summary: `Group ${state.selection.length} elements`,
+        origin: 'user',
+      })
+    )
+      selectNew([groupId]);
+  };
+  const ungroupSelection = () => {
+    const el = page && state.selection.length === 1 ? findElement(page, state.selection[0] ?? '') : null;
+    if (!page || !el || el.type !== 'group') return;
+    if (
+      studio.applyIntent({
+        operations: [{ op: 'ungroupElement', pageId: page.id, elementId: el.id }],
+        summary: `Ungroup ${el.name}`,
+        origin: 'user',
+      })
+    )
+      selectNew(el.children.map((c) => c.id));
+  };
+  const editText = (id: string) => {
+    const el = page ? findElement(page, id) : null;
+    studio.select([id]);
+    if (el?.type === 'text' && !el.locked) setEditingTextId(id);
+    else setFocusText((n) => n + 1);
   };
 
   if (!page)
@@ -158,9 +219,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           <span aria-hidden="true" className="text-muted-foreground">
             /
           </span>
-          <h1 className="truncate text-sm font-semibold" data-testid="document-title">
-            {initial.title}
-          </h1>
+          <DocumentTitle documentId={documentId} title={initial.title} />
         </div>
         <SaveIndicator
           save={state.save}
@@ -302,7 +361,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 <LayersPanel
                   page={page}
                   selection={state.selection}
-                  onSelect={studio.select}
+                  onSelect={selectNew}
                   onActivate={() => setFocusText((n) => n + 1)}
                 />
               </TabPanel>
@@ -314,6 +373,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   selection={state.selection}
                   readOnly={readOnly}
                   onIntent={studio.applyIntent}
+                  onInserted={(id) => selectNew([id])}
                 />
               </TabPanel>
               <TabPanel value="templates">
@@ -324,6 +384,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   resolveTemplate={studio.resolveTemplate}
                   onIntent={studio.applyIntent}
                   templates={state.templates}
+                  saveSource={dirty ? null : { title: initial.title, document: state.committed.snapshot }}
                 />
               </TabPanel>
             </Tabs>
@@ -335,6 +396,19 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
           className="flex min-h-72 min-w-0 flex-col rounded-md border border-border md:min-h-0"
           data-testid="canvas-column"
         >
+          <InsertToolbar
+            page={page}
+            kit={kit}
+            readOnly={readOnly}
+            onIntent={studio.applyIntent}
+            onInserted={(id) => selectNew([id])}
+          />
+          {page.locked && (
+            <p className="border-b border-border px-3 py-1.5 text-xs text-muted-foreground" role="status">
+              This page is locked: elements on it cannot be moved, resized or rotated, and AI agents cannot
+              change it.
+            </p>
+          )}
           <Canvas
             doc={doc}
             page={page}
@@ -342,11 +416,12 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             readOnly={readOnly}
             onSelect={studio.select}
             onIntent={studio.applyIntent}
-            onEditText={(id) => {
-              studio.select([id]);
-              setFocusText((n) => n + 1);
-            }}
+            onEditText={editText}
+            editingTextId={editingTextId}
+            onEditTextDone={() => setEditingTextId(null)}
             onDeleteSelected={deleteSelected}
+            onGroup={groupSelection}
+            onUngroup={ungroupSelection}
             onUndo={studio.undo}
             onRedo={studio.redo}
             onSave={() => void studio.saveNow()}
@@ -370,10 +445,14 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             <Panel title="Properties" level={2} className="shrink-0 md:max-h-[45%] md:overflow-auto">
               <PropertiesPanel
                 page={page}
-                elementId={state.selection[0] ?? null}
+                selection={state.selection}
                 readOnly={readOnly}
                 colourTokens={colourTokens}
+                fonts={fontOptions}
+                generatedIds={generatedIds}
+                resolveAssetUrl={(id) => assetUrls.get(id) ?? null}
                 onIntent={studio.applyIntent}
+                onSelect={selectNew}
                 focusTextRequest={focusText}
               />
             </Panel>
@@ -389,9 +468,15 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 className="flex min-h-0 flex-1 flex-col"
               >
                 <TabList label="Document panels" className="flex-wrap">
+                  <Tab value="generate">
+                    Generate
+                    {state.proposal?.generation && <TabCount n={1} label="proposal waiting" />}
+                  </Tab>
                   <Tab value="agent">
                     Agent
-                    {state.proposal && <TabCount n={1} label="proposal waiting" />}
+                    {state.proposal && !state.proposal.generation && (
+                      <TabCount n={1} label="proposal waiting" />
+                    )}
                   </Tab>
                   <Tab value="comments">
                     Comments
@@ -403,6 +488,17 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   </Tab>
                   <Tab value="history">History</Tab>
                 </TabList>
+                <TabPanel value="generate" className="flex flex-col gap-3 p-3" keepMounted>
+                  <GeneratePanel
+                    documentId={documentId}
+                    page={page}
+                    state={state}
+                    studio={studio}
+                    proposalDiff={proposalDiff}
+                    hasLocalWork={dirty}
+                    readOnly={readOnly}
+                  />
+                </TabPanel>
                 <TabPanel value="agent" className="flex flex-col gap-3 p-3">
                   <AgentPanel
                     brandId={brandId}

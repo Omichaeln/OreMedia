@@ -14,19 +14,27 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
-import { assetService, uploadsCapability } from '@oremedia/module-assets';
+import { assetService, storage, uploadsCapability } from '@oremedia/module-assets';
+import { UPLOAD_INTENT_TTL_SEC } from '@oremedia/contracts/assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
   registerBrandAssetKindSource,
+  registerChannelKeySource,
   registerBrandAssetVersionSource,
   registerOnboardingRunSource,
   registerBrandChangeImpactSource,
   registerEligibleTemplateSource,
+  registerAssistModelGate,
+  registerSourceAssetResolver,
+  registerSourceUploadStore,
 } from '@oremedia/module-brand';
 import {
+  configureGenerationPricing,
   creativeService,
   registerAssetAuthoriser,
+  registerChannelCapabilitySource,
+  registerGenerationAssetSource,
   registerCreativeAssetCatalog,
   registerExportSigner,
   registerRevisionChangeHook,
@@ -79,6 +87,7 @@ import {
   registerVariantSource,
   registerPublishingBrandChecker,
   registerDestinationPublisher,
+  providerRegistryInUse,
 } from '@oremedia/module-publishing';
 import {
   registerAssetAuthoriser as registerReleaseAssetAuthoriser,
@@ -90,12 +99,16 @@ import {
 } from '@oremedia/module-review';
 import { registerBrandChecker as registerSkillBrandChecker, skillsService } from '@oremedia/module-skills';
 import {
+  brandAssistModelGate,
   registerContentToolSource,
   registerIntelligenceToolSource,
   registerPublishingToolSource,
   registerReviewToolSource,
   registerRoutingPolicySource,
   registerSkillResolver,
+  IMAGE_COST_MICROS,
+  estimateCostMicros,
+  modelConfigFromEnv,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
 import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
@@ -343,7 +356,42 @@ export function composeModules(): void {
     contentService.revisions.withVariants(contentRevisionId, tx),
   );
   registerEligibleTemplateSource((brandId, tx) => creativeService.templates.eligibleVersionIds(brandId, tx));
+  // STU-1b: generation reads the eligible assets, the channel capability register in use and its price list.
+  registerGenerationAssetSource(async (brandId, tx) =>
+    (
+      await assetService.findEligibleAssets(
+        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        { limit: 200 },
+        tx,
+      )
+    ).items.map((a) => ({
+      assetId: a.assetId,
+      assetVersionId: a.assetVersionId,
+      kind: a.kind,
+      altText: a.altText,
+      semanticRole: a.semanticRole,
+    })),
+  );
+  registerChannelCapabilitySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.capability),
+  );
+  const generationModel = modelConfigFromEnv();
+  configureGenerationPricing({
+    modelCallMicros: estimateCostMicros(generationModel, {
+      inputTokens: 12_000,
+      outputTokens: generationModel.maxOutputTokens,
+    }),
+    imageMicros: IMAGE_COST_MICROS,
+  });
   registerBrandAssetKindSource((brandId, assetIds, tx) => assetService.kindsForBrand(brandId, assetIds, tx));
+  // BSC-1: guidance names the channels of the registry publishing uses (the one channels.limits reads).
+  registerChannelKeySource(() =>
+    providerRegistryInUse()
+      .list()
+      .map((p) => p.key),
+  );
   registerBrandAssetVersionSource((brandId, ids, tx) => assetService.assetsOfVersions(brandId, ids, tx));
   // Spec 8.2: brand onboarding starts an agent run; its proposal tool reads the run's brief through the same source.
   registerOnboardingRunSource(onboardingRunSource);
@@ -353,6 +401,17 @@ export function composeModules(): void {
     const publications = await publicationService.scheduledForBrand(brandId, tx);
     return { ...scope, truncated: scope.truncated || publications.length >= 200, publications };
   });
+  // BSC-4: an assist estimate and start read the deployment's model and the tenant's routing policy; documents are
+  // uploaded to the assets module's store (quarantine prefix, deleted once read) and assets are described by it.
+  registerAssistModelGate(brandAssistModelGate());
+  registerSourceUploadStore({
+    signUpload: (key, { contentType, contentLength }) =>
+      storage().signUploadUrl(key, { contentType, contentLength, expiresInSec: UPLOAD_INTENT_TTL_SEC }),
+    delete: (key) => storage().deleteObject(key),
+  });
+  registerSourceAssetResolver((brandId, assetVersionId, tx) =>
+    assetService.describeForSource(brandId, assetVersionId, tx),
+  );
   if (process.env['KMS_LOCAL_MASTER_SECRET'])
     configureCredentialBroker({ kms: createKmsFromEnv({ decrypt: false }) });
 }

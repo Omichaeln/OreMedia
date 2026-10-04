@@ -107,3 +107,55 @@ Graphic documents keep schemaVersion 1 and change only additively; video is a ne
 | STU-2b | VideoProject model, ops, reducer, timeline editor UI, preview, ffmpeg compositor render, video templates                                                                                                                                                                                     |
 | STU-3  | AI storyboard, assembly, recut and targeted timeline edits, captions from script, audio options                                                                                                                                                                                              |
 | STU-4  | Studio -> review -> publish path for both kinds, campaign links, deployed acceptance journeys                                                                                                                                                                                                |
+
+## STU-1a as built (notes for later stages)
+
+- Custom page sizes are format keys `custom_<width>x<height>` (64..4096 px, long edge at most 8 × the short edge),
+  parsed by `formatFor` into a definition with a 5 % safe area; renders, variants, template formats and checks treat
+  them like presets, so no separate `custom` field was needed on pages. Presets `yt_thumbnail_1280x720` and
+  `li_banner_1584x396` were added.
+- `contentType` (optional, no default) lives on the CreativeDocumentV1 snapshot; pages have an optional `locked`
+  (unlocking removes the key). Stored snapshots parse and hash unchanged; no migration.
+- Built-in starters live in `packages/editor/src/starters` and are instantiated in the browser with the published
+  brand system (`instantiateStarter`); `documents.create` takes `source` (blank | custom | starter | template) and
+  `contentType`, records both in the audit, and resolves a brand template version itself. New procedures:
+  `creative.documents.duplicate`, `creative.documents.rename`, `creative.templates.retire`.
+- Locks: `guardLocks` (packages/editor/src/guard.ts) runs in `evaluateBatch` for agent batches; the reducer refuses
+  manual move/resize/rotate/align/distribute of locked elements and on locked pages.
+- The content type model of the creation screen is `apps/web/src/features/studio/create/content-types.ts`; the
+  `video` entry is where STU-2b wires the video document kind.
+- Generated raster images are detected from the asset version's provenance kind, now returned by
+  `assets.media.signedUrl` (`origin`).
+
+## STU-1b as built (notes for later stages)
+
+- Contracts: `packages/contracts/src/generation.ts` (brief, refine request with explicit scope and action
+  `edit | alternatives | adapt`, preflight, job DTO states, the model's strict output `ModelGenerationOutput`, proposal
+  groups, `GenerationInputs`, workflow input and activity interfaces). Job ids use the prefix `sgj`.
+- Migration `0025_studio_generation` (self-contained drizzle-kit output, after BSC-4's `0024_brand_assist`): table `studio_generation_jobs` (one row per document, base revision and inputs hash; attempts update it
+  in place) and nullable `creative_revisions.generation_inputs`. Rows written before it read as null.
+- Pure parts in `packages/editor/src/generation.ts`: slots of a page (template slots or the element's role; locked,
+  protected, logo, hidden, locked-page and out-of-scope elements listed as fixed), the structural operations a request
+  implies (applyTemplate with role-bound slots, duplicatePage for alternatives, createFormatVariant for adapt), the
+  compiler from slot fills to operations (text within the slot limit with effective fact ids, eligible assets only,
+  palette tokens only, boxes inside the page, type size/weight/align; anything else refused with a reason), proposal
+  grouping for selective accept, and the preflight rules. `guardScope` (packages/editor/src/guard.ts) is ancestor-aware
+  and runs in `evaluateBatch` whenever a batch carries a scope (the job's batches and the accept of its proposal).
+- Service: `generationService` (module-creative) preflight/start/get/active/cancel/retry; start needs creative.edit
+  and agent.start_run; the outbox starts `studioGenerationWorkflowV1` on queue `agents` (workflow id
+  `studio-gen:<jobId>:<attempt>`), cancel moves the row first, releases the reservation and is relayed as a signal.
+  The model call lives in module-agents (`createStudioGenerationRuntime`, the worker's adapter and price list); the
+  prompt (`packages/ai/src/generation-prompt.ts`) renders BSC-1 guidance for the destination channel and copy type,
+  facts by id, palette, logo rules and asset descriptions as untrusted evidence, and forces one tool with a strict
+  JSON schema.
+- Revision model and variations: revisions are a linear head, so a proposal set of alternatives on one document would
+  fight the head. Variation 1 goes into the document itself; each further variation is a duplicate of the base
+  revision with its own generated revision (`resultDocumentIds`). A document whose revisions after the first are all
+  generated is "fresh" and receives the revision directly (undoable: the studio adopts it as a history entry); a
+  document a person edited, and every refinement, gets a proposal. Accept sends exactly the chosen groups' operations
+  to `operations.applyBatch` with `generation: { jobId, groupIds }`; the server checks them against the stored
+  proposal and its scope and records the inputs with `acceptedGroupIds`. A proposal with blocking findings (e.g. a
+  reflowed logo outside a story's safe area: agents may not move logos) can only be taken as the person's own edit.
+- Image generation for empty image areas: preflight and the panel gate it on `registerGenerationImageAvailability`,
+  which no deployment registers yet, because a generated image is a pending asset (rights unknown) that the
+  eligibility rule refuses to place. Wiring generation through the asset approval path is left for a later stage.

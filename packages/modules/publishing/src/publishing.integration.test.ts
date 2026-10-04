@@ -330,6 +330,16 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       expect(Object.keys(dto)).not.toContain('credentialRefId');
     });
 
+    it('the platform limits list certified providers only, from the capability register (BSC-1)', async () => {
+      const { items } = await inTenant(tenantA, () => channelService.limits(A, { brandId: brandA }));
+      expect(items.map((i) => i.providerKey)).toEqual([fixture.key]);
+      expect(items[0]).toMatchObject({
+        capabilityVersion: fixture.capability.version,
+        text: fixture.capability.text,
+        altText: fixture.capability.media.altText,
+      });
+    });
+
     it('an uncertified provider cannot be connected (registry gate, spec 14.6)', async () => {
       await expect(
         run(tenantA, (tx) =>

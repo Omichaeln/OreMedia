@@ -35,6 +35,16 @@ export interface SignedUrl {
   expiresAt: Date;
 }
 
+/**
+ * A presigned PUT. With `contentLength` the signature covers the Content-Length header, so the store refuses a body
+ * of any other size (BSC-4 document sources declare their size up front).
+ */
+export interface UploadSignOptions {
+  contentType: string;
+  expiresInSec: number;
+  contentLength?: number;
+}
+
 /** Inclusive byte range, as in HTTP Range. */
 export interface ByteRange {
   start: number;
@@ -67,7 +77,7 @@ export function attachmentDisposition(filename: string): string {
 }
 
 export interface StorageProvider {
-  signUploadUrl(key: string, opts: { contentType: string; expiresInSec: number }): Promise<SignedUrl>;
+  signUploadUrl(key: string, opts: UploadSignOptions): Promise<SignedUrl>;
   signDownloadUrl(key: string, opts: SignedDownloadOptions): Promise<SignedUrl>;
   headObject(key: string): Promise<StorageObjectHead | null>;
   getObject(key: string, range?: ByteRange): Promise<Buffer | null>;
@@ -178,7 +188,7 @@ export function assertTenantKey(key: string): { prefix: StoragePrefix; tenantId:
 /** Template base: every public operation checks the key against the current tenant, then delegates. Methods are
  *  async so a refused key is always a rejection, never a synchronous throw from a Promise-returning API. */
 abstract class TenantPrefixedStorage implements StorageProvider {
-  async signUploadUrl(key: string, opts: { contentType: string; expiresInSec: number }): Promise<SignedUrl> {
+  async signUploadUrl(key: string, opts: UploadSignOptions): Promise<SignedUrl> {
     assertTenantKey(key);
     return this.doSignUploadUrl(key, opts);
   }
@@ -220,10 +230,7 @@ abstract class TenantPrefixedStorage implements StorageProvider {
     return this.doDeleteObject(key);
   }
 
-  protected abstract doSignUploadUrl(
-    key: string,
-    opts: { contentType: string; expiresInSec: number },
-  ): Promise<SignedUrl>;
+  protected abstract doSignUploadUrl(key: string, opts: UploadSignOptions): Promise<SignedUrl>;
   protected abstract doSignDownloadUrl(key: string, opts: SignedDownloadOptions): Promise<SignedUrl>;
   protected abstract doHeadObject(key: string): Promise<StorageObjectHead | null>;
   protected abstract doGetObject(key: string, range?: ByteRange): Promise<Buffer | null>;
@@ -280,10 +287,15 @@ export class S3StorageProvider extends TenantPrefixedStorage {
     return key.startsWith('releases/') ? this.cfg.buckets.releases : this.cfg.buckets.assets;
   }
 
-  protected async doSignUploadUrl(key: string, opts: { contentType: string; expiresInSec: number }) {
+  protected async doSignUploadUrl(key: string, opts: UploadSignOptions) {
     const url = await getSignedUrl(
       this.client,
-      new PutObjectCommand({ Bucket: this.bucketForKey(key), Key: key, ContentType: opts.contentType }),
+      new PutObjectCommand({
+        Bucket: this.bucketForKey(key),
+        Key: key,
+        ContentType: opts.contentType,
+        ...(opts.contentLength !== undefined ? { ContentLength: opts.contentLength } : {}),
+      }),
       { expiresIn: opts.expiresInSec },
     );
     return { url, expiresAt: new Date(Date.now() + opts.expiresInSec * 1000) };
@@ -436,7 +448,7 @@ export class MemoryStorageProvider extends TenantPrefixedStorage {
     return this.objects.has(key);
   }
 
-  protected async doSignUploadUrl(key: string, opts: { contentType: string; expiresInSec: number }) {
+  protected async doSignUploadUrl(key: string, opts: UploadSignOptions) {
     const expiresAt = new Date(Date.now() + opts.expiresInSec * 1000);
     return { url: `memory://upload/${key}?expires=${expiresAt.getTime()}`, expiresAt };
   }

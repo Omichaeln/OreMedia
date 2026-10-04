@@ -60,6 +60,18 @@ export function useTemplates(brandId: string) {
   return useQuery(trpc.creative.templates.list.queryOptions({ brandId, page: { limit: 50 } }));
 }
 
+/** STU-1a: active templates with their current version document in one read (the creation gallery). */
+export function useTemplatesWithCurrent(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery(trpc.creative.templates.listCurrent.queryOptions({ brandId, page: { limit: 50 } }));
+}
+
+/** STU-2b: the built-in starter video templates, bound to the brand (the creation screen's video start). */
+export function useVideoTemplates(brandId: string, enabled: boolean) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.creative.videoTemplates.list.queryOptions({ brandId }), enabled });
+}
+
 export function useTemplate(templateId: string | null) {
   const trpc = useTRPC();
   return useQuery({

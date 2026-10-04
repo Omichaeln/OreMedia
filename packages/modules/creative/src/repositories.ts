@@ -11,6 +11,7 @@ import {
   renderJobs,
   renderPreviews,
   renderedExports,
+  studioGenerationJobs,
   templateVersions,
   templates,
 } from '@oremedia/db/schema/creative';
@@ -77,6 +78,10 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   }
   async setCurrentRevision(id: string, expectedVersion: number, revisionId: string, tx: Tx) {
     await this.updateScoped(id, expectedVersion, { currentRevisionId: revisionId }, tx);
+  }
+  /** STU-1a: the title only; optimistic version like every other row update. */
+  async rename(id: string, expectedVersion: number, title: string, tx: Tx) {
+    await this.updateScoped(id, expectedVersion, { title }, tx);
   }
 }
 
@@ -371,6 +376,14 @@ export class TemplateVersionRepository extends BrandScopedRepository<typeof temp
       .where(this.brandScope(brandId, eq(templateVersions.templateId, templateId)));
     return Number(rows[0]?.max ?? 0) + 1;
   }
+  /** Versions by id (current versions of a page of templates), bounded by the id-list maximum (spec 7.4). */
+  async listByIds(brandId: string, ids: readonly string[], tx?: Tx) {
+    if (ids.length === 0) return [];
+    return this.conn(tx)
+      .select()
+      .from(templateVersions)
+      .where(this.brandScope(brandId, inArray(templateVersions.id, ids.slice(0, ID_LIST_MAX))));
+  }
   async listForTemplate(brandId: string, templateId: string, tx?: Tx) {
     return this.conn(tx)
       .select()
@@ -408,5 +421,61 @@ export class TemplateVersionRepository extends BrandScopedRepository<typeof temp
         ),
       );
     if (affectedRows(res) !== 1) throw new ConflictError('TemplateVersion', id, 0);
+  }
+}
+
+/** STU-1b generation jobs: one row per (document, base revision, inputs hash); attempts update it in place. */
+export class StudioGenerationJobRepository extends BrandScopedRepository<typeof studioGenerationJobs> {
+  constructor() {
+    super(studioGenerationJobs);
+  }
+  async create(values: Omit<typeof studioGenerationJobs.$inferInsert, 'tenantId'>, tx: Tx) {
+    await this.insertBrandScoped(values, tx);
+  }
+  /** SELECT ... FOR UPDATE: state moves (worker, cancel, retry) serialise on the job row. */
+  async lock(id: string, tx: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(studioGenerationJobs)
+      .where(this.scope(eq(studioGenerationJobs.id, id)))
+      .for('update');
+    const row = rows[0];
+    const ctx = requireTenant();
+    if (!row || (ctx.brandIds !== 'all' && !ctx.brandIds.has(row.brandId)))
+      throw new NotFoundError('StudioGenerationJob', id);
+    return row;
+  }
+  async findByInputs(documentId: string, baseRevisionId: string, inputsHash: string, tx?: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(studioGenerationJobs)
+      .where(
+        this.scope(
+          and(
+            eq(studioGenerationJobs.documentId, documentId),
+            eq(studioGenerationJobs.baseRevisionId, baseRevisionId),
+            eq(studioGenerationJobs.inputsHash, inputsHash),
+          ),
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  }
+  /** The document's most recent jobs, newest first (the studio reattaches to the live ones). */
+  async recentForDocument(brandId: string, documentId: string, limit: number, tx?: Tx) {
+    return this.conn(tx)
+      .select()
+      .from(studioGenerationJobs)
+      .where(this.brandScope(brandId, eq(studioGenerationJobs.documentId, documentId)))
+      .orderBy(desc(studioGenerationJobs.id))
+      .limit(limit);
+  }
+  async update(
+    id: string,
+    expectedVersion: number,
+    values: Partial<typeof studioGenerationJobs.$inferInsert>,
+    tx: Tx,
+  ) {
+    await this.updateScoped(id, expectedVersion, values, tx);
   }
 }

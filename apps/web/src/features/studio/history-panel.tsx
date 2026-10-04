@@ -64,6 +64,12 @@ export function HistoryPanel({
                   </button>
                 )}
                 <span>{r.authorKind === 'agent' ? 'Agent' : 'Person'}</span>
+                {r.generationInputs && (
+                  <Badge tone="info">
+                    {r.generationInputs.kind === 'refine' ? 'AI change' : 'Generated'}
+                    {r.generationInputs.acceptedGroupIds ? ' (accepted)' : ''}
+                  </Badge>
+                )}
                 {r.agentRunId && (
                   <Link
                     to={brandPath(companyId, brandId, `agents?run=${encodeURIComponent(r.agentRunId)}`)}
