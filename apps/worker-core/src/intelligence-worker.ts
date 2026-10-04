@@ -1,8 +1,9 @@
-import { ScheduleAlreadyRunning, ScheduleOverlapPolicy, type Client } from '@temporalio/client';
+import { ScheduleOverlapPolicy, type Client } from '@temporalio/client';
 import {
   createAnalystSweepActivities,
   createBaselineComparisonActivities,
   createBrandAnalystActivities,
+  ensureScheduleReconciled,
 } from '@oremedia/activities';
 import {
   ANALYST_SCHEDULE_ID,
@@ -12,12 +13,11 @@ import {
   CORE_TASK_QUEUE,
   createIntelligenceRuntime,
 } from '@oremedia/module-intelligence';
-import { logger } from '@oremedia/observability';
 
 /**
  * Spec 16.3 / 16.8: the brand analyst and the ranking baseline comparison run on task queue `core` (this worker).
  * Their activities join the core worker (publishing-worker.ts); the weekly and monthly cadences are Temporal
- * schedules created once per namespace at start (joined when they already exist). The analysis itself starts a
+ * schedules created once per namespace at start (brought in line with the code when they already exist). The analysis itself starts a
  * performance-review agent run on queue `agents`, so this process must host both queues, which it does.
  */
 export function intelligenceActivities() {
@@ -39,18 +39,12 @@ async function ensureSchedule(
   workflowType: string,
   calendar: Record<string, unknown>,
 ): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId,
-      spec: { calendars: [calendar] },
-      action: { type: 'startWorkflow', workflowType, taskQueue: CORE_TASK_QUEUE, args: [{}] },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: scheduleId }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId,
+    spec: { calendars: [calendar] },
+    action: { workflowType, taskQueue: CORE_TASK_QUEUE, args: [{}] },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
 }
 
 export async function ensureIntelligenceSchedulesRunning(client: Client): Promise<void> {

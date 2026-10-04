@@ -9,12 +9,7 @@ import {
   type NativeConnectionOptions,
   type WorkerOptions,
 } from '@temporalio/worker';
-import {
-  ScheduleAlreadyRunning,
-  ScheduleOverlapPolicy,
-  WorkflowNotFoundError,
-  type Client,
-} from '@temporalio/client';
+import { ScheduleOverlapPolicy, WorkflowNotFoundError, type Client } from '@temporalio/client';
 import {
   createBrandChangeImpactActivities,
   createBrandFactSweepActivities,
@@ -33,6 +28,7 @@ import {
   createRemoteChangeSweepActivities,
   createRenderedValidationActivities,
   createTokenRefreshActivities,
+  ensureScheduleReconciled,
 } from '@oremedia/activities';
 import {
   CONNECT_CHOICE_PURGE_SCHEDULE_ID,
@@ -201,105 +197,77 @@ export async function ensureSweeperRunning(client: Client): Promise<void> {
 /** Spec 14.7: every 15 minutes, expired account choices are shredded and deleted (it always applies). */
 export const CONNECT_CHOICE_PURGE_INTERVAL = '15 minutes';
 
-/** The connect-choice purge schedule: created once per namespace, joined when it already exists. */
+/** The connect-choice purge schedule: created once per namespace, reconciled when it exists. */
 export async function ensureConnectChoicePurgeScheduleRunning(client: Client): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId: CONNECT_CHOICE_PURGE_SCHEDULE_ID,
-      spec: { intervals: [{ every: CONNECT_CHOICE_PURGE_INTERVAL }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
-        taskQueue: CORE_TASK_QUEUE,
-        args: [{}],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
-    });
-    logger().info({ status: CONNECT_CHOICE_PURGE_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: CONNECT_CHOICE_PURGE_SCHEDULE_ID,
+    spec: { intervals: [{ every: CONNECT_CHOICE_PURGE_INTERVAL }] },
+    action: {
+      workflowType: CONNECT_CHOICE_PURGE_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
+  });
 }
 
 /** Daily at 03:10 UTC, after the retention sweep and outside the top-of-hour publishing burst. */
 export const DESTINATION_TOKEN_REFRESH_CALENDAR = { hour: 3, minute: 10 } as const;
 
 /**
- * Ledger R2-1: destinationTokenRefreshWorkflowV1 once a day (one schedule per namespace, joined if it exists): every
- * active destination whose source token expires within the next day is refreshed; a revoked grant leaves it
- * unreachable until a person connects it again.
+ * Ledger R2-1: destinationTokenRefreshWorkflowV1 once a day (one schedule per namespace, reconciled if it
+ * exists): every active destination whose source token expires within the next day is refreshed; a revoked grant
+ * leaves it unreachable until a person connects it again.
  */
 export async function ensureDestinationTokenRefreshScheduled(client: Client): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
-      spec: { calendars: [{ ...DESTINATION_TOKEN_REFRESH_CALENDAR }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE,
-        taskQueue: CORE_TASK_QUEUE,
-        args: [{}],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: DESTINATION_TOKEN_REFRESH_SCHEDULE_ID,
+    spec: { calendars: [{ ...DESTINATION_TOKEN_REFRESH_CALENDAR }] },
+    action: {
+      workflowType: DESTINATION_TOKEN_REFRESH_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
 }
 
 /** Daily at 03:20 UTC, after the destination refresh and outside the top-of-hour publishing burst. */
 export const BRAND_FACT_SWEEP_CALENDAR = { hour: 3, minute: 20 } as const;
 
 /**
- * BSC-3: brandFactSweepWorkflowV1 once a day (one schedule per namespace, joined if it exists): approved facts whose
- * validity ended emit brand.fact_expired once (their scheduled work is held), facts past their review date are
- * flagged for the workspace and Needs you.
+ * BSC-3: brandFactSweepWorkflowV1 once a day (one schedule per namespace, reconciled if it exists): approved
+ * facts whose validity ended emit brand.fact_expired once (their scheduled work is held), facts past their review
+ * date are flagged for the workspace and Needs you.
  */
 export async function ensureBrandFactSweepScheduled(client: Client): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId: BRAND_FACT_SWEEP_SCHEDULE_ID,
-      spec: { calendars: [{ ...BRAND_FACT_SWEEP_CALENDAR }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: BRAND_FACT_SWEEP_WORKFLOW_TYPE,
-        taskQueue: CORE_TASK_QUEUE,
-        args: [{}],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: BRAND_FACT_SWEEP_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: BRAND_FACT_SWEEP_SCHEDULE_ID,
+    spec: { calendars: [{ ...BRAND_FACT_SWEEP_CALENDAR }] },
+    action: {
+      workflowType: BRAND_FACT_SWEEP_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      args: [{}],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
 }
 
 /**
- * remoteChangeSweepWorkflowV1 every hour (one schedule per namespace, joined if it exists): a remote edit or delete
- * whose workflow was lost is closed after the stale threshold, so the post can be changed again.
+ * remoteChangeSweepWorkflowV1 every hour (one schedule per namespace, reconciled if it exists): a remote edit or
+ * delete whose workflow was lost is closed after the stale threshold, so the post can be changed again.
  */
 export async function ensureRemoteChangeSweepScheduled(client: Client): Promise<void> {
-  try {
-    await client.schedule.create({
-      scheduleId: REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
-      spec: { intervals: [{ every: '1 hour' }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE,
-        taskQueue: CORE_TASK_QUEUE,
-        args: [],
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
-    });
-    logger().info({ status: REMOTE_CHANGE_SWEEP_SCHEDULE_ID }, 'schedule created');
-  } catch (err) {
-    if (err instanceof ScheduleAlreadyRunning) return; // one per namespace; joined
-    throw err;
-  }
+  await ensureScheduleReconciled(client, {
+    scheduleId: REMOTE_CHANGE_SWEEP_SCHEDULE_ID,
+    spec: { intervals: [{ every: '1 hour' }] },
+    action: {
+      workflowType: REMOTE_CHANGE_SWEEP_WORKFLOW_TYPE,
+      taskQueue: CORE_TASK_QUEUE,
+      args: [],
+    },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 hour' },
+  });
 }
 
 /**

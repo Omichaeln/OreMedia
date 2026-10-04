@@ -1,5 +1,9 @@
-import { ScheduleAlreadyRunning, ScheduleOverlapPolicy, type Client } from '@temporalio/client';
-import { createDeletionActivities, createRetentionActivities } from '@oremedia/activities';
+import { ScheduleOverlapPolicy, type Client } from '@temporalio/client';
+import {
+  createDeletionActivities,
+  createRetentionActivities,
+  ensureScheduleReconciled,
+} from '@oremedia/activities';
 import type { RetentionSweepArgsV1 } from '@oremedia/contracts/operations';
 import {
   OPERATIONS_TASK_QUEUE,
@@ -42,28 +46,13 @@ export async function ensureRetentionScheduleRunning(
   const dryRun = env['RETENTION_SWEEP_APPLY'] !== 'true';
   const mode = dryRun ? 'dry_run' : 'apply';
   const args: [RetentionSweepArgsV1] = [{ dryRun }];
-  try {
-    await client.schedule.create({
-      scheduleId: RETENTION_SCHEDULE_ID,
-      spec: { calendars: [{ ...RETENTION_CALENDAR }] },
-      action: {
-        type: 'startWorkflow',
-        workflowType: RETENTION_SWEEP_WORKFLOW_TYPE,
-        taskQueue: OPERATIONS_TASK_QUEUE,
-        args,
-      },
-      policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
-    });
-    logger().info({ status: `${RETENTION_SCHEDULE_ID}:${mode}` }, 'schedule created');
-  } catch (err) {
-    if (!(err instanceof ScheduleAlreadyRunning)) throw err;
-    // One per namespace; joined. The mode is the environment's now, not the one the schedule was created with:
-    // the workflow file stays immutable, its args move with the schedule's action.
-    const handle = client.schedule.getHandle(RETENTION_SCHEDULE_ID);
-    const previous = await handle.describe();
-    const current = (previous.action.args?.[0] ?? {}) as RetentionSweepArgsV1;
-    if ((current.dryRun ?? true) === dryRun) return;
-    await handle.update((schedule) => ({ ...schedule, action: { ...schedule.action, args } }));
-    logger().info({ status: `${RETENTION_SCHEDULE_ID}:${mode}` }, 'schedule updated');
-  }
+  // The mode is the environment's now, not the one the schedule was created with: the workflow file stays
+  // immutable, its args move with the schedule's action (reconciled with the calendar and policies).
+  const result = await ensureScheduleReconciled(client, {
+    scheduleId: RETENTION_SCHEDULE_ID,
+    spec: { calendars: [{ ...RETENTION_CALENDAR }] },
+    action: { workflowType: RETENTION_SWEEP_WORKFLOW_TYPE, taskQueue: OPERATIONS_TASK_QUEUE, args },
+    policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1 day' },
+  });
+  if (result !== 'unchanged') logger().info({ status: `${RETENTION_SCHEDULE_ID}:${mode}` }, 'retention mode');
 }
