@@ -11,6 +11,7 @@ import {
   acceptanceLogoSvg,
   brandSystemChecks,
   capModelSpend,
+  ensurePhotoAssetVersion,
   factChecks,
   logoChecks,
   pickSuggestion,
@@ -967,6 +968,81 @@ describe('logoChecks', () => {
         detail: expect.stringContaining('expected a logo kept as SVG with a PNG rendition'),
       },
     ]);
+  });
+});
+
+describe('ensurePhotoAssetVersion (the Studio browser suite’s hero image)', () => {
+  const usable: StoreState = { usable: true, detail: 'ok' };
+
+  it('uploads a PNG photo, records its rights and approves it; the version it returns is approved with rights', async () => {
+    let store = '';
+    const assets = assetWorld(() => store);
+    const d = await fakeDeployment(assets.handlers);
+    store = d.storeOrigin;
+    const photo = await ensurePhotoAssetVersion(config(), sessionsFor(d.origin), tenant, usable, {
+      pollMs: 1,
+    });
+    expect(photo).toEqual({
+      assetVersionId: 'av_ast_upi_1',
+      detail: 'uploaded and approved photo ast_upi_1',
+    });
+    expect(d.puts[0]!.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a'); // a PNG
+    expect(assets.assets.get('ast_upi_1')).toMatchObject({
+      kind: 'photo',
+      state: 'approved',
+      rightsState: 'recorded',
+    });
+    expect(assets.assets.get('ast_upi_1')!.name).toMatch(/^oremedia-acceptance-photo-\d{14}\.png$/);
+    expect(d.calls).toContain('assets.approve');
+  });
+
+  it('reuses an earlier run’s approved photo with rights, and does not approve again what ingest approved', async () => {
+    const earlier: FakeAsset = {
+      ...oldLogo,
+      id: 'ast_photo',
+      kind: 'photo',
+      name: 'oremedia-acceptance-photo-20261001000000.png',
+      state: 'approved', // set here: the logo journey's test retires the shared oldLogo object
+      rightsState: 'recorded',
+      currentVersion: { id: 'av_photo', mime: 'image/png', width: 64, height: 64, durationMs: null },
+    };
+    const reused = assetWorld(() => '', {
+      existing: [{ ...earlier, id: 'ast_norights', rightsState: 'unknown' }, earlier],
+    });
+    const d = await fakeDeployment(reused.handlers);
+    expect(await ensurePhotoAssetVersion(config(), sessionsFor(d.origin), tenant, usable)).toEqual({
+      assetVersionId: 'av_photo',
+      detail: 'approved photo ast_photo',
+    });
+    expect(d.calls).not.toContain('assets.uploads.createIntent');
+
+    let store = '';
+    const atIngest = assetWorld(() => store, { uploaderApproves: true });
+    const d2 = await fakeDeployment(atIngest.handlers);
+    store = d2.storeOrigin;
+    const photo = await ensurePhotoAssetVersion(config(), sessionsFor(d2.origin), tenant, usable, {
+      pollMs: 1,
+    });
+    expect(photo.assetVersionId).toBe('av_ast_upi_1');
+    expect(d2.calls).not.toContain('assets.approve');
+  });
+
+  it('has none without a usable store, or when ingest rejects the photo, and says why', async () => {
+    const d = await fakeDeployment({});
+    expect(
+      await ensurePhotoAssetVersion(config(), sessionsFor(d.origin), tenant, {
+        usable: false,
+        reason: 'PUT refused',
+      }),
+    ).toEqual({ assetVersionId: null, detail: 'PUT refused' });
+    expect(d.calls).toEqual([]);
+    let store = '';
+    const rejected = assetWorld(() => store, { reject: 'image_decode_failed' });
+    const d2 = await fakeDeployment(rejected.handlers);
+    store = d2.storeOrigin;
+    expect(
+      await ensurePhotoAssetVersion(config(), sessionsFor(d2.origin), tenant, usable, { pollMs: 1 }),
+    ).toEqual({ assetVersionId: null, detail: 'photo upload: upi_1 rejected: image_decode_failed' });
   });
 });
 

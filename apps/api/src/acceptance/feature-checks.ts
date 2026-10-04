@@ -16,6 +16,7 @@ import { operationsOfGroups } from '@oremedia/editor/generation';
 import { instantiateStarter, starterByKey, type StarterBrand } from '@oremedia/editor/starters/index';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import { fail, pass, skip, type AcceptanceResult } from '../../../../tooling/scripts/acceptance/report';
+import { randomPng } from '../../../../tooling/scripts/smoke/checks';
 import { ensureFontAssetVersion, sessionKey, type Sessions } from './checks';
 import { mutate, putObject, query, sleep, type ApiSession } from './client';
 import type { FixtureTenant } from './fixtures';
@@ -861,6 +862,79 @@ async function retireAsset(api: ApiSession, assetId: string): Promise<string | n
   return after.data?.state === 'retired'
     ? null
     : `${assetId} reads ${after.data?.state ?? after.error} after retiring`;
+}
+
+// ---- the Studio browser suite's photo ------------------------------------------------------------------------
+
+const PHOTO_PREFIX = 'oremedia-acceptance-photo';
+
+/**
+ * An approved photo with recorded rights (the `creative` purpose requires both) for the Studio browser suite: its
+ * real-API path seeds the fixture's hero image layer from it, and the rebase and hide-layer cases act on that layer.
+ * An earlier run's photo is reused; otherwise a small PNG goes through the real upload flow, its rights are recorded
+ * and it is approved unless ingest approved it already. Without a usable store there is none, and the suite skips.
+ */
+export async function ensurePhotoAssetVersion(
+  cfg: AcceptanceConfig,
+  sessions: Sessions,
+  tenant: FixtureTenant,
+  store: StoreState,
+  opts: JourneyOptions = {},
+): Promise<{ assetVersionId: string | null; detail: string }> {
+  const owner = sessions.get(sessionKey(tenant, 'owner'));
+  if (!owner) return { assetVersionId: null, detail: 'company A owner has no session' };
+  if (!store.usable) return { assetVersionId: null, detail: store.reason };
+  const listed = await query<{ items: Array<{ id: string; name: string; state: string }> }>(
+    owner,
+    'assets.list',
+    { brandId: tenant.brandId, kinds: ['photo'], query: PHOTO_PREFIX, page: { limit: 100 } },
+  );
+  for (const a of listed.data?.items ?? []) {
+    if (!a.name.startsWith(PHOTO_PREFIX) || a.state !== 'approved') continue;
+    const got = await query<AssetRead>(owner, 'assets.get', { assetId: a.id });
+    if (got.data?.state === 'approved' && got.data.rightsState === 'recorded' && got.data.currentVersion)
+      return { assetVersionId: got.data.currentVersion.id, detail: `approved photo ${a.id}` };
+  }
+  const uploaded = await uploadThroughIntent(
+    owner,
+    {
+      brandId: tenant.brandId,
+      kind: 'photo',
+      mime: 'image/png',
+      filename: `${PHOTO_PREFIX}-${runMarker()}.png`,
+      bytes: randomPng(64),
+    },
+    cfg.journeys.timeoutMs,
+    opts.pollMs ?? 3000,
+  );
+  if (uploaded.kind !== 'accepted')
+    return { assetVersionId: null, detail: `photo upload: ${uploaded.reason}` };
+  const assetId = uploaded.assetId;
+  const rights = await mutate(owner, 'assets.rights.set', {
+    assetId,
+    owner: tenant.brandName,
+    permittedChannels: 'all',
+    territories: 'all',
+  });
+  if (rights.status !== 200) return { assetVersionId: null, detail: `assets.rights.set: ${rights.error}` };
+  const current = await query<AssetRead>(owner, 'assets.get', { assetId });
+  // An owner's upload is approved at ingest; approve is a pending_review transition only (as the logo journey).
+  if (current.data && current.data.state !== 'approved') {
+    const approved = await mutate(owner, 'assets.approve', {
+      assetId,
+      expectedVersion: current.data.version,
+    });
+    if (approved.status !== 200) return { assetVersionId: null, detail: `assets.approve: ${approved.error}` };
+  }
+  const after = await query<AssetRead>(owner, 'assets.get', { assetId });
+  return after.data?.state === 'approved' &&
+    after.data.rightsState === 'recorded' &&
+    after.data.currentVersion
+    ? { assetVersionId: after.data.currentVersion.id, detail: `uploaded and approved photo ${assetId}` }
+    : {
+        assetVersionId: null,
+        detail: `${assetId} reads ${after.data?.state ?? after.error}, rights ${after.data?.rightsState}`,
+      };
 }
 
 // ---- SVG logo (BSC-2) ---------------------------------------------------------------------------------------
