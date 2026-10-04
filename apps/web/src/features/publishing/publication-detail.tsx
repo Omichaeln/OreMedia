@@ -22,6 +22,9 @@ import { useTRPC } from '../../lib/trpc';
 import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import {
   actionsFor,
+  articleConflictOf,
+  compareArticleBlocks,
+  articleVerificationStages,
   channelOutcomeSummary,
   holdReasonText,
   isoToZonedInput,
@@ -33,6 +36,7 @@ import {
   remoteChangeStatus,
   remoteVerificationChip,
   CHANNEL_CHIP,
+  type VerificationStage,
 } from './publication-state';
 import {
   useChannelVariant,
@@ -125,6 +129,11 @@ function Loaded({
   const [lastError, setLastError] = useState<unknown>(null);
   const siblings = useRevisionPublications(brandId, p.contentRevisionId);
   const remote = remoteChangeStatus(p.remote.changes);
+  // PR-03: a refused website edit with what the site holds now, recorded with the refreshed read-back.
+  const conflict = articleConflictOf(
+    p.remote.article?.readback?.payload ?? null,
+    remote.failed?.kind === 'edit' ? remote.failed.id : null,
+  );
   const deletedAt =
     p.remote.changes.find((c) => c.kind === 'delete' && c.state === 'succeeded')?.finishedAt ?? null;
   // RA-12: the latest change went through but replaced a change made on the website in the write's window.
@@ -303,7 +312,16 @@ function Loaded({
           description={`Requested ${when(remote.stale.requestedAt)}, and no outcome was recorded in time. Check the post on the channel; you can ask again, which closes this request.`}
         />
       )}
-      {remote.failed && (
+      {conflict && (
+        <ArticleConflictPanel
+          publication={p}
+          conflict={conflict}
+          canReapply={actions.editRemote && p.remote.edit && p.remote.allowed.edit && !remote.open}
+          onDone={refresh}
+          onError={fail('Edit request failed')}
+        />
+      )}
+      {remote.failed && !conflict && (
         <StatusBanner
           tone="critical"
           title={`The channel did not accept the ${remoteChangeNoun(remote.failed.kind)}`}
@@ -537,11 +555,27 @@ const EVIDENCE_KIND_TEXT: Record<string, string> = {
 const RENDERED_CHECK_TEXT: Record<string, string> = {
   status_ok: 'The page answered 200',
   title_present: 'The title is in the page title or its heading',
-  canonical_present: 'A canonical link is present',
-  indexable: 'No noindex (a draft is allowed one)',
+  canonical_present: 'A canonical link is present (in the page or its Link header)',
+  indexable: 'No noindex in the robots meta tags (a draft is allowed one)',
   body_present: 'The first paragraph is in the page',
   canonical_matches: 'The canonical link names this page (its address or its slug)',
   last_paragraph_present: 'The last paragraph is in the page',
+  article_region_found: 'The article’s region was found on the page',
+  content_complete: 'Every block of the approved content is in the article, in order',
+  images_present: 'Every image of the article is in it',
+  header_indexable: 'No noindex in the X-Robots-Tag header (a draft is allowed one)',
+};
+const STAGE_TONE: Record<VerificationStage['state'], 'good' | 'critical' | 'neutral' | 'info'> = {
+  verified: 'good',
+  failed: 'critical',
+  unverified: 'neutral',
+  not_applicable: 'info',
+};
+const STAGE_TEXT: Record<VerificationStage['state'], string> = {
+  verified: 'Verified',
+  failed: 'Failed',
+  unverified: 'Not verified',
+  not_applicable: 'Not applicable',
 };
 
 /** RA-04: what the read-back proved, as the server recorded it in the read-back evidence (read as data). */
@@ -598,11 +632,18 @@ function ArticlePanel({
         toast(
           res.ok
             ? { tone: 'good', title: 'The page checks out' }
-            : {
-                tone: 'warning',
-                title: 'The page did not pass every check',
-                description: 'See the checks below.',
-              },
+            : res.outcome === 'unverified'
+              ? {
+                  tone: 'warning',
+                  title: 'The page could not be verified',
+                  description:
+                    'It did not answer, was cut short or has no recognisable article region; try again later.',
+                }
+              : {
+                  tone: 'warning',
+                  title: 'The page did not pass every check',
+                  description: 'See the checks below.',
+                },
         );
       },
       onError,
@@ -616,6 +657,7 @@ function ArticlePanel({
   const remoteStatus = publicationChip(p.state, p.remoteStatus);
   const verification = remoteVerificationChip(p.remoteVerification);
   const readbackVerification = readback ? readbackVerificationOf(readback) : null;
+  const stages = articleVerificationStages(p, readback, validation);
   return (
     <section
       aria-labelledby={`article-${p.id}`}
@@ -655,11 +697,37 @@ function ArticlePanel({
             Page not validated
           </Badge>
         ) : (
-          <Badge tone={ok ? 'good' : 'critical'} data-testid="article-validation">
-            {ok ? 'Page validated' : 'Page validation failed'}
+          <Badge
+            tone={ok ? 'good' : validation?.['outcome'] === 'unverified' ? 'neutral' : 'critical'}
+            data-testid="article-validation"
+          >
+            {ok
+              ? 'Page validated'
+              : validation?.['outcome'] === 'unverified'
+                ? 'Page not verified'
+                : 'Page validation failed'}
           </Badge>
         )}
       </div>
+      <ol
+        className="flex flex-col gap-1 text-xs"
+        aria-label="What the verification proved"
+        data-testid="article-stages"
+      >
+        {stages.map((stage) => (
+          <li
+            key={stage.key}
+            className="flex flex-wrap items-baseline gap-2"
+            data-testid={`article-stage-${stage.key}`}
+            data-state={stage.state}
+          >
+            <Badge tone={STAGE_TONE[stage.state]}>
+              {stage.label}: {STAGE_TEXT[stage.state]}
+            </Badge>
+            <span className="text-muted-foreground">{stage.detail}</span>
+          </li>
+        ))}
+      </ol>
       {p.remoteStatus && (
         <p className="text-xs text-muted-foreground" data-testid="article-remote-status-detail">
           {remoteStatus.detail}
@@ -784,6 +852,164 @@ function RevertToDraftAction({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * PR-03: a website edit the site refused, and the way to resolve it. Nothing was written. Beside each other: the
+ * article as the website holds it now and the edit that was not applied, block by block (a block the other side
+ * lacks is marked). `remote_changed`: the person re-applies the edit to the current version on purpose (a new
+ * edit request whose precondition is the version shown, so a further change on the site is refused again) or
+ * reconciles it in the site's own editor. `limited_mode`: the site cannot apply an edit safely at all, so the edit
+ * is made on the site (or the site administrator installs the conditional-write plugin).
+ */
+function ArticleConflictPanel({
+  publication: p,
+  conflict,
+  canReapply,
+  onDone,
+  onError,
+}: {
+  publication: PublicationDto;
+  conflict: NonNullable<ReturnType<typeof articleConflictOf>>;
+  canReapply: boolean;
+  onDone: () => void;
+  onError: (err: unknown) => void;
+}) {
+  const trpc = useTRPC();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const intent = useIntentKey();
+  const compared =
+    conflict.currentHtml !== null ? compareArticleBlocks(conflict.currentHtml, conflict.attemptedHtml) : null;
+  const reapply = useMutation(
+    trpc.publishing.publications.editRemote.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setOpen(false);
+        onDone();
+        toast({
+          tone: 'info',
+          title: 'Edit requested again',
+          description:
+            'It is applied only if the website still holds the version shown here; this screen shows the outcome.',
+        });
+      },
+      onError,
+    }),
+  );
+  const limited = conflict.reason === 'limited_mode';
+  const side = (label: string, blocks: Array<{ text: string; changed: boolean }>, testId: string) => (
+    <section className="flex min-w-0 flex-col gap-1" aria-label={label} data-testid={testId}>
+      <h4 className="text-xs font-semibold">{label}</h4>
+      {blocks.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No text.</p>
+      ) : (
+        <ol className="flex flex-col gap-1 text-xs">
+          {blocks.map((b, i) => (
+            <li
+              key={i}
+              data-changed={b.changed ? 'true' : 'false'}
+              className={b.changed ? 'border-l-2 border-status-warning pl-2' : 'pl-2.5'}
+            >
+              {b.changed && <span className="sr-only">Differs: </span>}
+              {b.text}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+  return (
+    <section
+      className="flex flex-col gap-3 rounded-md border border-status-warning p-3"
+      aria-labelledby={`conflict-${p.id}`}
+      data-testid="article-conflict"
+      data-conflict-reason={conflict.reason}
+    >
+      <StatusBanner
+        tone="warning"
+        title={
+          limited
+            ? 'The edit was not applied: this website is in limited mode'
+            : 'The edit was not applied: the article changed on the website'
+        }
+        description={
+          limited
+            ? 'This website cannot guarantee that an edit does not overwrite a change made there, so Oremedia does not edit existing articles on it. Make the change in the website’s own editor, or ask the site administrator to install the Oremedia conditional-write plugin. Nothing was written.'
+            : `Someone changed the article on the website${conflict.currentModifiedAt ? ` (${when(conflict.currentModifiedAt)})` : ''} after Oremedia last read it, so the website refused the edit and nothing was written. Compare the two versions, then re-apply your edit to the current version or reconcile the article on the website.`
+        }
+      />
+      <h3 id={`conflict-${p.id}`} className="sr-only">
+        Compare the website’s current article with your edit
+      </h3>
+      {compared ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {side('On the website now', compared.current, 'conflict-current')}
+          {side('Your edit (not applied)', compared.attempted, 'conflict-attempted')}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          The website’s current article could not be read; open it on the website to compare.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {!limited && canReapply && conflict.attemptedHtml.trim() !== '' && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setOpen(true)}
+              data-testid="conflict-reapply"
+            >
+              Re-apply my edit to the current version
+            </Button>
+            <DialogContent
+              role="alertdialog"
+              title="Replace the website’s current version with your edit?"
+              description="Your edit replaces the article body shown under “On the website now”, including the changes made on the website. It is applied only if the website still holds exactly that version; if it changed again, it is refused again and nothing is written."
+            >
+              <DialogActions>
+                <DialogClose asChild>
+                  <Button variant="ghost">Back</Button>
+                </DialogClose>
+                <Button
+                  variant="primary"
+                  disabled={reapply.isPending}
+                  onClick={() =>
+                    reapply.mutate({
+                      publicationId: p.id,
+                      text: conflict.attemptedHtml,
+                      reason: 'Re-applied after comparing with the website’s current version',
+                    })
+                  }
+                  data-testid="confirm-conflict-reapply"
+                >
+                  {reapply.isPending ? 'Requesting…' : 'Re-apply my edit'}
+                </Button>
+              </DialogActions>
+            </DialogContent>
+          </Dialog>
+        )}
+        {conflict.editUrl && (
+          <a
+            href={conflict.editUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-xs underline"
+            data-testid="conflict-open-editor"
+          >
+            Open in the website’s editor
+          </a>
+        )}
+        {p.remoteUrl && (
+          <a href={p.remoteUrl} target="_blank" rel="noreferrer noopener" className="text-xs underline">
+            View the page
+          </a>
+        )}
+      </div>
+    </section>
   );
 }
 

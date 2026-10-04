@@ -57,6 +57,8 @@ const METADATA_ALLOWLIST = new Set([
   'sourceBrandVersionId',
   'sourceClaimed',
   'contentType',
+  // PR-03: what a destination verification found about atomic article updates (conditional / limited)
+  'writeSafety',
 ]);
 
 class AuditRepository extends TenantScopedRepository<typeof auditEvents> {

@@ -14175,6 +14175,36 @@
         }
       }
     },
+    "/trpc/destinations.setArticleSelector": {
+      "post": {
+        "operationId": "destinations.setArticleSelector",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "articleSelector": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  }
+                },
+                "required": ["brandId", "destinationId", "expectedVersion"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/destinations.setHealth": {
       "post": {
         "operationId": "destinations.setHealth",
@@ -31600,6 +31630,27 @@
             }
           },
           "required": ["brandId", "destinationId", "windowStart", "windowEnd"]
+        }
+      },
+      "destinations.setArticleSelector": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "destinationId": {
+              "type": "string"
+            },
+            "articleSelector": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            }
+          },
+          "required": ["brandId", "destinationId", "expectedVersion"]
         }
       },
       "destinations.setHealth": {

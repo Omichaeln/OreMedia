@@ -185,4 +185,74 @@ describe.skipIf(!enabled)('edit and delete a published post (built app in Chromi
     const violations = await auditPage(page, { narrow: true });
     expect(violations, formatViolations('deleted publication', violations)).toEqual([]);
   }, 60_000);
+
+  it('website edit refused (PR-03): the website’s current article and the edit sit side by side with the differences marked; the edit can be re-applied on purpose or the article opened on the site; limited mode offers no re-apply', async () => {
+    const id = P5.publications.article;
+    const requestEdit = async (html: string) => {
+      await openPublication(id);
+      await detail().getByRole('button', { name: 'Edit text' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Edit the article’s body' });
+      await dialog.waitFor();
+      await dialog.getByLabel('Body (HTML)').fill(html);
+      const before = calls('publishing.publications.editRemote');
+      await dialog.getByRole('button', { name: 'Save to the channel' }).click();
+      await expect.poll(() => calls('publishing.publications.editRemote')).toBe(before + 1);
+    };
+    const approved = '<p>Ore is heavy.</p><p>Tar keeps the rain out.</p>';
+    await requestEdit(approved);
+    p5.refuseArticleEdit(
+      id,
+      'remote_changed',
+      '<p>Ore is heavy.</p><p>Edited on the website by the editor.</p>',
+    );
+    await openPublication(id);
+    const conflict = detail().getByTestId('article-conflict');
+    await conflict.waitFor({ timeout: 15_000 });
+    expect(await conflict.getAttribute('data-conflict-reason')).toBe('remote_changed');
+    expect(await conflict.textContent()).toContain('the article changed on the website');
+    const current = conflict.getByTestId('conflict-current');
+    const attempted = conflict.getByTestId('conflict-attempted');
+    expect(await current.locator('li[data-changed="true"]').textContent()).toContain(
+      'Edited on the website by the editor.',
+    );
+    expect(await attempted.locator('li[data-changed="true"]').textContent()).toContain(
+      'Tar keeps the rain out.',
+    );
+    expect(await current.locator('li[data-changed="false"]').textContent()).toContain('Ore is heavy.');
+    expect(await conflict.getByTestId('conflict-open-editor').getAttribute('href')).toBe(
+      'https://acme.example/wp-admin/post.php?post=42&action=edit',
+    );
+    // The generic failure banner is replaced by the resolution panel.
+    expect(await detail().getByTestId('remote-change-status').count()).toBe(0);
+    const violations = await auditPage(page, { narrow: true });
+    expect(violations, formatViolations('article conflict', violations)).toEqual([]);
+
+    const before = calls('publishing.publications.editRemote');
+    await conflict.getByTestId('conflict-reapply').click();
+    const confirm = page.getByRole('alertdialog');
+    expect(await confirm.textContent()).toContain(
+      'applied only if the website still holds exactly that version',
+    );
+    await confirm.getByTestId('confirm-conflict-reapply').click();
+    await expect.poll(() => calls('publishing.publications.editRemote')).toBe(before + 1);
+    expect(p5.publication(id).remoteChanges[0]).toMatchObject({
+      kind: 'edit',
+      state: 'requested',
+      text: approved,
+    });
+    await expect
+      .poll(() => detail().getByTestId('remote-change-status').textContent(), { timeout: 15_000 })
+      .toContain('Text edit requested');
+
+    p5.refuseArticleEdit(
+      id,
+      'limited_mode',
+      '<p>Ore is heavy.</p><p>Edited on the website by the editor.</p>',
+    );
+    await openPublication(id);
+    await conflict.waitFor({ timeout: 15_000 });
+    expect(await conflict.getAttribute('data-conflict-reason')).toBe('limited_mode');
+    expect(await conflict.textContent()).toContain('limited mode');
+    expect(await conflict.getByTestId('conflict-reapply').count()).toBe(0);
+  }, 90_000);
 });

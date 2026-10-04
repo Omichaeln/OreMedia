@@ -31,7 +31,7 @@ import {
 import { brandDestinations } from '@oremedia/db/schema/destinations';
 import { RENDERED_VALIDATION_DELAYS_MS } from '@oremedia/contracts/publishing';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
-import type { RenderedValidationV1 } from '@oremedia/contracts/article';
+import { articleManifest, renderArticleHtml, type RenderedValidationV1 } from '@oremedia/contracts/article';
 import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { idempotent } from '@oremedia/module-operations';
@@ -2559,11 +2559,22 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         url: 'https://blog.acme.example/why-ore-and-tar-last/',
         title: article.title,
         slug: article.slug,
-        firstParagraph: 'Ore is heavy.',
-        lastParagraph: 'Yes, mostly.',
+        // PR-04: the whole approved revision's rendering is the manifest the article region must carry.
+        manifest: articleManifest(renderArticleHtml(article)),
         draft: false, // a live article must be indexable
       });
       expect(await row(pub.id)).toMatchObject({ remoteVerification: 'failed', remoteVerifiedAt: null });
+      // PR-04: a page that cannot be read (a 503, a timeout) proves nothing: unverified, never verified or kept.
+      validateResult = {
+        ...validationOf(false),
+        outcome: 'unverified',
+        reason: 'page_unavailable_503',
+        status: 503,
+      };
+      expect(
+        await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
+      ).toEqual({ outcome: 'validated', ok: false, verification: 'unverified' });
+      expect(await row(pub.id)).toMatchObject({ remoteVerification: 'unverified', remoteVerifiedAt: null });
       validateResult = validationOf(true);
       expect(
         await inTenant(tenantA, () => runtime.renderedValidation.validateRenderedPublication(input)),
@@ -2573,7 +2584,7 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         verification: 'verified',
       });
       expect((await row(pub.id)).remoteVerification).toBe('verified');
-      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(3);
+      expect((await evidenceOf(pub.id)).filter((e) => e.kind === 'rendered_validation')).toHaveLength(4);
       // The on-demand validation records the same way.
       validateResult = validationOf(false);
       await run(tenantA, (tx) => publicationService.validateRendered(A, { publicationId: pub.id }, tx));
@@ -2834,6 +2845,94 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         errorCode: 'conflict_overwritten',
       });
       expect(dto.remote.currentText).toBe('<p>Written over the window.</p>');
+      // PR-04: once an edit went through, the page is verified against the edited body, not the revision.
+      validateResult = validationOf(true);
+      await inTenant(tenantA, () =>
+        runtime.renderedValidation.validateRenderedPublication({
+          ...wfInput(pub.id),
+          publishedAt: new Date().toISOString(),
+        }),
+      );
+      expect(validateInputs.at(-1)?.manifest).toEqual(articleManifest('<p>Written over the window.</p>'));
+    });
+
+    it('edit (PR-03): the stored write token is the precondition; a refusal keeps the remote body and the refused text for the comparison; limited mode is refused and audited like a conflict', async () => {
+      const token = `wpcw1:7:${'f'.repeat(64)}`;
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish', { writeToken: token }),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const first = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      const now = `wpcw1:9:${'0'.repeat(64)}`;
+      const current = readbackOf('publish', { contentHash: 'c'.repeat(64), writeToken: now });
+      editResult = {
+        outcome: 'rejected',
+        code: 'conflict',
+        message: 'the article changed on the site; nothing was written',
+        readback: current,
+        conflict: {
+          reason: 'remote_changed',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+        },
+      };
+      const input = changeInput(pub.id, first.changeId);
+      const refused = await inTenant(tenantA, () => runtime.remoteChangeProvider.editRemotePost(input, A));
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: token, expectedHash: 'a'.repeat(64) });
+      if (refused.outcome === 'skipped') throw new Error('unexpected skip');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: refused }),
+      );
+      const stored = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(stored?.payload).toMatchObject({
+        writeToken: now,
+        refreshedAfter: 'conflict',
+        conflict: {
+          reason: 'remote_changed',
+          current: { html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+          attemptedHtml: '<p>The approved edit.</p>',
+        },
+      });
+      // The person re-applies the edit after comparing: the precondition is now what the site holds.
+      const second = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      editResult = {
+        outcome: 'rejected',
+        code: 'limited_mode',
+        message: 'the site cannot apply an update atomically',
+        readback: current,
+        conflict: {
+          reason: 'limited_mode',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: null,
+        },
+      };
+      const limitedInput = changeInput(pub.id, second.changeId);
+      const limited = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(limitedInput, A),
+      );
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: now, expectedHash: 'c'.repeat(64) });
+      expect(limited).toMatchObject({ outcome: 'rejected', code: 'limited_mode' });
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'publication.edit_remote_conflict')),
+        );
+      expect(audited.map((a) => (a.metadata as Record<string, unknown>)['reason'])).toEqual(
+        expect.arrayContaining(['remote_changed_since_readback', 'limited_mode']),
+      );
     });
   });
 

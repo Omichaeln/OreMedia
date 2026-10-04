@@ -13,3 +13,9 @@ export {
   type RecordedRequest,
 } from './fixture-server';
 export { allCapabilitiesCertifiedForTest, certifiedForTest } from './certified';
+export {
+  FakeWordPressSite,
+  type FakeWordPressPlugin,
+  type FakeWordPressPost,
+  type FakeWordPressRequest,
+} from './wordpress-site';

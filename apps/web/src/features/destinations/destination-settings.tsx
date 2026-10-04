@@ -6,10 +6,16 @@ import {
   DestinationKind,
   SOURCE_USE_RETENTION_MAX_DAYS,
   type DestinationHealth,
+  type DestinationWriteSafety,
   type DestinationStatus,
   type SourceUse,
 } from '@oremedia/contracts/destinations';
 import type { ErrorDetail } from '@oremedia/contracts/errors';
+import {
+  ARTICLE_SELECTOR_MAX_CHARS,
+  ArticleRegionSelector,
+  DEFAULT_ARTICLE_REGION_SELECTORS,
+} from '@oremedia/contracts/article';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, type Tone } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
@@ -57,6 +63,27 @@ const STATUS_CHIP: Record<DestinationStatus, { tone: Tone; label: string }> = {
   disconnected: { tone: 'neutral', label: 'Disconnected' },
 };
 const USE_LABEL: Record<SourceUse, string> = { read: 'Read', retain: 'Retain', write: 'Write' };
+/**
+ * PR-03: what the last verification found about updating a published article safely (only shown once known: a
+ * kind that never updates articles stays `unknown`).
+ */
+const WRITE_SAFETY_CHIP: Record<
+  Exclude<DestinationWriteSafety, 'unknown'>,
+  { tone: Tone; label: string; detail: string }
+> = {
+  conditional: {
+    tone: 'good',
+    label: 'Safe updates',
+    detail:
+      'The site applies an edit only if the article is still the version Oremedia last read; a change made on the site in the meantime is never overwritten.',
+  },
+  limited: {
+    tone: 'warning',
+    label: 'Limited mode',
+    detail:
+      'This site cannot guarantee that an edit does not overwrite a change made on the site, so Oremedia does not edit articles that already exist there: new drafts and publishes, reverting to a draft and deleting still work; edit existing articles on the site itself, or have the site administrator install the Oremedia conditional-write plugin.',
+  },
+};
 
 /** Policy dates are days in UTC (the input sends midnight UTC), so the label reads them in UTC too. */
 const day = (iso: string) =>
@@ -129,6 +156,72 @@ function DisconnectButton({ destination }: { destination: DestinationDto }) {
   );
 }
 
+/**
+ * PR-04: where this website's theme puts an article's body, for rendered-article verification (simple selectors
+ * such as `.entry-content` or `div.post-body`; empty uses the common WordPress defaults). destination.manage.
+ */
+function ArticleSelectorForm({ destination }: { destination: DestinationDto }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const intent = useIntentKey();
+  const [value, setValue] = useState(destination.articleSelector ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const save = useMutation(
+    trpc.destinations.setArticleSelector.mutationOptions({
+      ...mutationIntent(intent.key),
+      onSuccess: () => {
+        intent.renew();
+        setError(null);
+        void queryClient.invalidateQueries(trpc.destinations.pathFilter());
+      },
+      onError: (err) => setError(toUiError(err).message),
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (trimmed !== '' && !ArticleRegionSelector.safeParse(trimmed).success) {
+      setError(
+        'Use simple selectors only, separated by commas: a tag, #id, .class or [attribute], e.g. div.post-body.',
+      );
+      return;
+    }
+    save.mutate({
+      brandId: destination.brandId,
+      destinationId: destination.id,
+      articleSelector: trimmed === '' ? null : trimmed,
+      expectedVersion: destination.version,
+    });
+  };
+  const id = `article-selector-${destination.id}`;
+  return (
+    <form
+      onSubmit={submit}
+      className="flex flex-wrap items-end gap-2"
+      noValidate
+      data-testid="article-selector-form"
+    >
+      <Field
+        label="Article region selector"
+        htmlFor={id}
+        hint={`Where the theme puts an article's body, checked first when a published page is verified; empty uses the defaults (${DEFAULT_ARTICLE_REGION_SELECTORS.join(', ')}).`}
+        error={error ?? undefined}
+      >
+        <Input
+          id={id}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          maxLength={ARTICLE_SELECTOR_MAX_CHARS}
+          placeholder=".entry-content"
+        />
+      </Field>
+      <Button type="submit" size="sm" variant="secondary" disabled={save.isPending}>
+        {save.isPending ? 'Saving…' : 'Save selector'}
+      </Button>
+    </form>
+  );
+}
+
 function DestinationRow({
   destination,
   canManageDestinations,
@@ -138,6 +231,7 @@ function DestinationRow({
 }) {
   const health = HEALTH_CHIP[destination.health];
   const status = STATUS_CHIP[destination.status];
+  const safety = destination.writeSafety === 'unknown' ? null : WRITE_SAFETY_CHIP[destination.writeSafety];
   return (
     <li
       className="flex flex-col gap-2 py-3"
@@ -149,13 +243,37 @@ function DestinationRow({
         <code className="text-xs text-muted-foreground">{destination.externalId}</code>
         <Badge tone={health.tone}>{health.label}</Badge>
         {destination.status !== 'active' && <Badge tone={status.tone}>{status.label}</Badge>}
+        {safety && (
+          <Badge tone={safety.tone} data-testid="destination-write-safety">
+            {safety.label}
+          </Badge>
+        )}
       </div>
+      {safety && destination.writeSafety === 'limited' && destination.status === 'active' && (
+        <StatusBanner
+          tone="warning"
+          title="Limited mode: existing articles are not edited from Oremedia"
+          description={safety.detail}
+          data-testid="destination-limited-mode"
+        />
+      )}
+      {safety && destination.writeSafety === 'conditional' && (
+        <p className="text-xs text-muted-foreground">{safety.detail}</p>
+      )}
       <p className="text-xs text-muted-foreground">
         Owner <code>{destination.ownerUserId}</code> · capability v{destination.capabilityVersion}
         {destination.healthCheckedAt &&
           ` · checked ${new Date(destination.healthCheckedAt).toLocaleString()}`}
         {destination.grantedScopes.length > 0 && ` · scopes: ${destination.grantedScopes.join(', ')}`}
       </p>
+      {destination.kind === 'cms_site' && destination.articleSelector && (
+        <p className="text-xs text-muted-foreground" data-testid="destination-article-selector">
+          Article region: <code>{destination.articleSelector}</code>
+        </p>
+      )}
+      {canManageDestinations && destination.status === 'active' && destination.kind === 'cms_site' && (
+        <ArticleSelectorForm destination={destination} />
+      )}
       {canManageDestinations && destination.status === 'active' && (
         <div className="flex flex-wrap items-start gap-2">
           <DisconnectButton destination={destination} />

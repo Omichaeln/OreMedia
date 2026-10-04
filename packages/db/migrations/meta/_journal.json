@@ -218,6 +218,20 @@
       "when": 1791126368283,
       "tag": "0030_tenant_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1791145791505,
+      "tag": "0031_destination_write_safety",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1791152183007,
+      "tag": "0032_destination_article_selector",
+      "breakpoints": true
     }
   ]
 }
