@@ -118,6 +118,15 @@ const FONT_FILE = fileURLToPath(
  * `corsOrigin` (a store on its own origin) it answers CORS as a bucket configured for the web origin does: the
  * preflight for PUT with a content-type, and Access-Control-Allow-Origin on every answer. False: not a store path.
  */
+/**
+ * STU-2a: the clip the store answers for a `.webm` object (the mock's video exports and proxies): 2 s, 320×180, VP9 +
+ * Opus, made with ffmpeg 6.1.1 (`-f lavfi -i testsrc2=size=320x180:rate=10 -f lavfi -i sine -t 2 -c:v libvpx-vp9
+ * -b:v 100k -c:a libopus -b:a 24k`). WebM because Playwright's Chromium has no H.264/AAC decoders.
+ */
+const VIDEO_FILE = fileURLToPath(new URL('../../../tooling/test-fixtures/media/clip.webm', import.meta.url));
+/** A WebVTT captions sidecar for a `.vtt` object. */
+const VTT_TEXT = 'WEBVTT\n\n00:00.000 --> 00:02.000\nLaunch day captions\n';
+
 /** A 2×2 PNG, the image the store answers for a `.png` object (what the mock's signed image URLs point at). */
 const PNG_BYTES = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVQIW2NkYPj/n4GBgYGJgYEBAAgQAgHfTMWQAAAAAElFTkSuQmCC',
@@ -172,6 +181,16 @@ function serveObjectStore(
     if (url.pathname.endsWith('.png')) {
       res.setHeader('content-type', 'image/png');
       res.end(PNG_BYTES);
+      return true;
+    }
+    if (url.pathname.endsWith('.webm')) {
+      res.setHeader('content-type', 'video/webm');
+      createReadStream(VIDEO_FILE).pipe(res);
+      return true;
+    }
+    if (url.pathname.endsWith('.vtt')) {
+      res.setHeader('content-type', 'text/vtt');
+      res.end(VTT_TEXT);
       return true;
     }
     res.setHeader('content-type', 'font/ttf');

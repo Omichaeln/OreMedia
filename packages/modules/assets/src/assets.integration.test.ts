@@ -297,6 +297,8 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         assetId: result.assetId,
         rejectionReason: null,
         rejectionMessage: null,
+        rejectionDetail: null,
+        kind: 'photo',
       });
       // Storage: immutable keys exist, quarantine is empty.
       expect(mem.has(storageKeys.original(tenantA, brandA1, result.assetId, result.assetVersionId))).toBe(
@@ -384,6 +386,8 @@ describe('assets module against MySQL 8 (spec 9)', () => {
         assetId: null,
         rejectionReason: 'svg_script',
         rejectionMessage: INGEST_REJECTION_MESSAGES.svg_script,
+        rejectionDetail: null,
+        kind: 'logo',
       });
       expect(mem.keys().filter((k) => k.includes(badIntent))).toEqual([]);
       expect((await tdb.db.select().from(assets).where(eq(assets.name, 'evil.svg'))).length).toBe(0);
@@ -578,12 +582,13 @@ describe('assets module against MySQL 8 (spec 9)', () => {
             originalFilename: 'a.svg',
           }),
         ).rejects.toBeInstanceOf(ValidationFailedError);
+        // STU-2a: a person may upload video, within the 1 GiB cap.
         await expect(
           bad({
             brandId: brandA1,
             kind: 'video',
             declaredMime: 'video/mp4',
-            declaredBytes: 10,
+            declaredBytes: 1024 ** 3 + 1,
             originalFilename: 'a.mp4',
           }),
         ).rejects.toBeInstanceOf(ValidationFailedError);
@@ -728,26 +733,24 @@ describe('assets module against MySQL 8 (spec 9)', () => {
       await expect(generate({ autonomyMode: 'create' }, brandA2)).rejects.toBeInstanceOf(PolicyDeniedError);
     });
 
-    it('a generated video enters ingest (checked structurally, no derivatives); a person still cannot upload video', async () => {
-      await expect(
-        runInTenant(ctxFor(ownerA), () =>
-          withTransaction((tx) =>
-            assetService.createIntent(
-              ownerA,
-              {
-                brandId: brandA1,
-                kind: 'video',
-                declaredMime: 'video/mp4',
-                declaredBytes: 1000,
-                originalFilename: 'clip.mp4',
-              },
-              tx,
-            ),
+    it('a generated video still passes the v1 structural ingest (in-flight events); a person may now upload video (STU-2a)', async () => {
+      // STU-2a: a person's video intent is issued (capped at 1 GiB) and processed by videoIngestWorkflowV1.
+      const personIntent = await runInTenant(ctxFor(ownerA), () =>
+        withTransaction((tx) =>
+          assetService.createIntent(
+            ownerA,
+            {
+              brandId: brandA1,
+              kind: 'video',
+              declaredMime: 'video/mp4',
+              declaredBytes: 1000,
+              originalFilename: 'clip.mp4',
+            },
+            tx,
           ),
         ),
-      ).rejects.toMatchObject({
-        details: [{ path: 'kind', issue: 'processing_not_available_in_release_1' }],
-      });
+      );
+      expect(personIntent.maxBytes).toBe(1024 ** 3);
       const clip = mp4({ seconds: 6, width: 720, height: 1280 });
       const { intentId } = await runInTenant(ctxFor(agentA1), () =>
         withTransaction((tx) =>

@@ -11,6 +11,7 @@ import {
   varchar,
 } from 'drizzle-orm/mysql-core';
 import type { Provenance } from '@oremedia/contracts/assets';
+import type { MediaProbeV1 } from '@oremedia/contracts/media';
 import { brandId, createdAt, hash, id, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
@@ -70,6 +71,7 @@ export const assetVersions = mysqlTable(
     focalPoint: json('focal_point').$type<{ x: number; y: number }>(),
     altText: varchar('alt_text', { length: 1000 }),
     provenance: json('provenance').$type<Provenance>().notNull(), // upload/generated/imported: see contracts Provenance
+    mediaInfo: json('media_info').$type<MediaProbeV1>(), // video/audio: the ffprobe inspection (STU-2a)
     createdAt: createdAt(),
   },
   (t) => [
@@ -91,7 +93,7 @@ export const assetDerivatives = mysqlTable(
     tenantId: tenantId(),
     brandId: brandId(),
     assetVersionId: ref('asset_version_id').notNull(),
-    purpose: varchar('purpose', { length: 40 }).notNull(), // thumbnail, preview, web, release
+    purpose: varchar('purpose', { length: 40 }).notNull(), // DerivativePurpose or release
     transform: json('transform').$type<Record<string, unknown>>().notNull(),
     storageKey: varchar('storage_key', { length: 300 }).notNull(),
     contentHash: hash('content_hash').notNull(),
@@ -214,6 +216,7 @@ export const uploadIntents = mysqlTable(
     originalFilename: varchar('original_filename', { length: 255 }).notNull(),
     state: mysqlEnum('state', ['issued', 'uploaded', 'quarantined', 'accepted', 'rejected']).notNull(),
     rejectionReason: varchar('rejection_reason', { length: 200 }),
+    rejectionDetail: varchar('rejection_detail', { length: 300 }), // what was found and the limit (STU-2a)
     resultAssetId: ref('result_asset_id'),
     createdByUserId: ref('created_by_user_id').notNull(),
     expiresAt: ts('expires_at').notNull(),

@@ -15,6 +15,8 @@ describe('production security headers, read from infra/railway/web/Caddyfile', (
     const csp = cspDirectives(h.app['Content-Security-Policy'] as string);
     expect(csp['connect-src']).toEqual(["'self'", STORE]);
     expect(csp['font-src']).toEqual(["'self'", 'https://fonts.gstatic.com', STORE]);
+    // STU-2a: inline video and audio players load signed store URLs.
+    expect(csp['media-src']).toEqual(["'self'", 'blob:', STORE]);
     expect(csp['script-src']).toEqual(["'self'"]);
     expect(h.app['X-Frame-Options']).toBe('DENY');
     expect(h.deploymentBrand['Content-Security-Policy']).toContain("default-src 'none'");
@@ -26,6 +28,7 @@ describe('production security headers, read from infra/railway/web/Caddyfile', (
     const csp = cspDirectives(productionSecurityHeaders({}).app['Content-Security-Policy'] as string);
     expect(csp['connect-src']).toEqual(["'self'"]);
     expect(csp['font-src']).toEqual(["'self'", 'https://fonts.gstatic.com']);
+    expect(csp['media-src']).toEqual(["'self'", 'blob:']);
   });
 
   it('ignores matcher-scoped header lines (the immutable cache header on /assets/*)', () => {

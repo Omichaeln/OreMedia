@@ -47,14 +47,20 @@ export function validateVariantAgainstCapability(
     });
   }
   if (cap.media.video) {
+    const limits = cap.media.video;
     videos.forEach((v, i) => {
       const p = `media.${i}`;
-      if (!cap.media.video?.mimes.includes(v.mime))
-        issues.push({ path: p, issue: `mime_not_supported:${v.mime}` });
-      if ((v.durationMs ?? 0) > (cap.media.video?.maxDurationSec ?? Infinity) * 1000)
-        issues.push({ path: p, issue: 'video_too_long' });
-      if (v.bytes > (cap.media.video?.maxBytes ?? Infinity))
-        issues.push({ path: p, issue: 'video_too_large' });
+      if (!limits.mimes.includes(v.mime)) issues.push({ path: p, issue: `mime_not_supported:${v.mime}` });
+      // STU-2a: a video without a measured duration cannot be held to the channel's limit, so it is not passed.
+      if (v.durationMs === undefined || v.durationMs <= 0)
+        issues.push({ path: p, issue: 'video_duration_unknown' });
+      else if (v.durationMs > limits.maxDurationSec * 1000)
+        issues.push({
+          path: p,
+          issue: `video_too_long:${Math.ceil(v.durationMs / 1000)}s>${limits.maxDurationSec}s`,
+        });
+      if (v.bytes > limits.maxBytes)
+        issues.push({ path: p, issue: `video_too_large:${v.bytes}>${limits.maxBytes}` });
     });
   }
   if (images.length > 1) {

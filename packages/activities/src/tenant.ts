@@ -47,3 +47,12 @@ export function heartbeat(detail: string): void {
     // Outside a Temporal activity (unit tests, scripts): no-op.
   }
 }
+
+/** The running activity's cancellation signal (cancel, timeout, worker shutdown); undefined outside an activity. */
+export function cancellationSignal(): AbortSignal | undefined {
+  try {
+    return Context.current().cancellationSignal;
+  } catch {
+    return undefined;
+  }
+}

@@ -143,6 +143,25 @@
           "behaviour": "hang"
         }
       ]
+    },
+    "reel_pending": {
+      "description": "STU-2a: a rendered video export published as a Reel: the container names the signed release URL as video_url.",
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "host": "graph.facebook.com",
+            "path": "/v25.0/ig_900/media",
+            "bodyIncludes": [
+              "\"video_url\":\"https://media.oremedia.test/release/export.mp4\"",
+              "\"media_type\":\"REELS\"",
+              "\"share_to_feed\":true",
+              "\"caption\":\"Hello from Oremedia #launch\""
+            ]
+          },
+          "response": { "status": 200, "json": { "id": "ctn_reel" } }
+        }
+      ]
     }
   }
 }

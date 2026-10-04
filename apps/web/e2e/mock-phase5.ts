@@ -467,6 +467,8 @@ const SETTINGS_SCHEMA: Record<string, Record<string, unknown>> = {
 };
 
 export class Phase5Backend {
+  /** STU-2a: exports the media endpoint answers as video exports (inline player, poster, captions); none by default. */
+  readonly videoExportIds = new Set<string>();
   readonly channels = new Map<string, Channel>();
   readonly revisions = new Map<string, Revision>();
   readonly variants = new Map<string, Variant>();
@@ -1749,9 +1751,13 @@ export function phase5Routers(
           mime: string;
           width: number;
           height: number;
+          durationMs: number | null;
+          fps: number | null;
           verified: true;
           url: string;
           expiresAt: string;
+          posterUrl: string | null;
+          captionsUrl: string | null;
         }> = [];
         for (const e of r.frozenManifest.exports) {
           const target = e.destinationId ?? e.channelConnectionId ?? '';
@@ -1760,16 +1766,22 @@ export function phase5Routers(
             seen.channelConnectionIds.push(target);
             continue;
           }
+          const video = b.videoExportIds.has(e.exportId);
           items.push({
             exportId: e.exportId,
             channelConnectionIds: [target],
             contentHash: e.contentHash,
-            mime: 'image/png',
-            width: 1080,
-            height: 1080,
+            mime: video ? 'video/mp4' : 'image/png',
+            width: video ? 320 : 1080,
+            height: video ? 180 : 1080,
+            durationMs: video ? 2_000 : null,
+            fps: video ? 30 : null,
             verified: true as const,
-            url: PNG_DATA_URL,
+            // A video plays from the store (the WebM fixture); its poster and captions are signed beside it.
+            url: video ? `/e2e-object/${e.exportId}.webm` : PNG_DATA_URL,
             expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            posterUrl: video ? `/e2e-object/${e.exportId}-poster.png` : null,
+            captionsUrl: video ? `/e2e-object/${e.exportId}.vtt` : null,
           });
         }
         // RA-09: the frozen article's images, signed per asset version; only the seeded photo exists.

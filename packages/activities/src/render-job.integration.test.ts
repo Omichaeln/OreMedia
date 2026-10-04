@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { MockActivityEnvironment } from '@temporalio/testing';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
-import type { CreativeDocumentV1, Element, RenderExportInput } from '@oremedia/contracts/creative';
+import type {
+  CreativeDocumentV1,
+  Element,
+  RenderExportInput,
+  RenderJobState,
+} from '@oremedia/contracts/creative';
 import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { RenderJobInputV1, RenderResolveSuccess } from '@oremedia/contracts/render';
 import type { Tx } from '@oremedia/db';
@@ -201,7 +206,7 @@ function studioDocument(
 interface StoredJob {
   renderJobId: string;
   tenantId: string;
-  state: 'pending' | 'rendering' | 'ready' | 'failed';
+  state: RenderJobState;
   revisionId: string;
   documentId: string;
   brandId: string;

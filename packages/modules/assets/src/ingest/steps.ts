@@ -53,12 +53,16 @@ const MIME_EQUIVALENTS: ReadonlyArray<readonly string[]> = [
   ['font/otf', 'application/x-font-otf', 'application/font-sfnt', 'font/sfnt'],
   ['image/jpeg', 'image/jpg'],
   ['image/heic', 'image/heif'],
+  ['video/mp4', 'video/x-m4v'],
 ];
 
 const normaliseMime = (m: string): string => (m.split(';')[0] ?? '').trim().toLowerCase();
 
 /** Detector names with an accepted canonical mime (file-type reports M4A audio as audio/x-m4a). */
-const CANONICAL_MIME: Readonly<Record<string, string>> = { 'audio/x-m4a': 'audio/mp4' };
+const CANONICAL_MIME: Readonly<Record<string, string>> = {
+  'audio/x-m4a': 'audio/mp4',
+  'video/x-m4v': 'video/mp4',
+};
 
 function mimeMatches(declared: string, sniffed: string): boolean {
   const d = normaliseMime(declared);
@@ -209,7 +213,7 @@ const SVG_ALLOWED_URI = /^(?:#|[^a-z/\\]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\
  * image-set() string with a scheme other than data:image or a `//` prefix, and @import.
  */
 const EXTERNAL_STYLE_REF =
-  /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\\)|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+  /(?:url\(\s*(?:['"]\s*)?(?:[a-z][a-z0-9+.-]*:|\/\/|\\)|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
 
 /** The text as CSS reads it: comments removed, escapes (`\68`, `\h`) decoded. Used only to test, never stored. */
 export function cssReadable(text: string): string {
@@ -323,8 +327,10 @@ export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok
       ? { ok: false, detail: 'entity_declaration' }
       : { ok: true, text };
   const before = text.slice(0, match.index);
-  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own.
-  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*$/.test(before))
+  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own. One greedy
+  // `<!--…-->` accepts exactly what a repeated lazy comment group did (that group could already run across `-->`),
+  // without the exponential backtracking the repetition cost on a run of comments followed by anything else.
+  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*-->\s*)?$/.test(before))
     return { ok: false, detail: 'entity_declaration' };
   const rest = text.slice(match.index + match[0].length);
   if (/<!DOCTYPE|<!ENTITY/i.test(rest)) return { ok: false, detail: 'entity_declaration' };

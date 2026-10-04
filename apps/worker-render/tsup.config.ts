@@ -14,7 +14,7 @@ import { defineConfig } from 'tsup';
  *  2. the render-only editor bundle is copied next to main.js. The image build must therefore run
  *     `pnpm --filter @oremedia/editor build:renderer` before `pnpm --filter @oremedia/worker-render build`.
  */
-const QUEUES = ['render', 'media'] as const;
+const QUEUES = ['render', 'media', 'video'] as const;
 
 export default defineConfig({
   entry: {

@@ -256,3 +256,26 @@ describe('renderJobWorkflowV1 orchestration (spec 11.5, 13.1)', () => {
     expect(isFailureOfType(null, 'NotFoundError')).toBe(false);
   });
 });
+
+describe('renderJobWorkflowV1 and a job cancelled meanwhile (STU-2a rolling deploy)', () => {
+  it('a job cancelled before the worker begins ends once as failed (illegal_state); nothing renders, no retry loop', async () => {
+    const f = fakes({
+      beginRender: async () => {
+        throw activityFailure('ValidationFailedError', 'Render job is cancelled');
+      },
+    });
+    expect(await runRenderJob(f.acts, input)).toEqual({ outcome: 'failed', reason: 'illegal_state' });
+    expect(f.names()).toEqual(['beginRender', 'failRender']);
+  });
+
+  it('a job cancelled while it rendered: completeRender is refused once (the state machine has no ready from cancelled)', async () => {
+    const f = fakes({
+      completeRender: async () => {
+        throw activityFailure('ValidationFailedError', 'render_job_cancelled');
+      },
+    });
+    expect(await runRenderJob(f.acts, input)).toEqual({ outcome: 'failed', reason: 'illegal_state' });
+    expect(f.names().filter((n) => n === 'completeRender')).toHaveLength(1);
+    expect(f.names().at(-1)).toBe('failRender');
+  });
+});
