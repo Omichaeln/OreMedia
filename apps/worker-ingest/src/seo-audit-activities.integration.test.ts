@@ -234,7 +234,7 @@ describe('SEO audit activity hosts (worker-ingest) against MySQL and a loopback 
   });
 
   let runId = '';
-  it('plans in the destination tenant as the platform job and opens one run; a replayed plan opens no second run', async () => {
+  it('plans in the destination tenant as the platform job and opens one run; the same plan retried resumes its run and opens no second one', async () => {
     const plan = await acts.planSeoAudit(input(tenantA, siteA));
     expect(plan).toMatchObject({ outcome: 'planned', origin, seeds: [`${origin}/`] });
     if (plan.outcome !== 'planned') throw new Error('expected a plan');
@@ -250,7 +250,8 @@ describe('SEO audit activity hosts (worker-ingest) against MySQL and a loopback 
     const started = await auditsOf(tenantA, 'seo_audit.started', siteA);
     expect(started).toHaveLength(1);
     expect(started[0]).toMatchObject({ actorKind: SEO_AUDIT_ACTOR.kind, actorId: SEO_AUDIT_ACTOR.id });
-    expect((await acts.planSeoAudit(input(tenantA, siteA))).outcome).toBe('skipped');
+    // The same plan retried resumes its own run (a Temporal retry of the activity), opening nothing new.
+    expect(await acts.planSeoAudit(input(tenantA, siteA))).toMatchObject({ outcome: 'planned', runId });
     expect((await runsOf(siteA)).map((r) => r.id)).toEqual([runId]);
     expect(await auditsOf(tenantA, 'seo_audit.started', siteA)).toHaveLength(1);
   });
