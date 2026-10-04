@@ -5,6 +5,7 @@ import {
   uploadIntents,
   usageRights,
 } from '@oremedia/db/schema/assets';
+import { sql } from 'drizzle-orm';
 import { sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { CrossTenantFixture, SeedExtension } from '../cross-tenant-inputs';
@@ -99,9 +100,13 @@ export const ASSETS_SEED: SeedExtension | null = async (db, { tenantId, brandIds
       rightsState: 'unknown',
     },
   ]);
-  await db
-    .insert(assetVersions)
-    .values([version(assetVersionId, assetId), version(pendingVersionId, pendingAssetId)]);
+  // sql``, not insert(…).values(): Drizzle would name media_info (0026) on asset_versions and rejection_detail (0026)
+  // on upload_intents, which the roll-forward suites' earlier heads do not have; the columns named here exist at
+  // every head, later ones take their defaults.
+  for (const v of [version(assetVersionId, assetId), version(pendingVersionId, pendingAssetId)])
+    await db.execute(
+      sql`insert into ${assetVersions} (id, tenant_id, brand_id, asset_id, number, storage_key, content_hash, mime, bytes, width, height, provenance, created_at) values (${v.id}, ${v.tenantId}, ${v.brandId}, ${v.assetId}, ${v.number}, ${v.storageKey}, ${v.contentHash}, ${v.mime}, ${v.bytes}, ${v.width}, ${v.height}, ${JSON.stringify(v.provenance)}, ${new Date()})`,
+    );
   await db.insert(assetDerivatives).values({
     id: newId('assetDerivative'),
     tenantId,
@@ -127,19 +132,9 @@ export const ASSETS_SEED: SeedExtension | null = async (db, { tenantId, brandIds
     releases: [],
     restrictions: [],
   });
-  await db.insert(uploadIntents).values({
-    id: uploadIntentId,
-    tenantId,
-    brandId,
-    kind: 'photo',
-    declaredMime: 'image/png',
-    declaredBytes: 1024,
-    maxBytes: 50 * 1024 * 1024,
-    storageKey: `quarantine/${tenantId}/${uploadIntentId}`,
-    originalFilename: 'seed-intent.png',
-    state: 'issued',
-    createdByUserId: ownerUserId,
-    expiresAt: new Date(Date.now() + 3600_000),
-  });
+  const at = new Date();
+  await db.execute(
+    sql`insert into ${uploadIntents} (id, tenant_id, brand_id, kind, declared_mime, declared_bytes, max_bytes, storage_key, original_filename, state, created_by_user_id, expires_at, created_at, updated_at) values (${uploadIntentId}, ${tenantId}, ${brandId}, 'photo', 'image/png', 1024, ${50 * 1024 * 1024}, ${`quarantine/${tenantId}/${uploadIntentId}`}, 'seed-intent.png', 'issued', ${ownerUserId}, ${new Date(Date.now() + 3600_000)}, ${at}, ${at})`,
+  );
   return { assetId, assetVersionId, pendingAssetId, uploadIntentId, usageRightsId };
 };

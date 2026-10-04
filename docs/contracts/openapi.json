@@ -1167,7 +1167,17 @@
                       },
                       {
                         "type": "string",
-                        "enum": ["thumbnail", "preview", "web", "png"]
+                        "enum": [
+                          "thumbnail",
+                          "preview",
+                          "web",
+                          "png",
+                          "poster",
+                          "strip",
+                          "strip_map",
+                          "proxy",
+                          "waveform"
+                        ]
                       }
                     ]
                   }
@@ -16769,7 +16779,17 @@
                 },
                 {
                   "type": "string",
-                  "enum": ["thumbnail", "preview", "web", "png"]
+                  "enum": [
+                    "thumbnail",
+                    "preview",
+                    "web",
+                    "png",
+                    "poster",
+                    "strip",
+                    "strip_map",
+                    "proxy",
+                    "waveform"
+                  ]
                 }
               ]
             }

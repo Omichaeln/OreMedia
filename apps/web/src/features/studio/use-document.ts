@@ -82,7 +82,7 @@ export function useRenderJob(renderJobId: string | null) {
     enabled: renderJobId !== null,
     refetchInterval: (q) => {
       const state = q.state.data?.state;
-      return state === 'ready' || state === 'failed' ? false : 2000;
+      return state === 'ready' || state === 'failed' || state === 'cancelled' ? false : 2000;
     },
   });
 }

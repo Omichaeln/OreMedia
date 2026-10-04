@@ -1,10 +1,16 @@
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PolicyDeniedError } from '@oremedia/contracts/errors';
@@ -76,8 +82,71 @@ export interface StorageProvider {
   headObject(key: string): Promise<StorageObjectHead | null>;
   getObject(key: string, range?: ByteRange): Promise<Buffer | null>;
   putObject(key: string, body: Buffer, opts: { contentType: string }): Promise<void>;
+  /**
+   * STU-2a: the object (or an inclusive byte range of it) as a stream, for objects too large to hold in memory
+   * (video and audio up to the upload caps). Null when the object does not exist.
+   */
+  getObjectStream(key: string, range?: ByteRange): Promise<Readable | null>;
+  /**
+   * STU-2a: writes a stream of unknown length. Bodies larger than one part go up as a multipart upload in parts of
+   * equal size (R2 requires it), so memory holds one part at a time; a failed upload is aborted, never left dangling.
+   */
+  putObjectStream(key: string, body: Readable, opts: { contentType: string }): Promise<{ bytes: number }>;
   copyObject(fromKey: string, toKey: string): Promise<void>;
   deleteObject(key: string): Promise<void>;
+}
+
+/** Multipart part size: every part but the last has exactly this size (S3 minimum 5 MiB; R2 wants equal parts). */
+export const MULTIPART_PART_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Re-chunks a stream into buffers of exactly `size` bytes (the last may be shorter). Holds at most one part plus one
+ * incoming chunk in memory.
+ */
+export async function* chunkStream(
+  body: AsyncIterable<Uint8Array | string> | Iterable<Uint8Array | string>,
+  size: number,
+): AsyncGenerator<Buffer> {
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
+  for await (const raw of body) {
+    let chunk =
+      typeof raw === 'string' ? Buffer.from(raw) : Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+    while (chunk.length > 0) {
+      const take = Math.min(size - pendingBytes, chunk.length);
+      pending.push(chunk.subarray(0, take));
+      pendingBytes += take;
+      chunk = chunk.subarray(take);
+      if (pendingBytes === size) {
+        yield Buffer.concat(pending, size);
+        pending = [];
+        pendingBytes = 0;
+      }
+    }
+  }
+  if (pendingBytes > 0) yield Buffer.concat(pending, pendingBytes);
+}
+
+/** SHA-256 and length of a stored object, read as a stream (never loaded whole). Null when it does not exist. */
+export async function hashStoredObject(
+  store: StorageProvider,
+  key: string,
+  onProgress?: (bytes: number) => void,
+): Promise<{ contentHash: string; bytes: number } | null> {
+  const stream = await store.getObjectStream(key);
+  if (!stream) return null;
+  const hash = createHash('sha256');
+  let bytes = 0;
+  let reported = 0;
+  for await (const chunk of stream as AsyncIterable<Buffer>) {
+    hash.update(chunk);
+    bytes += chunk.length;
+    if (onProgress && bytes - reported >= MULTIPART_PART_BYTES) {
+      reported = bytes;
+      onProgress(bytes);
+    }
+  }
+  return { contentHash: hash.digest('hex'), bytes };
 }
 
 /** Key builders: the only way keys are made, so the prefix and tenant segment can never be omitted. */
@@ -139,6 +208,18 @@ abstract class TenantPrefixedStorage implements StorageProvider {
     assertTenantKey(key);
     return this.doPutObject(key, body, opts);
   }
+  async getObjectStream(key: string, range?: ByteRange): Promise<Readable | null> {
+    assertTenantKey(key);
+    return this.doGetObjectStream(key, range);
+  }
+  async putObjectStream(
+    key: string,
+    body: Readable,
+    opts: { contentType: string },
+  ): Promise<{ bytes: number }> {
+    assertTenantKey(key);
+    return this.doPutObjectStream(key, body, opts);
+  }
   async copyObject(fromKey: string, toKey: string): Promise<void> {
     assertTenantKey(fromKey);
     assertTenantKey(toKey);
@@ -154,6 +235,12 @@ abstract class TenantPrefixedStorage implements StorageProvider {
   protected abstract doHeadObject(key: string): Promise<StorageObjectHead | null>;
   protected abstract doGetObject(key: string, range?: ByteRange): Promise<Buffer | null>;
   protected abstract doPutObject(key: string, body: Buffer, opts: { contentType: string }): Promise<void>;
+  protected abstract doGetObjectStream(key: string, range?: ByteRange): Promise<Readable | null>;
+  protected abstract doPutObjectStream(
+    key: string,
+    body: Readable,
+    opts: { contentType: string },
+  ): Promise<{ bytes: number }>;
   protected abstract doCopyObject(fromKey: string, toKey: string): Promise<void>;
   protected abstract doDeleteObject(key: string): Promise<void>;
 }
@@ -166,6 +253,8 @@ export interface S3StorageConfig {
   secretAccessKey?: string;
   buckets: { assets: string; releases: string };
   forcePathStyle?: boolean;
+  /** Multipart part size for putObjectStream (tests use a small one); default MULTIPART_PART_BYTES. */
+  partBytes?: number;
 }
 
 const isNotFound = (err: unknown): boolean => {
@@ -263,6 +352,76 @@ export class S3StorageProvider extends TenantPrefixedStorage {
       }),
     );
   }
+  protected async doGetObjectStream(key: string, range?: ByteRange) {
+    try {
+      const res = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucketForKey(key),
+          Key: key,
+          ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+        }),
+      );
+      if (!res.Body) return null;
+      // In Node the SDK's body is an http.IncomingMessage (a Readable) mixed with its helpers.
+      return res.Body as Readable;
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+  protected async doPutObjectStream(key: string, body: Readable, opts: { contentType: string }) {
+    const Bucket = this.bucketForKey(key);
+    const parts = chunkStream(body, this.cfg.partBytes ?? MULTIPART_PART_BYTES);
+    const first = await parts.next();
+    const firstPart = first.done ? Buffer.alloc(0) : first.value;
+    const second = first.done ? first : await parts.next();
+    if (second.done) {
+      // One part or less: a plain PUT (multipart needs at least one full part before the last).
+      await this.client.send(
+        new PutObjectCommand({ Bucket, Key: key, Body: firstPart, ContentType: opts.contentType }),
+      );
+      return { bytes: firstPart.length };
+    }
+    const created = await this.client
+      .send(new CreateMultipartUploadCommand({ Bucket, Key: key, ContentType: opts.contentType }))
+      .catch((err: unknown) => {
+        body.destroy();
+        throw err;
+      });
+    const UploadId = created.UploadId;
+    if (!UploadId) throw new Error(`multipart upload not created for ${key}`);
+    const done: Array<{ ETag: string; PartNumber: number }> = [];
+    let bytes = 0;
+    try {
+      const upload = async (part: Buffer) => {
+        const PartNumber = done.length + 1;
+        const res = await this.client.send(
+          new UploadPartCommand({ Bucket, Key: key, UploadId, PartNumber, Body: part }),
+        );
+        done.push({ ETag: res.ETag ?? '', PartNumber });
+        bytes += part.length;
+      };
+      await upload(firstPart);
+      await upload(second.value);
+      for await (const part of parts) await upload(part);
+      await this.client.send(
+        new CompleteMultipartUploadCommand({ Bucket, Key: key, UploadId, MultipartUpload: { Parts: done } }),
+      );
+      return { bytes };
+    } catch (err) {
+      // The source stops too (a file or upstream stream is not left open behind a failed upload).
+      body.destroy();
+      await this.client
+        .send(new AbortMultipartUploadCommand({ Bucket, Key: key, UploadId }))
+        .catch((abortErr: unknown) =>
+          logger().warn(
+            { errorName: (abortErr as Error | undefined)?.name ?? 'unknown' },
+            'multipart upload abort failed; the bucket lifecycle rule removes it',
+          ),
+        );
+      throw err;
+    }
+  }
   protected async doCopyObject(fromKey: string, toKey: string) {
     await this.client.send(
       new CopyObjectCommand({
@@ -311,6 +470,19 @@ export class MemoryStorageProvider extends TenantPrefixedStorage {
   }
   protected async doPutObject(key: string, body: Buffer, opts: { contentType: string }) {
     this.objects.set(key, { body: Buffer.from(body), contentType: opts.contentType });
+  }
+  protected async doGetObjectStream(key: string, range?: ByteRange) {
+    const bytes = await this.doGetObject(key, range);
+    if (!bytes) return null;
+    // Served in small chunks so consumers see a real stream (several chunks), as from the store.
+    return Readable.from(chunkStream([bytes], 64 * 1024));
+  }
+  protected async doPutObjectStream(key: string, body: Readable, opts: { contentType: string }) {
+    const parts: Buffer[] = [];
+    for await (const part of chunkStream(body, MULTIPART_PART_BYTES)) parts.push(part);
+    const all = Buffer.concat(parts);
+    this.objects.set(key, { body: all, contentType: opts.contentType });
+    return { bytes: all.length };
   }
   protected async doCopyObject(fromKey: string, toKey: string) {
     const o = this.objects.get(fromKey);

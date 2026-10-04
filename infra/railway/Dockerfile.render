@@ -5,7 +5,13 @@
 # means regenerating tooling/test-fixtures/golden on the new build (spec 19.5).
 FROM mcr.microsoft.com/playwright:v1.56.1-noble AS base
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+# STU-2a: ffmpeg + ffprobe for video and audio ingest (task queue `video`), pinned to Ubuntu noble's package (the same
+# 6.1.1 build the media tests run against); bumping it means re-running the video suites on the new build.
+ARG FFMPEG_VERSION=7:6.1.1-3ubuntu5
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+  && apt-get install -y --no-install-recommends "ffmpeg=${FFMPEG_VERSION}" \
+  && ffmpeg -hide_banner -version | head -1 && ffprobe -hide_banner -version | head -1 \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS build
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true

@@ -1,4 +1,5 @@
 import { StatusBanner } from '@oremedia/ui';
+import { rejectionText } from './media';
 import type { UploadStep } from './use-upload';
 
 /**
@@ -46,11 +47,13 @@ export function UploadRejected({ step }: { step: Extract<UploadStep, { kind: 're
       title="Rejected at ingest"
       description={
         <>
-          {step.message ?? `The file was not catalogued: ${step.reason.replaceAll('_', ' ')}.`}{' '}
+          {step.message ?? rejectionText(step.reason)}{' '}
+          {step.detail ? <span className="mt-1 block">Found: {step.detail}.</span> : null}
           <span className="text-xs text-muted-foreground">(reason: {step.reason})</span>
         </>
       }
       data-testid="upload-rejected"
+      data-reason={step.reason}
     />
   );
 }

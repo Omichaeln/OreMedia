@@ -580,13 +580,33 @@ export const reviewService = {
           mime: e?.mime ?? null,
           width: e?.width ?? null,
           height: e?.height ?? null,
+          // STU-2a: a video export's duration and frame rate (null for stills).
+          durationMs: e?.durationMs ?? null,
+          fps: e?.fps ?? null,
         };
         if (!e || e.contentHash !== f.contentHash) {
-          items.push({ ...base, verified: false as const, url: null, expiresAt: null });
+          items.push({
+            ...base,
+            verified: false as const,
+            url: null,
+            expiresAt: null,
+            posterUrl: null,
+            captionsUrl: null,
+          });
           continue;
         }
         const signed = await mediaSigner(e.storageKey);
-        items.push({ ...base, verified: true as const, url: signed.url, expiresAt: signed.expiresAt });
+        // A video export plays inline with its poster frame and, when it has one, its WebVTT captions sidecar.
+        const poster = e.posterStorageKey ? await mediaSigner(e.posterStorageKey) : null;
+        const captions = e.captionsStorageKey ? await mediaSigner(e.captionsStorageKey) : null;
+        items.push({
+          ...base,
+          verified: true as const,
+          url: signed.url,
+          expiresAt: signed.expiresAt,
+          posterUrl: poster?.url ?? null,
+          captionsUrl: captions?.url ?? null,
+        });
       }
       // RA-09: the frozen article's images, one per asset version (immutable bytes), signed the same way.
       const images = [];

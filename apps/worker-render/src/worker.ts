@@ -13,11 +13,20 @@ import {
   createAssetIngestActivities,
   createBrandSourceExtractActivities,
   createRenderJobActivities,
+  createVideoExportActivities,
+  createVideoIngestActivities,
 } from '@oremedia/activities';
 import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import { closeDatabase, configureDatabase } from '@oremedia/db';
 import { RENDERER_VERSION } from '@oremedia/editor/renderer/version';
-import { configureStorage, createStorageFromEnv, storage, uploadsCapability } from '@oremedia/module-assets';
+import {
+  configureStorage,
+  createStorageFromEnv,
+  mediaToolsAvailable,
+  storage,
+  sweepStaleTempDirs,
+  uploadsCapability,
+} from '@oremedia/module-assets';
 import { Runtime } from '@temporalio/worker';
 import {
   reportConfiguration,
@@ -30,10 +39,12 @@ import { createChromiumRenderer } from './chromium-renderer';
 import { creativeRenderJobStore } from './creative-store';
 
 /**
- * worker-render (spec 4.4, 11.5): the isolated worker pool for CPU/memory-heavy and untrusted-input work. Two
- * Temporal workers share one connection: task queue `render` (renderJobWorkflowV1: headless Chromium) and task
+ * worker-render (spec 4.4, 11.5): the isolated worker pool for CPU/memory-heavy and untrusted-input work. Three
+ * Temporal workers share one connection: task queue `render` (renderJobWorkflowV1: headless Chromium), task
  * queue `media` (assetIngestWorkflowV1: sniffing, scanning, sanitising and derivatives of uploads; BSC-4 document
- * text extraction for brand assist jobs). No credential
+ * text extraction for brand assist jobs) and, STU-2a, task queue `video` (videoIngestWorkflowV1 and the video export
+ * store: ffprobe/ffmpeg jobs that run for minutes, with their own concurrency, VIDEO_CONCURRENCY, so they never
+ * starve still renders or image ingest). No credential
  * broker access; egress is restricted to the object store at the network layer. Workflow code is pre-bundled at
  * build time (tsup.config.ts → dist/workflows.<queue>.js) because production images carry no sources. The process
  * entry is main.ts, which checks the configuration before this module (and its dependencies) load.
@@ -63,7 +74,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const production = (process.env['NODE_ENV'] ?? 'development') === 'production';
 
 /** The pre-built bundle next to this file; outside production the queue entry is bundled at start instead. */
-function workflowsFor(queue: 'render' | 'media'): Pick<WorkerOptions, 'workflowBundle' | 'workflowsPath'> {
+function workflowsFor(
+  queue: 'render' | 'media' | 'video',
+): Pick<WorkerOptions, 'workflowBundle' | 'workflowsPath'> {
   const codePath = join(here, `workflows.${queue}.js`);
   if (existsSync(codePath)) return { workflowBundle: { codePath } };
   if (production) {
@@ -130,20 +143,60 @@ const mediaWorker = await Worker.create({
   },
   maxConcurrentActivityTaskExecutions: Number(process.env['MEDIA_CONCURRENCY'] ?? 4),
 });
-log.info({ status: RENDERER_VERSION }, 'worker-render polling task queues render and media');
+// Media jobs work in private temp directories (MEDIA_TMP_DIR); a container killed mid-job leaves them behind.
+const swept = await sweepStaleTempDirs({ olderThanMs: 6 * 3_600_000 });
+if (swept > 0) log.info({ count: swept }, 'removed stale media temp directories');
+// Each video job holds a source of up to 1 GiB on temp disk and runs one ffmpeg at a time (two decoder threads).
+// The render image carries ffmpeg/ffprobe: in production a container without them refuses to start (a broken image
+// must fail its deploy, not leave video uploads waiting). Elsewhere `video` is simply not polled, and the log says so.
+const mediaTools = await mediaToolsAvailable();
+if (!mediaTools && production) {
+  log.error(
+    { queue: 'video' },
+    'ffmpeg/ffprobe not found in the image: refusing to start (task queue video)',
+  );
+  process.exit(2);
+}
+const videoWorker = mediaTools
+  ? await Worker.create({
+      connection,
+      namespace,
+      taskQueue: 'video',
+      ...workflowsFor('video'),
+      activities: {
+        ...createVideoIngestActivities({
+          storage: storage(),
+          ...(process.env['MEDIA_TMP_MAX_BYTES']
+            ? { tmpMaxBytes: Number(process.env['MEDIA_TMP_MAX_BYTES']) }
+            : {}),
+          ...(process.env['MEDIA_PROXY_TIMEOUT_MS']
+            ? { proxyTimeoutMs: Number(process.env['MEDIA_PROXY_TIMEOUT_MS']) }
+            : {}),
+        }),
+        ...createVideoExportActivities({ storage: storage() }),
+      },
+      maxConcurrentActivityTaskExecutions: Number(process.env['VIDEO_CONCURRENCY'] ?? 1),
+    })
+  : null;
+if (!videoWorker) log.error({ queue: 'video' }, 'ffmpeg/ffprobe not found: task queue video is not polled');
+const polled = ['render', 'media', ...(videoWorker ? ['video'] : [])];
+log.info(
+  { status: RENDERER_VERSION, queue: polled.join(',') },
+  `worker-render polling task queues ${polled.join(', ')}`,
+);
 // Answer the platform health check only now that both workers were created (a failed start throws above).
 const health = await startHealthServer(undefined, config.degraded);
 
 const shutdown = () => {
   log.info({}, 'worker-render shutting down');
   // The SDK already drains on SIGTERM/SIGINT; shutdown() on a worker that is not RUNNING throws IllegalStateError.
-  for (const w of [renderWorker, mediaWorker]) if (w.getState() === 'RUNNING') w.shutdown();
+  for (const w of [renderWorker, mediaWorker, videoWorker]) if (w && w.getState() === 'RUNNING') w.shutdown();
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 try {
-  await Promise.all([renderWorker.run(), mediaWorker.run()]);
+  await Promise.all([renderWorker.run(), mediaWorker.run(), ...(videoWorker ? [videoWorker.run()] : [])]);
 } finally {
   await health.close();
   await renderer.close();

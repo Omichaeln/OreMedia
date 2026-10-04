@@ -1,6 +1,14 @@
 export { inTenant, heartbeat, type GrantLoader, type ActivityActorGrants } from './tenant';
 export { principalFor, resolveActivityActor, loadActorGrants } from './actor';
 export { createAssetIngestActivities } from './asset-ingest';
+export { createVideoIngestActivities } from './video-ingest';
+export {
+  createVideoExportActivities,
+  checkVideoExport,
+  topLevelBoxes,
+  videoExportDedupeKey,
+  videoExportStorageKeys,
+} from './video-export';
 export {
   createRenderJobActivities,
   RenderIntegrityError,
