@@ -49,6 +49,11 @@ export const OPERATIONS_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
     why: "takes no input: the feature flags evaluated for the caller's verified tenant",
     input: () => undefined,
   },
+  'operations.flags.list': {
+    why: 'takes no input and is operator-only: a tenant owner is refused, and the refusal names no other tenant',
+    input: () => undefined,
+    expectError: 'FORBIDDEN',
+  },
   'operations.providers.list': {
     why: 'takes no input: the provider adapters registered on the deployment with their activation, no tenant content',
     input: () => undefined,
