@@ -5,6 +5,7 @@ import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   CROSS_TENANT_INPUTS,
   MCP_CROSS_TENANT_INPUTS,
+  OWN_TENANT_INPUTS,
   callMcpTool,
   callPath,
   callRest,
@@ -79,6 +80,92 @@ describe('cross-tenant harness', () => {
       expect(await tenantB.snapshot()).toEqual(before); // no writes landed in tenant B
     },
   );
+
+  // ---- Ledger G14: a procedure with no foreign reference to try answers only the caller's tenant data. ----
+  const ownTenantPaths = procedures
+    .map((p) => p.path)
+    .filter((path) => CROSS_TENANT_INPUTS[path] && CROSS_TENANT_INPUTS[path].buildInput === null);
+
+  /**
+   * Its own pair of tenants in the same database: these calls write in the caller's tenant (a brand, a membership,
+   * a definition, a routing policy, a password), which the tests above and below must not see.
+   */
+  describe('procedures that take no foreign reference (ledger G14)', () => {
+    let caller: SeededTenant;
+    let other: SeededTenant;
+    beforeAll(async () => {
+      ({ tenantA: caller, tenantB: other } = await seedTwoTenants(tdb.db));
+    });
+
+    /** Every id of the other tenants a leak would carry (rows, people, brands, principals), none shared with the caller. */
+    const foreignValues = (): string[] => {
+      const own = new Set<string>([
+        caller.tenantId,
+        caller.ownerUserId,
+        caller.ownerMembershipId,
+        ...Object.values(caller.ids),
+      ]);
+      return [
+        ...new Set(
+          [other, tenantA, tenantB].flatMap((t) => [
+            t.tenantId,
+            t.ownerUserId,
+            t.ownerMembershipId,
+            t.creatorUserId,
+            t.creatorMembershipId,
+            ...t.brandIds,
+            t.servicePrincipalId,
+            t.apiClientId,
+            ...Object.values(t.ids),
+          ]),
+        ),
+      ].filter((v) => v.length >= 10 && !own.has(v));
+    };
+    /** Every value under a `tenantId` key, at any depth of the answer. */
+    const tenantIdsIn = (value: unknown): unknown[] =>
+      Array.isArray(value)
+        ? value.flatMap(tenantIdsIn)
+        : value && typeof value === 'object'
+          ? Object.entries(value).flatMap(([k, v]) => (k === 'tenantId' ? [v] : tenantIdsIn(v)))
+          : [];
+
+    it('every procedure without a foreign id to try says why and is called as the caller tenant instead', () => {
+      expect(ownTenantPaths.length).toBeGreaterThan(0);
+      const missing = ownTenantPaths.filter((path) => !(path in OWN_TENANT_INPUTS));
+      expect(
+        missing,
+        `add an own-tenant entry in tooling/test-fixtures/src/inputs for: ${missing.join(', ')}`,
+      ).toEqual([]);
+      const stale = Object.keys(OWN_TENANT_INPUTS).filter((path) => !ownTenantPaths.includes(path));
+      expect(
+        stale,
+        'own-tenant entries for procedures that now take a foreign id (or no longer exist)',
+      ).toEqual([]);
+      for (const [path, fixture] of Object.entries(OWN_TENANT_INPUTS)) expect(fixture.why, path).toBeTruthy();
+    });
+
+    it.each(ownTenantPaths.map((path) => ({ path })))(
+      '$path answers only the caller tenant data and changes nothing of another tenant',
+      async ({ path }) => {
+        const fixture = OWN_TENANT_INPUTS[path];
+        expect(fixture, `${path} has an own-tenant entry`).toBeDefined();
+        if (!fixture) return;
+        const before = await other.snapshot();
+        const res = await callPath(
+          { bearer: caller.ownerToken, tenantId: caller.tenantId },
+          path,
+          fixture.input(),
+        );
+        if (fixture.expectError) expect(res.error?.code, path).toBe(fixture.expectError);
+        else expect(res.error, `${path} refused: ${JSON.stringify(res.error)}`).toBeUndefined();
+        const answer = JSON.stringify(res.data ?? res.error ?? null);
+        for (const value of foreignValues())
+          expect(answer.includes(value), `${path} answered another tenant's ${value}`).toBe(false);
+        for (const tenantId of tenantIdsIn(res.data)) expect(tenantId, path).toBe(caller.tenantId);
+        expect(await other.snapshot()).toEqual(before); // no writes landed in the other tenant
+      },
+    );
+  });
 
   // ---- Public REST (spec 7.6): generated from the REST route table; each route reuses its procedure's fixture. ----
   const restRoutes = allRestRoutes();

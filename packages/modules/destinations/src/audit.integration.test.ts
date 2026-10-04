@@ -293,11 +293,21 @@ describe('technical SEO audit against MySQL 8 and a loopback site (R2-4)', () =>
     expect(served).toEqual(['/robots.txt', '/sitemap.xml']);
     const stored = (await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.id, runId)))[0]!;
     expect(stored).toMatchObject({ outcome: 'running', trigger: 'scheduled', robotsDisallow: ['/private/'] });
-    // A second plan while this one runs is locked (the lock, then the open run).
-    expect(await asPlatformJob(tenantA, () => runtime.audit.planSeoAudit(base()))).toEqual({
+    // A second plan while this one runs (another sweep's key: a later `now`) is locked (the lock, then the open
+    // run).
+    const later = { ...base(), now: new Date(clock.getTime() + 60_000).toISOString() };
+    expect(await asPlatformJob(tenantA, () => runtime.audit.planSeoAudit(later))).toEqual({
       outcome: 'skipped',
       reason: 'locked',
     });
+    // The same plan retried (same input, as Temporal retries it) resumes this run: no second run, no second start.
+    expect(await asPlatformJob(tenantA, () => runtime.audit.planSeoAudit(base()))).toEqual(plan);
+    expect(
+      (await tdb.db.select().from(seoAuditRuns).where(eq(seoAuditRuns.destinationId, siteId))).map(
+        (r) => r.id,
+      ),
+    ).toEqual([runId]);
+    expect(await auditsOf('seo_audit.started')).toHaveLength(1);
     expect((await auditsOf('seo_audit.started'))[0]?.metadata).toMatchObject({ runId, count: 2 });
   });
 

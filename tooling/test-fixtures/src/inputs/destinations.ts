@@ -1,4 +1,4 @@
-import type { CrossTenantFixture } from '../cross-tenant-inputs';
+import type { CrossTenantFixture, OwnTenantFixture } from '../cross-tenant-inputs';
 
 const future = () => new Date(Date.now() + 30 * 86_400_000).toISOString();
 
@@ -118,5 +118,17 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
       dataType: 'ga4.reports',
       use: 'read',
     }),
+  },
+};
+
+/**
+ * Ledger G14: the destinations.* procedures above whose fixture is `buildInput: null` take no foreign reference, so there is
+ * no foreign id to try. Each is called as the caller's own tenant instead (OwnTenantFixture), and must answer only
+ * that tenant's data and leave the other tenant unchanged. A block of its own, apart from the fixtures above.
+ */
+export const DESTINATIONS_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
+  'destinations.sources.list': {
+    why: 'takes no input: the source adapters registered on the deployment, no tenant content',
+    input: () => undefined,
   },
 };
