@@ -27,7 +27,7 @@ import type { FixtureTenant } from './fixtures';
  * whose procedures each test scripts over its own in-memory state, and an object store on another port. A journey
  * passes only when the state it reads back agrees; a fake that answers 200 without changing anything fails it.
  */
-const TOKEN = 'ses_fake_token_must_not_print';
+const TOKEN = 'ses_fake.token.never.printed';
 const SIGNATURE = 'SIGNATURE_MUST_NOT_PRINT';
 
 class Refusal {
