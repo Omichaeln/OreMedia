@@ -1,4 +1,4 @@
-import type { CrossTenantFixture } from '../cross-tenant-inputs';
+import type { CrossTenantFixture, OwnTenantFixture } from '../cross-tenant-inputs';
 
 export const OPERATIONS_INPUTS: Record<string, CrossTenantFixture> = {
   'operations.audit.query': {
@@ -19,5 +19,25 @@ export const OPERATIONS_INPUTS: Record<string, CrossTenantFixture> = {
   'operations.outbox.replay': { buildInput: (f) => ({ eventId: f['outboxEventId'] }) },
   'operations.deletion.request': {
     buildInput: (f) => ({ subjectType: 'brand', subjectId: f['brandId'], reason: 'x' }),
+  },
+};
+
+/**
+ * Ledger G14: the operations.* procedures above whose fixture is `buildInput: null` take no foreign reference, so there is
+ * no foreign id to try. Each is called as the caller's own tenant instead (OwnTenantFixture), and must answer only
+ * that tenant's data and leave the other tenant unchanged. A block of its own, apart from the fixtures above.
+ */
+export const OPERATIONS_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
+  'operations.flags.snapshot': {
+    why: "takes no input: the feature flags evaluated for the caller's verified tenant",
+    input: () => undefined,
+  },
+  'operations.providers.list': {
+    why: 'takes no input: the provider adapters registered on the deployment with their activation, no tenant content',
+    input: () => undefined,
+  },
+  'operations.outbox.deadLetters': {
+    why: "takes no input: the dead-lettered outbox events of the caller's verified tenant",
+    input: () => undefined,
   },
 };
