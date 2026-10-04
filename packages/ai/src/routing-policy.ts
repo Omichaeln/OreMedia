@@ -50,7 +50,15 @@ export function routingPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): Mode
   return modelId ? { ...base, defaultModel: modelId } : base;
 }
 
-let platformPolicy: ModelRoutingPolicy = builtIn();
+/**
+ * The deployment's own policy, which a tenant without a stored policy runs under: the one routingPolicyFromEnv
+ * reads (a mounted MODEL_ROUTING_POLICY_REF, else the built-in policy for the configured gateway), the same
+ * configuration modelConfigFromEnv picks the provider and model from. Read on first use; configureRoutingPolicy
+ * replaces it (tests). Without this, an OpenRouter deployment's worker asserted provider `openrouter` against an
+ * Anthropic-only default and refused every call of every company that had not stored a policy.
+ */
+let platformPolicy: ModelRoutingPolicy | undefined;
+const platform = (): ModelRoutingPolicy => (platformPolicy ??= routingPolicyFromEnv());
 /** Tests and the fake adapter run under a policy that permits the `fake` vendor. */
 const tenantPolicies = new Map<string, ModelRoutingPolicy>();
 
@@ -75,7 +83,7 @@ export function registerRoutingPolicySource(source: RoutingPolicySource): void {
 }
 /** Test seam. */
 export function resetRoutingPolicies(): void {
-  platformPolicy = builtIn();
+  platformPolicy = undefined;
   regionOverride = undefined;
   tenantPolicies.clear();
   policySource = noStoredPolicy;
@@ -95,7 +103,7 @@ export function modelRegion(env: NodeJS.ProcessEnv = process.env): string | null
 }
 
 export async function routingPolicyFor(tenantId: string): Promise<ModelRoutingPolicy> {
-  return (await policySource(tenantId)) ?? tenantPolicies.get(tenantId) ?? platformPolicy;
+  return (await policySource(tenantId)) ?? tenantPolicies.get(tenantId) ?? platform();
 }
 
 /**
