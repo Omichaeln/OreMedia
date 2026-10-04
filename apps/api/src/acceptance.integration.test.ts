@@ -1,14 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { eq } from 'drizzle-orm';
-import { brands, brandVersions, policyVersions } from '@oremedia/db/schema/brand';
+import { and, eq } from 'drizzle-orm';
+import {
+  approvedFacts,
+  brandAssistJobs,
+  brands,
+  brandSources,
+  brandVersions,
+  policyVersions,
+} from '@oremedia/db/schema/brand';
 import { memberships, sessions, tenants, users } from '@oremedia/db/schema/access';
 import { runInTenant } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { registerSkillResolver, type ResolvedSkill } from '@oremedia/ai';
 import { seedBuiltinSkills } from '@oremedia/module-skills';
 import { budgets } from '@oremedia/module-billing';
+import { resolveTenantContext } from '@oremedia/module-access';
+import { createBrandAssistRuntime, registerAssistModelGate } from '@oremedia/module-brand';
+import { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
+import type { BrandAssistModelV1 } from '@oremedia/contracts/brand-assist';
 import {
   configureCredentialBroker,
   configureChannelActivation,
@@ -28,7 +39,8 @@ import {
   sessionKey,
   signInFixtures,
 } from './acceptance/checks';
-import { mutate, query, signInWithPassword } from './acceptance/client';
+import { mutate, query, signInWithPassword, sleep } from './acceptance/client';
+import { brandSystemChecks, factChecks, logoChecks, videoChecks } from './acceptance/feature-checks';
 import {
   FIXTURE_ROLES,
   FIXTURE_TENANTS,
@@ -81,6 +93,7 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     load: { enabled: false, expectedPeak: 1, peakMultiplier: 1 },
     modelEval: { enabled: false, taskKinds: [], timeoutMs: 1000, budgetMicros: 0 },
     settle: { revision: null, timeoutMs: 1000 },
+    journeys: { modelBudgetMicros: 200_000, timeoutMs: 30_000 },
   });
 
   const ids = (t: FixtureTenant) => ({
@@ -249,6 +262,175 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     ]);
     const everything = journey.map((r) => r.detail).join('\n');
     expect(everything).not.toMatch(/\b(rl|ses)_/);
+  }, 120_000);
+
+  it('facts: propose, approve, review, conflict, expiry and withdraw, each read back, and again on a rerun', async () => {
+    configureRateLimiter();
+    const [a] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [a]);
+    const steps = [
+      ['facts:propose', 'pass'],
+      ['facts:approve', 'pass'],
+      ['facts:review', 'pass'],
+      ['facts:conflict', 'pass'],
+      ['facts:expiry', 'pass'],
+      ['facts:withdraw', 'pass'],
+    ];
+    const first = await factChecks(signedIn, a);
+    expect(
+      first.map((r) => [r.name, r.outcome]),
+      JSON.stringify(first),
+    ).toEqual(steps);
+    const rows = await tdb.db.select().from(approvedFacts).where(eq(approvedFacts.brandId, a.brandId));
+    // The withdrawn fact, the superseded rival and the expired fact withdrawn as cleanup: nothing stays in force.
+    expect(rows.map((f) => f.state).sort()).toEqual(['revoked', 'revoked', 'superseded']);
+    await sleep(1100); // the next run's marker (to the second) differs, so its statements are new facts
+    const again = await factChecks(signedIn, a);
+    expect(
+      again.map((r) => [r.name, r.outcome]),
+      JSON.stringify(again),
+    ).toEqual(steps);
+  }, 120_000);
+
+  it('logo and video: without an object store the upload steps skip with the reason, never pass', async () => {
+    configureRateLimiter();
+    const [a] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [a]);
+    const logo = await logoChecks(config(), signedIn, a, { pollMs: 10 });
+    expect(logo.results.map((r) => [r.name, r.outcome])).toEqual([
+      ['logo:upload', 'skip'],
+      ['logo:approve', 'skip'],
+      ['logo:primary', 'skip'],
+    ]);
+    expect(logo.results[0]!.detail).toMatch(/^the object store did not take the upload: /);
+    expect(logo.store).toMatchObject({ usable: false });
+    const video = await videoChecks(config(), signedIn, a, logo.store, { pollMs: 10 });
+    expect(video).toEqual([{ name: 'video:upload', outcome: 'skip', detail: logo.results[0]!.detail }]);
+  }, 120_000);
+
+  it('brand system: a setup job through the worker runtime, a suggestion accepted and applied with provenance, then restored', async () => {
+    configureRateLimiter();
+    const [a] = second as [FixtureTenant, FixtureTenant];
+    const { sessions: signedIn } = await signInFixtures(config(), [a]);
+    registerAssistModelGate({
+      describe: () => ({
+        provider: 'fake',
+        model: 'scripted',
+        maxOutputTokens: 2000,
+        inputMicrosPerMillionTokens: 1_000_000,
+        outputMicrosPerMillionTokens: 2_000_000,
+      }),
+      assertRouting: async () => {},
+    });
+    // The model worker-core calls on staging, scripted: one principle quoted from the pasted notes.
+    const model: BrandAssistModelV1 = {
+      async propose(req) {
+        const evidence = req.evidence[0]!;
+        const quote = /One of our principles: "([^"]+)"/.exec(evidence.text)![1]!;
+        return {
+          raw: {
+            personality: [],
+            principles: [
+              {
+                value: { statement: quote, rationale: 'The notes state it.' },
+                rationale: 'Stated in the voice notes.',
+                basis: 'stated',
+                confidence: 'high',
+                evidence: [{ sourceId: evidence.id, excerpt: quote }],
+              },
+            ],
+            styleRules: [],
+            claimRules: [],
+            remove: [],
+            questions: [],
+          },
+          parseError: null,
+          usage: { inputTokens: 900, outputTokens: 150 },
+          costMicros: 1200,
+        };
+      },
+    };
+    const owner = a.members.owner;
+    const requester = await resolveTenantContext(
+      { kind: 'user', userId: owner.userId, sessionId: 'acceptance-test', selectedTenantId: a.tenantId },
+      a.tenantId,
+      'acceptance-test',
+    );
+    /** The workflow's steps for the job the check starts, as worker-core runs them (brandAssistWorkflowV1). */
+    const driveQueuedJob = async () => {
+      for (let i = 0; i < 400; i++) {
+        const [job] = await tdb.db
+          .select()
+          .from(brandAssistJobs)
+          .where(and(eq(brandAssistJobs.brandId, a.brandId), eq(brandAssistJobs.state, 'queued')));
+        if (job) {
+          const rt = createBrandAssistRuntime({ model });
+          const inp = {
+            tenantId: a.tenantId,
+            actor: { kind: 'user' as const, id: owner.userId },
+            correlationId: 'acceptance-test',
+            brandId: a.brandId,
+            jobId: job.id,
+          };
+          await runInTenant(requester.context, async () => {
+            await rt.beginBrandAssist(inp);
+            const prepared = await rt.prepareBrandAssistProposals(inp, requester.actor);
+            for (const section of prepared.sections) await rt.proposeBrandAssistSection({ ...inp, section });
+            await rt.finishBrandAssist({ ...inp, cancelled: false, failure: prepared.reason });
+          });
+          return job.id;
+        }
+        await sleep(25);
+      }
+      throw new Error('the check started no assist job');
+    };
+    const [before] = await tdb.db.select().from(brands).where(eq(brands.id, a.brandId));
+    const [results, jobId] = await Promise.all([
+      brandSystemChecks(config(), signedIn, a, { pollMs: 20 }),
+      driveQueuedJob(),
+    ]);
+    expect(
+      results.map((r) => [r.name, r.outcome]),
+      JSON.stringify(results),
+    ).toEqual([
+      ['brand-system:source', 'pass'],
+      ['brand-system:budget', 'pass'],
+      ['brand-system:assist', 'pass'],
+      ['brand-system:accept', 'pass'],
+      ['brand-system:publish', 'pass'],
+      ['brand-system:provenance', 'pass'],
+      ['brand-system:restore', 'pass'],
+    ]);
+    const by = Object.fromEntries(results.map((r) => [r.name, r.detail]));
+    expect(by['brand-system:assist']).toContain(jobId);
+    expect(by['brand-system:assist']).toMatch(/spent 1200 µUSD of the 200000 cap/);
+    expect(by['brand-system:provenance']).toMatch(
+      /^voice\.principles#Say run \d{14} out loud: origin \w+, suggestion bsug_/,
+    );
+    // The day limit is what today already committed plus the cap.
+    const day = (
+      await query<{ day: { limitMicros: number; committedMicros: number } }>(
+        signedIn.get(sessionKey(a, 'owner'))!,
+        'agents.budgets.read',
+        { brandId: a.brandId },
+      )
+    ).data!.day;
+    expect(day.limitMicros).toBeLessThanOrEqual(day.committedMicros + 200_000);
+    // The brand system is what it was before the journey (a new version with the same content), and the source is gone.
+    const [after] = await tdb.db.select().from(brands).where(eq(brands.id, a.brandId));
+    expect(after!.publishedVersionId).not.toBe(before!.publishedVersionId);
+    const [was] = await tdb.db
+      .select()
+      .from(brandVersions)
+      .where(eq(brandVersions.id, before!.publishedVersionId!));
+    const [now] = await tdb.db
+      .select()
+      .from(brandVersions)
+      .where(eq(brandVersions.id, after!.publishedVersionId!));
+    expect(now!.contentHash).toBe(was!.contentHash);
+    expect(BrandSystemDocumentV1.parse(now!.document).voice.principles ?? []).toEqual([]);
+    const sources = await tdb.db.select().from(brandSources).where(eq(brandSources.brandId, a.brandId));
+    expect(sources.every((src) => src.removedAt !== null)).toBe(true);
   }, 120_000);
 
   /**
