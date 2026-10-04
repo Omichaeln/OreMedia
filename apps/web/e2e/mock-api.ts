@@ -2989,6 +2989,8 @@ export function createMockRouter(backend: MockBackend) {
               url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-${input.derivative}.json`,
               expiresAt: new Date(Date.now() + 300_000),
               mime: 'application/json',
+              // As assetsService.signedUrl: every answer carries the version's provenance kind.
+              origin: 'upload' as const,
             };
           if (/^av_(video|audio)_/.test(input.assetVersionId))
             return input.derivative === 'proxy'
@@ -3096,6 +3098,7 @@ export function createMockRouter(backend: MockBackend) {
             version: 1,
             contentHash: head.contentHash,
             findings: [],
+            kind: 'graphic' as const,
           };
         }),
         duplicate: mutation.input(DocumentDuplicate).mutation(({ input }) => {
@@ -3112,6 +3115,7 @@ export function createMockRouter(backend: MockBackend) {
             version: 1,
             contentHash: head.contentHash,
             findings: [],
+            kind: 'graphic' as const,
           };
         }),
         rename: mutation.input(DocumentRename).mutation(({ input }) => {
