@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { IMAGE_CREATIVE_KINDS, type AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSnapshot } from '@oremedia/contracts/brand';
 import {
   CreativeDocumentV1,
@@ -273,6 +274,7 @@ async function prepare(
   tx?: Tx,
   fixedStructure?: z.infer<typeof StoredModelOutput>['structure'],
 ) {
+  engine.assertGraphic(doc); // STU-2b: generation edits pages; a video document is refused before its snapshot is read
   const base = await engine.loadRevision(doc, baseRevisionId, tx);
   const document = CreativeDocumentV1.parse(base.snapshot);
   const snapshot: BrandSnapshot = await engine.resolveSnapshot(
@@ -330,7 +332,10 @@ async function prepare(
       }),
     );
   const excluded = new Set(brief?.assets.exclude ?? []);
-  const eligible = (await assetSource(doc.brandId, tx)).filter((a) => !excluded.has(a.assetVersionId));
+  // STU-2b: the creative purpose also covers video and audio; generation fills image areas, so it offers stills only.
+  const eligible = (await assetSource(doc.brandId, tx)).filter(
+    (a) => IMAGE_CREATIVE_KINDS.includes(a.kind as AssetKind) && !excluded.has(a.assetVersionId),
+  );
   const channels = channelSource();
   const images = await imageAvailability(doc.brandId, tx);
   const estimate = estimateOf(request, slots.filter((s) => s.kind === 'image_area' && !s.fixed).length);

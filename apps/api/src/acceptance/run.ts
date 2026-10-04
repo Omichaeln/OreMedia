@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readMigrationState } from '@oremedia/db';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
 import { runK6, runVitest } from '../../../../tooling/scripts/acceptance/processes';
@@ -12,6 +13,7 @@ import {
   summarize,
   type AcceptanceResult,
 } from '../../../../tooling/scripts/acceptance/report';
+import { waitForSettled, type SettleProbes } from '../../../../tooling/scripts/acceptance/settle';
 import { signOut } from './client';
 import {
   ensureFontAssetVersion,
@@ -49,6 +51,19 @@ const describeProviders = (cfg: AcceptanceConfig): string => {
     ? `certified providers: ${p.usable.join(', ')}`
     : `no certified provider in this registry (uncertified: ${p.uncertified.join(', ') || 'none'}; disabled: ${p.disabled.join(', ') || 'none'})`;
 };
+
+/** The settle step's probes against the deployment: the api's /health through the web origin, and the database. */
+const settleProbes = (cfg: AcceptanceConfig, f: FetchLike): SettleProbes => ({
+  health: async () => {
+    const res = await f(`${cfg.webOrigin}/health`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const body = (await res.json().catch(() => null)) as { revision?: unknown } | null;
+    return { status: res.status, revision: typeof body?.revision === 'string' ? body.revision : null };
+  },
+  migrations: () => readMigrationState(),
+});
 
 async function browserSuites(
   cfg: AcceptanceConfig,
@@ -148,6 +163,19 @@ export async function runAcceptance(cfg: AcceptanceConfig, opts: RunOptions): Pr
       emit([fail(name, err instanceof Error ? `${err.name}: ${err.message}` : 'failed')]);
     }
   };
+
+  // The job redeploys on the same push as the api: nothing is provisioned until the api serves this commit with
+  // every bundled migration applied (docs/runbooks/staging-acceptance.md, "Reading the log").
+  const settled = await waitForSettled(settleProbes(cfg, opts.fetch ?? fetch), {
+    revision: cfg.settle.revision,
+    timeoutMs: cfg.settle.timeoutMs,
+    print,
+  });
+  emit([settled]);
+  if (settled.outcome !== 'pass') {
+    print(formatDone(summarize(results)));
+    return false;
+  }
 
   let tenants: FixtureTenant[];
   try {

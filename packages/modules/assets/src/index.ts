@@ -24,7 +24,14 @@ export {
   type MediaRejection,
   type RawProbe,
 } from './ingest/video';
-export { TempDir, TempDiskBudgetExceededError, hashFile, sweepStaleTempDirs, withTempDir } from './temp-disk';
+export {
+  TempDir,
+  TempDiskBudgetExceededError,
+  hashFile,
+  sweepStaleTempDirs,
+  tempRoot,
+  withTempDir,
+} from './temp-disk';
 export * as ingestSteps from './ingest/steps';
 export {
   ClamAvScanner,

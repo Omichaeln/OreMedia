@@ -246,6 +246,7 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
       const got = await run(tenantA, () =>
         creativeService.documents.get(A, { documentId: created.documentId }),
       );
+      if (got.revision.kind !== 'graphic') throw new Error('expected graphic'); // STU-2b: the DTO is per kind
       expect(got.revision.snapshot.contentType).toBe('carousel');
       expect(got.revision.snapshot.pages).toHaveLength(3);
       expect(authorised).toEqual(expect.arrayContaining(['av_font', 'av_logo']));
@@ -371,6 +372,7 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
       const got = await run(tenantA, () =>
         creativeService.documents.get(A, { documentId: created.documentId }),
       );
+      if (got.revision.kind !== 'graphic') throw new Error('expected graphic');
       expect(got.revision.snapshot.templateVersionId).toBe(v.templateVersionId);
       expect(got.revision.snapshot.contentType).toBe('social_post');
       expect(hashCanonical(got.revision.snapshot.pages)).toBe(hashCanonical(document.pages));
@@ -746,9 +748,9 @@ describe('STU-1a studio entry and locks against MySQL 8', () => {
     });
 
     it('page operations commit for a person and undo through their inverses', async () => {
-      const ids = (
-        await run(tenantA, () => creativeService.documents.get(A, { documentId }))
-      ).revision.snapshot.pages[0]!.elements.map((e) => e.id);
+      const { revision } = await run(tenantA, () => creativeService.documents.get(A, { documentId }));
+      if (revision.kind !== 'graphic') throw new Error('expected graphic');
+      const ids = revision.snapshot.pages[0]!.elements.map((e) => e.id);
       const elementIdMap = Object.fromEntries(ids.map((id) => [id, newElementId()]));
       const res = await run(tenantA, (tx) =>
         creativeService.operations.apply(

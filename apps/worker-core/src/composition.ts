@@ -18,6 +18,7 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import { runInTenant } from '@oremedia/db';
 import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
@@ -51,6 +52,11 @@ import {
   registerAssetAuthoriser,
   registerChannelCapabilitySource,
   registerGenerationAssetSource,
+  registerCreativeAssetCatalog,
+  registerVideoAiAssetSource,
+  registerVideoAiCapabilitySource,
+  configureVideoAiPricing,
+  registerExportSigner,
   registerCreativeOutboxRoutes,
 } from '@oremedia/module-creative';
 import {
@@ -84,6 +90,7 @@ import {
   registerSpeechGenerator,
   registerVideoGenerator,
   IMAGE_COST_MICROS,
+  createVideoAiCapabilitySource,
   estimateCostMicros,
   modelConfigFromEnv,
 } from '@oremedia/ai';
@@ -156,8 +163,31 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
     channels: await channelService.countActive(tx),
   }));
   registerAssetAuthoriser(async (assetVersionId, ctx, tx) => {
-    await assetService.authoriseUse(assetVersionId, ctx.purpose, { brandId: ctx.brandId }, tx);
+    await assetService.authoriseUse(
+      assetVersionId,
+      ctx.purpose,
+      { brandId: ctx.brandId, ...(ctx.kinds ? { kinds: ctx.kinds } : {}) },
+      tx,
+    );
   });
+  // STU-2b: video documents read their sources' kind, duration, size and derivatives through the assets module.
+  registerCreativeAssetCatalog({
+    mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
+    currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
+    waveforms: (ids, tx) => assetService.waveforms(ids, tx),
+  });
+  // STU-3: storyboards read the eligible, person-supplied assets; gaps say whether generated media could close them;
+  // the job's estimate is one model call at the configured price list.
+  registerVideoAiAssetSource((brandId, tx) => assetService.storyboardCandidates(brandId, tx));
+  registerVideoAiCapabilitySource(createVideoAiCapabilitySource());
+  const videoAiModel = modelConfigFromEnv();
+  configureVideoAiPricing({
+    modelCallMicros: estimateCostMicros(videoAiModel, {
+      inputTokens: 12_000,
+      outputTokens: videoAiModel.maxOutputTokens,
+    }),
+  });
+  registerExportSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerAssetOutboxRoutes();
   registerCreativeOutboxRoutes();
   registerSkillOutboxRoutes();
@@ -297,7 +327,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerGenerationAssetSource(async (brandId, tx) =>
     (
       await assetService.findEligibleAssets(
-        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        // STU-2b: `creative` also covers video and audio; generation fills image areas with stills only.
+        { brandId, purpose: 'creative', channelConnectionIds: [], kinds: [...IMAGE_CREATIVE_KINDS] },
         { limit: 200 },
         tx,
       )

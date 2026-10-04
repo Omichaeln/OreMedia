@@ -49,6 +49,8 @@ export const ID_PREFIXES = {
   renderJob: 'rj',
   /** STU-1b: a durable studio generation or refinement job. */
   studioGenerationJob: 'sgj',
+  /** STU-3: a durable studio video AI job (storyboard or recut). */
+  studioVideoJob: 'svj',
   renderPreview: 'rpv',
   previewExport: 'pvx',
   campaign: 'cmp',

@@ -1,7 +1,7 @@
 import { reportConfiguration, startTelemetry, stopTelemetry } from '@oremedia/observability';
 import { configureDatabase, closeDatabase } from '@oremedia/db';
 import { configureConnectCallback } from '@oremedia/module-publishing';
-import { createServer } from './server';
+import { createServer, revisionFromEnv } from './server';
 import { configureRateLimiter, rateLimitRedisUrlFromEnv } from './trpc';
 import { apiCapabilities, composeModules } from './composition';
 import { authConfigFromEnv, type AuthConfig } from './auth/config';
@@ -66,6 +66,7 @@ const app = createServer({
   reviewPortalOrigin: process.env['REVIEW_PORTAL_ORIGIN'],
   auth,
   degraded: config.degraded,
+  revision: revisionFromEnv(process.env),
 });
 const server = app.listen(port, () => log.info({ status: port }, 'api listening'));
 

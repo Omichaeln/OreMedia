@@ -80,6 +80,7 @@ describe('staging acceptance fixtures and checks (in-process api)', () => {
     e2e: { enabled: false },
     load: { enabled: false, expectedPeak: 1, peakMultiplier: 1 },
     modelEval: { enabled: false, taskKinds: [], timeoutMs: 1000, budgetMicros: 0 },
+    settle: { revision: null, timeoutMs: 1000 },
   });
 
   const ids = (t: FixtureTenant) => ({
