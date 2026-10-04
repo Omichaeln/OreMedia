@@ -2615,7 +2615,13 @@ export function createMockRouter(backend: MockBackend) {
           items:
             onlyLogos && logos.length
               ? logos
-              : [photo, ...(purpose === 'creative' ? [generated] : []), ...logos],
+              : [
+                  photo,
+                  ...(purpose === 'creative' ? [generated] : []),
+                  ...logos,
+                  // STU-2b: like the server, the creative purpose without a kind filter also offers video and audio.
+                  ...(purpose === 'creative' && !kinds ? backend.video.search(['video', 'audio']) : []),
+                ],
           nextCursor: null,
         };
       }),

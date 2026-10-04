@@ -18,6 +18,7 @@ import {
   registerMetricsSource,
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
+import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import { runInTenant } from '@oremedia/db';
 import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
@@ -326,7 +327,8 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerGenerationAssetSource(async (brandId, tx) =>
     (
       await assetService.findEligibleAssets(
-        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        // STU-2b: `creative` also covers video and audio; generation fills image areas with stills only.
+        { brandId, purpose: 'creative', channelConnectionIds: [], kinds: [...IMAGE_CREATIVE_KINDS] },
         { limit: 200 },
         tx,
       )

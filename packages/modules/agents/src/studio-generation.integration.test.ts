@@ -285,14 +285,14 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
       {
         assetId: 'ast_photo',
         assetVersionId: 'av_photo',
-        kind: 'image',
+        kind: 'photo',
         altText: 'Product photograph',
         semanticRole: 'product',
       },
       {
         assetId: 'ast_photo2',
         assetVersionId: 'av_photo2',
-        kind: 'image',
+        kind: 'photo',
         altText: null,
         semanticRole: null,
       },
@@ -460,6 +460,69 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     )[0]!;
     expect(reservation.state).toBe('settled');
     expect(jobRow.costSpentMicros).toBe(ledger[0]!.costMicros);
+  });
+
+  it('video and audio from the asset source are never offered or placed (STU-2b); the job still completes', async () => {
+    const photo = {
+      assetId: 'ast_photo',
+      assetVersionId: 'av_photo',
+      kind: 'photo',
+      altText: null,
+      semanticRole: null,
+    };
+    registerGenerationAssetSource(async () => [
+      photo,
+      { assetId: 'ast_video', assetVersionId: 'av_video', kind: 'video', altText: null, semanticRole: null },
+      { assetId: 'ast_audio', assetVersionId: 'av_audio', kind: 'audio', altText: null, semanticRole: null },
+    ]);
+    try {
+      const d = await starterDocument();
+      const headline = el(d.document, 'Headline');
+      const area = el(d.document, 'Image area');
+      const brief = { keyMessage: 'Reel teaser', channelKeys: ['instagram'], factIds: [] };
+      const preflight = await inTenant(tenantA, () =>
+        generationService.preflight(A, {
+          documentId: d.documentId,
+          baseRevisionId: d.revisionId,
+          request: { kind: 'generate', brief: { ...brief, assets: { include: ['av_video'] } } },
+        }),
+      );
+      expect(preflight.inputs.eligibleAssetCount).toBe(1);
+      expect(preflight.issues).toContainEqual(expect.objectContaining({ code: 'asset_not_eligible' }));
+      const job = await start(d.documentId, d.revisionId, { kind: 'generate', brief });
+      const { runtime, adapter } = runtimeWith([
+        fillCall({
+          summary: 'Reel teaser',
+          edits: [
+            { label: 'Headline', pageId: 'page_1', elementId: headline.id, text: 'Coming soon' },
+            { label: 'Clip', pageId: 'page_1', elementId: area.id, assetVersionId: 'av_video' },
+          ],
+        }),
+      ]);
+      expect(await drive(job, runtime)).toBe('completed');
+      const system = adapter.requests[0]!.system;
+      expect(system).toContain('av_photo');
+      expect(system).not.toContain('av_video');
+      expect(system).not.toContain('av_audio');
+      const done = await getJob(job.id);
+      expect(done.result?.refused).toContainEqual(
+        expect.objectContaining({ elementId: area.id, reason: 'asset_not_eligible' }),
+      );
+      const page = (await head(d.documentId)).snapshot.pages[0]!;
+      expect(page.elements.find((e) => e.id === headline.id)).toMatchObject({ text: 'Coming soon' });
+      expect(JSON.stringify(page)).not.toContain('av_video');
+    } finally {
+      registerGenerationAssetSource(async () => [
+        { ...photo, kind: 'photo', altText: 'Product photograph', semanticRole: 'product' },
+        {
+          assetId: 'ast_photo2',
+          assetVersionId: 'av_photo2',
+          kind: 'photo',
+          altText: null,
+          semanticRole: null,
+        },
+      ]);
+    }
   });
 
   it('start is idempotent per document, base revision and inputs; the studio reattaches to the live job', async () => {

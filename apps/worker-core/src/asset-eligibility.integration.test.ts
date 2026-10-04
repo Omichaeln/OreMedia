@@ -35,7 +35,12 @@ import {
 import { resolveTenantContext } from '@oremedia/module-access';
 import { MemoryStorageProvider, assetService } from '@oremedia/module-assets';
 import { brandService } from '@oremedia/module-brand';
-import { CreativeRevisionRepository, RenderJobRepository, creativeService } from '@oremedia/module-creative';
+import {
+  CreativeRevisionRepository,
+  RenderJobRepository,
+  creativeService,
+  generationService,
+} from '@oremedia/module-creative';
 import { runRenderJob } from '@oremedia/workflows/render-job.workflow.v1';
 import { composeModules } from './composition';
 
@@ -616,4 +621,84 @@ describe('2.g1: ineligible assets never appear in search, agent context or rende
     },
     120_000,
   );
+
+  it('STU-2b: generation as worker-core composes it reads still images only; videos never crowd them out of its 200', async () => {
+    // 200 approved videos with rights, ids sorting before every photo (the candidates are read newest id first).
+    const videoIds = Array.from(
+      { length: 200 },
+      (_, i) => `ast_ZZ${String(i).padStart(4, '0')}${newId('x').slice(2, 22)}`,
+    );
+    await tdb.db.insert(assets).values(
+      videoIds.map((id) => ({
+        id,
+        tenantId,
+        brandId: brandA,
+        kind: 'video' as const,
+        name: `video-${id}`,
+        currentVersionId: `av_${id.slice(4)}`,
+        state: 'approved' as const,
+        rightsState: 'recorded' as const,
+      })),
+    );
+    await tdb.db.insert(assetVersions).values(
+      videoIds.map((id) => ({
+        id: `av_${id.slice(4)}`,
+        tenantId,
+        brandId: brandA,
+        assetId: id,
+        number: 1,
+        storageKey: `assets/${tenantId}/${brandA}/originals/${id}/av_${id.slice(4)}`,
+        contentHash: 'd'.repeat(64),
+        mime: 'video/mp4',
+        bytes: 4096,
+        width: 1080,
+        height: 1920,
+        durationMs: 5000,
+        provenance: { kind: 'upload' as const, uploadedByUserId: owner.id, originalFilename: `${id}.mp4` },
+      })),
+    );
+    await tdb.db.insert(usageRights).values(
+      videoIds.map((id) => ({
+        id: newId('ur'),
+        tenantId,
+        brandId: brandA,
+        assetId: id,
+        owner: 'owner',
+        permittedChannels: 'all' as const,
+        territories: 'all' as const,
+        expiresAt: null,
+        releases: [],
+        restrictions: [],
+      })),
+    );
+    // Not vacuous: the creative purpose itself offers the videos first.
+    const first = (
+      await readAsOwner(() =>
+        assetService.findEligibleAssets(
+          { brandId: brandA, purpose: 'creative', channelConnectionIds: [] },
+          { limit: 200 },
+        ),
+      )
+    ).items;
+    expect(first.every((a) => a.kind === 'video')).toBe(true);
+    const preflight = await readAsOwner(() =>
+      generationService.preflight(ownerActor, {
+        documentId,
+        baseRevisionId: revisionId,
+        request: {
+          kind: 'refine',
+          refine: {
+            instruction: 'Brighter',
+            scope: { pageId: 'page_1', elementIds: [] },
+            action: { kind: 'edit' },
+            factIds: [],
+            assetVersionIds: [`av_${videoIds[0]!.slice(4)}`],
+          },
+        },
+      }),
+    );
+    // The four photos are offered; a chosen video is refused as not eligible.
+    expect(preflight.inputs.eligibleAssetCount).toBe(allKeys.length);
+    expect(preflight.issues).toContainEqual(expect.objectContaining({ code: 'asset_not_eligible' }));
+  }, 120_000);
 });
