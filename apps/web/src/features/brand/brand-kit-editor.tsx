@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
@@ -8,7 +8,6 @@ import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useBrandAssetsOfKind, useBrandFonts, type BrandFontFaceDto } from '../assets/use-assets';
-import { useFontFaces } from '../assets/use-font-faces';
 import { useAssetUpload } from '../assets/use-upload';
 import { UploadStatus } from '../assets/upload-status';
 import { useBrandContext } from './brand-context';
@@ -28,6 +27,8 @@ import {
 } from './guidance-editors';
 import { EditorSection as Section } from './guidance-fields';
 import { LogosSection } from './logo-rules';
+import { TYPE_ROLES } from './typography-helpers';
+import { TypographySpecimen } from './typography-specimen';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -46,13 +47,6 @@ const COLOUR_ROLES: Colour['role'][] = [
   'background',
   'text',
   'semantic',
-];
-const TYPE_ROLES: Array<{ role: TypeRoleKey; label: string; minSizePx: number; sample: string }> = [
-  { role: 'display', label: 'Display', minSizePx: 40, sample: 'Built to last' },
-  { role: 'heading', label: 'Heading', minSizePx: 28, sample: 'The quick brown fox' },
-  { role: 'body', label: 'Body', minSizePx: 16, sample: 'The quick brown fox jumps over the lazy dog.' },
-  { role: 'label', label: 'Label', minSizePx: 14, sample: 'Shop the range' },
-  { role: 'caption', label: 'Caption', minSizePx: 12, sample: 'Photographed on site, 2026' },
 ];
 const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
 const FONT_ACCEPT = '.woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf';
@@ -614,7 +608,7 @@ const weightsFor = (f: BrandFontFaceDto | undefined) => {
 /**
  * Typography (spec 8.1 type roles): the brand's fonts (uploaded files, or a family imported from Google Fonts,
  * each file an asset with its provenance and licence) and, per type role, the face, weight and minimum size, with a
- * preview line drawn in the chosen font loaded from its pinned files. Saved with the rest of the brand system.
+ * live specimen of every role drawn in its font loaded from its pinned files. Saved with the rest of the brand system.
  */
 function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
   const { brandId } = useBrandContext();
@@ -633,21 +627,6 @@ function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => 
         }),
       },
     });
-  // Every face a role uses is loaded once, under its representative file's version id.
-  const used = useMemo(
-    () =>
-      faces
-        .filter((f) => roles.some((r) => r.fontAssetId === f.assetId))
-        .flatMap((f) =>
-          f.files.map((x) => ({
-            family: f.assetVersionId,
-            assetVersionId: x.assetVersionId,
-            unicodeRange: f.files.length > 1 ? x.unicodeRange : null,
-          })),
-        ),
-    [faces, roles],
-  );
-  const loaded = useFontFaces(used);
   return (
     <Section
       title="Typography"
@@ -704,14 +683,11 @@ function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => 
             spec={r}
             value={roles.find((x) => x.role === r.role)}
             faces={faces}
-            loadedFamily={(assetId) => {
-              const face = faces.find((f) => f.assetId === assetId);
-              return face && loaded.has(face.assetVersionId) ? face.assetVersionId : null;
-            }}
             onChange={(next) => setRole(r.role, next)}
           />
         ))}
       </ul>
+      <TypographySpecimen doc={doc} editing />
     </Section>
   );
 }
@@ -720,13 +696,11 @@ function TypeRoleSlot({
   spec,
   value,
   faces,
-  loadedFamily,
   onChange,
 }: {
   spec: (typeof TYPE_ROLES)[number];
   value: TypeRole | undefined;
   faces: BrandFontFaceDto[];
-  loadedFamily: (assetId: string) => string | null;
   onChange: (next: TypeRole | null) => void;
 }) {
   const known = value ? faces.some((f) => f.assetId === value.fontAssetId) : true;
@@ -736,7 +710,6 @@ function TypeRoleSlot({
       ? [{ value: value.fontAssetId, label: 'A font not in this brand', disabled: true }]
       : []),
   ];
-  const family = value ? loadedFamily(value.fontAssetId) : null;
   const id = `kit-type-${spec.role}`;
   return (
     <li className="flex flex-col gap-2 rounded-md border border-border p-3">
@@ -778,7 +751,7 @@ function TypeRoleSlot({
               fonts.
             </p>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             <Field label="Weight" htmlFor={`${id}-weight`}>
               <Select
                 id={`${id}-weight`}
@@ -804,21 +777,22 @@ function TypeRoleSlot({
                 onChange={(e) => onChange({ ...value, minSizePx: Number(e.target.value) || 0 })}
               />
             </Field>
+            <Field label="Tracking (em)" htmlFor={`${id}-tracking`} hint="Letter spacing; empty is none.">
+              <Input
+                id={`${id}-tracking`}
+                type="number"
+                step={0.01}
+                min={-0.5}
+                max={1}
+                value={value.tracking ?? ''}
+                onChange={(e) => {
+                  const { tracking: _unset, ...rest } = value;
+                  const n = e.target.value === '' ? Number.NaN : Number(e.target.value);
+                  onChange(Number.isFinite(n) ? { ...rest, tracking: n } : rest);
+                }}
+              />
+            </Field>
           </div>
-          <p
-            data-testid={`type-preview-${spec.role}`}
-            className="truncate rounded-sm bg-muted px-2 py-1"
-            style={{
-              fontFamily: family ? `"${family}", sans-serif` : 'sans-serif',
-              fontWeight: value.weight,
-              fontSize: Math.min(Math.max(value.minSizePx, 12), 40),
-            }}
-          >
-            {spec.sample}
-          </p>
-          {!family && known && (
-            <p className="text-xs text-muted-foreground">Loading the font for the preview…</p>
-          )}
         </>
       )}
     </li>
