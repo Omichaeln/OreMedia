@@ -1,0 +1,12 @@
+{
+  "workflowType": "agentRunWorkflowV1",
+  "case": "cancelled-while-waiting",
+  "description": "The cancel signal arrives while the run waits for a decision: finished cancelled.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:09.470Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "c38e9cbbcce0391013f69e0cabf05ea84c23183951a4ed0329f5cf6e15b15d01"
+}

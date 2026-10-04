@@ -1,6 +1,10 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
 import type { ArticleManifestV1, RenderedValidationV1 } from '@oremedia/contracts/article';
-import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
+import type {
+  ArticleConflictV1,
+  ArticleReadbackV1,
+  ArticleReadbackVerificationV1,
+} from '@oremedia/contracts/destinations';
 import type {
   ClientConfig,
   ProviderCredentialRefV1,
@@ -313,6 +317,8 @@ export interface DestinationTargetDescription {
   usable: boolean;
   /** The remote actions the kind's adapter offers on a live article. */
   actions: { edit: boolean; delete: boolean; unpublish: boolean };
+  /** PR-06: the supported actions whose capability is not certified on the kind's adapter (refused). */
+  uncertifiedActions?: Array<'edit' | 'delete' | 'unpublish'>;
 }
 export interface DestinationPublishInput {
   tenantId: string;
@@ -339,6 +345,11 @@ export interface DestinationEditInput {
   expectedHash: string | null;
   /** The modified instant of that read-back (RA-12): a remote touched since, even to the same content, is a conflict. */
   expectedModifiedAt: string | null;
+  /**
+   * PR-03: the site's own write precondition stored with that read-back, compared and written atomically by the
+   * site; absent for a read-back stored before PR-03 or from a site in limited mode.
+   */
+  expectedWriteToken?: string | null;
   html: string;
   idempotencyKey: string;
 }
@@ -352,6 +363,8 @@ export type DestinationMutationResult = RemoteMutationOutcome & {
   readback?: ArticleReadbackV1;
   readbackVerification?: ArticleReadbackVerificationV1;
   overwritten?: { previous: ArticleReadbackV1; replaced: ArticleReadbackV1 };
+  /** PR-03: a refused edit (`conflict` or `limited_mode`): what the site holds now, for a person to resolve. */
+  conflict?: ArticleConflictV1;
 };
 export interface DestinationValidateInput {
   tenantId: string;

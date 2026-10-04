@@ -1,0 +1,12 @@
+{
+  "workflowType": "destinationReportsWorkflowV1",
+  "case": "fetch-failed-prune-failed",
+  "description": "The first fetch fails permanently (degraded) and the prune fails too; the run still records and returns.",
+  "queue": "ingest",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:15:26.600Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "cae8dbca58868a6563173c50eeda6c2b9dbf3d1faf27bcecdf91d247381e3a2a"
+}

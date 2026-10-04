@@ -257,16 +257,18 @@ describe('destination activity hosts (worker-core) against MySQL and the fixture
         ok: true,
         health: 'healthy',
       });
-      expect(cms.calls).toEqual([
-        {
-          op: 'verify',
+      // PR-03: the verified identity is followed by the conditional-write handshake, under the same opened secret.
+      expect(cms.calls).toEqual(
+        ['verify', 'write_safety'].map((op) => ({
+          op,
           secret: 'abcd efgh ijkl mnop',
           username: 'ore-editor',
           siteUrl: 'https://verify.acme.example',
-        },
-      ]);
+        })),
+      );
       const after = await destinationRow(site);
       expect(after.health).toBe('healthy');
+      expect(after).toMatchObject({ writeSafety: 'conditional' });
       const audits = await auditsOf(tenantA, 'destination.verify', site);
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({ actorKind: 'user', actorId: userA, decision: 'allowed' });
@@ -275,7 +277,7 @@ describe('destination activity hosts (worker-core) against MySQL and the fixture
         ok: false,
         reason: 'locked',
       });
-      expect(cms.calls).toHaveLength(1);
+      expect(cms.calls).toHaveLength(2);
       expect(await destinationRow(site)).toEqual(after);
       expect(await auditsOf(tenantA, 'destination.verify', site)).toHaveLength(1);
     });

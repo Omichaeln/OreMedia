@@ -17,6 +17,7 @@ import {
   CmsPublishMode,
   DESTINATION_KIND_CAPABILITIES,
   effectivePublishMode,
+  type ArticleConflictV1,
   type ArticleReadbackField,
   type ArticleReadbackV1,
   type ArticleReadbackVerificationV1,
@@ -24,15 +25,18 @@ import {
 import {
   ARTICLE_BODY_MAX_CHARS,
   ARTICLE_IMAGE_MIMES,
+  ARTICLE_TEXT_MAX_CHARS,
   articleImages,
   type ArticleDocumentV1,
   type ArticleImageV1,
 } from '@oremedia/contracts/content';
 import { CapabilityUnsupportedError, OremediaError, PolicyDeniedError } from '@oremedia/contracts/errors';
-import type {
-  DecryptedCredentials,
-  RemoteMutationOutcome,
-  ValidationResult,
+import {
+  capabilityNotCertifiedIssue,
+  type CertifiableCapability,
+  type DecryptedCredentials,
+  type RemoteMutationOutcome,
+  type ValidationResult,
 } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { Tx } from '@oremedia/db';
@@ -60,7 +64,7 @@ import {
   type CmsRemoteArticle,
   type CmsSite,
 } from '@oremedia/providers';
-import { cmsAdapterFor, cmsIO } from './cms';
+import { cmsAdapterFor, cmsIO, cmsRegistryInUse } from './cms';
 import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
 import {
   StoredKind,
@@ -181,6 +185,26 @@ const toReadback = (a: CmsRemoteArticle): ArticleReadbackV1 => ({
   status: a.status,
   modifiedAt: a.modifiedAt,
   contentHash: a.contentHash,
+  // PR-03: the site's precondition for the next update, where it offers atomic conditional writes.
+  ...(a.writeToken ? { writeToken: a.writeToken } : {}),
+});
+
+/**
+ * PR-03: the most characters of the remote body a refusal carries for the comparison screen (the article limit:
+ * a body longer than that is shown cut, never stored whole a second time).
+ */
+export const ARTICLE_CONFLICT_HTML_MAX_CHARS = ARTICLE_TEXT_MAX_CHARS;
+
+/** PR-03: a refused edit as a person resolves it: why, what the site holds now and where it opens on the site. */
+const toConflict = (
+  reason: ArticleConflictV1['reason'],
+  current: CmsRemoteArticle | null,
+): ArticleConflictV1 => ({
+  reason,
+  current: current
+    ? { ...toReadback(current), html: current.html.slice(0, ARTICLE_CONFLICT_HTML_MAX_CHARS) }
+    : null,
+  editUrl: current?.editUrl ?? null,
 });
 
 /**
@@ -381,6 +405,7 @@ export const destinationArticles: DestinationPublisher = {
         delete: capability?.delete ?? false,
         unpublish: capability?.unpublish ?? false,
       },
+      uncertifiedActions: uncertifiedCmsActions(row.kind),
     };
   },
 
@@ -393,6 +418,14 @@ export const destinationArticles: DestinationPublisher = {
       ]);
     const issues: ValidationResult['issues'] = [];
     if (!variant.article) issues.push({ path: 'article', issue: 'article_missing' });
+    // PR-06: writing the article (and uploading its images) must be certified on the kind's adapter.
+    const needed: CertifiableCapability[] =
+      variant.article && articleImages(variant.article).length > 0
+        ? ['publish_text', 'publish_image']
+        : ['publish_text'];
+    for (const capability of needed)
+      if (cmsRegistryInUse().isUncertified(row.kind, capability))
+        issues.push({ path: 'destinationId', issue: capabilityNotCertifiedIssue(row.kind, capability) });
     const mode = variant.settings['publishMode'];
     if (mode !== undefined && !CmsPublishMode.safeParse(mode).success)
       issues.push({ path: 'settings.publishMode', issue: 'publish_mode_invalid' });
@@ -462,11 +495,11 @@ export const destinationArticles: DestinationPublisher = {
           ...(featured ? { featuredMedia: featured } : {}),
         };
         const written = await adapter.createArticle(site, creds, io, sent, input.idempotencyKey);
-        if (written.outcome === 'conflict')
+        if (written.outcome === 'conflict' || written.outcome === 'limited')
           return {
             outcome: 'rejected',
-            code: 'conflict',
-            message: 'the site refused the new article as a conflict',
+            code: written.outcome === 'conflict' ? 'conflict' : 'limited_mode',
+            message: 'the site refused the new article',
           };
         if (written.outcome !== 'done') return written;
         // Read-back (D-16, RA-04): the remote revision as evidence, compared with what was sent; when the policy
@@ -542,11 +575,24 @@ export const destinationArticles: DestinationPublisher = {
       async (adapter, site, creds) => {
         const io = cmsIO(adapter.key, input.tenantId, hooks ? { hooks } : {});
         const sent = { html: sanitizeArticleHtml(input.html) };
-        // RA-12: both halves of the read-back are the precondition; the adapter reads, compares and only then writes.
-        const result = await adapter.updateArticle(site, creds, io, input.remoteId, sent, {
-          expectedHash,
-          ...(input.expectedModifiedAt !== null ? { expectedModifiedAt: input.expectedModifiedAt } : {}),
-        });
+        // PR-03: the stored write token is the precondition the site compares and writes against atomically; a
+        // read-back stored before it (RA-12) has only the hash and the modified instant, which the adapter compares
+        // with a fresh read whose own token then carries the write.
+        const result = await adapter.updateArticle(
+          site,
+          creds,
+          io,
+          input.remoteId,
+          sent,
+          input.expectedWriteToken
+            ? { expectedWriteToken: input.expectedWriteToken }
+            : {
+                expectedHash,
+                ...(input.expectedModifiedAt !== null
+                  ? { expectedModifiedAt: input.expectedModifiedAt }
+                  : {}),
+              },
+        );
         switch (result.outcome) {
           case 'done': {
             const { remote, verification } = await readBackAfterWrite(
@@ -580,12 +626,29 @@ export const destinationArticles: DestinationPublisher = {
                 { destinationId: row.id, reason: 'remote_changed_since_readback' },
                 'article edit refused: the remote moved',
               );
-            // The current remote travels with the refusal, so the stored read-back is refreshed (RA-12).
+            // The current remote travels with the refusal, so the stored read-back is refreshed (RA-12) and a person
+            // can compare it with the edit and re-apply or reconcile it (PR-03).
             return {
               outcome: 'rejected',
               code: 'conflict',
-              message: `the article changed on the site since it was last read back (now ${result.current.modifiedAt ?? 'unknown'})`,
+              message: `the article changed on the site since it was last read back (now ${result.current.modifiedAt ?? 'unknown'}); nothing was written`,
               readback: toReadback(result.current),
+              conflict: toConflict('remote_changed', result.current),
+            };
+          case 'limited':
+            logger()
+              .child('destinations')
+              .warn(
+                { destinationId: row.id, reason: result.reason },
+                'article edit refused: the site cannot apply an update atomically (limited mode)',
+              );
+            // PR-03: never a non-atomic write over content; the person edits the article on the site itself.
+            return {
+              outcome: 'rejected',
+              code: 'limited_mode',
+              message: `the site cannot apply an update atomically (${result.reason}); nothing was written. Install the Oremedia conditional-write plugin on the site, or edit the article there.`,
+              ...(result.current ? { readback: toReadback(result.current) } : {}),
+              conflict: toConflict('limited_mode', result.current),
             };
           case 'unknown':
             return { outcome: 'retryable_error', code: result.code, message: result.message };
@@ -698,6 +761,13 @@ export const destinationArticles: DestinationPublisher = {
     }
   },
 };
+
+/** PR-06: the live-article actions whose capability is not certified on the kind's adapter (an unpublish is an edit). */
+function uncertifiedCmsActions(kind: string): Array<'edit' | 'delete' | 'unpublish'> {
+  return (['edit', 'delete', 'unpublish'] as const).filter((action) =>
+    cmsRegistryInUse().isUncertified(kind, action === 'unpublish' ? 'edit' : action),
+  );
+}
 
 /** The kind's CMS capability when registered (certified or not), for the actions a screen may offer. */
 function cmsAdapterCapability(kind: string) {

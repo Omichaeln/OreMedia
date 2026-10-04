@@ -1,0 +1,12 @@
+{
+  "workflowType": "tokenRefreshWorkflowV1",
+  "case": "transient-retry-open",
+  "description": "In flight: a transient refresh failure, the workflow waits on the two-minute retry timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:52.981Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "391eef0e41913ba572d6f554bad93de3ffa519e0bd20448d4381f957e02c63b8"
+}

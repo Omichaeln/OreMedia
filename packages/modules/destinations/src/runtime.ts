@@ -1,5 +1,6 @@
 import type {
   DestinationHealth,
+  DestinationWriteSafety,
   DestinationRefreshInputV1,
   DestinationRefreshResultV1,
   DestinationRefreshRuntimeV1,
@@ -19,6 +20,7 @@ import { requireTenant, runAsPlatform, runInTenant, withTransaction } from '@ore
 import { MemoryRateLimiterStore, audit, type RateLimiterStore } from '@oremedia/module-operations';
 import { auditRevokeReason, credentialBroker, providerClientFor } from '@oremedia/module-publishing';
 import { logger } from '@oremedia/observability';
+import type { CmsWriteSafety } from '@oremedia/providers';
 import { cmsIO, cmsRegistryInUse } from './cms';
 import { createSeoAuditRuntime } from './audit-runtime';
 import { createDestinationReportRuntime } from './report-runtime';
@@ -38,6 +40,10 @@ const SWEEP_JOB = 'publication-sweeper';
 const REFRESH_LOCK_SECONDS = 60;
 /** The platform job the due listing declares (spec 5.3); references only leave it. */
 const REFRESH_JOB = 'destination-token-refresh';
+
+/** PR-03: what a handshake records on the destination; an unreadable one (`unknown`) leaves the stored value. */
+const writeSafetyOf = (safety: CmsWriteSafety | null): Exclude<DestinationWriteSafety, 'unknown'> | null =>
+  safety && safety.mode !== 'unknown' ? safety.mode : null;
 
 export interface DestinationRuntimeOptions {
   now?: () => Date;
@@ -184,14 +190,16 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
       const adapter = enabledCmsAdapter(StoredKind.parse(row.kind));
       const credentialRefId = row.credentialRefId;
       let verified: Awaited<ReturnType<typeof adapter.verify>>;
+      // PR-03: after a verified identity, the site's conditional-write handshake (unknown leaves the stored value).
+      let safety: CmsWriteSafety | null = null;
       try {
-        verified = await openDestinationCredential(tenantId, { ...row, credentialRefId }, (creds) =>
-          adapter.verify(
-            { siteUrl: row.externalId, username: creds.extra?.['username'] ?? '' },
-            creds,
-            cmsIO(adapter.key, tenantId),
-          ),
-        );
+        verified = await openDestinationCredential(tenantId, { ...row, credentialRefId }, async (creds) => {
+          const site = { siteUrl: row.externalId, username: creds.extra?.['username'] ?? '' };
+          const io = cmsIO(adapter.key, tenantId);
+          const result = await adapter.verify(site, creds, io);
+          if (result.ok) safety = await adapter.writeSafety(site, creds, io);
+          return result;
+        });
       } catch (err) {
         verified =
           err instanceof PolicyDeniedError && err.reason === 'credential_destroyed'
@@ -212,7 +220,22 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
         const locked = await destinationsRepo.lock(row.id, tx);
         if (locked.status !== 'active' || locked.credentialRefId !== credentialRefId)
           return { ok: false, reason: 'not_active' }; // disconnected or reconnected meanwhile
-        await destinationsRepo.update(locked.id, locked.version, { health, healthCheckedAt: now() }, tx);
+        const writeSafety = writeSafetyOf(safety);
+        await destinationsRepo.update(
+          locked.id,
+          locked.version,
+          {
+            health,
+            healthCheckedAt: now(),
+            ...(writeSafety ? { writeSafety, writeSafetyCheckedAt: now() } : {}),
+          },
+          tx,
+        );
+        if (writeSafety && writeSafety !== locked.writeSafety)
+          log.info(
+            { destinationId: locked.id, fromState: locked.writeSafety, toState: writeSafety },
+            'destination write safety changed',
+          );
         await audit.record(
           workflowActor(),
           'destination.verify',
@@ -225,6 +248,7 @@ export function createDestinationRuntime(opts: DestinationRuntimeOptions = {}): 
             fromState: locked.health,
             toState: health,
             reason: verified.ok ? null : verified.reason,
+            ...(writeSafety ? { writeSafety } : {}),
           },
         );
         return verified.ok

@@ -123,7 +123,12 @@ import {
 } from '@oremedia/editor';
 import { fixtureDocument, fixtureSnapshot, ids } from '@oremedia/editor/fixtures';
 import { AuditQuery } from '@oremedia/contracts/operations';
-import { providerActivationState, type ProviderActivationV1 } from '@oremedia/contracts/providers';
+import {
+  CertifiableCapability,
+  capabilityCertificationStatuses,
+  providerActivationState,
+  type ProviderActivationV1,
+} from '@oremedia/contracts/providers';
 import { PageRequest } from '@oremedia/contracts/pagination';
 import {
   SkillBindingSet,
@@ -635,11 +640,26 @@ function provider(
   disabled: boolean,
   present: string[],
   missing: string[],
+  uncertified: CertifiableCapability[] = [],
 ): ProviderActivationV1 {
   const credentialRefs = [
     ...present.map((name) => ({ name, present: true })),
     ...missing.map((name) => ({ name, present: false })),
   ];
+  // PR-06: a certified provider here has every capability certified except `uncertified`; publish_video and
+  // comment_reply are not supported by the mock's CMS and sources, as the real registries say for those kinds.
+  const supported = new Set(
+    CertifiableCapability.options.filter(
+      (c) => kind === 'channel' || !['publish_video', 'comment_reply'].includes(c),
+    ),
+  );
+  const records = certifiedAt
+    ? Object.fromEntries(
+        CertifiableCapability.options
+          .filter((c) => !uncertified.includes(c))
+          .map((c) => [c, { certifiedAt, environment: 'staging', evidence: 'mock' }]),
+      )
+    : {};
   const facts = {
     key,
     kind,
@@ -649,6 +669,7 @@ function provider(
     certifiedAt,
     disabled,
     credentialRefs,
+    capabilities: capabilityCertificationStatuses(supported, records),
   };
   return { ...facts, ...providerActivationState(facts) };
 }
@@ -895,11 +916,11 @@ export class MockBackend {
     },
     version: 2,
   };
-  /** The route this deployment starts runs with (agents.routingPolicy.get inUse). */
-  readonly modelInUse = {
+  /** The route this deployment starts runs with (agents.routingPolicy.get inUse); null = the api is not told it. */
+  modelInUse: { provider: string; model: string; region: string | null } | null = {
     provider: 'openrouter',
     model: 'anthropic/claude-sonnet',
-    region: 'eu' as string | null,
+    region: 'eu',
   };
   /** The signed-in person's role in the company (access.listCompanies); the server still decides every call. */
   role: MembershipRole = 'owner';
@@ -917,6 +938,7 @@ export class MockBackend {
       false,
       ['PROVIDER_LINKEDIN_PAGE_CLIENT_ID_REF', 'PROVIDER_LINKEDIN_PAGE_SECRET_REF'],
       [],
+      ['publish_video'],
     ),
     provider(
       'channel',
@@ -2117,6 +2139,16 @@ export function createMockRouter(backend: MockBackend) {
             throw new ValidationFailedError([{ path: 'expectedVersion', issue: 'required' }]);
           if (stored && expected !== undefined && expected !== stored.version)
             throw new ConflictError('ModelRoutingPolicy', 'current', expected);
+          // As the API: a policy that refuses the model in use is stored only with confirmStopsRuns.
+          const inUse = backend.modelInUse;
+          const stops =
+            inUse &&
+            (!input.policy.permittedVendors.some((v) => v === inUse.provider) ||
+              input.policy.deniedModels.includes(inUse.model) ||
+              (input.policy.permittedRegions.length > 0 &&
+                (!inUse.region || !input.policy.permittedRegions.includes(inUse.region))));
+          if (stops && !input.confirmStopsRuns)
+            throw new ValidationFailedError([{ path: 'policy', issue: 'stops_model_in_use' }]);
           const version = stored ? stored.version + 1 : 0;
           backend.routingPolicy = { policy: input.policy, version };
           return { policy: input.policy, version };

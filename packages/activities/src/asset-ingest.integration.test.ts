@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { deflateSync } from 'node:zlib';
 import { MockActivityEnvironment } from '@temporalio/testing';
 import type { AssetIngestInputV1 } from '@oremedia/contracts/assets';
-import { NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
+import { NotFoundError, PolicyDeniedError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type TenantContext } from '@oremedia/db';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
@@ -237,6 +237,33 @@ describe('asset ingest activities (MockActivityEnvironment against MySQL)', () =
       sanitised: sanitised.sanitised,
     });
     expect(catalogued).toMatchObject({ assetId: moved.assetId, state: 'approved' });
+    // What the staging acceptance's logo:approve did with an owner's upload (rights, read, approve): the rights are
+    // recorded, and approve refuses the asset with VALIDATION_FAILED asset_approved, because approve is the asset
+    // machine's pending_review transition and ingest already approved it. The refusal is the product's rule.
+    const owner = actorFor(ownerA, tenantA, 'owner');
+    await runInTenant(ctxFor(owner), async () => {
+      await withTransaction((tx) =>
+        assetService.setRights(
+          owner,
+          {
+            assetId: moved.assetId,
+            owner: 'A',
+            permittedChannels: 'all',
+            territories: 'all',
+            releases: [],
+            restrictions: [],
+          },
+          tx,
+        ),
+      );
+      const read = await assetService.get(owner, { assetId: moved.assetId });
+      expect(read).toMatchObject({ state: 'approved', rightsState: 'recorded' });
+      const refused = await withTransaction((tx) =>
+        assetService.approve(owner, { assetId: moved.assetId, expectedVersion: read.version }, tx),
+      ).catch((err: unknown) => err);
+      expect(refused).toBeInstanceOf(ValidationFailedError);
+      expect(refused).toMatchObject({ details: [{ path: 'assetId', issue: 'asset_approved' }] });
+    });
     await run(acts.finaliseUpload, {
       ...input,
       outcome: 'accepted' as const,

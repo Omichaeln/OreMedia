@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoRenderJobWorkflowV1",
+  "case": "cancelled-during-compose",
+  "description": "The cancel signal cancels the running compose (delivered through its heartbeat); the work is discarded and the run ends cancelled.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:18:22.483Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "d8a81308d0c37620d3c7d91d2046e2447fa1ea9a3962074a43c3f1fdf656a19e"
+}

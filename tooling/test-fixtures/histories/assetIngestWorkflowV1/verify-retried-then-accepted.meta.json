@@ -1,0 +1,12 @@
+{
+  "workflowType": "assetIngestWorkflowV1",
+  "case": "verify-retried-then-accepted",
+  "description": "The first verify fails transiently and is retried by the activity policy (2 s), then the upload is accepted.",
+  "queue": "media",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:16:46.690Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "3a83c5d5b45cc074c90dab1a4dd3f4ad2cbaab0155c558a7ba42072de1c9ab83"
+}

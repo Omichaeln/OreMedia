@@ -10,6 +10,7 @@ import {
   CapabilityUnsupportedError,
 } from '@oremedia/contracts/errors';
 import type { ResolvedActor, ResolvedActorServicePrincipal } from '@oremedia/contracts/policy';
+import type { CertifiableCapability } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { ReleaseDecision } from '@oremedia/contracts/review';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
@@ -129,6 +130,31 @@ describe('publishing module (spec 14) against MySQL 8', () => {
   );
   Object.defineProperty(uncertified, 'key', { value: 'uncertified_fixture' });
   registry.register(fixture).register(uncertified);
+  /**
+   * PR-06: runs `fn` with these capabilities of the fixture provider lacking their certification record (the
+   * provider itself stays certified), then restores them.
+   */
+  const withoutCertification = async <T>(capabilities: CertifiableCapability[], fn: () => Promise<T>) => {
+    const saved = fixture.capability.certifications;
+    Object.assign(fixture.capability, {
+      certifications: Object.fromEntries(
+        Object.entries(saved ?? {}).filter(([c]) => !capabilities.includes(c as CertifiableCapability)),
+      ),
+    });
+    try {
+      return await fn();
+    } finally {
+      Object.assign(fixture.capability, { certifications: saved });
+    }
+  };
+  const capabilityIssue = async (p: Promise<unknown>) => {
+    const err = await p.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CapabilityUnsupportedError);
+    return (err as CapabilityUnsupportedError).details?.[0]?.issue;
+  };
   const variantsById = new Map<string, ChannelVariantForPublishing>();
   let releaseDecision: ReleaseDecision = { allow: true };
   const releaseCalls: Array<{ id: string; state: string }> = [];
@@ -443,6 +469,48 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         .where(eq(channelConnections.id, connA));
     });
 
+    it('PR-06: a certified provider whose connect is not certified is refused at start and at completion', async () => {
+      const start = () =>
+        run(tenantA, (tx) =>
+          channelService.connect.start(
+            A,
+            { brandId: brandA, providerKey: FIXTURE_PROVIDER_KEY, redirectUri: 'https://app.example/cb' },
+            tx,
+          ),
+        );
+      const started = await start();
+      await withoutCertification(['connect'], async () => {
+        expect(await capabilityIssue(start())).toBe(
+          `capability_not_certified:${FIXTURE_PROVIDER_KEY}:connect`,
+        );
+        // A flow started before the record was withdrawn cannot complete either.
+        expect(
+          await capabilityIssue(
+            run(tenantA, (tx) =>
+              channelService.connect.complete(A, { state: started.state, code: 'good' }, tx),
+            ),
+          ),
+        ).toBe(`capability_not_certified:${FIXTURE_PROVIDER_KEY}:connect`);
+      });
+    });
+
+    it('PR-06: a variant whose publish kind is not certified fails validation with the capability, and passes once certified', async () => {
+      const text = newVariant(tenantA, brandA, connA);
+      expect(await inTenant(tenantA, () => channelService.validateVariant(text.id))).toBe(true);
+      await withoutCertification(['publish_text'], async () => {
+        expect(await inTenant(tenantA, () => channelService.validateVariantDetailed(text.id))).toEqual({
+          ok: false,
+          issues: [
+            { path: 'providerKey', issue: `capability_not_certified:${FIXTURE_PROVIDER_KEY}:publish_text` },
+          ],
+        });
+      });
+      // A text variant does not need the image or video publish certified.
+      await withoutCertification(['publish_image', 'publish_video'], async () => {
+        expect(await inTenant(tenantA, () => channelService.validateVariant(text.id))).toBe(true);
+      });
+    });
+
     it('validateVariant runs the adapter against the capability register', async () => {
       const ok = newVariant(tenantA, brandA, connA);
       const long = newVariant(tenantA, brandA, connA, 'x'.repeat(300));
@@ -510,6 +578,19 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       actor: ResolvedActor = A,
       tenantId = tenantA,
     ) => run(tenantId, (tx) => channelService.connect.select(actor, { pendingId, remoteAccountId }, tx));
+
+    it('PR-06: choosing among the accounts is refused while the page picker is not certified', async () => {
+      const { pendingId, ids } = await choose();
+      await withoutCertification(['page_picker'], async () => {
+        expect(await capabilityIssue(select(pendingId, ids[1]!))).toBe(
+          `capability_not_certified:${FIXTURE_PROVIDER_KEY}:page_picker`,
+        );
+      });
+      expect(await select(pendingId, ids[1]!)).toMatchObject({
+        outcome: 'connected',
+        remoteAccountId: ids[1],
+      });
+    });
 
     it('one account: connects as before, outcome connected, nothing pending', async () => {
       const result = await completeWith('acct_single_only', []);
@@ -1766,6 +1847,31 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       return (err as ValidationFailedError).details?.[0]?.issue;
     };
 
+    it('PR-06: an edit or delete the channel supports but nobody certified is refused, and the detail says so', async () => {
+      const { pub } = await published();
+      await withoutCertification(['edit', 'delete'], async () => {
+        expect(
+          await capabilityIssue(
+            run(tenantA, (tx) =>
+              publicationService.editRemote(A, { publicationId: pub.id, text: 'Edited' }, tx),
+            ),
+          ),
+        ).toBe(`capability_not_certified:${FIXTURE_PROVIDER_KEY}:edit`);
+        expect(
+          await capabilityIssue(
+            run(tenantA, (tx) =>
+              publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+            ),
+          ),
+        ).toBe(`capability_not_certified:${FIXTURE_PROVIDER_KEY}:delete`);
+        const detail = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+        expect(detail.remote).toMatchObject({ edit: false, delete: false, uncertified: ['edit', 'delete'] });
+        expect(await changesOf(pub.id)).toEqual([]);
+      });
+      const detail = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
+      expect(detail.remote).toMatchObject({ edit: true, delete: true, uncertified: [] });
+    });
+
     it('delete: recorded, emitted with the change, carried out once; the publication becomes removed with evidence', async () => {
       const { pub, remotePostId } = await published();
       const del = await run(tenantA, (tx) =>
@@ -2748,6 +2854,85 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         }),
       );
       expect(validateInputs.at(-1)?.manifest).toEqual(articleManifest('<p>Written over the window.</p>'));
+    });
+
+    it('edit (PR-03): the stored write token is the precondition; a refusal keeps the remote body and the refused text for the comparison; limited mode is refused and audited like a conflict', async () => {
+      const token = `wpcw1:7:${'f'.repeat(64)}`;
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish', { writeToken: token }),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const first = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      const now = `wpcw1:9:${'0'.repeat(64)}`;
+      const current = readbackOf('publish', { contentHash: 'c'.repeat(64), writeToken: now });
+      editResult = {
+        outcome: 'rejected',
+        code: 'conflict',
+        message: 'the article changed on the site; nothing was written',
+        readback: current,
+        conflict: {
+          reason: 'remote_changed',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+        },
+      };
+      const input = changeInput(pub.id, first.changeId);
+      const refused = await inTenant(tenantA, () => runtime.remoteChangeProvider.editRemotePost(input, A));
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: token, expectedHash: 'a'.repeat(64) });
+      if (refused.outcome === 'skipped') throw new Error('unexpected skip');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: refused }),
+      );
+      const stored = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(stored?.payload).toMatchObject({
+        writeToken: now,
+        refreshedAfter: 'conflict',
+        conflict: {
+          reason: 'remote_changed',
+          current: { html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+          attemptedHtml: '<p>The approved edit.</p>',
+        },
+      });
+      // The person re-applies the edit after comparing: the precondition is now what the site holds.
+      const second = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      editResult = {
+        outcome: 'rejected',
+        code: 'limited_mode',
+        message: 'the site cannot apply an update atomically',
+        readback: current,
+        conflict: {
+          reason: 'limited_mode',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: null,
+        },
+      };
+      const limitedInput = changeInput(pub.id, second.changeId);
+      const limited = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(limitedInput, A),
+      );
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: now, expectedHash: 'c'.repeat(64) });
+      expect(limited).toMatchObject({ outcome: 'rejected', code: 'limited_mode' });
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'publication.edit_remote_conflict')),
+        );
+      expect(audited.map((a) => (a.metadata as Record<string, unknown>)['reason'])).toEqual(
+        expect.arrayContaining(['remote_changed_since_readback', 'limited_mode']),
+      );
     });
   });
 

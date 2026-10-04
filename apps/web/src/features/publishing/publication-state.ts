@@ -8,6 +8,7 @@ import {
   type PublicationState as PublicationStateT,
 } from '@oremedia/contracts/publishing';
 import type { ChannelConnectionStatus, ChannelHealth } from '@oremedia/contracts/providers';
+import { articleHtmlBlocks } from '@oremedia/contracts/article';
 
 export interface StateChip {
   tone: Tone;
@@ -445,6 +446,68 @@ export function remoteChangeStatus<C extends RemoteChangeLike>(changes: readonly
   const stale = requested?.stale ? requested : null;
   const latest = changes[0] ?? null;
   return { open, stale, failed: !requested && latest?.state === 'failed' ? latest : null };
+}
+
+/**
+ * PR-03: a refused website edit as the server recorded it with the refreshed read-back (evidence payload, read as
+ * data): why, what the site holds now, the edit that was not applied and where the article opens on the site.
+ */
+export interface ArticleConflictView {
+  changeId: string;
+  reason: 'remote_changed' | 'limited_mode';
+  currentHtml: string | null;
+  currentModifiedAt: string | null;
+  attemptedHtml: string;
+  editUrl: string | null;
+}
+
+/** The conflict a read-back payload carries for the given failed change; null when it carries none (or another's). */
+export function articleConflictOf(
+  readback: Record<string, unknown> | null,
+  failedChangeId: string | null,
+): ArticleConflictView | null {
+  if (!readback || !failedChangeId || readback['changeId'] !== failedChangeId) return null;
+  const conflict = readback['conflict'];
+  if (!conflict || typeof conflict !== 'object') return null;
+  const c = conflict as Record<string, unknown>;
+  const reason = c['reason'];
+  if (reason !== 'remote_changed' && reason !== 'limited_mode') return null;
+  const current =
+    c['current'] && typeof c['current'] === 'object' ? (c['current'] as Record<string, unknown>) : null;
+  const editUrl = typeof c['editUrl'] === 'string' && /^https:\/\//.test(c['editUrl']) ? c['editUrl'] : null;
+  return {
+    changeId: failedChangeId,
+    reason,
+    currentHtml: typeof current?.['html'] === 'string' ? current['html'] : null,
+    currentModifiedAt: typeof current?.['modifiedAt'] === 'string' ? current['modifiedAt'] : null,
+    attemptedHtml: typeof c['attemptedHtml'] === 'string' ? c['attemptedHtml'] : '',
+    editUrl,
+  };
+}
+
+/** One block of a side of the comparison, marked when the other side has no block reading the same. */
+export interface ComparedBlock {
+  text: string;
+  changed: boolean;
+}
+
+/**
+ * PR-03: the website's current article and the refused edit, block by block (paragraphs, headings, list items as
+ * they read): a block is marked changed when the other side has no block with the same text, so what the site
+ * changed and what the edit would have replaced stand out.
+ */
+export function compareArticleBlocks(
+  currentHtml: string,
+  attemptedHtml: string,
+): { current: ComparedBlock[]; attempted: ComparedBlock[] } {
+  const current = articleHtmlBlocks(currentHtml);
+  const attempted = articleHtmlBlocks(attemptedHtml);
+  const inCurrent = new Set(current);
+  const inAttempted = new Set(attempted);
+  return {
+    current: current.map((text) => ({ text, changed: !inAttempted.has(text) })),
+    attempted: attempted.map((text) => ({ text, changed: !inCurrent.has(text) })),
+  };
 }
 
 export const remoteChangeNoun = (kind: RemoteChangeLike['kind']): string =>

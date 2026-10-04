@@ -15,10 +15,11 @@ import {
 } from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0031 (PR-04, rendered-article verification): on a database populated at the previous
- * head the migration adds the nullable brand_destinations.article_selector; every existing row is unchanged, every
- * existing destination reads no selector (the theme defaults) through the new code, and a selector is stored. The
- * column is in LATER_COLUMNS (seed.ts).
+ * Ledger 1.g4 for migration 0031 (PR-03, conditional CMS writes): on a database populated at the previous head the
+ * migration adds brand_destinations.write_safety (not null, default `unknown`) and the nullable
+ * write_safety_checked_at; every existing row is unchanged, every existing destination reads `unknown` (not yet
+ * asked) through the new code until its next verification, and a verification's result is stored. The columns are in
+ * LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0030_tenant_kind';
 const TABLES = (Object.values(schema) as unknown[])
@@ -43,27 +44,32 @@ describe('migration 0031 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(brandDestinations)).rejects.toThrow(); // article_selector not there yet
+    await expect(tdb.db.select().from(brandDestinations)).rejects.toThrow(); // write_safety not there yet
     before = await snapshot();
   });
   afterAll(async () => {
     await tdb?.drop();
   });
 
-  it('adds article_selector (null on every existing destination), leaving every existing row unchanged', async () => {
+  it('adds write_safety (`unknown` on every existing destination) and the nullable checked instant, leaving every existing row unchanged', async () => {
     await tdb.migrateToHead();
     expect(await snapshot()).toBe(before);
     const destinations = await tdb.db.select().from(brandDestinations);
     expect(destinations.length).toBeGreaterThan(0);
-    expect(destinations.every((d) => d.articleSelector === null)).toBe(true);
-    const columns = await tdb.db.execute(
-      sql`select column_name as c, is_nullable as n from information_schema.columns where table_schema = database() and table_name = 'brand_destinations' and column_name = 'article_selector'`,
+    expect(destinations.every((d) => d.writeSafety === 'unknown' && d.writeSafetyCheckedAt === null)).toBe(
+      true,
     );
-    const cols = (columns as unknown as [Array<{ c: string; n: string }>])[0];
-    expect(cols.map((r) => `${r.c}:${r.n}`)).toEqual(['article_selector:YES']);
+    const columns = await tdb.db.execute(
+      sql`select column_name as c, is_nullable as n, column_default as d from information_schema.columns where table_schema = database() and table_name = 'brand_destinations' and column_name in ('write_safety', 'write_safety_checked_at')`,
+    );
+    const cols = (columns as unknown as [Array<{ c: string; n: string; d: string | null }>])[0];
+    expect(cols.map((r) => `${r.c}:${r.n}:${r.d ?? ''}`).sort()).toEqual([
+      'write_safety:NO:unknown',
+      'write_safety_checked_at:YES:',
+    ]);
   });
 
-  it('an existing destination reads no selector through the new code, and a stored selector is read back', async () => {
+  it('an existing destination reads `unknown` through the new code, and a recorded verification result is kept', async () => {
     const owner: ResolvedActor = {
       kind: 'user',
       id: tenantA.ownerUserId,
@@ -86,15 +92,17 @@ describe('migration 0031 rolls forward on a populated database (ledger 1.g4)', (
       .select()
       .from(brandDestinations)
       .where(eq(brandDestinations.id, destinationId));
-    expect(
-      await runInTenant(ctx, () => destinationService.get(owner, { brandId: row!.brandId, destinationId })),
-    ).toMatchObject({ articleSelector: null });
+    const got = await runInTenant(ctx, () =>
+      destinationService.get(owner, { brandId: row!.brandId, destinationId }),
+    );
+    expect(got).toMatchObject({ writeSafety: 'unknown', writeSafetyCheckedAt: null });
+    const at = new Date('2026-10-04T12:00:00.000Z');
     await tdb.db
       .update(brandDestinations)
-      .set({ articleSelector: 'div.post-body' })
+      .set({ writeSafety: 'limited', writeSafetyCheckedAt: at })
       .where(eq(brandDestinations.id, destinationId));
     expect(
       await runInTenant(ctx, () => destinationService.get(owner, { brandId: row!.brandId, destinationId })),
-    ).toMatchObject({ articleSelector: 'div.post-body' });
+    ).toMatchObject({ writeSafety: 'limited', writeSafetyCheckedAt: at.toISOString() });
   });
 });

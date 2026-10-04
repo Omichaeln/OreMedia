@@ -956,12 +956,20 @@ export async function logoChecks(
     territories: 'all',
   });
   const current = await query<AssetRead>(owner, 'assets.get', { assetId });
+  // Spec 9.1 step 8: ingest catalogues the upload as approved when the uploader holds asset.approve (the owner
+  // does), and approve is a pending_review transition only (assetMachine), so an approved asset is not approved again.
+  const atIngest = current.data?.state === 'approved';
   const approved =
-    rights.status === 200 && current.data
+    rights.status === 200 && current.data && !atIngest
       ? await mutate(owner, 'assets.approve', { assetId, expectedVersion: current.data.version })
       : null;
   const after = await query<AssetRead>(owner, 'assets.get', { assetId });
-  if (approved?.status !== 200 || after.data?.state !== 'approved' || after.data.rightsState !== 'recorded')
+  if (
+    rights.status !== 200 ||
+    (approved && approved.status !== 200) ||
+    after.data?.state !== 'approved' ||
+    after.data.rightsState !== 'recorded'
+  )
     return {
       results: [
         ...out,
@@ -969,13 +977,21 @@ export async function logoChecks(
           'logo:approve',
           rights.status !== 200
             ? `assets.rights.set: ${rights.error}`
-            : (approved?.error ?? '') ||
-                `${assetId} reads ${after.data?.state}, rights ${after.data?.rightsState}`,
+            : approved?.error
+              ? `assets.approve (the asset read ${current.data?.state} at version ${current.data?.version}): ${approved.error}`
+              : `${assetId} reads ${after.data?.state ?? after.error}, rights ${after.data?.rightsState}`,
         ),
       ],
       store,
     };
-  out.push(pass('logo:approve', `${assetId} approved with its rights recorded`));
+  out.push(
+    pass(
+      'logo:approve',
+      atIngest
+        ? `${assetId} approved at ingest (the uploader holds asset.approve) with its rights recorded`
+        : `${assetId} approved with its rights recorded`,
+    ),
+  );
 
   const system = await appliedSystem(owner, brandId);
   if ('error' in system) return { results: [...out, fail('logo:primary', system.error)], store };
@@ -1219,20 +1235,25 @@ export async function studioChecks(
         },
       },
     };
-    const preflight = await query<{
+    type Preflight = {
       blocking: boolean;
-      issues: Array<{ code: string; message: string }>;
+      issues: Array<{ code: string; severity: 'blocking' | 'warning'; message: string }>;
       cost: GenerationCostEstimate;
-    }>(owner, 'creative.generation.preflight', request);
+    };
+    const preflightOf = () => query<Preflight>(owner, 'creative.generation.preflight', request);
+    const blocks = (p: Preflight, ignore: string[] = []) => {
+      const blocking = p.issues.filter((i) => i.severity === 'blocking' && !ignore.includes(i.code));
+      return blocking.length || (p.blocking && !ignore.length)
+        ? `preflight blocks: ${p.issues.map((i) => `${i.code} (${i.message})`).join('; ')}`
+        : null;
+    };
+    const preflight = await preflightOf();
     if (!preflight.data) return [...out, fail('studio:generate', `preflight: ${preflight.error}`)];
-    if (preflight.data.blocking)
-      return [
-        ...out,
-        fail(
-          'studio:generate',
-          `preflight blocks: ${preflight.data.issues.map((i) => `${i.code} (${i.message})`).join('; ')}`,
-        ),
-      ];
+    // budget_insufficient is judged once the spend is capped: an earlier journey today (brand assist) spends under
+    // the day limit it set, which can leave less than this estimate; capModelSpend sets today's limit to what is
+    // committed plus the cap, and the preflight is asked again.
+    const blocked = blocks(preflight.data, ['budget_insufficient']);
+    if (blocked) return [...out, fail('studio:generate', blocked)];
     const room = await capModelSpend(
       owner,
       brandId,
@@ -1240,6 +1261,12 @@ export async function studioChecks(
       cfg.journeys.modelBudgetMicros,
     );
     if (!room.ok) return [...out, fail('studio:generate', room.reason)];
+    if (preflight.data.blocking) {
+      const again = await preflightOf();
+      if (!again.data) return [...out, fail('studio:generate', `preflight: ${again.error}`)];
+      const still = blocks(again.data);
+      if (still) return [...out, fail('studio:generate', `${still}; after the cap: ${room.detail}`)];
+    }
     const started = await mutate<{ id: string }>(owner, 'creative.generation.start', request);
     if (!started.data)
       return [...out, fail('studio:generate', `creative.generation.start: ${started.error}`)];

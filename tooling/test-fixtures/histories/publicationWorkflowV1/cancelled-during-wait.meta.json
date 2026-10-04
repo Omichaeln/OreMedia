@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationWorkflowV1",
+  "case": "cancelled-during-wait",
+  "description": "A cancel signal during the wait cancels before any claim; nothing is sent.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:06:38.942Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "2e40cb9780a41923a415fb4cd968a2886ab591bbc38593dc890c2d97e63664c0"
+}

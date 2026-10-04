@@ -671,6 +671,48 @@ describe('destinations module against MySQL 8', () => {
       ).rejects.toBeInstanceOf(PolicyDeniedError);
     });
 
+    it('PR-06: providers.list carries every capability state; a source whose connect or picker is not certified is refused', async () => {
+      configureSourceAvailability(() => true);
+      const listed = async () =>
+        (await inTenant(tenantA, () => providerService.list(owner()))).items.find(
+          (p) => p.kind === 'source' && p.key === 'ga4_property',
+        )!;
+      const before = await listed();
+      expect(before.capabilities.map((c) => [c.capability, c.state])).toEqual([
+        ['connect', 'certified'],
+        ['page_picker', 'certified'],
+        ['publish_text', 'not_supported'],
+        ['publish_image', 'not_supported'],
+        ['publish_video', 'not_supported'],
+        ['edit', 'not_supported'],
+        ['delete', 'not_supported'],
+        ['comment_reply', 'not_supported'],
+        ['analytics', 'certified'],
+        ['token_refresh', 'certified'],
+        ['reconnect', 'certified'],
+      ]);
+      const saved = fixture.capability.certifications;
+      const { connect: _connect, ...withoutConnect } = saved ?? {};
+      Object.assign(fixture.capability, { certifications: withoutConnect });
+      try {
+        expect(await listed()).toMatchObject({
+          state: 'uncertified',
+          reason: 'capability_not_certified:ga4_property:connect',
+        });
+        expect((await listed()).capabilities.find((c) => c.capability === 'connect')).toEqual({
+          capability: 'connect',
+          state: 'uncertified',
+          certification: null,
+        });
+        await expect(start(owner())).rejects.toMatchObject({
+          code: 'CAPABILITY_UNSUPPORTED',
+          details: [{ path: 'kind', issue: 'capability_not_certified:ga4_property:connect' }],
+        });
+      } finally {
+        Object.assign(fixture.capability, { certifications: saved });
+      }
+    });
+
     it('sources.list names each registered kind with its certification and whether it is enabled here', async () => {
       configureSourceAvailability((kind) => kind === 'ga4_property');
       const { items } = await destinationService.sources.list();
@@ -1339,12 +1381,32 @@ describe('destinations module against MySQL 8', () => {
     it('the worker verifies the sealed secret against the site and records the health; a refused identity is unreachable', async () => {
       cms.calls.length = 0;
       expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
-      expect(cms.calls).toEqual([{ op: 'verify', secret: SECRET, username: 'ore-editor', siteUrl: SITE }]);
+      // PR-03: a verified identity is followed by the conditional-write handshake, recorded on the destination.
+      expect(cms.calls).toEqual([
+        { op: 'verify', secret: SECRET, username: 'ore-editor', siteUrl: SITE },
+        { op: 'write_safety', secret: SECRET, username: 'ore-editor', siteUrl: SITE },
+      ]);
       let dto = await inTenant(tenantA, () =>
         destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
       );
       expect(dto.health).toBe('healthy');
       expect(dto.healthCheckedAt).toBeTruthy();
+      expect(dto).toMatchObject({ writeSafety: 'conditional', writeSafetyCheckedAt: expect.any(String) });
+      // A site without the plugin is recorded in limited mode; an unreadable handshake leaves what was recorded.
+      cms.writeSafetyMode = { mode: 'limited', reason: 'extension_absent' };
+      expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
+      dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      expect(dto.writeSafety).toBe('limited');
+      cms.writeSafetyMode = { mode: 'unknown', reason: 'http_503' };
+      expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
+      dto = await inTenant(tenantA, () =>
+        destinationService.get(owner(), { brandId: brandA, destinationId: siteId }),
+      );
+      expect(dto.writeSafety).toBe('limited');
+      cms.writeSafetyMode = { mode: 'conditional', mechanism: 'fixture', version: '1' };
+      expect(await verify(siteId)).toEqual({ ok: true, health: 'healthy' });
       cms.verifyBehaviour = { kind: 'unauthorised' };
       expect(await verify(siteId)).toEqual({ ok: false, reason: 'reconnect_required' });
       dto = await inTenant(tenantA, () =>
@@ -1366,7 +1428,16 @@ describe('destinations module against MySQL 8', () => {
         .select()
         .from(auditEvents)
         .where(and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'destination.verify')));
-      expect(audits.map((a) => a.decision)).toEqual(['allowed', 'denied', 'denied', 'allowed']);
+      expect(audits.map((a) => a.decision)).toEqual([
+        'allowed',
+        'allowed',
+        'allowed',
+        'allowed',
+        'denied',
+        'denied',
+        'allowed',
+      ]);
+      expect((audits[1]?.metadata as Record<string, unknown>)['writeSafety']).toBe('limited');
       await expect(verify(newId('destination'))).rejects.toBeInstanceOf(NotFoundError);
     });
 
@@ -1414,6 +1485,47 @@ describe('destinations module against MySQL 8', () => {
       );
       expect(effectivePublishMode({}, ['articles:write', 'articles:publish'])).toBe('draft');
       await expect(inTenant(tenantB, () => destinationArticles.describe(siteId))).resolves.toBeNull();
+    });
+
+    it('PR-06: an article write, an edit or a delete the site supports but nobody certified is refused, and connect too', async () => {
+      const saved = cms.capability.certifications;
+      const withdraw = (...capabilities: string[]) =>
+        Object.assign(cms.capability, {
+          certifications: Object.fromEntries(
+            Object.entries(saved ?? {}).filter(([c]) => !capabilities.includes(c)),
+          ),
+        });
+      try {
+        withdraw('publish_text', 'delete');
+        expect(await inTenant(tenantA, () => destinationArticles.validateVariant(variant(siteId)))).toEqual({
+          ok: false,
+          issues: [{ path: 'destinationId', issue: 'capability_not_certified:cms_site:publish_text' }],
+        });
+        expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+          actions: { edit: true, delete: true, unpublish: true },
+          uncertifiedActions: ['delete'],
+        });
+        withdraw('edit');
+        expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+          uncertifiedActions: ['edit', 'unpublish'], // an unpublish changes the live article: it is an edit
+        });
+        withdraw('connect');
+        const err = await connect(member(tenantA, 'publisher'), {
+          siteUrl: 'https://other.acme.example',
+        }).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(CapabilityUnsupportedError);
+        expect((err as CapabilityUnsupportedError).details?.[0]?.issue).toBe(
+          'capability_not_certified:cms_site:connect',
+        );
+      } finally {
+        Object.assign(cms.capability, { certifications: saved });
+      }
+      expect(await inTenant(tenantA, () => destinationArticles.describe(siteId))).toMatchObject({
+        uncertifiedActions: [],
+      });
     });
 
     it('publish is refused without a source-use policy allowing write (default deny); with it the article lands as a draft, is read back and its page validated', async () => {
@@ -1890,10 +2002,10 @@ describe('destinations module against MySQL 8', () => {
       expect(cms.articles.get('100')?.html).toBe('<p>Changed on the site.</p>');
     });
 
-    it('an edit (RA-12): a site change that lands between the pre-write read and the write is replaced, detected after the write and returned as what was overwritten', async () => {
+    it('an edit (PR-03): a site change that lands between the pre-write read and the write is refused by the site; nothing is written and the refusal carries what the site holds now', async () => {
       const current = cms.articles.get('100')!;
       cms.editInWindow = () => ({ html: '<p>Edited on the site in the window.</p>' });
-      const edited = await inTenant(tenantA, () =>
+      const refused = await inTenant(tenantA, () =>
         destinationArticles.edit({
           tenantId: tenantA,
           destinationId: siteId,
@@ -1904,20 +2016,95 @@ describe('destinations module against MySQL 8', () => {
           idempotencyKey: 'idem_edit_window',
         }),
       );
-      expect(edited).toMatchObject({
-        outcome: 'done',
-        readback: { remoteId: '100' },
-        readbackVerification: { outcome: 'verified' },
-        overwritten: {
-          previous: { remoteId: '100', contentHash: current.contentHash, modifiedAt: current.modifiedAt },
-          replaced: {
-            remoteId: '100',
-            contentHash: fixtureArticleHash({ ...current, html: '<p>Edited on the site in the window.</p>' }),
-          },
+      expect(cms.editInWindow).toBeNull();
+      expect(refused).toMatchObject({
+        outcome: 'rejected',
+        code: 'conflict',
+        readback: { remoteId: '100', writeToken: `fx:${cms.counters.get('100')}` },
+        conflict: {
+          reason: 'remote_changed',
+          current: { remoteId: '100', html: '<p>Edited on the site in the window.</p>' },
         },
       });
-      expect(cms.editInWindow).toBeNull();
+      expect(refused.outcome === 'rejected' && refused.overwritten).toBeUndefined();
+      expect(cms.articles.get('100')?.html).toBe('<p>Edited on the site in the window.</p>');
+      // Re-applied on purpose against the refreshed read-back (its write token), the edit goes through.
+      const token = refused.outcome === 'rejected' ? refused.readback?.writeToken : undefined;
+      const applied = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: refused.outcome === 'rejected' ? (refused.readback?.contentHash ?? null) : null,
+          expectedModifiedAt: null,
+          expectedWriteToken: token ?? null,
+          html: '<p>Written over the window.</p>',
+          idempotencyKey: 'idem_edit_rebased_2',
+        }),
+      );
+      expect(applied).toMatchObject({
+        outcome: 'done',
+        readback: { writeToken: `fx:${cms.counters.get('100')}` },
+      });
       expect(cms.articles.get('100')?.html).toBe('<p>Written over the window.</p>');
+    });
+
+    it('an edit (PR-03) with a stored write token the site has moved past is refused without a preflight read; same-second and term-only changes count', async () => {
+      const read = await cms.readArticle(
+        { siteUrl: 'https://site.example', username: 'u' },
+        { accessToken: 'x' },
+        {} as never,
+        '100',
+      );
+      const token = read.outcome === 'found' ? read.article.writeToken : undefined;
+      expect(token).toMatch(/^fx:\d+$/);
+      // A change that keeps the content, the hash and the modified instant (a term or featured image): only the
+      // site's counter moves, and the stored token no longer matches.
+      const before = cms.articles.get('100')!;
+      cms.editOnSite('100', {});
+      cms.articles.set('100', { ...cms.articles.get('100')!, modifiedAt: before.modifiedAt });
+      cms.calls.length = 0;
+      const refused = await inTenant(tenantA, () =>
+        destinationArticles.edit({
+          tenantId: tenantA,
+          destinationId: siteId,
+          remoteId: '100',
+          expectedHash: before.contentHash,
+          expectedModifiedAt: before.modifiedAt,
+          expectedWriteToken: token ?? null,
+          html: '<p>Stale approved edit.</p>',
+          idempotencyKey: 'idem_edit_stale_token',
+        }),
+      );
+      expect(refused).toMatchObject({ outcome: 'rejected', code: 'conflict' });
+      expect(cms.calls.map((c) => c.op)).toEqual(['update']);
+      expect(cms.articles.get('100')).toMatchObject({ html: before.html, modifiedAt: before.modifiedAt });
+    });
+
+    it('an edit (PR-03) on a site in limited mode is refused before any write, with the current revision for reconciliation', async () => {
+      cms.writeSafetyMode = { mode: 'limited', reason: 'extension_absent' };
+      try {
+        const current = cms.articles.get('100')!;
+        const refused = await inTenant(tenantA, () =>
+          destinationArticles.edit({
+            tenantId: tenantA,
+            destinationId: siteId,
+            remoteId: '100',
+            expectedHash: current.contentHash,
+            expectedModifiedAt: current.modifiedAt,
+            html: '<p>Not atomic, so not sent.</p>',
+            idempotencyKey: 'idem_edit_limited',
+          }),
+        );
+        expect(refused).toMatchObject({
+          outcome: 'rejected',
+          code: 'limited_mode',
+          conflict: { reason: 'limited_mode', current: { remoteId: '100', html: current.html } },
+        });
+        expect(cms.articles.get('100')).toEqual(current);
+      } finally {
+        cms.writeSafetyMode = { mode: 'conditional', mechanism: 'fixture', version: '1' };
+      }
     });
 
     it('an edit with no read-back to compare against is refused before any call: never an overwrite (D-16)', async () => {

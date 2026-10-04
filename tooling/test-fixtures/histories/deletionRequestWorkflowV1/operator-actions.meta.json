@@ -1,0 +1,12 @@
+{
+  "workflowType": "deletionRequestWorkflowV1",
+  "case": "operator-actions",
+  "description": "One handler needs an operator; the request is left blocked with the actions named.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:10:56.831Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "53bc6190bd55d5a332333f775cda79c481bb48efb93defe24b55cd0de472bed4"
+}

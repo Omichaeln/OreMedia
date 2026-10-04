@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoIngestWorkflowV1",
+  "case": "rejected-at-inspect",
+  "description": "ffprobe finds an unsupported codec: rejected with that reason.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:17:24.674Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "fb81ed3b98e0bf9276d4bd1fd562474d496ec22b3df358bd739ed109be2572e4"
+}

@@ -48,6 +48,16 @@ export const brandDestinations = mysqlTable(
     /** When the zone was last read from the platform; the sweep asks again after REPORTING_ZONE_RECHECK_DAYS. */
     reportingZoneCheckedAt: ts('reporting_zone_checked_at'),
     /**
+     * PR-03: whether the last verification found the site able to update an existing article atomically
+     * (`conditional`: e.g. WordPress with the Oremedia conditional-write plugin) or not (`limited`: updates of
+     * existing articles are refused); `unknown` before the first verification and for kinds that do not write.
+     * The adapter repeats the handshake before every update; this column is what the settings screen shows.
+     */
+    writeSafety: mysqlEnum('write_safety', ['unknown', 'conditional', 'limited'])
+      .notNull()
+      .default('unknown'),
+    writeSafetyCheckedAt: ts('write_safety_checked_at'),
+    /**
      * PR-04: where a website's theme puts an article's body (simple CSS selectors, contracts ArticleRegionSelector),
      * tried before the common WordPress defaults when a rendered article is verified; null: the defaults only.
      */

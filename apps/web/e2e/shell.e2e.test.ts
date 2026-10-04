@@ -457,8 +457,15 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await ga4.textContent()).toContain('Healthy');
     expect(await ga4.getAttribute('data-destination-health')).toBe('healthy');
     expect(await page.getByTestId('destination-dst_e2e_gbp').textContent()).toContain('Not checked');
-    // PR-04: a website's article region selector is set (and validated) on its row; other kinds have none.
+    // PR-03: the website verified without the conditional-write plugin is in limited mode and says what that means;
+    // a destination that never updates articles shows no such state.
     const cms = page.getByTestId('destination-dst_e2e_cms');
+    expect(await cms.getByTestId('destination-write-safety').textContent()).toContain('Limited mode');
+    expect(await cms.getByTestId('destination-limited-mode').textContent()).toContain(
+      'Oremedia conditional-write plugin',
+    );
+    expect(await ga4.getByTestId('destination-write-safety').count()).toBe(0);
+    // PR-04: a website's article region selector is set (and validated) on its row; other kinds have none.
     const selector = cms.getByLabel('Article region selector');
     await selector.fill('div p');
     await cms.getByRole('button', { name: 'Save selector' }).click();
@@ -1092,7 +1099,23 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await confirm.waitFor({ timeout: 15_000 });
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     expect(backend.routingPolicy?.version).toBe(3);
-    await form.getByRole('button', { name: 'Cancel' }).click();
+    // Confirming is the explicit choice the server requires to store a policy that refuses the model in use.
+    await form.getByRole('button', { name: 'Save policy' }).click();
+    await confirm.waitFor({ timeout: 15_000 });
+    await confirm.getByRole('button', { name: 'Save and stop agent runs' }).click();
+    await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('Stored version 4.');
+    expect(backend.routingPolicy?.policy.permittedVendors).toEqual(['anthropic']);
+    // An api that is not told the deployment's model shows no made-up model in use, and offers no editing.
+    const inUseBefore = backend.modelInUse;
+    backend.modelInUse = null;
+    await page.reload();
+    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await expect
+      .poll(() => routing.textContent(), { timeout: 15_000 })
+      .toContain('The model in use is not known here');
+    expect(await routing.getByTestId('model-in-use').count()).toBe(0);
+    expect(await routing.getByRole('button', { name: 'Edit' }).count()).toBe(0);
+    backend.modelInUse = inUseBefore;
     backend.routingPolicy = storedBefore;
     backend.killSwitches.clear();
     await page.close();

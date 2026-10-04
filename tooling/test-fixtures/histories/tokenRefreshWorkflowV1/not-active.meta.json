@@ -1,0 +1,12 @@
+{
+  "workflowType": "tokenRefreshWorkflowV1",
+  "case": "not-active",
+  "description": "The connection was disconnected: nothing to refresh.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:46.156Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "f5e2d7f9e24efefc9df4e9275e1a573eeacccd0843de723f74dc1c82c9236b2c"
+}

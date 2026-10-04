@@ -1,0 +1,12 @@
+{
+  "workflowType": "renderJobWorkflowV1",
+  "case": "render-failed",
+  "description": "The renderer fails non-retryably on the first format: the job fails as render_failed.",
+  "queue": "render",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:17:08.709Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "3ab66c73630a4f7604da25cd6727f38da5f9bcef0aa1afb88360f5e0853fd110"
+}

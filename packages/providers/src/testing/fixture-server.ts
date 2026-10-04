@@ -213,7 +213,10 @@ export async function closedLoopbackPort(): Promise<number> {
  * A ProviderIO built with the real `createProviderIO` that rewrites every platform URL to the fixture server,
  * preserving path and query and carrying the original host in `x-fixture-host`.
  */
-export async function fixtureIO(server: FixtureServer, opts: FixtureIOOptions): Promise<FixtureIO> {
+export async function fixtureIO(
+  server: Pick<FixtureServer, 'baseUrl'>,
+  opts: FixtureIOOptions,
+): Promise<FixtureIO> {
   process.env['LOG_LEVEL'] ??= 'silent';
   const base = opts.refuse ? `http://127.0.0.1:${await closedLoopbackPort()}` : server.baseUrl;
   const inner = createProviderIO({

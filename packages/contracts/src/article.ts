@@ -308,6 +308,52 @@ export const articleHtmlChars = (html: string): number => {
   return decodeEntities(text).length;
 };
 
+/** The elements whose text reads as one block of an article (a paragraph, a heading, a list item, a caption…). */
+const TEXT_BLOCK_TAGS = new Set([
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'li',
+  'blockquote',
+  'figcaption',
+  'pre',
+  'dt',
+  'dd',
+  'td',
+  'th',
+]);
+
+/**
+ * PR-03: the text of each block of an HTML body as it reads (tags removed, inline ones joined as written, entities
+ * decoded, whitespace folded, case kept), in order, empty blocks dropped; script and style contents never count.
+ * What a screen compares paragraph by paragraph when a website's current article is set beside an edit.
+ */
+export const articleHtmlBlocks = (html: string): string[] => {
+  const blocks: string[] = [];
+  let current = '';
+  let skip: string | null = null;
+  const flush = () => {
+    const text = decodeEntities(current).replace(/\s+/g, ' ').trim();
+    if (text !== '') blocks.push(text);
+    current = '';
+  };
+  for (const t of scanMarkup(html, { rawText: false })) {
+    if (skip !== null) {
+      if (t.type === 'close' && t.name === skip) skip = null;
+    } else if (t.type === 'text') current += t.text;
+    else if (t.type === 'open' && (t.name === 'script' || t.name === 'style')) skip = t.name;
+    else if (t.name === 'br') current += ' ';
+    else if (TEXT_BLOCK_TAGS.has(t.name) || t.name === 'div') flush();
+    // An inline element (strong, a, em…) joins its text to the block's as written.
+  }
+  flush();
+  return blocks;
+};
+
 // ---- rendered-page validation (R2-3): what a published page must show ----
 
 /**

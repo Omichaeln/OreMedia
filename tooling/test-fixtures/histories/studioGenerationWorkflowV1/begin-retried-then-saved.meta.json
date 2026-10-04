@@ -1,0 +1,12 @@
+{
+  "workflowType": "studioGenerationWorkflowV1",
+  "case": "begin-retried-then-saved",
+  "description": "The first begin fails transiently and is retried by the activity policy (2 s), then the job completes.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:01.969Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "66be5e3bc75ae5524750be21aa5e37a407b49be2676edb5baf2e838e7132a27e"
+}

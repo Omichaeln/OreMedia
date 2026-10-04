@@ -458,6 +458,13 @@ export function ModelRouting() {
           <span className="text-muted-foreground"> · set by the deployment, not by this policy</span>
         </p>
       )}
+      {routing.data && !inUse && (
+        <StatusBanner
+          tone="warning"
+          title="The model in use is not known here"
+          description="The API is not told which model this deployment's agents run through, so a policy cannot be checked against it and editing is unavailable. An operator sets OREMEDIA_MODEL_PROVIDER and OREMEDIA_MODEL_ID on the api to the gateway and model the workers use."
+        />
+      )}
       {routing.data && !p && !editing && (
         <EmptyState
           title="No routing policy stored"
@@ -567,8 +574,14 @@ function RoutingForm({
     next.permittedRegions.length > 0 && (!inUse.region || !next.permittedRegions.includes(inUse.region));
   const blocks = blocksVendor || blocksModel || blocksRegion;
   const inUseText = `${inUse.model} through ${vendorLabel(inUse.provider)}${inUse.region ? ` in ${inUse.region}` : ''}`;
-  const submit = () =>
-    save.mutate({ policy: next, ...(version === null ? {} : { expectedVersion: version }) });
+  // The confirmation dialog is the explicit choice the server requires before it stores a policy that refuses the
+  // model in use (confirmStopsRuns); without it the server refuses such a policy.
+  const submit = (confirmStopsRuns = false) =>
+    save.mutate({
+      policy: next,
+      ...(version === null ? {} : { expectedVersion: version }),
+      ...(confirmStopsRuns ? { confirmStopsRuns } : {}),
+    });
   const ui = save.isError ? toUiError(save.error) : null;
   const toggle = (v: ModelVendor) =>
     setVendors((xs) => (xs.includes(v) ? xs.filter((x) => x !== v) : [...xs, v]));
@@ -660,7 +673,7 @@ function RoutingForm({
               disabled={save.isPending}
               onClick={() => {
                 setConfirming(false);
-                submit();
+                submit(true);
               }}
             >
               Save and stop agent runs

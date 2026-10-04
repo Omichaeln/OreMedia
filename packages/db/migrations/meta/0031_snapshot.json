@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "c4be886f-83d3-45e6-9cdf-2e35f890c400",
+  "id": "76ae439e-a945-4a46-8fc3-805bace0c768",
   "prevId": "034c2747-504c-4eb1-8e5c-5725f44176d0",
   "tables": {
     "api_clients": {
@@ -13244,9 +13244,17 @@
           "notNull": false,
           "autoincrement": false
         },
-        "article_selector": {
-          "name": "article_selector",
-          "type": "varchar(200)",
+        "write_safety": {
+          "name": "write_safety",
+          "type": "enum('unknown','conditional','limited')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "write_safety_checked_at": {
+          "name": "write_safety_checked_at",
+          "type": "datetime(3)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

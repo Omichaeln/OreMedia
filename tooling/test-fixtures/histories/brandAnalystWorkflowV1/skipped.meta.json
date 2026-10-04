@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAnalystWorkflowV1",
+  "case": "skipped",
+  "description": "No run could start and nothing changed: the analysis is skipped.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:11.570Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "521b35ddbbaf5019d229997dbf1211992c2f248dba6a824385819bb04638e3c3"
+}

@@ -205,6 +205,7 @@ export function communityRouters(b: CommunityBackend, { router, query, mutation 
     ...c.channel,
     status: 'active' as const,
     replySupported: true,
+    replyUncertified: false,
     replyMaxLength: PC.maxLength as number | null,
   });
   const conversationOf = (id: string) => {
