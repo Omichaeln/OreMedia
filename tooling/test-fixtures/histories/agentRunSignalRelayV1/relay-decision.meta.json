@@ -1,0 +1,12 @@
+{
+  "workflowType": "agentRunSignalRelayV1",
+  "case": "relay-decision",
+  "description": "The outbox relays a proposal decision to a waiting run (external signal).",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:19.260Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "c81b1f2b1741983bf64e3df63eae6a93638a8e83c50f78db4b3ddd61fb07d429"
+}

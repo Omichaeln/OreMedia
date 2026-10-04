@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationSweeperWorkflowV1",
+  "case": "default-open",
+  "description": "In flight with the default configuration: after the first pass it waits on the 60 s timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:36.294Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "b345f8bc0249db618375e281fbcaabee8c71de8afb4a4b426ffdb789030fb5d5"
+}

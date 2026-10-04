@@ -1,0 +1,12 @@
+{
+  "workflowType": "agentRunWorkflowV1",
+  "case": "completed",
+  "description": "Context, budget, one read tool call, then the model is done: completed and settled.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:01.777Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "5c77b6588b5cb08fdb2cad31f20cdf7deabd43f2f84dababb6fdb9164758c5fa"
+}

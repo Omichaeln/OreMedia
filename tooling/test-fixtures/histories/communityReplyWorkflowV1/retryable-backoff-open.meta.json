@@ -1,0 +1,12 @@
+{
+  "workflowType": "communityReplyWorkflowV1",
+  "case": "retryable-backoff-open",
+  "description": "In flight: a pre-send retryable error, the workflow waits on its 30 s backoff timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:10:34.580Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "27d92deef4dc06ae82ddf41bd11dacbd23b884ca59ad9a383cf455546ed7c17d"
+}

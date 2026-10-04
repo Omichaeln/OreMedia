@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationRemoteEditWorkflowV1",
+  "case": "activity-rejected",
+  "description": "The provider activity fails non-retryably (ValidationFailed): recorded as rejected.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:09:46.972Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "0f6a830116904bc45a04ecdf2adb30b13ad21602fb236a8dbe4e519867b85b84"
+}

@@ -1,0 +1,83 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-10-04T17:15:37.048477497Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1056852",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "seoAuditWorkflowV1"
+        },
+        "taskQueue": {
+          "name": "ingest-metrics",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJ0ZW5hbnRJZCI6InRudF9yZXBsYXlfMSIsImFjdG9yIjp7ImtpbmQiOiJwbGF0Zm9ybV9vcGVyYXRvciIsImlkIjoic2VvLWF1ZGl0LXN3ZWVwIn0sImNvcnJlbGF0aW9uSWQiOiJjb3JyX3JlcGxheV9zZW9fMSIsImRlc3RpbmF0aW9uSWQiOiJkc3RfcmVwbGF5X3Nlb18xIiwibm93IjoiMjAyNi0wMS0wNVQwOTowMDowMC4wMDBaIiwidHJpZ2dlciI6InNjaGVkdWxlZCJ9"
+            }
+          ]
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a107e9-fad8-7742-a1e8-a4904deb3cb1",
+        "identity": "replay-recorder",
+        "firstExecutionRunId": "01a107e9-fad8-7742-a1e8-a4904deb3cb1",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "header": {},
+        "workflowId": "seo-audit:dst_replay_seo_1:2026-W02"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-10-04T17:15:37.050631726Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1056853",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "ingest-metrics",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-10-04T17:15:37.065246158Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1056858",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "replay-recorder",
+        "requestId": "d9d3931c-e5e8-4b05-a39a-95c650e69861",
+        "historySizeBytes": "511",
+        "workerVersion": {
+          "buildId": "@temporalio/worker@1.24.0+538db1f90c8f1ea54f33e878a3b3f9ed8ec05b42708fb34b1ca1b65cfda75938"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-10-04T17:15:37.234062186Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_FAILED",
+      "taskId": "1056862",
+      "workflowTaskFailedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "cause": "WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE",
+        "failure": {
+          "message": "acts.planSeoAudit is not a function",
+          "source": "TypeScriptSDK",
+          "stackTrace": ""
+        },
+        "identity": "replay-recorder"
+      }
+    }
+  ]
+}

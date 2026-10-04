@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationRemoteDeleteWorkflowV1",
+  "case": "skipped",
+  "description": "The change is no longer requested: skipped, nothing sent or recorded.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:09:37.721Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "8a4500b14465c10d91c8e2c14f583587f3b59b457bc248bb14302dae559c503e"
+}

@@ -1,0 +1,12 @@
+{
+  "workflowType": "channelRevokeWorkflowV1",
+  "case": "not-found-fails",
+  "description": "The activity fails non-retryably (NotFound): the workflow fails.",
+  "queue": "core",
+  "state": "failed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:11:03.073Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "380a0885f201844d28f763dace8a57bfda422303231bcfe9208f719e1d96e172"
+}

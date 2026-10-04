@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoRenderJobWorkflowV1",
+  "case": "too-large",
+  "description": "Compose exceeds the temp disk budget: the work is discarded and the job fails as too_large.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:18:25.972Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "40fe5326e26a1897a8c421b2ef76ed34fcf2d3159ce65af18c278f330fffc1a1"
+}

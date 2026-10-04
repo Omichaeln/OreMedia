@@ -1,0 +1,12 @@
+{
+  "workflowType": "destinationVerifyWorkflowV1",
+  "case": "verified",
+  "description": "The sealed secret verifies; the destination is healthy.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:11:06.901Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "3107904bf71bf9364aca7b46e6361e87700422d778bb789512da9fb87bf99d1c"
+}
