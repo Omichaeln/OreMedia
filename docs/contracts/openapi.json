@@ -15494,6 +15494,75 @@
         }
       }
     },
+    "/trpc/operations.flags.list": {
+      "get": {
+        "operationId": "operations.flags.list",
+        "x-trpc-type": "query"
+      }
+    },
+    "/trpc/operations.flags.set": {
+      "post": {
+        "operationId": "operations.flags.set",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "enum": [
+                      "mandates.managed_autopublish",
+                      "intelligence.brand_analyst",
+                      "experiments.randomised",
+                      "creative.preview_render",
+                      "creative.video_generation",
+                      "creative.audio_generation"
+                    ]
+                  },
+                  "target": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "global"
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "const": "tenant"
+                          },
+                          "tenantId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["kind", "tenantId"]
+                      }
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": ["key", "target", "enabled", "reason"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/operations.flags.snapshot": {
       "get": {
         "operationId": "operations.flags.snapshot",
@@ -32358,6 +32427,64 @@
             }
           },
           "required": ["subjectType", "subjectId", "reason"]
+        }
+      },
+      "operations.flags.list": {
+        "type": "query",
+        "input": null
+      },
+      "operations.flags.set": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "enum": [
+                "mandates.managed_autopublish",
+                "intelligence.brand_analyst",
+                "experiments.randomised",
+                "creative.preview_render",
+                "creative.video_generation",
+                "creative.audio_generation"
+              ]
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "global"
+                    }
+                  },
+                  "required": ["kind"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "tenant"
+                    },
+                    "tenantId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind", "tenantId"]
+                }
+              ]
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": ["key", "target", "enabled", "reason"]
         }
       },
       "operations.flags.snapshot": {

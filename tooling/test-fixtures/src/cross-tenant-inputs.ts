@@ -58,7 +58,8 @@ export interface CrossTenantFixture {
 export interface OwnTenantFixture {
   why: string;
   input: () => unknown;
-  expectError?: 'VALIDATION_FAILED';
+  /** The refusal the caller's own tenant gets: VALIDATION_FAILED for a bad own input, FORBIDDEN for an operator-only procedure. */
+  expectError?: 'VALIDATION_FAILED' | 'FORBIDDEN';
 }
 
 /** A module may seed extra rows per tenant and return the ids a foreign caller might try to use. */

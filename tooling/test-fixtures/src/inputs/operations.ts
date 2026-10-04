@@ -6,6 +6,23 @@ export const OPERATIONS_INPUTS: Record<string, CrossTenantFixture> = {
     expectEmpty: true,
   },
   'operations.flags.snapshot': { buildInput: null, reason: 'no input' },
+  'operations.flags.list': {
+    buildInput: null,
+    reason:
+      "no input; operator-only, and shows the global default plus the session's own tenant (never other tenant ids)",
+  },
+  // The tenant id is not secret, so a foreign one is FORBIDDEN (a tenant member is refused before it is read; a
+  // support session bound to tenant A targeting tenant B is tenant_mismatch: feature-flags.integration.test.ts).
+  'operations.flags.set': {
+    buildInput: (f) => ({
+      key: 'experiments.randomised',
+      target: { kind: 'tenant', tenantId: f['tenantId'] },
+      enabled: true,
+      expectedVersion: null,
+      reason: 'cross-tenant probe',
+    }),
+    expectCode: 'FORBIDDEN',
+  },
   'operations.providers.list': {
     buildInput: null,
     reason:
@@ -31,6 +48,11 @@ export const OPERATIONS_OWN_TENANT_INPUTS: Record<string, OwnTenantFixture> = {
   'operations.flags.snapshot': {
     why: "takes no input: the feature flags evaluated for the caller's verified tenant",
     input: () => undefined,
+  },
+  'operations.flags.list': {
+    why: 'takes no input and is operator-only: a tenant owner is refused, and the refusal names no other tenant',
+    input: () => undefined,
+    expectError: 'FORBIDDEN',
   },
   'operations.providers.list': {
     why: 'takes no input: the provider adapters registered on the deployment with their activation, no tenant content',

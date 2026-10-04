@@ -7,7 +7,7 @@
     "build": "tsup",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "pnpm --dir ../.. exec vitest run --project unit apps/approval-monitor/src/review.test.ts"
+    "test": "pnpm --dir ../.. exec vitest run --project unit apps/approval-monitor/src"
   },
   "dependencies": {
     "@oremedia/db": "workspace:*",

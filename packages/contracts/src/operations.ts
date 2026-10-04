@@ -31,14 +31,12 @@ export const RetentionDataClass = z.enum([
 
 export const IncidentSeverity = z.enum(['sev1', 'sev2', 'sev3', 'sev4']);
 
-/** Spec 22.1: engineering flags (short-lived, server-enforced). */
+/**
+ * Spec 22.1: engineering flags (short-lived, server-enforced). Every key here is read by the code it gates
+ * (feature-flags.test.ts). `studio.agent_proposals` and `publishing.channel.*` were removed unread: agent proposals
+ * shipped ungated, and channel connect is gated by certification. Their rows, if any, are ignored on read.
+ */
 export const FeatureFlagKey = z.enum([
-  'studio.agent_proposals',
-  'publishing.channel.linkedin_page',
-  'publishing.channel.instagram_business',
-  'publishing.channel.facebook_page',
-  'publishing.channel.x',
-  'publishing.channel.tiktok',
   'mandates.managed_autopublish',
   'intelligence.brand_analyst',
   'experiments.randomised',
@@ -47,6 +45,46 @@ export const FeatureFlagKey = z.enum([
   'creative.audio_generation',
 ]);
 export type FeatureFlagKey = z.infer<typeof FeatureFlagKey>;
+
+/**
+ * Where operations.flags.set writes, in the feature_flags row's own targeting model: `global` is the row's
+ * enabled_default (every tenant), `tenant` adds or removes one tenant id in targeting.tenantIds. A tenant entry only
+ * ever turns a flag on: with the global default on, removing a tenant does not turn it off for that tenant.
+ */
+export const FeatureFlagTarget = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('global') }),
+  z.object({ kind: z.literal('tenant'), tenantId: z.string().min(1).max(40) }),
+]);
+export type FeatureFlagTarget = z.infer<typeof FeatureFlagTarget>;
+
+/**
+ * Operator-only flag change (platform operator in an escalated support session). `expectedVersion` is the row's
+ * version from operations.flags.list, or null when the flag has no row yet; a stale value is CONFLICT.
+ */
+export const FeatureFlagSet = z.object({
+  key: FeatureFlagKey,
+  target: FeatureFlagTarget,
+  enabled: z.boolean(),
+  expectedVersion: z.number().int().min(0).nullable(),
+  reason: z.string().trim().min(1).max(200),
+});
+export type FeatureFlagSet = z.infer<typeof FeatureFlagSet>;
+
+/** One flag as an operator sees it from inside a support session: the global default and this tenant's entry. */
+export const FeatureFlagState = z.object({
+  key: FeatureFlagKey,
+  owner: z.string(),
+  removalDate: z.string(),
+  successMetric: z.string(),
+  globalEnabled: z.boolean(),
+  tenantTargeted: z.boolean(),
+  /** How many tenants are targeted; the ids of other tenants are never returned. */
+  targetedTenantCount: z.number().int(),
+  percentage: z.number().nullable(),
+  enabledForTenant: z.boolean(),
+  version: z.number().int().nullable(),
+});
+export type FeatureFlagState = z.infer<typeof FeatureFlagState>;
 
 export const KillSwitchScope = z.enum(['agent_starts', 'release_dispatch']);
 export type KillSwitchScope = z.infer<typeof KillSwitchScope>;

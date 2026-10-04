@@ -1,9 +1,20 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
-import type { FeatureFlagKey } from '@oremedia/contracts/operations';
-import { FeatureFlagKey as FeatureFlagKeySchema } from '@oremedia/contracts/operations';
-import { PlatformRepository, currentTenant, runAsPlatform, type Tx } from '@oremedia/db';
+import { ConflictError, PolicyDeniedError } from '@oremedia/contracts/errors';
+import type { FeatureFlagKey, FeatureFlagState } from '@oremedia/contracts/operations';
+import { FeatureFlagKey as FeatureFlagKeySchema, FeatureFlagSet } from '@oremedia/contracts/operations';
+import type { ResolvedActor } from '@oremedia/contracts/policy';
+import {
+  PlatformRepository,
+  affectedRows,
+  currentTenant,
+  requireTenant,
+  runAsPlatform,
+  type Tx,
+} from '@oremedia/db';
 import { featureFlags } from '@oremedia/db/schema/operations';
+import type { z } from 'zod';
+import { audit } from './audit';
 
 /**
  * Spec 22.1: engineering flags are short-lived, server-enforced, and carry owner, removal date and success metric.
@@ -18,48 +29,6 @@ export interface FlagDefinition {
 }
 
 export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
-  {
-    key: 'studio.agent_proposals',
-    owner: 'creative',
-    removalDate: '2027-03-31',
-    successMetric: 'proposal acceptance rate ≥ 40 % over 4 weeks',
-    enabledDefault: false,
-  },
-  {
-    key: 'publishing.channel.linkedin_page',
-    owner: 'publishing',
-    removalDate: '2027-03-31',
-    successMetric: 'certified; 99 % publications reach published or failed within 1 h',
-    enabledDefault: false,
-  },
-  {
-    key: 'publishing.channel.instagram_business',
-    owner: 'publishing',
-    removalDate: '2027-03-31',
-    successMetric: 'certified; same as above',
-    enabledDefault: false,
-  },
-  {
-    key: 'publishing.channel.facebook_page',
-    owner: 'publishing',
-    removalDate: '2027-03-31',
-    successMetric: 'certified; same as above',
-    enabledDefault: false,
-  },
-  {
-    key: 'publishing.channel.x',
-    owner: 'publishing',
-    removalDate: '2027-03-31',
-    successMetric: 'certified; same as above',
-    enabledDefault: false,
-  },
-  {
-    key: 'publishing.channel.tiktok',
-    owner: 'publishing',
-    removalDate: '2027-03-31',
-    successMetric: 'certified; same as above',
-    enabledDefault: false,
-  },
   {
     key: 'mandates.managed_autopublish',
     owner: 'review',
@@ -112,6 +81,13 @@ export const FLAG_DEFINITIONS: readonly FlagDefinition[] = [
   },
 ];
 
+type FlagRow = typeof featureFlags.$inferSelect;
+type Targeting = FlagRow['targeting'];
+
+const isDuplicateKeyError = (err: unknown): boolean =>
+  (err as { code?: string } | undefined)?.code === 'ER_DUP_ENTRY' ||
+  (err as { cause?: { code?: string } } | undefined)?.cause?.code === 'ER_DUP_ENTRY';
+
 class FlagRepository extends PlatformRepository {
   async get(key: string, tx?: Tx) {
     const rows = await this.conn(tx).select().from(featureFlags).where(eq(featureFlags.key, key)).limit(1);
@@ -119,6 +95,36 @@ class FlagRepository extends PlatformRepository {
   }
   async all(tx?: Tx) {
     return this.conn(tx).select().from(featureFlags);
+  }
+  /** The row under a write lock for the rest of the command's transaction, or null when the flag has no row. */
+  async lock(key: string, tx: Tx) {
+    const rows = await this.conn(tx)
+      .select()
+      .from(featureFlags)
+      .where(eq(featureFlags.key, key))
+      .for('update');
+    return rows[0] ?? null;
+  }
+  /** First write of a flag. A concurrent first write of the same key is a version conflict, not a 500. */
+  async create(values: typeof featureFlags.$inferInsert, tx: Tx) {
+    try {
+      await this.conn(tx).insert(featureFlags).values(values);
+    } catch (err) {
+      if (isDuplicateKeyError(err)) throw new ConflictError('FeatureFlag', values.key, 0);
+      throw err;
+    }
+  }
+  async update(
+    key: string,
+    expectedVersion: number,
+    values: { enabledDefault: boolean; targeting: Targeting },
+    tx: Tx,
+  ) {
+    const res = await this.conn(tx)
+      .update(featureFlags)
+      .set({ ...values, version: expectedVersion + 1 })
+      .where(and(eq(featureFlags.key, key), eq(featureFlags.version, expectedVersion)));
+    if (affectedRows(res) !== 1) throw new ConflictError('FeatureFlag', key, expectedVersion);
   }
 }
 
@@ -142,6 +148,79 @@ export function evaluateFlag(
   return row.enabledDefault;
 }
 
+/** Ids of other tenants never leave the row: an operator sees the global default and their session's tenant only. */
+function stateOf(def: FlagDefinition, row: FlagRow | null, tenantId: string): FeatureFlagState {
+  const targeting: Targeting = row?.targeting ?? {};
+  return {
+    key: def.key,
+    owner: def.owner,
+    removalDate: def.removalDate,
+    successMetric: def.successMetric,
+    globalEnabled: row?.enabledDefault ?? def.enabledDefault,
+    tenantTargeted: targeting.tenantIds?.includes(tenantId) ?? false,
+    targetedTenantCount: targeting.tenantIds?.length ?? 0,
+    percentage: typeof targeting.percentage === 'number' ? targeting.percentage : null,
+    enabledForTenant: evaluateFlag(row, def, tenantId),
+    version: row?.version ?? null,
+  };
+}
+
+/** The row after the change, in the existing targeting model; percentage targeting is left as it is. */
+function applyTarget(
+  current: { enabledDefault: boolean; targeting: Targeting },
+  input: z.infer<typeof FeatureFlagSet>,
+): { enabledDefault: boolean; targeting: Targeting } {
+  if (input.target.kind === 'global') return { ...current, enabledDefault: input.enabled };
+  const tenantId = input.target.tenantId;
+  const others = (current.targeting.tenantIds ?? []).filter((id) => id !== tenantId);
+  return {
+    enabledDefault: current.enabledDefault,
+    targeting: { ...current.targeting, tenantIds: input.enabled ? [...others, tenantId] : others },
+  };
+}
+
+const definitionOf = (key: FeatureFlagKey): FlagDefinition => {
+  const def = FLAG_DEFINITIONS.find((d) => d.key === key);
+  if (!def) throw new PolicyDeniedError('unknown_flag', `Unknown flag ${key}`);
+  return def;
+};
+
+/**
+ * Flags are platform settings: only a platform operator, inside a live support session (spec 5.7), reads their
+ * targeting or changes them, and a change needs the session escalated by a second operator. Tenant members, API
+ * clients and agents are refused whatever their role. A refusal is audited outside the command's transaction so it
+ * survives the rollback (same as support.escalate).
+ */
+type FlagAction = 'feature_flag.list' | 'feature_flag.set';
+
+async function refuse(
+  actor: ResolvedActor,
+  action: FlagAction,
+  resourceId: string,
+  reason: string,
+  message: string,
+): Promise<never> {
+  await audit.record(
+    { kind: actor.kind, id: actor.id },
+    action,
+    { type: 'feature_flag', id: resourceId },
+    {
+      allowed: false,
+      reason,
+    },
+  );
+  throw new PolicyDeniedError(reason, message);
+}
+
+async function assertOperator(actor: ResolvedActor, action: FlagAction, resourceId: string): Promise<void> {
+  const deny = (reason: string, message: string) => refuse(actor, action, resourceId, reason, message);
+  if (actor.kind !== 'platform_operator')
+    return deny('platform_operator_required', 'Feature flags are managed by platform operators');
+  if (actor.expired) return deny('support_session_expired', 'The support session has expired');
+  if (action === 'feature_flag.set' && actor.mode !== 'escalated')
+    return deny('support_read_only', 'A second operator must escalate this support session first');
+}
+
 export const featureFlag = {
   definitions: FLAG_DEFINITIONS,
   async isEnabled(key: FeatureFlagKey, tenantId: string, tx?: Tx): Promise<boolean> {
@@ -158,5 +237,85 @@ export const featureFlag = {
     for (const def of FLAG_DEFINITIONS)
       out[def.key] = evaluateFlag(byKey.get(def.key) ?? null, def, tenantId);
     return out;
+  },
+
+  /** Operator view of every defined flag for the support session's tenant, with the version a change must quote. */
+  async list(actor: ResolvedActor, tx?: Tx): Promise<FeatureFlagState[]> {
+    const { tenantId, correlationId: corr } = requireTenant();
+    await assertOperator(actor, 'feature_flag.list', 'all');
+    const rows = await runAsPlatform('feature-flags', corr, () => repo.all(tx));
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    return FLAG_DEFINITIONS.map((def) => stateOf(def, byKey.get(def.key) ?? null, tenantId));
+  },
+  /**
+   * operations.flags.set: one flag on or off, globally (enabled_default) or for the support session's own tenant
+   * (targeting.tenantIds). Version-checked against the row (null = no row yet). A change to the state the flag is
+   * already in writes nothing and keeps the version; the request is audited either way in the tenant's trail.
+   */
+  async set(
+    actor: ResolvedActor,
+    input: z.infer<typeof FeatureFlagSet>,
+    tx: Tx,
+  ): Promise<{ changed: boolean; flag: FeatureFlagState }> {
+    const parsed = FeatureFlagSet.parse(input);
+    const { tenantId, correlationId: corr } = requireTenant();
+    await assertOperator(actor, 'feature_flag.set', parsed.key);
+    // A support session is bound to one company: it may target that company, never another (spec 5.7).
+    if (parsed.target.kind === 'tenant' && parsed.target.tenantId !== tenantId)
+      await refuse(
+        actor,
+        'feature_flag.set',
+        parsed.key,
+        'tenant_mismatch',
+        'Support session is bound to one company',
+      );
+    const def = definitionOf(parsed.key);
+    const { row, after, changed } = await runAsPlatform('feature-flags', corr, async () => {
+      const row = await repo.lock(parsed.key, tx);
+      if ((row?.version ?? null) !== parsed.expectedVersion)
+        // -1: the caller expected no row at all.
+        throw new ConflictError('FeatureFlag', parsed.key, parsed.expectedVersion ?? -1);
+      const current = row
+        ? { enabledDefault: row.enabledDefault, targeting: row.targeting }
+        : { enabledDefault: def.enabledDefault, targeting: {} };
+      const next = applyTarget(current, parsed);
+      const changed =
+        next.enabledDefault !== current.enabledDefault ||
+        JSON.stringify(next.targeting.tenantIds ?? []) !== JSON.stringify(current.targeting.tenantIds ?? []);
+      if (changed && row) await repo.update(parsed.key, row.version, next, tx);
+      else if (changed)
+        await repo.create(
+          {
+            key: def.key,
+            ...next,
+            owner: def.owner,
+            removalDate: new Date(`${def.removalDate}T00:00:00Z`),
+            successMetric: def.successMetric,
+          },
+          tx,
+        );
+      return { row, after: changed ? await repo.get(parsed.key, tx) : row, changed };
+    });
+    const onOff = (on: boolean) => (on ? 'on' : 'off');
+    const was =
+      parsed.target.kind === 'global'
+        ? (row?.enabledDefault ?? def.enabledDefault)
+        : (row?.targeting.tenantIds?.includes(tenantId) ?? false);
+    await audit.record(
+      { kind: actor.kind, id: actor.id },
+      'feature_flag.set',
+      { type: 'feature_flag', id: parsed.key },
+      'allowed',
+      tx,
+      {
+        flag: parsed.key,
+        scope: parsed.target.kind,
+        fromState: onOff(was),
+        toState: onOff(parsed.enabled),
+        expectedVersion: parsed.expectedVersion,
+        reason: parsed.reason,
+      },
+    );
+    return { changed, flag: stateOf(def, after, tenantId) };
   },
 };
