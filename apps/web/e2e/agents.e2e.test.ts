@@ -386,7 +386,14 @@ function createRouter(backend: Backend) {
         }),
       }),
       listCompanies: authedOnly.query(({ ctx }) => [
-        { tenantId: E2E.tenantId, name: 'E2E company', slug: 'e2e', role: ctx.role, allBrands: true },
+        {
+          tenantId: E2E.tenantId,
+          name: 'E2E company',
+          slug: 'e2e',
+          kind: 'live' as const,
+          role: ctx.role,
+          allBrands: true,
+        },
       ]),
     }),
     skills: t.router({

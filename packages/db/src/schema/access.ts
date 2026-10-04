@@ -46,6 +46,12 @@ export const tenants = mysqlTable(
     billingAccountId: ref('billing_account_id'),
     dataRegion: varchar('data_region', { length: 16 }).notNull().default('default'),
     status: mysqlEnum('status', ['active', 'suspended', 'closing']).notNull().default('active'),
+    /**
+     * `live` for every real company; `demo` for a demonstration workspace the system provisions for one person
+     * (docs: demo workspace architecture). Set once at creation and never updated: the access repositories expose no
+     * write of it, so anything that keys behaviour on it (simulation, egress refusal) can trust and cache it.
+     */
+    kind: mysqlEnum('kind', ['live', 'demo']).notNull().default('live'),
     policy: json('policy').$type<{
       maxAutonomy?: string;
       mfaRequired?: boolean;

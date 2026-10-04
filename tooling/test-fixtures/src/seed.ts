@@ -68,11 +68,10 @@ async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
   const brandIds: [string, string] = [newId('brand'), newId('brand')];
   const servicePrincipalId = newId('servicePrincipal');
   const apiClientId = newId('apiClient');
-  await db.insert(tenants).values({
-    id: tenantId,
-    name: `Tenant ${label}`,
-    slug: `t-${label}-${tenantId.slice(-8).toLowerCase()}`,
-  });
+  // sql``, not insert(tenants).values(), for the reason given at the brands below (tenants.kind, 0030).
+  await db.execute(
+    sql`insert into ${tenants} (id, name, slug, created_at, updated_at) values (${tenantId}, ${`Tenant ${label}`}, ${`t-${label}-${tenantId.slice(-8).toLowerCase()}`}, ${new Date()}, ${new Date()})`,
+  );
   // sql``, not insert(users).values(), for the reason given at the brands below (users.password_origin, 0013).
   for (const [id, role] of [
     [ownerUserId, 'owner'],
@@ -321,6 +320,7 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   render_jobs: ['progress'], // 0026
   rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key', 'dedupe_key'], // 0026, 0027
   creative_documents: ['kind', 'archived_at'], // 0027, 0029
+  tenants: ['kind'], // 0030
 };
 
 /** Tables created after every head the older roll-forward suites seed; their snapshots leave them out. */
