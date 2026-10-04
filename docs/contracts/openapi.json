@@ -9393,6 +9393,24 @@
                             }
                           },
                           "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setVisibility"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "visible": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "visible"]
                         }
                       ]
                     }
@@ -9954,6 +9972,24 @@
                             }
                           },
                           "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setVisibility"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "visible": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "visible"]
                         }
                       ]
                     }
@@ -24079,6 +24115,24 @@
                       }
                     },
                     "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setVisibility"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "visible"]
                   }
                 ]
               }
@@ -24631,6 +24685,24 @@
                       }
                     },
                     "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setVisibility"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "visible"]
                   }
                 ]
               }

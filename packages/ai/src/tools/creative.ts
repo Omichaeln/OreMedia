@@ -75,6 +75,7 @@ const OPERATION_INPUT_SCHEMA = {
       description: 'alignElements, distributeElements: the bounds of the elements themselves, or the page.',
     },
     locked: { type: 'boolean', description: 'setLock, setPageLock: agents may lock but never unlock.' },
+    visible: { type: 'boolean', description: 'setVisibility: show (true) or hide (false) the element.' },
   },
   required: ['op'],
 };

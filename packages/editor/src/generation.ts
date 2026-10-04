@@ -394,6 +394,9 @@ function compileEdit(
     if (edit.box.x !== t.x || edit.box.y !== t.y)
       ops.push({ op: 'moveElement', ...target, x: edit.box.x, y: edit.box.y });
   }
+  // Hiding compiles into the editor's visibility operation; the guards refuse it on locked or protected elements.
+  if (edit.hidden !== undefined && el.visible === edit.hidden)
+    ops.push({ op: 'setVisibility', pageId: page.id, elementId: targetId, visible: !edit.hidden });
   if (ops.length === 0) return { reason: 'no_change' };
   return { ops, assets, facts };
 }

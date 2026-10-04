@@ -159,6 +159,32 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
       origin: 'user',
     });
   };
+  /**
+   * Shows or hides elements as one undoable step: hides them all when any is shown, else shows them. Locked elements
+   * (or ones in a locked group, or anything on a locked page) are left as they are, as removal leaves them.
+   */
+  const toggleVisibility = (ids: string[]) => {
+    if (!page || page.locked) return;
+    const targets = ids
+      .map((id) => findWithAncestors(page, id))
+      .filter((f): f is NonNullable<typeof f> => f !== null && !isLockedInContext(f.element, f.ancestors))
+      .map((f) => f.element);
+    if (targets.length === 0) return;
+    const visible = !targets.some((el) => el.visible);
+    studio.applyIntent({
+      operations: targets.map((el) => ({
+        op: 'setVisibility' as const,
+        pageId: page.id,
+        elementId: el.id,
+        visible,
+      })),
+      summary:
+        targets.length === 1
+          ? `${visible ? 'Show' : 'Hide'} ${targets[0]?.name}`
+          : `${visible ? 'Show' : 'Hide'} ${targets.length} elements`,
+      origin: 'user',
+    });
+  };
   /** Selects ids that may not be in this render's page yet (a just-inserted element, a new group). */
   const selectNew = (ids: string[]) => studio.dispatch({ type: 'select', ids });
   const groupSelection = () => {
@@ -370,6 +396,8 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   selection={state.selection}
                   onSelect={selectNew}
                   onActivate={() => setFocusText((n) => n + 1)}
+                  readOnly={readOnly}
+                  onToggleVisibility={(id) => toggleVisibility([id])}
                 />
               </TabPanel>
               <TabPanel value="assets">
@@ -429,6 +457,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             onDeleteSelected={deleteSelected}
             onGroup={groupSelection}
             onUngroup={ungroupSelection}
+            onToggleVisibility={() => toggleVisibility(state.selection)}
             onUndo={studio.undo}
             onRedo={studio.redo}
             onSave={() => void studio.saveNow()}
