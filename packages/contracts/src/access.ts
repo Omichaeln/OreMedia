@@ -6,6 +6,12 @@ import { AutonomyMode } from './tenancy';
 
 export const MembershipStatus = z.enum(['invited', 'active', 'disabled']);
 export const TenantStatus = z.enum(['active', 'suspended', 'closing']);
+/**
+ * A real company (`live`) or a demonstration workspace the system provisions for one person (`demo`). Fixed when the
+ * company is created: no command changes it, so server-side checks can rely on it.
+ */
+export const TenantKind = z.enum(['live', 'demo']);
+export type TenantKind = z.infer<typeof TenantKind>;
 export const UserStatus = z.enum(['active', 'disabled', 'deleted']);
 export const ServicePrincipalKind = z.enum(['agent', 'api_client', 'mcp_client', 'integration']);
 export const SupportSessionMode = z.enum(['read_only', 'escalated']);
