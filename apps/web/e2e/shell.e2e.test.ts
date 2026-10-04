@@ -1083,7 +1083,23 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await confirm.waitFor({ timeout: 15_000 });
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     expect(backend.routingPolicy?.version).toBe(3);
-    await form.getByRole('button', { name: 'Cancel' }).click();
+    // Confirming is the explicit choice the server requires to store a policy that refuses the model in use.
+    await form.getByRole('button', { name: 'Save policy' }).click();
+    await confirm.waitFor({ timeout: 15_000 });
+    await confirm.getByRole('button', { name: 'Save and stop agent runs' }).click();
+    await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('Stored version 4.');
+    expect(backend.routingPolicy?.policy.permittedVendors).toEqual(['anthropic']);
+    // An api that is not told the deployment's model shows no made-up model in use, and offers no editing.
+    const inUseBefore = backend.modelInUse;
+    backend.modelInUse = null;
+    await page.reload();
+    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await expect
+      .poll(() => routing.textContent(), { timeout: 15_000 })
+      .toContain('The model in use is not known here');
+    expect(await routing.getByTestId('model-in-use').count()).toBe(0);
+    expect(await routing.getByRole('button', { name: 'Edit' }).count()).toBe(0);
+    backend.modelInUse = inUseBefore;
     backend.routingPolicy = storedBefore;
     backend.killSwitches.clear();
     await page.close();

@@ -28,13 +28,30 @@ export interface ApiAnswer<T> {
 }
 
 interface TrpcFailure {
-  error?: { json?: { message?: string; data?: { envelope?: { code?: string; message?: string } } } };
+  error?: {
+    json?: {
+      message?: string;
+      data?: {
+        envelope?: { code?: string; message?: string; details?: Array<{ path?: string; issue?: string }> };
+      };
+    };
+  };
 }
 
-const trpcError = (body: unknown, status: number): string => {
+/** At most this many envelope details (spec 7.2: `{ path, issue }`, e.g. `assetId: asset_approved`) in a detail line. */
+const MAX_DETAILS = 5;
+
+/** `HTTP <status> [<code>][: <message>][ [<path>: <issue>; …]]`: what a failed call answered, with its issues. */
+export const trpcError = (body: unknown, status: number): string => {
   const env = (body as TrpcFailure | null)?.error?.json;
   const code = env?.data?.envelope?.code;
-  return `HTTP ${status}${code ? ` ${code}` : ''}${env?.message ? `: ${env.message}` : ''}`;
+  const details = (env?.data?.envelope?.details ?? []).map((d) =>
+    d.path ? `${d.path}: ${d.issue ?? '?'}` : (d.issue ?? '?'),
+  );
+  const listed = details.length
+    ? ` [${details.slice(0, MAX_DETAILS).join('; ')}${details.length > MAX_DETAILS ? `; +${details.length - MAX_DETAILS} more` : ''}]`
+    : '';
+  return `HTTP ${status}${code ? ` ${code}` : ''}${env?.message ? `: ${env.message}` : ''}${listed}`;
 };
 
 async function answer<T>(res: Response): Promise<ApiAnswer<T>> {

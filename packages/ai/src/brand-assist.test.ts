@@ -9,6 +9,7 @@ import {
   buildBrandAssistPrompt,
   createBrandAssistModel,
   parseModelJson,
+  REMOVAL_EXAMPLE,
   SECTION_EXAMPLES,
 } from './brand-assist';
 import { FakeModelAdapter } from './fake-adapter';
@@ -48,6 +49,73 @@ describe('brand assist prompt (BSC-4)', () => {
   it('every section example matches its strict output schema (the shape the model is shown is valid)', () => {
     for (const section of AssistSection.options)
       expect(MODEL_SECTION_OUTPUT[section].safeParse(SECTION_EXAMPLES[section]).success, section).toBe(true);
+  });
+
+  it('every field a section’s schema accepts is in the example the model is told to follow exactly', () => {
+    // The voice task asked for the spelling locale while its example had no `spelling`: the model invented a shape
+    // (staging, 4 October: InvalidModelOutputError for voice on both attempts).
+    for (const section of AssistSection.options) {
+      const schema = MODEL_SECTION_OUTPUT[section] as unknown as { shape: Record<string, unknown> };
+      expect(Object.keys(SECTION_EXAMPLES[section] as object).sort(), section).toEqual(
+        Object.keys(schema.shape).sort(),
+      );
+    }
+  });
+
+  it('a voice answer written as the prompt instructs matches the strict schema: spelling, topics, removals, item uncertainty', () => {
+    const { system } = buildBrandAssistPrompt(request());
+    expect(system).toContain('"spelling":{"value":{"locale":"en-GB","notes":');
+    expect(system).toContain('topic one of numbers|dates|capitalisation|punctuation|formatting|other');
+    expect(system).toContain('confidence "high", "medium" or "low"');
+    expect(system).toContain(JSON.stringify(REMOVAL_EXAMPLE));
+    expect(system).toContain('An item may state its uncertainty in an optional "uncertainty"');
+    const evidence = [{ sourceId: 'bsrc_1', excerpt: 'Welcome.' }];
+    const answer = {
+      summary: {
+        value: 'Warm, plain and practical.',
+        rationale: 'The site speaks plainly.',
+        basis: 'stated',
+        confidence: 'medium',
+        evidence,
+        uncertainty: 'One page only.',
+        conflicts: [{ note: 'The menu is more formal.', sourceIds: ['bsrc_1'] }],
+      },
+      tone: { value: ['warm', 'plain'], rationale: 'r', basis: 'inferred', confidence: 'low', evidence },
+      personality: [],
+      principles: [],
+      spelling: {
+        value: { locale: 'en-GB', notes: 'British spelling throughout.' },
+        rationale: 'The site writes "colour".',
+        basis: 'stated',
+        confidence: 'high',
+        evidence,
+      },
+      styleRules: [
+        {
+          value: { topic: 'other', rule: 'Use the Oxford comma.' },
+          rationale: 'r',
+          basis: 'suggested',
+          confidence: 'low',
+          evidence: [],
+        },
+      ],
+      claimRules: [],
+      remove: [REMOVAL_EXAMPLE],
+      questions: [],
+    };
+    const parsed = MODEL_SECTION_OUTPUT.voice.safeParse(answer);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    for (const section of AssistSection.options) {
+      const schema = MODEL_SECTION_OUTPUT[section] as unknown as { shape: Record<string, unknown> };
+      if (!('remove' in schema.shape)) continue;
+      expect(
+        MODEL_SECTION_OUTPUT[section].safeParse({
+          ...(SECTION_EXAMPLES[section] as object),
+          remove: [REMOVAL_EXAMPLE],
+        }).success,
+        section,
+      ).toBe(true);
+    }
   });
 
   it('carries the approved guidance, the request, kept items, answers and rejections; evidence is untrusted and cannot close itself or forge a heading', () => {

@@ -47,7 +47,12 @@ import {
   sourceCaptureOptions,
   workingDocument,
 } from './assist';
-import { parseSectionOutput, suggestionsFromOutput, type SuggestionSource } from './assist-suggestions';
+import {
+  parseSectionOutput,
+  shapeIssues,
+  suggestionsFromOutput,
+  type SuggestionSource,
+} from './assist-suggestions';
 import { DocumentRefusal, capText } from './capture/documents';
 import { createCaptureIsolate, type CaptureIsolate } from './capture/isolate';
 import { crawlSite } from './capture/site-crawl';
@@ -568,10 +573,12 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
       );
       const overBudget = billed.closed || billed.exceeded;
       let output;
+      let issues: string[] = [];
       try {
         if (result.parseError !== null) throw new Error(result.parseError);
         output = parseSectionOutput(input.section, result.raw);
-      } catch {
+      } catch (err) {
+        issues = shapeIssues(err);
         await withTransaction(async (tx) => {
           const j = await lockJob(input, tx);
           await jobsRepo.update(
@@ -585,7 +592,7 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
           );
         });
         // Retried by the activity host; a section whose answers never fit its schema fails on its own.
-        throw new InvalidModelOutputError(input.section);
+        throw new InvalidModelOutputError(input.section, issues);
       }
       return withTransaction(async (tx) => {
         const j = await lockJob(input, tx);
@@ -903,8 +910,10 @@ export type BrandAssistRuntime = ReturnType<typeof createBrandAssistRuntime>;
 
 /** A model answer that never matched the section's schema: retried by the activity host, then the section fails. */
 export class InvalidModelOutputError extends Error {
-  constructor(section: AssistSection) {
-    super(`The model's answer for ${section} did not match the expected shape`);
+  constructor(section: AssistSection, issues: string[] = []) {
+    super(
+      `The model's answer for ${section} did not match the expected shape${issues.length ? ` (${issues.join('; ')})` : ''}`,
+    );
     this.name = 'InvalidModelOutputError';
   }
 }

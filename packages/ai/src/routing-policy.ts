@@ -21,20 +21,51 @@ const builtIn = (): ModelRoutingPolicy =>
   });
 
 /**
- * ADR-11: with OPENROUTER_API_KEY_REF set, the built-in policy permits the OpenRouter gateway and its default model
- * must be configured (OREMEDIA_MODEL_ID, an OpenRouter model id such as `vendor/model`): no model is guessed.
+ * The vendor the deployment's model calls go through: OREMEDIA_MODEL_PROVIDER when set (the name modelConfigFromEnv
+ * reads first), else OpenRouter wherever OPENROUTER_API_KEY_REF is set (ADR-11), else Anthropic. A service that
+ * makes no model call (the api) holds no key, so it names the gateway with OREMEDIA_MODEL_PROVIDER.
+ */
+const gatewayOf = (env: NodeJS.ProcessEnv): string =>
+  env['OREMEDIA_MODEL_PROVIDER']?.trim() || (env['OPENROUTER_API_KEY_REF'] ? 'openrouter' : 'anthropic');
+
+/**
+ * ADR-11: on the OpenRouter gateway the built-in policy permits OpenRouter and its default model must be configured
+ * (OREMEDIA_MODEL_ID, an OpenRouter model id such as `vendor/model`): no model is guessed. The built-in policy
+ * permits the vendor modelConfigFromEnv routes to, so the two never disagree.
  */
 const builtInFor = (env: NodeJS.ProcessEnv): ModelRoutingPolicy => {
-  if (!env['OPENROUTER_API_KEY_REF']) return builtIn();
+  const gateway = gatewayOf(env);
+  if (gateway === 'anthropic') return builtIn();
+  if (gateway !== 'openrouter')
+    return ModelRoutingPolicy.parse({ ...builtIn(), permittedVendors: [gateway] });
   const model = env['OREMEDIA_MODEL_ID'];
   if (!model)
-    throw new Error('OREMEDIA_MODEL_ID is required with OPENROUTER_API_KEY_REF (an OpenRouter model id)');
+    throw new Error(
+      'OREMEDIA_MODEL_ID is required on the OpenRouter gateway (OPENROUTER_API_KEY_REF or OREMEDIA_MODEL_PROVIDER=openrouter): an OpenRouter model id',
+    );
   return ModelRoutingPolicy.parse({
     schemaVersion: 1,
     defaultModel: model,
     permittedVendors: ['openrouter'],
   });
 };
+
+/**
+ * Whether this process is told the deployment's model route, so that modelConfigFromEnv's provider and model are
+ * what the deployment runs rather than the built-in defaults: a gateway key (worker-core, worker-ingest), the
+ * gateway named by OREMEDIA_MODEL_PROVIDER, or a mounted MODEL_ROUTING_POLICY_REF. The api makes no model call and
+ * holds no key: without OREMEDIA_MODEL_PROVIDER (and OREMEDIA_MODEL_ID) it does not know the route, and must not
+ * present the built-in Anthropic default as the model in use (docs/runbooks/deploy-railway.md).
+ */
+export function modelRouteConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  const ref = env['MODEL_ROUTING_POLICY_REF'];
+  return Boolean(
+    env['OPENROUTER_API_KEY_REF'] ||
+    env['ANTHROPIC_API_KEY_REF'] ||
+    env['OREMEDIA_MODEL_PROVIDER']?.trim() ||
+    (ref && existsSync(ref)),
+  );
+}
 
 /**
  * MODEL_ROUTING_POLICY_REF names a JSON document mounted from the secret manager (a file path); when absent the
@@ -118,20 +149,28 @@ export async function assertRoutingAllowed(
   region: string | null = modelRegion(),
 ): Promise<ModelRoutingPolicy> {
   const policy = await routingPolicyFor(tenantId);
+  const denial = routeDenial(policy, provider, model, region);
+  if (denial) throw new PolicyDeniedError('model_routing_denied', denial);
+  return policy;
+}
+
+/**
+ * Why `policy` refuses the route (vendor, model, region), or null when it permits it: the rule assertRoutingAllowed
+ * enforces, also used to tell an administrator, before a policy is stored, that it would refuse the model in use.
+ */
+export function routeDenial(
+  policy: ModelRoutingPolicy,
+  provider: string,
+  model: string,
+  region: string | null,
+): string | null {
   const vendor = ModelVendor.safeParse(provider);
   if (!vendor.success || !policy.permittedVendors.includes(vendor.data))
-    throw new PolicyDeniedError(
-      'model_routing_denied',
-      `Model vendor ${provider} is not permitted for this company`,
-    );
-  if (policy.deniedModels.includes(model))
-    throw new PolicyDeniedError('model_routing_denied', `Model ${model} is not permitted for this company`);
+    return `Model vendor ${provider} is not permitted for this company`;
+  if (policy.deniedModels.includes(model)) return `Model ${model} is not permitted for this company`;
   if (policy.permittedRegions.length && !region)
-    throw new PolicyDeniedError(
-      'model_routing_denied',
-      'The inference region is not configured, so this company’s region restriction cannot be met',
-    );
+    return 'The inference region is not configured, so this company’s region restriction cannot be met';
   if (region && policy.permittedRegions.length && !policy.permittedRegions.includes(region))
-    throw new PolicyDeniedError('model_routing_denied', `Region ${region} is not permitted for this company`);
-  return policy;
+    return `Region ${region} is not permitted for this company`;
+  return null;
 }
