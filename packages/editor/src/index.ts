@@ -82,3 +82,4 @@ export {
   type StarterSlot,
   type InstantiatedStarter,
 } from './starters';
+export * from './video/index';

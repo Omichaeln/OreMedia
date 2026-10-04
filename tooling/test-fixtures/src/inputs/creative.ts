@@ -42,6 +42,27 @@ export const CREATIVE_INPUTS: Record<string, CrossTenantFixture> = {
     }),
   },
   'creative.renders.get': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
+  'creative.renders.exportMedia': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
+  'creative.renders.cancel': { buildInput: (f) => ({ renderJobId: f['renderJobId'] }) },
+  'creative.operations.applyVideo': {
+    buildInput: (f) => ({
+      documentId: f['videoDocumentId'],
+      baseRevisionId: f['videoRevisionId'],
+      operations: [{ op: 'setTrackLock', trackId: 'trk_video', locked: true }],
+      summary: 'x',
+      origin: 'user',
+    }),
+  },
+  'creative.operations.proposeVideo': {
+    buildInput: (f) => ({
+      documentId: f['videoDocumentId'],
+      baseRevisionId: f['videoRevisionId'],
+      operations: [{ op: 'removeCaption', trackId: 'trk_captions', itemId: 'cap_seed' }],
+      summary: 'x',
+      origin: 'user',
+    }),
+  },
+  'creative.videoTemplates.list': { buildInput: (f) => ({ brandId: f['brandId'] }) },
   'creative.comments.add': {
     buildInput: (f) => ({
       documentId: f['creativeDocumentId'],

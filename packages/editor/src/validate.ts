@@ -6,6 +6,7 @@ import type {
   Finding,
   TextElement,
 } from '@oremedia/contracts/creative';
+import { videoFormatFor } from '@oremedia/contracts/video';
 import { formatFor } from './formats';
 
 /** Relative luminance and WCAG contrast ratio for #rrggbb values. */
@@ -72,7 +73,8 @@ export function validateAgainstBrand(doc: CreativeDocumentV1, snapshot: BrandSna
     target === 'AAA' ? (sizePx >= 24 ? 4.5 : 7) : sizePx >= 24 ? 3 : 4.5;
 
   for (const page of doc.pages) {
-    const format = formatFor(page.formatKey);
+    // Video overlays are checked on a page at the project's output preset (STU-2b).
+    const format = formatFor(page.formatKey) ?? videoFormatFor(page.formatKey);
     const all = flat(page.elements);
     const background = page.elements.find(
       (e): e is Extract<Element, { type: 'background' }> => e.type === 'background',

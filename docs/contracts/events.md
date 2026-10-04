@@ -59,6 +59,7 @@ a breaking change creates a new event type or schema version with dual publishin
 | `brand.fact_expired`                   | 1              |
 | `brand.assist_requested`               | 1              |
 | `brand.assist_cancel_requested`        | 1              |
+| `creative.render_cancel_requested`     | 1              |
 
 ## Error codes (spec 7.2)
 

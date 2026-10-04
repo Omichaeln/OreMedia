@@ -7,6 +7,7 @@ import {
   ARTICLE_IMAGE_ALT_MAX,
   ARTICLE_IMAGE_CAPTION_MAX,
   ARTICLE_LINK_TEXT_MAX,
+  ARTICLE_IMAGE_KINDS,
   ARTICLE_LINK_URL_MAX,
   ARTICLE_QUOTE_CITE_MAX,
   ARTICLE_SLUG_PATTERN,
@@ -231,6 +232,7 @@ function ImageFields({
       <AssetPickerDialog
         brandId={brandId}
         purpose="creative"
+        kinds={ARTICLE_IMAGE_KINDS}
         open={open}
         onOpenChange={setOpen}
         title={`Choose ${label.toLowerCase()}`}
