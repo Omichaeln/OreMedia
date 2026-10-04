@@ -29,6 +29,7 @@ import {
   type MemberStatusResult,
   type PasswordSetupLink,
   type SignInRefusalReason,
+  type TenantKind,
 } from '@oremedia/contracts/access';
 import {
   ConflictError,
@@ -215,10 +216,13 @@ const isClaimablePlaceholder = (
  * A password chosen through a setup link (by whoever held the link: possibly the admin who issued it) is confined to
  * the issuing company. Once the person is an active member of a second company it is cleared, and every session of
  * theirs ends (one might have been opened with it); they sign in with Google, or set their own password.
+ * Only live companies count: a demo workspace is the person's own sandbox, provisioned by the system with nobody
+ * else's data in it, so opening one must not sign them out or remove their password. A second live company still
+ * clears it, whatever demo workspaces the person also has.
  */
 async function confineSetupLinkPassword(userId: string, origin: AuthOrigin, tx: Tx): Promise<void> {
-  const memberships = await directory.allMembershipsOfUser(userId, tx);
-  const companies = new Set(memberships.filter((m) => m.status === 'active').map((m) => m.tenantId));
+  const active = await directory.activeCompaniesOfUser(userId, tx);
+  const companies = new Set(active.filter((c) => c.kind === 'live').map((c) => c.tenantId));
   if (companies.size < 2 || !(await directory.clearSetupLinkPassword(userId, tx))) return;
   await directory.revokeSessionsForUser(userId, tx);
   await directory.recordAuthEvent(
@@ -368,19 +372,24 @@ async function recordMemberStatus(
 }
 
 export const accessService = {
-  /** Bootstrap: creates a tenant and its owner membership. Called by sign-up, outside any tenant context. */
+  /**
+   * Bootstrap: creates a tenant and its owner membership. Called by sign-up, outside any tenant context. `kind` is
+   * fixed here for the tenant's lifetime (`live` unless a system path provisions a demo workspace); it is not part
+   * of TenantCreate, so no request can choose it.
+   */
   async createTenantWithOwner(
     input: z.infer<typeof TenantCreate>,
     ownerUserId: string,
     correlationId: string,
     outer?: Tx,
+    kind: TenantKind = 'live',
   ): Promise<{ tenantId: string; membershipId: string }> {
     const parsed = TenantCreate.parse(input);
     const tenantId = newId('tenant');
     const membershipId = newId('membership');
     await runAsPlatform('tenant-bootstrap', correlationId, () =>
       withTransaction(outer, async (tx) => {
-        await directory.createTenant({ id: tenantId, name: parsed.name, slug: parsed.slug }, tx);
+        await directory.createTenant({ id: tenantId, name: parsed.name, slug: parsed.slug, kind }, tx);
         await directory.createMembership(
           {
             id: membershipId,
@@ -392,7 +401,7 @@ export const accessService = {
           },
           tx,
         );
-        // An existing user becoming owner of a second company: a setup-link password does not follow them.
+        // An existing user becoming owner of a second live company: a setup-link password does not follow them.
         await confineSetupLinkPassword(ownerUserId, { correlationId, ipHash: null, userAgentHash: null }, tx);
       }),
     );
@@ -926,6 +935,7 @@ export const accessService = {
       tenantId: r.tenant.id,
       name: r.tenant.name,
       slug: r.tenant.slug,
+      kind: r.tenant.kind,
       role: r.membership.role,
       allBrands: r.membership.allBrands,
     }));

@@ -1785,6 +1785,7 @@ export function createMockRouter(backend: MockBackend) {
                   tenantId: company.tenantId,
                   name: company.companyName,
                   slug: company.tenantId.replace(/^ten_/, ''),
+                  kind: 'live' as const,
                   role: member.role,
                   allBrands: member.brandIds === null,
                 },
