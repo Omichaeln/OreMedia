@@ -13,6 +13,7 @@ import { useDestinationMap } from '../destinations/use-destinations';
 import { localInputToIso } from '../publishing/publication-state';
 import { useChannels, type ChannelDto } from '../publishing/use-publishing';
 import { BriefDetail } from './brief-detail';
+import { CampaignSummary } from './campaign-actions';
 import { briefChip, briefGaps, campaignChip, isSuggested, missedDate } from './content-helpers';
 import { PackageDetail } from './package-detail';
 import { useBriefs, useCampaigns, usePackages } from './use-content';
@@ -235,6 +236,7 @@ export function CampaignsScreen() {
   };
   const forbidden = campaigns.isError && toUiError(campaigns.error).kind === 'forbidden';
   const [creating, setCreating] = useState<'campaign' | 'brief' | null>(null);
+  const selectedCampaign = campaignId ? campaigns.items.find((c) => c.id === campaignId) : undefined;
 
   return (
     <main id="main" className="flex min-h-full flex-col lg:flex-row">
@@ -359,6 +361,7 @@ export function CampaignsScreen() {
             )
           }
         />
+        {selectedCampaign && <CampaignSummary campaign={selectedCampaign} canPlan={!forbidden} />}
         {creating === 'brief' && (
           <CreateBriefForm
             brandId={brandId}

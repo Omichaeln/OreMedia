@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import type { ElementCommentState, TemplateVersionState } from '@oremedia/contracts/creative';
 import { ConflictError, NotFoundError } from '@oremedia/contracts/errors';
 import { ID_LIST_MAX, type Page, type PageRequest } from '@oremedia/contracts/pagination';
@@ -50,11 +50,13 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   /** The brand's documents newest first (id-desc cursor, as revisions); optionally those of one content package. */
   async list(
     brandId: string,
-    filter: { contentPackageId?: string },
+    filter: { contentPackageId?: string; archived?: boolean },
     page: PageRequest,
     tx?: Tx,
   ): Promise<Page<typeof creativeDocuments.$inferSelect>> {
-    const clauses: SQL[] = [];
+    const clauses: SQL[] = [
+      filter.archived ? isNotNull(creativeDocuments.archivedAt) : isNull(creativeDocuments.archivedAt),
+    ];
     if (filter.contentPackageId)
       clauses.push(eq(creativeDocuments.contentPackageId, filter.contentPackageId));
     const cursor = page.cursor ? decodeCursor(page.cursor) : null;
@@ -62,7 +64,7 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
     const rows = await this.conn(tx)
       .select()
       .from(creativeDocuments)
-      .where(this.brandScope(brandId, clauses.length ? (and(...clauses) as SQL) : undefined))
+      .where(this.brandScope(brandId, and(...clauses) as SQL))
       .orderBy(desc(creativeDocuments.id))
       .limit(page.limit + 1);
     return pageOf(rows, page);
@@ -82,6 +84,10 @@ export class CreativeDocumentRepository extends BrandScopedRepository<typeof cre
   /** STU-1a: the title only; optimistic version like every other row update. */
   async rename(id: string, expectedVersion: number, title: string, tx: Tx) {
     await this.updateScoped(id, expectedVersion, { title }, tx);
+  }
+  /** G12: archived (a time) or back in use (null); optimistic version like every other row update. */
+  async setArchived(id: string, expectedVersion: number, archivedAt: Date | null, tx: Tx) {
+    await this.updateScoped(id, expectedVersion, { archivedAt }, tx);
   }
 }
 

@@ -340,6 +340,20 @@ import { PageRequest } from './pagination';
 
 export const CampaignList = z.object({ brandId: z.string(), page: PageRequest });
 export const CampaignGet = z.object({ campaignId: z.string() });
+/**
+ * G12: changes what create accepts (name, run dates, objective), version-checked. Only the fields sent change;
+ * `objectiveId: null` clears the objective. A completed or archived campaign is not edited.
+ */
+export const CampaignUpdate = z.object({
+  campaignId: z.string(),
+  expectedVersion: z.number().int(),
+  name: CampaignCreate.shape.name.optional(),
+  objectiveId: z.string().nullable().optional(),
+  startsAt: z.string().datetime().optional(),
+  endsAt: z.string().datetime().optional(),
+});
+/** G12: draft or active → completed (spec 13.1 transition), version-checked and audited; its briefs are untouched. */
+export const CampaignClose = z.object({ campaignId: z.string(), expectedVersion: z.number().int() });
 
 export const BriefList = z.object({
   brandId: z.string(),

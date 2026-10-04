@@ -5,9 +5,11 @@ import {
   BriefGet,
   BriefList,
   CalendarRange,
+  CampaignClose,
   CampaignCreate,
   CampaignGet,
   CampaignList,
+  CampaignUpdate,
   CHANNEL_VARIANT_TEXT_MAX_CHARS,
   ChannelVariantGenerate,
   ChannelVariantGet,
@@ -46,6 +48,7 @@ import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { briefMachine } from '@oremedia/domain/state-machines/brief';
+import { campaignMachine } from '@oremedia/domain/state-machines/campaign';
 import { contentPackageMachine } from '@oremedia/domain/state-machines/content-package';
 import {
   contentRevisionMachine,
@@ -851,6 +854,68 @@ export const contentService = {
       const campaign = await campaignsRepo.getById(parsed.campaignId, tx);
       await policy.assert(actor, 'brand.read', brandResource(campaign.brandId), {}, tx);
       return toCampaignDto(campaign);
+    },
+
+    /**
+     * G12: the fields create accepts (name, run dates, objective), version-checked; only those sent change. The run
+     * may not end before it starts, the objective must be the brand's, and a completed or archived campaign is final.
+     */
+    async update(actor: ResolvedActor, input: z.infer<typeof CampaignUpdate>, tx: Tx) {
+      const parsed = CampaignUpdate.parse(input);
+      const campaign = await campaignsRepo.getById(parsed.campaignId, tx);
+      await policy.assert(actor, 'content.plan', brandResource(campaign.brandId), {}, tx);
+      if (campaignMachine.terminal.includes(campaign.state))
+        throw new ValidationFailedError(
+          [{ path: 'campaignId', issue: `campaign_is_${campaign.state}` }],
+          'A closed campaign is not edited',
+        );
+      const startsAt = parsed.startsAt ? new Date(parsed.startsAt) : campaign.startsAt;
+      const endsAt = parsed.endsAt ? new Date(parsed.endsAt) : campaign.endsAt;
+      if (endsAt.getTime() < startsAt.getTime())
+        throw new ValidationFailedError([{ path: 'endsAt', issue: 'must not be before startsAt' }]);
+      if (parsed.objectiveId) {
+        const objective = await objectivesRepo.getById(parsed.objectiveId, tx);
+        if (objective.brandId !== campaign.brandId)
+          throw new NotFoundError('BrandObjective', parsed.objectiveId);
+      }
+      await campaignsRepo.update(
+        campaign.id,
+        parsed.expectedVersion,
+        {
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.objectiveId !== undefined ? { objectiveId: parsed.objectiveId } : {}),
+          startsAt,
+          endsAt,
+        },
+        tx,
+      );
+      await audit.record(
+        actorRef(actor),
+        'content.campaign.update',
+        { type: 'campaign', id: campaign.id },
+        'allowed',
+        tx,
+        { brandId: campaign.brandId, expectedVersion: parsed.expectedVersion },
+      );
+      return toCampaignDto(await campaignsRepo.getById(campaign.id, tx));
+    },
+
+    /** G12: draft or active → completed by campaignMachine, version-checked and audited; its briefs are untouched. */
+    async close(actor: ResolvedActor, input: z.infer<typeof CampaignClose>, tx: Tx) {
+      const parsed = CampaignClose.parse(input);
+      const campaign = await campaignsRepo.getById(parsed.campaignId, tx);
+      await policy.assert(actor, 'content.plan', brandResource(campaign.brandId), {}, tx);
+      const toState = transition(campaignMachine, campaign.state, 'close', 'campaignId');
+      await campaignsRepo.update(campaign.id, parsed.expectedVersion, { state: toState }, tx);
+      await audit.record(
+        actorRef(actor),
+        'content.campaign.close',
+        { type: 'campaign', id: campaign.id },
+        'allowed',
+        tx,
+        { brandId: campaign.brandId, fromState: campaign.state, toState },
+      );
+      return toCampaignDto(await campaignsRepo.getById(campaign.id, tx));
     },
   },
 

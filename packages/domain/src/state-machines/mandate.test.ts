@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IllegalTransitionError } from './machine';
 import { mandateMachine } from './mandate';
 import { briefMachine } from './brief';
+import { campaignMachine } from './campaign';
 import { contentPackageMachine } from './content-package';
 import { experimentMachine } from './experiment';
 
@@ -26,6 +27,16 @@ describe('brief state machine (spec 6.3 briefs)', () => {
     expect(briefMachine.can('draft', 'start')).toBe(false);
     for (const s of briefMachine.terminal)
       for (const e of briefMachine.events) expect(briefMachine.can(s, e)).toBe(false);
+  });
+});
+
+describe('campaign state machine (spec 6.3 campaigns, G12)', () => {
+  it('draft and active close as completed; completed and archived are final', () => {
+    expect(campaignMachine.transition('draft', 'close')).toBe('completed');
+    expect(campaignMachine.transition('active', 'close')).toBe('completed');
+    for (const s of campaignMachine.terminal)
+      for (const e of campaignMachine.events) expect(campaignMachine.can(s, e)).toBe(false);
+    expect(() => campaignMachine.transition('completed', 'close')).toThrow(IllegalTransitionError);
   });
 });
 

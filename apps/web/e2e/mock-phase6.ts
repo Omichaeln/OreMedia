@@ -5,9 +5,11 @@ import {
   BriefCreate,
   BriefGet,
   BriefList,
+  CampaignClose,
   CampaignCreate,
   CampaignGet,
   CampaignList,
+  CampaignUpdate,
   ChannelVariantGenerate,
   ChannelVariantUpdate,
   ContentPackageCreate,
@@ -612,6 +614,16 @@ export class Phase6Backend {
       });
     }
     return out;
+  }
+
+  /** A campaign that may still change (G12): stale versions conflict, closed campaigns refuse. */
+  openCampaign(campaignId: string, expectedVersion: number): Campaign {
+    const c = this.campaigns.get(campaignId);
+    if (!c) throw new NotFoundError('Campaign', campaignId);
+    if (c.state === 'completed' || c.state === 'archived')
+      throw new ValidationFailedError([{ path: 'campaignId', issue: `campaign_is_${c.state}` }]);
+    if (c.version !== expectedVersion) throw new ConflictError('Campaign', c.id, expectedVersion);
+    return c;
   }
 
   /** Seeds a campaign (a second company's own rows). */
@@ -1662,6 +1674,28 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
           version: 0,
         });
         return { campaignId: id, state: 'draft' as const, version: 0 };
+      }),
+      // G12: as the API: version-checked; a completed or archived campaign is final.
+      update: mutation.input(CampaignUpdate).mutation(({ input }) => {
+        const c = b.openCampaign(input.campaignId, input.expectedVersion);
+        const startsAt = input.startsAt ?? c.startsAt;
+        const endsAt = input.endsAt ?? c.endsAt;
+        if (new Date(endsAt) < new Date(startsAt))
+          throw new ValidationFailedError([{ path: 'endsAt', issue: 'must not be before startsAt' }]);
+        Object.assign(c, {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.objectiveId !== undefined ? { objectiveId: input.objectiveId } : {}),
+          startsAt,
+          endsAt,
+          updatedAt: now(),
+          version: c.version + 1,
+        });
+        return { ...c };
+      }),
+      close: mutation.input(CampaignClose).mutation(({ input }) => {
+        const c = b.openCampaign(input.campaignId, input.expectedVersion);
+        Object.assign(c, { state: 'completed', updatedAt: now(), version: c.version + 1 });
+        return { ...c };
       }),
     }),
     briefs: router({

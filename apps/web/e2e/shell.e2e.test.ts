@@ -1108,6 +1108,79 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
+  it('settings (G03): an owner makes a creator a reviewer on one brand, then disables them and their session is refused', async () => {
+    backend.addBrand('brd_e2e_team', 'Team brand');
+    const kofi = backend.members.find((m) => m.membershipId === 'mem_creator');
+    if (!kofi) throw new Error('seeded creator missing');
+    const saved = structuredClone(kofi);
+    kofi.brandIds = [E2E.brandId, 'brd_e2e_team'];
+    // Kofi is signed in in a browser of his own.
+    const kofiContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const kofiPage = await kofiContext.newPage();
+    const kofiSignsIn = async () => {
+      const token = backend.signInMember('mem_creator');
+      if (!token) throw new Error('sign-in refused');
+      await kofiPage.goto(`${origin}/sign-in`);
+      await kofiPage.getByLabel('Session token').fill(token);
+      await kofiPage.getByRole('button', { name: 'Continue' }).click();
+      await kofiPage.waitForURL('**/portfolio*', { timeout: 15_000 });
+    };
+    const kofiSessions = () => [...backend.sessions.values()].filter((x) => x.userId === kofi.userId);
+    await kofiSignsIn();
+
+    const page = await signedIn(1440);
+    await page.goto(`${origin}${home.replace('/home', '/settings?tab=members')}`);
+    const row = page
+      .getByRole('list', { name: 'Members' })
+      .getByRole('listitem')
+      .filter({ hasText: 'Kofi Asare' });
+    await expect.poll(() => row.textContent(), { timeout: 15_000 }).toContain('Team brand');
+    // Your own row offers neither: the API refuses disabling yourself.
+    const own = page
+      .getByRole('list', { name: 'Members' })
+      .getByRole('listitem')
+      .filter({ hasText: 'E2E person' });
+    expect(await own.getByRole('button', { name: /^(Manage|Disable)/ }).count()).toBe(0);
+
+    // Creator → reviewer: saved with the version shown; it signs Kofi out of every session.
+    await row.getByRole('button', { name: 'Manage Kofi Asare' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Manage Kofi Asare' });
+    await dialog.getByRole('combobox', { name: 'Role' }).click();
+    await page.getByRole('option', { name: 'Reviewer' }).click();
+    await dialog.getByTestId('save-member-role').click();
+    await expect.poll(() => kofi.role, { timeout: 15_000 }).toBe('reviewer');
+    expect(kofiSessions()).toEqual([]);
+    // Restricted to one brand: the second brand is taken away.
+    await dialog.getByTestId('member-brand-brd_e2e_team').click();
+    await expect.poll(() => kofi.brandIds, { timeout: 15_000 }).toEqual([E2E.brandId]);
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await expect.poll(() => row.textContent(), { timeout: 15_000 }).toContain('Reviewer');
+    expect(await row.textContent()).not.toContain('Team brand');
+
+    // Kofi signs in again, now a reviewer on one brand.
+    await kofiSignsIn();
+    expect(kofiSessions()[0]?.memberships[E2E.tenantId]).toEqual({
+      role: 'reviewer',
+      brandIds: [E2E.brandId],
+    });
+
+    // Disabled behind a confirmation: his session ends and the next page he opens sends him to sign-in.
+    await row.getByRole('button', { name: 'Disable Kofi Asare' }).click();
+    await page.getByTestId('confirm-disable-member').click();
+    await expect.poll(() => kofi.status, { timeout: 15_000 }).toBe('disabled');
+    await expect.poll(() => row.textContent(), { timeout: 15_000 }).toContain('Disabled');
+    expect(kofiSessions()).toEqual([]);
+    await kofiPage.goto(`${origin}${home}`);
+    await kofiPage.waitForURL('**/sign-in*', { timeout: 15_000 });
+    expect(backend.signInMember('mem_creator')).toBeNull();
+    // Enable is offered on the disabled row.
+    expect(await row.getByRole('button', { name: 'Enable Kofi Asare' }).count()).toBe(1);
+
+    Object.assign(kofi, saved);
+    await kofiContext.close();
+    await page.close();
+  }, 60_000);
+
   it('settings: a brand manager sees neither the kill switches nor model routing', async () => {
     backend.role = 'brand_manager';
     const page = await signedIn(1440);
