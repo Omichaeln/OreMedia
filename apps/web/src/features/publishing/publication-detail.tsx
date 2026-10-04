@@ -878,9 +878,9 @@ function ArticleConflictPanel({
             : `Someone changed the article on the website${conflict.currentModifiedAt ? ` (${when(conflict.currentModifiedAt)})` : ''} after Oremedia last read it, so the website refused the edit and nothing was written. Compare the two versions, then re-apply your edit to the current version or reconcile the article on the website.`
         }
       />
-      <h4 id={`conflict-${p.id}`} className="sr-only">
+      <h3 id={`conflict-${p.id}`} className="sr-only">
         Compare the website’s current article with your edit
-      </h4>
+      </h3>
       {compared ? (
         <div className="grid gap-3 md:grid-cols-2">
           {side('On the website now', compared.current, 'conflict-current')}

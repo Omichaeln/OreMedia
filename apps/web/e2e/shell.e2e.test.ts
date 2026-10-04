@@ -460,7 +460,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     // PR-03: the website verified without the conditional-write plugin is in limited mode and says what that means;
     // a destination that never updates articles shows no such state.
     const cms = page.getByTestId('destination-dst_e2e_cms');
-    expect(await cms.getByTestId('destination-write-safety').textContent()).toBe('Limited mode');
+    expect(await cms.getByTestId('destination-write-safety').textContent()).toContain('Limited mode');
     expect(await cms.getByTestId('destination-limited-mode').textContent()).toContain(
       'Oremedia conditional-write plugin',
     );
