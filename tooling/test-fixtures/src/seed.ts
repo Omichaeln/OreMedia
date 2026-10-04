@@ -278,16 +278,16 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'review_flagged_at',
     'expiry_notified_at',
   ], // 0023
-  asset_versions: ['media_info'], // 0024
-  upload_intents: ['rejection_detail'], // 0024
-  render_jobs: ['progress'], // 0024
-  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key', 'dedupe_key'], // 0024, 0025
-  creative_documents: ['kind'], // 0025
-  creative_revisions: ['generation_inputs'], // STU-1b 0027 (#59)
+  creative_revisions: ['generation_inputs'], // 0025
+  asset_versions: ['media_info'], // 0026
+  upload_intents: ['rejection_detail'], // 0026
+  render_jobs: ['progress'], // 0026
+  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key', 'dedupe_key'], // 0026, 0027
+  creative_documents: ['kind'], // 0027
 };
 
 /** Tables created after every head the older roll-forward suites seed; their snapshots leave them out. */
-export const LATER_TABLE_NAMES: readonly string[] = ['studio_video_jobs']; // 0026
+export const LATER_TABLE_NAMES: readonly string[] = ['studio_video_jobs']; // 0028
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
 export function snapshotColumns(table: MySqlTable): Record<string, MySqlColumn> {

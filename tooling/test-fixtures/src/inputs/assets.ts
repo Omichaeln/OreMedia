@@ -100,7 +100,7 @@ export const ASSETS_SEED: SeedExtension | null = async (db, { tenantId, brandIds
       rightsState: 'unknown',
     },
   ]);
-  // sql``, not insert(…).values(): Drizzle would name media_info (0024) on asset_versions and rejection_detail (0024)
+  // sql``, not insert(…).values(): Drizzle would name media_info (0026) on asset_versions and rejection_detail (0026)
   // on upload_intents, which the roll-forward suites' earlier heads do not have; the columns named here exist at
   // every head, later ones take their defaults.
   for (const v of [version(assetVersionId, assetId), version(pendingVersionId, pendingAssetId)])

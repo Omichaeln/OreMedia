@@ -1,1 +1,0 @@
-ALTER TABLE `creative_revisions` ADD `generation_inputs` json;

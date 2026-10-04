@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useMemo, useState, type ChangeEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
@@ -14,8 +14,20 @@ import { UploadStatus } from '../assets/upload-status';
 import { useBrandContext } from './brand-context';
 import { useBrandVersionImpact } from './use-brand';
 import { PublishImpact } from './publish-impact';
+import {
+  ChannelsSection,
+  ExamplesSection,
+  MessagingSection,
+  TemplatesSection,
+  VocabularySection,
+  VoicePersonalitySection,
+  WritingPatternsSection,
+  channelIssues,
+  guidanceIssues,
+  pruneGuidance,
+} from './guidance-editors';
+import { EditorSection as Section } from './guidance-fields';
 import { LogosSection } from './logo-rules';
-import { RELEASE_1_PROVIDERS } from '../publishing/channel-connect';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { useTRPC } from '../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -68,7 +80,19 @@ export const contrast = (a: string, b: string): number | null => {
 
 /** The kit's editable sections; the brand system edits one at a time, a proposed update is reviewed with all of them. */
 export type KitSection =
-  'guidelines' | 'palette' | 'typography' | 'voice' | 'logos' | 'imagery' | 'patterns' | 'channels';
+  | 'guidelines'
+  | 'palette'
+  | 'typography'
+  | 'voice'
+  | 'messaging'
+  | 'vocabulary'
+  | 'writing'
+  | 'examples'
+  | 'templates'
+  | 'logos'
+  | 'imagery'
+  | 'patterns'
+  | 'channels';
 
 /**
  * Spec 8.1 brand kit, D-22: one brand system, edited in place. The document (the applied brand system, or a proposed
@@ -106,9 +130,16 @@ export function BrandKitEditor({
   const impact = useBrandVersionImpact(brandId, confirming);
   const impactKnown = impact.data?.available === true;
   const show = (section: KitSection) => only === undefined || only === section;
+  const guidance = guidanceIssues(doc);
+  const blocked = (section: KitSection, key: string) => show(section) && (guidance[key]?.length ?? 0) > 0;
   const invalid =
     (show('patterns') && patternIssues(doc).length > 0) ||
-    (show('channels') && channelIssues(doc).length > 0);
+    (show('channels') && channelIssues(doc).length > 0) ||
+    blocked('voice', 'voice') ||
+    blocked('messaging', 'messaging') ||
+    blocked('vocabulary', 'vocabulary') ||
+    blocked('examples', 'examples') ||
+    blocked('templates', 'templates');
   const intent = useIntentKey();
   const save = useMutation(
     trpc.brand.system.save.mutationOptions({
@@ -132,7 +163,12 @@ export function BrandKitEditor({
     }),
   );
   const commit = () =>
-    save.mutate({ brandId, basedOnVersionId, document: doc, ...(proposal ? { proposal } : {}) });
+    save.mutate({
+      brandId,
+      basedOnVersionId,
+      document: pruneGuidance(doc),
+      ...(proposal ? { proposal } : {}),
+    });
   // UX-20: what applying reaches is read fresh; anything reached (or a reach that cannot be computed) is confirmed.
   const requestSave = async () => {
     setError(null);
@@ -222,6 +258,12 @@ export function BrandKitEditor({
       {show('palette') && <PaletteSection doc={doc} onChange={setDoc} />}
       {show('typography') && <TypographySection doc={doc} onChange={setDoc} />}
       {show('voice') && <VoiceSection doc={doc} onChange={setDoc} />}
+      {show('voice') && <VoicePersonalitySection doc={doc} onChange={setDoc} />}
+      {show('messaging') && <MessagingSection doc={doc} onChange={setDoc} />}
+      {show('vocabulary') && <VocabularySection doc={doc} onChange={setDoc} />}
+      {show('writing') && <WritingPatternsSection doc={doc} onChange={setDoc} />}
+      {show('examples') && <ExamplesSection doc={doc} onChange={setDoc} />}
+      {show('templates') && <TemplatesSection doc={doc} onChange={setDoc} />}
       {show('logos') && <LogosSection doc={doc} onChange={setDoc} />}
       {show('imagery') && <ReferenceImagerySection doc={doc} onChange={setDoc} />}
       {show('patterns') && <PatternsSection doc={doc} onChange={setDoc} />}
@@ -254,18 +296,6 @@ export function BrandKitEditor({
         )}
       </Dialog>
     </div>
-  );
-}
-
-function Section({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-3 border-t border-border pt-3 first:border-t-0 first:pt-0">
-      <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="text-xs text-muted-foreground">{hint}</p>
-      </div>
-      {children}
-    </section>
   );
 }
 
@@ -463,15 +493,6 @@ const commas = (text: string, max: number) =>
     .filter(Boolean)
     .slice(0, max);
 
-/** "key: description" per line. */
-const audiencesText = (v: Voice) => v.audiences.map((a) => `${a.key}: ${a.description}`).join('\n');
-const parseAudiences = (text: string): Voice['audiences'] =>
-  lines(text).map((l) => {
-    const at = l.indexOf(':');
-    return at === -1
-      ? { key: l, description: '' }
-      : { key: l.slice(0, at).trim(), description: l.slice(at + 1).trim() };
-  });
 /** "use instead of avoid, avoid" per line. */
 const termsText = (v: Voice) =>
   v.preferredTerms
@@ -482,28 +503,12 @@ const parseTerms = (text: string): Voice['preferredTerms'] =>
     const [use = '', avoid = ''] = l.split(/\s+instead of\s+/i);
     return { use: use.trim(), avoid: commas(avoid, 10) };
   });
-/** Examples of one verdict, one per line; a line that matches an existing example keeps its note. */
-const examplesText = (v: Voice, verdict: 'on_brand' | 'off_brand') =>
-  v.examples
-    .filter((e) => e.verdict === verdict)
-    .map((e) => e.text)
-    .join('\n');
-const parseExamples = (text: string, verdict: 'on_brand' | 'off_brand', current: Voice['examples']) =>
-  lines(text).map((t) => ({
-    text: t,
-    verdict,
-    note: current.find((e) => e.verdict === verdict && e.text === t)?.note ?? '',
-  }));
-
 function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
   const v = doc.voice;
   const [text, setText] = useState({
     tone: v.tone.join(', '),
-    audiences: audiencesText(v),
     terms: termsText(v),
     prohibited: v.prohibitedPhrases.join('\n'),
-    onBrand: examplesText(v, 'on_brand'),
-    offBrand: examplesText(v, 'off_brand'),
     locales: v.locales.join(', '),
   });
   const edit = (key: keyof typeof text, value: string, voice: (next: string) => Partial<Voice>) => {
@@ -513,7 +518,7 @@ function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void 
   return (
     <Section
       title="Voice"
-      hint="How the brand sounds. Agents read this with the approved facts on every run."
+      hint="How the brand sounds. Agents read this with the approved facts on every run. Audiences are under Messaging, examples under Examples."
     >
       <Field label="Summary" htmlFor="kit-voice-summary">
         <Textarea
@@ -536,18 +541,6 @@ function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void 
         />
       </Field>
       <Field
-        label="Audiences"
-        htmlFor="kit-voice-audiences"
-        hint="One per line: name, a colon, then who they are."
-      >
-        <Textarea
-          id="kit-voice-audiences"
-          rows={3}
-          value={text.audiences}
-          onChange={(e) => edit('audiences', e.target.value, (t) => ({ audiences: parseAudiences(t) }))}
-        />
-      </Field>
-      <Field
         label="Preferred terms"
         htmlFor="kit-voice-terms"
         hint="One per line, for example: roast instead of blend, mix"
@@ -567,38 +560,6 @@ function VoiceSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void 
           onChange={(e) => edit('prohibited', e.target.value, (t) => ({ prohibitedPhrases: lines(t) }))}
         />
       </Field>
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field label="On-brand examples" htmlFor="kit-voice-on" hint="One per line.">
-          <Textarea
-            id="kit-voice-on"
-            rows={3}
-            value={text.onBrand}
-            onChange={(e) =>
-              edit('onBrand', e.target.value, (t) => ({
-                examples: [
-                  ...parseExamples(t, 'on_brand', v.examples),
-                  ...v.examples.filter((x) => x.verdict === 'off_brand'),
-                ],
-              }))
-            }
-          />
-        </Field>
-        <Field label="Off-brand examples" htmlFor="kit-voice-off" hint="One per line.">
-          <Textarea
-            id="kit-voice-off"
-            rows={3}
-            value={text.offBrand}
-            onChange={(e) =>
-              edit('offBrand', e.target.value, (t) => ({
-                examples: [
-                  ...v.examples.filter((x) => x.verdict === 'on_brand'),
-                  ...parseExamples(t, 'off_brand', v.examples),
-                ],
-              }))
-            }
-          />
-        </Field>
-      </div>
       <Field
         label="Locales"
         htmlFor="kit-voice-locales"
@@ -1051,7 +1012,6 @@ function ReferenceImagerySection({ doc, onChange }: { doc: Doc; onChange: (d: Do
 }
 
 type Pattern = Doc['patterns'][number];
-type ChannelGuidance = Doc['channelGuidance'][number];
 
 /** The pattern the Imagery section edits (the first with the reference key); the Patterns section lists the rest. */
 const referenceIndex = (doc: Doc) => doc.patterns.findIndex((p) => p.key === REFERENCE_PATTERN);
@@ -1074,20 +1034,6 @@ function patternIssues(doc: Doc): Array<{ index: number; issue: string }> {
   });
 }
 
-/** Per channel row: what is wrong with its channel, if anything (one row per channel). */
-function channelIssues(doc: Doc): Array<{ index: number; issue: string }> {
-  const seen = new Set<string>();
-  return doc.channelGuidance.flatMap((c, index) => {
-    const issue = !c.providerKey
-      ? 'Choose the channel.'
-      : seen.has(c.providerKey)
-        ? 'Another row has this channel.'
-        : null;
-    seen.add(c.providerKey);
-    return issue ? [{ index, issue }] : [];
-  });
-}
-
 /**
  * Patterns: named layouts a brief or template refers to by key, each with what it is for. Example images and the
  * templates that implement a pattern are attached elsewhere and kept as they are; reference imagery is edited under
@@ -1101,8 +1047,8 @@ function PatternsSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => vo
   const rows = doc.patterns.flatMap((p, i) => (i === reference ? [] : [{ p, i }]));
   return (
     <Section
-      title="Patterns"
-      hint="Named layouts agents and templates refer to by key, each with what it is for. Examples and templates attached to a pattern are kept as they are."
+      title="Visual patterns"
+      hint="Named visual layouts agents and templates refer to by key, each with what it is for. Examples and templates attached to a pattern are kept as they are. Copy structures are under Templates."
     >
       {rows.length === 0 && <p className="text-sm text-muted-foreground">No patterns yet.</p>}
       <ul className="flex flex-col gap-3" aria-label="Patterns">
@@ -1167,137 +1113,5 @@ function PatternsSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => vo
         </Button>
       </div>
     </Section>
-  );
-}
-
-/**
- * Channel guidance: per channel, the caption style, preferred formats and call-to-action conventions agents follow
- * when they write for it. A channel the document names that is not a Release 1 provider is kept and offered as is.
- */
-function ChannelsSection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
-  const rows = doc.channelGuidance;
-  const issues = channelIssues(doc);
-  // Rows have no id of their own; a local one keeps each row's typed formats with it when another is removed.
-  const next = useRef(0);
-  const [ids, setIds] = useState(() => rows.map(() => next.current++));
-  const update = (i: number, patch: Partial<ChannelGuidance>) =>
-    onChange({ ...doc, channelGuidance: rows.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
-  return (
-    <Section
-      title="Channel guidance"
-      hint="How the brand writes for each channel: caption style, preferred formats and calls to action."
-    >
-      {rows.length === 0 && <p className="text-sm text-muted-foreground">No channel guidance yet.</p>}
-      <ul className="flex flex-col gap-3" aria-label="Channel guidance">
-        {rows.map((c, i) => (
-          <ChannelRow
-            key={ids[i] ?? `row-${i}`}
-            index={i}
-            value={c}
-            issue={issues.find((x) => x.index === i)?.issue}
-            used={rows.filter((_, j) => j !== i).map((x) => x.providerKey)}
-            onChange={(patch) => update(i, patch)}
-            onRemove={() => {
-              setIds(ids.filter((_, j) => j !== i));
-              onChange({ ...doc, channelGuidance: rows.filter((_, j) => j !== i) });
-            }}
-          />
-        ))}
-      </ul>
-      <div>
-        <Button
-          size="sm"
-          onClick={() => {
-            setIds([...ids, next.current++]);
-            onChange({
-              ...doc,
-              channelGuidance: [
-                ...rows,
-                { providerKey: '', captionStyle: '', preferredFormats: [], ctaConventions: '' },
-              ],
-            });
-          }}
-          disabled={rows.length >= 20}
-        >
-          Add channel
-        </Button>
-      </div>
-    </Section>
-  );
-}
-
-function ChannelRow({
-  index,
-  value,
-  issue,
-  used,
-  onChange,
-  onRemove,
-}: {
-  index: number;
-  value: ChannelGuidance;
-  issue: string | undefined;
-  used: string[];
-  onChange: (patch: Partial<ChannelGuidance>) => void;
-  onRemove: () => void;
-}) {
-  const [formats, setFormats] = useState(value.preferredFormats.join(', '));
-  const id = `kit-channel-${index}`;
-  const known = RELEASE_1_PROVIDERS.some((p) => p.key === value.providerKey);
-  const options = [
-    ...RELEASE_1_PROVIDERS.map((p) => ({ value: p.key, label: p.label, disabled: used.includes(p.key) })),
-    ...(value.providerKey && !known ? [{ value: value.providerKey, label: value.providerKey }] : []),
-  ];
-  const label = RELEASE_1_PROVIDERS.find((p) => p.key === value.providerKey)?.label ?? value.providerKey;
-  return (
-    <li className="flex flex-col gap-2 rounded-md border border-border p-3">
-      <div className="flex flex-wrap items-end gap-2">
-        <Field label="Channel" htmlFor={`${id}-provider`} error={issue} className="min-w-48 flex-1">
-          <Select
-            id={`${id}-provider`}
-            placeholder="Choose a channel"
-            value={value.providerKey}
-            onValueChange={(providerKey) => onChange({ providerKey })}
-            options={options}
-          />
-        </Field>
-        <Button size="sm" variant="ghost" onClick={onRemove}>
-          Remove<span className="sr-only"> guidance for {label || `row ${index + 1}`}</span>
-        </Button>
-      </div>
-      <Field label="Caption style" htmlFor={`${id}-caption`}>
-        <Textarea
-          id={`${id}-caption`}
-          rows={2}
-          maxLength={2000}
-          value={value.captionStyle}
-          onChange={(e) => onChange({ captionStyle: e.target.value })}
-        />
-      </Field>
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field
-          label="Preferred formats"
-          htmlFor={`${id}-formats`}
-          hint="Separated by commas, for example carousel, short video."
-        >
-          <Input
-            id={`${id}-formats`}
-            value={formats}
-            onChange={(e) => {
-              setFormats(e.target.value);
-              onChange({ preferredFormats: commas(e.target.value, 12) });
-            }}
-          />
-        </Field>
-        <Field label="Calls to action" htmlFor={`${id}-cta`}>
-          <Input
-            id={`${id}-cta`}
-            value={value.ctaConventions}
-            maxLength={1000}
-            onChange={(e) => onChange({ ctaConventions: e.target.value })}
-          />
-        </Field>
-      </div>
-    </li>
   );
 }

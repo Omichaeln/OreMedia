@@ -3,6 +3,7 @@
 export { agentsService, configureAgentModel, onboardingRunSource } from './service';
 export { durableProviderJobStore } from './provider-jobs';
 export { createAgentRunRuntime, type AgentRuntimeOptions } from './runtime';
+export { createStudioGenerationRuntime, type StudioGenerationRuntimeOptions } from './studio-generation';
 export { createStudioVideoRuntime, type StudioVideoRuntimeOptions } from './studio-video';
 export { dispatchSurfaceToolCall, surfaceAutonomyFor, type SurfaceToolCall } from './surface';
 export {

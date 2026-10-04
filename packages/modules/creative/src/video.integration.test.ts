@@ -32,6 +32,7 @@ import {
 } from '@oremedia/module-brand';
 import { registerCreativeOutboxRoutes } from './outbox-routes';
 import { outboxRouteFor, type OutboxEventRecord } from '@oremedia/module-operations';
+import { generationService } from './generation';
 import { creativeService, registerAssetAuthoriser, registerRevisionChangeHook } from './service';
 import { registerCreativeAssetCatalog } from './video-support';
 
@@ -357,9 +358,16 @@ describe('video documents (STU-2b) against MySQL 8', () => {
       });
     });
 
-    it('refuses a video without options, video options on a graphic, and unknown templates', async () => {
+    it('refuses a video without options, video options on a graphic, unknown templates and graphic sources', async () => {
       for (const input of [
         { brandId: brandA, title: 'x', kind: 'video' as const },
+        {
+          brandId: brandA,
+          title: 'x',
+          kind: 'video' as const,
+          video: { formatKey: 'video_1x1' as const, fps: 30 as const },
+          source: { kind: 'blank' as const },
+        },
         { brandId: brandA, title: 'x', video: { formatKey: 'video_1x1' as const, fps: 30 as const } },
         {
           brandId: brandA,
@@ -371,6 +379,54 @@ describe('video documents (STU-2b) against MySQL 8', () => {
         expect(
           await failure(run(tenantA, (tx) => creativeService.documents.create(A, input, tx))),
         ).toBeInstanceOf(ValidationFailedError);
+    });
+
+    it('duplicates a video as a video: the same timeline at the published brand version, assets authorised again', async () => {
+      authorised.length = 0;
+      const copy = await run(tenantA, (tx) =>
+        creativeService.documents.duplicate(A, { documentId: docId, title: 'Launch reel (copy)' }, tx),
+      );
+      expect(copy).toMatchObject({ number: 1, kind: 'video' });
+      const [original, got] = await run(tenantA, async () => [
+        await creativeService.documents.get(A, { documentId: docId }),
+        await creativeService.documents.get(A, { documentId: copy.documentId }),
+      ]);
+      expect(got).toMatchObject({ kind: 'video', title: 'Launch reel (copy)' });
+      if (got.revision.kind !== 'video' || original.revision.kind !== 'video')
+        throw new Error('expected video');
+      expect(got.revision.snapshot).toEqual(original.revision.snapshot);
+      expect(got.revision.changeSummary).toMatch(/^Duplicate of revision \d+ of Launch reel$/);
+      expect(authorised).toContainEqual({ assetVersionId: 'av_font', purpose: 'font' });
+    });
+
+    it('generation (STU-1b) refuses a video document before reading its snapshot', async () => {
+      const refused = await failure(
+        run(tenantA, (tx) =>
+          generationService.preflight(
+            A,
+            {
+              documentId: docId,
+              baseRevisionId: headRev,
+              request: {
+                kind: 'refine',
+                refine: {
+                  instruction: 'Brighter',
+                  scope: { pageId: 'page_1', elementIds: [] },
+                  action: { kind: 'edit' },
+                  factIds: [],
+                  assetVersionIds: [],
+                },
+              },
+            },
+            tx,
+          ),
+        ),
+      );
+      expect(refused).toBeInstanceOf(ValidationFailedError);
+      expect((refused as ValidationFailedError).details).toContainEqual({
+        path: 'documentId',
+        issue: 'document_is_video',
+      });
     });
 
     it('existing graphic documents are untouched: created, read and edited exactly as before', async () => {
@@ -411,7 +467,7 @@ describe('video documents (STU-2b) against MySQL 8', () => {
         variants: [],
       };
       const at = new Date();
-      // As 0024-era code wrote them: no kind column value (the default applies), the graphic batch and snapshot.
+      // As 0026-era code wrote them: no kind column value (the default applies), the graphic batch and snapshot.
       await tdb.db.execute(
         sql`insert into ${creativeDocuments} (id, tenant_id, brand_id, title, current_revision_id, schema_version, created_at, updated_at, version) values (${documentId}, ${tenantA}, ${brandA}, 'Old', ${revisionId}, 1, ${at}, ${at}, 1)`,
       );

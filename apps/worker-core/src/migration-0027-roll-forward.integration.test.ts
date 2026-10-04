@@ -1,21 +1,29 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { asc, getTableColumns, getTableName } from 'drizzle-orm';
+import { asc, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
 import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { creativeRevisions } from '@oremedia/db/schema/creative';
+import { creativeDocuments, renderedExports } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { creativeService } from '@oremedia/module-creative';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
- * Ledger 1.g4 for migration 0027 (the stand-in for STU-1b's generation_inputs column until #59 lands): on a populated
- * database it adds the nullable creative_revisions.generation_inputs; every existing row is unchanged and every
- * existing revision has none. The column is in LATER_COLUMNS (seed.ts).
+ * Ledger 1.g4 for migration 0027 (STU-2b video projects): on a database populated at the previous head the migration
+ * adds creative_documents.kind (NOT NULL, default graphic) and the nullable rendered_exports.dedupe_key with its
+ * index; every existing row is unchanged, every existing document reads as graphic, and the seeded graphic document
+ * still reads with its snapshot through the new code. The columns are in LATER_COLUMNS (seed.ts).
  */
-const PREVIOUS_HEAD = '0026_studio_video_jobs';
-const TABLES = (Object.values(schema) as unknown[]).filter((v): v is MySqlTable => v instanceof MySqlTable);
+const PREVIOUS_HEAD = '0026_video_media';
+const TABLES = (Object.values(schema) as unknown[])
+  .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;
@@ -35,22 +43,26 @@ describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', (
   beforeAll(async () => {
     tdb = await createTestDatabase({ migrationsUpTo: PREVIOUS_HEAD });
     ({ tenantA } = await seedTwoTenants(tdb.db));
-    await expect(tdb.db.select().from(creativeRevisions)).rejects.toThrow(); // generation_inputs not there yet
+    await expect(tdb.db.select().from(creativeDocuments)).rejects.toThrow(); // kind not there yet
     before = await snapshot();
   });
   afterAll(async () => {
     await tdb?.drop();
   });
 
-  it('adds generation_inputs (null on every existing revision), leaving every existing row unchanged', async () => {
+  it('adds kind (graphic on every existing document) and dedupe_key (null), leaving every existing row unchanged', async () => {
     await tdb.migrateToHead();
     expect(await snapshot()).toBe(before);
-    const revisions = await tdb.db.select().from(creativeRevisions);
-    expect(revisions.length).toBeGreaterThan(0);
-    expect(revisions.every((r) => r.generationInputs === null)).toBe(true);
+    const docs = await tdb.db.select().from(creativeDocuments);
+    expect(docs.length).toBeGreaterThan(0);
+    expect(docs.every((d) => d.kind === 'graphic')).toBe(true);
+    expect((await tdb.db.select().from(renderedExports)).every((e) => e.dedupeKey === null)).toBe(true);
+    await expect(
+      tdb.db.execute(sql`update ${creativeDocuments} set kind = 'audio' where id = ${docs[0]!.id}`),
+    ).rejects.toMatchObject({ cause: { code: 'WARN_DATA_TRUNCATED' } });
   });
 
-  it('the seeded document reads through the new code', async () => {
+  it('the seeded graphic document reads through the new code as graphic with its snapshot', async () => {
     const owner: ResolvedActor = {
       kind: 'user',
       id: tenantA.ownerUserId,
@@ -71,5 +83,7 @@ describe('migration 0027 rolls forward on a populated database (ledger 1.g4)', (
     const documentId = tenantA.ids['creativeDocumentId'] as string;
     const got = await runInTenant(ctx, () => creativeService.documents.get(owner, { documentId }));
     expect(got).toMatchObject({ kind: 'graphic', revision: { kind: 'graphic' } });
+    const [row] = await tdb.db.select().from(creativeDocuments).where(eq(creativeDocuments.id, documentId));
+    expect(row?.kind).toBe('graphic');
   });
 });

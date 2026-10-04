@@ -1,2 +1,12 @@
 # gitleaks false positive: the word "LinkedIn" followed by an API field name in a runbook, not a credential.
 bca84a7676620a5c65e93486cd9c314c3a05fa21:docs/runbooks/certify-a-channel.md:linkedin-client-secret:66
+975b8126c03a461ad7546c8fa1e5fa0f772a981f:docs/runbooks/certify-a-channel.md:linkedin-client-secret:66
+# gitleaks false positives: the STU-1a format keys yt_thumbnail_1280x720 and li_banner_1584x396, not credentials.
+550f765ea4fccbdc5500deefebe3cc89905e681c:packages/editor/src/formats.ts:generic-api-key:76
+550f765ea4fccbdc5500deefebe3cc89905e681c:packages/editor/src/formats.ts:generic-api-key:85
+15e1e4f2c8793698ca445091b2f17532ada0f09a:packages/editor/src/starters/catalogue.ts:generic-api-key:692
+15e1e4f2c8793698ca445091b2f17532ada0f09a:packages/editor/src/starters/catalogue.ts:generic-api-key:733
+# gitleaks false positive: the video template name promo_vertical_15s after `key:` / `templateKey:`, not a credential.
+7a1af4673c53462260b6fb88bf683025c9b1725b:packages/modules/creative/src/video.integration.test.ts:generic-api-key:337
+7a1af4673c53462260b6fb88bf683025c9b1725b:packages/modules/creative/src/video.integration.test.ts:generic-api-key:347
+4f0ab677e35967b9c9fd51dda296cf88e90de71a:packages/editor/src/video/templates.ts:generic-api-key:56

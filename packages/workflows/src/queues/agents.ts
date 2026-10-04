@@ -2,5 +2,9 @@
 // apps/worker-core (bundleWorkflowCode) into dist/workflows.agents.js; only what this queue serves is exported here.
 export { agentRunWorkflowV1, agentRunSignalRelayV1 } from '../agent-run.workflow.v1';
 export { skillEvaluationWorkflowV1 } from '../skill-evaluation.workflow.v1';
+// BSC-4: AI assist jobs (sources read on ingest-metrics and media, model calls and suggestions here).
+export { brandAssistWorkflowV1, brandAssistSignalRelayV1 } from '../brand-assist.workflow.v1';
+// STU-1b: one attempt of a studio generation job, and the relay that signals its cancel.
+export { studioGenerationWorkflowV1, studioGenerationSignalRelayV1 } from '../studio-generation.workflow.v1';
 // STU-3: one attempt of a studio video AI job (storyboard or recut), and the relay that signals its cancel.
 export { studioVideoJobWorkflowV1, studioVideoJobSignalRelayV1 } from '../studio-video.workflow.v1';

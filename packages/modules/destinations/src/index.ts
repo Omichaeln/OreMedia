@@ -122,8 +122,10 @@ export const DESTINATION_TOKEN_REFRESH_SCHEDULE_ID = 'destination-token-refresh'
 export const DESTINATION_REPORT_SWEEP_WORKFLOW_TYPE = 'destinationReportSweepWorkflowV1';
 export const DESTINATION_REPORT_SWEEP_SCHEDULE_ID = 'destination-report-sweep';
 /** R2-4: the weekly audit sweep, one schedule per namespace on task queue `ingest-metrics` (worker-ingest). */
-export const SEO_AUDIT_SWEEP_WORKFLOW_TYPE = 'seoAuditSweepWorkflowV1';
-export const SEO_AUDIT_SWEEP_SCHEDULE_ID = 'seo-audit-sweep';
+export const SEO_AUDIT_SWEEP_WORKFLOW_TYPE = 'seoAuditSweepWorkflowV2';
+/** The v2 sweep's schedule; the v1 schedule (`seo-audit-sweep`) started children that could not run and is removed. */
+export const SEO_AUDIT_SWEEP_SCHEDULE_ID = 'seo-audit-sweep-v2';
+export const SEO_AUDIT_SWEEP_V1_SCHEDULE_ID = 'seo-audit-sweep';
 /** Test fixtures only (an in-memory source); never registered by a production composition root. */
 export {
   FixtureSourceAdapter,

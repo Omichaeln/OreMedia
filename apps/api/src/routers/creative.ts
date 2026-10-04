@@ -3,8 +3,10 @@ import {
   CommentList,
   CommentResolve,
   DocumentCreate,
+  DocumentDuplicate,
   DocumentGet,
   DocumentList,
+  DocumentRename,
   OperationsApply,
   OperationsPropose,
   RenderCancel,
@@ -16,8 +18,18 @@ import {
   TemplateCreate,
   TemplateGet,
   TemplateList,
+  TemplateListCurrent,
+  TemplateRetire,
   TemplateVersionCreate,
 } from '@oremedia/contracts/creative';
+import {
+  GenerationActive,
+  GenerationCancel,
+  GenerationGet,
+  GenerationPreflight,
+  GenerationRetry,
+  GenerationStart,
+} from '@oremedia/contracts/generation';
 import { VideoOperationsApply, VideoOperationsPropose, VideoTemplateList } from '@oremedia/contracts/video';
 import {
   VideoAiAccept,
@@ -30,7 +42,7 @@ import {
   VideoAiSaveDraft,
   VideoAiStart,
 } from '@oremedia/contracts/video-ai';
-import { creativeService, videoAiService } from '@oremedia/module-creative';
+import { creativeService, generationService, videoAiService } from '@oremedia/module-creative';
 import { idempotent } from '@oremedia/module-operations';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
 
@@ -53,6 +65,19 @@ export const creativeRouter = router({
     list: tenantQuery
       .input(DocumentList)
       .query(({ ctx, input }) => creativeService.documents.list(ctx.tenant.actor, input)),
+    /** STU-1a: a copy whose revision 1 is the source's current revision (provenance in the audit). */
+    duplicate: tenantMutation
+      .input(DocumentDuplicate)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.documents.duplicate(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    rename: tenantMutation
+      .input(DocumentRename)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.documents.rename(ctx.tenant.actor, input, tx)),
+      ),
   }),
 
   revisions: router({
@@ -201,11 +226,49 @@ export const creativeRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => creativeService.templates.approve(ctx.tenant.actor, input, tx)),
       ),
+    retire: tenantMutation
+      .input(TemplateRetire)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.templates.retire(ctx.tenant.actor, input, tx)),
+      ),
     list: tenantQuery
       .input(TemplateList)
       .query(({ ctx, input }) => creativeService.templates.list(ctx.tenant.actor, input)),
+    listCurrent: tenantQuery
+      .input(TemplateListCurrent)
+      .query(({ ctx, input }) => creativeService.templates.listCurrent(ctx.tenant.actor, input)),
     get: tenantQuery
       .input(TemplateGet)
       .query(({ ctx, input }) => creativeService.templates.get(ctx.tenant.actor, input)),
+  }),
+
+  /** STU-1b: generation and targeted refinement as durable jobs (studioGenerationWorkflowV1). */
+  generation: router({
+    /** Inputs, constraints, issues and cost of a request; nothing is written. */
+    preflight: tenantQuery
+      .input(GenerationPreflight)
+      .query(({ ctx, input }) => generationService.preflight(ctx.tenant.actor, input)),
+    start: tenantMutation
+      .input(GenerationStart)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => generationService.start(ctx.tenant.actor, input, tx)),
+      ),
+    get: tenantQuery
+      .input(GenerationGet)
+      .query(({ ctx, input }) => generationService.get(ctx.tenant.actor, input)),
+    /** The document's live jobs and its last finished one: the studio reattaches after a reload. */
+    active: tenantQuery
+      .input(GenerationActive)
+      .query(({ ctx, input }) => generationService.active(ctx.tenant.actor, input)),
+    cancel: tenantMutation
+      .input(GenerationCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => generationService.cancel(ctx.tenant.actor, input, tx)),
+      ),
+    retry: tenantMutation
+      .input(GenerationRetry)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => generationService.retry(ctx.tenant.actor, input, tx)),
+      ),
   }),
 });

@@ -15,7 +15,9 @@
           "audience": { "type": "string" },
           "keyMessages": { "type": "array", "items": { "type": "string" } },
           "channelKey": { "type": "string" },
-          "locale": { "type": "string" }
+          "locale": { "type": "string" },
+          "contentType": { "enum": ["social_post", "article", "email", "ad", "landing_section", "other"] },
+          "templateKey": { "type": "string", "maxLength": 60 }
         },
         "required": ["objective", "audience", "keyMessages", "channelKey", "locale"]
       },

@@ -20,8 +20,10 @@ import {
   ChannelConnectComplete,
   ChannelConnectSelect,
   ChannelDisconnect,
+  ChannelLimitsList,
   ChannelList,
   type ChannelConnectChoice,
+  type ChannelLimitsV1,
   type ChannelVariantForPublishing,
 } from '@oremedia/contracts/publishing';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
@@ -538,6 +540,34 @@ export const channelService = {
     await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
     const rows = await connectionsRepo.listForBrand(parsed.brandId, tx);
     return rows.map(toConnectionDto);
+  },
+
+  /**
+   * BSC-1: the platform limits of every certified channel provider, from the capability register, for the brand
+   * system's channel guidance (shown read-only beside the brand's preferences, which they override). Not tenant
+   * data; gated like the channel list so only people who may read the brand see it.
+   */
+  async limits(actor: ResolvedActor, input: z.infer<typeof ChannelLimitsList>, tx?: Tx) {
+    const parsed = ChannelLimitsList.parse(input);
+    await assertBrandExists(parsed.brandId, tx);
+    await policy.assert(actor, 'brand.read', brandResource(parsed.brandId), {}, tx);
+    const items: ChannelLimitsV1[] = registry()
+      .list()
+      .filter((p) => p.certified)
+      .map(({ key, version, capability: c }) => ({
+        providerKey: key,
+        vendor: c.vendor ?? key,
+        capabilityVersion: version,
+        text: c.text,
+        image: c.media.image
+          ? { maxCount: c.media.image.maxCount, aspectRatios: c.media.image.aspectRatios }
+          : null,
+        video: c.media.video ? { maxDurationSec: c.media.video.maxDurationSec } : null,
+        carousel: c.media.carousel ?? null,
+        altText: c.media.altText,
+        threading: c.threading,
+      }));
+    return { items };
   },
 
   async get(actor: ResolvedActor, channelConnectionId: string, tx?: Tx) {

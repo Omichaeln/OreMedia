@@ -10,6 +10,7 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/mysql-core';
+import type { GenerationRequest, GenerationResult } from '@oremedia/contracts/generation';
 import type {
   CreativeDocumentV1,
   OperationBatch,
@@ -69,11 +70,9 @@ export const creativeRevisions = mysqlTable(
     snapshot: json('snapshot').$type<CreativeDocumentV1 | VideoProjectV1>().notNull(), // full document at this revision
     contentHash: hash('content_hash').notNull(),
     /**
-     * Principle 8: what produced an AI-assisted revision; null for people's own edits and older rows. The column is
-     * STU-1b's (#59, migration 0027_studio_generation, GenerationInputs); STU-3 writes its video variant
-     * (VideoGenerationInputs, `documentKind: 'video'`). Until #59 lands, the stand-in migration
-     * 0027_generation_inputs_stand_in_for_stu1b adds the same column; it is dropped when this branch is rebased onto
-     * #59, and the column's type is StoredGenerationInputs (video first, then #59's graphic shape).
+     * STU-1b (principle 8): what produced an AI-generated revision; null for people's edits and older rows. Video
+     * revisions (STU-3) store VideoGenerationInputs (`documentKind: 'video'`), graphic ones STU-1b's GenerationInputs,
+     * so reads go through videoGenerationInputsOf or graphicGenerationInputs, which skip the other kind.
      */
     generationInputs: json('generation_inputs').$type<StoredGenerationInputs>(),
     createdAt: createdAt(),
@@ -306,6 +305,66 @@ export const previewExports = mysqlTable(
       columns: [t.tenantId, t.brandId, t.renderJobId],
       foreignColumns: [renderJobs.tenantId, renderJobs.brandId, renderJobs.id],
       name: 'fk_preview_export_job',
+    }),
+  ],
+);
+
+/**
+ * STU-1b: a durable generation or refinement job for one document (studioGenerationWorkflowV1). Start is idempotent
+ * per (document, base revision, inputs hash); a retry is a new attempt of the same row. The model's output and the
+ * result (revisions saved, or a proposal) are stored here so a retried activity never calls the model twice and the
+ * studio can reattach after a reload.
+ */
+export const studioGenerationJobs = mysqlTable(
+  'studio_generation_jobs',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    brandId: brandId(),
+    documentId: ref('document_id').notNull(),
+    baseRevisionId: ref('base_revision_id').notNull(),
+    kind: mysqlEnum('kind', ['generate', 'refine']).notNull(),
+    state: mysqlEnum('state', [
+      'queued',
+      'generating',
+      'validating',
+      'saving',
+      'completed',
+      'failed',
+      'cancelled',
+    ])
+      .notNull()
+      .default('queued'),
+    progress: int('progress').notNull().default(0),
+    request: json('request').$type<GenerationRequest>().notNull(),
+    inputsHash: hash('inputs_hash').notNull(),
+    attempt: int('attempt').notNull().default(1),
+    /** The current attempt's budget reservation key (budget_reservations.run_id). */
+    budgetRunId: ref('budget_run_id'),
+    /** That reservation's id (charges are recorded against it). */
+    budgetReservationId: ref('budget_reservation_id'),
+    costReservedMicros: micros('cost_reserved_micros').notNull().default(0),
+    costSpentMicros: micros('cost_spent_micros').notNull().default(0),
+    /** The model's validated output for the current attempt, with the ledger key of the call. */
+    modelOutput: json('model_output').$type<{ output: unknown; callRef: string; structure: unknown }>(),
+    result: json('result').$type<GenerationResult>(),
+    errorCode: varchar('error_code', { length: 40 }),
+    error: varchar('error', { length: 500 }),
+    requestedByKind: mysqlEnum('requested_by_kind', ['user', 'agent', 'system']).notNull(),
+    requestedById: ref('requested_by_id').notNull(),
+    finishedAt: ts('finished_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    version: version(),
+  },
+  (t) => [
+    uniqueIndex('uq_generation_job_inputs').on(t.tenantId, t.documentId, t.baseRevisionId, t.inputsHash),
+    index('ix_generation_job_document').on(t.tenantId, t.documentId, t.state),
+    uniqueIndex('uq_generation_job_tbi').on(t.tenantId, t.brandId, t.id),
+    foreignKey({
+      columns: [t.tenantId, t.brandId, t.documentId],
+      foreignColumns: [creativeDocuments.tenantId, creativeDocuments.brandId, creativeDocuments.id],
+      name: 'fk_generation_job_document',
     }),
   ],
 );

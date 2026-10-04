@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "e185d261-1ccd-4716-bf18-34b58e191487",
-  "prevId": "85851c30-ec63-4b90-a4f7-d324514b125a",
+  "id": "fb2afdc2-f9bc-456d-87ae-5443a3d003c2",
+  "prevId": "20939bda-4b27-4c67-97e2-1e81f61133c8",
   "tables": {
     "api_clients": {
       "name": "api_clients",
@@ -1635,6 +1635,259 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "brand_assist_jobs": {
+      "name": "brand_assist_jobs",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "enum('setup','section')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sections": {
+          "name": "sections",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "instruction": {
+          "name": "instruction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "source_ids": {
+          "name": "source_ids",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "preserve": {
+          "name": "preserve",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "answers": {
+          "name": "answers",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "parent_job_id": {
+          "name": "parent_job_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "alternatives_for_job_id": {
+          "name": "alternatives_for_job_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "enum('queued','capturing','extracting','proposing','ready','partially_ready','failed','cancelled')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "progress": {
+          "name": "progress",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "questions": {
+          "name": "questions",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "estimate_micros": {
+          "name": "estimate_micros",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "reserved_micros": {
+          "name": "reserved_micros",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "spent_micros": {
+          "name": "spent_micros",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "budget_reservation_id": {
+          "name": "budget_reservation_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "request_key": {
+          "name": "request_key",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cancel_requested_at": {
+          "name": "cancel_requested_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by_kind": {
+          "name": "created_by_kind",
+          "type": "enum('user','service_principal')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by_id": {
+          "name": "created_by_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "uq_brand_assist_job_tbi": {
+          "name": "uq_brand_assist_job_tbi",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "ix_brand_assist_job_request": {
+          "name": "ix_brand_assist_job_request",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "request_key",
+            "state"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "fk_brand_assist_job_brand": {
+          "name": "fk_brand_assist_job_brand",
+          "tableFrom": "brand_assist_jobs",
+          "tableTo": "brands",
+          "columnsFrom": [
+            "tenant_id",
+            "brand_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "brand_assist_jobs_id": {
+          "name": "brand_assist_jobs_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "brand_guideline_authors": {
       "name": "brand_guideline_authors",
       "columns": {
@@ -1854,6 +2107,521 @@
       "compositePrimaryKeys": {
         "brand_objectives_id": {
           "name": "brand_objectives_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "brand_sources": {
+      "name": "brand_sources",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "enum('url','document','text','brand_asset')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "url": {
+          "name": "url",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "file_name": {
+          "name": "file_name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mime": {
+          "name": "mime",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "asset_id": {
+          "name": "asset_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "asset_version_id": {
+          "name": "asset_version_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "varchar(300)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('pending','captured','unsupported','inaccessible','failed')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "varchar(40)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "detail": {
+          "name": "detail",
+          "type": "varchar(300)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "content_hash": {
+          "name": "content_hash",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "duplicate_of_source_id": {
+          "name": "duplicate_of_source_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "byte_size": {
+          "name": "byte_size",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "char_count": {
+          "name": "char_count",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "truncated": {
+          "name": "truncated",
+          "type": "enum('yes','no')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'no'"
+        },
+        "text": {
+          "name": "text",
+          "type": "mediumtext",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "pages": {
+          "name": "pages",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "captured_at": {
+          "name": "captured_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "removed_at": {
+          "name": "removed_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by_kind": {
+          "name": "created_by_kind",
+          "type": "enum('user','service_principal')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_by_id": {
+          "name": "created_by_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "uq_brand_source_tbi": {
+          "name": "uq_brand_source_tbi",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "ix_brand_source_hash": {
+          "name": "ix_brand_source_hash",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "content_hash"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "fk_brand_source_brand": {
+          "name": "fk_brand_source_brand",
+          "tableFrom": "brand_sources",
+          "tableTo": "brands",
+          "columnsFrom": [
+            "tenant_id",
+            "brand_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "brand_sources_id": {
+          "name": "brand_sources_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
+    "brand_suggestions": {
+      "name": "brand_suggestions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "brand_id": {
+          "name": "brand_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "job_id": {
+          "name": "job_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "section": {
+          "name": "section",
+          "type": "enum('voice','messaging','vocabulary','writing','examples','templates','channels','facts')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "path": {
+          "name": "path",
+          "type": "varchar(400)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "op": {
+          "name": "op",
+          "type": "enum('add','replace','remove')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provenance": {
+          "name": "provenance",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rationale": {
+          "name": "rationale",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "uncertainty": {
+          "name": "uncertainty",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "conflicts": {
+          "name": "conflicts",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fingerprint": {
+          "name": "fingerprint",
+          "type": "char(64)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "against_user_item": {
+          "name": "against_user_item",
+          "type": "enum('yes','no')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'no'"
+        },
+        "based_on": {
+          "name": "based_on",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "enum('pending','accepted','edited','rejected','superseded')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "decided_by_id": {
+          "name": "decided_by_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "batch_id": {
+          "name": "batch_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "applied_proposal_version_id": {
+          "name": "applied_proposal_version_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "applied_before": {
+          "name": "applied_before",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "applied_value": {
+          "name": "applied_value",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "fact_id": {
+          "name": "fact_id",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "version": {
+          "name": "version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "uq_brand_suggestion_tbi": {
+          "name": "uq_brand_suggestion_tbi",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "isUnique": true
+        },
+        "ix_brand_suggestion_job": {
+          "name": "ix_brand_suggestion_job",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "job_id",
+            "section"
+          ],
+          "isUnique": false
+        },
+        "ix_brand_suggestion_fingerprint": {
+          "name": "ix_brand_suggestion_fingerprint",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "fingerprint",
+            "status"
+          ],
+          "isUnique": false
+        },
+        "ix_brand_suggestion_batch": {
+          "name": "ix_brand_suggestion_batch",
+          "columns": [
+            "tenant_id",
+            "brand_id",
+            "batch_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "fk_brand_suggestion_job": {
+          "name": "fk_brand_suggestion_job",
+          "tableFrom": "brand_suggestions",
+          "tableTo": "brand_assist_jobs",
+          "columnsFrom": [
+            "tenant_id",
+            "brand_id",
+            "job_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "brand_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "brand_suggestions_id": {
+          "name": "brand_suggestions_id",
           "columns": [
             "id"
           ]
@@ -4610,8 +5378,8 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
-    "studio_video_jobs": {
-      "name": "studio_video_jobs",
+    "studio_generation_jobs": {
+      "name": "studio_generation_jobs",
       "columns": {
         "id": {
           "name": "id",
@@ -4650,7 +5418,7 @@
         },
         "kind": {
           "name": "kind",
-          "type": "enum('storyboard','recut')",
+          "type": "enum('generate','refine')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -4683,13 +5451,6 @@
           "type": "char(64)",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
-        },
-        "live_key": {
-          "name": "live_key",
-          "type": "varchar(160)",
-          "primaryKey": false,
-          "notNull": false,
           "autoincrement": false
         },
         "attempt": {
@@ -4803,17 +5564,18 @@
         }
       },
       "indexes": {
-        "uq_video_job_live": {
-          "name": "uq_video_job_live",
+        "uq_generation_job_inputs": {
+          "name": "uq_generation_job_inputs",
           "columns": [
             "tenant_id",
             "document_id",
-            "live_key"
+            "base_revision_id",
+            "inputs_hash"
           ],
           "isUnique": true
         },
-        "ix_video_job_document": {
-          "name": "ix_video_job_document",
+        "ix_generation_job_document": {
+          "name": "ix_generation_job_document",
           "columns": [
             "tenant_id",
             "document_id",
@@ -4821,8 +5583,8 @@
           ],
           "isUnique": false
         },
-        "uq_video_job_tbi": {
-          "name": "uq_video_job_tbi",
+        "uq_generation_job_tbi": {
+          "name": "uq_generation_job_tbi",
           "columns": [
             "tenant_id",
             "brand_id",
@@ -4832,9 +5594,9 @@
         }
       },
       "foreignKeys": {
-        "fk_video_job_document": {
-          "name": "fk_video_job_document",
-          "tableFrom": "studio_video_jobs",
+        "fk_generation_job_document": {
+          "name": "fk_generation_job_document",
+          "tableFrom": "studio_generation_jobs",
           "tableTo": "creative_documents",
           "columnsFrom": [
             "tenant_id",
@@ -4851,8 +5613,8 @@
         }
       },
       "compositePrimaryKeys": {
-        "studio_video_jobs_id": {
-          "name": "studio_video_jobs_id",
+        "studio_generation_jobs_id": {
+          "name": "studio_generation_jobs_id",
           "columns": [
             "id"
           ]

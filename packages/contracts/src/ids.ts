@@ -26,6 +26,12 @@ export const ID_PREFIXES = {
   approvedFact: 'fact',
   brandObjective: 'obj',
   policyVersion: 'pol',
+  /** BSC-4: material a brand supplied (a website, a document, pasted text, one of its assets) and an assist job over it. */
+  brandSource: 'bsrc',
+  brandAssistJob: 'baj',
+  /** BSC-4: one proposed change from an assist job, and the batch a person decided together (undo works per batch). */
+  brandSuggestion: 'bsug',
+  brandSuggestionBatch: 'bsb',
   asset: 'ast',
   assetVersion: 'av',
   assetDerivative: 'ad',
@@ -41,6 +47,8 @@ export const ID_PREFIXES = {
   template: 'tpl',
   templateVersion: 'tv',
   renderJob: 'rj',
+  /** STU-1b: a durable studio generation or refinement job. */
+  studioGenerationJob: 'sgj',
   /** STU-3: a durable studio video AI job (storyboard or recut). */
   studioVideoJob: 'svj',
   renderPreview: 'rpv',

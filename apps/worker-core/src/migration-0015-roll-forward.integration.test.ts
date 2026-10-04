@@ -4,6 +4,8 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
+import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import {
   brandDestinations,
   destinationReportRows,
@@ -32,11 +34,17 @@ const PREVIOUS_HEAD = '0014_plan_items';
 const NEW_TABLES: MySqlTable[] = [brandDestinations, sourceUsePolicies];
 /** Added by later migrations (0016, 0017). */
 const LATER_TABLES: MySqlTable[] = [
+  // BSC-4 (0024)
+  brandSources,
+  brandAssistJobs,
+  brandSuggestions,
+
   pendingDestinationGrants,
   destinationReportRows,
   seoAuditRuns,
   seoAuditPages,
   seoFindingWork,
+  studioGenerationJobs, // 0025
 ];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)

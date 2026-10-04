@@ -103,20 +103,16 @@ export class FactsBackend {
     private readonly role: () => MembershipRole,
   ) {}
 
-  /**
-   * The workspace fixtures (facts.e2e.test.ts). Not seeded by default, so the other suites keep a brand without
-   * facts (Needs you and the navigation counts stay as they expect).
-   */
-  seed(): void {
+  /** One fact as the workspace fixtures write it: approved, by the e2e user, reviewed 30 days ago. */
+  private fixture(
+    id: string,
+    statement: string,
+    category: FactCategory,
+    over: Partial<MockFact> = {},
+  ): MockFact {
     const brandId = this.brandId;
-    const now = Date.now();
-    const iso = (offsetDays: number) => new Date(now + offsetDays * DAY).toISOString();
-    const base = (
-      id: string,
-      statement: string,
-      category: FactCategory,
-      over: Partial<MockFact> = {},
-    ): MockFact => ({
+    const iso = (offsetDays: number) => new Date(Date.now() + offsetDays * DAY).toISOString();
+    return {
       id,
       brandId,
       kind: factKindOf(category),
@@ -143,7 +139,25 @@ export class FactsBackend {
       updatedAt: iso(-30),
       version: 1,
       ...over,
-    });
+    };
+  }
+
+  /** BSC-1: two facts in effect, for brand-kit pillars to cite as proof (statements only on screen). */
+  seedProofFacts(): void {
+    this.facts.push(
+      this.fixture('fact_e2e_roasted', 'Roasted in Harare every week', 'claim'),
+      this.fixture('fact_e2e_farms', 'Beans from three Chimanimani farms', 'claim'),
+    );
+  }
+
+  /**
+   * The workspace fixtures (facts.e2e.test.ts). Not seeded by default, so the other suites keep a brand without
+   * facts (Needs you and the navigation counts stay as they expect).
+   */
+  seed(): void {
+    const now = Date.now();
+    const iso = (offsetDays: number) => new Date(now + offsetDays * DAY).toISOString();
+    const base = this.fixture.bind(this);
     this.facts.push(
       base(PF.website, 'Founded in Harare in 1998', 'company', {
         origin: 'extracted',

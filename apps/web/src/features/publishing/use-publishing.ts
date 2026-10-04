@@ -33,6 +33,12 @@ export function useChannels(brandId: string) {
   return useQuery(trpc.publishing.channels.list.queryOptions({ brandId }));
 }
 
+/** BSC-1: the channel providers' platform limits (the capability register), shown beside the brand's guidance. */
+export function useChannelLimits(brandId: string) {
+  const trpc = useTRPC();
+  return useQuery({ ...trpc.publishing.channels.limits.queryOptions({ brandId }), staleTime: 5 * 60_000 });
+}
+
 export function usePublication(publicationId: string | null) {
   const trpc = useTRPC();
   return useQuery({

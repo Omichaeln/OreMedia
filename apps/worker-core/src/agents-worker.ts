@@ -11,18 +11,33 @@ import {
 } from '@temporalio/worker';
 import {
   createAgentRunActivities,
+  createBrandAssistActivities,
   createSkillEvaluationActivities,
+  createStudioGenerationActivities,
   createStudioVideoActivities,
 } from '@oremedia/activities';
-import { createModelAdapterFromEnv, createReleaseOneRegistry, modelConfigFromEnv } from '@oremedia/ai';
-import { AGENTS_TASK_QUEUE, createAgentRunRuntime, createStudioVideoRuntime } from '@oremedia/module-agents';
+import {
+  createBrandAssistModel,
+  createModelAdapterFromEnv,
+  createReleaseOneRegistry,
+  modelConfigFromEnv,
+} from '@oremedia/ai';
+import {
+  AGENTS_TASK_QUEUE,
+  createAgentRunRuntime,
+  createStudioGenerationRuntime,
+  createStudioVideoRuntime,
+} from '@oremedia/module-agents';
+import { createBrandAssistRuntime } from '@oremedia/module-brand';
 import { logger } from '@oremedia/observability';
 import { skillEvaluationStore } from './skills-store';
 import type { TemporalConfig } from './temporal';
 
 /**
- * Spec 4.4: worker-core hosts task queue `agents` (agentRunWorkflowV1, its signal relay, skillEvaluationWorkflowV1 and STU-3's studioVideoJobWorkflowV1 with its relay). Workflow code is
- * pre-bundled at build time (tsup.config.ts → dist/workflows.agents.js) because production images carry no
+ * Spec 4.4: worker-core hosts task queue `agents` (agentRunWorkflowV1, its signal relay, skillEvaluationWorkflowV1,
+ * BSC-4's brandAssistWorkflowV1 with its signal relay: the assist job's budget, model calls and suggestions,
+ * STU-1b's studioGenerationWorkflowV1 with its relay, and STU-3's studioVideoJobWorkflowV1 with its relay).
+ * Workflow code is pre-bundled at build time (tsup.config.ts → dist/workflows.agents.js) because production images carry no
  * sources; outside production the queue entry is bundled at start. The model adapter comes from the environment:
  * OPENROUTER_API_KEY_REF (ADR-11), else ANTHROPIC_API_KEY_REF, or the scripted fake outside production
  * (OREMEDIA_FAKE_MODEL=1); nothing else.
@@ -68,6 +83,9 @@ export async function startAgentsWorker(
   const adapter = createModelAdapterFromEnv(env); // loud when no model is configured
   const modelConfig = modelConfigFromEnv(env);
   const runtime = createAgentRunRuntime({ adapter, modelConfig, registry: createReleaseOneRegistry() });
+  const assist = createBrandAssistRuntime({ model: createBrandAssistModel({ adapter, modelConfig }) });
+  // STU-1b: studio generation jobs make their one bounded model call with the same adapter and price list.
+  const generation = createStudioGenerationRuntime({ adapter, modelConfig });
   // STU-3: studio video AI jobs make their one bounded model call with the same adapter and price list.
   const videoJobs = createStudioVideoRuntime({ adapter, modelConfig });
   const connection = await NativeConnection.connect(await connectionOptions(cfg));
@@ -79,6 +97,8 @@ export async function startAgentsWorker(
     activities: {
       ...createAgentRunActivities(runtime),
       ...createSkillEvaluationActivities({ store: skillEvaluationStore() }),
+      ...createStudioGenerationActivities(generation),
+      ...createBrandAssistActivities(assist),
       ...createStudioVideoActivities(videoJobs),
     },
     maxConcurrentActivityTaskExecutions: Number(env['AGENTS_CONCURRENCY'] ?? 8),

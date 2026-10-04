@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActivityHooks } from './agents';
 import { Finding } from './creative';
+import { GenerationInputs } from './generation';
 import type { ResolvedActor } from './policy';
 import { TenantContextInput } from './tenancy';
 import type { VideoProjectV1 } from './video';
@@ -427,8 +428,8 @@ export const VideoAiResult = z.object({
 export type VideoAiResult = z.infer<typeof VideoAiResult>;
 
 /**
- * Principle 8: what produced a revision (creative_revisions.generation_inputs). The column belongs to STU-1b (#59,
- * GenerationInputs for graphic documents); this is its video variant: the same field names and types where they
+ * Principle 8: what produced a revision (creative_revisions.generation_inputs). The column belongs to STU-1b
+ * (GenerationInputs for graphic documents, migration 0025_studio_generation); this is its video variant: the same field names and types where they
  * overlap (job, inputs hash, template version, brand version, assets, facts, model call refs, cost, variation,
  * accepted groups), told apart by `documentKind: 'video'`, with the video request, scope and kinds. The model call
  * reference is the job's ledger key, never a prompt or a model identifier.
@@ -460,20 +461,11 @@ export type VideoGenerationInputs = z.infer<typeof VideoGenerationInputs>;
 
 /**
  * What creative_revisions.generation_inputs may hold on any row: the video variant first, then STU-1b's graphic
- * GenerationInputs (#59; no `documentKind`, or `documentKind: 'graphic'` once it gains the discriminator), kept as
- * an opaque record here. Neither side's parse throws on the other's rows. At the rebase onto #59 the second member
- * becomes #59's GenerationInputs.
+ * GenerationInputs (`documentKind: 'graphic'`, or none on rows written before the field existed). The video member
+ * comes first so a video row never reads as graphic; a malformed video row matches neither (GenerationInputs takes
+ * only `'graphic'`). Readers go through videoGenerationInputsOf or graphicGenerationInputs, which never throw.
  */
-export const StoredGenerationInputs = z.union([
-  VideoGenerationInputs,
-  z
-    .object({ documentKind: z.literal('graphic').optional(), jobId: z.string() })
-    .passthrough()
-    .refine(
-      (v) => (v as { documentKind?: unknown }).documentKind !== 'video',
-      'a video row that does not parse',
-    ),
-]);
+export const StoredGenerationInputs = z.union([VideoGenerationInputs, GenerationInputs]);
 export type StoredGenerationInputs = z.infer<typeof StoredGenerationInputs>;
 
 /** The video variant of a stored generation_inputs value; null for a graphic row, an empty one or a malformed one. */

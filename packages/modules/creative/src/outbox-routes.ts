@@ -1,9 +1,16 @@
+import { StudioGenerationInputV1, StudioGenerationSignalV1 } from '@oremedia/contracts/generation';
 import { RenderJobInputV1, VideoRenderSignalV1 } from '@oremedia/contracts/render';
 import { StudioVideoJobInputV1, StudioVideoJobSignalV1 } from '@oremedia/contracts/video-ai';
 import { registerOutboxRoute } from '@oremedia/module-operations';
 
 /** Task queue for isolated rendering (spec 4.4: worker-render hosts `render` and `media`). */
 export const RENDER_TASK_QUEUE = 'render';
+/** STU-1b: generation makes model calls, so it runs beside agent runs on worker-core's `agents` queue. */
+export const GENERATION_TASK_QUEUE = 'agents';
+export const STUDIO_GENERATION_WORKFLOW_TYPE = 'studioGenerationWorkflowV1';
+export const STUDIO_GENERATION_SIGNAL_RELAY_WORKFLOW_TYPE = 'studioGenerationSignalRelayV1';
+const generationWorkflowId = (jobId: string, attempt: number) => `studio-gen:${jobId}:${attempt}`;
+
 /** STU-2b: video renders run on worker-render's `video` queue (ffmpeg + Chromium, minutes long, own concurrency). */
 export const VIDEO_RENDER_TASK_QUEUE = 'video';
 export const VIDEO_RENDER_WORKFLOW_TYPE = 'videoRenderJobWorkflowV1';
@@ -38,6 +45,35 @@ export function registerCreativeOutboxRoutes(): void {
       taskQueue: video ? VIDEO_RENDER_TASK_QUEUE : RENDER_TASK_QUEUE,
       workflowId: renderWorkflowId(input.renderJobId),
       args: [input],
+    };
+  });
+  // STU-1b: start and retry → studioGenerationWorkflowV1 (one workflow per attempt); cancel → a relay that signals it.
+  registerOutboxRoute('creative.generation_requested', (evt) => {
+    const p = evt.payload;
+    const input = StudioGenerationInputV1.parse({
+      tenantId: evt.tenantId,
+      actor: { kind: p['actorKind'], id: p['actorId'] },
+      correlationId: evt.correlationId,
+      jobId: p['jobId'],
+      attempt: Number(p['attempt']),
+    });
+    return {
+      workflowType: STUDIO_GENERATION_WORKFLOW_TYPE,
+      taskQueue: GENERATION_TASK_QUEUE,
+      workflowId: generationWorkflowId(input.jobId, input.attempt),
+      args: [input],
+    };
+  });
+  registerOutboxRoute('creative.generation_cancel_requested', (evt) => {
+    const signal = StudioGenerationSignalV1.parse({
+      workflowId: generationWorkflowId(String(evt.payload['jobId']), Number(evt.payload['attempt'])),
+      signal: 'cancel',
+    });
+    return {
+      workflowType: STUDIO_GENERATION_SIGNAL_RELAY_WORKFLOW_TYPE,
+      taskQueue: GENERATION_TASK_QUEUE,
+      workflowId: `${signal.workflowId}:signal:${evt.id}`,
+      args: [signal],
     };
   });
   registerOutboxRoute('creative.render_cancel_requested', (evt) => {

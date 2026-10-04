@@ -26,6 +26,10 @@ export const EVENT_TYPES = {
   'creative.revision_created': 1,
   'creative.render_requested': 1,
   'creative.render_completed': 1,
+  // STU-1b: studio generation jobs (start/retry → workflow, cancel → signal relay, completion for observers).
+  'creative.generation_requested': 1,
+  'creative.generation_cancel_requested': 1,
+  'creative.generation_completed': 1,
   // STU-3: studio video AI jobs (start/retry → workflow, cancel → signal relay, completion for observers).
   'creative.video_job_requested': 1,
   'creative.video_job_cancel_requested': 1,
@@ -76,6 +80,10 @@ export const EVENT_TYPES = {
   // BSC-3 (appended; additive only): an approved fact's validity ended; emitted once by the daily fact sweep, which
   // holds the scheduled work citing it itself (informational: no route)
   'brand.fact_expired': 1,
+  // BSC-4 (appended; additive only): a person asked for an assist job (brandAssistWorkflowV1 reads the sources and
+  // proposes suggestions), and asked to cancel one (relayed to the running workflow as a signal)
+  'brand.assist_requested': 1,
+  'brand.assist_cancel_requested': 1,
   // STU-2b (appended; additive only): a person cancelled a video render; relayed as a signal to its workflow
   'creative.render_cancel_requested': 1,
 } as const;

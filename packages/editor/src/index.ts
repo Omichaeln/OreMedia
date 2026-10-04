@@ -7,6 +7,11 @@ export {
   changedElementIds,
   allElementIds,
   findElement,
+  isLockedDeep,
+  isLockedInContext,
+  findWithAncestors,
+  footprintOf,
+  boundsOf,
   OperationError,
   SlotConstraintError,
   validateSlotBindings,
@@ -14,7 +19,37 @@ export {
   type SlotFinding,
   type TemplateDocument,
 } from './reduce';
-export { guardProtected, guardLogoInsertion } from './guard';
+export {
+  guardProtected,
+  guardLocks,
+  guardLogoInsertion,
+  guardScope,
+  scopeState,
+  type ScopeState,
+} from './guard';
+export {
+  ancestryOf,
+  inScope,
+  isImageArea,
+  imageForArea,
+  generationSlots,
+  textCapacity,
+  structureFor,
+  bindSlots,
+  compileFill,
+  groupOperations,
+  operationsOfGroups,
+  preflightGeneration,
+  type GenerationSlot,
+  type GenerationSlotKind,
+  type FixedReason,
+  type Structure,
+  type CompileContext,
+  type CompiledFill,
+  type PreflightAsset,
+  type PreflightInput,
+  type PreflightResult,
+} from './generation';
 export { fontFaceDescriptors } from './renderer/scene';
 export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn, looksLikeClaim } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
@@ -27,10 +62,24 @@ export {
   nudgeIntent,
   resizeIntent,
   transformIntent,
+  frameTransformIntent,
+  marqueeSelection,
+  toggleSelection,
   formatForPage,
   fitScale,
   type IntentBatch,
   type KonvaAdapterOptions,
   type KonvaEditorHandle,
 } from './konva-adapter';
+export {
+  STARTERS,
+  starterByKey,
+  instantiateStarter,
+  starterBrandIssue,
+  blankDocument,
+  type StarterSpec,
+  type StarterBrand,
+  type StarterSlot,
+  type InstantiatedStarter,
+} from './starters';
 export * from './video/index';

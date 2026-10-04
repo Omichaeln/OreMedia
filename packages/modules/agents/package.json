@@ -15,6 +15,7 @@
     "@oremedia/contracts": "workspace:*",
     "@oremedia/db": "workspace:*",
     "@oremedia/domain": "workspace:*",
+    "@oremedia/editor": "workspace:*",
     "@oremedia/module-access": "workspace:*",
     "@oremedia/module-billing": "workspace:*",
     "@oremedia/module-brand": "workspace:*",

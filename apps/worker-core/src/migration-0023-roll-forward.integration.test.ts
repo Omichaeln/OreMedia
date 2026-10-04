@@ -4,14 +4,15 @@ import { MySqlTable, type MySqlColumn } from 'drizzle-orm/mysql-core';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import * as schema from '@oremedia/db/schema';
-import { approvedFacts } from '@oremedia/db/schema/brand';
+import { studioGenerationJobs } from '@oremedia/db/schema/creative';
+import { approvedFacts, brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/schema/brand';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandService } from '@oremedia/module-brand';
 import {
+  LATER_TABLE_NAMES,
   seedTwoTenants,
   snapshotColumns,
   type SeededTenant,
-  LATER_TABLE_NAMES,
 } from '../../../tooling/test-fixtures/src/seed';
 
 /**
@@ -24,8 +25,11 @@ import {
  * supersedes it. Additive and roll-forward safe: the new columns are in LATER_COLUMNS (seed.ts).
  */
 const PREVIOUS_HEAD = '0022_channel_health';
+/** Tables later migrations add (BSC-4, 0024; STU-1b, 0025): absent at both heads this suite compares. */
+const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
+  .filter((t) => !LATER_TABLES.includes(t))
   .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0023 rolls forward on a populated database (ledger 1.g4)', () => {

@@ -302,10 +302,10 @@ Rollout order for speech generation (migration 0008, flag `creative.audio_genera
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
 `worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
 
-Rollout order for video and audio uploads (migration 0024, STU-2a; no flag: a person's video or audio upload is
+Rollout order for video and audio uploads (migration 0026, STU-2a; no flag: a person's video or audio upload is
 accepted as soon as the API is on the new build):
 
-1. Apply migration 0024 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
+1. Apply migration 0026 (additive: nullable `asset_versions.media_info`, `upload_intents.rejection_detail`,
    `render_jobs.progress`, `rendered_exports.duration_ms`/`fps`/`poster_storage_key`/`captions_storage_key`, and
    `cancelled` appended to `render_jobs.state`, metadata only) with the api pre-deploy command.
 2. Before the merge that ships this (the api deploys on merge and accepts video at once), raise the clamav service's
@@ -326,10 +326,10 @@ accepted as soon as the API is on the new build):
    Rolling back the API leaves person video/audio intents refused again; workflows already started on `video` finish
    on worker-render, which must stay on the new build until they drain.
 
-Rollout order for video documents (migration 0025, STU-2b; no flag: a person can create a video document once the
+Rollout order for video documents (migration 0027, STU-2b; no flag: a person can create a video document once the
 API is on the new build):
 
-1. Apply migration 0025 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
+1. Apply migration 0027 (additive: `creative_documents.kind` enum defaulting to `graphic`, nullable
    `rendered_exports.dedupe_key` with index `ix_export_dedupe`; existing documents stay graphic) with the api
    pre-deploy command.
 2. Deploy `worker-render` first: it registers `videoRenderJobWorkflowV1` and `videoRenderSignalRelayV1` and the

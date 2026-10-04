@@ -1663,6 +1663,14 @@ async function saveRecut(
           operations: engine.initialVideoBatch(project, 'agent'),
           brandVersionId: project.brandVersionId,
           origin: 'agent',
+          changeSummary: 'Initial video',
+          auditAction: 'creative.document.create',
+          auditMeta: {
+            sourceType: 'creative_document',
+            sourceId: doc.id,
+            sourceRevisionId: prepared.base.id,
+            videoJobId: job.id,
+          },
           generationInputs: generationInputsOf(job, prepared, 'vertical_version', {
             assetVersionIds: [...new Set(timedAssetIds(project))],
             factIds: compiled.factIds,

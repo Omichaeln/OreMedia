@@ -143,6 +143,13 @@ describe('createStorageFromEnv (spec 9.1: no local storage in production)', () =
       expect(put.url).toContain('oremedia-assets');
       expect(put.url).toContain(`quarantine/${A}/ui_1`);
       expect(put.url).toContain('X-Amz-Expires=3600');
+      // BSC-4: a declared size is part of the signature, so a larger body is refused by the store.
+      const sized = await s3.signUploadUrl(`quarantine/${A}/ui_2`, {
+        contentType: 'application/pdf',
+        expiresInSec: 600,
+        contentLength: 1234,
+      });
+      expect(new URL(sized.url).searchParams.get('X-Amz-SignedHeaders')).toContain('content-length');
       const get = await s3.signDownloadUrl(`releases/${A}/brd/av/web/ad`, { expiresInSec: 300 });
       expect(get.url).toContain('oremedia-releases');
       expect(get.url).toContain('X-Amz-Expires=300');
