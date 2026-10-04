@@ -29,6 +29,12 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`, and `PROVIDER_GBP_LOCATION_*` with `OREMEDIA_ENABLE_GBP=1` where the Business Profile kind is enabled (R2-2);
    - `worker-render`: `OBJECT_STORE_*` only (no credentials, no model keys);
+   - `approval-monitor`: `OREMEDIA_APP=approval-monitor`, `DATABASE_URL` (referenced from the api), sealed
+     `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`. Its **Cron Schedule** is `*/5 * * * *` (UTC,
+     every five minutes, as both environments run it) and is set in the service's Railway settings (Settings → Cron
+     Schedule): it is not config-as-code, and `infra/railway/approval-monitor/railway.json` deliberately carries no
+     `cronSchedule`. Without real Gmail credentials (staging today) every run fails with `invalid_client`: set them
+     or remove the schedule there;
    - `web`: `API_INTERNAL_URL` (runtime: the api on the private network, section 1a), `OBJECT_STORE_PUBLIC_ORIGIN`
      (runtime: the object store origin allowed in `font-src` and `connect-src`, section 1b; uploads fail without it), `OREMEDIA_DEPLOYMENT_BRAND`
      (runtime, D-12: the brand pack in `apps/web/deployment-brands`, `ore-and-tar` for this deployment; unset is the
@@ -281,7 +287,7 @@ worker understands them:
    (Railway → worker-render → Deployments shows only the new one; worker logs show `worker started` from it).
 3. Deploy the API (and the other workers) as usual. With the flag still off, `operations.propose` with
    `previewRender` returns the scene preview only and queues nothing.
-4. Enable `creative.preview_render` (feature_flags row: tenant allowlist first, then `enabled_default`). To roll back
+4. Enable `creative.preview_render` with `operations.flags.set` ([feature flags](feature-flags.md): one tenant first, then global). To roll back
    `worker-render` to a build without previews, disable the flag first and let queued preview jobs finish.
 
 Rollout order for video generation (migration 0007, flag `creative.video_generation`, default off; ADR-11, ledger 4.25):
@@ -293,14 +299,14 @@ Rollout order for video generation (migration 0007, flag `creative.video_generat
    the chosen model produces at its longest duration; a clip above it fails the scan and stays quarantined. Raise it
    on the clamav service first if needed.
 3. Set `VIDEO_GEN_PROVIDER=openrouter` and `OREMEDIA_VIDEO_MODEL_ID` on `worker-core` and deploy it.
-4. Enable `creative.video_generation` (feature_flags row: tenant allowlist first, then `enabled_default`). A skill
+4. Enable `creative.video_generation` with `operations.flags.set` ([feature flags](feature-flags.md): one tenant first, then global). A skill
    that should generate video lists both `videos.generate` and `videos.status` in its allowed tools. Turning the
    flag off stops new generations; `videos.status` still collects clips already paid for.
 
 Rollout order for speech generation (migration 0008, flag `creative.audio_generation`, default off; ADR-11, ledger
 4.26): apply migration 0008 (adds `audio_generation` to `usage_ledger.kind`, appended, metadata only) before the
 workers; set `SPEECH_GEN_PROVIDER`, `OREMEDIA_SPEECH_MODEL_ID` and, if the model needs one, `OREMEDIA_SPEECH_VOICE` on
-`worker-core` and deploy it; then enable the flag per tenant. A skill that should narrate lists `speech.generate`.
+`worker-core` and deploy it; then enable the flag per tenant with `operations.flags.set` ([feature flags](feature-flags.md)). A skill that should narrate lists `speech.generate`.
 
 Rollout order for video and audio uploads (migration 0026, STU-2a; no flag: a person's video or audio upload is
 accepted as soon as the API is on the new build):

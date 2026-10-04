@@ -25,7 +25,7 @@ The step-by-step procedure, rollback and the kill switches are in `docs/runbooks
 service exists only in the staging project: `docs/runbooks/staging-acceptance.md` (it provisions its own fixtures and
 prints `ACCEPTANCE_*` lines).
 
-`approval-monitor` is a separate Railway cron service. Configure its Cron Schedule as `0 */6 * * *` (UTC), set `OREMEDIA_APP=approval-monitor`, and reference the API service's `DATABASE_URL` in the monitor service. It also requires sealed `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` variables. The monitor records Meta and LinkedIn review evidence in the global `provider_review_statuses` table; an approval email does not auto-certify a provider because the certification runbook still requires real publish/read-back and metrics checks.
+`approval-monitor` is a separate Railway cron service. Its Cron Schedule is `*/5 * * * *` (UTC, every five minutes; what production and staging run, completion ledger). The schedule is applied in the service's Railway settings (Settings → Cron Schedule), not in config-as-code: `approval-monitor/railway.json` deliberately has no `cronSchedule`, so a change to the schedule is a settings change, recorded in the completion ledger. Set `OREMEDIA_APP=approval-monitor`, and reference the API service's `DATABASE_URL` in the monitor service. It also requires sealed `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` variables. The monitor records Meta and LinkedIn review evidence in the global `provider_review_statuses` table; an approval email does not auto-certify a provider because the certification runbook still requires real publish/read-back and metrics checks.
 
 ## worker-render resources for video (STU-2a)
 
