@@ -428,6 +428,46 @@ describe('STU-3 studio video AI against MySQL 8 (scripted model)', () => {
     await tdb?.drop();
   });
 
+  it('in a demo workspace the preflight says AI video jobs are not available (no budget figure) and start is refused', async () => {
+    const tenantD = newId('tenant');
+    const brandD = newId('brand');
+    const D = manager(tenantD);
+    await tdb.db
+      .insert(tenants)
+      .values({ id: tenantD, name: 'Demo', slug: 'stu3-d-' + tenantD.slice(-6).toLowerCase(), kind: 'demo' });
+    await tdb.db.insert(brands).values({
+      id: brandD,
+      tenantId: tenantD,
+      name: 'D1',
+      timezone: 'UTC',
+      defaultLocale: 'en',
+      status: 'active',
+    });
+    await publishBrand(tenantD, brandD);
+    const v = await run(tenantD, (tx) =>
+      creativeService.documents.create(
+        D,
+        { brandId: brandD, title: 'Demo film', kind: 'video', video: { formatKey: 'video_16x9', fps: 30 } },
+        tx,
+      ),
+    );
+    const request = { kind: 'storyboard' as const, brief: { objective: 'Launch', durationMs: 12_000 } };
+    const preflight = await inTenant(tenantD, () =>
+      videoAiService.preflight(D, { documentId: v.documentId, baseRevisionId: v.revisionId, request }),
+    );
+    expect(preflight.blocking).toBe(true);
+    expect(preflight.issues[0]).toMatchObject({ code: 'demo_simulated', severity: 'blocking' });
+    expect(preflight.cost.remainingMicros).toBeNull();
+    await expect(
+      run(tenantD, (tx) =>
+        videoAiService.start(D, { documentId: v.documentId, baseRevisionId: v.revisionId, request }, tx),
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'demo_simulated' });
+    expect(await tdb.db.select().from(studioVideoJobs).where(eq(studioVideoJobs.tenantId, tenantD))).toEqual(
+      [],
+    );
+  });
+
   it('storyboards from a brief with eligible assets only; an invented asset and an unsupported claim are refused', async () => {
     const v = await newVideo('Launch film');
     const preflight = await inTenant(tenantA, () =>

@@ -45,9 +45,15 @@ export { hashRequest } from './request-hash';
 export {
   registerOutboxRoute,
   outboxRouteFor,
+  demoOutboxRouteFor,
   clearOutboxRoutes,
+  configureTenantKindResolver,
+  tenantKindResolverConfigured,
+  type DemoOutboxRoute,
   type OutboxEventRecord,
   type OutboxRoute,
+  type OutboxRouteOptions,
+  type TenantKindResolver,
   type WorkflowStartRequest,
 } from './outbox-routes';
 export {
@@ -58,6 +64,7 @@ export {
   replayDeadLetter,
   registerOutboxGauges,
   DEAD_LETTER_ATTEMPTS,
+  DEMO_SUPPRESSED,
   type WorkflowStarter,
   type DispatchOptions,
   type DispatchSummary,

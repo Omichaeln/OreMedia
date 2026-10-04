@@ -8,7 +8,9 @@ import {
 } from '@oremedia/ai';
 import type { ToolResult } from '@oremedia/contracts/agents';
 import {
+  DEMO_REFUSAL_MESSAGE,
   httpStatusFor,
+  isDemoRefusalReason,
   NotFoundError,
   toErrorEnvelope,
   UnauthenticatedError,
@@ -141,7 +143,10 @@ function envelopeForResult(
       return { code: 'VALIDATION_FAILED', message: 'Validation failed', correlationId };
     return {
       code: 'FORBIDDEN',
-      message: 'You are not allowed to perform this action',
+      // A demo workspace's refusal (the tool's own service refused it) says so; the reason is the same detail.
+      message: isDemoRefusalReason(result.reason)
+        ? DEMO_REFUSAL_MESSAGE
+        : 'You are not allowed to perform this action',
       correlationId,
       details: [{ issue: result.reason }],
     };

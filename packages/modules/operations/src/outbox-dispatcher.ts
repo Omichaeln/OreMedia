@@ -1,9 +1,16 @@
 import { and, asc, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
-import { affectedRows } from '@oremedia/db';
+import { affectedRows, runInTenant } from '@oremedia/db';
 import { getDb } from '@oremedia/db/client';
 import { outboxEvents } from '@oremedia/db/schema/operations';
 import { METRIC, count, gauge, logger, record } from '@oremedia/observability';
-import { outboxRouteFor, type OutboxEventRecord, type WorkflowStartRequest } from './outbox-routes';
+import { audit } from './audit';
+import {
+  demoOutboxRouteFor,
+  outboxRouteFor,
+  tenantKindForDispatch,
+  type OutboxEventRecord,
+  type WorkflowStartRequest,
+} from './outbox-routes';
 
 /**
  * Spec 14.2: portable lease-based outbox dispatch (no SKIP LOCKED), run by worker-core. This is platform-level code
@@ -30,6 +37,9 @@ export interface DispatchSummary {
   ignored: number;
   failed: number;
 }
+
+/** lastError of a demo workspace's event that was suppressed (architecture §4.3). */
+export const DEMO_SUPPRESSED = 'demo_suppressed';
 
 /** Events that keep failing surface in the dead-letter view at this many attempts (spec 14.2 alerting). */
 export const DEAD_LETTER_ATTEMPTS = 5;
@@ -166,7 +176,16 @@ export async function dispatchBatch(opts: DispatchOptions): Promise<DispatchSumm
   for (const row of roundRobinByTenant(claimed)) {
     const evt = toRecord(row);
     try {
-      const route = outboxRouteFor(evt.eventType);
+      // Architecture §4.3: a demo workspace's event takes its demo route, or none at all (fail-closed), never the
+      // live route by default. The kind is immutable, so the resolver caches it; a failure to read it fails the row.
+      const demo = (await tenantKindForDispatch(evt.tenantId, evt.correlationId)) === 'demo';
+      const route = demo ? demoOutboxRouteFor(evt.eventType) : outboxRouteFor(evt.eventType);
+      if (demo && !route) {
+        // Counted with the ignored events (nothing was started); the row's lastError says why.
+        await suppressDemoEvent(evt, now());
+        summary.ignored += 1;
+        continue;
+      }
       const req = route ? route(evt) : null;
       if (req) {
         await opts.starter.start({ ...req, tenantId: evt.tenantId, correlationId: evt.correlationId });
@@ -233,6 +252,37 @@ export async function dispatchBatch(opts: DispatchOptions): Promise<DispatchSumm
     }
   }
   return summary;
+}
+
+/**
+ * A demo workspace's event with no demo route: marked dispatched with lastError `demo_suppressed` (so it never runs
+ * and never dead-letters), counted, and audited in the demo tenant. Nothing is started.
+ */
+async function suppressDemoEvent(evt: OutboxEventRecord, at: Date): Promise<void> {
+  await withLockRetry(() =>
+    getDb()
+      .update(outboxEvents)
+      .set({ dispatchedAt: at, lastError: DEMO_SUPPRESSED })
+      .where(and(eq(outboxEvents.id, evt.id), isNull(outboxEvents.dispatchedAt))),
+  );
+  count(METRIC.outboxDispatched, 1, { eventType: evt.eventType, routed: DEMO_SUPPRESSED });
+  // The context's actor is not recorded: the audit event names the dispatcher as its actor.
+  const context = {
+    tenantId: evt.tenantId,
+    actor: { kind: 'service_principal' as const, id: 'outbox_dispatcher' },
+    brandIds: 'all' as const,
+    correlationId: evt.correlationId,
+  };
+  await runInTenant(context, () =>
+    audit.record(
+      { kind: 'system', id: 'outbox_dispatcher' },
+      'outbox.demo_suppressed',
+      { type: evt.aggregateType, id: evt.aggregateId },
+      { allowed: false, reason: DEMO_SUPPRESSED },
+      undefined,
+      { kind: evt.eventType },
+    ),
+  );
 }
 
 /** Age of the oldest undispatched event, or null when the outbox is drained (spec 17.2: alert above 60 s). */

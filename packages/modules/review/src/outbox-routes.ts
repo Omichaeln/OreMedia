@@ -12,25 +12,31 @@ export const BRAND_CHANGE_IMPACT_WORKFLOW_TYPE = 'brandChangeImpactWorkflowV1';
  * (spec 14.2). The actor is the one who published or revoked, carried for tenant re-establishment (spec 5.2).
  */
 export function registerReviewOutboxRoutes(): void {
-  registerOutboxRoute('brand.version_published', (evt) => {
-    const p = evt.payload;
-    const input = BrandChangeImpactInputV1.parse({
-      tenantId: evt.tenantId,
-      actor: { kind: p['actorKind'], id: p['actorId'] },
-      correlationId: evt.correlationId,
-      brandId: p['brandId'],
-      change: { kind: 'version_published', brandVersionId: p['brandVersionId'] },
-    });
-    return {
-      workflowType: BRAND_CHANGE_IMPACT_WORKFLOW_TYPE,
-      taskQueue: CORE_TASK_QUEUE,
-      workflowId: `brand-change:${evt.id}`,
-      args: [input],
-    };
-  });
+  // Demo workspaces too (architecture §4.3): the impact check only re-reads and holds rows of the same company.
+  registerOutboxRoute(
+    'brand.version_published',
+    (evt) => {
+      const p = evt.payload;
+      const input = BrandChangeImpactInputV1.parse({
+        tenantId: evt.tenantId,
+        actor: { kind: p['actorKind'], id: p['actorId'] },
+        correlationId: evt.correlationId,
+        brandId: p['brandId'],
+        change: { kind: 'version_published', brandVersionId: p['brandVersionId'] },
+      });
+      return {
+        workflowType: BRAND_CHANGE_IMPACT_WORKFLOW_TYPE,
+        taskQueue: CORE_TASK_QUEUE,
+        workflowId: `brand-change:${evt.id}`,
+        args: [input],
+      };
+    },
+    { demo: 'same' },
+  );
   // brand.fact_revoked covers revoke, withdraw and supersede (payload `cause`). Expiry is held by the daily fact
   // sweep itself (BSC-3), so brand.fact_expired is informational and has no route.
-  registerOutboxRoute('brand.fact_revoked', factImpactRoute);
+  // Demo workspaces too, as brand.version_published.
+  registerOutboxRoute('brand.fact_revoked', factImpactRoute, { demo: 'same' });
 }
 
 /** A fact that stopped applying (revoked, withdrawn or superseded) → the brand's change impact. */

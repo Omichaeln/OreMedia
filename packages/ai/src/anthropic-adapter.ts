@@ -8,6 +8,7 @@ import type {
   ModelToolCall,
 } from '@oremedia/contracts/agents';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { assertCurrentTenantEgress } from '@oremedia/module-access';
 import { logger } from '@oremedia/observability';
 import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 import { rejectionDetail } from './openrouter-adapter';
@@ -45,6 +46,9 @@ export class AnthropicModelAdapter implements ModelAdapter {
   }
 
   async complete(req: ModelRequest): Promise<ModelCompletion> {
+    // Architecture §4.4: the direct Anthropic adapter's choke point, as openRouterFetch for the gateway. A demo
+    // company's call is refused before the SDK sends anything; outside a tenant context it is a platform call.
+    await assertCurrentTenantEgress();
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: req.model,
       max_tokens: req.maxOutputTokens,

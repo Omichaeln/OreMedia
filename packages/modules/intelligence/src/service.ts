@@ -22,7 +22,7 @@ import { ExperimentDesign } from '@oremedia/contracts/experiments';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { agentsService } from '@oremedia/module-agents';
 import { brandService } from '@oremedia/module-brand';
 import { contentService } from '@oremedia/module-content';
@@ -644,6 +644,8 @@ export const intelligenceService = {
      */
     async accept(actor: ResolvedActor, input: z.infer<typeof RecommendationAccept>, tx: Tx) {
       const parsed = RecommendationAccept.parse(input);
+      // generate_variants starts a copywriting run (a model call): a demo workspace is pointed at create_brief instead.
+      if (parsed.action === 'generate_variants') await assertTenantCapability('agent_variants', tx);
       const r = await recommendationsRepo.lock(parsed.recommendationId, tx);
       await policy.assert(actor, 'insight.manage', recommendationResource(r), {}, tx);
       if (actor.kind !== 'user')
@@ -1007,6 +1009,7 @@ export const intelligenceService = {
     /** Spec 16.3 on demand: intelligence.analysis_due → brandAnalystWorkflowV1 (the weekly schedule uses the same route). */
     async run(actor: ResolvedActor, input: z.infer<typeof AnalystRun>, tx: Tx) {
       const parsed = AnalystRun.parse(input);
+      await assertTenantCapability('analyst_run', tx);
       const brand = await brandService.get(actor, parsed.brandId, tx);
       await policy.assert(actor, 'insight.manage', brandResource(brand.id), {}, tx);
       const { tenantId } = requireTenant();

@@ -7,9 +7,12 @@ export type {
   EditPostRequest,
 } from './contract';
 export {
+  configureEgressGuard,
   createProviderIO,
+  egressGuardConfigured,
   sendTracking,
   ProviderTransportError,
+  type EgressGuard,
   type ProviderIO,
   type ProviderRequestMeta,
   type SendPhase,

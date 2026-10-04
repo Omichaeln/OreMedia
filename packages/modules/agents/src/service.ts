@@ -45,7 +45,7 @@ import {
   tenantPolicyFor,
   type ModelConfig,
 } from '@oremedia/ai';
-import { policy, ServicePrincipalRepository } from '@oremedia/module-access';
+import { assertTenantCapability, policy, ServicePrincipalRepository } from '@oremedia/module-access';
 import { budgets, entitlements } from '@oremedia/module-billing';
 import { brandService, type OnboardingRunSource } from '@oremedia/module-brand';
 import { audit, killSwitch, outbox } from '@oremedia/module-operations';
@@ -145,6 +145,7 @@ async function startRun(
   opts: { autonomyMode?: AutonomyMode } = {},
 ) {
   const parsed = RunStart.parse(input);
+  await assertTenantCapability('agent_run', tx);
   const taskKind = TaskKind.safeParse(parsed.taskKind);
   if (!taskKind.success)
     throw new ValidationFailedError([{ path: 'taskKind', issue: `unknown task kind ${parsed.taskKind}` }]);
@@ -670,6 +671,8 @@ export const agentsService = {
 
     async setLimit(actor: ResolvedActor, input: z.infer<typeof BudgetSetLimit>, tx: Tx) {
       const parsed = BudgetSetLimit.parse(input);
+      // A demo workspace's spend limits stay at zero (architecture §4.6): the backstop behind the demo refusals.
+      await assertTenantCapability('spend_limit', tx);
       const { tenantId } = requireTenant();
       await brandService.assertExist([parsed.brandId], tx);
       await policy.assert(actor, 'billing.manage', brandBudgetResource(tenantId, parsed.brandId), {}, tx);

@@ -28,7 +28,7 @@ import {
 import type { SourceUseCheckResult } from '@oremedia/contracts/destinations';
 import type { Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
 import { FINDING_RULES, findingsOf } from './audit-crawl';
 import { findingWork, type FindingWorkRef } from './hooks';
@@ -388,6 +388,7 @@ export function createSeoAuditService(opts: SeoAuditQueryOptions = {}) {
      */
     async run(actor: ResolvedActor, input: z.infer<typeof SeoAuditRun>, tx: Tx): Promise<SeoAuditRunV1> {
       const parsed = SeoAuditRun.parse(input);
+      await assertTenantCapability('site_audit', tx);
       const at = now();
       await visibleBrand(actor, parsed.brandId, tx);
       const row = await destinationOf(

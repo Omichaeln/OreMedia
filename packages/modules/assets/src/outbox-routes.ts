@@ -20,21 +20,26 @@ const VIDEO_INGEST_KINDS = new Set(['video', 'audio']);
  * started it (only generated media could be video or audio then, and v1 still checks those structurally).
  */
 export function registerAssetOutboxRoutes(): void {
-  registerOutboxRoute('asset.upload_completed', (evt) => {
-    const p = evt.payload;
-    const input = AssetIngestInputV1.parse({
-      tenantId: evt.tenantId,
-      actor: { kind: p['actorKind'], id: p['actorId'] },
-      correlationId: evt.correlationId,
-      intentId: p['uploadIntentId'],
-      brandId: p['brandId'],
-    });
-    const video = typeof p['kind'] === 'string' && VIDEO_INGEST_KINDS.has(p['kind']);
-    return {
-      workflowType: video ? 'videoIngestWorkflowV1' : 'assetIngestWorkflowV1',
-      taskQueue: video ? VIDEO_TASK_QUEUE : MEDIA_TASK_QUEUE,
-      workflowId: `ingest:${input.intentId}`,
-      args: [input],
-    };
-  });
+  // Demo workspaces too (architecture §4.3): ingest and the malware scan are internal work, nothing leaves.
+  registerOutboxRoute(
+    'asset.upload_completed',
+    (evt) => {
+      const p = evt.payload;
+      const input = AssetIngestInputV1.parse({
+        tenantId: evt.tenantId,
+        actor: { kind: p['actorKind'], id: p['actorId'] },
+        correlationId: evt.correlationId,
+        intentId: p['uploadIntentId'],
+        brandId: p['brandId'],
+      });
+      const video = typeof p['kind'] === 'string' && VIDEO_INGEST_KINDS.has(p['kind']);
+      return {
+        workflowType: video ? 'videoIngestWorkflowV1' : 'assetIngestWorkflowV1',
+        taskQueue: video ? VIDEO_TASK_QUEUE : MEDIA_TASK_QUEUE,
+        workflowId: `ingest:${input.intentId}`,
+        args: [input],
+      };
+    },
+    { demo: 'same' },
+  );
 }

@@ -28,7 +28,7 @@ import {
 } from '@oremedia/contracts/publishing';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
 import { logger } from '@oremedia/observability';
 import { missingScopes, type ProviderAdapter, type ProviderIO } from '@oremedia/providers';
@@ -356,6 +356,7 @@ export const channelService = {
     /** Spec 14.7: the authorization URL with a server-side PKCE verifier; uncertified providers are refused. */
     async start(actor: ResolvedActor, input: z.infer<typeof ChannelConnectStart>, tx: Tx) {
       const parsed = ChannelConnectStart.parse(input);
+      await assertTenantCapability('channel_connect', tx);
       await assertBrandExists(parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'channel.connect', brandResource(parsed.brandId), {}, tx);
       const adapter = adapterFor(parsed.providerKey); // CAPABILITY_UNSUPPORTED unless certified (spec 14.6)
@@ -424,6 +425,7 @@ export const channelService = {
       tx: Tx,
     ): Promise<ChannelConnectResult> {
       const parsed = ChannelConnectComplete.parse(input);
+      await assertTenantCapability('channel_connect', tx);
       const { tenantId } = requireTenant();
       const pending = await stateStore.take(parsed.state);
       if (!pending || pending.tenantId !== tenantId || pending.actorId !== actor.id)
@@ -515,6 +517,7 @@ export const channelService = {
      */
     async select(actor: ResolvedActor, input: z.infer<typeof ChannelConnectSelect>, tx: Tx) {
       const parsed = ChannelConnectSelect.parse(input);
+      await assertTenantCapability('channel_connect', tx);
       const { rows } = await takeChoice(actor, parsed.pendingId, tx);
       const chosen = rows.find((r) => r.remoteAccountId === parsed.remoteAccountId);
       if (!chosen)

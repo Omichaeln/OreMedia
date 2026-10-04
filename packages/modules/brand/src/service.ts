@@ -67,8 +67,8 @@ import { approvedFactMachine } from '@oremedia/domain/state-machines/approved-fa
 import { brandVersionMachine } from '@oremedia/domain/state-machines/brand-version';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
 import { policyVersionMachine } from '@oremedia/domain/state-machines/policy-version';
-import { accessService, policy } from '@oremedia/module-access';
-import { entitlements } from '@oremedia/module-billing';
+import { accessService, assertTenantCapability, isDemoTenant, policy } from '@oremedia/module-access';
+import { budgets, entitlements } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import { providerRegistry } from '@oremedia/providers';
 import {
@@ -1027,6 +1027,9 @@ export const brandService = {
       },
       tx,
     );
+    // Demo workspace (architecture §4.6): every brand of a demo starts with a zero daily spend limit, beside the
+    // company's zero monthly limit set when the demo was created.
+    if (await isDemoTenant(tx)) await budgets.setLimit(id, 'day', 0, tx);
     await audit.record(
       { kind: actor.kind, id: actor.id },
       'brand.create',
@@ -2180,6 +2183,7 @@ export const brandService = {
    */
   async startOnboarding(actor: ResolvedActor, input: z.infer<typeof OnboardingStart>, tx: Tx) {
     const parsed = OnboardingStart.parse(input);
+    await assertTenantCapability('agent_run', tx); // an onboarding run calls a model
     if (parsed.websiteUrls.length)
       throw new ValidationFailedError([
         {

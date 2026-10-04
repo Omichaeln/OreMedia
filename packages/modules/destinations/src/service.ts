@@ -37,7 +37,7 @@ import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
 import type { DecryptedCredentials, RemoteRevokeOutcome } from '@oremedia/contracts/providers';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
 import {
@@ -385,6 +385,7 @@ export const destinationService = {
    */
   async register(actor: ResolvedActor, input: z.input<typeof DestinationRegister>, tx: Tx) {
     const parsed = DestinationRegister.parse(input);
+    await assertTenantCapability('destination_connect', tx);
     await visibleBrand(actor, parsed.brandId, tx);
     await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
     return registerDestination(
@@ -418,6 +419,7 @@ export const destinationService = {
      */
     async start(actor: ResolvedActor, input: z.infer<typeof DestinationConnectStart>, tx: Tx) {
       const parsed = DestinationConnectStart.parse(input);
+      await assertTenantCapability('destination_connect', tx);
       await visibleBrand(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
       const adapter = enabledSourceAdapter(parsed.kind);
@@ -469,6 +471,7 @@ export const destinationService = {
       tx: Tx,
     ): Promise<DestinationConnectChoice> {
       const parsed = DestinationConnectComplete.parse(input);
+      await assertTenantCapability('destination_connect', tx);
       const { tenantId } = requireTenant();
       const pending = await stateStore.take(parsed.state);
       if (!pending || pending.tenantId !== tenantId || pending.actorId !== actor.id)
@@ -532,6 +535,7 @@ export const destinationService = {
      */
     async select(actor: ResolvedActor, input: z.infer<typeof DestinationConnectSelect>, tx: Tx) {
       const parsed = DestinationConnectSelect.parse(input);
+      await assertTenantCapability('destination_connect', tx);
       const row = await takeFlow(actor, parsed.pendingId, tx);
       const target = row.targets.find((t) => t.externalId === parsed.externalId);
       if (!target)
@@ -571,6 +575,7 @@ export const destinationService = {
      */
     async withSecret(actor: ResolvedActor, input: z.input<typeof DestinationConnectWithSecret>, tx: Tx) {
       const parsed = DestinationConnectWithSecret.parse(input);
+      await assertTenantCapability('destination_connect', tx);
       await visibleBrand(actor, parsed.brandId, tx);
       await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
       const adapter = enabledCmsAdapter(parsed.kind);

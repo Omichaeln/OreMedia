@@ -2,7 +2,10 @@ import {
   registerBrandChecker,
   MembershipRepository,
   ServicePrincipalRepository,
+  assertEgressAllowed,
+  tenantKinds,
 } from '@oremedia/module-access';
+import { configureEgressGuard } from '@oremedia/providers';
 import {
   experimentsService,
   registerExperimentListener,
@@ -20,7 +23,11 @@ import {
 } from '@oremedia/module-intelligence';
 import { IMAGE_CREATIVE_KINDS } from '@oremedia/contracts/assets';
 import { runInTenant } from '@oremedia/db';
-import { registerOperationsOutboxRoutes, registerRetentionTenantSource } from '@oremedia/module-operations';
+import {
+  registerOperationsOutboxRoutes,
+  registerRetentionTenantSource,
+  configureTenantKindResolver,
+} from '@oremedia/module-operations';
 import { registerDeletionHandlers, registerRetentionHandlers } from './deletion-handlers';
 import {
   cmsCapabilities,
@@ -278,6 +285,10 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerVariantValidator((variant, tx) => channelService.validateVariantDraft(variant, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
+  // Architecture §4.1/§4.4: the outbox dispatcher routes by tenant kind, and provider I/O (publishing, CMS writes, the
+  // SEO crawler, source reads, page capture) refuses a demo company before any socket.
+  configureTenantKindResolver((tenantId, correlationId) => tenantKinds.of(tenantId, correlationId));
+  configureEgressGuard((tenantId) => assertEgressAllowed(tenantId));
   // Ledger R2-1: the sources this deployment refreshes (app credentials present, not disabled).
   configureSourceActivation(sourceActivationFromEnv());
   // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.

@@ -14,7 +14,7 @@ import {
   StaleRevisionError,
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
-import type { GenerationProposal } from '@oremedia/contracts/generation';
+import type { GenerationIssue, GenerationProposal } from '@oremedia/contracts/generation';
 import {
   GENERATION_PROGRESS,
   GenerationActive,
@@ -56,7 +56,7 @@ import {
   type PreflightAsset,
 } from '@oremedia/editor/generation';
 import { applyBatch, type TemplateDocument } from '@oremedia/editor/reduce';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, isDemoTenant, policy } from '@oremedia/module-access';
 import { budgets } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import { StudioGenerationJobRepository } from './repositories';
@@ -159,6 +159,13 @@ function move(from: GenerationJobState, event: GenerationJobEvent): GenerationJo
 }
 
 const SYSTEM = { kind: 'system' as const, id: 'studio_generation' };
+
+/** Demo workspace (architecture §4.2): what the preflight says instead of a budget figure; start is refused. */
+const DEMO_GENERATION_ISSUE: GenerationIssue = {
+  code: 'demo_simulated',
+  severity: 'blocking',
+  message: 'AI generation is not available in the demo workspace: no model is called here.',
+};
 const LIVE: ReadonlySet<GenerationJobState> = new Set(['queued', 'generating', 'validating', 'saving']);
 export const workflowIdFor = (jobId: string, attempt: number): string => `studio-gen:${jobId}:${attempt}`;
 export const modelCallRef = (jobId: string, attempt: number): string => `sgj:${jobId}:${attempt}:model`;
@@ -367,7 +374,9 @@ async function preflightOf(
   request: z.infer<typeof GenerationRequest>,
   tx?: Tx,
 ) {
-  const remainingMicros = await remainingBudget(doc.brandId, tx);
+  // A demo workspace calls no model: its preflight says so instead of showing a (zero) budget figure.
+  const demo = await isDemoTenant(tx);
+  const remainingMicros = demo ? null : await remainingBudget(doc.brandId, tx);
   const checked = preflightGeneration({
     document: prepared.document,
     working: prepared.working,
@@ -385,7 +394,7 @@ async function preflightOf(
     costMicros: prepared.estimate.totalMicros,
     remainingMicros,
   });
-  const issues = [...checked.issues];
+  const issues = [...(demo ? [DEMO_GENERATION_ISSUE] : []), ...checked.issues];
   if (prepared.structureError)
     issues.push({
       code: 'structure_not_possible',
@@ -472,6 +481,7 @@ export const generationService = {
    */
   async start(actor: ResolvedActor, input: z.input<typeof GenerationStart>, tx: Tx) {
     const parsed = GenerationStart.parse(input);
+    await assertTenantCapability('ai_generation', tx);
     const doc = await engine.documentsRepo.lock(parsed.documentId, tx);
     await policy.assert(actor, 'creative.edit', engine.documentResource(doc), {}, tx);
     await policy.assert(actor, 'agent.start_run', engine.brandResource(doc.brandId), {}, tx);
@@ -607,6 +617,7 @@ export const generationService = {
    */
   async retry(actor: ResolvedActor, input: z.input<typeof GenerationRetry>, tx: Tx) {
     const parsed = GenerationRetry.parse(input);
+    await assertTenantCapability('ai_generation', tx);
     const job = await jobsRepo.lock(parsed.jobId, tx);
     await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
     await policy.assert(actor, 'agent.start_run', engine.brandResource(job.brandId), {}, tx);

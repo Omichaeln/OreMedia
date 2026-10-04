@@ -48,6 +48,31 @@ export interface ProviderIOOptions extends SafeDispatcherOptions {
 }
 
 /**
+ * Architecture §4.4 (demo workspace): refuses outbound I/O for a tenant that may not send any (a demo company). The
+ * providers package does not know tenants, so each app's composition root wires the check (module-access).
+ */
+export type EgressGuard = (tenantId: string) => Promise<void>;
+
+let egressGuard: EgressGuard | null = null;
+
+export function configureEgressGuard(fn: EgressGuard | null): void {
+  egressGuard = fn;
+}
+
+export const egressGuardConfigured = (): boolean => egressGuard !== null;
+
+/**
+ * Runs the configured guard; it throws to refuse. Unwired in production every request is refused (fail-closed: a
+ * process that forgot the wiring sends nothing); outside production an unwired guard lets requests through, so
+ * adapter tests run without a database.
+ */
+async function assertEgress(tenantId: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  if (egressGuard) return egressGuard(tenantId);
+  if (env['NODE_ENV'] === 'production')
+    throw new Error('provider egress guard is not configured: refusing to send');
+}
+
+/**
  * Spec 14.5: the only way an adapter performs network I/O. Wraps the SSRF-safe dispatcher, an explicit per-request
  * timeout, structured redacting logs, heartbeat detail recording and rate-limit accounting.
  *
@@ -63,6 +88,8 @@ export function createProviderIO(opts: ProviderIOOptions): ProviderIO {
   return {
     async request(url, init, meta) {
       const target = assertSafeUrl(url, opts);
+      // Before the rate limiter and any socket: a demo company's request never leaves the process.
+      await assertEgress(opts.tenantId);
       await opts.limiter.acquire(opts.providerKey, opts.tenantId);
       const method = (init.method ?? 'GET').toUpperCase();
       const detail = `${meta.mutation ? 'mutation' : 'read'} ${method} ${target.origin}${target.pathname}`;
