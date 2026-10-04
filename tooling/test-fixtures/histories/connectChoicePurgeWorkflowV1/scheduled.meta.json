@@ -1,0 +1,12 @@
+{
+  "workflowType": "connectChoicePurgeWorkflowV1",
+  "case": "scheduled",
+  "description": "Started by the schedule with no args: the run id and workflow clock fill the input.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:10:38.920Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "872355817f8cc5a1a9c37430ae98962f12084e49939bc780254e9a702177443f"
+}

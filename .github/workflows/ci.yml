@@ -110,6 +110,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The gate compares retained histories with their first commit and the manifest with origin/main.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.6.1
@@ -119,6 +122,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # Spec 19.4 release gate: every retained history in tooling/test-fixtures/histories replays against the
+      # candidate bundles; fails on nondeterminism, on a registered workflow type without a retained history, on a
+      # missing, unlisted or edited history, or when nothing is discovered (docs/runbooks/workflow-replay-histories.md).
       - run: pnpm test:replay
 
   workflow-time-skipping:

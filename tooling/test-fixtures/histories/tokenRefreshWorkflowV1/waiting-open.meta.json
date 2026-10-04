@@ -1,0 +1,12 @@
+{
+  "workflowType": "tokenRefreshWorkflowV1",
+  "case": "waiting-open",
+  "description": "In flight: the token expires in two hours, the workflow sleeps until the margin.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:42.997Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "b761c6bd4c0ac71d3a4e19132adb070c2737deb1a8f8eaaa2fc2fd70e5264899"
+}

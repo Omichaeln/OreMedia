@@ -1,0 +1,12 @@
+{
+  "workflowType": "agentRunWorkflowV1",
+  "case": "waiting-for-decision-open",
+  "description": "In flight: the run waits up to 72 hours for the proposal decision.",
+  "queue": "agents",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:12.792Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "912e6620588d00de90235f5c91b40cb0a5cd6e1e1f39a05ae3bf90d02872770e"
+}

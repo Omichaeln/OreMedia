@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationReconcileWorkflowV1",
+  "case": "found-after-first-delay",
+  "description": "After the one-minute delay the post is found remotely: outcome_unknown → published.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:08:22.366Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "09a08aa92decaab60bc3bee76a4076e7c70c66b660c3803b75e4112ebb554c47"
+}

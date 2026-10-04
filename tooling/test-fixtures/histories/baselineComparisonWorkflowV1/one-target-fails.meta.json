@@ -1,0 +1,12 @@
+{
+  "workflowType": "baselineComparisonWorkflowV1",
+  "case": "one-target-fails",
+  "description": "The monthly comparison over three brands: learned beats baseline, a fallback, and a failure.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:11:31.446Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "3b5b0cbbd69c788f24ea7be11d90495817d46cd65f7618ea2e4a481940e1a3cf"
+}

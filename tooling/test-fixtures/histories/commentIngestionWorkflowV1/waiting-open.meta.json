@@ -1,0 +1,12 @@
+{
+  "workflowType": "commentIngestionWorkflowV1",
+  "case": "waiting-open",
+  "description": "In flight: published just now, waiting on the one-hour timer for the first pull.",
+  "queue": "ingest",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:15:01.078Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "015cd9a93de5f192825d2c9ab9a1fd7b96b8db9b649b9391a2ed93e52c35c5ac"
+}

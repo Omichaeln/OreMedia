@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAssistWorkflowV1",
+  "case": "cancelled-by-signal",
+  "description": "The cancel signal lands during the capture: extraction and proposals are skipped and the job finishes cancelled.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:43.674Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "5df3fcef955aa9cd4cb5bbd2ff30e1a149b988e5fc4233bb1883ff228d752505"
+}

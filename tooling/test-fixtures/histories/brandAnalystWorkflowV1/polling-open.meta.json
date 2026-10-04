@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAnalystWorkflowV1",
+  "case": "polling-open",
+  "description": "In flight: the run is not terminal and the workflow waits on its poll timer.",
+  "queue": "core",
+  "state": "open",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:15.608Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "b34e75bf172f9feb1798f80cf2342dd8aea5457cdb98c14502ed6d08b4aaad37"
+}
