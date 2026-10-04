@@ -224,7 +224,17 @@
                   "roles": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "owner",
+                        "admin",
+                        "brand_manager",
+                        "creator",
+                        "reviewer",
+                        "publisher",
+                        "analyst",
+                        "community"
+                      ]
                     }
                   }
                 },
@@ -9426,6 +9436,24 @@
                             }
                           },
                           "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setVisibility"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "visible": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "visible"]
                         }
                       ]
                     }
@@ -10993,6 +11021,24 @@
                             }
                           },
                           "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "setVisibility"
+                            },
+                            "pageId": {
+                              "type": "string"
+                            },
+                            "elementId": {
+                              "type": "string"
+                            },
+                            "visible": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["op", "pageId", "elementId", "visible"]
                         }
                       ]
                     }
@@ -19034,7 +19080,17 @@
             "roles": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "admin",
+                  "brand_manager",
+                  "creator",
+                  "reviewer",
+                  "publisher",
+                  "analyst",
+                  "community"
+                ]
               }
             }
           },
@@ -27057,6 +27113,24 @@
                       }
                     },
                     "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setVisibility"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "visible"]
                   }
                 ]
               }
@@ -28594,6 +28668,24 @@
                       }
                     },
                     "required": ["op", "pageId", "elementIds", "axis", "relativeTo"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "const": "setVisibility"
+                      },
+                      "pageId": {
+                        "type": "string"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "visible": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["op", "pageId", "elementId", "visible"]
                   }
                 ]
               }

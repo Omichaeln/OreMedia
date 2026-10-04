@@ -47,7 +47,7 @@ export const ACCESS_INPUTS: Record<string, CrossTenantFixture> = {
     buildInput: (f) => ({ servicePrincipalId: f['servicePrincipalId'], expectedVersion: 0 }),
   },
   'access.apiClients.create': {
-    buildInput: (f) => ({ servicePrincipalId: f['servicePrincipalId'], scopes: [] }),
+    buildInput: (f) => ({ servicePrincipalId: f['servicePrincipalId'], scopes: ['brands:read'] }),
   },
   'access.apiClients.rotate': { buildInput: (f) => ({ apiClientId: f['apiClientId'] }) },
   'access.supportSessions.escalate': {
