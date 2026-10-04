@@ -15,7 +15,7 @@ import {
   registerPublicationVolumeSource,
 } from '@oremedia/module-intelligence';
 import { assetService, storage, uploadsCapability } from '@oremedia/module-assets';
-import { UPLOAD_INTENT_TTL_SEC } from '@oremedia/contracts/assets';
+import { IMAGE_CREATIVE_KINDS, UPLOAD_INTENT_TTL_SEC } from '@oremedia/contracts/assets';
 import { registerUsageCounters } from '@oremedia/module-billing';
 import {
   brandService,
@@ -360,7 +360,8 @@ export function composeModules(): void {
   registerGenerationAssetSource(async (brandId, tx) =>
     (
       await assetService.findEligibleAssets(
-        { brandId, purpose: 'creative', channelConnectionIds: [] },
+        // STU-2b: `creative` also covers video and audio; generation fills image areas with stills only.
+        { brandId, purpose: 'creative', channelConnectionIds: [], kinds: [...IMAGE_CREATIVE_KINDS] },
         { limit: 200 },
         tx,
       )
