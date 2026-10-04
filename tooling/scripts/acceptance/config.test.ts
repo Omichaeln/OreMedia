@@ -24,6 +24,39 @@ describe('acceptanceConfigFromEnv', () => {
     });
     expect(cfg.disabledChannels.size).toBe(0);
     expect(cfg.expectStoreOrigin).toBeUndefined();
+    expect(cfg.settle).toEqual({ revision: null, timeoutMs: 20 * 60_000 });
+    expect(cfg.journeys).toEqual({ modelBudgetMicros: 200_000, timeoutMs: 600_000 });
+  });
+
+  it('reads the journeys: a model budget of 0 turns the model journeys off, a malformed value is refused by name', () => {
+    expect(
+      acceptanceConfigFromEnv(
+        { ...base, ACCEPTANCE_MODEL_BUDGET_MICROS: '0', ACCEPTANCE_JOURNEY_TIMEOUT_MS: '90000' },
+        '/src',
+      ).journeys,
+    ).toEqual({ modelBudgetMicros: 0, timeoutMs: 90_000 });
+    expect(
+      acceptanceConfigFromEnv({ ...base, ACCEPTANCE_MODEL_BUDGET_MICROS: '50000' }, '/src').journeys
+        .modelBudgetMicros,
+    ).toBe(50_000);
+    for (const bad of ['-1', '1.5', 'lots'])
+      expect(() => acceptanceConfigFromEnv({ ...base, ACCEPTANCE_MODEL_BUDGET_MICROS: bad }, '/src')).toThrow(
+        /^ACCEPTANCE_MODEL_BUDGET_MICROS must be a whole number of 0 or more$/,
+      );
+    expect(() => acceptanceConfigFromEnv({ ...base, ACCEPTANCE_JOURNEY_TIMEOUT_MS: '0' }, '/src')).toThrow(
+      /^ACCEPTANCE_JOURNEY_TIMEOUT_MS must be a positive number$/,
+    );
+  });
+
+  it('reads the settle step: its own commit and the timeout, refusing a malformed timeout by name', () => {
+    const cfg = acceptanceConfigFromEnv(
+      { ...base, RAILWAY_GIT_COMMIT_SHA: ' f3ba12f ', ACCEPTANCE_SETTLE_TIMEOUT_MS: '60000' },
+      '/src',
+    );
+    expect(cfg.settle).toEqual({ revision: 'f3ba12f', timeoutMs: 60_000 });
+    expect(() => acceptanceConfigFromEnv({ ...base, ACCEPTANCE_SETTLE_TIMEOUT_MS: 'soon' }, '/src')).toThrow(
+      /^ACCEPTANCE_SETTLE_TIMEOUT_MS must be a positive number$/,
+    );
   });
 
   it('refuses to run without the staging confirmation, in a production environment, or against a production origin', () => {

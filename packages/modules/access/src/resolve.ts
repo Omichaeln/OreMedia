@@ -119,6 +119,8 @@ export async function resolveTenantContext(
       const user = await runAsPlatform('resolve-tenant', correlationId, () =>
         directory.findById(principal.userId, tx),
       );
+      // Re-checked here as well as at authentication: a person disabled since is refused on every surface.
+      if (user && user.status !== 'active') throw new UnauthenticatedError('Account disabled');
       if (!found || !tenant || !user)
         throw new PolicyDeniedError('membership_missing', 'You are not a member of this company');
       if (tenant.status !== 'active')

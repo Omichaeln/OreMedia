@@ -84,6 +84,15 @@ describe('video export keys and dedupe', () => {
     expect(videoExportDedupeKey({ ...base, fps: 25 })).not.toBe(key);
     expect(videoExportDedupeKey({ ...base, rendererVersion: 'r2' })).not.toBe(key);
     expect(videoExportDedupeKey({ ...base, assetContentHashes: ['x'] })).not.toBe(key);
+    // STU-2b: other encoder settings or another ffmpeg build render anew.
+    const enc = videoExportDedupeKey({
+      ...base,
+      encoder: 'x264 veryfast crf 20 threads 2; ffmpeg version 6.1.1',
+    });
+    expect(enc).not.toBe(key);
+    expect(
+      videoExportDedupeKey({ ...base, encoder: 'x264 veryfast crf 18 threads 2; ffmpeg version 6.1.1' }),
+    ).not.toBe(enc);
   });
 });
 

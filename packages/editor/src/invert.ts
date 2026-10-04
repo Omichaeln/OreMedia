@@ -232,6 +232,8 @@ function invertOne(doc: CreativeDocumentV1, op: Operation, ctx: ReduceContext): 
         }
         case 'setLock':
           return [{ op: 'setLock', pageId: op.pageId, elementId: el.id, locked: el.locked }];
+        case 'setVisibility':
+          return [{ op: 'setVisibility', pageId: op.pageId, elementId: el.id, visible: el.visible }];
         case 'setRotation':
           return [
             { op: 'setRotation', pageId: op.pageId, elementId: el.id, rotation: el.transform.rotation },

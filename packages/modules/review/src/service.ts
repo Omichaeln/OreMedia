@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { ApprovalBindingV1, bindingTargetId } from '@oremedia/contracts/approval';
-import { ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
+import { EXTERNAL_LINK_MAX_TTL_MS, ExternalLinkCreate, ExternalLinkRevoke } from '@oremedia/contracts/access';
 import { renderArticleHtml } from '@oremedia/contracts/article';
 import { articleImages } from '@oremedia/contracts/content';
 import { effectivePublishMode } from '@oremedia/contracts/destinations';
@@ -839,8 +839,11 @@ export const reviewService = {
       const request = await requestsRepo.getById(parsed.reviewRequestId, tx); // foreign → NOT_FOUND
       if (request.state !== 'open')
         throw new ValidationFailedError([{ path: 'reviewRequestId', issue: 'request_not_open' }]);
-      if (new Date(parsed.expiresAt).getTime() <= Date.now())
+      const expiresAt = new Date(parsed.expiresAt).getTime();
+      if (expiresAt <= Date.now())
         throw new ValidationFailedError([{ path: 'expiresAt', issue: 'must be in the future' }]);
+      if (expiresAt > Date.now() + EXTERNAL_LINK_MAX_TTL_MS)
+        throw new ValidationFailedError([{ path: 'expiresAt', issue: 'at most 30 days ahead' }]);
       const { linkId, token } = await accessService.createExternalReviewerLink(
         actor,
         parsed,

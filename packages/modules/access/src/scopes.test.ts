@@ -35,11 +35,12 @@ describe('API client key scopes (spec 7.6)', () => {
     expect(principalHasScope({ ...key, scopes: [...key.scopes] }, 'brands:write')).toBe(false);
   });
 
-  it('new keys can only be issued with scopes from the vocabulary', () => {
+  it('new keys can only be issued with at least one scope, from the vocabulary', () => {
     expect(ApiClientCreate.safeParse({ servicePrincipalId: 'sp', scopes: ['brands:read'] }).success).toBe(
       true,
     );
-    expect(ApiClientCreate.safeParse({ servicePrincipalId: 'sp', scopes: [] }).success).toBe(true);
+    // A new key names at least one scope (an empty list would read every area but community).
+    expect(ApiClientCreate.safeParse({ servicePrincipalId: 'sp', scopes: [] }).success).toBe(false);
     expect(ApiClientCreate.safeParse({ servicePrincipalId: 'sp', scopes: ['everything'] }).success).toBe(
       false,
     );

@@ -49,6 +49,8 @@ const skillEvaluation = (ctx: ActivityContext, f: Ids) => ({
   runs: 3,
 });
 const generation = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['generationJobId'], attempt: 1 });
+/** STU-3: an attempt of the foreign tenant's studio video job. */
+const videoJob = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['videoJobId'], attempt: 1 });
 const publication = (ctx: ActivityContext, f: Ids) => ({ ...ctx, publicationId: f['publicationId'] });
 const reply = (ctx: ActivityContext, f: Ids) => ({ ...ctx, responseDraftId: f['responseDraftId'] });
 const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
@@ -89,6 +91,12 @@ const renderTarget = (ctx: ActivityContext, f: Ids, own: Ids) => ({
   ...renderJob(ctx, f),
   revisionId: f['creativeRevisionId'],
   documentId: f['creativeDocumentId'],
+  brandId: own['brandId'],
+});
+const videoTarget = (ctx: ActivityContext, f: Ids, own: Ids) => ({
+  ...renderJob(ctx, f),
+  revisionId: f['videoRevisionId'],
+  documentId: f['videoDocumentId'],
   brandId: own['brandId'],
 });
 const ingest = (ctx: ActivityContext, f: Ids, own: Ids) => ({
@@ -180,6 +188,15 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'agents.finishBrandAssist': {
       buildInput: (ctx, f) => ({ ...assistJob(ctx, f), cancelled: false, failure: null }),
     },
+    // STU-3 studioVideoJobWorkflowV1 (task queue `agents`)
+    'agents.beginVideoJob': { buildInput: videoJob },
+    'agents.reserveVideoJobBudget': { buildInput: videoJob },
+    'agents.callVideoJobModel': { buildInput: videoJob },
+    'agents.saveVideoJob': { buildInput: videoJob },
+    'agents.failVideoJob': {
+      buildInput: (ctx, f) => ({ ...videoJob(ctx, f), code: 'failed', detail: 'harness' }),
+    },
+    'agents.settleVideoJobBudget': { buildInput: videoJob },
 
     // ---- task queue `core`: publicationWorkflowV1 control activities (spec 14.3) ----
     'core.readSchedule': { buildInput: publication },
@@ -220,6 +237,12 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
       reason:
         'platform-level: carries no tenant or resource id (only a correlation id and a clock); it deletes expired ' +
         'pending connect choices in every tenant by design and returns only a row count',
+    },
+    'core.purgeExpiredIdempotencyKeys': {
+      buildInput: null,
+      reason:
+        'platform-level: carries no tenant or resource id (only a correlation id and a clock); it deletes expired ' +
+        'idempotency records in every tenant by design and returns only a row count',
     },
     // brandChangeImpactWorkflowV1 (spec 8.2): the brand is the only id, so it acts in the foreign brand
     'core.invalidateApprovals': {
@@ -529,6 +552,61 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         cleanupKeys: [quarantineKey(f)],
       }),
     },
+    // ---- task queue `video` (STU-2b): videoRenderJobWorkflowV1 against tenant B's video document ----
+    'video.beginVideoRender': { buildInput: renderJob },
+    'video.resolveVideoRender': {
+      buildInput: (ctx, f, own) => ({ ...videoTarget(ctx, f, own), formatKeys: ['video_9x16'] }),
+    },
+    'video.renderVideoOverlays': {
+      buildInput: (ctx, f, own) => ({
+        ...videoTarget(ctx, f, own),
+        brandVersionId: f['creativePublishedBrandVersionId'],
+        fonts: [],
+        assets: [],
+        rendererVersion: 'harness',
+      }),
+    },
+    'video.composeVideo': {
+      buildInput: (ctx, f, own) => ({
+        ...videoTarget(ctx, f, own),
+        sources: [],
+        frames: [],
+        dedupeKey: 'd'.repeat(64),
+        tempBudgetBytes: 64 * 1024 * 1024,
+      }),
+    },
+    'video.completeVideoRender': {
+      buildInput: (ctx, f) => {
+        const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['videoRevisionId']}/${f['renderJobId']}/timeline-video_9x16`;
+        return {
+          ...renderJob(ctx, f),
+          rendererVersion: 'harness',
+          manifest: {
+            rendererVersion: 'harness',
+            fonts: [],
+            assets: [],
+            brandVersionId: f['creativePublishedBrandVersionId'],
+            revisionContentHash: 'c'.repeat(64),
+          },
+          dedupeKey: 'd'.repeat(64),
+          findings: [],
+          export: {
+            pageId: 'timeline',
+            formatKey: 'video_9x16',
+            storageKey: `${base}.mp4`,
+            contentHash: 'c'.repeat(64),
+            bytes: 1,
+            width: 1080,
+            height: 1920,
+            durationMs: 1000,
+            fps: 30,
+            posterStorageKey: `${base}.poster.webp`,
+          },
+        };
+      },
+    },
+    'video.failVideoRender': { buildInput: (ctx, f) => ({ ...renderJob(ctx, f), reason: 'render_failed' }) },
+    'video.discardVideoRenderWork': { buildInput: (ctx, f, own) => videoTarget(ctx, f, own) },
     'video.storeVideoExport': {
       buildInput: (ctx, f, own) => {
         const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['creativeRevisionId']}/${f['renderJobId']}/page_1-reel`;

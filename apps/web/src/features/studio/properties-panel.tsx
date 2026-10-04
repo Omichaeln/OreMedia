@@ -12,6 +12,18 @@ export interface FontOption {
   label: string;
 }
 
+/** A brand font face as the font picker lists it ("Inter Bold", "Lora 400"). */
+export const toFontOption = (f: {
+  assetVersionId: string;
+  name: string;
+  family?: string | null;
+  subfamily?: string | null;
+  weight?: number | null;
+}): FontOption => ({
+  assetVersionId: f.assetVersionId,
+  label: [f.family ?? f.name, f.subfamily ?? (f.weight ? String(f.weight) : null)].filter(Boolean).join(' '),
+});
+
 export interface PropertiesPanelProps {
   page: CreativePage;
   selection: string[];
@@ -830,6 +842,26 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
             }
           >
             {el.locked ? 'Unlock' : 'Lock'}
+          </Button>
+          <Button
+            size="sm"
+            aria-pressed={!el.visible}
+            aria-keyshortcuts="Control+Shift+H"
+            disabledReason={
+              lockedDeep
+                ? 'Locked elements keep their visibility: unlock it (or its group) first'
+                : pageLocked
+                  ? 'The page is locked: unlock it first'
+                  : undefined
+            }
+            onClick={() =>
+              one(
+                { op: 'setVisibility', pageId: page.id, elementId: el.id, visible: !el.visible },
+                `${el.visible ? 'Hide' : 'Show'} ${el.name}`,
+              )
+            }
+          >
+            {el.visible ? 'Hide' : 'Show'}
           </Button>
           <Button
             size="sm"

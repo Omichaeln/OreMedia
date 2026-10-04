@@ -373,11 +373,13 @@ export const deletion = {
   },
 };
 
-/** Spec 4.4: deletion and retention run on task queue `core` (worker-core). */
+/** Spec 4.4: deletion, retention and the idempotency purge run on task queue `core` (worker-core). */
 export const OPERATIONS_TASK_QUEUE = 'core';
 export const DELETION_WORKFLOW_TYPE = 'deletionRequestWorkflowV1';
 export const RETENTION_SWEEP_WORKFLOW_TYPE = 'retentionSweepWorkflowV1';
 export const RETENTION_SCHEDULE_ID = 'retention-sweep';
+export const IDEMPOTENCY_KEY_PURGE_WORKFLOW_TYPE = 'idempotencyKeyPurgeWorkflowV1';
+export const IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID = 'idempotency-key-purge';
 export const deletionWorkflowId = (deletionRequestId: string): string => `deletion:${deletionRequestId}`;
 
 /**

@@ -18,6 +18,7 @@ import {
   sanitise,
   scan,
   sniffType,
+  stripSvgDoctype,
   verifyObject,
 } from './steps';
 
@@ -297,6 +298,61 @@ describe('ingest step 4: sanitise SVG', () => {
       ok: false,
       reason: 'pixel_limit_exceeded',
     });
+  });
+});
+
+describe('ingest step 4: SVG prolog and style checks in linear time', () => {
+  /** A generous bound: the earlier patterns took seconds (or, for a run of comments, forever) here. */
+  const fast = (run: () => unknown) => {
+    const started = performance.now();
+    run();
+    expect(performance.now() - started).toBeLessThan(250);
+  };
+  const doctype = `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd"><svg ${SVG_NS} width="10" height="10"/>`;
+
+  it('refuses text before the DOCTYPE after a run of comments without exponential backtracking', () => {
+    // 2^40 backtracking steps for the earlier repeated lazy comment group.
+    fast(() =>
+      expect(stripSvgDoctype(`${'<!---->'.repeat(40)}x${doctype}`)).toEqual({
+        ok: false,
+        detail: 'entity_declaration',
+      }),
+    );
+    fast(() => stripSvgDoctype(`${'<!-- c -->\n'.repeat(10_000)}x${doctype}`));
+  });
+
+  it('accepts and refuses the same prologs as before', () => {
+    const accepted = (before: string) => stripSvgDoctype(`${before}${doctype}`).ok;
+    expect(accepted('')).toBe(true);
+    expect(accepted('  \n')).toBe(true);
+    expect(accepted('<?xml version="1.0" encoding="utf-8"?>\n')).toBe(true);
+    expect(
+      accepted('<?xml version="1.0"?>\n<!-- Generator: Adobe Illustrator 27.0.0 -->\n<!-- two -->\n'),
+    ).toBe(true);
+    // The earlier lazy group could run across `-->`, so anything between the first `<!--` and the last `-->` passed.
+    expect(accepted('<!-- a --> x <!-- b -->')).toBe(true);
+    expect(accepted('x')).toBe(false);
+    expect(accepted('<!-- a --> x')).toBe(false);
+    expect(accepted('<!-- unclosed')).toBe(false);
+    expect(accepted('<!-- a -->\n<?xml version="1.0"?>')).toBe(false);
+  });
+
+  it('checks a style with a long run of spaces inside url( in linear time, with the same findings', async () => {
+    const styled = (css: string) =>
+      Buffer.from(
+        `<svg ${SVG_NS} width="10" height="10"><style>${css}</style><rect width="10" height="10"/></svg>`,
+      );
+    const started = performance.now();
+    const spaced = await sanitise(styled(`.a{fill:url(${' '.repeat(100_000)})}`), 'image/svg+xml', 'svg');
+    // The earlier `\s*['"]?\s*` took seconds on this; the sanitiser itself (DOMPurify, rasterising) needs the rest.
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect((spaced as { reason?: string }).reason).not.toBe('svg_external_reference');
+    for (const css of ['.a{fill:url( "http://evil.example/x")}', ".a{fill:url(' //evil.example/x')}"])
+      expect(await sanitise(styled(css), 'image/svg+xml', 'svg')).toMatchObject({
+        ok: false,
+        reason: 'svg_external_reference',
+      });
+    expect(await sanitise(styled('.a{fill:url( "#g")}'), 'image/svg+xml', 'svg')).toMatchObject({ ok: true });
   });
 });
 

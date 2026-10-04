@@ -23,6 +23,14 @@ export function internalErrorFields(err: unknown): Record<string, unknown> {
   };
 }
 
+/**
+ * The deployed git commit /health reports (`revision`): Railway's RAILWAY_GIT_COMMIT_SHA, else OREMEDIA_VERSION,
+ * else null. The staging acceptance job waits until /health reports its own commit before it provisions anything.
+ */
+export function revisionFromEnv(env: Record<string, string | undefined>): string | null {
+  return env['RAILWAY_GIT_COMMIT_SHA']?.trim() || env['OREMEDIA_VERSION']?.trim() || null;
+}
+
 export interface ServerOptions {
   webOrigin?: string;
   reviewPortalOrigin?: string;
@@ -33,6 +41,8 @@ export interface ServerOptions {
    * only: never a setting name or value, since /health is public through the web origin.
    */
   degraded?: readonly string[];
+  /** The deployed git commit (revisionFromEnv), served on /health; null or absent = unknown. */
+  revision?: string | null;
 }
 
 /** Spec 4.3 request path and spec 18 security headers. */
@@ -84,8 +94,9 @@ export function createServer(opts: ServerOptions = {}): Express {
     next();
   });
 
-  // Always 200 while the process serves (the platform health check); `degraded` says what cannot work yet.
-  const health = { ok: true, degraded: [...(opts.degraded ?? [])] };
+  // Always 200 while the process serves (the platform health check); `degraded` says what cannot work yet and
+  // `revision` which commit is serving.
+  const health = { ok: true, degraded: [...(opts.degraded ?? [])], revision: opts.revision ?? null };
   app.get('/health', (_req, res) => res.json(health));
 
   app.use(

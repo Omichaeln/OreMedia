@@ -3,6 +3,7 @@ import { IllegalTransitionError } from './machine';
 import { publicationMachine, type PublicationEvent } from './publication';
 import { contentRevisionMachine } from './content-revision';
 import { renderJobMachine } from './render-job';
+import { videoAiJobMachine } from './video-ai-job';
 import { agentRunMachine } from './agent-run';
 import { approvalMachine } from './approval';
 import { brandVersionMachine } from './brand-version';
@@ -105,6 +106,16 @@ describe('other machines', () => {
     expect(renderJobMachine.can('ready', 'cancel')).toBe(false);
     expect(renderJobMachine.can('failed', 'cancel')).toBe(false);
     for (const e of renderJobMachine.events) expect(renderJobMachine.can('cancelled', e)).toBe(false);
+  });
+  it('studio video job (STU-3): saving cannot be cancelled, failed and cancelled jobs retry, completed is final', () => {
+    expect(videoAiJobMachine.transition('queued', 'start')).toBe('generating');
+    expect(videoAiJobMachine.transition('generating', 'validate')).toBe('validating');
+    expect(videoAiJobMachine.transition('validating', 'save')).toBe('saving');
+    expect(videoAiJobMachine.transition('saving', 'complete')).toBe('completed');
+    expect(videoAiJobMachine.can('saving', 'cancel')).toBe(false);
+    expect(videoAiJobMachine.transition('cancelled', 'retry')).toBe('queued');
+    expect(videoAiJobMachine.transition('failed', 'retry')).toBe('queued');
+    for (const e of videoAiJobMachine.events) expect(videoAiJobMachine.can('completed', e)).toBe(false);
   });
   it('agent run: waiting_for_review expires or resumes; terminal states are final', () => {
     expect(agentRunMachine.transition('running', 'await_review')).toBe('waiting_for_review');

@@ -150,6 +150,15 @@ describe('GET /<code>', () => {
       expect.objectContaining({ trackedLinkId: expected.trackedLinkId, visitorHash: hash }),
     ]);
   });
+  it('a spoofed leftmost X-Forwarded-For entry does not change the visitor hash (one trusted hop)', async () => {
+    const before = written.length;
+    // The edge appends the address it saw (203.0.113.9); everything to its left came from the client.
+    await get('entry0001', '198.51.100.1, 203.0.113.9');
+    await get('entry0001', '192.0.2.77, 198.51.100.2, 203.0.113.9');
+    await clicks.flush();
+    const hash = visitorHash(SECRET, 'ten_A', '203.0.113.9|UA-test');
+    expect(written.slice(before).map((r) => r.visitorHash)).toEqual([hash, hash]);
+  });
   it('a plain link redirects to its destination; an unknown code is 404', async () => {
     const res = await get('plain0001', '203.0.113.8');
     expect(res.status).toBe(302);

@@ -707,7 +707,10 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
   it('revoke a compromised credential (7.10): API key rotation and principal revocation, social token crypto-shred with holds, session revocation on role change', async () => {
     // API client key.
     const created = (
-      await api('access.apiClients.create', { servicePrincipalId: A.servicePrincipalId, scopes: [] })
+      await api('access.apiClients.create', {
+        servicePrincipalId: A.servicePrincipalId,
+        scopes: ['brands:read'],
+      })
     ).data as { apiClientId: string; key: string };
     expect((await callPath({ bearer: created.key }, 'brand.list', undefined)).error).toBeUndefined();
     const rotated = (await api('access.apiClients.rotate', { apiClientId: created.apiClientId })).data as {
@@ -727,7 +730,10 @@ describe('runbook rehearsals (worker-core composition, fixture provider, fake Te
       })
     ).data as { servicePrincipalId: string };
     const k = (
-      await api('access.apiClients.create', { servicePrincipalId: sp.servicePrincipalId, scopes: [] })
+      await api('access.apiClients.create', {
+        servicePrincipalId: sp.servicePrincipalId,
+        scopes: ['brands:read'],
+      })
     ).data as {
       key: string;
     };

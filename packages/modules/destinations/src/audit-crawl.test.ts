@@ -308,3 +308,65 @@ describe('cross-page checks, summary and findings', () => {
     });
   });
 });
+
+describe('reading crawled pages in linear time', () => {
+  /** A generous bound: the regular expressions these replace took seconds here (quadratic in the page). */
+  const fast = (run: () => unknown) => {
+    const started = performance.now();
+    run();
+    expect(performance.now() - started).toBeLessThan(250);
+  };
+  const N = 100_000;
+
+  it.each([
+    ['unclosed tags', '<a '.repeat(N / 3)],
+    ['unclosed scripts', '<script>'.repeat(N / 8)],
+    ['unclosed titles', '<title>'.repeat(N / 7)],
+    ['unclosed metas', '<meta '.repeat(N / 6)],
+    ['unclosed links', '<link '.repeat(N / 6)],
+    ['unclosed structured data', '<script type="application/ld+json">'.repeat(N / 35)],
+    ['a meta with many unclosed attributes', `<meta${' name="'.repeat(N / 7)}`],
+    ['bare angle brackets', '<'.repeat(N)],
+  ])('audits a page of %s in linear time', (_, html) => {
+    fast(() => auditPage(page(html)));
+    fast(() => extractLinks(html, `${ORIGIN}/about`, ORIGIN));
+  });
+
+  it('reads a well-formed page exactly as before: noscript and script subresources, structured data with markup, unquoted attributes', () => {
+    // Expected values are the earlier implementation's output for the same pages.
+    const rich = `<!doctype html><html lang="en"><head><title>About us</title>
+<meta name="description" content="What the company does, who runs it and how to reach the team by phone or email.">
+<meta name="viewport" content="width=device-width">
+<link rel="canonical" href="https://site.example/about">
+<link rel="alternate" hreflang="fr" href="https://site.example/fr/about"><link rel="alternate" hreflang="en" href="https://site.example/about">
+<script type="application/ld+json">{"@type":"Organization","description":"<b>x</b>"}</script></head>
+<body><h1>About</h1><img src="/a.png" alt="team"><img src="http://cdn.example/b.png"><a href="/contact">Contact</a><a href="https://other.example/x">Out</a>
+<noscript><img src="http://px.example/p.gif"></noscript><script src="http://cdn.example/x.js"></script><template><a href="/tpl">t</a></template></body></html>`;
+    const failing = (html: string) =>
+      auditPage(page(html))
+        .checks.filter((c) => !c.ok)
+        .map((c) => `${c.key}:${c.detail}`);
+    expect(failing(rich)).toEqual(['image_alt:count=1', 'mixed_content:count=3']);
+    expect(auditPage(page(rich))).toMatchObject({
+      titleHash: sha256Hex('about us'),
+      links: [`${ORIGIN}/contact`],
+    });
+    const sloppy = `<html><head><title></title><meta property="description" content="  short &amp; sweet "><meta name="robots" content="nofollow"><script type='application/ld+json'>{bad json</script></head><body><h1>a</h1><h1>b</h1><img src=x.png><a href=/one>1</a><a href='/two#x'>2</a><a>none</a></body></html>`;
+    expect(failing(sloppy)).toEqual([
+      'title:missing',
+      'meta_description:length=13',
+      'h1:count=2',
+      'canonical:missing',
+      'robots_meta:nofollow',
+      'viewport:missing',
+      'lang:missing',
+      'image_alt:count=1',
+      'structured_data:invalid',
+    ]);
+    expect(auditPage(page(sloppy))).toMatchObject({
+      titleHash: null,
+      metaDescriptionHash: sha256Hex('short & sweet'),
+      links: [`${ORIGIN}/one`, `${ORIGIN}/two`],
+    });
+  });
+});

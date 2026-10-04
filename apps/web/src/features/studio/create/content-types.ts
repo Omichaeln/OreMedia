@@ -4,7 +4,7 @@ import { FORMAT_DEFINITIONS, aspectLabel } from '@oremedia/editor';
 /**
  * STU-1a (architecture principle 4): what a document is for, separate from its layout (format) and destinations.
  * The one place the creation screen learns which content types exist and which can be started here. The video
- * document kind (STU-2b) is wired by setting `available` (and its start) on the `video` entry.
+ * document kind (STU-2b) has no page formats: its tile opens the video start instead of filtering the gallery.
  */
 export interface ContentTypeOption {
   key: ContentType;
@@ -53,10 +53,10 @@ export const CONTENT_TYPES: readonly ContentTypeOption[] = [
     label: 'Video or reel',
     titleLabel: 'Video',
     description: 'A reel, short or video ad on a timeline.',
+    // A video starts from an output preset or a video template in its own dialog, not from a page format.
     formats: [],
     pages: 1,
-    available: false,
-    unavailableReason: 'Coming in this release',
+    available: true,
   },
   {
     key: 'thumbnail_banner',

@@ -1,14 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MCP_TOOLS, allProcedures, allRestRoutes } from '@oremedia/api';
 import type { ErrorEnvelope } from '@oremedia/contracts/errors';
+import { eq } from 'drizzle-orm';
+import { apiClients, memberships, servicePrincipals } from '@oremedia/db/schema/access';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import {
   CROSS_TENANT_INPUTS,
   MCP_CROSS_TENANT_INPUTS,
+  OWN_TENANT_INPUTS,
   callMcpTool,
   callPath,
   callRest,
   seedApiClient,
+  seedRestrictedMember,
   seedTwoTenants,
   type CrossTenantFixture,
   type SeededTenant,
@@ -79,6 +83,92 @@ describe('cross-tenant harness', () => {
       expect(await tenantB.snapshot()).toEqual(before); // no writes landed in tenant B
     },
   );
+
+  // ---- Ledger G14: a procedure with no foreign reference to try answers only the caller's tenant data. ----
+  const ownTenantPaths = procedures
+    .map((p) => p.path)
+    .filter((path) => CROSS_TENANT_INPUTS[path] && CROSS_TENANT_INPUTS[path].buildInput === null);
+
+  /**
+   * Its own pair of tenants in the same database: these calls write in the caller's tenant (a brand, a membership,
+   * a definition, a routing policy, a password), which the tests above and below must not see.
+   */
+  describe('procedures that take no foreign reference (ledger G14)', () => {
+    let caller: SeededTenant;
+    let other: SeededTenant;
+    beforeAll(async () => {
+      ({ tenantA: caller, tenantB: other } = await seedTwoTenants(tdb.db));
+    });
+
+    /** Every id of the other tenants a leak would carry (rows, people, brands, principals), none shared with the caller. */
+    const foreignValues = (): string[] => {
+      const own = new Set<string>([
+        caller.tenantId,
+        caller.ownerUserId,
+        caller.ownerMembershipId,
+        ...Object.values(caller.ids),
+      ]);
+      return [
+        ...new Set(
+          [other, tenantA, tenantB].flatMap((t) => [
+            t.tenantId,
+            t.ownerUserId,
+            t.ownerMembershipId,
+            t.creatorUserId,
+            t.creatorMembershipId,
+            ...t.brandIds,
+            t.servicePrincipalId,
+            t.apiClientId,
+            ...Object.values(t.ids),
+          ]),
+        ),
+      ].filter((v) => v.length >= 10 && !own.has(v));
+    };
+    /** Every value under a `tenantId` key, at any depth of the answer. */
+    const tenantIdsIn = (value: unknown): unknown[] =>
+      Array.isArray(value)
+        ? value.flatMap(tenantIdsIn)
+        : value && typeof value === 'object'
+          ? Object.entries(value).flatMap(([k, v]) => (k === 'tenantId' ? [v] : tenantIdsIn(v)))
+          : [];
+
+    it('every procedure without a foreign id to try says why and is called as the caller tenant instead', () => {
+      expect(ownTenantPaths.length).toBeGreaterThan(0);
+      const missing = ownTenantPaths.filter((path) => !(path in OWN_TENANT_INPUTS));
+      expect(
+        missing,
+        `add an own-tenant entry in tooling/test-fixtures/src/inputs for: ${missing.join(', ')}`,
+      ).toEqual([]);
+      const stale = Object.keys(OWN_TENANT_INPUTS).filter((path) => !ownTenantPaths.includes(path));
+      expect(
+        stale,
+        'own-tenant entries for procedures that now take a foreign id (or no longer exist)',
+      ).toEqual([]);
+      for (const [path, fixture] of Object.entries(OWN_TENANT_INPUTS)) expect(fixture.why, path).toBeTruthy();
+    });
+
+    it.each(ownTenantPaths.map((path) => ({ path })))(
+      '$path answers only the caller tenant data and changes nothing of another tenant',
+      async ({ path }) => {
+        const fixture = OWN_TENANT_INPUTS[path];
+        expect(fixture, `${path} has an own-tenant entry`).toBeDefined();
+        if (!fixture) return;
+        const before = await other.snapshot();
+        const res = await callPath(
+          { bearer: caller.ownerToken, tenantId: caller.tenantId },
+          path,
+          fixture.input(),
+        );
+        if (fixture.expectError) expect(res.error?.code, path).toBe(fixture.expectError);
+        else expect(res.error, `${path} refused: ${JSON.stringify(res.error)}`).toBeUndefined();
+        const answer = JSON.stringify(res.data ?? res.error ?? null);
+        for (const value of foreignValues())
+          expect(answer.includes(value), `${path} answered another tenant's ${value}`).toBe(false);
+        for (const tenantId of tenantIdsIn(res.data)) expect(tenantId, path).toBe(caller.tenantId);
+        expect(await other.snapshot()).toEqual(before); // no writes landed in the other tenant
+      },
+    );
+  });
 
   // ---- Public REST (spec 7.6): generated from the REST route table; each route reuses its procedure's fixture. ----
   const restRoutes = allRestRoutes();
@@ -186,6 +276,128 @@ describe('cross-tenant harness', () => {
       undefined,
     );
     expect((list.data as Array<{ id: string }>).map((b) => b.id)).toEqual([tenantA.brandIds[0]]);
+  });
+
+  /**
+   * Inside one tenant: a member restricted to brand 1 reaches neither brand 2's resources nor a way to them. The
+   * procedures below take only a brand id, so the same input with brand 1 is the control; the access procedures are
+   * the ones that hand out brands (memberships, brand grants, service principals and their keys).
+   */
+  describe('a member restricted to one brand of the tenant', () => {
+    const BRAND_SCOPED = [
+      'brand.get',
+      'brand.versions.impact',
+      'brand.versions.createDraft',
+      'assets.fonts.list',
+      'agents.budgets.read',
+      'destinations.list',
+      'destinations.sourceUse.list',
+      'intelligence.workspace.get',
+      'publishing.channels.list',
+      'publishing.channels.limits',
+      'skills.taskKinds',
+    ];
+    let admin: { membershipId: string; token: string };
+    const as = () => ({ bearer: admin.token, tenantId: tenantA.tenantId });
+    const accessRows = async () =>
+      JSON.stringify({
+        m: await tdb.db.select().from(memberships).where(eq(memberships.tenantId, tenantA.tenantId)),
+        sp: await tdb.db
+          .select()
+          .from(servicePrincipals)
+          .where(eq(servicePrincipals.tenantId, tenantA.tenantId)),
+        ac: await tdb.db.select().from(apiClients).where(eq(apiClients.tenantId, tenantA.tenantId)),
+      });
+
+    beforeAll(async () => {
+      // An admin (membership.manage) granted brand 1 only.
+      admin = await seedRestrictedMember(tdb.db, tenantA, { role: 'admin', brandIds: [tenantA.brandIds[0]] });
+    });
+
+    it('every fixture of the representative set takes only a brand id', () => {
+      for (const path of BRAND_SCOPED)
+        expect(
+          Object.keys((CROSS_TENANT_INPUTS[path]?.buildInput?.(tenantA.ids) ?? {}) as object),
+          path,
+        ).toEqual(['brandId']);
+    });
+
+    it.each(BRAND_SCOPED.map((path) => ({ path })))(
+      '$path on the brand not granted is refused, on the granted brand it answers',
+      async ({ path }) => {
+        const build = CROSS_TENANT_INPUTS[path]!.buildInput!;
+        const hidden = await callPath(as(), path, build({ ...tenantA.ids, brandId: tenantA.brandIds[1] }));
+        expect(hidden.error, `${path} returned data: ${JSON.stringify(hidden.data)}`).toBeDefined();
+        expect(['NOT_FOUND', 'FORBIDDEN']).toContain(hidden.error?.code);
+        const granted = await callPath(as(), path, build({ ...tenantA.ids, brandId: tenantA.brandIds[0] }));
+        expect(granted.error, path).toBeUndefined();
+      },
+    );
+
+    it('hands out no brand it was not granted, and never every brand', async () => {
+      const before = await accessRows();
+      const version = (
+        await tdb.db.select().from(memberships).where(eq(memberships.id, admin.membershipId))
+      )[0]!.version;
+      const refused: Array<[string, unknown, string[]]> = [
+        [
+          'access.members.setRole',
+          { membershipId: admin.membershipId, expectedVersion: version, role: 'admin', allBrands: true },
+          ['FORBIDDEN'],
+        ],
+        [
+          'access.members.invite',
+          { email: 'every-brand@example.test', role: 'creator', allBrands: true },
+          ['FORBIDDEN'],
+        ],
+        [
+          'access.brandGrants.set',
+          { membershipId: admin.membershipId, brandId: tenantA.brandIds[1], roles: [] },
+          ['NOT_FOUND', 'FORBIDDEN'],
+        ],
+        [
+          'access.servicePrincipals.create',
+          {
+            kind: 'agent',
+            name: 'hidden',
+            grants: [{ action: 'brand.read', brandIds: [tenantA.brandIds[1]] }],
+          },
+          ['NOT_FOUND'],
+        ],
+        [
+          'access.servicePrincipals.create',
+          { kind: 'agent', name: 'every', grants: [{ action: 'brand.read', brandIds: 'all' }] },
+          ['FORBIDDEN'],
+        ],
+        // The seeded principal is granted every brand: a key for it would be every brand too.
+        [
+          'access.apiClients.create',
+          { servicePrincipalId: tenantA.servicePrincipalId, scopes: ['brands:read'] },
+          ['FORBIDDEN'],
+        ],
+        ['access.apiClients.rotate', { apiClientId: tenantA.apiClientId }, ['FORBIDDEN']],
+      ];
+      for (const [path, input, codes] of refused) {
+        const res = await callPath(as(), path, input);
+        expect(
+          codes,
+          `${path} ${JSON.stringify(input)} answered ${JSON.stringify(res.error ?? res.data)}`,
+        ).toContain(res.error?.code);
+      }
+      expect(await accessRows()).toEqual(before);
+      // Within its own brand it still works.
+      const own = await callPath(as(), 'access.servicePrincipals.create', {
+        kind: 'agent',
+        name: 'own brand',
+        grants: [{ action: 'brand.read', brandIds: [tenantA.brandIds[0]] }],
+      });
+      expect(own.error).toBeUndefined();
+      const key = await callPath(as(), 'access.apiClients.create', {
+        servicePrincipalId: (own.data as { servicePrincipalId: string }).servicePrincipalId,
+        scopes: ['brands:read'],
+      });
+      expect(key.error).toBeUndefined();
+    });
   });
 
   it('an API client of tenant B cannot select tenant A', async () => {

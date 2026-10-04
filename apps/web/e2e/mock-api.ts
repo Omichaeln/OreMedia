@@ -5,6 +5,18 @@ import { createHTTPHandler } from '@trpc/server/adapters/standalone';
 import superjson from 'superjson';
 import { z } from 'zod';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
+import { VideoOperationsApply, VideoOperationsPropose, VideoTemplateList } from '@oremedia/contracts/video';
+import {
+  VideoAiAccept,
+  VideoAiActive,
+  VideoAiAssemble,
+  VideoAiSaveDraft,
+  VideoAiCancel,
+  VideoAiGet,
+  VideoAiPreflight,
+  VideoAiRetry,
+  VideoAiStart,
+} from '@oremedia/contracts/video-ai';
 import {
   CommentAdd,
   CommentList,
@@ -16,6 +28,7 @@ import {
   DocumentRename,
   OperationsApply,
   OperationsPropose,
+  RenderCancel,
   RenderGet,
   RenderRequest,
   RevisionGet,
@@ -143,6 +156,7 @@ import { GenerationBackend, generationRouter, type GenerationHost } from './mock
 import type { GenerationInputs } from '@oremedia/contracts/generation';
 import { AssistBackend, assistRouters } from './mock-assist';
 import { overviewRouters } from './mock-overview';
+import { VideoAiMockBackend, VideoMockBackend } from './mock-video';
 
 /**
  * A UI-only transport for the studio smoke test: the same procedure paths, input DTOs, error envelope and header
@@ -341,6 +355,7 @@ interface Rev {
   authorKind: 'user' | 'agent';
   authorId: string;
   changeSummary: string;
+  kind: 'graphic';
   operations: OperationBatch;
   snapshot: CreativeDocumentV1;
   contentHash: string;
@@ -355,6 +370,7 @@ interface Doc {
   title: string;
   currentRevisionId: string;
   schemaVersion: 1;
+  kind: 'graphic';
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -954,6 +970,8 @@ export class MockBackend {
   /** Procedure paths answered after a delay (ms), to observe loading states. */
   readonly delays = new Map<string, number>();
   readonly docs = new Map<string, Doc>();
+  /** STU-2b: video documents, their renders and the media library. */
+  readonly video: VideoMockBackend;
   /** STU-1a: the brand's templates; seeded with one approved template on the fixture document. */
   readonly templates: MockTemplate[] = [
     {
@@ -996,6 +1014,8 @@ export class MockBackend {
     if (!t) throw new NotFoundError('Template', templateId);
     return t;
   }
+  /** STU-3: storyboard and recut jobs over the video documents (tests script the model's answers). */
+  readonly videoAi: VideoAiMockBackend;
   readonly comments: Comment[] = [];
   readonly jobs = new Map<string, RenderJob>();
   readonly replays = new Map<string, unknown>();
@@ -1065,6 +1085,18 @@ export class MockBackend {
       return d ? { brandId: d.brandId, displayName: d.displayName, usable: d.status === 'active' } : null;
     };
     this.brands = [{ id: company.brandId, name: company.brandName, publishedVersionId: E2E.brandVersionId }];
+    this.video = new VideoMockBackend(company.brandId, E2E.brandVersionId, () => this.objectStoreOrigin);
+    this.videoAi = new VideoAiMockBackend(this.video, {
+      storyboard: {
+        title: 'Storyboard',
+        scenes: [
+          { title: 'Scene', shots: [{ description: 'Shot', assetVersionId: null, durationMs: 2_000 }] },
+        ],
+        gaps: [],
+        musicAssetVersionId: null,
+      },
+      recut: { summary: 'No change', actions: [], unsupported: [] },
+    });
     this.brandVersions = seedBrandVersions(company.brandId);
     if (seed) this.addRun('run_e2e_copy', 'copywriting', 'completed', 9_990);
   }
@@ -1154,6 +1186,7 @@ export class MockBackend {
       title,
       currentRevisionId: revision.id,
       schemaVersion: 1,
+      kind: 'graphic',
       createdAt: now(),
       updatedAt: now(),
       version: 1,
@@ -1181,6 +1214,7 @@ export class MockBackend {
       authorKind: batch.origin,
       authorId: 'usr_e2e',
       changeSummary: batch.summary,
+      kind: 'graphic',
       operations: batch,
       snapshot,
       contentHash: hash(snapshot),
@@ -2663,6 +2697,9 @@ export function createMockRouter(backend: MockBackend) {
         // BSC-2: uploaded logos (with their own versions) are offered where logos are: approved ones as the brand
         // kit's reference, and with rights recorded for creative and logo use (spec 9.2).
         const { purpose, kinds } = input.query;
+        // STU-2b: a filter naming video or audio returns the video library (video, audio, stills).
+        if (kinds?.some((k) => k === 'video' || k === 'audio'))
+          return { items: backend.video.search(kinds), nextCursor: null };
         const logos = backend.assets
           .filter((a) => a.kind === 'logo' && a.file && a.state === 'approved')
           .filter((a) => purpose === 'reference' || a.rights !== null)
@@ -2689,7 +2726,13 @@ export function createMockRouter(backend: MockBackend) {
           items:
             onlyLogos && logos.length
               ? logos
-              : [photo, ...(purpose === 'creative' ? [generated] : []), ...logos],
+              : [
+                  photo,
+                  ...(purpose === 'creative' ? [generated] : []),
+                  ...logos,
+                  // STU-2b: like the server, the creative purpose without a kind filter also offers video and audio.
+                  ...(purpose === 'creative' && !kinds ? backend.video.search(['video', 'audio']) : []),
+                ],
           nextCursor: null,
         };
       }),
@@ -2937,6 +2980,16 @@ export function createMockRouter(backend: MockBackend) {
               origin: 'upload' as const,
             };
           // STU-2a: a video or audio version's proxy plays from the store (WebM in the e2e store); its images are PNG.
+          // STU-2b: the strip map and waveform are JSON the timeline fetches from the store.
+          if (
+            /^av_(video|audio)_/.test(input.assetVersionId) &&
+            (input.derivative === 'strip_map' || input.derivative === 'waveform')
+          )
+            return {
+              url: `${backend.objectStoreOrigin}/e2e-object/${input.assetVersionId}-${input.derivative}.json`,
+              expiresAt: new Date(Date.now() + 300_000),
+              mime: 'application/json',
+            };
           if (/^av_(video|audio)_/.test(input.assetVersionId))
             return input.derivative === 'proxy'
               ? {
@@ -3004,6 +3057,20 @@ export function createMockRouter(backend: MockBackend) {
       documents: t.router({
         create: mutation.input(DocumentCreate).mutation(({ input }) => {
           backend.creates.push(input);
+          if (input.kind === 'video') {
+            if (!input.video) throw new ValidationFailedError([{ path: 'video', issue: 'required' }]);
+            const v = backend.video.create(input.title, input.video);
+            const head = backend.video.head(v);
+            return {
+              documentId: v.id,
+              revisionId: head.id,
+              number: 1,
+              version: 1,
+              contentHash: head.contentHash,
+              findings: [],
+              kind: 'video' as const,
+            };
+          }
           let initial = input.document;
           if (input.source?.kind === 'template') {
             const source = input.source;
@@ -3055,12 +3122,14 @@ export function createMockRouter(backend: MockBackend) {
           return { documentId: doc.id, title: doc.title, version: doc.version };
         }),
         get: query.input(DocumentGet).query(({ input }) => {
+          const video = backend.video.get(input.documentId);
+          if (video) return video;
           const { revisions: _r, ...doc } = backend.doc(input.documentId);
-          return { ...doc, revision: backend.head(input.documentId) };
+          return { ...doc, revision: backend.head(input.documentId), media: [] };
         }),
         list: query.input(DocumentList).query(({ input }) =>
           paged(
-            [...backend.docs.values()]
+            [...backend.docs.values(), ...backend.video.docs.values()]
               .filter(
                 (d) =>
                   d.brandId === input.brandId &&
@@ -3076,15 +3145,17 @@ export function createMockRouter(backend: MockBackend) {
       generation: generationRouter(backend.generation, { router: t.router, query, mutation }),
       revisions: t.router({
         list: query.input(RevisionList).query(({ input }) => ({
-          items: backend
-            .doc(input.documentId)
-            .revisions.slice()
+          items: (backend.video.doc(input.documentId) ?? backend.doc(input.documentId)).revisions
+            .slice()
             .reverse()
             .map(({ operations: _o, snapshot: _s, ...summary }) => summary),
           nextCursor: null,
         })),
         get: query.input(RevisionGet).query(({ input }) => {
-          const rev = backend.doc(input.documentId).revisions.find((r) => r.id === input.revisionId);
+          const video = backend.video.doc(input.documentId);
+          const rev = (video ?? backend.doc(input.documentId)).revisions.find(
+            (r) => r.id === input.revisionId,
+          );
           if (!rev) throw new NotFoundError('CreativeRevision', input.revisionId);
           return rev;
         }),
@@ -3119,9 +3190,35 @@ export function createMockRouter(backend: MockBackend) {
             },
           };
         }),
+        applyVideo: mutation.input(VideoOperationsApply).mutation(({ input }) => {
+          if (backend.failNextApply) {
+            backend.failNextApply = false;
+            throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'simulated outage' });
+          }
+          return backend.video.apply(input);
+        }),
+        proposeVideo: mutation
+          .input(VideoOperationsPropose)
+          .mutation(({ input }) => backend.video.propose(input)),
+      }),
+      videoTemplates: t.router({
+        list: query.input(VideoTemplateList).query(() => backend.video.templates()),
+      }),
+      videoAi: t.router({
+        preflight: query.input(VideoAiPreflight).query(({ input }) => backend.videoAi.preflight(input)),
+        start: mutation.input(VideoAiStart).mutation(({ input }) => backend.videoAi.start(input)),
+        get: query.input(VideoAiGet).query(({ input }) => backend.videoAi.get(input.jobId)),
+        active: query.input(VideoAiActive).query(({ input }) => backend.videoAi.active(input.documentId)),
+        cancel: mutation.input(VideoAiCancel).mutation(({ input }) => backend.videoAi.cancel(input.jobId)),
+        retry: mutation.input(VideoAiRetry).mutation(({ input }) => backend.videoAi.retry(input.jobId)),
+        saveDraft: mutation.input(VideoAiSaveDraft).mutation(({ input }) => backend.videoAi.saveDraft(input)),
+        assemble: mutation.input(VideoAiAssemble).mutation(({ input }) => backend.videoAi.assemble(input)),
+        accept: mutation.input(VideoAiAccept).mutation(({ input }) => backend.videoAi.accept(input)),
       }),
       renders: t.router({
         request: mutation.input(RenderRequest).mutation(({ input }) => {
+          if (backend.video.ownsRevision(input.revisionId))
+            return backend.video.request(input.revisionId, input.formatKeys);
           const id = rid('rj');
           backend.jobs.set(id, {
             id,
@@ -3145,6 +3242,8 @@ export function createMockRouter(backend: MockBackend) {
           return { renderJobId: id, state: 'pending' as const, version: 0 };
         }),
         get: query.input(RenderGet).query(({ input }) => {
+          const video = backend.video.poll(input.renderJobId);
+          if (video) return video;
           const job = backend.jobs.get(input.renderJobId);
           if (!job) throw new NotFoundError('RenderJob', input.renderJobId);
           job.polls += 1;
@@ -3157,6 +3256,14 @@ export function createMockRouter(backend: MockBackend) {
           const { polls: _p, ...dto } = job;
           return dto;
         }),
+        cancel: mutation.input(RenderCancel).mutation(({ input }) => {
+          const r = backend.video.cancel(input.renderJobId);
+          if (!r) throw new NotFoundError('RenderJob', input.renderJobId);
+          return r;
+        }),
+        exportMedia: query
+          .input(RenderGet)
+          .query(({ input }) => backend.video.exportMedia(input.renderJobId) ?? { items: [] }),
       }),
       comments: t.router({
         add: mutation.input(CommentAdd).mutation(({ input }) => {

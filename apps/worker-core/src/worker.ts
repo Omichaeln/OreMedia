@@ -12,7 +12,10 @@ import { composeModules, workerCoreCapabilities } from './composition';
 import { startAgentsWorker } from './agents-worker';
 import { runDispatchLoop } from './dispatch-loop';
 import { ensureIntelligenceSchedulesRunning } from './intelligence-worker';
-import { ensureRetentionScheduleRunning } from './operations-worker';
+import {
+  ensureIdempotencyKeyPurgeScheduleRunning,
+  ensureRetentionScheduleRunning,
+} from './operations-worker';
 import {
   TemporalWorkflowProbe,
   ensureRemoteChangeSweepScheduled,
@@ -84,6 +87,7 @@ try {
   await ensureBrandFactSweepScheduled(client); // BSC-3 daily fact expiry events and review-due flags
   await ensureIntelligenceSchedulesRunning(client); // spec 16.3 weekly analyst, 16.8 monthly baseline comparison
   await ensureRetentionScheduleRunning(client); // spec 17.5 daily TTL sweep (dry run unless RETENTION_SWEEP_APPLY)
+  await ensureIdempotencyKeyPurgeScheduleRunning(client); // spec 7.3 hourly purge of expired idempotency records
 } catch (err) {
   log.error(
     { errorMessage: err instanceof Error ? err.message : String(err) },

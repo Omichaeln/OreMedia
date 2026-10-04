@@ -3,7 +3,7 @@ import { PolicyDeniedError } from '@oremedia/contracts/errors';
 import type { GenerationScope } from '@oremedia/contracts/generation';
 import { findWithAncestors, isLockedInContext, reflow } from './reduce';
 
-/** Spec 11.2/11.4: protected elements (e.g. logos) cannot be moved, resized, recoloured, replaced or removed by agents. */
+/** Spec 11.2/11.4: protected elements (e.g. logos) cannot be moved, resized, recoloured, replaced, hidden or removed by agents. */
 const MUTATING_ON_ELEMENT = new Set<Operation['op']>([
   'removeElement',
   'setStyle',
@@ -13,6 +13,7 @@ const MUTATING_ON_ELEMENT = new Set<Operation['op']>([
   'setCrop',
   'reorderElement',
   'setLock',
+  'setVisibility',
   'setText',
   'setRotation',
   'setMask',

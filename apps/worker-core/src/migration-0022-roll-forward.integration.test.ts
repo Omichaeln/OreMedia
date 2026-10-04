@@ -10,7 +10,12 @@ import { auditEvents } from '@oremedia/db/schema/operations';
 import { channelConnections } from '@oremedia/db/schema/publishing';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { channelHealth, channelService } from '@oremedia/module-publishing';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0022 (RA-01 channel health): on a database populated at the previous head (0021)
@@ -25,7 +30,8 @@ const PREVIOUS_HEAD = '0021_report_quality_finding_work';
 const LATER_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestions, studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !LATER_TABLES.includes(t));
+  .filter((t) => !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0022 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

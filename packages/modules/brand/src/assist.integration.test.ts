@@ -1046,6 +1046,59 @@ describe('brand sources, assist jobs, suggestions and history (BSC-4/5) against 
       expect(await suggestions(j.jobId)).toHaveLength(1);
     });
 
+    it('a model call that finishes after the job was settled is still ledgered and counts toward the caps', async () => {
+      const before = await read(() => budgets.summary(brandA));
+      const j = await start(['voice'], [textId], { instruction: 'late charge' });
+      const scripted = scriptedModel({
+        voice: () => ({
+          personality: [],
+          principles: [],
+          styleRules: [],
+          claimRules: [],
+          remove: [],
+          questions: [],
+        }),
+      });
+      // The job is settled (its remainder released) while the section's model call is still running.
+      const rt = createBrandAssistRuntime({
+        model: {
+          async propose(req) {
+            await budgets.settle(j.jobId);
+            return scripted.propose(req);
+          },
+        },
+      });
+      const inp = input(j.jobId);
+      await read(() => rt.beginBrandAssist(inp));
+      await read(() => rt.prepareBrandAssistProposals(inp, A));
+      await read(() =>
+        rt.proposeBrandAssistSection({ ...inp, section: 'voice' }, { heartbeat: () => {}, attempt: 1 }),
+      );
+      const charges = await tdb.db
+        .select()
+        .from(usageLedger)
+        .where(eq(usageLedger.sourceRef, `brand-assist:${j.jobId}:voice`));
+      expect(charges.map((c) => c.idempotencyKey)).toEqual([`brand-assist:${j.jobId}:voice:a1`]);
+      const cost = charges[0]!.costMicros;
+      expect(cost).toBeGreaterThan(0);
+      const after = await read(() => budgets.summary(brandA));
+      expect(after.reservations.find((r) => r.runId === j.jobId)).toMatchObject({
+        state: 'settled',
+        consumedMicros: cost,
+      });
+      expect(after.day.committedMicros - before.day.committedMicros).toBe(cost);
+      // A replay of the same attempt charges nothing more.
+      await read(() =>
+        rt.proposeBrandAssistSection({ ...inp, section: 'voice' }, { heartbeat: () => {}, attempt: 1 }),
+      );
+      expect(
+        await tdb.db
+          .select()
+          .from(usageLedger)
+          .where(eq(usageLedger.sourceRef, `brand-assist:${j.jobId}:voice`)),
+      ).toHaveLength(1);
+    });
+
     it('cancel stops the next section; the job ends cancelled and its reservation is settled', async () => {
       const j = await start(['voice', 'facts'], [textId], { instruction: 'cancel' });
       const rt = createBrandAssistRuntime({

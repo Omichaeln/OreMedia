@@ -78,12 +78,46 @@ export interface ConnectStateStore {
 export class MemoryConnectStateStore implements ConnectStateStore {
   private readonly entries = new Map<string, ConnectState>();
   async put(state: string, value: ConnectState) {
+    // Flows a person never completed are evicted once expired, so abandoned states cannot accumulate.
+    const now = Date.now();
+    for (const [key, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(key);
     this.entries.set(state, value);
   }
   async take(state: string) {
     const v = this.entries.get(state);
     this.entries.delete(state);
     return v && v.expiresAt > Date.now() ? v : null;
+  }
+  /** Entries currently held (tests). */
+  get size(): number {
+    return this.entries.size;
+  }
+}
+
+/** The part of an ioredis client the shared store uses. */
+export interface ConnectStateRedis {
+  set(key: string, value: string, mode: 'PX', ttlMs: number): Promise<unknown>;
+  getdel(key: string): Promise<string | null>;
+}
+/**
+ * The shared store for a multi-instance deployment (REDIS_URL): each state expires in Redis at its own expiresAt and
+ * is read and removed in one GETDEL, so it is consumed once whichever instance the callback reaches. `prefix` keeps
+ * the channel and destination flows apart.
+ */
+export class RedisConnectStateStore implements ConnectStateStore {
+  constructor(
+    private readonly redis: ConnectStateRedis,
+    private readonly prefix: string,
+  ) {}
+  async put(state: string, value: ConnectState) {
+    const ttlMs = Math.max(1, value.expiresAt - Date.now());
+    await this.redis.set(`${this.prefix}${state}`, JSON.stringify(value), 'PX', ttlMs);
+  }
+  async take(state: string) {
+    const raw = await this.redis.getdel(`${this.prefix}${state}`);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as ConnectState;
+    return v.expiresAt > Date.now() ? v : null;
   }
 }
 let stateStore: ConnectStateStore = new MemoryConnectStateStore();

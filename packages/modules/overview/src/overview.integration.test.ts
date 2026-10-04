@@ -72,6 +72,8 @@ const run = <T>(tenantId: string, fn: (tx: Tx) => Promise<T>) =>
   runInTenant(ctx(tenantId), () => withTransaction(fn));
 const inTenant = <T>(tenantId: string, fn: () => Promise<T>) => runInTenant(ctx(tenantId), fn);
 const dayKey = (offset: number) => new Date(NOW.getTime() + offset * DAY).toISOString().slice(0, 10);
+/** Midday UTC of the day `offset` days from now: fixture times that stay inside their UTC day whatever hour the suite runs. */
+const middayOf = (offset: number) => new Date(`${dayKey(offset)}T12:00:00.000Z`);
 /** The last seven UTC days as the web sends them (today included; the platforms have not reported it). */
 const window = { windowStart: `${dayKey(-6)}T00:00:00.000Z`, windowEnd: `${dayKey(0)}T23:59:59.999Z` };
 
@@ -256,10 +258,9 @@ describe('overview read model against MySQL 8 (R2-5)', () => {
     disabledChannel = disabled.id;
     idleChannel = (await connect('acct_idle')).id;
     // Six posts this week with a number each, five the week before: the D-14 sample holds on both sides.
-    for (let i = 1; i <= 6; i++)
-      await publish(freshChannel, new Date(NOW.getTime() - i * DAY + 3_600_000), 100);
+    for (let i = 1; i <= 6; i++) await publish(freshChannel, middayOf(-i), 100);
     for (let i = 1; i <= 5; i++) {
-      const at = new Date(NOW.getTime() - (6 + i) * DAY);
+      const at = middayOf(-(6 + i));
       await publish(freshChannel, at, 80, new Date(at.getTime() + 3_600_000)); // fetched inside its own window
     }
 
