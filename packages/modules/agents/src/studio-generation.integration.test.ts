@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1, Element } from '@oremedia/contracts/creative';
-import { NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { BudgetExhaustedError, NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type {
   GenerationRequest,
   ModelFill,
@@ -264,7 +264,10 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     };
   }
   const head = (documentId: string) =>
-    inTenant(tenantA, () => creativeService.documents.get(A, { documentId })).then((d) => d.revision);
+    inTenant(tenantA, () => creativeService.documents.get(A, { documentId })).then((d) => {
+      if (d.revision.kind !== 'graphic') throw new Error('expected graphic'); // STU-2b: the DTO is per kind
+      return d.revision;
+    });
   const el = (doc: CreativeDocumentV1, name: string, page = 0): Element =>
     doc.pages[page]!.elements.find((e) => e.name.startsWith(name))!;
   const start = (documentId: string, baseRevisionId: string, request: z.input<typeof GenerationRequest>) =>
@@ -282,14 +285,14 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
       {
         assetId: 'ast_photo',
         assetVersionId: 'av_photo',
-        kind: 'image',
+        kind: 'photo',
         altText: 'Product photograph',
         semanticRole: 'product',
       },
       {
         assetId: 'ast_photo2',
         assetVersionId: 'av_photo2',
-        kind: 'image',
+        kind: 'photo',
         altText: null,
         semanticRole: null,
       },
@@ -457,6 +460,69 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     )[0]!;
     expect(reservation.state).toBe('settled');
     expect(jobRow.costSpentMicros).toBe(ledger[0]!.costMicros);
+  });
+
+  it('video and audio from the asset source are never offered or placed (STU-2b); the job still completes', async () => {
+    const photo = {
+      assetId: 'ast_photo',
+      assetVersionId: 'av_photo',
+      kind: 'photo',
+      altText: null,
+      semanticRole: null,
+    };
+    registerGenerationAssetSource(async () => [
+      photo,
+      { assetId: 'ast_video', assetVersionId: 'av_video', kind: 'video', altText: null, semanticRole: null },
+      { assetId: 'ast_audio', assetVersionId: 'av_audio', kind: 'audio', altText: null, semanticRole: null },
+    ]);
+    try {
+      const d = await starterDocument();
+      const headline = el(d.document, 'Headline');
+      const area = el(d.document, 'Image area');
+      const brief = { keyMessage: 'Reel teaser', channelKeys: ['instagram'], factIds: [] };
+      const preflight = await inTenant(tenantA, () =>
+        generationService.preflight(A, {
+          documentId: d.documentId,
+          baseRevisionId: d.revisionId,
+          request: { kind: 'generate', brief: { ...brief, assets: { include: ['av_video'] } } },
+        }),
+      );
+      expect(preflight.inputs.eligibleAssetCount).toBe(1);
+      expect(preflight.issues).toContainEqual(expect.objectContaining({ code: 'asset_not_eligible' }));
+      const job = await start(d.documentId, d.revisionId, { kind: 'generate', brief });
+      const { runtime, adapter } = runtimeWith([
+        fillCall({
+          summary: 'Reel teaser',
+          edits: [
+            { label: 'Headline', pageId: 'page_1', elementId: headline.id, text: 'Coming soon' },
+            { label: 'Clip', pageId: 'page_1', elementId: area.id, assetVersionId: 'av_video' },
+          ],
+        }),
+      ]);
+      expect(await drive(job, runtime)).toBe('completed');
+      const system = adapter.requests[0]!.system;
+      expect(system).toContain('av_photo');
+      expect(system).not.toContain('av_video');
+      expect(system).not.toContain('av_audio');
+      const done = await getJob(job.id);
+      expect(done.result?.refused).toContainEqual(
+        expect.objectContaining({ elementId: area.id, reason: 'asset_not_eligible' }),
+      );
+      const page = (await head(d.documentId)).snapshot.pages[0]!;
+      expect(page.elements.find((e) => e.id === headline.id)).toMatchObject({ text: 'Coming soon' });
+      expect(JSON.stringify(page)).not.toContain('av_video');
+    } finally {
+      registerGenerationAssetSource(async () => [
+        { ...photo, kind: 'photo', altText: 'Product photograph', semanticRole: 'product' },
+        {
+          assetId: 'ast_photo2',
+          assetVersionId: 'av_photo2',
+          kind: 'photo',
+          altText: null,
+          semanticRole: null,
+        },
+      ]);
+    }
   });
 
   it('start is idempotent per document, base revision and inputs; the studio reattaches to the live job', async () => {
@@ -755,6 +821,7 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
       creativeService.documents.get(A, { documentId: done.resultDocumentIds[1]! }),
     );
     expect(copy.title).toContain('variation 2');
+    if (copy.revision.kind !== 'graphic') throw new Error('expected graphic');
     expect(copy.revision.snapshot.pages[0]!.elements.find((e) => e.id === headline.id)).toMatchObject({
       text: 'Take two',
     });
@@ -936,6 +1003,7 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     expect(done.result?.refused).toEqual([]);
     for (const [i, documentId] of done.resultDocumentIds.entries()) {
       const got = await inTenant(tenantA, () => creativeService.documents.get(A, { documentId }));
+      if (got.revision.kind !== 'graphic') throw new Error('expected graphic');
       const page = got.revision.snapshot.pages[0]!;
       expect(got.revision.number).toBe(2);
       expect(got.revision.brandVersionId).toBe(jobBrandVersion);
@@ -1113,7 +1181,7 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     ).rejects.toThrow(/no blocking findings/);
   });
 
-  it('a cancel while the model call runs: the closed reservation is not charged further, the call cost is recorded, nothing is saved', async () => {
+  it('a cancel while the model call runs: the call cost is ledgered against the closed reservation and recorded, nothing is saved', async () => {
     const d = await starterDocument();
     const headline = el(d.document, 'Headline');
     const job = await start(d.documentId, d.revisionId, {
@@ -1146,7 +1214,63 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     const reservation = (
       await tdb.db.select().from(budgetReservations).where(eq(budgetReservations.runId, row.budgetRunId!))
     )[0]!;
-    expect(reservation).toMatchObject({ state: 'released', consumedMicros: 0 });
+    // The call had already cost what it cost: it stays against the caps (released rows count their consumption).
+    expect(reservation).toMatchObject({ state: 'released', consumedMicros: row.costSpentMicros });
+    const charged = await tdb.db
+      .select()
+      .from(usageLedger)
+      .where(eq(usageLedger.reservationId, reservation.id));
+    expect(charged.map((c) => c.costMicros)).toEqual([row.costSpentMicros]);
     expect((await head(d.documentId)).id).toBe(d.revisionId);
+  });
+
+  it('spend of a cancelled attempt still counts toward the brand-day cap after a retry', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const before = await inTenant(tenantA, () => budgets.summary(brandA));
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'generate',
+      brief: { keyMessage: 'Spend then cancel' },
+    });
+    const { runtime } = runtimeWith([
+      fillCall({
+        summary: 's',
+        edits: [{ label: 'H', pageId: 'page_1', elementId: headline.id, text: 'Spent' }],
+      }),
+    ]);
+    const input: StudioGenerationInputV1 = {
+      tenantId: tenantA,
+      actor: { kind: 'user', id: USER },
+      correlationId: 'c',
+      jobId: job.id,
+      attempt: 1,
+    };
+    // Attempt 1 reserves and its model call is charged while the reservation is held; then the person cancels
+    // before the save and retries.
+    await inTenant(tenantA, () => runtime.begin(input));
+    await inTenant(tenantA, () => runtime.reserve(input));
+    expect((await inTenant(tenantA, () => runtime.callModel(input, A))).proceed).toBe(true);
+    const spent = (await getJob(job.id)).costSpentMicros;
+    expect(spent).toBeGreaterThan(0);
+    const current = await getJob(job.id);
+    const cancelled = await run(tenantA, (tx) =>
+      generationService.cancel(A, { jobId: job.id, expectedVersion: current.version }, tx),
+    );
+    await run(tenantA, (tx) =>
+      generationService.retry(A, { jobId: job.id, expectedVersion: cancelled.version }, tx),
+    );
+    const after = await inTenant(tenantA, () => budgets.summary(brandA));
+    expect(after.day.committedMicros - before.day.committedMicros).toBe(spent);
+    // The cap holds with it: one micro over what remains is refused, exactly what remains fits.
+    const over = newId('agentRun');
+    const fits = newId('agentRun');
+    const deadline = new Date(Date.now() + 60_000);
+    await expect(
+      inTenant(tenantA, () => budgets.reserveSpend(brandA, over, after.day.remainingMicros + 1, deadline)),
+    ).rejects.toBeInstanceOf(BudgetExhaustedError);
+    await inTenant(tenantA, async () => {
+      await budgets.reserveSpend(brandA, fits, after.day.remainingMicros, deadline);
+      await budgets.release(fits);
+    });
   });
 });

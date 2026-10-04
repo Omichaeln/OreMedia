@@ -80,6 +80,29 @@ export async function query<T>(s: ApiSession, path: string, input?: unknown): Pr
   return answer<T>(res);
 }
 
+/**
+ * PUT bytes to an upload intent's signed URL, as the browser does (the store answers it, not the api). The status,
+ * or the network error's name and message, is what comes back; never the URL, whose query carries the signature.
+ */
+export async function putObject(
+  uploadUrl: string,
+  bytes: Uint8Array,
+  mime: string,
+): Promise<{ status: number; error: string }> {
+  try {
+    const res = await httpFetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'content-type': mime },
+      // A copy on a plain ArrayBuffer: a BodyInit under both the Node and the DOM typings.
+      body: new Uint8Array(bytes),
+    });
+    await res.arrayBuffer().catch(() => undefined);
+    return { status: res.status, error: res.status >= 300 ? `HTTP ${res.status}` : '' };
+  } catch (err) {
+    return { status: 0, error: err instanceof Error ? `${err.name}: ${err.message}` : 'request failed' };
+  }
+}
+
 export type SignInAnswer = { ok: true; token: string } | { ok: false; status: number; error: string };
 
 /**

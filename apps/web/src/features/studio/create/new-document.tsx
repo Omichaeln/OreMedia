@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import type { ContentType, CreativeDocumentV1 } from '@oremedia/contracts/creative';
+import { VIDEO_FORMAT_KEYS, VIDEO_FORMATS, type VideoFormatKey } from '@oremedia/contracts/video';
 import {
   STARTERS,
   blankDocument,
@@ -17,7 +18,7 @@ import { Select } from '../../../components/select';
 import { toUiError } from '../../../lib/errors';
 import { useBrandContext } from '../../brand/brand-context';
 import type { TemplateWithCurrentDto } from '../types';
-import { useDocuments, useTemplatesWithCurrent } from '../use-document';
+import { useDocuments, useTemplatesWithCurrent, useVideoTemplates } from '../use-document';
 import {
   CHANNELS,
   CONTENT_TYPES,
@@ -83,7 +84,7 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
     source: 'all',
   });
   const [details, setDetails] = useState<GalleryEntry | null>(null);
-  const [other, setOther] = useState<'blank' | 'custom' | 'duplicate' | null>(null);
+  const [other, setOther] = useState<'blank' | 'custom' | 'duplicate' | 'video' | null>(null);
   const start = useStartDocument({
     onCreated: () => {
       setDetails(null);
@@ -153,7 +154,8 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
             description={c.available ? c.description : (c.unavailableReason ?? '')}
             pressed={filters.type === c.key}
             disabled={!c.available}
-            onClick={() => set({ type: c.key })}
+            // STU-2b: a video has no page starters to filter; its tile opens the video start.
+            onClick={() => (c.key === 'video' ? setOther('video') : set({ type: c.key }))}
           />
         ))}
       </div>
@@ -324,6 +326,14 @@ export function NewDocumentGallery({ disabledReason }: { disabledReason?: string
       )}
       {other === 'duplicate' && (
         <DuplicateDialog busy={busy} onClose={() => setOther(null)} onStart={(req) => start.mutate(req)} />
+      )}
+      {other === 'video' && (
+        <VideoDialog
+          busy={busy}
+          disabledReason={disabledReason}
+          onClose={() => setOther(null)}
+          onStart={(req) => start.mutate(req)}
+        />
       )}
     </div>
   );
@@ -620,9 +630,10 @@ function BlankDialog({
   onStart: (req: StartRequest) => void;
 }) {
   const { brandId } = useBrandContext();
-  const startable = CONTENT_TYPES.filter((c) => c.available);
+  // A video (no page formats) starts in its own dialog.
+  const startable = CONTENT_TYPES.filter((c) => c.available && c.formats.length > 0);
   const [type, setType] = useState<ContentType>(
-    contentTypeOf(initialType).available ? initialType : 'social_post',
+    startable.some((c) => c.key === initialType) ? initialType : 'social_post',
   );
   const option = contentTypeOf(type);
   const [picked, setPicked] = useState<string | null>(null);
@@ -808,6 +819,96 @@ function DuplicateDialog({
             />
           </div>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * STU-2b: a video document on a timeline, from a blank output preset or a built-in video template bound to the
+ * brand (the template sets the format); the frame rate is chosen here.
+ */
+function VideoDialog({
+  busy,
+  disabledReason,
+  onClose,
+  onStart,
+}: {
+  busy: boolean;
+  disabledReason?: string;
+  onClose: () => void;
+  onStart: (req: StartRequest) => void;
+}) {
+  const { brandId } = useBrandContext();
+  const templates = useVideoTemplates(brandId, true);
+  const [templateKey, setTemplateKey] = useState('blank');
+  const [formatKey, setFormatKey] = useState<VideoFormatKey>('video_9x16');
+  const [fps, setFps] = useState<24 | 25 | 30>(30);
+  const template = templates.data?.items.find((t) => t.key === templateKey);
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent title="Video" description="A reel, short or video ad edited on a timeline.">
+        {templates.isError && (
+          <RequestError error={templates.error} onRetry={() => void templates.refetch()} />
+        )}
+        <StartForm
+          defaultTitle={suggestTitle('video', null)}
+          busy={busy}
+          disabledReason={disabledReason}
+          onStart={(title) =>
+            onStart({
+              kind: 'create',
+              input: {
+                brandId,
+                title,
+                kind: 'video',
+                video: {
+                  formatKey: template?.formatKey ?? formatKey,
+                  fps,
+                  ...(template ? { templateKey: template.key } : {}),
+                },
+              },
+            })
+          }
+        >
+          <Field label="Starting point" htmlFor="video-template" hint={template?.description}>
+            <Select
+              id="video-template"
+              value={templateKey}
+              onValueChange={(v) => {
+                if (v) setTemplateKey(v);
+              }}
+              options={[
+                { value: 'blank', label: 'Blank video' },
+                ...(templates.data?.items ?? []).map((t) => ({ value: t.key, label: t.name })),
+              ]}
+            />
+          </Field>
+          <Field label="Format" htmlFor="video-format" hint={template ? 'Set by the template' : undefined}>
+            <Select
+              id="video-format"
+              value={template?.formatKey ?? formatKey}
+              disabled={Boolean(template)}
+              onValueChange={(v) => {
+                if (v) setFormatKey(v as VideoFormatKey);
+              }}
+              options={VIDEO_FORMAT_KEYS.map((k) => ({
+                value: k,
+                label: `${VIDEO_FORMATS[k].label} (${VIDEO_FORMATS[k].width}×${VIDEO_FORMATS[k].height})`,
+              }))}
+            />
+          </Field>
+          <Field label="Frame rate" htmlFor="video-fps">
+            <Select
+              id="video-fps"
+              value={String(fps)}
+              onValueChange={(v) => {
+                if (v) setFps(Number(v) as 24 | 25 | 30);
+              }}
+              options={[24, 25, 30].map((n) => ({ value: String(n), label: `${n} fps` }))}
+            />
+          </Field>
+        </StartForm>
       </DialogContent>
     </Dialog>
   );

@@ -520,45 +520,60 @@ export function createDestinationReportRuntime(
       return { outcome: 'fetched', rows: rows.length, days: new Set(rows.map((r) => r.date)).size };
     },
 
-    /** The run's record and the destination's health from it, under the row lock as setHealth writes it. */
+    /**
+     * The run's record and the destination's health from it, under the row lock as setHealth writes it. Recorded
+     * once per call: the key is the run (the destination and its clock `now`, as destinationReportsWorkflowId names
+     * it) and what it reports, so a Temporal retry whose first attempt committed (the acknowledgement was lost)
+     * answers the stored health and writes nothing; a finish that failed releases the marker for its retry.
+     */
     async finishDestinationReports({
+      tenantId,
       destinationId,
+      now: at,
       health,
       fetched,
       reason,
     }: DestinationReportFinishInputV1) {
-      return withTransaction(async (tx) => {
-        const locked = await destinationsRepo.lock(destinationId, tx);
-        if (locked.status !== 'active') return { health: locked.health };
-        if (locked.health !== health) {
-          await destinationsRepo.update(locked.id, locked.version, { health, healthCheckedAt: now() }, tx);
+      const finishKey = `finish:${REPORT_JOB}:${tenantId}:${destinationId}:${hashCanonical({ at, health, fetched, reason })}`;
+      if ((await reportLock.hit(finishKey, REPORT_LOCK_SECONDS)).count > 1)
+        return { health: (await destinationsRepo.getById(destinationId)).health };
+      try {
+        return await withTransaction(async (tx) => {
+          const locked = await destinationsRepo.lock(destinationId, tx);
+          if (locked.status !== 'active') return { health: locked.health };
+          if (locked.health !== health) {
+            await destinationsRepo.update(locked.id, locked.version, { health, healthCheckedAt: now() }, tx);
+            await audit.record(
+              workflowActor(),
+              'destination.health',
+              { type: 'brand_destination', id: locked.id },
+              'allowed',
+              tx,
+              { brandId: locked.brandId, fromState: locked.health, toState: health },
+            );
+          } else await destinationsRepo.update(locked.id, locked.version, { healthCheckedAt: now() }, tx);
           await audit.record(
             workflowActor(),
-            'destination.health',
+            'destination.report.fetched',
             { type: 'brand_destination', id: locked.id },
-            'allowed',
+            health === 'healthy' ? 'allowed' : 'denied',
             tx,
-            { brandId: locked.brandId, fromState: locked.health, toState: health },
+            {
+              brandId: locked.brandId,
+              kind: locked.kind,
+              count: fetched.reduce((n, f) => n + f.rows, 0),
+              scope: fetched.map((f) => f.reportKey).join(','),
+              reason,
+              fromState: locked.health,
+              toState: health,
+            },
           );
-        } else await destinationsRepo.update(locked.id, locked.version, { healthCheckedAt: now() }, tx);
-        await audit.record(
-          workflowActor(),
-          'destination.report.fetched',
-          { type: 'brand_destination', id: locked.id },
-          health === 'healthy' ? 'allowed' : 'denied',
-          tx,
-          {
-            brandId: locked.brandId,
-            kind: locked.kind,
-            count: fetched.reduce((n, f) => n + f.rows, 0),
-            scope: fetched.map((f) => f.reportKey).join(','),
-            reason,
-            fromState: locked.health,
-            toState: health,
-          },
-        );
-        return { health };
-      });
+          return { health };
+        });
+      } catch (err) {
+        await reportLock.reset(finishKey);
+        throw err;
+      }
     },
 
     /**

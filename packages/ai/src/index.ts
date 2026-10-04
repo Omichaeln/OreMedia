@@ -115,6 +115,14 @@ export {
   type BrandAssistPrompt,
 } from './brand-assist';
 export {
+  assembleVideoAiPrompt,
+  createVideoAiCapabilitySource,
+  parseVideoAiOutput,
+  videoAiTool,
+  STORYBOARD_TOOL,
+  RECUT_TOOL,
+} from './video-ai-prompt';
+export {
   MemoryProviderJobStore,
   registerProviderJobStore,
   providerJobs,

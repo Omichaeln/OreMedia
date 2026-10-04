@@ -182,7 +182,7 @@ describe('API request path (spec 4.3, 7.1–7.3)', () => {
     const created = await callPath(
       { bearer: tenantA.ownerToken, tenantId: tenantA.tenantId },
       'access.apiClients.create',
-      { servicePrincipalId: tenantA.servicePrincipalId, scopes: [] },
+      { servicePrincipalId: tenantA.servicePrincipalId, scopes: ['brands:read'] },
     );
     const { apiClientId, key } = created.data as { apiClientId: string; key: string };
     expect(key.startsWith('ak_')).toBe(true);

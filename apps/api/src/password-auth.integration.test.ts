@@ -632,17 +632,99 @@ describe('password sign-in: sign-in route, setup links, account password', () =>
         expect(await liveSessions(p.id)).toEqual([]);
       });
 
-      it('once the person changes it themselves it is theirs: invitations are accepted and it is kept', async () => {
+      const linkGoogle = (p: { id: string; email: string }) =>
+        tdb.db.insert(externalIdentities).values({
+          id: newId('externalIdentity'),
+          provider: 'google',
+          subject: `google-${randomUUID()}`,
+          userId: p.id,
+          emailAtLink: p.email,
+        });
+      const passwordSession = async (email: string, password: string) => {
+        const jar = new CookieJar();
+        expect((await signIn(email, password, { jar })).status).toBe(200);
+        return jar.cookies.get('oremedia_session') as string;
+      };
+
+      // Changed behaviour: a change proven with the link password used to make it `self`. Knowing that password only
+      // proves the caller held the link (possibly the admin who issued it), so it now stays confined.
+      it('changing it with the link password keeps it confined: holding the link is not being the person', async () => {
         const p = await linkedMember();
         const mine = await sessionFor(p.id);
-        const own = 'my own chosen passphrase';
+        const changed = 'changed with the link password';
         expect(
           (
             await callPath({ bearer: mine.token }, 'access.account.setPassword', {
               currentPassword: PASSWORD,
-              newPassword: own,
+              newPassword: changed,
             })
           ).data,
+        ).toEqual({ ok: true });
+        const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
+        expect(row?.passwordOrigin).toBe('setup_link');
+        const invitation = await inviteToA(p);
+        expect((await signIn(p.email, changed)).status).toBe(200);
+        expect(await statusOf(invitation)).toBe('invited');
+      });
+
+      it('the issuer keeps no way into a company the person joins later, even after changing the password', async () => {
+        // 1-2. Company B's link is redeemed, then the password is changed with it, as the issuer could do.
+        const p = await linkedMember();
+        const held = await passwordSession(p.email, PASSWORD);
+        const changed = 'the issuer picks this one';
+        expect(
+          (
+            await callPath({ bearer: held }, 'access.account.setPassword', {
+              currentPassword: PASSWORD,
+              newPassword: changed,
+            })
+          ).data,
+        ).toEqual({ ok: true });
+        // 3. Company A invites the person, who accepts with Google.
+        const invitation = await inviteToA(p);
+        const google = await googleSignIn(p.email);
+        expect(google.ok).toBe(true);
+        expect(await statusOf(invitation)).toBe('active');
+        // 4. The password is gone, every session it opened has ended, and it signs nobody in.
+        const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
+        expect(row).toMatchObject({ passwordHash: null, passwordOrigin: null });
+        expect((await liveSessions(p.id)).map((x) => x.id)).toEqual([
+          (google as { sessionId: string }).sessionId,
+        ]);
+        expect((await callPath({ bearer: held }, 'access.listCompanies', undefined)).error?.code).toBe(
+          'UNAUTHENTICATED',
+        );
+        expect((await signIn(p.email, changed)).status).toBe(401);
+      });
+
+      it('removing it and setting a first password from a session the link password opened keeps it confined', async () => {
+        const p = await linkedMember();
+        await linkGoogle(p); // removal needs another sign-in method
+        const held = await passwordSession(p.email, PASSWORD);
+        expect(
+          (await callPath({ bearer: held }, 'access.account.removePassword', { currentPassword: PASSWORD }))
+            .data,
+        ).toEqual({ ok: true });
+        expect(
+          (await callPath({ bearer: held }, 'access.account.setPassword', { newPassword: 'set right after' }))
+            .data,
+        ).toEqual({ ok: true });
+        const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
+        expect(row?.passwordOrigin).toBe('setup_link');
+      });
+
+      it('the person makes it their own from a Google session: remove it, then set a first password', async () => {
+        const p = await linkedMember();
+        const google = await googleSignIn(p.email); // no invitation: nothing is cleared
+        expect(google.ok).toBe(true);
+        const token = (google as { token: string }).token;
+        expect(
+          (await callPath({ bearer: token }, 'access.account.removePassword', { currentPassword: PASSWORD }))
+            .data,
+        ).toEqual({ ok: true });
+        const own = 'my own chosen passphrase';
+        expect(
+          (await callPath({ bearer: token }, 'access.account.setPassword', { newPassword: own })).data,
         ).toEqual({ ok: true });
         const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
         expect(row?.passwordOrigin).toBe('self');
@@ -773,9 +855,10 @@ describe('password sign-in: sign-in route, setup links, account password', () =>
       expect(await verifyPassword(PASSWORD, row?.passwordHash ?? null)).toBe(true);
     }, 60_000);
 
-    it('removing the password is refused without a linked Google identity, allowed with one', async () => {
+    it('removing the password is refused without a linked Google identity, allowed with one; other sessions end', async () => {
       const p = await person({ password: PASSWORD });
       const mine = await sessionFor(p.id);
+      const elsewhere = await sessionFor(p.id);
       const remove = (currentPassword = PASSWORD) =>
         callPath({ bearer: mine.token }, 'access.account.removePassword', { currentPassword });
       expect((await remove('not the password at all')).error).toMatchObject({
@@ -799,9 +882,15 @@ describe('password sign-in: sign-in route, setup links, account password', () =>
         hasPassword: true,
         hasGoogle: true,
       });
+      expect((await liveSessions(p.id)).map((s) => s.id).sort()).toEqual([mine.id, elsewhere.id].sort());
       expect((await remove()).data).toEqual({ ok: true });
       const [row] = await tdb.db.select().from(users).where(eq(users.id, p.id));
       expect(row?.passwordHash).toBeNull();
+      // A session the password may have opened ends with it; the one that removed it stays.
+      expect((await liveSessions(p.id)).map((s) => s.id)).toEqual([mine.id]);
+      expect(
+        (await callPath({ bearer: elsewhere.token }, 'access.account.signInMethods', undefined)).error?.code,
+      ).toBe('UNAUTHENTICATED');
       expect((await authEventsOf(p.id)).at(-1)).toMatchObject({ action: 'auth.password_remove' });
       expect((await signIn(p.email, PASSWORD)).status).toBe(401);
     });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ToolDefinition } from '../tool-registry';
 import { NOT_AVAILABLE_YET } from './services';
+import { untrustedText } from '../prompt';
 import type { ToolContext } from '../tool-registry';
 
 /**
@@ -68,7 +69,13 @@ export const metricsQuery: ToolDefinition<
 const VoiceClustersInput = z.object({ limit: z.number().int().min(1).max(50).default(20) }).strict();
 const VoiceClustersOutput = z.object({
   clusters: z.array(
-    z.object({ id: z.string(), label: z.string(), size: z.number().int(), examples: z.array(z.string()) }),
+    z.object({
+      id: z.string(),
+      // A label is customer text (the opening of a public comment): neutralised and marked untrusted.
+      label: z.object({ untrusted: z.literal(true), text: z.string() }),
+      size: z.number().int(),
+      examples: z.array(z.string()),
+    }),
   ),
 });
 
@@ -89,8 +96,14 @@ export const voiceClusters: ToolDefinition<
   action: 'insight.read',
   effect: 'read',
   availability,
-  run: (input, ctx) =>
-    sourceOf(ctx).voiceClusters(ctx.actor, { brandId: ctx.run.brandId, limit: input.limit }, ctx.tx),
+  async run(input, ctx) {
+    const { clusters } = await sourceOf(ctx).voiceClusters(
+      ctx.actor,
+      { brandId: ctx.run.brandId, limit: input.limit },
+      ctx.tx,
+    );
+    return { clusters: clusters.map((c) => ({ ...c, label: untrustedText(c.label) })) };
+  },
 };
 
 const RecommendationsCreateInput = z

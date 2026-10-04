@@ -18,9 +18,11 @@ export {
   configureConnectCallback,
   connectCallbackUriInUse,
   MemoryConnectStateStore,
+  RedisConnectStateStore,
   CONNECT_STATE_TTL_MS,
   type ChannelConnectResult,
   type ConnectState,
+  type ConnectStateRedis,
   type ConnectStateStore,
 } from './channels';
 export { publicationService, type ActorOptions } from './publications';

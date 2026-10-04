@@ -10,7 +10,6 @@ import { useStarterBrand } from './create/use-starter-brand';
 import { DocumentTitle } from './document-title';
 import { InsertToolbar } from './insert-toolbar';
 import { newElementId } from '../../lib/ids';
-import type { FontOption } from './properties-panel';
 import { useTheme } from '../../lib/theme';
 import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
@@ -20,7 +19,7 @@ import { assetVersionIdsOf, fontRefsOf, logoVersionIdsOf } from './document-help
 import { FormatStrip } from './format-strip';
 import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
-import { PropertiesPanel } from './properties-panel';
+import { PropertiesPanel, toFontOption, type FontOption } from './properties-panel';
 import { AgentPanel } from './agent-panel';
 import { GeneratePanel } from './generate-panel';
 import { RenderPanel } from './render-panel';
@@ -103,13 +102,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
     : null;
   const brandFonts = useBrandFonts(brandId);
   const fontOptions: FontOption[] = useMemo(
-    () =>
-      (brandFonts.data?.items ?? []).map((f) => ({
-        assetVersionId: f.assetVersionId,
-        label: [f.family ?? f.name, f.subfamily ?? (f.weight ? String(f.weight) : null)]
-          .filter(Boolean)
-          .join(' '),
-      })),
+    () => (brandFonts.data?.items ?? []).map(toFontOption),
     [brandFonts.data],
   );
   const generatedIds = useGeneratedAssetIds(

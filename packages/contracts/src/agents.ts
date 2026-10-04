@@ -72,12 +72,27 @@ export const BudgetSetLimit = z.object({
   limitMicros: z.number().int().min(0),
 });
 
+/**
+ * The task brief is inlined into the system prompt of every step, so it is bounded: at most 32 KB serialised, not
+ * counting `evidence` (each evidence item is bounded and rendered once as an untrusted evidence block).
+ */
+export const RUN_BRIEF_MAX_BYTES = 32 * 1024;
+const serialisedBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
+export const RunBrief = z.record(z.unknown()).superRefine((brief, ctx) => {
+  const { evidence: _evidence, ...rest } = brief;
+  if (serialisedBytes(rest) > RUN_BRIEF_MAX_BYTES)
+    ctx.addIssue({
+      code: 'custom',
+      message: `brief_too_large: at most ${RUN_BRIEF_MAX_BYTES} bytes serialised`,
+    });
+});
+
 export const RunStart = z.object({
   brandId: z.string(),
   servicePrincipalId: z.string(),
   requestedAutonomy: AutonomyMode.default('create'),
   taskKind: z.string(),
-  brief: z.record(z.unknown()),
+  brief: RunBrief,
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -154,8 +169,10 @@ export const EvidenceSourceKind = z.enum([
 ]);
 export type EvidenceSourceKind = z.infer<typeof EvidenceSourceKind>;
 
+/** Evidence ids are rendered inside the marker line, so they are plain identifiers (no quotes, spaces or newlines). */
+export const EVIDENCE_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 export const EvidenceItem = z.object({
-  id: z.string().min(1).max(80),
+  id: z.string().regex(EVIDENCE_ID),
   sourceKind: EvidenceSourceKind,
   ref: z.string().max(1000),
   text: z.string().max(20000),

@@ -218,3 +218,41 @@ describe('malicious package fixtures (spec 18: skill package → runtime)', () =
     expect(Object.keys(content.references)).toEqual(['references/checklist.md', 'assets/grid.svg']);
   });
 });
+
+describe('link checks in linear time (spec 18)', () => {
+  const skill = (content: string) => [
+    { path: 'SKILL.md', content },
+    { path: 'manifest.json', content: manifestJson(manifest()) },
+  ];
+  const issues = (content: string) => {
+    try {
+      parsePackage(skill(content));
+      return [];
+    } catch (err) {
+      return ((err as ValidationFailedError).details ?? []).map((d) => d.issue);
+    }
+  };
+
+  it.each([
+    ['an attribute', `<img src=${' '.repeat(100_000)}>`],
+    ['an anchor', `<a href=${' '.repeat(100_000)}>`],
+    ['a CSS url', `url(${' '.repeat(100_000)}x`],
+    ['a CSS import', `@import ${' '.repeat(100_000)}x`],
+  ])('reads a long run of spaces after %s in linear time', (_, content) => {
+    const started = performance.now();
+    expect(issues(`# Unit skill\n\n${content}\n`)).toEqual([]);
+    // The earlier `\s*["']?\s*` took seconds here; a generous bound.
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it('finds the same quoted and spaced links as before', () => {
+    expect(issues('<img src = " https://evil.example/a.png">')).toEqual(['remote_fetch_prohibited']);
+    expect(issues("<video poster='  //evil.example/p.png'>")).toEqual(['remote_fetch_prohibited']);
+    expect(issues('<style>.a{background:url(  "http://evil.example/a.png")}</style>')).toEqual([
+      'remote_fetch_prohibited',
+    ]);
+    expect(issues('<style>@import   "//evil.example/a.css";</style>')).toEqual(['remote_fetch_prohibited']);
+    expect(issues("<a href=' javascript:alert(1)'>x</a>")).toEqual(['link_scheme_prohibited']);
+    expect(issues('<a class="x" href="  https://example.com/guide">ok</a> <img src="SKILL.md">')).toEqual([]);
+  });
+});

@@ -2097,4 +2097,83 @@ describe('brand module (spec 8) against MySQL 8', () => {
       ).rejects.toBeInstanceOf(ValidationFailedError);
     });
   });
+  describe('agents and API-key principals only propose (spec 5.5)', () => {
+    // An API client resolves to its service principal with the key's per-request autonomy ceiling (create).
+    const apiKey = (tenantId: string): ResolvedActor => ({
+      kind: 'service_principal',
+      id: 'sp_brand_api_key',
+      tenantId,
+      status: 'active',
+      maxAutonomy: 'create',
+      requestAutonomy: 'create',
+      grants: [
+        { action: 'brand.read', brandIds: 'all' },
+        { action: 'brand.edit_standards', brandIds: 'all' },
+      ],
+    });
+
+    it('brand create, objectives.set and system.discardProposal refuse a service principal with propose_only', async () => {
+      const brandsBefore = await tdb.db.select().from(brands).where(eq(brands.tenantId, tenantA));
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.create(
+            apiKey(tenantA),
+            { name: 'Key-made brand', timezone: 'UTC', defaultLocale: 'en', classification: 'client' },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'propose_only' });
+      expect(await tdb.db.select().from(brands).where(eq(brands.tenantId, tenantA))).toHaveLength(
+        brandsBefore.length,
+      );
+
+      const objectivesBefore = await tdb.db
+        .select()
+        .from(brandObjectives)
+        .where(eq(brandObjectives.brandId, brandA));
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.objectives.set(
+            apiKey(tenantA),
+            {
+              brandId: brandA,
+              name: 'Set by a key',
+              primaryMetricKey: 'clicks',
+              guardrailMetricKeys: [],
+              activeFrom: new Date().toISOString(),
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'propose_only' });
+      expect(await tdb.db.select().from(brandObjectives).where(eq(brandObjectives.brandId, brandA))).toEqual(
+        objectivesBefore,
+      );
+
+      // A person's proposal stays open when a key tries to retire it; the person can.
+      const proposal = await run(tenantA, (tx) =>
+        brandService.versions.createDraft(A, { brandId: brandA2 }, tx),
+      );
+      await expect(
+        run(tenantA, (tx) =>
+          brandService.system.discardProposal(
+            apiKey(tenantA),
+            { brandId: brandA2, versionId: proposal.versionId, expectedVersion: 0 },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject({ reason: 'propose_only' });
+      expect(
+        (await tdb.db.select().from(brandVersions).where(eq(brandVersions.id, proposal.versionId)))[0]!.state,
+      ).toBe('draft');
+      const discarded = await run(tenantA, (tx) =>
+        brandService.system.discardProposal(
+          A,
+          { brandId: brandA2, versionId: proposal.versionId, expectedVersion: 0 },
+          tx,
+        ),
+      );
+      expect(discarded.state).toBe('retired');
+    });
+  });
 });

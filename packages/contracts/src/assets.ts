@@ -272,10 +272,17 @@ export const UPLOAD_INTENT_TTL_SEC = 60 * 60;
 export const MAX_IMAGE_PIXELS = 64_000_000;
 
 /** Kinds compatible with each purpose (spec 9.2 "kind compatible with :purpose"). */
+/**
+ * Still-image kinds: what a graphic document's image, logo and background layers (and a video's stills and image
+ * overlays) may use. STU-2b: the `creative` purpose also takes a person's video and audio uploads (with recorded
+ * rights, like every creative asset) for timelines; graphic layers keep to these kinds.
+ */
+export const IMAGE_CREATIVE_KINDS: readonly AssetKind[] = ['photo', 'illustration', 'icon', 'logo'];
+
 export const PURPOSE_KINDS: Readonly<Record<AssetPurpose, readonly AssetKind[]>> = {
   logo: ['logo'],
   font: ['font'],
-  creative: ['photo', 'illustration', 'icon', 'logo'],
+  creative: [...IMAGE_CREATIVE_KINDS, 'video', 'audio'],
   reference: AssetKind.options,
 };
 
