@@ -62,6 +62,7 @@ export type {
   CmsRemoveResult,
   CmsRenderedPage,
   CmsUpdatePrecondition,
+  CmsWriteSafety,
 } from './cms-contract';
 export { CMS_MEDIA_MAX_BYTES } from './cms-contract';
 export { CmsRegistry, cmsRegistry } from './cms-registry';

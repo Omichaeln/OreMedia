@@ -457,6 +457,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await ga4.textContent()).toContain('Healthy');
     expect(await ga4.getAttribute('data-destination-health')).toBe('healthy');
     expect(await page.getByTestId('destination-dst_e2e_gbp').textContent()).toContain('Not checked');
+    // PR-03: the website verified without the conditional-write plugin is in limited mode and says what that means;
+    // a destination that never updates articles shows no such state.
+    const cms = page.getByTestId('destination-dst_e2e_cms');
+    expect(await cms.getByTestId('destination-write-safety').textContent()).toBe('Limited mode');
+    expect(await cms.getByTestId('destination-limited-mode').textContent()).toContain(
+      'Oremedia conditional-write plugin',
+    );
+    expect(await ga4.getByTestId('destination-write-safety').count()).toBe(0);
     // Register a Search Console site: it joins the list under its own kind, owned by the signed-in person.
     await page.locator('#destination-kind').click();
     await page.getByRole('option', { name: 'Search Console site' }).click();

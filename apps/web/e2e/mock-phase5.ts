@@ -612,6 +612,60 @@ export class Phase5Backend {
     return p;
   }
 
+  /**
+   * Test backdoor (PR-03): the website refused the requested article edit, as the runtime records it: the change
+   * fails with `conflict` (the site moved since the read-back) or `limited_mode` (no atomic update on the site), and
+   * a refreshed read-back carries what the site holds now beside the refused text.
+   */
+  refuseArticleEdit(
+    publicationId: string,
+    reason: 'remote_changed' | 'limited_mode',
+    siteHtml: string,
+  ): void {
+    const p = this.publication(publicationId);
+    for (const c of p.remoteChanges.filter((x) => x.state === 'requested' && x.kind === 'edit')) {
+      const code = reason === 'remote_changed' ? 'conflict' : 'limited_mode';
+      Object.assign(c, {
+        state: 'failed',
+        finishedAt: now(),
+        errorCode: code,
+        errorDetail: 'nothing was written',
+      });
+      const current = {
+        remoteId: p.remotePostId,
+        remoteUrl: p.remoteUrl,
+        title: P5_ARTICLE.title,
+        slug: P5_ARTICLE.slug,
+        status: 'publish',
+        modifiedAt: now(),
+        contentHash: hash(siteHtml),
+      };
+      const payload = {
+        ...current,
+        changeId: c.id,
+        refreshedAfter: code,
+        conflict: {
+          reason,
+          current: { ...current, html: siteHtml },
+          editUrl:
+            reason === 'remote_changed' ? 'https://acme.example/wp-admin/post.php?post=42&action=edit' : null,
+          attemptedHtml: c.text ?? '',
+        },
+      };
+      this.evidence.push({
+        id: rid('ev'),
+        publicationId: p.id,
+        attemptId: null,
+        kind: 'remote_readback',
+        remotePostId: p.remotePostId,
+        remoteUrl: p.remoteUrl,
+        payload,
+        payloadHash: hash(payload),
+        capturedAt: now(),
+      });
+    }
+  }
+
   /** Test backdoor: the requested change's workflow was lost; past the stale threshold it no longer blocks. */
   makeRemoteChangeStale(publicationId: string): void {
     for (const c of this.publication(publicationId).remoteChanges)

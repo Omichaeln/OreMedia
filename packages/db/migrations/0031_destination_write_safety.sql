@@ -1,0 +1,2 @@
+ALTER TABLE `brand_destinations` ADD `write_safety` enum('unknown','conditional','limited') DEFAULT 'unknown' NOT NULL;--> statement-breakpoint
+ALTER TABLE `brand_destinations` ADD `write_safety_checked_at` datetime(3);

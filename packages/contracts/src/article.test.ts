@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   articleFirstParagraph,
+  articleHtmlBlocks,
   articleHtmlChars,
   articleLastParagraph,
   articlePlainText,
@@ -670,5 +671,17 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
       key: 'title_present',
       ok: true,
     });
+  });
+});
+
+describe('articleHtmlBlocks (PR-03: the conflict comparison)', () => {
+  it('reads each block as text, in order: entities decoded, whitespace folded, case kept, scripts and empty blocks dropped', () => {
+    expect(
+      articleHtmlBlocks(
+        '<h2>Why  ore</h2>\n<p>Ore &amp; tar<br>are <strong>heavy</strong>.</p><p> </p><ul><li>One</li><li>Two</li></ul><script>alert(1)</script><blockquote>Quoted</blockquote>',
+      ),
+    ).toEqual(['Why ore', 'Ore & tar are heavy.', 'One', 'Two', 'Quoted']);
+    expect(articleHtmlBlocks('')).toEqual([]);
+    expect(articleHtmlBlocks('plain text without tags')).toEqual(['plain text without tags']);
   });
 });
