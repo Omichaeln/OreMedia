@@ -12,6 +12,7 @@ import {
   sanitizeArticleHtml,
   validateRenderedPage,
 } from './article';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from './testing/linear-time';
 import {
   ARTICLE_BODY_MAX_CHARS,
   ARTICLE_EXCERPT_MAX,
@@ -486,13 +487,15 @@ describe('character references that are not Unicode scalar values (crafted pages
 });
 
 describe('reading untrusted markup in linear time (the sanitiser and the rendered-page checks)', () => {
-  /** A generous bound: the regular expressions these replace took seconds (or, for attributes, forever) here. */
-  const fast = (run: () => unknown) => {
-    const started = performance.now();
-    run();
-    expect(performance.now() - started).toBeLessThan(250);
+  /**
+   * Time grows with the input, not its square: 8× the input takes well under 64× the CPU time. The regular
+   * expressions these replace took seconds (or, for attributes, forever) at the larger sizes.
+   */
+  const linear = (input: (size: number) => string, run: (html: string) => unknown, size = 12_500) => {
+    const growth = timeGrowth(input, run, { size });
+    expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
+    expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
   };
-  const N = 100_000;
   const check = (html: string) =>
     validateRenderedPage({
       status: 200,
@@ -504,34 +507,45 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     });
 
   it.each([
-    ['unclosed comments', '<!--'.repeat(N / 4)],
-    ['unclosed tags', '<a x'.repeat(N / 4)],
-    ['bare angle brackets', '<'.repeat(N)],
-    ['unclosed quotes', '<a "'.repeat(N / 4)],
-    ['a URL of character references', `<a href="${'&#x3a'.repeat(N / 5)}&#">x</a>`],
-  ])('sanitises %s in linear time', (_, input) => {
-    fast(() => sanitizeArticleHtml(input));
-  });
+    ['unclosed comments', (n: number) => '<!--'.repeat(n / 4)],
+    ['unclosed tags', (n: number) => '<a x'.repeat(n / 4)],
+    ['bare angle brackets', (n: number) => '<'.repeat(n)],
+    ['unclosed quotes', (n: number) => '<a "'.repeat(n / 4)],
+    ['a URL of character references', (n: number) => `<a href="${'&#x3a'.repeat(n / 5)}&#">x</a>`],
+  ])(
+    'sanitises %s in linear time',
+    (_, input) => {
+      linear(input, sanitizeArticleHtml);
+    },
+    30_000,
+  );
 
   it('sanitises a tag with many empty attributes and no `>` (exponential for the earlier pattern)', () => {
-    // 2^40 backtracking steps for the earlier token pattern; one pass for the scanner.
-    fast(() => expect(sanitizeArticleHtml(`<a${' x=""'.repeat(40)}`)).toBe(`&lt;a${' x=""'.repeat(40)}`));
-    fast(() => sanitizeArticleHtml(`<a${' x=""'.repeat(N / 5)}`));
-  });
+    // 2 → 16 attributes is ×8 time for the scanner and ×2^14 for the earlier token pattern, which never finished
+    // at 40 (2^40 steps); the growth checks come first, so a backtracking pattern fails them instead of hanging.
+    const attrs = (n: number) => `<a${' x=""'.repeat(n)}`;
+    linear(attrs, sanitizeArticleHtml, 2);
+    linear(attrs, sanitizeArticleHtml, 2_500);
+    expect(sanitizeArticleHtml(attrs(40))).toBe(`&lt;a${' x=""'.repeat(40)}`);
+  }, 30_000);
 
   it.each([
-    ['bare angle brackets', '<'.repeat(N)],
-    ['unclosed tags', '<a '.repeat(N / 3)],
-    ['unclosed scripts', '<script>'.repeat(N / 8)],
-    ['unclosed titles', '<title>'.repeat(N / 7)],
-    ['unclosed headings', '<h1>'.repeat(N / 4)],
-    ['unclosed metas', '<meta '.repeat(N / 6)],
-    ['unclosed links', '<link '.repeat(N / 6)],
-  ])('reads a rendered page of %s in linear time', (_, input) => {
-    fast(() => check(input));
-    fast(() => pageText(input));
-    fast(() => articleHtmlChars(input));
-  });
+    ['bare angle brackets', (n: number) => '<'.repeat(n)],
+    ['unclosed tags', (n: number) => '<a '.repeat(n / 3)],
+    ['unclosed scripts', (n: number) => '<script>'.repeat(n / 8)],
+    ['unclosed titles', (n: number) => '<title>'.repeat(n / 7)],
+    ['unclosed headings', (n: number) => '<h1>'.repeat(n / 4)],
+    ['unclosed metas', (n: number) => '<meta '.repeat(n / 6)],
+    ['unclosed links', (n: number) => '<link '.repeat(n / 6)],
+  ])(
+    'reads a rendered page of %s in linear time',
+    (_, input) => {
+      linear(input, check);
+      linear(input, pageText);
+      linear(input, articleHtmlChars);
+    },
+    30_000,
+  );
 
   it('sanitises well-formed article markup exactly as before', () => {
     // Expected values are the earlier implementation's output for the same input.

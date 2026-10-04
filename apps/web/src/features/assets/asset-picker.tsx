@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AssetPurpose } from '@oremedia/contracts/assets';
+import type { AssetKind, AssetPurpose } from '@oremedia/contracts/assets';
 import { Badge, Button, EmptyState, Input, Skeleton } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { LoadMore } from '../../components/load-more';
@@ -10,6 +10,8 @@ import { useAssetSearch, type AssetRefDto } from './use-assets';
 export interface AssetPickerDialogProps {
   brandId: string;
   purpose: AssetPurpose;
+  /** The asset kinds the use takes (an article image is a still); every kind of the purpose when absent. */
+  kinds?: readonly AssetKind[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called with the chosen asset (its current version); the dialog closes itself. */
@@ -25,13 +27,14 @@ export interface AssetPickerDialogProps {
 export function AssetPickerDialog({
   brandId,
   purpose,
+  kinds,
   open,
   onOpenChange,
   onPick,
   title = 'Choose an image',
 }: AssetPickerDialogProps) {
   const [query, setQuery] = useState('');
-  const search = useAssetSearch(brandId, purpose, query);
+  const search = useAssetSearch(brandId, purpose, query, kinds);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent

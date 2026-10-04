@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RateLimitedError } from '@oremedia/contracts/errors';
-import { MemoryRateLimiterStore, RateLimiter, RedisRateLimiterStore } from './rate-limit';
+import {
+  MEMORY_BUCKET_SWEEP_MS,
+  MemoryRateLimiterStore,
+  RateLimiter,
+  RedisRateLimiterStore,
+} from './rate-limit';
 
 const KIND = 'auth.password.attempt';
 
@@ -45,5 +50,22 @@ describe('attempt counters (per-account password lockout)', () => {
     });
     await store.reset('k');
     expect(deleted).toEqual(['k']);
+  });
+});
+
+describe('in-memory store (no REDIS_URL outside production)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('evicts buckets whose window has ended, so distinct callers cannot grow memory without bound', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-01T00:00:00Z') });
+    const store = new MemoryRateLimiterStore();
+    for (let i = 0; i < 100; i++) await store.hit(`rl:ip:${i}`, 60);
+    await store.hit('rl:long', 3600);
+    expect(store.size).toBe(101);
+    vi.advanceTimersByTime(Math.max(61_000, MEMORY_BUCKET_SWEEP_MS));
+    await store.hit('rl:new', 60);
+    // The ended one-minute windows are gone; the live hour window and the new bucket remain, with their counts.
+    expect(store.size).toBe(2);
+    expect((await store.hit('rl:long', 3600)).count).toBe(2);
   });
 });

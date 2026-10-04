@@ -57,6 +57,8 @@ export const reviewRunBrandReview: ToolDefinition<
   }),
   async run(input, ctx) {
     const revision = await ctx.services.creative.revisions.get(ctx.actor, input, ctx.tx);
+    // STU-2b: brand review of a video's timeline is not an agent tool yet (STU-3); graphic documents only.
+    if (revision.kind !== 'graphic') throw new ToolDeniedError('video_document_not_supported');
     const target = reviewableElement(revision.snapshot);
     if (!target) throw new ToolDeniedError('no_reviewable_element');
     const proposed = await ctx.services.creative.operations.propose(

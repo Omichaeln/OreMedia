@@ -170,16 +170,22 @@ export const accessRouter = router({
     ),
   }),
 
+  /**
+   * The plaintext key is returned exactly once and only its hash is stored, so these are deliberately not idempotent
+   * (like issuePasswordSetup): a replayed response would have to be stored with the live key in it, and would hand
+   * it out again without asking the policy. A retried create issues a second key; a retried rotate is refused, as
+   * the key it names is no longer active.
+   */
   apiClients: router({
     create: tenantMutation
       .input(ApiClientCreate)
       .mutation(({ ctx, input }) =>
-        idempotent(mutationCtx(ctx), (tx) => accessService.createApiClient(ctx.tenant.actor, input, tx)),
+        withTransaction((tx) => accessService.createApiClient(ctx.tenant.actor, input, tx)),
       ),
     rotate: tenantMutation
       .input(ApiClientRotate)
       .mutation(({ ctx, input }) =>
-        idempotent(mutationCtx(ctx), (tx) => accessService.rotateApiClient(ctx.tenant.actor, input, tx)),
+        withTransaction((tx) => accessService.rotateApiClient(ctx.tenant.actor, input, tx)),
       ),
   }),
 

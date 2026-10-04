@@ -2,9 +2,11 @@
 // immutable; changes ship as a new versioned workflow (spec 14.3).
 export { assetIngestWorkflowV1 } from './asset-ingest.workflow.v1';
 export { videoIngestWorkflowV1 } from './video-ingest.workflow.v1';
+export { videoRenderJobWorkflowV1, videoRenderSignalRelayV1 } from './video-render.workflow.v1';
 export { renderJobWorkflowV1 } from './render-job.workflow.v1';
 export { agentRunWorkflowV1, agentRunSignalRelayV1 } from './agent-run.workflow.v1';
 export { studioGenerationWorkflowV1, studioGenerationSignalRelayV1 } from './studio-generation.workflow.v1';
+export { studioVideoJobWorkflowV1, studioVideoJobSignalRelayV1 } from './studio-video.workflow.v1';
 export { skillEvaluationWorkflowV1 } from './skill-evaluation.workflow.v1';
 export {
   publicationWorkflowV1,
@@ -38,5 +40,6 @@ export { brandAnalystWorkflowV1, brandAnalystSweepWorkflowV1 } from './brand-ana
 export { baselineComparisonWorkflowV1 } from './baseline-comparison.workflow.v1';
 export { deletionRequestWorkflowV1 } from './deletion-request.workflow.v1';
 export { retentionSweepWorkflowV1 } from './retention-sweep.workflow.v1';
+export { idempotencyKeyPurgeWorkflowV1 } from './idempotency-key-purge.workflow.v1';
 export { communityReplyWorkflowV1 } from './community-reply.workflow.v1';
 export { brandAssistWorkflowV1, brandAssistSignalRelayV1 } from './brand-assist.workflow.v1';

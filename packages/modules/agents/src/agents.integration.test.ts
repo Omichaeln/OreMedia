@@ -987,9 +987,9 @@ describe('agents module (spec 12) against MySQL 8', () => {
         authorId: spA,
         agentRunId: started.runId,
       });
-      const applied = after
-        .find((r) => r.number === 2)!
-        .snapshot.pages[0]!.elements.find((e) => e.id === headlineId);
+      const applied = (
+        after.find((r) => r.number === 2)!.snapshot as CreativeDocumentV1
+      ).pages[0]!.elements.find((e) => e.id === headlineId);
       expect(applied).toMatchObject({
         type: 'text',
         text: longHeadline,

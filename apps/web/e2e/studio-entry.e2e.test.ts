@@ -79,8 +79,9 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     const video = page
       .getByRole('group', { name: 'Content type' })
       .getByRole('button', { name: /Video or reel/ });
-    expect(await video.isDisabled()).toBe(true);
-    expect(await video.textContent()).toContain('Coming in this release');
+    // STU-2b: videos can be started; the tile opens the video start (video-studio.e2e.test.ts creates one).
+    expect(await video.isDisabled()).toBe(false);
+    expect(await video.textContent()).toContain('A reel, short or video ad on a timeline.');
 
     await page
       .getByRole('group', { name: 'Content type' })
