@@ -6,6 +6,7 @@ export { videoRenderJobWorkflowV1, videoRenderSignalRelayV1 } from './video-rend
 export { renderJobWorkflowV1 } from './render-job.workflow.v1';
 export { agentRunWorkflowV1, agentRunSignalRelayV1 } from './agent-run.workflow.v1';
 export { studioGenerationWorkflowV1, studioGenerationSignalRelayV1 } from './studio-generation.workflow.v1';
+export { studioVideoJobWorkflowV1, studioVideoJobSignalRelayV1 } from './studio-video.workflow.v1';
 export { skillEvaluationWorkflowV1 } from './skill-evaluation.workflow.v1';
 export {
   publicationWorkflowV1,

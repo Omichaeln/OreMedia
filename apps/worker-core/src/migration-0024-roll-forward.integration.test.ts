@@ -8,7 +8,12 @@ import { brandAssistJobs, brandSources, brandSuggestions } from '@oremedia/db/sc
 import { studioGenerationJobs } from '@oremedia/db/schema/creative';
 import { createTestDatabase, type TestDatabase } from '@oremedia/db/testing';
 import { brandAssistService } from '@oremedia/module-brand';
-import { seedTwoTenants, snapshotColumns, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  LATER_TABLE_NAMES,
+  seedTwoTenants,
+  snapshotColumns,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 
 /**
  * Ledger 1.g4 for migration 0024 (BSC-4 sources and AI assist): on a database populated at the previous head (0023)
@@ -23,7 +28,8 @@ const NEW_TABLES: MySqlTable[] = [brandSources, brandAssistJobs, brandSuggestion
 const LATER_TABLES: MySqlTable[] = [studioGenerationJobs];
 const TABLES = (Object.values(schema) as unknown[])
   .filter((v): v is MySqlTable => v instanceof MySqlTable)
-  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t));
+  .filter((t) => !NEW_TABLES.includes(t) && !LATER_TABLES.includes(t))
+  .filter((t) => !LATER_TABLE_NAMES.includes(getTableName(t)));
 
 describe('migration 0024 rolls forward on a populated database (ledger 1.g4)', () => {
   let tdb: TestDatabase;

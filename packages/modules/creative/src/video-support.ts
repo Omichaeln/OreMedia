@@ -1,5 +1,6 @@
 import { IMAGE_CREATIVE_KINDS, type AssetKind } from '@oremedia/contracts/assets';
 import type { BrandSnapshot } from '@oremedia/contracts/brand';
+import type { WaveformV1 } from '@oremedia/contracts/media';
 import {
   CreativeDocumentV1,
   OperationBatch,
@@ -29,6 +30,11 @@ export interface CreativeAssetCatalog {
   mediaInfo(assetVersionIds: readonly string[], tx?: Tx): Promise<VideoMediaInfo[]>;
   /** The current version of each asset (brand fonts and logos are recorded by asset in the brand system). */
   currentVersionIds(assetIds: readonly string[], tx?: Tx): Promise<Record<string, string>>;
+  /**
+   * STU-3: the waveform peaks (STU-2a derivative) of each version that has one, for pause detection. Optional: a
+   * catalog without it finds no pauses (recuts say so).
+   */
+  waveforms?(assetVersionIds: readonly string[], tx?: Tx): Promise<Record<string, WaveformV1>>;
 }
 const unregisteredCatalog: CreativeAssetCatalog = {
   mediaInfo: async () => {
@@ -49,6 +55,12 @@ export async function mediaLookup(ids: readonly string[], tx?: Tx): Promise<Reco
   return Object.fromEntries((await catalog.mediaInfo(ids, tx)).map((m) => [m.assetVersionId, m]));
 }
 export const asLookup = (m: Record<string, VideoMediaInfo>): VideoMediaLookup => m;
+
+/** STU-3: waveform peaks of the given sources, where the catalog can read them. */
+export async function waveformLookup(ids: readonly string[], tx?: Tx): Promise<Record<string, WaveformV1>> {
+  if (!ids.length || !catalog.waveforms) return {};
+  return catalog.waveforms(ids, tx);
+}
 
 /** A use of an asset version: the eligibility purpose and the kinds its place in the document accepts. */
 export interface KindedAssetRef {
@@ -151,7 +163,7 @@ export function distinctKindedRefs(refs: readonly KindedAssetRef[]): KindedAsset
  * font asset), colour tokens by role (text on video takes the background colour, the caption box the text colour,
  * so captions read light on dark like broadcast captions), and the primary logo.
  */
-export async function brandBindings(snapshot: BrandSnapshot, tx: Tx): Promise<VideoBrandBindings> {
+export async function brandBindings(snapshot: BrandSnapshot, tx?: Tx): Promise<VideoBrandBindings> {
   const doc = snapshot.document;
   const primaryLogo =
     doc.logoRules.find((r) => r.variant === 'primary') ?? doc.logoRules.find(() => true) ?? null;

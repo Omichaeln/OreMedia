@@ -49,6 +49,8 @@ const skillEvaluation = (ctx: ActivityContext, f: Ids) => ({
   runs: 3,
 });
 const generation = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['generationJobId'], attempt: 1 });
+/** STU-3: an attempt of the foreign tenant's studio video job. */
+const videoJob = (ctx: ActivityContext, f: Ids) => ({ ...ctx, jobId: f['videoJobId'], attempt: 1 });
 const publication = (ctx: ActivityContext, f: Ids) => ({ ...ctx, publicationId: f['publicationId'] });
 const reply = (ctx: ActivityContext, f: Ids) => ({ ...ctx, responseDraftId: f['responseDraftId'] });
 const attempt = (ctx: ActivityContext, f: Ids, outcome: string) => ({
@@ -186,6 +188,15 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
     'agents.finishBrandAssist': {
       buildInput: (ctx, f) => ({ ...assistJob(ctx, f), cancelled: false, failure: null }),
     },
+    // STU-3 studioVideoJobWorkflowV1 (task queue `agents`)
+    'agents.beginVideoJob': { buildInput: videoJob },
+    'agents.reserveVideoJobBudget': { buildInput: videoJob },
+    'agents.callVideoJobModel': { buildInput: videoJob },
+    'agents.saveVideoJob': { buildInput: videoJob },
+    'agents.failVideoJob': {
+      buildInput: (ctx, f) => ({ ...videoJob(ctx, f), code: 'failed', detail: 'harness' }),
+    },
+    'agents.settleVideoJobBudget': { buildInput: videoJob },
 
     // ---- task queue `core`: publicationWorkflowV1 control activities (spec 14.3) ----
     'core.readSchedule': { buildInput: publication },

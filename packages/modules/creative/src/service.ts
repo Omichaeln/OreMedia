@@ -56,6 +56,7 @@ import {
   type VideoOperationBatch,
   type VideoProjectV1,
 } from '@oremedia/contracts/video';
+import type { VideoAiScope, VideoGenerationInputs } from '@oremedia/contracts/video-ai';
 import { IMAGE_CREATIVE_KINDS, type AssetKind } from '@oremedia/contracts/assets';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, type Tx } from '@oremedia/db';
@@ -95,12 +96,15 @@ import {
   VideoOperationError,
   blankVideoProject,
   findItem,
-  guardVideoAgent,
+  guardVideoAgentScoped,
+  guardVideoScopeChange,
   instantiateVideoTemplate,
   listVideoTemplates,
   reduceVideo,
   validateVideoProject,
   videoOpItemIds,
+  videoScopeOf,
+  type VideoScopeState,
 } from '@oremedia/editor/video/index';
 import { policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
@@ -677,20 +681,42 @@ async function evaluateVideoBatch(
   base: RevisionRow,
   batch: VideoOperationBatch,
   tx: Tx,
+  opts: {
+    scope?: VideoAiScope | null;
+    /** A scope already resolved (and grown) by an earlier part of the same change, carried across parts. */
+    scopeState?: VideoScopeState | null;
+    /** STU-3 model-planned assembly: the brand's primary logo it may place, by its rules (see guardVideoAgent). */
+    brandLogo?: { assetVersionId: string; minWidthPx: number };
+  } = {},
 ) {
   const project = videoSnapshotOf(base);
   const snapshot = await resolveSnapshot(actor, doc.brandId, project.brandVersionId, tx);
   let next = structuredClone(project);
   const media = await mediaLookup(timedAssetIds(project), tx);
   const changed = new Set<string>();
+  // STU-3: an agent batch made for a scoped request is held to that scope (resolved against the base project).
+  const scope =
+    batch.origin !== 'agent'
+      ? null
+      : opts.scopeState !== undefined
+        ? opts.scopeState
+        : videoScopeOf(project, opts.scope ?? null);
   for (const [index, op] of batch.operations.entries()) {
     try {
-      guardVideoAgent(next, op, batch.origin);
+      guardVideoAgentScoped(
+        next,
+        op,
+        batch.origin,
+        scope,
+        opts.brandLogo ? { brandLogo: opts.brandLogo } : {},
+      );
       const refs = videoOpAssetRefs(op, (id) => next.tracks.find((t) => t.id === id)?.kind);
       await authoriseRefs(refs, doc.brandId, tx);
       const unknown = refs.map((r) => r.assetVersionId).filter((id) => !(id in media));
       Object.assign(media, await mediaLookup(unknown, tx));
-      next = reduceVideo(next, op, { media: asLookup(media), strictMedia: true });
+      const reduced = reduceVideo(next, op, { media: asLookup(media), strictMedia: true });
+      guardVideoScopeChange(next, reduced, op, scope);
+      next = reduced;
       for (const id of videoOpItemIds(op)) changed.add(id);
     } catch (err) {
       if (err instanceof VideoOperationError)
@@ -704,6 +730,82 @@ async function evaluateVideoBatch(
   const parsed = parseSnapshot('video', next).snapshot as VideoProjectV1; // schema bounds
   const findings = validateVideoProject(parsed, { media, snapshot });
   return { next: parsed, findings, contentHash: hashCanonical(parsed), changedItemIds: [...changed], media };
+}
+
+/**
+ * The write half of operations.applyVideo (STU-2b), shared with STU-3's assembly and proposal accept: the insert-only
+ * revision (with its generation inputs when an AI job produced it), the head move, outdated comments, the
+ * revision_created event, the approvals hook and the audit record. The caller locked the document, checked the stale
+ * base and evaluated the batch.
+ */
+async function commitVideoRevision(
+  actor: ResolvedActor,
+  doc: DocumentRow,
+  base: RevisionRow,
+  batch: VideoOperationBatch,
+  evaluated: Awaited<ReturnType<typeof evaluateVideoBatch>>,
+  tx: Tx,
+  generationInputs: VideoGenerationInputs | null = null,
+) {
+  assertAgentClean(batch.origin, evaluated.findings);
+  const revisionId = newId('creativeRevision');
+  const number = base.number + 1;
+  await revisionsRepo.create(
+    {
+      id: revisionId,
+      brandId: doc.brandId,
+      documentId: doc.id,
+      parentRevisionId: base.id,
+      number,
+      brandVersionId: evaluated.next.brandVersionId,
+      agentRunId: batch.agentRunId ?? null,
+      authorKind: batch.origin,
+      authorId: actor.id,
+      changeSummary: batch.summary,
+      operations: batch,
+      snapshot: evaluated.next,
+      contentHash: evaluated.contentHash,
+      generationInputs,
+    },
+    tx,
+  );
+  await documentsRepo.setCurrentRevision(doc.id, doc.version, revisionId, tx);
+  const outdatedComments = await commentsRepo.markOutdated(doc.brandId, doc.id, evaluated.changedItemIds, tx); // comments anchored to a timeline item outdate when it changes
+  await outbox.add(
+    'creative.revision_created',
+    { type: 'creative_document', id: doc.id, version: doc.version + 1 },
+    {
+      documentId: doc.id,
+      revisionId,
+      number,
+      contentHash: evaluated.contentHash,
+      brandVersionId: evaluated.next.brandVersionId,
+    },
+    tx,
+    { brandId: doc.brandId },
+  );
+  await revisionChangeHook(doc.id, tx);
+  await audit.record(
+    actorRef(actor),
+    'creative.operations.apply',
+    { type: 'creative_revision', id: revisionId },
+    'allowed',
+    tx,
+    {
+      brandId: doc.brandId,
+      revisionId,
+      count: batch.operations.length,
+      runId: batch.agentRunId ?? null,
+      scope: 'video',
+    },
+  );
+  return {
+    revision: toRevisionDto(await revisionsRepo.getById(revisionId, tx), 'video'),
+    findings: evaluated.findings,
+    media: Object.values(evaluated.media),
+    outdatedComments,
+    version: doc.version + 1,
+  };
 }
 
 /** Longest edge of a proposal preview: small enough to draw inline beside the conversation. */
@@ -1030,6 +1132,8 @@ async function insertNewDocument(
     changeSummary: string;
     auditAction: string;
     auditMeta: Record<string, unknown>;
+    /** STU-3: a document an AI job created (a new-format version) records what produced it. */
+    generationInputs?: VideoGenerationInputs | null;
   },
   tx: Tx,
 ) {
@@ -1063,6 +1167,7 @@ async function insertNewDocument(
       operations: d.operations,
       snapshot: d.snapshot,
       contentHash,
+      generationInputs: d.generationInputs ?? null,
     },
     tx,
   );
@@ -1580,69 +1685,7 @@ export const creativeService = {
       await assertStale(doc, batch.baseRevisionId);
       const base = await loadRevision(doc, batch.baseRevisionId, tx);
       const evaluated = await evaluateVideoBatch(actor, doc, base, batch, tx);
-      assertAgentClean(batch.origin, evaluated.findings);
-      const revisionId = newId('creativeRevision');
-      const number = base.number + 1;
-      await revisionsRepo.create(
-        {
-          id: revisionId,
-          brandId: doc.brandId,
-          documentId: doc.id,
-          parentRevisionId: base.id,
-          number,
-          brandVersionId: evaluated.next.brandVersionId,
-          agentRunId: batch.agentRunId ?? null,
-          authorKind: batch.origin,
-          authorId: actor.id,
-          changeSummary: batch.summary,
-          operations: batch,
-          snapshot: evaluated.next,
-          contentHash: evaluated.contentHash,
-        },
-        tx,
-      );
-      await documentsRepo.setCurrentRevision(doc.id, doc.version, revisionId, tx);
-      const outdatedComments = await commentsRepo.markOutdated(
-        doc.brandId,
-        doc.id,
-        evaluated.changedItemIds,
-        tx,
-      ); // comments anchored to a timeline item outdate when it changes
-      await outbox.add(
-        'creative.revision_created',
-        { type: 'creative_document', id: doc.id, version: doc.version + 1 },
-        {
-          documentId: doc.id,
-          revisionId,
-          number,
-          contentHash: evaluated.contentHash,
-          brandVersionId: evaluated.next.brandVersionId,
-        },
-        tx,
-        { brandId: doc.brandId },
-      );
-      await revisionChangeHook(doc.id, tx);
-      await audit.record(
-        actorRef(actor),
-        'creative.operations.apply',
-        { type: 'creative_revision', id: revisionId },
-        'allowed',
-        tx,
-        {
-          brandId: doc.brandId,
-          revisionId,
-          count: batch.operations.length,
-          runId: batch.agentRunId ?? null,
-          scope: 'video',
-        },
-      );
-      return {
-        revision: toRevisionDto(await revisionsRepo.getById(revisionId, tx), 'video'),
-        findings: evaluated.findings,
-        media: Object.values(evaluated.media),
-        outdatedComments,
-        version: doc.version + 1,
-      };
+      return commitVideoRevision(actor, doc, base, batch, evaluated, tx);
     },
 
     /** The dry run: findings are returned even when blocking; nothing is written. */
@@ -2356,8 +2399,10 @@ async function duplicateRevision(
 }
 
 /**
- * STU-1b: the operation engine as the generation job service (generation.ts) composes it. Not part of the module's
- * public index: other modules reach generation through its service and runtime API only.
+ * STU-1b and STU-3: the operation engine as the generation job service (generation.ts) and the studio video AI service
+ * (video-ai.ts) compose it, so they run the same loads, guards, evaluation and writes as every other change to a
+ * document (one engine, no second path). Not part of the module's public index: other modules reach generation and
+ * video AI through their services and runtime API only.
  */
 export const creativeEngine = {
   documentsRepo,
@@ -2372,10 +2417,17 @@ export const creativeEngine = {
   templateVersionOf,
   documentResource,
   brandResource,
+  evaluateVideoBatch,
+  commitVideoRevision,
+  insertNewDocument,
+  initialVideoBatch,
   actorRef,
   requesterKindOf,
   isBlocking,
   findingDetail,
+  assertVideo,
+  authoriseRefs,
+  loadDocumentForUpdate: (id: string, tx: Tx) => documentsRepo.lock(id, tx),
   toRevisionDto,
 };
 export type CreativeDocumentRow = DocumentRow;

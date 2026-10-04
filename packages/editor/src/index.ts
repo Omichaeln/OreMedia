@@ -51,7 +51,7 @@ export {
   type PreflightResult,
 } from './generation';
 export { fontFaceDescriptors } from './renderer/scene';
-export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn } from './validate';
+export { validateAgainstBrand, contrastRatio, prohibitedPhrasesIn, looksLikeClaim } from './validate';
 export type { EditorAdapter, EditorHandle, Unsubscribe } from './adapter';
 export { invertBatch, type InvertResult } from './invert';
 export { rebaseBatch, type RebaseConflict, type RebaseResult } from './rebase';

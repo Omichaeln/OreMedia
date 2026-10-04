@@ -30,6 +30,10 @@ export const EVENT_TYPES = {
   'creative.generation_requested': 1,
   'creative.generation_cancel_requested': 1,
   'creative.generation_completed': 1,
+  // STU-3: studio video AI jobs (start/retry → workflow, cancel → signal relay, completion for observers).
+  'creative.video_job_requested': 1,
+  'creative.video_job_cancel_requested': 1,
+  'creative.video_job_completed': 1,
   'content.revision_created': 1,
   'review.requested': 1,
   'review.decided': 1,

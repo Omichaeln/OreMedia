@@ -53,6 +53,9 @@ import {
   registerChannelCapabilitySource,
   registerGenerationAssetSource,
   registerCreativeAssetCatalog,
+  registerVideoAiAssetSource,
+  registerVideoAiCapabilitySource,
+  configureVideoAiPricing,
   registerExportSigner,
   registerCreativeOutboxRoutes,
 } from '@oremedia/module-creative';
@@ -87,6 +90,7 @@ import {
   registerSpeechGenerator,
   registerVideoGenerator,
   IMAGE_COST_MICROS,
+  createVideoAiCapabilitySource,
   estimateCostMicros,
   modelConfigFromEnv,
 } from '@oremedia/ai';
@@ -170,6 +174,18 @@ export function composeModules(opts: { workflowProbe?: WorkflowProbe } = {}): vo
   registerCreativeAssetCatalog({
     mediaInfo: (ids, tx) => assetService.mediaSummaries(ids, tx),
     currentVersionIds: (ids, tx) => assetService.currentVersionIds(ids, tx),
+    waveforms: (ids, tx) => assetService.waveforms(ids, tx),
+  });
+  // STU-3: storyboards read the eligible, person-supplied assets; gaps say whether generated media could close them;
+  // the job's estimate is one model call at the configured price list.
+  registerVideoAiAssetSource((brandId, tx) => assetService.storyboardCandidates(brandId, tx));
+  registerVideoAiCapabilitySource(createVideoAiCapabilitySource());
+  const videoAiModel = modelConfigFromEnv();
+  configureVideoAiPricing({
+    modelCallMicros: estimateCostMicros(videoAiModel, {
+      inputTokens: 12_000,
+      outputTokens: videoAiModel.maxOutputTokens,
+    }),
   });
   registerExportSigner((storageKey) => assetService.signStorageKey(storageKey));
   registerAssetOutboxRoutes();

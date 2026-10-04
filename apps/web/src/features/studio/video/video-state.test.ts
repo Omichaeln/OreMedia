@@ -120,4 +120,37 @@ describe('video studio state', () => {
     expect(s.pending?.operations).toEqual([move(11_000)]);
     expect(s.notice?.text).toMatch(/1 of your changes no longer apply/);
   });
+
+  it('adopts a revision the server wrote (assembly, accepted proposal) as head and undo entry, not over local work', () => {
+    const ops: VideoOperation[] = [{ op: 'removeCaption', trackId: 'trk_captions', itemId: 'cap_2' }];
+    const s0 = start();
+    const s1 = videoStudioReducer(s0, {
+      type: 'commit:external',
+      revision: committed(2),
+      operations: ops,
+      summary: 'Accepted AI changes',
+      findings: [],
+      media: [],
+    });
+    expect(s1.committed.number).toBe(2);
+    expect(s1.undo).toEqual([
+      { before: s0.committed.snapshot, operations: ops, summary: 'Accepted AI changes' },
+    ]);
+    expect(s1.redo).toEqual([]);
+    const busy = videoStudioReducer(s0, {
+      type: 'intent',
+      intent: { operations: [move(11_000)], summary: 'Move' },
+      key: 'k',
+    });
+    expect(
+      videoStudioReducer(busy, {
+        type: 'commit:external',
+        revision: committed(2),
+        operations: ops,
+        summary: 'x',
+        findings: [],
+        media: [],
+      }),
+    ).toBe(busy);
+  });
 });
