@@ -18,6 +18,7 @@ import type {
   RenderProgress,
   RenderValidationResult,
 } from '@oremedia/contracts/creative';
+import type { VideoOperationBatch, VideoProjectV1 } from '@oremedia/contracts/video';
 import { brandId, createdAt, hash, id, micros, ref, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
@@ -31,6 +32,8 @@ export const creativeDocuments = mysqlTable(
     title: varchar('title', { length: 200 }).notNull(),
     currentRevisionId: ref('current_revision_id'),
     schemaVersion: int('schema_version').notNull(),
+    // STU-2b: graphic (CreativeDocumentV1 snapshots) or video (VideoProjectV1 snapshots); existing rows are graphic.
+    kind: mysqlEnum('kind', ['graphic', 'video']).notNull().default('graphic'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     version: version(),
@@ -60,8 +63,10 @@ export const creativeRevisions = mysqlTable(
     authorKind: mysqlEnum('author_kind', ['user', 'agent']).notNull(),
     authorId: ref('author_id').notNull(),
     changeSummary: varchar('change_summary', { length: 500 }).notNull(),
-    operations: json('operations').$type<OperationBatch>().notNull(), // what changed from parent
-    snapshot: json('snapshot').$type<CreativeDocumentV1>().notNull(), // full document at this revision
+    // STU-2b: graphic documents keep graphic batches and CreativeDocumentV1; video documents timeline batches and
+    // VideoProjectV1 (the document's `kind` says which; the snapshot also carries kind: 'video').
+    operations: json('operations').$type<OperationBatch | VideoOperationBatch>().notNull(), // what changed from parent
+    snapshot: json('snapshot').$type<CreativeDocumentV1 | VideoProjectV1>().notNull(), // full document at this revision
     contentHash: hash('content_hash').notNull(),
     /**
      * STU-1b (principle 8): what produced an AI-generated revision; null for people's edits and older rows. Graphic
@@ -105,10 +110,13 @@ export const renderedExports = mysqlTable(
     fps: int('fps'),
     posterStorageKey: varchar('poster_storage_key', { length: 300 }),
     captionsStorageKey: varchar('captions_storage_key', { length: 300 }),
+    // STU-2b: videoExportDedupeKey of a video export; an identical later render reuses the stored export.
+    dedupeKey: hash('dedupe_key'),
     createdAt: createdAt(),
   },
   (t) => [
     index('ix_export_revision').on(t.tenantId, t.revisionId, t.formatKey),
+    index('ix_export_dedupe').on(t.tenantId, t.brandId, t.dedupeKey),
     uniqueIndex('uq_export_tbi').on(t.tenantId, t.brandId, t.id),
     foreignKey({
       columns: [t.tenantId, t.brandId, t.revisionId],

@@ -1,5 +1,5 @@
 import { Link } from 'react-router';
-import { Button, EmptyState, Skeleton } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
@@ -52,6 +52,7 @@ export function Documents() {
             >
               {d.title}
             </Link>
+            {d.kind === 'video' && <Badge glyph={false}>Video</Badge>}
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
               {new Date(d.updatedAt).toLocaleDateString()}
             </span>

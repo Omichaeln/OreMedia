@@ -5,7 +5,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type BrowserContext, type LaunchOptions } from 'playwright';
 import sharp from 'sharp';
-import type { FormatRenderer, RenderTargetInput, RenderTargetOutput } from '@oremedia/activities';
+import type {
+  FormatRenderer,
+  OverlayRenderer,
+  RenderTargetInput,
+  RenderTargetOutput,
+} from '@oremedia/activities';
 import type { CreativePage, Element } from '@oremedia/contracts/creative';
 import { NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { runRenderChecks } from '@oremedia/editor/checks';
@@ -32,7 +37,7 @@ export interface ChromiumRendererOptions {
   maxEdgePx?: number;
 }
 
-export interface ChromiumRenderer extends FormatRenderer {
+export interface ChromiumRenderer extends FormatRenderer, OverlayRenderer {
   readonly version: string;
   close(): Promise<void>;
 }
@@ -163,6 +168,47 @@ export function createChromiumRenderer(opts: ChromiumRendererOptions = {}): Chro
     return bundle;
   };
 
+  /** Draws one page in a fresh offline context with the render-only bundle (spec 11.5 render isolation). */
+  const draw = async (browserInput: RenderInput): Promise<{ png: Buffer; out: RenderOutput }> => {
+    const format = browserInput.format;
+    const [b, code] = await Promise.all([launch(), loadBundle()]);
+    const context = await openRenderContext(
+      b,
+      { width: Math.min(format.width, 1600), height: Math.min(format.height, 1600) },
+      timeoutMs,
+    );
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const tab = await context.newPage();
+      const pageErrors: string[] = [];
+      tab.on('pageerror', (err) => pageErrors.push(err.message));
+      await tab.setContent(PAGE_HTML, { waitUntil: 'load' });
+      await tab.addScriptTag({ content: code });
+      const hardTimeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`render exceeded ${timeoutMs}ms`)), timeoutMs);
+      });
+      // The page function is serialised by Playwright; the cast (erased at compile time) keeps this file free of
+      // DOM typings while calling exactly the bundle's public entry.
+      const out = await Promise.race([
+        tab.evaluate(
+          (i: RenderInput) => (globalThis as unknown as RendererGlobal).__oremediaRender(i),
+          browserInput,
+        ),
+        hardTimeout,
+      ]);
+      if (pageErrors.length) throw new Error(`renderer page errors: ${pageErrors.join('; ')}`);
+      if (out.rendererVersion !== RENDERER_VERSION)
+        throw new Error(`renderer bundle ${out.rendererVersion} does not match worker ${RENDERER_VERSION}`);
+      const comma = out.dataUrl.indexOf(',');
+      if (!out.dataUrl.startsWith('data:image/png;base64,') || comma < 0)
+        throw new Error('renderer returned no PNG');
+      return { png: Buffer.from(out.dataUrl.slice(comma + 1), 'base64'), out };
+    } finally {
+      if (timer) clearTimeout(timer);
+      await context.close();
+    }
+  };
+
   return {
     version: RENDERER_VERSION,
 
@@ -171,7 +217,7 @@ export function createChromiumRenderer(opts: ChromiumRendererOptions = {}): Chro
       if (!format) throw new NotFoundError('FormatDefinition', input.formatKey);
       assertRenderable(input.page, format, maxEdge);
       const page = input.reflow ? reflow(input.page, format.key, format.width, format.height) : input.page;
-      const browserInput: RenderInput = {
+      const { png, out } = await draw({
         page,
         format,
         fonts: input.fonts.map((f) => ({
@@ -181,57 +227,43 @@ export function createChromiumRenderer(opts: ChromiumRendererOptions = {}): Chro
         })),
         assets: Object.fromEntries(input.assets.map((a) => [a.assetVersionId, dataUrl(a.mime, a.bytes)])),
         colours: Object.fromEntries(input.snapshot.document.tokens.colours.map((c) => [c.key, c.value])),
-      };
+      });
+      const meta = await sharp(png).metadata();
+      if (meta.format !== 'png' || !meta.width || !meta.height)
+        throw new Error('renderer output is not a PNG');
+      const validation = runRenderChecks({
+        doc: input.document,
+        page,
+        format,
+        metrics: out.metrics,
+        snapshot: input.snapshot,
+        output: { width: meta.width, height: meta.height, bytes: png.length },
+        ...(input.limits ? { limits: input.limits } : {}),
+      });
+      return { png, width: meta.width, height: meta.height, findings: validation.findings };
+    },
 
-      const [b, code] = await Promise.all([launch(), loadBundle()]);
-      const context = await openRenderContext(
-        b,
-        { width: Math.min(format.width, 1600), height: Math.min(format.height, 1600) },
-        timeoutMs,
-      );
-      let timer: NodeJS.Timeout | undefined;
-      try {
-        const tab = await context.newPage();
-        const pageErrors: string[] = [];
-        tab.on('pageerror', (err) => pageErrors.push(err.message));
-        await tab.setContent(PAGE_HTML, { waitUntil: 'load' });
-        await tab.addScriptTag({ content: code });
-        const hardTimeout = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error(`render exceeded ${timeoutMs}ms`)), timeoutMs);
-        });
-        // The page function is serialised by Playwright; the cast (erased at compile time) keeps this file free of
-        // DOM typings while calling exactly the bundle's public entry.
-        const out = await Promise.race([
-          tab.evaluate(
-            (i: RenderInput) => (globalThis as unknown as RendererGlobal).__oremediaRender(i),
-            browserInput,
-          ),
-          hardTimeout,
-        ]);
-        if (pageErrors.length) throw new Error(`renderer page errors: ${pageErrors.join('; ')}`);
-        if (out.rendererVersion !== RENDERER_VERSION)
-          throw new Error(`renderer bundle ${out.rendererVersion} does not match worker ${RENDERER_VERSION}`);
-        const comma = out.dataUrl.indexOf(',');
-        if (!out.dataUrl.startsWith('data:image/png;base64,') || comma < 0)
-          throw new Error('renderer returned no PNG');
-        const png = Buffer.from(out.dataUrl.slice(comma + 1), 'base64');
-        const meta = await sharp(png).metadata();
-        if (meta.format !== 'png' || !meta.width || !meta.height)
-          throw new Error('renderer output is not a PNG');
-        const validation = runRenderChecks({
-          doc: input.document,
-          page,
-          format,
-          metrics: out.metrics,
-          snapshot: input.snapshot,
-          output: { width: meta.width, height: meta.height, bytes: png.length },
-          ...(input.limits ? { limits: input.limits } : {}),
-        });
-        return { png, width: meta.width, height: meta.height, findings: validation.findings };
-      } finally {
-        if (timer) clearTimeout(timer);
-        await context.close();
-      }
+    /**
+     * STU-2b: one video overlay or caption as a transparent full-frame PNG at the project's size (the page has no
+     * background element, so only the overlay's pixels are opaque); the same scene code and fonts as the editor.
+     */
+    async renderFrame(input) {
+      assertRenderable(input.page, input.format, maxEdge);
+      const { png } = await draw({
+        page: input.page,
+        format: input.format,
+        fonts: input.fonts.map((f) => ({
+          family: f.family,
+          url: dataUrl(f.mime, f.bytes),
+          ...(f.unicodeRange ? { unicodeRange: f.unicodeRange } : {}),
+        })),
+        assets: Object.fromEntries(input.assets.map((a) => [a.assetVersionId, dataUrl(a.mime, a.bytes)])),
+        colours: input.colours,
+      });
+      const meta = await sharp(png).metadata();
+      if (meta.width !== input.format.width || meta.height !== input.format.height || !meta.hasAlpha)
+        throw new Error('overlay frame is not a transparent PNG of the project size');
+      return { png };
     },
 
     async close() {

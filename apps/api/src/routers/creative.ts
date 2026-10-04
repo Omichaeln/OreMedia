@@ -9,6 +9,7 @@ import {
   DocumentRename,
   OperationsApply,
   OperationsPropose,
+  RenderCancel,
   RenderGet,
   RenderRequest,
   RevisionGet,
@@ -29,6 +30,7 @@ import {
   GenerationRetry,
   GenerationStart,
 } from '@oremedia/contracts/generation';
+import { VideoOperationsApply, VideoOperationsPropose, VideoTemplateList } from '@oremedia/contracts/video';
 import { creativeService, generationService } from '@oremedia/module-creative';
 import { idempotent } from '@oremedia/module-operations';
 import { router, tenantMutation, tenantQuery, type MutationCtx } from '../trpc';
@@ -89,6 +91,22 @@ export const creativeRouter = router({
       .mutation(({ ctx, input }) =>
         idempotent(mutationCtx(ctx), (tx) => creativeService.operations.propose(ctx.tenant.actor, input, tx)),
       ),
+    /** STU-2b: timeline operations on a video document (same flow as applyBatch). */
+    applyVideo: tenantMutation
+      .input(VideoOperationsApply)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.videoOperations.apply(ctx.tenant.actor, input, tx),
+        ),
+      ),
+    /** STU-2b: the dry run of timeline operations; nothing is committed. */
+    proposeVideo: tenantMutation
+      .input(VideoOperationsPropose)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) =>
+          creativeService.videoOperations.propose(ctx.tenant.actor, input, tx),
+        ),
+      ),
   }),
 
   renders: router({
@@ -100,6 +118,23 @@ export const creativeRouter = router({
     get: tenantQuery
       .input(RenderGet)
       .query(({ ctx, input }) => creativeService.renders.get(ctx.tenant.actor, input)),
+    /** STU-2b: signed URLs of a ready job's exports (video, poster, captions) to play or download. */
+    exportMedia: tenantQuery
+      .input(RenderGet)
+      .query(({ ctx, input }) => creativeService.renders.exportMedia(ctx.tenant.actor, input)),
+    /** STU-2a/2b: stop a pending or rendering job; a running video render is signalled and ffmpeg stops. */
+    cancel: tenantMutation
+      .input(RenderCancel)
+      .mutation(({ ctx, input }) =>
+        idempotent(mutationCtx(ctx), (tx) => creativeService.renders.cancel(ctx.tenant.actor, input, tx)),
+      ),
+  }),
+
+  /** STU-2b: the built-in starter video templates (the creation screen lists them). */
+  videoTemplates: router({
+    list: tenantQuery
+      .input(VideoTemplateList)
+      .query(({ ctx, input }) => creativeService.videoTemplates.list(ctx.tenant.actor, input)),
   }),
 
   comments: router({

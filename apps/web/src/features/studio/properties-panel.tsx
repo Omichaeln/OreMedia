@@ -12,6 +12,18 @@ export interface FontOption {
   label: string;
 }
 
+/** A brand font face as the font picker lists it ("Inter Bold", "Lora 400"). */
+export const toFontOption = (f: {
+  assetVersionId: string;
+  name: string;
+  family?: string | null;
+  subfamily?: string | null;
+  weight?: number | null;
+}): FontOption => ({
+  assetVersionId: f.assetVersionId,
+  label: [f.family ?? f.name, f.subfamily ?? (f.weight ? String(f.weight) : null)].filter(Boolean).join(' '),
+});
+
 export interface PropertiesPanelProps {
   page: CreativePage;
   selection: string[];

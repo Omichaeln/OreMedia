@@ -80,5 +80,7 @@ export const EVENT_TYPES = {
   // proposes suggestions), and asked to cancel one (relayed to the running workflow as a signal)
   'brand.assist_requested': 1,
   'brand.assist_cancel_requested': 1,
+  // STU-2b (appended; additive only): a person cancelled a video render; relayed as a signal to its workflow
+  'creative.render_cancel_requested': 1,
 } as const;
 export type EventType = keyof typeof EVENT_TYPES;

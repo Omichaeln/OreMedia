@@ -105,6 +105,15 @@ describe.skipIf(!enabled)('studio generation and refinement (STU-1b, built app i
     expect(await panel().getByRole('checkbox', { name: 'Roasted in Harare every week' }).isVisible()).toBe(
       true,
     );
+    // STU-2b: the images generation may use are stills only, never the brand's videos or music.
+    await panel()
+      .getByText(/^Images \(/)
+      .click();
+    const images = await panel()
+      .getByRole('combobox', { name: /^How to use / })
+      .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+    expect(images).toContain('How to use Sample photo');
+    expect(images.filter((l) => /Beach walk|City lights|Upbeat music/.test(l ?? ''))).toEqual([]);
     // Nothing to check until the brief says something; then the cost and the outcome are shown.
     expect(await panel().getByTestId('generation-start').isEnabled()).toBe(false);
     await panel().getByLabel('Key message').fill('Fresh beans every week');
@@ -208,6 +217,16 @@ describe.skipIf(!enabled)('studio generation and refinement (STU-1b, built app i
     await panel().getByRole('button', { name: 'Change part of it' }).click();
     expect(await panel().getByTestId('refine-scope').textContent()).toContain('Only Headline');
     await panel().getByLabel('What should change').fill('Shorten this headline without changing the layout');
+    // STU-2b: the image a refinement may use is a still, never a video or music track.
+    await panel().getByLabel('Use an approved image (optional)').click();
+    const choices = await page
+      .getByRole('listbox')
+      .filter({ has: page.getByRole('option', { name: 'No particular image' }) })
+      .getByRole('option')
+      .allTextContents();
+    expect(choices).toContain('Sample photo');
+    expect(choices.filter((c) => /Beach walk|City lights|Upbeat music/.test(c))).toEqual([]);
+    await page.keyboard.press('Escape');
     const start = panel().getByTestId('refine-start');
     await expect.poll(() => start.isEnabled(), { timeout: 15_000 }).toBe(true);
     await start.click();

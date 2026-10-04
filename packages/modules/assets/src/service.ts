@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
+import type { VideoMediaInfo } from '@oremedia/contracts/video';
 import {
   ACCEPTED_MIMES,
   ARCHIVE_MIMES,
@@ -569,6 +570,58 @@ export const assetService = {
       height: v.height,
       storageKey: v.storageKey,
     };
+  },
+
+  /**
+   * STU-2b: what the timeline editor, the reducer and the compositor need to know about sources: kind (a video, an
+   * audio file or a still image), duration and displayed size from the ingest probe, whether it has sound, and the
+   * derivatives the editor can fetch (proxy, strip, waveform…). Tenant-scoped; ids not found are left out. Callers
+   * authorise use separately (authoriseUse); this is a description, not a permission.
+   */
+  async mediaSummaries(assetVersionIds: readonly string[], tx?: Tx): Promise<VideoMediaInfo[]> {
+    const out: VideoMediaInfo[] = [];
+    const unique = [...new Set(assetVersionIds)];
+    // Three queries per ID_LIST_MAX ids (a project holds up to 8 × 200 items), whatever the number of sources.
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX) {
+      const versions = await versionsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx);
+      const owners = new Map(
+        (await assetsRepo.listInTenant([...new Set(versions.map((v) => v.assetId))], tx)).map((a) => [
+          a.id,
+          a,
+        ]),
+      );
+      const purposes = new Map<string, string[]>();
+      for (const d of await derivativesRepo.purposesForVersions(
+        versions.map((v) => v.id),
+        tx,
+      ))
+        purposes.set(d.assetVersionId, [...(purposes.get(d.assetVersionId) ?? []), d.purpose]);
+      for (const v of versions) {
+        const a = owners.get(v.assetId);
+        if (!a) continue;
+        out.push({
+          assetVersionId: v.id,
+          kind: a.kind === 'video' ? 'video' : a.kind === 'audio' ? 'audio' : 'image',
+          mime: v.mime,
+          durationMs: v.durationMs ?? v.mediaInfo?.durationMs ?? null,
+          width: v.width,
+          height: v.height,
+          hasAudio: (v.mediaInfo?.audio.length ?? 0) > 0,
+          derivatives: [...new Set(purposes.get(v.id) ?? [])].sort().slice(0, 12),
+        });
+      }
+    }
+    return out;
+  },
+
+  /** STU-2b: the current version of each asset found in the tenant (templates bind brand fonts and logos by asset). */
+  async currentVersionIds(assetIds: readonly string[], tx?: Tx): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const unique = [...new Set(assetIds)];
+    for (let at = 0; at < unique.length; at += ID_LIST_MAX)
+      for (const a of await assetsRepo.listInTenant(unique.slice(at, at + ID_LIST_MAX), tx))
+        if (a.currentVersionId && a.state !== 'retired') out[a.id] = a.currentVersionId;
+    return out;
   },
 
   /** Any asset id from a client is loaded through the scoped repository first; a foreign id is NOT_FOUND. */

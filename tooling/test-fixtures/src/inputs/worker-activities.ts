@@ -91,6 +91,12 @@ const renderTarget = (ctx: ActivityContext, f: Ids, own: Ids) => ({
   documentId: f['creativeDocumentId'],
   brandId: own['brandId'],
 });
+const videoTarget = (ctx: ActivityContext, f: Ids, own: Ids) => ({
+  ...renderJob(ctx, f),
+  revisionId: f['videoRevisionId'],
+  documentId: f['videoDocumentId'],
+  brandId: own['brandId'],
+});
 const ingest = (ctx: ActivityContext, f: Ids, own: Ids) => ({
   ...ctx,
   intentId: f['uploadIntentId'],
@@ -529,6 +535,61 @@ export const WORKER_ACTIVITY_INPUTS: Record<WorkerName, Record<string, WorkerAct
         cleanupKeys: [quarantineKey(f)],
       }),
     },
+    // ---- task queue `video` (STU-2b): videoRenderJobWorkflowV1 against tenant B's video document ----
+    'video.beginVideoRender': { buildInput: renderJob },
+    'video.resolveVideoRender': {
+      buildInput: (ctx, f, own) => ({ ...videoTarget(ctx, f, own), formatKeys: ['video_9x16'] }),
+    },
+    'video.renderVideoOverlays': {
+      buildInput: (ctx, f, own) => ({
+        ...videoTarget(ctx, f, own),
+        brandVersionId: f['creativePublishedBrandVersionId'],
+        fonts: [],
+        assets: [],
+        rendererVersion: 'harness',
+      }),
+    },
+    'video.composeVideo': {
+      buildInput: (ctx, f, own) => ({
+        ...videoTarget(ctx, f, own),
+        sources: [],
+        frames: [],
+        dedupeKey: 'd'.repeat(64),
+        tempBudgetBytes: 64 * 1024 * 1024,
+      }),
+    },
+    'video.completeVideoRender': {
+      buildInput: (ctx, f) => {
+        const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['videoRevisionId']}/${f['renderJobId']}/timeline-video_9x16`;
+        return {
+          ...renderJob(ctx, f),
+          rendererVersion: 'harness',
+          manifest: {
+            rendererVersion: 'harness',
+            fonts: [],
+            assets: [],
+            brandVersionId: f['creativePublishedBrandVersionId'],
+            revisionContentHash: 'c'.repeat(64),
+          },
+          dedupeKey: 'd'.repeat(64),
+          findings: [],
+          export: {
+            pageId: 'timeline',
+            formatKey: 'video_9x16',
+            storageKey: `${base}.mp4`,
+            contentHash: 'c'.repeat(64),
+            bytes: 1,
+            width: 1080,
+            height: 1920,
+            durationMs: 1000,
+            fps: 30,
+            posterStorageKey: `${base}.poster.webp`,
+          },
+        };
+      },
+    },
+    'video.failVideoRender': { buildInput: (ctx, f) => ({ ...renderJob(ctx, f), reason: 'render_failed' }) },
+    'video.discardVideoRenderWork': { buildInput: (ctx, f, own) => videoTarget(ctx, f, own) },
     'video.storeVideoExport': {
       buildInput: (ctx, f, own) => {
         const base = `assets/${f['tenantId']}/${f['brandId']}/exports/${f['creativeRevisionId']}/${f['renderJobId']}/page_1-reel`;
