@@ -13,6 +13,7 @@ import { AssetThumb } from '../assets/asset-thumb';
 import { useAsset } from '../assets/use-assets';
 import { useChannelLimits } from '../publishing/use-publishing';
 import { useBrandContext } from './brand-context';
+import { TypographySpecimen } from './typography-specimen';
 import { contrast } from './brand-kit-editor';
 import {
   CHANNEL_FIELD_LABEL,
@@ -341,34 +342,9 @@ export function ImageryView({ doc }: { doc: Doc }) {
   );
 }
 
+/** Typography & layout: the brand's type roles as a live specimen in their own font files, then spacing and radii. */
 export function TypographyView({ doc }: { doc: Doc }) {
-  const t = doc.tokens;
-  return (
-    <div className="flex flex-col gap-8">
-      <ReadSection title="Type roles">
-        {t.typeRoles.length === 0 ? (
-          nothing('type roles')
-        ) : (
-          <ul className="flex flex-col divide-y divide-border text-sm">
-            {t.typeRoles.map((r) => (
-              <li key={r.role} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <span className="font-medium capitalize">{r.role}</span>
-                <span className="font-mono text-xs text-muted-foreground">
-                  weight {r.weight} · min {r.minSizePx} px
-                  {r.tracking !== undefined ? ` · tracking ${r.tracking}` : ''} · {r.fontAssetId}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </ReadSection>
-      <ReadSection title="Spacing and radii">
-        <p className="font-mono text-xs">
-          spacing {t.spacingScale.join(' · ') || '—'} · radii {t.radii.join(' · ') || '—'}
-        </p>
-      </ReadSection>
-    </div>
-  );
+  return <TypographySpecimen doc={doc} />;
 }
 
 export function PatternsView({ doc }: { doc: Doc }) {
