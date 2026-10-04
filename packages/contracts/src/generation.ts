@@ -192,7 +192,6 @@ export const ModelElementEdit = z
     sizePx: z.number().positive().max(1000).optional(),
     weight: z.number().int().min(100).max(900).optional(),
     align: z.enum(['left', 'center', 'right']).optional(),
-    hidden: z.boolean().optional(),
   })
   .strict();
 export type ModelElementEdit = z.infer<typeof ModelElementEdit>;
