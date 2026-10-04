@@ -1,6 +1,7 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
 import { renderedValidationOk } from '@oremedia/contracts/article';
 import type { ArticleReadbackV1, ArticleReadbackVerificationV1 } from '@oremedia/contracts/destinations';
+import { ARTICLE_TEXT_MAX_CHARS } from '@oremedia/contracts/content';
 import {
   NotFoundError,
   PolicyDeniedError,
@@ -1411,11 +1412,21 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
       // RA-12: the modified instant travels with the hash, so a remote touched to the same content is a conflict too.
       const expectedModifiedAt =
         typeof readback?.payload['modifiedAt'] === 'string' ? readback.payload['modifiedAt'] : null;
+      // PR-03: the site's own precondition, compared and written atomically by the site where it offers one.
+      const expectedWriteToken =
+        typeof readback?.payload['writeToken'] === 'string' ? readback.payload['writeToken'] : null;
       const result = await destinations.edit(
-        { ...target, expectedHash, expectedModifiedAt, html: change.text ?? '', idempotencyKey: change.id },
+        {
+          ...target,
+          expectedHash,
+          expectedModifiedAt,
+          expectedWriteToken,
+          html: change.text ?? '',
+          idempotencyKey: change.id,
+        },
         hooks,
       );
-      if (result.outcome === 'rejected' && result.code === 'conflict')
+      if (result.outcome === 'rejected' && (result.code === 'conflict' || result.code === 'limited_mode'))
         await withTransaction((tx) =>
           audit.record(
             workflowActor(),
@@ -1427,7 +1438,7 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
               brandId: row.brandId,
               publicationId: row.id,
               destinationId,
-              reason: 'remote_changed_since_readback',
+              reason: result.code === 'conflict' ? 'remote_changed_since_readback' : 'limited_mode',
             },
           ),
         );
@@ -1573,13 +1584,25 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
             tx,
           );
           // RA-12: a refusal as a conflict carries the current remote; stored, so the next edit compares against
-          // what the site holds now instead of failing again on the stale hash.
+          // what the site holds now instead of failing again on the stale hash. PR-03: with the refused edit's text
+          // and the remote body beside it, so a person can compare them and re-apply the edit on purpose.
           if (mutation.readback)
             await recordReadback(
               row,
               null,
               mutation.readback,
-              { changeId: change.id, refreshedAfter: failure.code },
+              {
+                changeId: change.id,
+                refreshedAfter: failure.code,
+                ...(mutation.conflict
+                  ? {
+                      conflict: {
+                        ...mutation.conflict,
+                        attemptedHtml: (change.text ?? '').slice(0, ARTICLE_TEXT_MAX_CHARS),
+                      },
+                    }
+                  : {}),
+              },
               at,
               tx,
             );

@@ -21,5 +21,9 @@ export const wordpressCmsCapability: CmsCapabilityV1 = {
   edit: true,
   delete: true,
   unpublish: true,
+  // PR-03: core WordPress has no conditional update (no ETag / If-Match on /wp/v2/posts, verified against 7.1.2 and
+  // trunk); updates of existing articles are atomic only on a site running the Oremedia conditional-write plugin
+  // (infra/wordpress/oremedia-conditional-write), which the adapter detects per site before every update.
+  conditionalWrite: 'extension',
   certifiedAt: null,
 };

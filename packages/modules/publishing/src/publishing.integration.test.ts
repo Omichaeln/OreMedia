@@ -2835,6 +2835,85 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       });
       expect(dto.remote.currentText).toBe('<p>Written over the window.</p>');
     });
+
+    it('edit (PR-03): the stored write token is the precondition; a refusal keeps the remote body and the refused text for the comparison; limited mode is refused and audited like a conflict', async () => {
+      const token = `wpcw1:7:${'f'.repeat(64)}`;
+      const { pub } = await publishArticle(
+        {
+          outcome: 'accepted',
+          remotePostId: '42',
+          remoteUrl: 'https://blog.acme.example/why-ore-and-tar-last/',
+          readback: readbackOf('publish', { writeToken: token }),
+          readbackVerification: verified,
+          validation: validationOf(true),
+        },
+        { publishMode: 'publish' },
+      );
+      const first = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      const now = `wpcw1:9:${'0'.repeat(64)}`;
+      const current = readbackOf('publish', { contentHash: 'c'.repeat(64), writeToken: now });
+      editResult = {
+        outcome: 'rejected',
+        code: 'conflict',
+        message: 'the article changed on the site; nothing was written',
+        readback: current,
+        conflict: {
+          reason: 'remote_changed',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+        },
+      };
+      const input = changeInput(pub.id, first.changeId);
+      const refused = await inTenant(tenantA, () => runtime.remoteChangeProvider.editRemotePost(input, A));
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: token, expectedHash: 'a'.repeat(64) });
+      if (refused.outcome === 'skipped') throw new Error('unexpected skip');
+      await inTenant(tenantA, () =>
+        runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result: refused }),
+      );
+      const stored = (await evidenceOf(pub.id)).filter((e) => e.kind === 'remote_readback').at(-1);
+      expect(stored?.payload).toMatchObject({
+        writeToken: now,
+        refreshedAfter: 'conflict',
+        conflict: {
+          reason: 'remote_changed',
+          current: { html: '<p>The person’s edit.</p>' },
+          editUrl: 'https://blog.acme.example/wp-admin/post.php?post=42&action=edit',
+          attemptedHtml: '<p>The approved edit.</p>',
+        },
+      });
+      // The person re-applies the edit after comparing: the precondition is now what the site holds.
+      const second = await run(tenantA, (tx) =>
+        publicationService.editRemote(A, { publicationId: pub.id, text: '<p>The approved edit.</p>' }, tx),
+      );
+      editResult = {
+        outcome: 'rejected',
+        code: 'limited_mode',
+        message: 'the site cannot apply an update atomically',
+        readback: current,
+        conflict: {
+          reason: 'limited_mode',
+          current: { ...current, html: '<p>The person’s edit.</p>' },
+          editUrl: null,
+        },
+      };
+      const limitedInput = changeInput(pub.id, second.changeId);
+      const limited = await inTenant(tenantA, () =>
+        runtime.remoteChangeProvider.editRemotePost(limitedInput, A),
+      );
+      expect(editInputs.at(-1)).toMatchObject({ expectedWriteToken: now, expectedHash: 'c'.repeat(64) });
+      expect(limited).toMatchObject({ outcome: 'rejected', code: 'limited_mode' });
+      const audited = await tdb.db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(eq(auditEvents.tenantId, tenantA), eq(auditEvents.action, 'publication.edit_remote_conflict')),
+        );
+      expect(audited.map((a) => (a.metadata as Record<string, unknown>)['reason'])).toEqual(
+        expect.arrayContaining(['remote_changed_since_readback', 'limited_mode']),
+      );
+    });
   });
 
   describe('disconnect, token refresh and the sweeper (spec 14.7, 14.2)', () => {

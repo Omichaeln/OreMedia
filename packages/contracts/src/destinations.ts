@@ -23,6 +23,14 @@ export type DestinationKind = z.infer<typeof DestinationKind>;
 export const DestinationHealth = z.enum(['unknown', 'healthy', 'degraded', 'unreachable']);
 export type DestinationHealth = z.infer<typeof DestinationHealth>;
 
+/**
+ * PR-03: whether a write-capable destination can update an existing article atomically (`conditional`: the site
+ * compares the stored precondition and writes in one step), cannot (`limited`: updates of existing articles are
+ * refused, nothing is overwritten) or has not been asked yet (`unknown`).
+ */
+export const DestinationWriteSafety = z.enum(['unknown', 'conditional', 'limited']);
+export type DestinationWriteSafety = z.infer<typeof DestinationWriteSafety>;
+
 export const DestinationStatus = z.enum(['active', 'disconnected']);
 export type DestinationStatus = z.infer<typeof DestinationStatus>;
 
@@ -68,6 +76,12 @@ export interface DestinationV1 {
   /** RA-10: the zone the source reports its days in and its currency, once the sweep has learnt them; else null. */
   reportingTimeZone: string | null;
   currencyCode: string | null;
+  /**
+   * PR-03: what the last verification found about atomic updates of existing articles (write-capable kinds;
+   * `unknown` for the others and before the first verification), and when.
+   */
+  writeSafety: DestinationWriteSafety;
+  writeSafetyCheckedAt: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -661,6 +675,26 @@ export interface ArticleReadbackV1 {
    * the current remote hash differs.
    */
   contentHash: string;
+  /**
+   * PR-03: the site's own write precondition for this revision when it offers atomic conditional writes (WordPress
+   * with the Oremedia conditional-write plugin: the post's write counter and row fingerprint, opaque here). Stored
+   * with the read-back, it is what the next update must still match on the site, compared and written in one
+   * atomic step there; absent when the site offers none (limited mode).
+   */
+  writeToken?: string | null;
+}
+
+/**
+ * PR-03: an update of a live article the site refused, and what a person needs to resolve it: why (`remote_changed`:
+ * the site moved since the stored read-back and refused the stale write atomically; `limited_mode`: the site cannot
+ * apply an update atomically, so none is sent), the remote revision at the refusal with its body for the
+ * comparison (null when it could not be read), and where the article opens in the site's own editor. Nothing was
+ * written in either case.
+ */
+export interface ArticleConflictV1 {
+  reason: 'remote_changed' | 'limited_mode';
+  current: (ArticleReadbackV1 & { html: string }) | null;
+  editUrl: string | null;
 }
 
 /**

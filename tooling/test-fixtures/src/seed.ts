@@ -293,7 +293,9 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
     'reporting_time_zone',
     'currency_code',
     'reporting_zone_checked_at',
-  ], // 0016, 0021
+    'write_safety',
+    'write_safety_checked_at',
+  ], // 0016, 0021, 0031
   channel_variants: ['destination_id'], // 0018
   publications: ['destination_id', 'remote_status', 'remote_verification', 'remote_verified_at'], // 0018, 0020
   channel_connections: ['health', 'health_checked_at'], // 0022

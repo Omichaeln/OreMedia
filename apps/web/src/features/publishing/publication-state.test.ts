@@ -5,7 +5,9 @@ import {
   HOLD_REASON_TEXT,
   PUBLICATION_CHIP,
   actionsFor,
+  articleConflictOf,
   channelOutcomeSummary,
+  compareArticleBlocks,
   dayKey,
   groupByDay,
   holdReasonText,
@@ -287,5 +289,62 @@ describe('channel health (RA-01): every value has a chip; a dead or unreachable 
     expect(channelNeedsAction({ status: 'active', health: 'unreachable' })).toBe(true);
     expect(channelNeedsAction({ status: 'reconnect_needed', health: 'ok' })).toBe(true);
     expect(channelNeedsAction({ status: 'disabled', health: 'revoked' })).toBe(true); // by status
+  });
+});
+
+describe('website edit conflicts (PR-03)', () => {
+  const payload = {
+    remoteId: '42',
+    changeId: 'chg_1',
+    refreshedAfter: 'conflict',
+    conflict: {
+      reason: 'remote_changed',
+      current: {
+        remoteId: '42',
+        modifiedAt: '2026-10-04T10:00:00.000Z',
+        html: '<p>Kept.</p><p>Changed on the site.</p>',
+      },
+      editUrl: 'https://site.example/wp-admin/post.php?post=42&action=edit',
+      attemptedHtml: '<p>Kept.</p><p>The approved edit.</p>',
+    },
+  };
+
+  it('reads the conflict of the failed change only; an unsafe editor link is dropped', () => {
+    expect(articleConflictOf(payload, 'chg_1')).toEqual({
+      changeId: 'chg_1',
+      reason: 'remote_changed',
+      currentHtml: '<p>Kept.</p><p>Changed on the site.</p>',
+      currentModifiedAt: '2026-10-04T10:00:00.000Z',
+      attemptedHtml: '<p>Kept.</p><p>The approved edit.</p>',
+      editUrl: 'https://site.example/wp-admin/post.php?post=42&action=edit',
+    });
+    expect(articleConflictOf(payload, 'chg_2')).toBeNull();
+    expect(articleConflictOf({ ...payload, conflict: undefined }, 'chg_1')).toBeNull();
+    expect(articleConflictOf(null, 'chg_1')).toBeNull();
+    expect(
+      articleConflictOf(
+        { ...payload, conflict: { ...payload.conflict, editUrl: 'javascript:alert(1)' } },
+        'chg_1',
+      )?.editUrl,
+    ).toBeNull();
+    expect(
+      articleConflictOf(
+        { ...payload, conflict: { reason: 'limited_mode', current: null, editUrl: null } },
+        'chg_1',
+      ),
+    ).toMatchObject({ reason: 'limited_mode', currentHtml: null, attemptedHtml: '' });
+  });
+
+  it('marks the blocks one side has and the other lacks', () => {
+    expect(compareArticleBlocks(payload.conflict.current.html, payload.conflict.attemptedHtml)).toEqual({
+      current: [
+        { text: 'Kept.', changed: false },
+        { text: 'Changed on the site.', changed: true },
+      ],
+      attempted: [
+        { text: 'Kept.', changed: false },
+        { text: 'The approved edit.', changed: true },
+      ],
+    });
   });
 });

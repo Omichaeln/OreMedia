@@ -6,6 +6,7 @@ import {
   DestinationKind,
   SOURCE_USE_RETENTION_MAX_DAYS,
   type DestinationHealth,
+  type DestinationWriteSafety,
   type DestinationStatus,
   type SourceUse,
 } from '@oremedia/contracts/destinations';
@@ -57,6 +58,27 @@ const STATUS_CHIP: Record<DestinationStatus, { tone: Tone; label: string }> = {
   disconnected: { tone: 'neutral', label: 'Disconnected' },
 };
 const USE_LABEL: Record<SourceUse, string> = { read: 'Read', retain: 'Retain', write: 'Write' };
+/**
+ * PR-03: what the last verification found about updating a published article safely (only shown once known: a
+ * kind that never updates articles stays `unknown`).
+ */
+const WRITE_SAFETY_CHIP: Record<
+  Exclude<DestinationWriteSafety, 'unknown'>,
+  { tone: Tone; label: string; detail: string }
+> = {
+  conditional: {
+    tone: 'good',
+    label: 'Safe updates',
+    detail:
+      'The site applies an edit only if the article is still the version Oremedia last read; a change made on the site in the meantime is never overwritten.',
+  },
+  limited: {
+    tone: 'warning',
+    label: 'Limited mode',
+    detail:
+      'This site cannot guarantee that an edit does not overwrite a change made on the site, so Oremedia does not edit articles that already exist there: new drafts and publishes, reverting to a draft and deleting still work; edit existing articles on the site itself, or have the site administrator install the Oremedia conditional-write plugin.',
+  },
+};
 
 /** Policy dates are days in UTC (the input sends midnight UTC), so the label reads them in UTC too. */
 const day = (iso: string) =>
@@ -138,6 +160,7 @@ function DestinationRow({
 }) {
   const health = HEALTH_CHIP[destination.health];
   const status = STATUS_CHIP[destination.status];
+  const safety = destination.writeSafety === 'unknown' ? null : WRITE_SAFETY_CHIP[destination.writeSafety];
   return (
     <li
       className="flex flex-col gap-2 py-3"
@@ -149,7 +172,23 @@ function DestinationRow({
         <code className="text-xs text-muted-foreground">{destination.externalId}</code>
         <Badge tone={health.tone}>{health.label}</Badge>
         {destination.status !== 'active' && <Badge tone={status.tone}>{status.label}</Badge>}
+        {safety && (
+          <Badge tone={safety.tone} data-testid="destination-write-safety">
+            {safety.label}
+          </Badge>
+        )}
       </div>
+      {safety && destination.writeSafety === 'limited' && destination.status === 'active' && (
+        <StatusBanner
+          tone="warning"
+          title="Limited mode: existing articles are not edited from Oremedia"
+          description={safety.detail}
+          data-testid="destination-limited-mode"
+        />
+      )}
+      {safety && destination.writeSafety === 'conditional' && (
+        <p className="text-xs text-muted-foreground">{safety.detail}</p>
+      )}
       <p className="text-xs text-muted-foreground">
         Owner <code>{destination.ownerUserId}</code> · capability v{destination.capabilityVersion}
         {destination.healthCheckedAt &&
