@@ -22,6 +22,7 @@
     "@oremedia/observability": "workspace:*",
     "@oremedia/providers": "workspace:*",
     "@temporalio/activity": "^1.24.0",
+    "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "zod": "^3.25.76"
   },

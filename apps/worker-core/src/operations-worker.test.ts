@@ -1,90 +1,85 @@
 import { describe, expect, it } from 'vitest';
-import { ScheduleAlreadyRunning, type Client } from '@temporalio/client';
-import { IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID, RETENTION_SCHEDULE_ID } from '@oremedia/module-operations';
+import { ScheduleOverlapPolicy } from '@temporalio/client';
+import { describeScheduleReconcile, fakeScheduleClient } from '@oremedia/activities/testing/schedules';
 import {
   ensureIdempotencyKeyPurgeScheduleRunning,
   ensureRetentionScheduleRunning,
   operationsActivities,
 } from './operations-worker';
 
-/** A schedule client that either creates, or already holds a schedule started with `existingArgs`. */
-function scheduleClient(existingArgs: unknown[] | null) {
-  const calls: Array<{ op: 'create' | 'update'; args: unknown[] }> = [];
-  const client = {
-    schedule: {
-      create: async (opts: { action: { args: unknown[] } }) => {
-        if (existingArgs) throw new ScheduleAlreadyRunning('already', RETENTION_SCHEDULE_ID);
-        calls.push({ op: 'create', args: opts.action.args });
-      },
-      getHandle: () => ({
-        describe: async () => ({
-          action: { type: 'startWorkflow', workflowType: 'retentionSweepWorkflowV1', args: existingArgs },
-          spec: {},
-          policies: {},
-          state: {},
-        }),
-        update: async (fn: (prev: unknown) => { action: { args: unknown[] } }) => {
-          const next = fn({ action: { type: 'startWorkflow', args: existingArgs }, spec: {}, state: {} });
-          calls.push({ op: 'update', args: next.action.args });
-        },
-      }),
-    },
-  } as unknown as Client;
-  return { client, calls };
-}
+const argsOf = (fake: ReturnType<typeof fakeScheduleClient>) =>
+  fake.schedules.get('retention-sweep')?.action.args;
 
 describe('ensureRetentionScheduleRunning (spec 17.5: the apply mode follows the environment at every start)', () => {
   it('creates the schedule in dry run by default, in apply mode with RETENTION_SWEEP_APPLY=true', async () => {
-    const dry = scheduleClient(null);
+    const dry = fakeScheduleClient();
     await ensureRetentionScheduleRunning(dry.client, {});
-    expect(dry.calls).toEqual([{ op: 'create', args: [{ dryRun: true }] }]);
-    const apply = scheduleClient(null);
+    expect(dry.calls).toEqual([{ op: 'create', scheduleId: 'retention-sweep' }]);
+    expect(argsOf(dry)).toEqual([{ dryRun: true }]);
+    const apply = fakeScheduleClient();
     await ensureRetentionScheduleRunning(apply.client, { RETENTION_SWEEP_APPLY: 'true' });
-    expect(apply.calls).toEqual([{ op: 'create', args: [{ dryRun: false }] }]);
+    expect(argsOf(apply)).toEqual([{ dryRun: false }]);
   });
 
   it('an existing schedule is switched to the mode the environment reads now, and left alone when it matches', async () => {
-    const flipped = scheduleClient([{ dryRun: true }]);
-    await ensureRetentionScheduleRunning(flipped.client, { RETENTION_SWEEP_APPLY: 'true' });
-    expect(flipped.calls).toEqual([{ op: 'update', args: [{ dryRun: false }] }]);
-    const back = scheduleClient([{ dryRun: false }]);
-    await ensureRetentionScheduleRunning(back.client, {});
-    expect(back.calls).toEqual([{ op: 'update', args: [{ dryRun: true }] }]);
-    const same = scheduleClient([{ dryRun: true }]);
-    await ensureRetentionScheduleRunning(same.client, {});
-    expect(same.calls).toEqual([]);
+    const fake = fakeScheduleClient();
+    await ensureRetentionScheduleRunning(fake.client, {});
+    await ensureRetentionScheduleRunning(fake.client, { RETENTION_SWEEP_APPLY: 'true' });
+    expect(argsOf(fake)).toEqual([{ dryRun: false }]);
+    await ensureRetentionScheduleRunning(fake.client, {});
+    expect(argsOf(fake)).toEqual([{ dryRun: true }]);
+    await ensureRetentionScheduleRunning(fake.client, {});
+    expect(fake.calls.map((c) => c.op)).toEqual(['create', 'update', 'update']);
   });
 });
 
+describeScheduleReconcile(
+  'ensureRetentionScheduleRunning',
+  (client) => ensureRetentionScheduleRunning(client, {}),
+  [
+    {
+      scheduleId: 'retention-sweep',
+      workflowType: 'retentionSweepWorkflowV1',
+      taskQueue: 'core',
+      args: [{ dryRun: true }],
+      spec: { calendars: [{ hour: 2, minute: 30 }] },
+      overlap: ScheduleOverlapPolicy.SKIP,
+      catchupWindow: '1 day',
+    },
+  ],
+);
+
 describe('ensureIdempotencyKeyPurgeScheduleRunning (spec 7.3: expired idempotency records are deleted hourly)', () => {
-  it('creates an hourly schedule of idempotencyKeyPurgeWorkflowV1 on core, and joins one that exists', async () => {
-    const created: unknown[] = [];
-    const client = (exists: boolean) =>
-      ({
-        schedule: {
-          create: async (opts: unknown) => {
-            if (exists) throw new ScheduleAlreadyRunning('already', IDEMPOTENCY_KEY_PURGE_SCHEDULE_ID);
-            created.push(opts);
-          },
-        },
-      }) as unknown as Client;
-    await ensureIdempotencyKeyPurgeScheduleRunning(client(false));
-    expect(created).toEqual([
-      expect.objectContaining({
-        scheduleId: 'idempotency-key-purge',
-        spec: { intervals: [{ every: '1 hour' }] },
-        action: expect.objectContaining({
-          workflowType: 'idempotencyKeyPurgeWorkflowV1',
-          taskQueue: 'core',
-          args: [{}],
-        }),
-      }),
-    ]);
-    await expect(ensureIdempotencyKeyPurgeScheduleRunning(client(true))).resolves.toBeUndefined();
-    expect(created).toHaveLength(1);
+  it('creates an hourly schedule of idempotencyKeyPurgeWorkflowV1 on core, and leaves one that matches alone', async () => {
+    const fake = fakeScheduleClient();
+    await ensureIdempotencyKeyPurgeScheduleRunning(fake.client);
+    expect(fake.calls).toEqual([{ op: 'create', scheduleId: 'idempotency-key-purge' }]);
+    expect(fake.schedules.get('idempotency-key-purge')?.action).toMatchObject({
+      workflowType: 'idempotencyKeyPurgeWorkflowV1',
+      taskQueue: 'core',
+      args: [{}],
+    });
+    await expect(ensureIdempotencyKeyPurgeScheduleRunning(fake.client)).resolves.toBeUndefined();
+    expect(fake.calls).toHaveLength(1);
   });
 
   it('its activity is registered on the core worker', () => {
     expect(typeof operationsActivities().purgeExpiredIdempotencyKeys).toBe('function');
   });
 });
+
+describeScheduleReconcile(
+  'ensureIdempotencyKeyPurgeScheduleRunning',
+  ensureIdempotencyKeyPurgeScheduleRunning,
+  [
+    {
+      scheduleId: 'idempotency-key-purge',
+      workflowType: 'idempotencyKeyPurgeWorkflowV1',
+      taskQueue: 'core',
+      args: [{}],
+      spec: { intervals: [{ every: '1 hour' }] },
+      overlap: ScheduleOverlapPolicy.SKIP,
+      catchupWindow: '1 hour',
+    },
+  ],
+);

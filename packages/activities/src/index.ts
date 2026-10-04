@@ -86,3 +86,9 @@ export {
   createRetentionActivities,
   RETENTION_ACTOR,
 } from './operations';
+export {
+  ensureScheduleReconciled,
+  scheduleDrift,
+  type DesiredSchedule,
+  type ScheduleDrift,
+} from './schedules';
