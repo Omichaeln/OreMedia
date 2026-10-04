@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { providerActivationState } from './providers';
+import {
+  CapabilityCertificationV1,
+  capabilityCertificationStatuses,
+  providerActivationState,
+  type CapabilityCertificationStatusV1,
+} from './providers';
 
 describe('providerActivationState (RA-01): the reasons in the order they are checked', () => {
   const refs = [
@@ -45,6 +50,57 @@ describe('providerActivationState (RA-01): the reasons in the order they are che
         certifiedAt: '2026-10-01T00:00:00.000Z',
         disabled: false,
         credentialRefs: [],
+      }).state,
+    ).toBe('ready');
+  });
+});
+
+describe('PR-06 capability certification', () => {
+  const record = { certifiedAt: '2026-10-01T00:00:00.000Z', environment: 'staging', evidence: 'D-04 run 1' };
+
+  it('a capability is not_supported whatever is recorded, certified with a record, else uncertified', () => {
+    const statuses = capabilityCertificationStatuses(new Set(['connect', 'publish_text']), {
+      connect: record,
+      edit: record,
+    });
+    expect(statuses).toHaveLength(11);
+    expect(statuses.find((s) => s.capability === 'connect')).toEqual({
+      capability: 'connect',
+      state: 'certified',
+      certification: record,
+    });
+    expect(statuses.find((s) => s.capability === 'publish_text')?.state).toBe('uncertified');
+    expect(statuses.find((s) => s.capability === 'edit')?.state).toBe('not_supported');
+    expect(capabilityCertificationStatuses(new Set(['connect']), undefined)[0]?.state).toBe('uncertified');
+  });
+
+  it('a record needs its date, environment and evidence', () => {
+    expect(CapabilityCertificationV1.safeParse(record).success).toBe(true);
+    expect(CapabilityCertificationV1.safeParse({ ...record, evidence: '' }).success).toBe(false);
+    expect(CapabilityCertificationV1.safeParse({ ...record, environment: '' }).success).toBe(false);
+    expect(CapabilityCertificationV1.safeParse({ ...record, certifiedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('a certified provider whose connect is not certified reads uncertified, with the capability reason', () => {
+    const capabilities: CapabilityCertificationStatusV1[] = [
+      { capability: 'connect', state: 'uncertified', certification: null },
+    ];
+    expect(
+      providerActivationState({
+        key: 'x',
+        certifiedAt: '2026-10-01T00:00:00.000Z',
+        disabled: false,
+        credentialRefs: [],
+        capabilities,
+      }),
+    ).toEqual({ state: 'uncertified', reason: 'capability_not_certified:x:connect' });
+    expect(
+      providerActivationState({
+        key: 'x',
+        certifiedAt: '2026-10-01T00:00:00.000Z',
+        disabled: false,
+        credentialRefs: [],
+        capabilities: [{ capability: 'connect', state: 'certified', certification: record }],
       }).state,
     ).toBe('ready');
   });

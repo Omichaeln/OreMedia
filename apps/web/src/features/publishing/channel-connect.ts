@@ -1,5 +1,9 @@
 import type { ErrorDetail } from '@oremedia/contracts/errors';
-import type { ProviderActivationState } from '@oremedia/contracts/providers';
+import type {
+  CapabilityCertificationState,
+  CertifiableCapability,
+  ProviderActivationState,
+} from '@oremedia/contracts/providers';
 
 /**
  * The Release 1 provider keys (spec 14.8, the registry in packages/providers). The API has no provider listing, so
@@ -27,10 +31,40 @@ export const ACTIVATION_CHIP: Record<
   credentials_missing: { tone: 'warning', label: 'Credentials missing' },
 };
 
+/** PR-06: how the settings screens name each certifiable capability. */
+export const CAPABILITY_LABEL: Record<CertifiableCapability, string> = {
+  connect: 'Connect',
+  page_picker: 'Page picker',
+  publish_text: 'Publish text',
+  publish_image: 'Publish image',
+  publish_video: 'Publish video',
+  edit: 'Edit',
+  delete: 'Delete',
+  comment_reply: 'Comment reply',
+  analytics: 'Analytics',
+  token_refresh: 'Token refresh',
+  reconnect: 'Reconnect',
+};
+
+/** PR-06: the chip for a capability's certification state (an uncertified one is never shown as usable). */
+export const CAPABILITY_STATE_CHIP: Record<
+  CapabilityCertificationState,
+  { tone: 'good' | 'neutral' | 'warning'; label: string }
+> = {
+  certified: { tone: 'good', label: 'certified' },
+  uncertified: { tone: 'warning', label: 'not certified' },
+  not_supported: { tone: 'neutral', label: 'not supported' },
+};
+
 /** Why a provider cannot be connected, from a refusal's issue code (`provider_not_certified:<key>`, ...); null for others. */
 export function reasonText(issue: string): string | null {
   if (issue.startsWith('provider_not_certified:'))
     return 'Not certified for use yet: the platform review for this provider is not complete (spec 14.6).';
+  if (issue.startsWith('capability_not_certified:')) {
+    const capability = issue.split(':')[2] as CertifiableCapability | undefined;
+    const label = (capability && CAPABILITY_LABEL[capability]) ?? capability ?? 'This capability';
+    return `${label} is not certified for this provider yet: it has not been exercised against the platform with a designated test account.`;
+  }
   if (issue.startsWith('unknown_provider:')) return 'Not available: this provider is not registered.';
   if (issue.startsWith('provider_disabled:') || issue.startsWith('source_not_enabled:'))
     return 'Not enabled on this deployment: the provider is listed as disabled in its environment configuration (OREMEDIA_DISABLED_CHANNELS / OREMEDIA_DISABLED_SOURCES, or its opt-in setting is off).';

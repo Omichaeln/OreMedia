@@ -8,6 +8,7 @@ import {
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
+import { capabilityNotCertifiedIssue } from '@oremedia/contracts/providers';
 import {
   CancelCommand,
   PublicationDeleteRemote,
@@ -271,17 +272,26 @@ async function targetOfVariant(
 async function remoteActionsOf(row: PublicationRow, tx?: Tx) {
   if (row.destinationId) {
     const d = await destinations.describe(row.destinationId, tx);
-    return d ? { ...d.actions, providerKey: d.kind } : null;
+    return d ? { ...d.actions, providerKey: d.kind, uncertified: d.uncertifiedActions ?? [] } : null;
   }
   const connection = await connectionsRepo.getById(row.channelConnectionId ?? '', tx);
   const cap = registry().capability(connection.providerKey);
+  // PR-06: the actions the channel supports whose capability carries no certification record of its own.
+  const uncertified = (['edit', 'delete'] as const).filter((kind) =>
+    registry().isUncertified(connection.providerKey, kind),
+  );
   return {
     edit: cap?.edit ?? false,
     delete: cap?.delete ?? false,
     unpublish: false,
     providerKey: connection.providerKey,
+    uncertified: uncertified as RemoteActionKind[],
   };
 }
+
+type RemoteActionKind = 'edit' | 'delete' | 'unpublish';
+/** PR-06: the certifiable capability a remote action exercises (an unpublish changes the live article: `edit`). */
+const capabilityOfAction = (kind: RemoteActionKind) => (kind === 'unpublish' ? 'edit' : kind);
 
 /**
  * The preconditions of changing a live post (publication.edit_remote / delete_remote / unpublish), under the
@@ -297,6 +307,13 @@ async function assertRemoteChangeAllowed(row: PublicationRow, kind: 'edit' | 'de
   const actions = await remoteActionsOf(row, tx);
   if (!actions?.[kind])
     throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: `${kind}_not_supported` }]);
+  if (actions.uncertified.includes(kind))
+    throw new CapabilityUnsupportedError([
+      {
+        path: 'providerKey',
+        issue: capabilityNotCertifiedIssue(actions.providerKey, capabilityOfAction(kind)),
+      },
+    ]);
   const open = await changesRepo.findOpenForPublication(row.id, tx);
   if (open && !isStaleRequest(open))
     throw new ValidationFailedError(
@@ -903,10 +920,12 @@ export const publicationService = {
       attempts: attempts.map(toAttemptDto),
       /** Changing the live post: what the target allows, the current text after an edit, the recent requests. */
       remote: {
-        edit: actions?.edit ?? false,
-        delete: actions?.delete ?? false,
+        edit: (actions?.edit ?? false) && !actions?.uncertified.includes('edit'),
+        delete: (actions?.delete ?? false) && !actions?.uncertified.includes('delete'),
         /** R2-3: a live article can be set back to a draft on its website (the rollback of a publish). */
-        unpublish: actions?.unpublish ?? false,
+        unpublish: (actions?.unpublish ?? false) && !actions?.uncertified.includes('unpublish'),
+        /** PR-06: the actions the target supports that are not certified yet (refused; the screen says why). */
+        uncertified: actions?.uncertified ?? [],
         /** Whether this caller holds the permissions (brand-level grants included); the commands re-check. */
         allowed: {
           edit: policy.allows(actor, 'publication.edit_remote', publicationResource(row)),

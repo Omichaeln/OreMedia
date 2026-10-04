@@ -12,6 +12,8 @@ import {
   authUrl,
   buildDeps,
   comments,
+  deletePost,
+  editPost,
   exchange,
   find,
   metrics,
@@ -47,17 +49,21 @@ PROVIDER_<KEY>_SECRET_REF in this shell (channels and sources; a CMS site needs 
 
 Every kind (runbook steps in brackets):
   status                                   [12] the required steps with what each run established
-  attest                                   [12] write .certify/<provider>/certification.json, only when every step passed
+  attest --environment <name>              [12] write .certify/<provider>/certification.json, only when every step
+                                           passed, with each capability whose steps passed (PR-06)
   forget                                   delete the stored test-account session (recordings are kept)
 
 Channel commands:
   auth-url --redirect-uri <uri>            [3] print the consent URL for the test account
   exchange --code <code> [--state <s>]     [3] exchange the code; shows scopes, missing scopes, other accounts
   select-account --account <id>            [3] switch to another page or organisation of the same login
-  publish --text <t> [--image <url,mime,w,h,bytes[,alt]>]...
-                                           [4] publish to the connected test account
+  publish --text <t> [--image <url,mime,w,h,bytes[,alt]>]... [--video <url,mime,w,h,bytes,durationMs>]
+                                           [4] publish to the connected test account (text alone, images
+                                           or a video: each certifies its own publish capability)
   pending-status | finalize                [4] follow the last publish while it is pending
   find                                     [5] reconcile the last publish (found / definitely_absent / cannot_determine)
+  edit-post --text <t>                     [5] edit the last publish through the adapter and read it back
+  delete-post                              [5] delete the last publish through the adapter and prove it absent
   refresh                                  [7] refresh the token (after revoke: reconnect_required proves the revoke)
   metrics [--account-metrics] [--post <id>] [--hours <n>]
                                            [9] post or account metrics; lists declared metrics not returned
@@ -84,6 +90,21 @@ CMS commands:
   revoke                                   [11] revoke the application password on the site, then verify
 
 Every request and response is recorded, redacted, under .certify/<provider>/recordings/ for the fixtures (step 6).`;
+
+/** `--video url,mime,width,height,bytes,durationMs`: a video at a public HTTPS URL with its measured duration. */
+function parseVideo(spec: string): PublishInput['media'][number] {
+  const [url, mime, width, height, bytes, durationMs] = spec.split(',');
+  if (!url || !mime || !width || !height || !bytes || !durationMs)
+    throw new Error(`--video needs url,mime,width,height,bytes,durationMs: ${spec}`);
+  return {
+    url,
+    mime,
+    width: Number(width),
+    height: Number(height),
+    bytes: Number(bytes),
+    durationMs: Number(durationMs),
+  };
+}
 
 function parseImage(spec: string): PublishInput['media'][number] {
   const [url, mime, width, height, bytes, altText] = spec.split(',');
@@ -119,6 +140,7 @@ async function main(argv: string[]): Promise<void> {
       account: { type: 'string' },
       text: { type: 'string' },
       image: { type: 'string', multiple: true },
+      video: { type: 'string', multiple: true },
       post: { type: 'string' },
       hours: { type: 'string' },
       cursor: { type: 'string' },
@@ -133,6 +155,7 @@ async function main(argv: string[]): Promise<void> {
       title: { type: 'string' },
       html: { type: 'string' },
       publish: { type: 'boolean' },
+      environment: { type: 'string' },
     },
     allowPositionals: false,
   });
@@ -141,7 +164,7 @@ async function main(argv: string[]): Promise<void> {
     case 'status':
       return status(deps);
     case 'attest':
-      attest(deps, deps.writeCertification);
+      attest(deps, deps.writeCertification, required(values.environment, 'environment'));
       console.log(`Record written to ${deps.certificationFile}`);
       return;
     case 'forget':
@@ -159,13 +182,20 @@ async function main(argv: string[]): Promise<void> {
         return selectAccount(deps, required(values.account, 'account'));
       case 'publish':
         if (values.text === undefined) throw new Error('--text is required');
-        return publish(deps, { text: values.text, media: (values.image ?? []).map(parseImage) });
+        return publish(deps, {
+          text: values.text,
+          media: [...(values.image ?? []).map(parseImage), ...(values.video ?? []).map(parseVideo)],
+        });
       case 'pending-status':
         return pendingStep(deps, 'status');
       case 'finalize':
         return pendingStep(deps, 'finalize');
       case 'find':
         return find(deps);
+      case 'edit-post':
+        return editPost(deps, required(values.text, 'text'));
+      case 'delete-post':
+        return deletePost(deps);
       case 'refresh':
         return refresh(deps);
       case 'revoke':

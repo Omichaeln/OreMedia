@@ -1,5 +1,6 @@
 import type { ArticleReadbackV1, DestinationKind } from '@oremedia/contracts/destinations';
 import type {
+  CapabilityCertifications,
   DecryptedCredentials,
   ProviderCapabilityV1,
   ProviderErrorClass,
@@ -29,6 +30,8 @@ export interface CmsCapabilityV1 {
   delete: boolean;
   unpublish: boolean;
   certifiedAt: string | null;
+  /** PR-06: the capabilities certified one by one; absent or without an entry means uncertified. */
+  certifications?: CapabilityCertifications;
 }
 
 /** The site an adapter addresses: its origin (https) and the integration identity it authenticates as. */

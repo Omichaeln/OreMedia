@@ -1,5 +1,11 @@
-import type { ProviderCapabilityV1 } from '@oremedia/contracts/providers';
+import {
+  capabilityCertificationStatuses,
+  type CapabilityCertificationStatusV1,
+  type CertifiableCapability,
+  type ProviderCapabilityV1,
+} from '@oremedia/contracts/providers';
 import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
+import { assertCapabilityCertified } from './capability';
 import type { ProviderAdapter } from './contract';
 import { linkedInPageAdapter } from './linkedin_page/adapter';
 import { instagramBusinessAdapter } from './instagram_business/adapter';
@@ -20,13 +26,28 @@ export class ProviderRegistry {
     return this;
   }
 
-  /** Certified adapters only (tenant-facing). */
-  get(key: string): ProviderAdapter {
+  /**
+   * Certified adapters only (tenant-facing). With `capability` (PR-06), a capability the adapter supports must
+   * also carry its own certification record, else the same CAPABILITY_UNSUPPORTED (`capability_not_certified`).
+   */
+  get(key: string, capability?: CertifiableCapability): ProviderAdapter {
     const a = this.adapters.get(key);
     if (!a) throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: `unknown_provider:${key}` }]);
     if (!a.capability.certifiedAt)
       throw new CapabilityUnsupportedError([{ path: 'providerKey', issue: `provider_not_certified:${key}` }]);
+    if (capability) assertCapabilityCertified('providerKey', key, capability, this.certifications(key));
     return a;
+  }
+
+  /** PR-06: every certifiable capability's state on a registered provider; empty for an unknown key. */
+  certifications(key: string): CapabilityCertificationStatusV1[] {
+    const a = this.adapters.get(key);
+    return a ? capabilityCertificationStatuses(channelCapabilitySupport(a), a.capability.certifications) : [];
+  }
+
+  /** PR-06: whether the capability is supported here but carries no certification record (refused or labelled). */
+  isUncertified(key: string, capability: CertifiableCapability): boolean {
+    return this.certifications(key).find((s) => s.capability === capability)?.state === 'uncertified';
   }
 
   forCertification(key: string): ProviderAdapter | undefined {
@@ -55,6 +76,30 @@ export class ProviderRegistry {
       capability: a.capability,
     }));
   }
+}
+
+/**
+ * PR-06: the certifiable capabilities a channel adapter offers, from its capability register and the optional
+ * methods it implements; the rest are `not_supported`. Text-only publishing is what the adapter's own validation
+ * accepts for a variant without media (Instagram requires media), the check the product runs before release.
+ */
+export function channelCapabilitySupport(adapter: ProviderAdapter): Set<CertifiableCapability> {
+  const cap = adapter.capability;
+  const supported = new Set<CertifiableCapability>(['connect', 'token_refresh', 'reconnect']);
+  if (adapter.selectAccount) supported.add('page_picker');
+  if (adapter.validateVariant({ text: 'Certification', altTexts: [], media: [], settings: {} }).ok)
+    supported.add('publish_text');
+  if (cap.media.image) supported.add('publish_image');
+  if (cap.media.video) supported.add('publish_video');
+  if (cap.edit && adapter.editPost) supported.add('edit');
+  if (cap.delete && adapter.deletePost) supported.add('delete');
+  if (cap.comments.reply && adapter.comment) supported.add('comment_reply');
+  if (
+    (adapter.fetchPostMetrics && cap.analytics.post.length > 0) ||
+    (adapter.fetchAccountMetrics && cap.analytics.account.length > 0)
+  )
+    supported.add('analytics');
+  return supported;
 }
 
 /**

@@ -66,6 +66,11 @@ Tenant-level channel connections and destinations (OAuth grants per brand) are r
 API in section 5; none can exist for the social channels while the adapters are uncertified (the connect start
 returns `provider_not_certified`).
 
+Provider certification per capability (PR-06, 4 October 2026 audit): `docs/release/connection-inventory.md` lists
+every provider × capability (connect, page picker, publish text, image and video, edit, delete, comment reply,
+analytics, token refresh, reconnect) with its status, evidence and owner action, derived from the registries and
+kept in step with them by a unit test. At this increment: 0 certified, 60 uncertified, 28 not supported.
+
 ## 2. Requirement and finding rows
 
 Columns: ID · user outcome · current state · dependency · implementation · acceptance · tested commit ·

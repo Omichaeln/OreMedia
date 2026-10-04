@@ -1,3 +1,4 @@
+import type { CertifiableCapability } from '@oremedia/contracts/providers';
 import type { ActivityHooks } from '@oremedia/contracts/agents';
 import {
   MemoryProviderRateLimiter,
@@ -49,8 +50,12 @@ export const cmsFetchOptions = (): SafeDispatcherOptions =>
 /** The URL policy every site address and crawled URL passes (https, no credentials, no blocked host), as cmsIO applies it. */
 export const cmsSafeUrl = (url: string): URL => assertSafeUrl(url, cmsFetchOptions());
 
-/** Certified CMS adapters only; an unknown or uncertified kind is CAPABILITY_UNSUPPORTED (spec 14.6). */
-export const cmsAdapterFor = (kind: string): CmsAdapter => options.registry.get(kind);
+/**
+ * Certified CMS adapters only; an unknown or uncertified kind is CAPABILITY_UNSUPPORTED (spec 14.6), and so is a
+ * supported `capability` without its own certification record (PR-06).
+ */
+export const cmsAdapterFor = (kind: string, capability?: CertifiableCapability): CmsAdapter =>
+  options.registry.get(kind, capability);
 
 function rateLimiter(): RateLimiter {
   return (limiter ??=

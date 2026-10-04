@@ -31,10 +31,12 @@ import {
   type ArticleImageV1,
 } from '@oremedia/contracts/content';
 import { CapabilityUnsupportedError, OremediaError, PolicyDeniedError } from '@oremedia/contracts/errors';
-import type {
-  DecryptedCredentials,
-  RemoteMutationOutcome,
-  ValidationResult,
+import {
+  capabilityNotCertifiedIssue,
+  type CertifiableCapability,
+  type DecryptedCredentials,
+  type RemoteMutationOutcome,
+  type ValidationResult,
 } from '@oremedia/contracts/providers';
 import type { ChannelVariantForPublishing } from '@oremedia/contracts/publishing';
 import type { Tx } from '@oremedia/db';
@@ -62,7 +64,7 @@ import {
   type CmsRemoteArticle,
   type CmsSite,
 } from '@oremedia/providers';
-import { cmsAdapterFor, cmsIO } from './cms';
+import { cmsAdapterFor, cmsIO, cmsRegistryInUse } from './cms';
 import { BrandDestinationRepository, SourceUsePolicyRepository } from './repositories';
 import {
   StoredKind,
@@ -362,6 +364,7 @@ export const destinationArticles: DestinationPublisher = {
         delete: capability?.delete ?? false,
         unpublish: capability?.unpublish ?? false,
       },
+      uncertifiedActions: uncertifiedCmsActions(row.kind),
     };
   },
 
@@ -374,6 +377,14 @@ export const destinationArticles: DestinationPublisher = {
       ]);
     const issues: ValidationResult['issues'] = [];
     if (!variant.article) issues.push({ path: 'article', issue: 'article_missing' });
+    // PR-06: writing the article (and uploading its images) must be certified on the kind's adapter.
+    const needed: CertifiableCapability[] =
+      variant.article && articleImages(variant.article).length > 0
+        ? ['publish_text', 'publish_image']
+        : ['publish_text'];
+    for (const capability of needed)
+      if (cmsRegistryInUse().isUncertified(row.kind, capability))
+        issues.push({ path: 'destinationId', issue: capabilityNotCertifiedIssue(row.kind, capability) });
     const mode = variant.settings['publishMode'];
     if (mode !== undefined && !CmsPublishMode.safeParse(mode).success)
       issues.push({ path: 'settings.publishMode', issue: 'publish_mode_invalid' });
@@ -678,6 +689,13 @@ export const destinationArticles: DestinationPublisher = {
     }
   },
 };
+
+/** PR-06: the live-article actions whose capability is not certified on the kind's adapter (an unpublish is an edit). */
+function uncertifiedCmsActions(kind: string): Array<'edit' | 'delete' | 'unpublish'> {
+  return (['edit', 'delete', 'unpublish'] as const).filter((action) =>
+    cmsRegistryInUse().isUncertified(kind, action === 'unpublish' ? 'edit' : action),
+  );
+}
 
 /** The kind's CMS capability when registered (certified or not), for the actions a screen may offer. */
 function cmsAdapterCapability(kind: string) {
