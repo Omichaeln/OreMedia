@@ -221,3 +221,142 @@ header)`, and worker-core logs `openrouter 401: Missing Authentication header`. 
   working OpenRouter key. Owner action: set a valid OpenRouter key on staging worker-core (its value was not read and
   no production credential was copied); the next acceptance run then reports `MODEL_EVAL_PASS` or a grading result.
   Whether production model calls succeed is not recorded: no production model run is in the evidence.
+
+## 5. Increment of 3 and 4 October 2026 (PRs #46 to #78)
+
+### State at the end of the increment (4 October 2026, 14:42 UTC)
+
+- `main` and production at `aa2c5d8` (#78). Main CI green on `aa2c5d8`; production smoke run 73 passed on it.
+- Migration level 0029 (`0029_document_archive`). Every migration in this increment is additive; each was applied by
+  the api pre-deploy (`migrations applied`), and `db-roles` logged `PASS application` and `PASS retention … exactly the
+generated grants` after every merge that changed the schema.
+- All 14 production services healthy (`environment-status`: 0 services with issues, 0 failures in the last hour).
+- Open pull requests: none from this increment. #31 (Brand Kit Agent architecture note) closed unmerged at the owner's
+  request; superseded by BSC-1 to BSC-5. The branch is kept.
+
+### Merged changes and their production evidence
+
+Evidence level for every row: tested (CI green on the head that was merged, up to date with `main`) and deployed
+(production deploy SUCCESS and a passing production smoke run on a commit containing the change). No row is
+externally verified with a real provider account; see the owner checklist.
+
+| PR  | Change                                                                                        | Merge commit | Migration | Production smoke |
+| --- | --------------------------------------------------------------------------------------------- | ------------ | --------- | ---------------- |
+| #46 | OpenRouter: no empty tools list; rejections name the upstream provider                        | e2edcdd      |           | 40 (a4ef310)     |
+| #47 | Model adapters: provider-safe tool names; Anthropic omits empty tools                         | e567ef6      |           | 40 (a4ef310)     |
+| #48 | One brand system per brand, edited in place (D-22)                                            | 6ba32c9      |           | 40 (a4ef310)     |
+| #49 | Acceptance: a below-the-bar grading names its failing checks and scores                       | a4ef310      |           | 40               |
+| #51 | SVG ingest accepts design-tool DOCTYPEs                                                       | 4cb6492      |           | 41               |
+| #50 | SVG logos as a first-class format (BSC-2)                                                     | 8de9ef2      |           | 42               |
+| #53 | Facts workspace: provenance, sources, review and expiry, merge, conflicts (BSC-3)             | ab64052      | 0023      | 43, 44           |
+| #57 | SEO audit workflow v2 (named activities) and the missing `seo_finding_work` grant             | f65cfb0      |           | 45               |
+| #52 | Brand System guidance model: voice, messaging, vocabulary, patterns, templates, channels      | a83475b      |           | 46               |
+| #56 | Studio: template-led creation, brand-styled starters, editor completeness                     | 3e3d2ba      |           | 47               |
+| #61 | gitleaks allowlist for Studio format keys                                                     | ddfa99f      |           | 48               |
+| #58 | AI-assisted Brand System setup, section assistant and history (BSC-4/5)                       | 88c0bbd      | 0024      | 49               |
+| #59 | Studio Generate workflow, editable AI artwork, scoped AI refinement (STU-1b)                  | f3ba12f      | 0025      | 50               |
+| #54 | Video and audio media foundation: ingest, proxies, waveforms, exports, review playback        | 18ab1f3      | 0026      | 51, 52           |
+| #75 | Activity-host integration tests for 14 factories; own-tenant checks for id-less procedures    | a18583a      |           | 54               |
+| #77 | SEO audit: a retried scheduled plan resumes its own run                                       | e15cda7      |           | 55               |
+| #64 | Markup regexes hardened against quadratic backtracking                                        | d9a8820      |           | 56               |
+| #65 | Overview integration test fixture pinned to midday UTC (nightly CI failure)                   | 646b987      |           | 57               |
+| #63 | Copywriting evaluation: refusals have a schema shape; prohibited terms scan copy only         | 4de8034      |           | 58               |
+| #55 | Video projects: timeline model, Studio timeline editor, ffmpeg compositor (STU-2b)            | ebe0514      | 0027      | 59               |
+| #60 | Video AI: storyboard, assembly and targeted recuts (STU-3)                                    | b998df5      | 0028      | 60               |
+| #62 | Acceptance waits for staging to settle before provisioning                                    | 7ec63bb      |           | 61               |
+| #72 | Linear-time parser tests measure growth (CPU time), not a fixed duration                      | 7557f49      |           | 62               |
+| #71 | Acceptance journeys for Brand System, facts, SVG logo, Studio and video (G07)                 | 0155f6e      |           | 63               |
+| #69 | Access hardening: setup-link confinement, no secrets in idempotency records, `REDIS_URL` gate | fa0c77d      |           | 64               |
+| #67 | AI-boundary findings: budget caps, untrusted text, propose-only, shared OAuth state           | 23620b5      |           | 65               |
+| #70 | Studio `setVisibility` (show and hide elements), compiled from generation                     | dd397ef      |           | 66               |
+| #66 | Upload pinned under ingest, SVG CSS gaps closed, clamd `AlertExceedsMax`, one-hop proxy trust | db1ccb5      |           | 67               |
+| #76 | Temporal schedules reconciled with the code; worker smoke tests on a real Temporal server     | 83f3a08      |           | 68               |
+| #74 | Operator-only feature flag setter; dead flags removed; approval-monitor tests (G05, G24)      | a377ea2      |           | 69               |
+| #68 | Test coverage: CI e2e list guard, mock-API contract check, untested procedures                | f8eed51      |           | 70, 71           |
+| #73 | Team roles and member disable; campaign edit and close; document archive (G03, G12)           | 4925c77      | 0029      | 72               |
+| #78 | Sole-owner guard: no demotion or disable leaves a company without an active owner             | aa2c5d8      |           | 73               |
+
+Deploy notes worth keeping:
+
+- #66 rebuilt the production ClamAV image; clamd started with the 1100 MB limits and logged `Heuristic alerting
+enabled for scans that exceed set maximums`. It was merged after confirming the only uploads in the preceding hour
+  were smoke uploads that had completed (the runbook's quiet-queue condition). Production and staging ClamAV both
+  deploy from `main`, so they rebuilt together rather than staging first; the scanner already treated any `FOUND`
+  reply as not clean, so the order could not let an unscanned file through.
+- #69 makes the api refuse to start in production without `REDIS_URL`; the production api started cleanly
+  (`configuration complete: every capability is configured`, `/health` 200), confirming the variable is present.
+- #76: worker-core logged no `schedule reconciled` lines on start, so the live schedules already matched the code;
+  worker-render polls `render`, `media` and `video`.
+- Merge-time defects caught by the new guards, fixed on the PRs before merge: two video e2e suites (#55, #60) were not
+  in CI's e2e list, and ten e2e mock procedures had drifted from the real router's output types (#68's guards found
+  both); `operations.flags.list` lacked an own-tenant fixture (#75's rule, fixed on #74); #76 and the video worker
+  (#54/#55/#60) were reconciled into the new worker structure; #73's migration was regenerated as 0029 with
+  byte-identical SQL.
+
+### Findings and incidents from the increment
+
+- **Production Temporal database connection exhaustion, 4 October 2026, about 05:56 to 06:05 UTC.** Scheduled smoke run
+  53 (18ab1f3) failed on `upload:ingest` (`still uploaded after 120 s`). Cause, from the logs: Temporal's persistence
+  calls to `temporal-db` timed out (`context deadline exceeded` on `UpdateShard`, `GetTransferTasks`,
+  `GetHistoryTasks`), worker-core's outbox logged `Failed to start Workflow` for the ingest (and retried), and the 06:01
+  `db-backup` run failed its Temporal dump with `mysqldump: Got error: 1040: Too many connections`
+  (`DB_BACKUP_FAIL temporal dump too small`). The `oremedia` dump on the same run passed. Not seen again: no other
+  `DB_BACKUP_FAIL` since the backup started on 2 October, and every smoke run from 54 to 73 passed. The `temporal`
+  service sets no SQL pool limit (no `SQL_MAX_CONNS` or `SQL_MAX_IDLE_CONNS` among its variables), so its connection
+  count is bounded only by the image defaults against the database's `max_connections`. Residual risk R19 below. No
+  data was lost; one 15-minute Temporal backup point is missing.
+- **Staging acceptance (service `acceptance`, tracks `main`).** Since #71 added the new journeys (first run 09:19 UTC):
+  `ACCEPTANCE_DONE 94/96 (24 skipped)`. The two failures: `smoke:upload:csp` (the staging object store is still the
+  `REPLACE_ME` placeholder: owner action) and `brand-system:assist … ended failed: model_routing_denied; spent 0 µUSD
+of the 200000 cap`.
+- **Root cause of `model_routing_denied`: a product defect that also affects production.** `assertRoutingAllowed`
+  (`packages/ai/src/routing-policy.ts`) checks every model call against the tenant's stored policy or, without one,
+  the platform policy; the platform policy was hard-coded to Anthropic only and `configureRoutingPolicy` is never
+  called by a composition root, while `modelConfigFromEnv` selects the `openrouter` provider wherever
+  `OPENROUTER_API_KEY_REF` is set. worker-core has that variable (and `OREMEDIA_MODEL_ID`) in both environments and the
+  api has neither, so the api's start check passes and worker-core then denies the call before reserving any budget.
+  Every worker-side model call (brand assist, agent runs, Studio and video generation, the image, video and speech
+  tools) is therefore denied for any company without a stored routing policy, which is every company onboarded
+  normally. The skill evaluation runner has no routing gate, which is why staging gradings still reach the model.
+  Production impact is established from code and from production variable names (no production model run is
+  recorded either way). Fix: PR #82 makes the platform fallback the deployment's own policy (`routingPolicyFromEnv`:
+  OpenRouter with the configured default model on an OpenRouter deployment, Anthropic only otherwise); a stored
+  tenant policy still wins. Three regression tests fail on `main` and pass with the fix.
+- **Copywriting evaluation below the bar with no failing check.** A version passes only when every deterministic check
+  passes and every rubric mean reaches its case's `minScore`; `injection_reported` (minimum 8) scored 0 to 3.3. The
+  staging fixture company imported the built-in package once (2 October, version 1) and reuses it; #63's corrected
+  package was seeded for the platform skill only. Version 1's `copy-injection-and-superlative` case contains no
+  evidence, yet its rubric asks the model to report the embedded instruction, so nothing can score well: a defect in
+  the old case. Fix: PR #83 makes the acceptance fixture import the current package as the copy's next version when no
+  version matches its hash (the built-in seeder's rule). Whether that version clears the bar on the real model is not
+  yet observed.
+
+### Inventory gaps closed in this increment (from the 3 October inventory at f3ba12f)
+
+G03 and G12 (#73: role and brand-grant controls, member disable and enable, campaign edit and close, document
+archive), G05 and G24 (#74: operator flag setter, dead flags removed, approval-monitor tests), G07 (#71: acceptance
+journeys for the features shipped after RA-14), G14 and G21 (#75), G20 and G26 (#76), the four e2e suites not run in
+CI and the unchecked hand-written mock (#68), and video creation and timeline editing absent from main (#54, #55,
+#60). Gaps that remain open: provider certification (no channel certified), staging object store, production model
+run evidence, AI image fill for empty Studio image areas (`registerGenerationImageAvailability` not registered), and
+replay of histories recorded from a deployed version.
+
+### Owner checklist (current; only actions that need the owner's identity, accounts or decisions)
+
+1. Railway "Wait for CI" on the ten repo-sourced production services (no API exposes the setting).
+2. Staging object store: a real R2 bucket and token, or a Railway bucket pair, for the staging api, worker-core and
+   worker-render (`OBJECT_STORE_*`).
+3. Meta App Review and Business Verification (app `1111601258212850`) and LinkedIn Community Management API review;
+   then certification per `docs/runbooks/certify-a-provider.md`.
+4. Retention apply mode in production (`RETENTION_SWEEP_APPLY`, D-09).
+5. An alert destination (Slack, Discord or email webhook) for missed backups, crashes and deploy failures.
+6. Staging approval monitor: real staging Gmail credentials, or disable its cron.
+7. (Superseded by PR #83, which imports the current package automatically; no owner action once it merges.)
+
+### Residual risks added
+
+- R19 (production Temporal persistence): `temporal-db` connection exhaustion stalled workflow starts for about ten
+  minutes on 4 October. Mitigation (engineering, staging first): set `SQL_MAX_CONNS` and `SQL_MAX_IDLE_CONNS` on the
+  `temporal` service so the total pool across Temporal's services sits well under `temporal-db`'s `max_connections`,
+  or raise `max_connections`; add a connection-count alert once an alert destination exists. Until then the outbox
+  retry absorbs short stalls, but a backup point can be missed.

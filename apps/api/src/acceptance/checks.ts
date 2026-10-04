@@ -9,7 +9,7 @@ import {
 } from '../../../../tooling/scripts/acceptance/report';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import type { FetchLike } from '../../../../tooling/scripts/acceptance/http';
-import { loadBuiltinPackage } from '@oremedia/module-skills';
+import { loadBuiltinPackage, packageHash, parsePackage } from '@oremedia/module-skills';
 import { mutate, query, signInWithPassword, sleep, type ApiSession } from './client';
 import type { FixtureRole, FixtureTenant } from './fixtures';
 
@@ -248,6 +248,7 @@ interface SkillVersionSummary {
   number: number;
   state: string;
   version: number;
+  packageHash: string;
 }
 /** A graded evaluation as skills.get returns it (insert-only results, newest last). */
 interface SkillEvaluationSummary {
@@ -296,7 +297,10 @@ export function gradingSummary(
  * A published skill bound to the fixture company for the task kind, the way a person does it in Settings → Skills
  * (UX-17): the built-in package is imported at tenant scope, its evaluation requested (worker-core grades it with
  * the model, so this runs only with the model evaluation), then published and bound tenant-wide. Re-runs find the
- * company's copy: published → bound again (idempotent); still being evaluated → waited for; failed → reported.
+ * company's copy and work on its version of the package this build ships (matched by package hash, as the built-in
+ * seeder does): a changed package is imported again as the copy's next version with its current cases, so a fix to
+ * the package or its cases is what gets graded, never an older version the copy was first imported with. That
+ * version published → bound again (idempotent); still being evaluated → waited for; failed → reported.
  */
 export async function ensureTaskKindSkill(
   api: ApiSession,
@@ -314,20 +318,20 @@ export async function ensureTaskKindSkill(
     page: { limit: 100 },
   });
   if (!listed.data) return { ok: false, reason: `skills.list: ${listed.error}` };
+  const pkg = await loadBuiltinPackage(key);
+  const currentHash = packageHash(parsePackage(pkg.files));
+  /** skills.import at tenant scope creates the company's copy, or appends the next version to the one it has. */
+  const importPackage = async () =>
+    mutate<{ skillId: string; skillVersionId: string; version: number }>(api, 'skills.import', {
+      files: pkg.files,
+      scope: 'tenant',
+      cases: pkg.cases,
+    });
   let skillId = listed.data.items.find((s) => s.key === key)?.id;
   let source: 'listed' | 'imported' = 'listed';
   if (!skillId) {
     source = 'imported';
-    const pkg = await loadBuiltinPackage(key);
-    const imported = await mutate<{ skillId: string; skillVersionId: string; version: number }>(
-      api,
-      'skills.import',
-      {
-        files: pkg.files,
-        scope: 'tenant',
-        cases: pkg.cases,
-      },
-    );
+    const imported = await importPackage();
     if (!imported.data) return { ok: false, reason: `skills.import: ${imported.error}` };
     skillId = imported.data.skillId;
   }
@@ -361,14 +365,24 @@ export async function ensureTaskKindSkill(
   };
   const deadline = Date.now() + opts.timeoutMs;
   let requestedAt: string | null = null;
+  let reimported = false;
+  let publishedHere = false;
   for (;;) {
     const read = await versionsOf();
     if ('error' in read) return { ok: false, reason: read.error };
     const { versions } = read;
-    const latest = [...versions].sort((a, b) => b.number - a.number)[0];
-    if (!latest) return { ok: false, reason: 'the imported skill has no version' };
-    const published = versions.find((v) => v.state === 'published') ?? null;
-    const version = published ?? latest;
+    const version = versions
+      .filter((v) => v.packageHash === currentHash)
+      .sort((a, b) => b.number - a.number)[0];
+    if (!version) {
+      // The copy predates this build's package: grade the package as it ships now, not the version first imported.
+      if (reimported || !versions.length)
+        return { ok: false, reason: `the company's ${key} copy has no version of the current package` };
+      reimported = true;
+      const imported = await importPackage();
+      if (!imported.data) return { ok: false, reason: `skills.import: ${imported.error}` };
+      continue;
+    }
     if (version.state === 'draft' && requestedAt) {
       // Our own request ran and worker-core returned the version to draft: the grading failed. Report why rather
       // than requesting again (every run burns model budget) and timing out without a cause.
@@ -386,6 +400,7 @@ export async function ensureTaskKindSkill(
         expectedVersion: version.version,
       });
       if (done.status !== 200) return { ok: false, reason: `skills.versions.publish: ${done.error}` };
+      publishedHere = true;
       continue;
     }
     if (version.state === 'published') {
@@ -395,7 +410,12 @@ export async function ensureTaskKindSkill(
         skillVersionId: version.id,
       });
       if (bound.status !== 200) return { ok: false, reason: `skills.bindings.set: ${bound.error}` };
-      return { ok: true, key, versionNumber: version.number, outcome: published ? 'existing' : 'published' };
+      return {
+        ok: true,
+        key,
+        versionNumber: version.number,
+        outcome: publishedHere ? 'published' : 'existing',
+      };
     }
     if (version.state === 'draft') {
       // Not yet evaluated (a fresh import), or an earlier evaluation failed and moved it back: request one.

@@ -1,4 +1,5 @@
-import { PolicyDeniedError, UnauthenticatedError } from '@oremedia/contracts/errors';
+import type { TenantKind } from '@oremedia/contracts/access';
+import { NotFoundError, PolicyDeniedError, UnauthenticatedError } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { ActorRef } from '@oremedia/contracts/tenancy';
 import { runAsPlatform, type TenantContext, type Tx } from '@oremedia/db';
@@ -90,10 +91,32 @@ export async function authenticate(bearer: string | undefined, tx?: Tx): Promise
   });
 }
 
+/** Kinds read so far, per process. A tenant's kind never changes after creation, so an entry never goes stale. */
+const KIND_CACHE_MAX = 10_000;
+const kindCache = new Map<string, TenantKind>();
+
+/**
+ * The kind of a tenant (`live` or `demo`), for checks that key behaviour on it outside a request (workers, guards
+ * reading currentTenant()). A platform read, cached for the life of the process: safe because the kind is immutable.
+ */
+export const tenantKinds = {
+  async of(tenantId: string, correlationId: string, tx?: Tx): Promise<TenantKind> {
+    const cached = kindCache.get(tenantId);
+    if (cached) return cached;
+    const kind = await runAsPlatform('tenant-kind', correlationId, () => directory.tenantKind(tenantId, tx));
+    if (!kind) throw new NotFoundError('Tenant', tenantId);
+    if (kindCache.size >= KIND_CACHE_MAX) kindCache.clear();
+    kindCache.set(tenantId, kind);
+    return kind;
+  },
+};
+
 export interface ResolvedTenant {
   context: TenantContext;
   actor: ResolvedActor;
   actorRef: ActorRef;
+  /** The resolved company's kind: server-side checks read it here (or through tenantKinds), never from the client. */
+  tenantKind: TenantKind;
 }
 
 /**
@@ -144,6 +167,7 @@ export async function resolveTenantContext(
         context: { tenantId, actor: { kind: 'user', id: user.id }, brandIds, correlationId },
         actor,
         actorRef: { kind: 'user', id: user.id },
+        tenantKind: tenant.kind,
       };
     }
     case 'api_client': {
@@ -176,6 +200,7 @@ export async function resolveTenantContext(
         },
         actor,
         actorRef: { kind: 'service_principal', id: sp.id },
+        tenantKind: await tenantKinds.of(sp.tenantId, correlationId, tx),
       };
     }
     case 'external_reviewer': {
@@ -204,6 +229,7 @@ export async function resolveTenantContext(
         },
         actor,
         actorRef: { kind: 'external_reviewer', id: principal.linkId },
+        tenantKind: await tenantKinds.of(principal.tenantId, correlationId, tx),
       };
     }
     case 'platform_operator': {
@@ -230,6 +256,7 @@ export async function resolveTenantContext(
         },
         actor,
         actorRef: { kind: 'platform_operator', id: principal.operatorId },
+        tenantKind: await tenantKinds.of(principal.tenantId, correlationId, tx),
       };
     }
   }
