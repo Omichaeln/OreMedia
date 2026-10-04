@@ -3,6 +3,16 @@
 export * from './time';
 export { framePlacement, type FramePlacement } from './frame';
 export {
+  soundWindows,
+  gainAt,
+  dbToGain,
+  scheduleGain,
+  transitionHalfFrames,
+  transitionInOf,
+  type SoundWindow,
+  type GainAutomation,
+} from './audio';
+export {
   pictureLayersAt,
   activeOverlays,
   activeCaptions,
