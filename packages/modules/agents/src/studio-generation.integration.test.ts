@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import type { CreativeDocumentV1, Element } from '@oremedia/contracts/creative';
-import { NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { BudgetExhaustedError, NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import type {
   GenerationRequest,
   ModelFill,
@@ -1181,7 +1181,7 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     ).rejects.toThrow(/no blocking findings/);
   });
 
-  it('a cancel while the model call runs: the closed reservation is not charged further, the call cost is recorded, nothing is saved', async () => {
+  it('a cancel while the model call runs: the call cost is ledgered against the closed reservation and recorded, nothing is saved', async () => {
     const d = await starterDocument();
     const headline = el(d.document, 'Headline');
     const job = await start(d.documentId, d.revisionId, {
@@ -1214,7 +1214,63 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     const reservation = (
       await tdb.db.select().from(budgetReservations).where(eq(budgetReservations.runId, row.budgetRunId!))
     )[0]!;
-    expect(reservation).toMatchObject({ state: 'released', consumedMicros: 0 });
+    // The call had already cost what it cost: it stays against the caps (released rows count their consumption).
+    expect(reservation).toMatchObject({ state: 'released', consumedMicros: row.costSpentMicros });
+    const charged = await tdb.db
+      .select()
+      .from(usageLedger)
+      .where(eq(usageLedger.reservationId, reservation.id));
+    expect(charged.map((c) => c.costMicros)).toEqual([row.costSpentMicros]);
     expect((await head(d.documentId)).id).toBe(d.revisionId);
+  });
+
+  it('spend of a cancelled attempt still counts toward the brand-day cap after a retry', async () => {
+    const d = await starterDocument();
+    const headline = el(d.document, 'Headline');
+    const before = await inTenant(tenantA, () => budgets.summary(brandA));
+    const job = await start(d.documentId, d.revisionId, {
+      kind: 'generate',
+      brief: { keyMessage: 'Spend then cancel' },
+    });
+    const { runtime } = runtimeWith([
+      fillCall({
+        summary: 's',
+        edits: [{ label: 'H', pageId: 'page_1', elementId: headline.id, text: 'Spent' }],
+      }),
+    ]);
+    const input: StudioGenerationInputV1 = {
+      tenantId: tenantA,
+      actor: { kind: 'user', id: USER },
+      correlationId: 'c',
+      jobId: job.id,
+      attempt: 1,
+    };
+    // Attempt 1 reserves and its model call is charged while the reservation is held; then the person cancels
+    // before the save and retries.
+    await inTenant(tenantA, () => runtime.begin(input));
+    await inTenant(tenantA, () => runtime.reserve(input));
+    expect((await inTenant(tenantA, () => runtime.callModel(input, A))).proceed).toBe(true);
+    const spent = (await getJob(job.id)).costSpentMicros;
+    expect(spent).toBeGreaterThan(0);
+    const current = await getJob(job.id);
+    const cancelled = await run(tenantA, (tx) =>
+      generationService.cancel(A, { jobId: job.id, expectedVersion: current.version }, tx),
+    );
+    await run(tenantA, (tx) =>
+      generationService.retry(A, { jobId: job.id, expectedVersion: cancelled.version }, tx),
+    );
+    const after = await inTenant(tenantA, () => budgets.summary(brandA));
+    expect(after.day.committedMicros - before.day.committedMicros).toBe(spent);
+    // The cap holds with it: one micro over what remains is refused, exactly what remains fits.
+    const over = newId('agentRun');
+    const fits = newId('agentRun');
+    const deadline = new Date(Date.now() + 60_000);
+    await expect(
+      inTenant(tenantA, () => budgets.reserveSpend(brandA, over, after.day.remainingMicros + 1, deadline)),
+    ).rejects.toBeInstanceOf(BudgetExhaustedError);
+    await inTenant(tenantA, async () => {
+      await budgets.reserveSpend(brandA, fits, after.day.remainingMicros, deadline);
+      await budgets.release(fits);
+    });
   });
 });

@@ -15,7 +15,7 @@ import {
   type CompileContext,
   type PreflightInput,
 } from './generation';
-import { guardScope, scopeState } from './guard';
+import { guardLocks, guardProtected, guardScope, scopeState } from './guard';
 import { applyBatch, findElement } from './reduce';
 import { instantiateStarter, starterByKey, type StarterBrand } from './starters';
 
@@ -226,6 +226,66 @@ describe('compile slot fills to operations', () => {
       contextFor(document, { scope, slots: generationSlots(document, page, { scope }) }),
     );
     expect(outOfScope.refused.map((r) => r.reason)).toEqual(['element_out_of_scope']);
+  });
+});
+
+describe('compile hidden', () => {
+  it('a hidden-only edit compiles to setVisibility, passes the agent guards and hides the element', () => {
+    const { document } = photoFeature();
+    const page = document.pages[0]!;
+    const body = byName(document, 'Body');
+    const out = compileFill(
+      document,
+      { summary: 's', edits: [{ label: 'Hide body', pageId: page.id, elementId: body.id, hidden: true }] },
+      contextFor(document),
+    );
+    expect(out.refused).toEqual([]);
+    expect(out.operations).toEqual([
+      { op: 'setVisibility', pageId: page.id, elementId: body.id, visible: false },
+    ]);
+    for (const op of out.operations) {
+      guardLocks(document, op, 'agent');
+      guardProtected(document, op, 'agent');
+    }
+    const next = applyBatch(document, { operations: out.operations });
+    expect(findElement(next.pages[0]!, body.id)?.visible).toBe(false);
+    // Showing an element that is already shown changes nothing.
+    const shown = compileFill(
+      document,
+      { summary: 's', edits: [{ label: 'Show', pageId: page.id, elementId: body.id, hidden: false }] },
+      contextFor(document),
+    );
+    expect(shown.refused.map((r) => r.reason)).toEqual(['no_change']);
+  });
+
+  it('hiding a locked element or the logo is refused by the compiler, and by the guards if sent directly', () => {
+    const { document } = photoFeature();
+    const page = document.pages[0]!;
+    const body = byName(document, 'Body');
+    const logo = page.elements.find((e) => e.type === 'logo')!;
+    const locked = structuredClone(document);
+    (locked.pages[0]!.elements.find((e) => e.id === body.id) as Element).locked = true;
+    const out = compileFill(
+      locked,
+      {
+        summary: 's',
+        edits: [
+          { label: 'a', pageId: page.id, elementId: body.id, hidden: true },
+          { label: 'b', pageId: page.id, elementId: logo.id, hidden: true },
+        ],
+      },
+      contextFor(locked, { slots: generationSlots(locked, locked.pages[0]!) }),
+    );
+    expect(out.refused.map((r) => r.reason)).toEqual(['element_locked', 'element_logo']);
+    expect(out.operations).toEqual([]);
+    const hide = (elementId: string): Operation => ({
+      op: 'setVisibility',
+      pageId: page.id,
+      elementId,
+      visible: false,
+    });
+    expect(() => guardLocks(locked, hide(body.id), 'agent')).toThrow(PolicyDeniedError);
+    expect(() => guardProtected(locked, hide(logo.id), 'agent')).toThrow(PolicyDeniedError);
   });
 });
 

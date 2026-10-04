@@ -1010,7 +1010,10 @@ export const brandService = {
   async create(actor: ResolvedActor, input: z.infer<typeof BrandCreate>, tx: Tx) {
     const parsed = BrandCreate.parse(input);
     const { tenantId } = requireTenant();
-    await policy.assert(actor, 'brand.edit_standards', { type: 'tenant', tenantId, id: tenantId }, {}, tx);
+    // Creating a brand is a person's decision: an agent or API key holding brand.edit_standards may only propose.
+    assertMayDecide(
+      await policy.assert(actor, 'brand.edit_standards', { type: 'tenant', tenantId, id: tenantId }, {}, tx),
+    );
     await entitlements.assert(tenantId, 'brands', tx);
     const id = newId('brand');
     await brandsRepo.create(
@@ -1360,12 +1363,15 @@ export const brandService = {
       const parsed = BrandProposalDiscard.parse(input);
       const brand = await brandsRepo.getById(parsed.brandId, tx);
       const v = await loadVersion(brand.id, parsed.versionId, tx);
-      await policy.assert(
-        actor,
-        'brand.edit_standards',
-        { type: 'brand_version', tenantId: brand.tenantId, brandId: brand.id, id: v.id, state: v.state },
-        {},
-        tx,
+      // Retiring a person's proposal is a decision: agents and API keys may only propose.
+      assertMayDecide(
+        await policy.assert(
+          actor,
+          'brand.edit_standards',
+          { type: 'brand_version', tenantId: brand.tenantId, brandId: brand.id, id: v.id, state: v.state },
+          {},
+          tx,
+        ),
       );
       const toState = transition(brandVersionMachine, v.state, 'retire', 'versionId');
       await versionsRepo.update(v.id, parsed.expectedVersion, { state: toState }, tx);
@@ -1945,7 +1951,8 @@ export const brandService = {
     async set(actor: ResolvedActor, input: z.infer<typeof ObjectiveSet>, tx: Tx) {
       const parsed = ObjectiveSet.parse(input);
       const brand = await brandsRepo.lock(parsed.brandId, tx);
-      await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
+      // The active objective feeds every agent snapshot: setting it is a person's decision.
+      assertMayDecide(await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx));
       const activeFrom = new Date(parsed.activeFrom);
       const activeUntil = parsed.activeUntil ? new Date(parsed.activeUntil) : null;
       if (activeUntil && activeUntil.getTime() <= activeFrom.getTime())

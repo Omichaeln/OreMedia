@@ -26,6 +26,8 @@ export interface CanvasProps {
   /** Ctrl/Cmd+G groups the selection, Ctrl/Cmd+Shift+G ungroups the selected group. */
   onGroup: () => void;
   onUngroup: () => void;
+  /** Ctrl/Cmd+Shift+H shows or hides the selection. */
+  onToggleVisibility: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -45,7 +47,8 @@ const OVERLAY_TONE: Record<ElementDiff['kind'], { className: string; label: stri
 
 /**
  * The Konva mount. State lives outside the stage (spec 11.6): the adapter draws `doc` and emits intents; every
- * canvas action also has a keyboard path here (spec 21.3): arrows nudge, Delete removes, Escape clears, Ctrl+Z/Y.
+ * canvas action also has a keyboard path here (spec 21.3): arrows nudge, Delete removes, Escape clears, Ctrl+Z/Y,
+ * Ctrl+Shift+H shows or hides the selection.
  */
 export function Canvas(props: CanvasProps) {
   const {
@@ -61,6 +64,7 @@ export function Canvas(props: CanvasProps) {
     onDeleteSelected,
     onGroup,
     onUngroup,
+    onToggleVisibility,
     onUndo,
     onRedo,
     onSave,
@@ -164,6 +168,11 @@ export function Canvas(props: CanvasProps) {
     if (meta && e.key.toLowerCase() === 'g') {
       e.preventDefault();
       if (!readOnly) (e.shiftKey ? onUngroup : onGroup)();
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === 'h') {
+      e.preventDefault();
+      if (!readOnly && selection.length > 0) onToggleVisibility();
       return;
     }
     if (e.key === 'Escape') {

@@ -358,8 +358,9 @@ export function createAgentRunRuntime(opts: AgentRuntimeOptions): AgentRunRuntim
           tx,
         );
       });
-      // Cost already incurred is ledgered first; exceeding the reservation ends the run with budget_exhausted.
-      await budgets.consume(
+      // Cost already incurred is always ledgered, even if a cancel closed the reservation while the call ran (the
+      // step names this call, so a replayed charge is not doubled). A closed or exceeded reservation then ends the run.
+      const billed = await budgets.consumeIncurred(
         run.budgetReservationId,
         run.brandId,
         'model_tokens',
@@ -367,7 +368,10 @@ export function createAgentRunRuntime(opts: AgentRuntimeOptions): AgentRunRuntim
         'tokens',
         costMicros,
         stepId,
+        stepId,
       );
+      if (billed.closed) throw new BudgetExhaustedError('reservation_closed');
+      if (billed.exceeded) throw new BudgetExhaustedError('run');
       messages.push({
         role: 'assistant',
         content: [

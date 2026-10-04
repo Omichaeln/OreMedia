@@ -279,6 +279,8 @@ export const Operation = z.discriminatedUnion('op', [
     axis: z.enum(['horizontal', 'vertical']),
     relativeTo: z.enum(['selection', 'page']),
   }),
+  /** Shows or hides an element (its `visible` flag); a hidden element is kept, only not drawn. */
+  z.object({ op: z.literal('setVisibility'), pageId: z.string(), elementId: Id, visible: z.boolean() }),
 ]);
 export type Operation = z.infer<typeof Operation>;
 /** Every operation name, in contract order (the agent tool schema and the studio's labels enumerate these). */
