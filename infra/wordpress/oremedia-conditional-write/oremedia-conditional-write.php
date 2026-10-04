@@ -190,7 +190,10 @@ function storage_report() {
 		return $report;
 	}
 	$engines = array();
-	if ( 'wpdb' === get_class( $wpdb ) ) {
+	// A SQLite drop-in (WordPress Playground, the SQLite Database Integration plugin) emulates MySQL's catalogue but
+	// has no row locks: never transactional here. A wpdb subclass on MySQL (Query Monitor, HyperDB) is read as usual.
+	$sqlite = ( defined( 'DB_ENGINE' ) && 'sqlite' === strtolower( (string) DB_ENGINE ) ) || false !== stripos( get_class( $wpdb ), 'sqlite' );
+	if ( $wpdb instanceof \wpdb && ! $sqlite ) {
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				'SELECT TABLE_NAME AS t, ENGINE AS e FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (%s, %s)',
