@@ -289,6 +289,23 @@ async function loadCampaign(brandId: string, campaignId: string, tx?: Tx) {
   if (c.brandId !== brandId) throw new NotFoundError('Campaign', campaignId);
   return c;
 }
+/**
+ * G12: a completed or archived campaign takes no new briefs and no new content (a plan item proposed or restored, a
+ * brief accepted into packages, a package created under one of its briefs). VALIDATION_FAILED with the campaign's
+ * state as the issue, so the caller can say why.
+ */
+function assertCampaignOpen(campaign: CampaignRow, path = 'campaignId'): void {
+  if (campaignMachine.terminal.includes(campaign.state))
+    throw new ValidationFailedError(
+      [{ path, issue: `campaign_is_${campaign.state}` }],
+      `The campaign "${campaign.name}" is closed: it takes no new briefs or content`,
+    );
+}
+/** The same rule for content linked to a campaign through its brief (a standalone brief has none). */
+async function assertBriefCampaignOpen(brief: BriefRow, tx: Tx): Promise<void> {
+  if (brief.campaignId)
+    assertCampaignOpen(await loadCampaign(brief.brandId, brief.campaignId, tx), 'briefId');
+}
 async function loadBrief(brandId: string, briefId: string, tx?: Tx) {
   const b = await briefsRepo.getById(briefId, tx);
   if (b.brandId !== brandId) throw new NotFoundError('Brief', briefId);
@@ -788,6 +805,7 @@ async function movePlanItem(
   const { item, brief } = await loadPlanItem(parsed.planItemId, tx);
   await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
   assertBriefDraft(brief);
+  if (to === 'proposed') await assertBriefCampaignOpen(brief, tx);
   if (item.state !== from)
     throw new ValidationFailedError([{ path: 'planItemId', issue: `plan_item_is_${item.state}` }]);
   await planItemsRepo.update(item.id, parsed.expectedVersion, { state: to }, tx);
@@ -939,7 +957,7 @@ export const contentService = {
         { autonomyMode: opts.autonomyMode },
         tx,
       );
-      if (parsed.campaignId) await loadCampaign(brand.id, parsed.campaignId, tx);
+      if (parsed.campaignId) assertCampaignOpen(await loadCampaign(brand.id, parsed.campaignId, tx));
       // BSC-3: a new brief offers only facts in effect now (approved, inside their validity window). Stored briefs
       // are not re-checked here; the copy and release checks hold whatever a brief carries.
       for (const [i, factId] of parsed.offerFactIds.entries()) {
@@ -1013,6 +1031,7 @@ export const contentService = {
       const parsed = BriefAccept.parse(input);
       const brief = await briefsRepo.getById(parsed.briefId, tx);
       await policy.assert(actor, 'content.plan', brandResource(brief.brandId), {}, tx);
+      await assertBriefCampaignOpen(brief, tx);
       const toState = transition(briefMachine, brief.state, 'accept', 'briefId');
       await briefsRepo.update(brief.id, parsed.expectedVersion, { state: toState }, tx);
       await audit.record(
@@ -1082,6 +1101,7 @@ export const contentService = {
         tx,
       );
       assertBriefDraft(brief);
+      await assertBriefCampaignOpen(brief, tx);
       const ids: string[] = [];
       for (const [i, item] of parsed.items.entries()) {
         await assertFactsInBrand(brief.brandId, item.factIds, `items.${i}.factIds`, tx);
@@ -1197,6 +1217,7 @@ export const contentService = {
         tx,
       );
       const brief = parsed.briefId ? await loadBrief(brand.id, parsed.briefId, tx) : null;
+      if (brief) await assertBriefCampaignOpen(brief, tx);
       const snapshot = await resolveSnapshot(actor, brand.id, tx);
       assertFactsEffective(parsed.copy, snapshot);
       await assertArticleAssetsUsable(parsed.copy, brand.id, tx);

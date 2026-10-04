@@ -14,6 +14,7 @@ import {
 import { Drawer, DrawerContent } from '../../components/drawer';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
+import { ContentWriteError } from './campaign-actions';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -212,7 +213,7 @@ function CreatePackageForm({
         />
       )}
       {ui && ui.kind !== 'forbidden' && (
-        <RequestError error={create.error} title="The package was not created" />
+        <ContentWriteError error={create.error} title="The package was not created" />
       )}
       <div>
         <Button
@@ -353,7 +354,7 @@ export function BriefDetail({
             />
           )}
           {acceptUi && acceptUi.kind !== 'forbidden' && (
-            <RequestError error={accept.error} title="The brief was not accepted" />
+            <ContentWriteError error={accept.error} title="The brief was not accepted" />
           )}
           <PlanGrid
             brief={b}

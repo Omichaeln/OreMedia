@@ -610,6 +610,90 @@ describe('content module (spec 6.3 content tables, 7.5 content router) against M
       );
     });
 
+    it('a closed campaign takes no new brief, and nothing is attached to its briefs; a standalone brief is unaffected', async () => {
+      const id = await newCampaign('Closed to new work');
+      const briefInput = (campaignId?: string) => ({
+        brandId: brandA2,
+        ...(campaignId ? { campaignId } : {}),
+        audience: 'a',
+        message: 'm',
+        offerFactIds: [],
+        channelConnectionIds: [],
+        constraints: [],
+      });
+      const before = await run(tenantA, (tx) => contentService.briefs.create(A, briefInput(id), tx));
+      await run(tenantA, (tx) =>
+        contentService.campaigns.close(A, { campaignId: id, expectedVersion: 0 }, tx),
+      );
+      const closed = { details: [{ path: 'briefId', issue: 'campaign_is_completed' }] };
+      // A new brief on it (the router, REST, the agent tool and an accepted recommendation all create through here).
+      await expect(
+        run(tenantA, (tx) => contentService.briefs.create(A, briefInput(id), tx)),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+        message: 'The campaign "Closed to new work" is closed: it takes no new briefs or content',
+        details: [{ path: 'campaignId', issue: 'campaign_is_completed' }],
+      });
+      // Plan items proposed on a brief it already had, accepting that brief into packages, or a package under it.
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.planItems.propose(
+            A,
+            {
+              briefId: before.briefId,
+              items: [
+                {
+                  date: '2031-03-02',
+                  channelKey: 'fixture_provider',
+                  theme: 'x',
+                  formatKey: 'post',
+                  factIds: [],
+                },
+              ],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject(closed);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: before.briefId, expectedVersion: 0 }, tx),
+        ),
+      ).rejects.toMatchObject(closed);
+      await expect(
+        run(tenantA, (tx) =>
+          contentService.packages.create(
+            A,
+            {
+              brandId: brandA2,
+              briefId: before.briefId,
+              title: 'Late',
+              copy: copy('x'),
+              creativeDocumentIds: [],
+            },
+            tx,
+          ),
+        ),
+      ).rejects.toMatchObject(closed);
+      const kept = await run(tenantA, () => contentService.briefs.get(A, { briefId: before.briefId }));
+      expect(kept).toMatchObject({ state: 'draft', version: 0, campaignId: id });
+      expect(
+        (
+          await tdb.db
+            .select()
+            .from(briefs)
+            .where(and(eq(briefs.tenantId, tenantA), eq(briefs.campaignId, id)))
+        ).length,
+      ).toBe(1);
+      // A brief without a campaign is not affected.
+      const standalone = await run(tenantA, (tx) => contentService.briefs.create(A, briefInput(), tx));
+      expect(
+        await run(tenantA, (tx) =>
+          contentService.briefs.accept(A, { briefId: standalone.briefId, expectedVersion: 0 }, tx),
+        ),
+      ).toMatchObject({ state: 'accepted' });
+    });
+
     it('needs content.plan on the brand; another tenant’s campaign is NOT_FOUND', async () => {
       const id = await newCampaign('Guarded');
       await expect(

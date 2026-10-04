@@ -2,11 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Field, Input, StatusBanner } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
+import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { isoToLocalInput, localInputToIso } from '../publishing/publication-state';
-import { campaignChip } from './content-helpers';
+import { campaignChip, campaignIsClosed, isClosedCampaignRefusal } from './content-helpers';
 import type { CampaignDto } from './use-content';
 
 const dayText = (iso: string) =>
@@ -192,7 +193,7 @@ function CloseCampaign({ campaign }: { campaign: CampaignDto }) {
 /** G12: the selected campaign's summary above its briefs, with edit and close while it is open (draft or active). */
 export function CampaignSummary({ campaign, canPlan }: { campaign: CampaignDto; canPlan: boolean }) {
   const chip = campaignChip(campaign.state);
-  const open = campaign.state === 'draft' || campaign.state === 'active';
+  const open = !campaignIsClosed(campaign.state);
   return (
     <div className="flex flex-col gap-2 border-b border-border px-4 py-3" data-testid="campaign-summary">
       <div className="flex flex-wrap items-center gap-2">
@@ -210,4 +211,22 @@ export function CampaignSummary({ campaign, canPlan }: { campaign: CampaignDto; 
       )}
     </div>
   );
+}
+
+/**
+ * G12: why a brief, a plan or a package was refused when its campaign is closed (the API names the campaign); any
+ * other failure is shown as a request error under `title`.
+ */
+export function ContentWriteError({ error, title }: { error: unknown; title: string }) {
+  const ui = toUiError(error);
+  if (isClosedCampaignRefusal(ui.details))
+    return (
+      <StatusBanner
+        tone="warning"
+        title="This campaign is closed"
+        description={ui.message}
+        data-testid="campaign-closed"
+      />
+    );
+  return <RequestError error={error} title={title} />;
 }

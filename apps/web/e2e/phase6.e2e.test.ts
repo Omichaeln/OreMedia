@@ -447,6 +447,27 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => spring.state, { timeout: 15_000 }).toBe('completed');
     await expect.poll(() => summary.textContent(), { timeout: 15_000 }).toContain('Completed');
     expect(await summary.getByRole('button').count()).toBe(0);
+
+    // A closed campaign takes no new brief: the form says so, and the API's reason is shown when tried anyway.
+    await page.getByRole('button', { name: /new brief/ }).click();
+    expect(await page.getByTestId('briefs').textContent()).toContain(
+      'The selected campaign is closed: it takes no new briefs.',
+    );
+    const briefsBefore = p6.briefs.size;
+    await page.getByLabel('Audience').fill('Late joiners');
+    await page.getByRole('button', { name: 'Create brief' }).click();
+    const closedBanner = page.getByTestId('campaign-closed');
+    await expect.poll(() => closedBanner.count(), { timeout: 15_000 }).toBe(1);
+    expect(await closedBanner.textContent()).toContain(
+      'The campaign "Spring relaunch" is closed: it takes no new briefs or content',
+    );
+    expect(p6.briefs.size).toBe(briefsBefore);
+    // Nor is content attached to one of its briefs: accepting it into packages is refused with the same reason.
+    await open(`campaigns?campaign=${P6.campaigns.spring}&brief=${P6.briefs.awaiting}`);
+    await page.getByRole('button', { name: 'Accept brief' }).click();
+    await expect.poll(() => page.getByTestId('campaign-closed').count(), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByTestId('campaign-closed').textContent()).toContain('This campaign is closed');
+    expect(p6.briefs.get(P6.briefs.awaiting)?.state).toBe('draft');
     Object.assign(spring, saved);
   }, 45_000);
 

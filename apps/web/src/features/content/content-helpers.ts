@@ -17,6 +17,11 @@ export const CAMPAIGN_STATE_CHIP: Record<string, Chip> = {
   archived: { tone: 'neutral', label: 'Archived' },
 };
 export const campaignChip = (state: string): Chip => chipOr(CAMPAIGN_STATE_CHIP, state);
+/** G12: a completed or archived campaign takes no new briefs or content. */
+export const campaignIsClosed = (state: string): boolean => state === 'completed' || state === 'archived';
+/** G12: the API refused because the campaign (or the campaign of the brief) is closed. */
+export const isClosedCampaignRefusal = (details: ReadonlyArray<{ issue: string }>): boolean =>
+  details.some((d) => d.issue.startsWith('campaign_is_'));
 
 export const BRIEF_STATE_CHIP: Record<string, Chip> = {
   draft: {

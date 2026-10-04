@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { ContentWriteError } from './campaign-actions';
 import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -170,7 +171,7 @@ function PlanRow({
           )}
         </div>
       )}
-      {error && <RequestError error={error} title="The plan item was not changed" />}
+      {error && <ContentWriteError error={error} title="The plan item was not changed" />}
     </li>
   );
 }
@@ -271,7 +272,7 @@ function AddPlanItemForm({
       )}
       {ui && ui.kind !== 'forbidden' && (
         <div className="sm:col-span-4">
-          <RequestError error={propose.error} title="The plan item was not added" />
+          <ContentWriteError error={propose.error} title="The plan item was not added" />
         </div>
       )}
     </form>
