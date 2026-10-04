@@ -833,6 +833,26 @@ export function PropertiesPanel(props: PropertiesPanelProps) {
           </Button>
           <Button
             size="sm"
+            aria-pressed={!el.visible}
+            aria-keyshortcuts="Control+Shift+H"
+            disabledReason={
+              lockedDeep
+                ? 'Locked elements keep their visibility: unlock it (or its group) first'
+                : pageLocked
+                  ? 'The page is locked: unlock it first'
+                  : undefined
+            }
+            onClick={() =>
+              one(
+                { op: 'setVisibility', pageId: page.id, elementId: el.id, visible: !el.visible },
+                `${el.visible ? 'Hide' : 'Show'} ${el.name}`,
+              )
+            }
+          >
+            {el.visible ? 'Hide' : 'Show'}
+          </Button>
+          <Button
+            size="sm"
             variant="danger"
             disabledReason={
               lockedDeep ? 'Locked elements are not removed: unlock it (or its group) first' : undefined

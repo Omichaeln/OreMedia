@@ -438,6 +438,50 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
     if (el) expect(el.transform).toMatchObject({ x: x + 1 });
   }, 30_000);
 
+  it('hides a layer with H, the canvas stops drawing it, undo shows it again; the eye and Ctrl+Shift+H toggle too', async () => {
+    const documentId = documentIdFromUrl();
+    const canvas = page.getByTestId('canvas');
+    const heroRow = () => page.getByTestId('layers').getByRole('option', { name: /^Hero/ });
+    const heroVisible = async () =>
+      realApi
+        ? null
+        : backend.head(documentId).snapshot.pages[0]!.elements.find((e) => e.id === ids.image)?.visible;
+    const settle = async () => {
+      await canvas.focus();
+      await page.keyboard.press('Escape'); // no selection frame in the picture
+      await page.waitForTimeout(300);
+      return canvas.screenshot();
+    };
+    await waitSaved();
+    const shown = await settle();
+    const n = await headNumber(documentId);
+    // Keyboard path: H on the focused layer row.
+    await heroRow().click();
+    await heroRow().press('h');
+    await expect.poll(() => heroRow().getAttribute('aria-label')).toMatch(/hidden/);
+    await waitSaved();
+    await expect.poll(() => headNumber(documentId)).toBe(n + 1);
+    if (!realApi) expect(await heroVisible()).toBe(false);
+    const hidden = await settle();
+    expect(hidden.equals(shown)).toBe(false); // the rendered canvas no longer draws the hero image
+    // Undo is a new revision that shows it again, and the canvas is drawn as before.
+    await page.getByTestId('undo').click();
+    await waitSaved();
+    await expect.poll(() => headNumber(documentId)).toBe(n + 2);
+    if (!realApi) expect(await heroVisible()).toBe(true);
+    await expect.poll(() => heroRow().getAttribute('aria-label')).not.toMatch(/hidden/);
+    expect((await settle()).equals(shown)).toBe(true);
+    // Ctrl+Shift+H on the canvas hides the selection; the row's eye shows it again.
+    await heroRow().click();
+    await canvas.focus();
+    await page.keyboard.press('Control+Shift+H');
+    await expect.poll(() => heroRow().getAttribute('aria-label')).toMatch(/hidden/);
+    await page.getByTestId(`layer-visibility-${ids.image}`).click();
+    await expect.poll(() => heroRow().getAttribute('aria-label')).not.toMatch(/hidden/);
+    await waitSaved();
+    if (!realApi) expect(await heroVisible()).toBe(true);
+  }, 60_000);
+
   it('unsaved local work blocks navigation until the person decides', async () => {
     await page
       .getByTestId('layers')
