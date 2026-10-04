@@ -17,9 +17,9 @@ const newId = (kind: keyof typeof PREFIX) =>
 /**
  * G03 team and roles through the real router against MySQL: a role change and brand grants (setRole,
  * brandGrants.set / remove), and access.members.disable / enable with their rules: membership.manage, people only,
- * an owner or admin only by an owner, never yourself, never the last active owner, version-checked, audited, every
- * session ended in the same transaction, the disabled member refused at tenant resolution while the person's other
- * companies are untouched.
+ * an owner or admin only by an owner, never yourself, never the last active owner (neither demoted nor disabled, even
+ * by concurrent requests), version-checked, audited, every session ended in the same transaction, the disabled member
+ * refused at tenant resolution while the person's other companies are untouched.
  */
 describe('members: role, brand grants, disable and enable', () => {
   let tdb: TestDatabase;
@@ -321,6 +321,61 @@ describe('members: role, brand grants, disable and enable', () => {
     ).rejects.toMatchObject({ reason: 'last_owner' });
     expect(await membership(tenantB.ownerMembershipId)).toMatchObject({ status: 'active', role: 'owner' });
     expect((await brandList(tenantB, tenantB.ownerToken)).error).toBeUndefined();
+  });
+
+  // Sole-owner guard on a role change: each case runs in a company of its own, as it changes who owns it.
+  const LAST_OWNER = 'The company must keep at least one active owner';
+  const freshCompany = async () => (await seedTwoTenants(tdb.db)).tenantA;
+  const setRole = (tenant: SeededTenant, bearer: string, membershipId: string, role: 'owner' | 'admin') =>
+    callPath(as(tenant, bearer), 'access.members.setRole', { membershipId, expectedVersion: 0, role });
+  const activeOwners = async (tenantId: string) =>
+    (await tdb.db.select().from(memberships).where(eq(memberships.tenantId, tenantId))).filter(
+      (m) => m.role === 'owner' && m.status === 'active',
+    );
+
+  it('the last active owner cannot demote themselves: refused, nothing changes and their sessions stay', async () => {
+    const company = await freshCompany();
+    const res = await setRole(company, company.ownerToken, company.ownerMembershipId, 'admin');
+    expect(res.error).toMatchObject({ code: 'FORBIDDEN', message: LAST_OWNER });
+    expect(await membership(company.ownerMembershipId)).toMatchObject({ role: 'owner', version: 0 });
+    expect(await liveSessions(company.ownerUserId)).not.toEqual([]);
+    expect(await auditOf(company.tenantId, 'membership.set_role')).toEqual([]);
+  });
+
+  it('one of two owners is demoted; the remaining owner then cannot demote themselves', async () => {
+    const company = await freshCompany();
+    const second = await person(company, { role: 'owner' });
+    expect((await setRole(company, company.ownerToken, second.membershipId, 'admin')).error).toBeUndefined();
+    expect(await membership(second.membershipId)).toMatchObject({ role: 'admin', version: 1 });
+    expect(await activeOwners(company.tenantId)).toHaveLength(1);
+    expect(
+      (await setRole(company, company.ownerToken, company.ownerMembershipId, 'admin')).error,
+    ).toMatchObject({ code: 'FORBIDDEN', message: LAST_OWNER });
+    expect(await membership(company.ownerMembershipId)).toMatchObject({ role: 'owner', status: 'active' });
+  });
+
+  it('two owners demoting each other at the same time: exactly one succeeds and one owner remains', async () => {
+    const company = await freshCompany();
+    const second = await person(company, { role: 'owner' });
+    const results = await Promise.all([
+      setRole(company, company.ownerToken, second.membershipId, 'admin'),
+      setRole(company, second.token, company.ownerMembershipId, 'admin'),
+    ]);
+    expect(results.filter((r) => r.error === undefined)).toHaveLength(1);
+    expect(results.find((r) => r.error)?.error).toMatchObject({ code: 'FORBIDDEN', message: LAST_OWNER });
+    expect(await activeOwners(company.tenantId)).toHaveLength(1);
+  });
+
+  it('demoting yourself while the other owner is disabled at the same time: exactly one succeeds', async () => {
+    const company = await freshCompany();
+    const second = await person(company, { role: 'owner' });
+    const results = await Promise.all([
+      disable(company, company.ownerToken, second.membershipId, 0),
+      setRole(company, company.ownerToken, company.ownerMembershipId, 'admin'),
+    ]);
+    expect(results.filter((r) => r.error === undefined)).toHaveLength(1);
+    expect(results.find((r) => r.error)?.error).toMatchObject({ code: 'FORBIDDEN', message: LAST_OWNER });
+    expect(await activeOwners(company.tenantId)).toHaveLength(1);
   });
 
   it('a foreign membership is NOT_FOUND and nothing changes in the other company', async () => {

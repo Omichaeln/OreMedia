@@ -1653,11 +1653,18 @@ export function createMockRouter(backend: MockBackend) {
         }),
       }),
       members: t.router({
-        // As the API (G03): owners and admins; an owner's role only from an owner; sessions end; version-checked.
+        // As the API (G03): owners and admins; an owner's role only from an owner; never the last active owner;
+        // sessions end; version-checked.
         setRole: mutation.input(MemberSetRole).mutation(({ ctx, input }) => {
           const m = manageableMember(ctx.member, input.membershipId);
           if ((m.role === 'owner' || input.role === 'owner') && ctx.member?.role !== 'owner')
             throw new PolicyDeniedError('owner_required');
+          if (
+            m.role === 'owner' &&
+            input.role !== 'owner' &&
+            !backend.members.some((o) => o !== m && o.role === 'owner' && o.status === 'active')
+          )
+            throw new PolicyDeniedError('last_owner', 'The company must keep at least one active owner');
           if (m.version !== input.expectedVersion)
             throw new ConflictError('Membership', m.membershipId, input.expectedVersion);
           Object.assign(m, {

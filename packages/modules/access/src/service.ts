@@ -330,6 +330,17 @@ async function loadManageableMember(
   return m;
 }
 
+/**
+ * Never leaves the company without an active owner: refuses a change that takes owner status from `membershipId` (a
+ * demotion or a disable) when no other active owner remains. The active owners are row-locked first (same
+ * transaction as the change), so two such changes on the last two owners cannot both commit.
+ */
+async function assertAnotherActiveOwner(membershipId: string, tx: Tx) {
+  const owners = await membershipsRepo.lockActiveOwners(tx);
+  if (!owners.some((o) => o.id !== membershipId))
+    throw new PolicyDeniedError('last_owner', 'The company must keep at least one active owner');
+}
+
 /** The audit event and outbox message of a membership status change, and what the procedure answers. */
 async function recordMemberStatus(
   actor: ResolvedActor,
@@ -1066,6 +1077,8 @@ export const accessService = {
     if ((m.role === 'owner' || parsed.role === 'owner') && person.role !== 'owner')
       throw new PolicyDeniedError('owner_required');
     if (parsed.allBrands && !m.allBrands) assertBrandScopeWithin(person, { allBrands: true });
+    // Never the company's last active owner (yourself included).
+    if (m.role === 'owner' && parsed.role !== 'owner') await assertAnotherActiveOwner(m.id, tx);
     await membershipsRepo.update(
       m.id,
       parsed.expectedVersion,
@@ -1103,11 +1116,7 @@ export const accessService = {
     const m = await loadManageableMember(actor, parsed.membershipId, 'disable', tx);
     if (m.status !== 'active')
       throw new ValidationFailedError([{ path: 'membershipId', issue: `membership_is_${m.status}` }]);
-    if (m.role === 'owner') {
-      const owners = await membershipsRepo.lockActiveOwners(tx);
-      if (!owners.some((o) => o.id !== m.id))
-        throw new PolicyDeniedError('last_owner', 'The company must keep at least one active owner');
-    }
+    if (m.role === 'owner') await assertAnotherActiveOwner(m.id, tx);
     await membershipsRepo.update(m.id, parsed.expectedVersion, { status: 'disabled' }, tx);
     await runAsPlatform('disable-member', requireTenant().correlationId, () =>
       directory.revokeSessionsForUser(m.userId, tx),
