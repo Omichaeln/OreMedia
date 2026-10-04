@@ -171,6 +171,29 @@ export interface RetentionActivitiesV1 {
   applyRetention(input: RetentionSweepInputV1 & { tenantId: string }): Promise<RetentionTenantResultV1>;
 }
 
+/**
+ * Spec 7.1/7.3: the periodic purge of expired idempotency records (idempotencyKeyPurgeWorkflowV1, a Temporal schedule
+ * on task queue `core`). A record is only a replay cache: past its expiry it is never replayed, so it is deleted
+ * whatever the retention sweep's dry-run setting. Platform-level: it spans tenants and carries none.
+ */
+export const IdempotencyKeyPurgeInputV1 = z.object({ correlationId: z.string(), now: z.string().datetime() });
+export type IdempotencyKeyPurgeInputV1 = z.infer<typeof IdempotencyKeyPurgeInputV1>;
+export interface IdempotencyKeyPurgeArgsV1 {
+  correlationId?: string;
+  now?: string;
+}
+export interface IdempotencyKeyPurgeResultV1 {
+  /** Expired idempotency records deleted. */
+  rows: number;
+}
+export interface IdempotencyKeyPurgeActivitiesV1 {
+  purgeExpiredIdempotencyKeys(input: IdempotencyKeyPurgeInputV1): Promise<IdempotencyKeyPurgeResultV1>;
+}
+/** The module-side implementation the activity wraps (platform-level: it declares its own platform job). */
+export interface IdempotencyKeyPurgeRuntimeV1 {
+  purgeExpiredIdempotencyKeys(input: IdempotencyKeyPurgeInputV1): Promise<IdempotencyKeyPurgeResultV1>;
+}
+
 /** The module-side implementations the activities wrap (tenant context is established by the activity host). */
 export type DeletionRuntimeV1 = DeletionActivitiesV1;
 export type RetentionRuntimeV1 = RetentionActivitiesV1;

@@ -16,10 +16,25 @@ export interface RateLimiterStore {
   reset(key: string): Promise<void>;
 }
 
+/** How often the in-memory store drops the buckets whose window has ended. */
+export const MEMORY_BUCKET_SWEEP_MS = 60_000;
+
 export class MemoryRateLimiterStore implements RateLimiterStore {
   private readonly buckets = new Map<string, { count: number; resetAt: number }>();
+  private sweptAt = Date.now();
+  /** Live buckets (tests and diagnostics). */
+  get size(): number {
+    return this.buckets.size;
+  }
+  /** Ended windows are evicted at most once a minute, so many distinct callers cannot grow memory without bound. */
+  private sweep(now: number) {
+    if (now - this.sweptAt < MEMORY_BUCKET_SWEEP_MS) return;
+    this.sweptAt = now;
+    for (const [key, b] of this.buckets) if (b.resetAt <= now) this.buckets.delete(key);
+  }
   async hit(key: string, windowSec: number) {
     const now = Date.now();
+    this.sweep(now);
     const b = this.buckets.get(key);
     if (!b || b.resetAt <= now) {
       this.buckets.set(key, { count: 1, resetAt: now + windowSec * 1000 });

@@ -69,8 +69,88 @@ describe('STU-1a document model (additive, schemaVersion 1)', () => {
         'setPageLock',
         'alignElements',
         'distributeElements',
+        'setVisibility',
       ]),
     );
+  });
+});
+
+describe('setVisibility (show or hide an element)', () => {
+  const hide = (elementId: string, visible = false): Operation => ({
+    op: 'setVisibility',
+    pageId: P,
+    elementId,
+    visible,
+  });
+
+  it('a stored document parses and hashes as before: every element stays visible by default', () => {
+    const stored = JSON.parse(JSON.stringify(fixtureDocument()));
+    for (const e of stored.pages[0].elements) delete e.visible;
+    const parsed = CreativeDocumentV1.parse(stored);
+    expect(parsed.pages[0]!.elements.every((e) => e.visible)).toBe(true);
+    expect(hashCanonical(CreativeDocumentV1.parse(fixtureDocument()))).toBe(hashCanonical(fixtureDocument()));
+  });
+
+  it('reduce hides and shows the element and nothing else; a group child can be hidden on its own', () => {
+    const doc = run([hide(ids.body)]);
+    expect(el(doc, ids.body).visible).toBe(false);
+    expect({ ...el(doc, ids.body), visible: true }).toEqual(el(fixtureDocument(), ids.body));
+    expect(el(run([hide(ids.body)], doc), ids.body).visible).toBe(false); // idempotent
+    expect(el(run([hide(ids.body, true)], doc), ids.body).visible).toBe(true);
+    const grouped = run([group, hide(ids.body)]);
+    expect(el(grouped, ids.body).visible).toBe(false);
+    expect(el(grouped, G).visible).toBe(true);
+    expect(changedElementIds({ operations: [hide(ids.body)] })).toEqual([ids.body]);
+  });
+
+  it('a person cannot hide where a move or removal is refused: a locked element, a locked group child, a locked page', () => {
+    const lockedBody = run([{ op: 'setLock', pageId: P, elementId: ids.body, locked: true }]);
+    expect(codeOf(() => reduce(lockedBody, hide(ids.body)))).toBe('element_locked');
+    const lockedGroup = run([group, { op: 'setLock', pageId: P, elementId: G, locked: true }]);
+    expect(codeOf(() => reduce(lockedGroup, hide(ids.body)))).toBe('element_locked');
+    expect(codeOf(() => reduce(lockedGroup, hide(G)))).toBe('element_locked');
+    const lockedPage = run([{ op: 'setPageLock', pageId: P, locked: true }]);
+    expect(codeOf(() => reduce(lockedPage, hide(ids.body)))).toBe('page_locked');
+    expect(codeOf(() => reduce(fixtureDocument(), hide(eid('01HMISSING'))))).toBe('element_not_found');
+  });
+
+  it('agents are refused on locked and protected elements and their group children; free elements pass', () => {
+    const lockedGroup = run([group, { op: 'setLock', pageId: P, elementId: G, locked: true }]);
+    expect(codeOf(() => guardLocks(lockedGroup, hide(ids.body), 'agent'))).toBe('element_locked');
+    expect(codeOf(() => guardProtected(fixtureDocument(), hide(ids.logo), 'agent'))).toBe(
+      'protected_element',
+    );
+    const withLogo = run([{ op: 'groupElements', pageId: P, elementIds: [ids.logo, ids.body], groupId: G }]);
+    expect(codeOf(() => guardProtected(withLogo, hide(G), 'agent'))).toBe('protected_element');
+    expect(() => guardLocks(fixtureDocument(), hide(ids.headline), 'agent')).not.toThrow();
+    expect(() => guardProtected(fixtureDocument(), hide(ids.headline), 'agent')).not.toThrow();
+    // A person is not stopped by the agent guards (the reducer applies the lock rules above).
+    expect(() => guardProtected(fixtureDocument(), hide(ids.logo), 'user')).not.toThrow();
+  });
+
+  it('inverts to the previous visibility, also when the same batch then locks the element', () => {
+    const before = fixtureDocument();
+    for (const ops of [
+      [hide(ids.body)],
+      [hide(ids.body), { op: 'setLock', pageId: P, elementId: ids.body, locked: true } as Operation],
+      [group, hide(ids.image)],
+    ]) {
+      const after = run(ops, before);
+      const inverse = invertBatch(before, { operations: ops });
+      expect(inverse.ok).toBe(true);
+      if (!inverse.ok) continue;
+      expect(hashCanonical(run(inverse.operations, after))).toBe(hashCanonical(before));
+    }
+  });
+
+  it('rebase: a visibility change and a remote edit of another element re-apply; the same element conflicts', () => {
+    const remote: Operation[] = [{ op: 'setText', pageId: P, elementId: ids.headline, text: 'Remote' }];
+    const rebased = rebaseBatch([hide(ids.body)], [remote]);
+    expect(rebased).toEqual({ ok: true, operations: [hide(ids.body)] });
+    expect(rebaseBatch([hide(ids.headline)], [remote])).toEqual({
+      ok: false,
+      conflicts: [{ elementId: ids.headline, localOp: hide(ids.headline), remoteOp: remote[0] }],
+    });
   });
 });
 

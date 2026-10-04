@@ -987,9 +987,9 @@ describe('agents module (spec 12) against MySQL 8', () => {
         authorId: spA,
         agentRunId: started.runId,
       });
-      const applied = after
-        .find((r) => r.number === 2)!
-        .snapshot.pages[0]!.elements.find((e) => e.id === headlineId);
+      const applied = (
+        after.find((r) => r.number === 2)!.snapshot as CreativeDocumentV1
+      ).pages[0]!.elements.find((e) => e.id === headlineId);
       expect(applied).toMatchObject({
         type: 'text',
         text: longHeadline,
@@ -1396,6 +1396,112 @@ describe('agents module (spec 12) against MySQL 8', () => {
       )[0]!;
       expect(reservation.state).toBe('settled');
       expect(reservation.consumedMicros).toBeGreaterThan(1000);
+    });
+
+    const startCopywriting = () =>
+      run(tenantA, (tx) =>
+        agentsService.runs.start(
+          A,
+          {
+            brandId: brandA,
+            servicePrincipalId: spA,
+            requestedAutonomy: 'create',
+            taskKind: 'copywriting',
+            brief: {},
+          },
+          tx,
+        ),
+      );
+    const reservationOf = async (runId: string) =>
+      (await tdb.db.select().from(budgetReservations).where(eq(budgetReservations.runId, runId)))[0]!;
+    /** The remaining brand-day cap holds: one micro more than what remains is refused, exactly what remains fits. */
+    const expectCapHolds = async (remainingMicros: number) => {
+      const over = newId('agentRun');
+      const fits = newId('agentRun');
+      await expect(
+        runInTenant(ctx(tenantA), () =>
+          budgets.reserveSpend(brandA, over, remainingMicros + 1, new Date(Date.now() + 60_000)),
+        ),
+      ).rejects.toBeInstanceOf(BudgetExhaustedError);
+      await runInTenant(ctx(tenantA), async () => {
+        await budgets.reserveSpend(brandA, fits, remainingMicros, new Date(Date.now() + 60_000));
+        await budgets.release(fits);
+      });
+    };
+
+    it('a cancelled run keeps what it consumed against the brand-day cap', async () => {
+      await runInTenant(ctx(tenantA), () => budgets.setLimit(brandA, 'day', 30_000_000));
+      const before = await runInTenant(ctx(tenantA), () => budgets.summary(brandA));
+      const started = await startCopywriting();
+      const { runtime } = runtimeWith([
+        {
+          kind: 'tool_calls',
+          toolCalls: [{ name: 'brand.getSnapshot', arguments: {} }],
+          usage: { inputTokens: 200_000, outputTokens: 10_000 },
+        },
+      ]);
+      const input = workflowInput(started.runId);
+      await runInTenant(spCtx(), async () => {
+        const snapshot = await runtime.resolveContextSnapshot(input);
+        await runtime.reserveBudget({ ...input, budget: snapshot.budget });
+        expect((await runtime.planNextStep({ ...input, step: 0 })).kind).toBe('tool_calls');
+      });
+      const consumed = (await reservationOf(started.runId)).consumedMicros;
+      expect(consumed).toBeGreaterThan(0);
+      await run(tenantA, (tx) => agentsService.runs.cancel(A, { runId: started.runId }, tx));
+      expect(await reservationOf(started.runId)).toMatchObject({
+        state: 'released',
+        consumedMicros: consumed,
+      });
+      const after = await runInTenant(ctx(tenantA), () => budgets.summary(brandA));
+      expect(after.day.committedMicros - before.day.committedMicros).toBe(consumed);
+      await expectCapHolds(after.day.remainingMicros);
+      await runInTenant(ctx(tenantA), () => budgets.setLimit(brandA, 'day', 100_000_000));
+    });
+
+    it('a model call that finishes after a cancel is still ledgered and counted; the run stops', async () => {
+      await runInTenant(ctx(tenantA), () => budgets.setLimit(brandA, 'day', 30_000_000));
+      const before = await runInTenant(ctx(tenantA), () => budgets.summary(brandA));
+      const started = await startCopywriting();
+      const inner = new FakeModelAdapter([
+        { kind: 'done', text: '{}', usage: { inputTokens: 300_000, outputTokens: 20_000 } },
+      ]);
+      // The person cancels while the call is in flight: the reservation is released before the cost lands.
+      const adapter = {
+        provider: 'fake',
+        async complete(req: Parameters<typeof inner.complete>[0]) {
+          await run(tenantA, (tx) => agentsService.runs.cancel(A, { runId: started.runId }, tx));
+          return inner.complete(req);
+        },
+      };
+      const runtime = createAgentRunRuntime({
+        adapter,
+        modelConfig,
+        registry: createReleaseOneRegistry(),
+        transcripts: new MemoryTranscriptStore(),
+      });
+      const input = workflowInput(started.runId);
+      await runInTenant(spCtx(), async () => {
+        const snapshot = await runtime.resolveContextSnapshot(input);
+        await runtime.reserveBudget({ ...input, budget: snapshot.budget });
+        await expect(runtime.planNextStep({ ...input, step: 0 })).rejects.toMatchObject({
+          scope: 'reservation_closed',
+        });
+      });
+      const reservation = await reservationOf(started.runId);
+      expect(reservation.state).toBe('released');
+      expect(reservation.consumedMicros).toBeGreaterThan(0);
+      const step = (await stepsOf(started.runId)).find((s) => s.kind === 'model_call')!;
+      const charged = await tdb.db
+        .select()
+        .from(usageLedger)
+        .where(eq(usageLedger.reservationId, reservation.id));
+      expect(charged).toHaveLength(1);
+      expect(charged[0]).toMatchObject({ sourceRef: step.id, costMicros: reservation.consumedMicros });
+      const after = await runInTenant(ctx(tenantA), () => budgets.summary(brandA));
+      expect(after.day.committedMicros - before.day.committedMicros).toBe(reservation.consumedMicros);
+      await expectCapHolds(after.day.remainingMicros);
+      await runInTenant(ctx(tenantA), () => budgets.setLimit(brandA, 'day', 100_000_000));
     });
   });
 });

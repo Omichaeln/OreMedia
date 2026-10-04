@@ -1,6 +1,13 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, asc, eq, lt } from 'drizzle-orm';
 import { IdempotencyInProgressError, IdempotencyKeyReusedError } from '@oremedia/contracts/errors';
-import { affectedRows, requireTenant, withTransaction, TenantScopedRepository, type Tx } from '@oremedia/db';
+import {
+  PlatformRepository,
+  affectedRows,
+  requireTenant,
+  withTransaction,
+  TenantScopedRepository,
+  type Tx,
+} from '@oremedia/db';
 import { idempotencyKeys } from '@oremedia/db/schema/operations';
 
 export interface MutationContext {
@@ -74,6 +81,26 @@ class IdempotencyRepository extends TenantScopedRepository<typeof idempotencyKey
 }
 
 const repo = new IdempotencyRepository();
+
+/** Rows per purge transaction. */
+export const IDEMPOTENCY_PURGE_BATCH = 1000;
+
+/**
+ * The periodic purge of expired records (idempotencyKeyPurgeWorkflowV1) spans tenants and runs as a declared
+ * platform job (spec 5.3): it reads no record, it deletes up to `limit` expired ones, oldest expiry first, and counts
+ * them. An expired record is never replayed (idempotent() removes it when its key is used again), so nothing is lost.
+ */
+export class IdempotencyKeyPurgeRepository extends PlatformRepository {
+  async purgeExpired(now: Date, tx: Tx, limit = IDEMPOTENCY_PURGE_BATCH): Promise<number> {
+    return affectedRows(
+      await this.conn(tx)
+        .delete(idempotencyKeys)
+        .where(lt(idempotencyKeys.expiresAt, now))
+        .orderBy(asc(idempotencyKeys.expiresAt))
+        .limit(limit),
+    );
+  }
+}
 
 function isDuplicateKeyError(err: unknown): boolean {
   return (

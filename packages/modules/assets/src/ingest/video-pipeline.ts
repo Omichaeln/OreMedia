@@ -19,7 +19,7 @@ import { requireTenant } from '@oremedia/db';
 import { AssetVersionRepository, GeneratedUploadRepository } from '../repositories';
 import { storageKeys } from '../storage';
 import { TempDiskBudgetExceededError, withTempDir } from '../temp-disk';
-import { loadIntent, type IngestDeps } from './pipeline';
+import { loadIntent, receivedKey, type IngestDeps } from './pipeline';
 import { ScannerUnavailableError } from './scanner';
 import {
   buildMediaDerivatives,
@@ -33,7 +33,8 @@ import {
 /**
  * STU-2a: the storage-and-database side of the video ingest steps (videoIngestWorkflowV1), one function per activity,
  * beside the image pipeline (pipeline.ts). Each step re-loads the intent through the brand-scoped repository, streams
- * the quarantined object (to clamd, or to a private temp directory for ffprobe/ffmpeg) and never holds it in memory.
+ * the received copy of the upload (verify's snapshot, see receivedKey) to clamd or to a private temp directory for
+ * ffprobe/ffmpeg, never past the cap, and never holds it in memory.
  * Temp directories are removed whatever happens (withTempDir).
  */
 export interface MediaIngestDeps extends IngestDeps {
@@ -80,6 +81,32 @@ async function withinBudget<R>(work: () => Promise<R>): Promise<R | IngestStepRe
 }
 const mediaGroup = (group: string): 'video' | 'audio' => (group === 'audio' ? 'audio' : 'video');
 
+const overCap = (maxBytes: number): IngestStepRejection => ({
+  ok: false,
+  reason: 'exceeds_cap',
+  detail: `over the cap of ${maxBytes} bytes`,
+});
+
+/**
+ * The received copy's bytes up to the cap: the read is ranged one byte past it and stops there, flagging `over`
+ * (an object that is somehow larger is refused, never streamed whole).
+ */
+async function* upToCap(
+  stream: AsyncIterable<Uint8Array>,
+  maxBytes: number,
+  over: { exceeded: boolean },
+): AsyncGenerator<Uint8Array> {
+  let seen = 0;
+  for await (const chunk of stream) {
+    seen += chunk.byteLength;
+    if (seen > maxBytes) {
+      over.exceeded = true;
+      return;
+    }
+    yield chunk;
+  }
+}
+
 /** Generated media keeps its generated caps (ADR-11); a person's upload has the Studio v1 limits. */
 async function durationCapSeconds(intentId: string, group: 'video' | 'audio'): Promise<number> {
   const generated = await generatedRepo.findById(intentId);
@@ -89,20 +116,32 @@ async function durationCapSeconds(intentId: string, group: 'video' | 'audio'): P
 }
 
 export const mediaIngest = {
-  /** Step 3 over a stream: clamd INSTREAM reads the object as it arrives. No verdict is retryable (quarantine). */
+  /**
+   * Step 3 over a stream: clamd INSTREAM reads the received copy (the bytes verify checked) as it arrives, never past
+   * the cap. No verdict is retryable (quarantine).
+   */
   async scan(deps: MediaIngestDeps, input: AssetIngestInputV1): Promise<IngestStepResult<IngestScanResult>> {
     const intent = await loadIntent(input, 'quarantined');
     const progress = (bytes: number) => deps.onProgress?.('scan', Math.min(1, bytes / intent.maxBytes));
+    const key = receivedKey(intent);
+    const range = { start: 0, end: intent.maxBytes };
     try {
       let verdict;
       if (deps.scanner.scanStream) {
-        const stream = await deps.storage.getObjectStream(intent.storageKey);
+        const stream = await deps.storage.getObjectStream(key, range);
         if (!stream) return { ok: false, reason: 'object_missing' };
-        verdict = await deps.scanner.scanStream(stream, progress);
+        const over = { exceeded: false };
+        try {
+          verdict = await deps.scanner.scanStream(upToCap(stream, intent.maxBytes, over), progress);
+        } finally {
+          stream.destroy();
+        }
+        if (over.exceeded) return overCap(intent.maxBytes);
       } else {
         // A scanner without stream support (test doubles) gets the bytes.
-        const bytes = await deps.storage.getObject(intent.storageKey);
+        const bytes = await deps.storage.getObject(key, range);
         if (!bytes) return { ok: false, reason: 'object_missing' };
+        if (bytes.length > intent.maxBytes) return overCap(intent.maxBytes);
         verdict = await deps.scanner.scan(bytes);
       }
       if (!verdict.clean) return { ok: false, reason: 'malware_detected', detail: verdict.signature };
@@ -132,10 +171,13 @@ export const mediaIngest = {
     return withinBudget<IngestStepResult<IngestMediaInspectResult>>(() =>
       inTools(deps, 'inspect', () =>
         withTempDir({ maxBytes }, async (dir) => {
-          const source = await dir.download(deps.storage, intent.storageKey, 'source', {
+          const received = receivedKey(intent);
+          const source = await dir.download(deps.storage, received, 'source', {
+            range: { start: 0, end: intent.maxBytes },
             onProgress: (bytes) => deps.onProgress?.('download', Math.min(1, bytes / intent.maxBytes)),
           });
           if (!source) return { ok: false, reason: 'object_missing' };
+          if (source.bytes > intent.maxBytes) return overCap(intent.maxBytes);
           const inspected = await inspectFile(source.path, source.bytes, {
             mime: input.mime,
             maxSeconds: maxDurationSeconds,
@@ -146,7 +188,7 @@ export const mediaIngest = {
           if (refused) return refused;
           const undecodable = await decodeCheck(source.path, group, input.mime);
           if (undecodable) return undecodable;
-          let kept = { key: intent.storageKey, contentHash: source.contentHash, bytes: source.bytes };
+          let kept = { key: received, contentHash: source.contentHash, bytes: source.bytes };
           const sanitised = inspected.personalTags.length > 0;
           if (sanitised) {
             const clean = await stripMetadata(dir, source.path, input.mime, 'clean');

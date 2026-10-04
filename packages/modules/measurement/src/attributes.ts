@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { CreativeAttributesV1, type CopyDocumentV1 } from '@oremedia/contracts/content';
 import type { CreativeDocumentV1 } from '@oremedia/contracts/creative';
+import { isVideoProject } from '@oremedia/contracts/video';
 import { NotFoundError, ValidationFailedError } from '@oremedia/contracts/errors';
 import {
   COMPARISON_MINIMUM_SAMPLE,
@@ -161,7 +162,9 @@ export const attributeService = {
     const firstCreative = input.creativeRevisionIds[0];
     if (firstCreative) {
       const revision = await creativeRevisionsRepo.getById(firstCreative, tx);
-      attributes = { ...attributes, ...layoutFeatures(revision.snapshot) };
+      // Layout features describe graphic pages; a video's timeline (STU-2b) contributes none yet.
+      if (!isVideoProject(revision.snapshot))
+        attributes = { ...attributes, ...layoutFeatures(revision.snapshot as CreativeDocumentV1) };
     }
     const id = newId('creativeAttributes');
     await attributesRepo.create(

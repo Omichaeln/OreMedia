@@ -553,24 +553,20 @@ export function createBrandAssistRuntime(opts: BrandAssistRuntimeOptions = {}) {
         }),
       );
       hooks?.heartbeat(`section:${input.section}:charge`);
-      // Cost already incurred is always charged before anything else is decided (spec 12.6).
-      let overBudget = false;
-      try {
-        await budgets.consume(
-          job.budgetReservationId as string,
-          brand.id,
-          'model_tokens',
-          result.usage.inputTokens + result.usage.outputTokens,
-          'tokens',
-          result.costMicros,
-          `brand-assist:${job.id}:${input.section}`,
-          // One charge per attempt: each attempt made its own model call; a replay of the same attempt charges nothing.
-          `brand-assist:${job.id}:${input.section}:${hooks?.attempt !== undefined ? `a${hooks.attempt}` : newId('usageLedger')}`,
-        );
-      } catch (err) {
-        if (!(err instanceof BudgetExhaustedError)) throw err;
-        overBudget = true;
-      }
+      // Cost already incurred is always charged before anything else is decided (spec 12.6), even when the job was
+      // settled while the call ran (consumeIncurred): it still counts toward the caps. One key per call: each attempt
+      // made its own model call, and a replay of the same attempt charges nothing.
+      const billed = await budgets.consumeIncurred(
+        job.budgetReservationId as string,
+        brand.id,
+        'model_tokens',
+        result.usage.inputTokens + result.usage.outputTokens,
+        'tokens',
+        result.costMicros,
+        `brand-assist:${job.id}:${input.section}`,
+        `brand-assist:${job.id}:${input.section}:${hooks?.attempt !== undefined ? `a${hooks.attempt}` : newId('usageLedger')}`,
+      );
+      const overBudget = billed.closed || billed.exceeded;
       let output;
       try {
         if (result.parseError !== null) throw new Error(result.parseError);

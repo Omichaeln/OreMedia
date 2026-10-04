@@ -14,6 +14,7 @@
     "@oremedia/contracts": "workspace:*",
     "@oremedia/db": "workspace:*",
     "@oremedia/domain": "workspace:*",
+    "@oremedia/editor": "workspace:*",
     "@oremedia/module-access": "workspace:*",
     "@oremedia/module-assets": "workspace:*",
     "@oremedia/module-brand": "workspace:*",
@@ -21,6 +22,7 @@
     "@oremedia/observability": "workspace:*",
     "@oremedia/providers": "workspace:*",
     "@temporalio/activity": "^1.24.0",
+    "@temporalio/client": "^1.24.0",
     "@temporalio/common": "^1.24.0",
     "zod": "^3.25.76"
   },

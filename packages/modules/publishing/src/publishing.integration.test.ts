@@ -1697,6 +1697,42 @@ describe('publishing module (spec 14) against MySQL 8', () => {
         ).state,
       ).toBe('cancelled');
     });
+
+    it('reconcile is a person-only resolution: an API-key principal is refused with agent_never and nothing is written', async () => {
+      const v = newVariant(tenantA, brandA, connA, 'Key reconcile caption');
+      const pub = await schedule(tenantA, v.id);
+      const { attemptId } = await dispatch(pub.id);
+      await inTenant(tenantA, () => runtime.control.markOutcomeUnknown({ ...wfInput(pub.id), attemptId }));
+      const before = await row(pub.id);
+      // An API client: its service principal, with the key's per-request ceiling, holding publication.schedule.
+      const apiKey: ResolvedActorServicePrincipal = {
+        kind: 'service_principal',
+        id: 'sp_publishing_key',
+        tenantId: tenantA,
+        status: 'active',
+        maxAutonomy: 'managed_autopublish',
+        requestAutonomy: 'managed_autopublish',
+        grants: [{ action: 'publication.schedule', brandIds: 'all', channelConnectionIds: 'all' }],
+      };
+      for (const resolution of [
+        { resolution: 'confirm_published' as const, remotePostId: 'post_by_key' },
+        { resolution: 'confirm_absent' as const },
+        { resolution: 'cancel' as const },
+      ])
+        await expect(
+          run(tenantA, (tx) =>
+            publicationService.reconcile(apiKey, { publicationId: pub.id, ...resolution }, tx),
+          ),
+          resolution.resolution,
+        ).rejects.toMatchObject({ reason: 'agent_never' });
+      expect(await row(pub.id)).toMatchObject({
+        state: 'outcome_unknown',
+        version: before.version,
+        remotePostId: null,
+      });
+      expect(await evidenceOf(pub.id)).toHaveLength(0);
+      expect(consumedApprovals).toEqual([]);
+    });
   });
 
   describe('remote edit and delete of a published post (publication.edit_remote / delete_remote)', () => {

@@ -18,3 +18,4 @@ export * from './experiment';
 export * from './deletion-request';
 export * from './response-draft';
 export * from './generation-job';
+export * from './video-ai-job';

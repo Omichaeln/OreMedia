@@ -192,6 +192,7 @@ export const ModelElementEdit = z
     sizePx: z.number().positive().max(1000).optional(),
     weight: z.number().int().min(100).max(900).optional(),
     align: z.enum(['left', 'center', 'right']).optional(),
+    /** Hide (true) or show (false) the element: compiled into a setVisibility operation. */
     hidden: z.boolean().optional(),
   })
   .strict();

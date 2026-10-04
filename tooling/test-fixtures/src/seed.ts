@@ -238,6 +238,43 @@ export async function seedApiClient(
 }
 
 /**
+ * A member of the tenant restricted to some of its brands (allBrands false, one grant per brand), with a live session:
+ * for checks that a brand-restricted member reaches only those brands and hands out no more than them.
+ */
+export async function seedRestrictedMember(
+  db: Db,
+  tenant: Pick<SeededTenant, 'tenantId'>,
+  opts: { role: 'admin' | 'brand_manager' | 'creator'; brandIds: string[] },
+): Promise<{ userId: string; membershipId: string; token: string }> {
+  const userId = newId('user');
+  const membershipId = newId('membership');
+  const token = `ses_${randomUUID()}`;
+  await db.execute(
+    sql`insert into ${users} (id, email, name, created_at, updated_at) values (${userId}, ${`${userId.toLowerCase()}@example.test`}, ${`restricted ${opts.role}`}, ${new Date()}, ${new Date()})`,
+  );
+  await db.insert(memberships).values({
+    id: membershipId,
+    tenantId: tenant.tenantId,
+    userId,
+    role: opts.role,
+    status: 'active',
+    allBrands: false,
+  });
+  for (const brandId of opts.brandIds)
+    await db
+      .insert(brandGrants)
+      .values({ id: newId('brandGrant'), tenantId: tenant.tenantId, membershipId, brandId, roles: [] });
+  await db.insert(sessions).values({
+    id: newId('session'),
+    userId,
+    tokenHash: hashToken(token),
+    selectedTenantId: tenant.tenantId,
+    expiresAt: new Date(Date.now() + 3600_000),
+  });
+  return { userId, membershipId, token };
+}
+
+/**
  * Columns added to tables that already existed, after the migrations the roll-forward suites start from. A suite that
  * seeds an earlier head selects its snapshot without them (Drizzle would name them, and they do not exist yet).
  */
@@ -282,8 +319,12 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   asset_versions: ['media_info'], // 0026
   upload_intents: ['rejection_detail'], // 0026
   render_jobs: ['progress'], // 0026
-  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key'], // 0026
+  rendered_exports: ['duration_ms', 'fps', 'poster_storage_key', 'captions_storage_key', 'dedupe_key'], // 0026, 0027
+  creative_documents: ['kind'], // 0027
 };
+
+/** Tables created after every head the older roll-forward suites seed; their snapshots leave them out. */
+export const LATER_TABLE_NAMES: readonly string[] = ['studio_video_jobs']; // 0028
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
 export function snapshotColumns(table: MySqlTable): Record<string, MySqlColumn> {

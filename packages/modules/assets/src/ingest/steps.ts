@@ -199,6 +199,25 @@ const SVG_UNSAFE_TAGS = new Set([
   'link',
 ]);
 const SVG_URI_ATTRS = new Set(['href', 'xlink:href', 'src', 'xml:base', 'action', 'formaction']);
+/** A link stays inside the file: a fragment, or (on `<image>` only) an embedded raster of an admitted type. */
+const SVG_LINK_ATTRS = new Set(['href', 'xlink:href']);
+const SVG_EMBEDDED_RASTER = /^data:image\/(?:png|jpe?g|gif|webp)[;,]/i;
+
+/**
+ * DOMPurify hook: an href or xlink:href that is not a fragment (or an embedded raster on `<image>`) is dropped, so a
+ * relative reference (`other.svg#a`, `pic.png`, `/path`) is reported as a removal like an absolute one and the file is
+ * refused. SVG_ALLOWED_URI alone admits relative values.
+ */
+function keepOnlyLocalLinks(
+  node: { nodeName: string },
+  data: { attrName: string; attrValue: string; keepAttr: boolean },
+): void {
+  if (!SVG_LINK_ATTRS.has(data.attrName)) return;
+  const value = data.attrValue.trim();
+  if (value.startsWith('#')) return;
+  if (node.nodeName.toLowerCase() === 'image' && SVG_EMBEDDED_RASTER.test(value)) return;
+  data.keepAttr = false;
+}
 /**
  * DOMPurify tests this against every attribute value that is not on its URI-safe list, so it must accept plain
  * values (numbers, path data, `url(#id)`, keywords) and fragment references while rejecting anything carrying a
@@ -208,12 +227,28 @@ const SVG_URI_ATTRS = new Set(['href', 'xlink:href', 'src', 'xml:base', 'action'
  */
 const SVG_ALLOWED_URI = /^(?:#|[^a-z/\\]|[a-z+.-]+(?:[^a-z+.:-]|$)|http:\/\/www\.w3\.org\/1999\/xlink$)/i;
 /**
- * External loads from CSS, tested on the cleaned file after CSS comments are removed and CSS escapes decoded (so
- * `\75rl(\68ttp://…)` and `@\69mport` are seen for what they are): url() with a scheme, `//` or a backslash, an
- * image-set() string with a scheme other than data:image or a `//` prefix, and @import.
+ * External loads from CSS, tested on the cleaned file after the serialiser's entities are decoded (an attribute's
+ * `"` is written `&quot;`), CSS comments removed and CSS escapes decoded (so `\75rl(\68ttp://…)` and `@\69mport` are
+ * seen for what they are): a url() whose target is anything but a fragment (`#id`), so a scheme, `//`, a backslash or
+ * a relative path; an image-set() string with a scheme other than data:image or a `//` prefix; and @import. An
+ * empty url() loads nothing and is left alone.
  */
 const EXTERNAL_STYLE_REF =
-  /(?:url\(\s*['"]?\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\\)|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+  /(?:url\(\s*(?:['"]\s*)?(?=[^#)'"\s])|image-set\([^)]*?['"]\s*(?!data:image\/)(?:[a-z][a-z0-9+.-]*:|\/\/)|@import)/i;
+
+/** The entities DOMPurify's serialiser writes (attribute quotes, markup characters, no-break space), decoded once. */
+const SERIALISED_ENTITIES: Readonly<Record<string, string>> = {
+  quot: '"',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  nbsp: '\u00a0',
+};
+
+/** The serialised file with its entities decoded in one pass, as a browser reads the attribute values. Test only. */
+export function decodeSerialised(text: string): string {
+  return text.replace(/&(quot|amp|lt|gt|nbsp);/g, (_m, name: string) => SERIALISED_ENTITIES[name] ?? '');
+}
 
 /** The text as CSS reads it: comments removed, escapes (`\68`, `\h`) decoded. Used only to test, never stored. */
 export function cssReadable(text: string): string {
@@ -327,8 +362,10 @@ export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok
       ? { ok: false, detail: 'entity_declaration' }
       : { ok: true, text };
   const before = text.slice(0, match.index);
-  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own.
-  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*$/.test(before))
+  // Only an XML declaration and comments may precede the DOCTYPE, so it is the document's own. One greedy
+  // `<!--…-->` accepts exactly what a repeated lazy comment group did (that group could already run across `-->`),
+  // without the exponential backtracking the repetition cost on a run of comments followed by anything else.
+  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*-->\s*)?$/.test(before))
     return { ok: false, detail: 'entity_declaration' };
   const rest = text.slice(match.index + match[0].length);
   if (/<!DOCTYPE|<!ENTITY/i.test(rest)) return { ok: false, detail: 'entity_declaration' };
@@ -359,8 +396,8 @@ export function stripSvgDoctype(text: string): { ok: true; text: string } | { ok
 }
 
 /**
- * SVG: DOMPurify SVG profile with only fragment and data-image URIs allowed (scripts, event handlers and external
- * references stripped), then a PNG preview rasterised with sharp. A file from which active or external content
+ * SVG: DOMPurify SVG profile with only fragment and data-image URIs allowed (scripts, event handlers, external and
+ * relative references stripped), then a PNG preview rasterised with sharp. A file from which active or external content
  * had to be removed is rejected rather than quietly cleaned (Phase 2 gate: attack fixtures rejected), with the most
  * specific reason (BSC-2) so the uploader is told what to take out. Legitimate artwork is kept as it is: gradients,
  * clip paths, masks, `<use>` of a fragment, `<style>` without external references, transparency and a viewBox.
@@ -371,17 +408,24 @@ async function sanitiseSvg(bytes: Buffer, opts: SanitiseOptions): Promise<Ingest
   // What stripSvgDoctype still refuses (external or parameter entities, expansion) is the XXE vector.
   if (!prolog.ok) return reject('svg_entity_declaration', prolog.detail);
   const text = prolog.text;
-  const clean = DOMPurify.sanitize(text, {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    // `use` is outside DOMPurify's SVG profile because of external references; with hrefs limited to fragments it is safe.
-    ADD_TAGS: ['use'],
-    FORBID_TAGS: [...SVG_UNSAFE_TAGS],
-    ALLOWED_URI_REGEXP: SVG_ALLOWED_URI,
-    KEEP_CONTENT: false,
-  });
+  // The hook is added for this call only (DOMPurify is a shared instance; sanitize is synchronous).
+  DOMPurify.addHook('uponSanitizeAttribute', keepOnlyLocalLinks);
+  let clean: string;
+  try {
+    clean = DOMPurify.sanitize(text, {
+      USE_PROFILES: { svg: true, svgFilters: true },
+      // `use` is outside DOMPurify's SVG profile because of external references; with hrefs limited to fragments it is safe.
+      ADD_TAGS: ['use'],
+      FORBID_TAGS: [...SVG_UNSAFE_TAGS],
+      ALLOWED_URI_REGEXP: SVG_ALLOWED_URI,
+      KEEP_CONTENT: false,
+    });
+  } finally {
+    DOMPurify.removeHook('uponSanitizeAttribute', keepOnlyLocalLinks);
+  }
   const removed = [...(DOMPurify.removed as Removed[])];
   const unsafe = unsafeRemovals(removed);
-  if (EXTERNAL_STYLE_REF.test(cssReadable(clean)))
+  if (EXTERNAL_STYLE_REF.test(cssReadable(decodeSerialised(clean))))
     unsafe.push({ reason: 'svg_external_reference', finding: 'style:external_url' });
   if (EMBEDDED_DATA_URI.test(clean))
     unsafe.push({ reason: 'svg_embedded_content', finding: 'data_uri:not_image' });

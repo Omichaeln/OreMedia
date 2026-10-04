@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LINEAR_RATIO_MAX, LINEAR_SAFETY_MS, timeGrowth } from '@oremedia/contracts/testing/linear-time';
 import { SOURCE_TEXT_MAX_CHARS } from '@oremedia/contracts/brand-assist';
 import { docx, docxBomb, pdfWithText, zip } from '../testing';
 import { DocumentRefusal, capText, docxXmlToText, extractDocument } from './documents';
@@ -84,14 +85,22 @@ describe('document text extraction (BSC-4)', () => {
 });
 
 describe('docxXmlToText on hostile XML (BSC-4)', () => {
-  const N = 20_000;
+  // Time grows with the input, not its square: 8× the input takes well under 64× the CPU time.
   it.each([
-    ['unclosed paragraphs', '<w:p>'.repeat(N)],
-    ['paragraph tags without ends', '<w:p '.repeat(N)],
-    ['unclosed text runs', '<w:p><w:t>'.repeat(N)],
-  ])('stays linear on %s', (_, xml) => {
-    const started = performance.now();
-    docxXmlToText(`<w:document><w:body>${xml}</w:body></w:document>`);
-    expect(performance.now() - started).toBeLessThan(200);
-  });
+    ['unclosed paragraphs', (n: number) => '<w:p>'.repeat(n)],
+    ['paragraph tags without ends', (n: number) => '<w:p '.repeat(n)],
+    ['unclosed text runs', (n: number) => '<w:p><w:t>'.repeat(n)],
+  ])(
+    'stays linear on %s',
+    (_, xml) => {
+      const growth = timeGrowth(
+        (n) => `<w:document><w:body>${xml(n)}</w:body></w:document>`,
+        (doc) => docxXmlToText(doc),
+        { size: 10_000 },
+      );
+      expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
+      expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
+    },
+    30_000,
+  );
 });

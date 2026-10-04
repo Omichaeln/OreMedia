@@ -15,6 +15,7 @@ import {
   type IngestSanitiseResult,
   type IngestScanResult,
   type IngestSniffResult,
+  type IngestStepRejection,
   type IngestStepResult,
   type IngestVerifyResult,
   type Provenance,
@@ -87,6 +88,31 @@ async function objectOrMissing(
   return bytes ?? { ok: false, reason: 'object_missing' };
 }
 
+/**
+ * The presigned PUT stays valid after completeUpload, so the uploader could replace the quarantine object between
+ * steps. verify copies it to this key, which no upload URL is signed for, and checks the copy's size; sniff, scan and
+ * sanitise (and the video steps) read only the copy, so every step sees the bytes verify saw. Derived here rather
+ * than carried by the workflow, so no activity's parameters change.
+ */
+export function receivedKey(intent: Pick<UploadIntentRow, 'id'>): string {
+  return storageKeys.quarantine(requireTenant().tenantId, intent.id, 'received');
+}
+
+/**
+ * The received copy as a buffer, read with a range ending one byte past the intent's cap (as the brand document
+ * extract does): an object that is somehow larger is refused, never read whole.
+ */
+async function receivedBytes(
+  storage: StorageProvider,
+  intent: Pick<UploadIntentRow, 'id' | 'maxBytes'>,
+): Promise<Buffer | IngestStepRejection> {
+  const bytes = await objectOrMissing(storage, receivedKey(intent), { start: 0, end: intent.maxBytes });
+  if (!Buffer.isBuffer(bytes)) return bytes;
+  if (bytes.length > intent.maxBytes)
+    return { ok: false, reason: 'exceeds_cap', detail: `over the cap of ${intent.maxBytes} bytes` };
+  return bytes;
+}
+
 function withFontMetadata(
   recorded: Provenance | undefined,
   input: Pick<IngestCatalogueInput, 'fontMetadata'>,
@@ -123,14 +149,22 @@ export const assetIngest = {
     });
   },
 
+  /**
+   * The upload is checked (an oversized one is refused before it is copied), copied to the received key and the copy
+   * checked again: the copy is what every later step reads, whatever happens to the upload key afterwards.
+   */
   async verify(deps: IngestDeps, input: AssetIngestInputV1): Promise<IngestStepResult<IngestVerifyResult>> {
     const intent = await loadIntent(input, 'quarantined');
-    return steps.verifyObject(deps.storage, intent.storageKey, intent.maxBytes);
+    const uploaded = await steps.verifyObject(deps.storage, intent.storageKey, intent.maxBytes);
+    if (!uploaded.ok) return uploaded;
+    const received = receivedKey(intent);
+    await deps.storage.copyObject(intent.storageKey, received);
+    return steps.verifyObject(deps.storage, received, intent.maxBytes);
   },
 
   async sniff(deps: IngestDeps, input: AssetIngestInputV1): Promise<IngestStepResult<IngestSniffResult>> {
     const intent = await loadIntent(input, 'quarantined');
-    const head = await objectOrMissing(deps.storage, intent.storageKey, {
+    const head = await objectOrMissing(deps.storage, receivedKey(intent), {
       start: 0,
       end: steps.SNIFF_BYTES - 1,
     });
@@ -140,7 +174,7 @@ export const assetIngest = {
 
   async scan(deps: IngestDeps, input: AssetIngestInputV1): Promise<IngestStepResult<IngestScanResult>> {
     const intent = await loadIntent(input, 'quarantined');
-    const bytes = await objectOrMissing(deps.storage, intent.storageKey);
+    const bytes = await receivedBytes(deps.storage, intent);
     if (!Buffer.isBuffer(bytes)) return bytes;
     return steps.scan(deps.scanner, bytes);
   },
@@ -151,7 +185,7 @@ export const assetIngest = {
     input: IngestSanitiseInput,
   ): Promise<IngestStepResult<IngestSanitiseResult>> {
     const intent = await loadIntent(input, 'quarantined');
-    const bytes = await objectOrMissing(deps.storage, intent.storageKey);
+    const bytes = await receivedBytes(deps.storage, intent);
     if (!Buffer.isBuffer(bytes)) return bytes;
     const r = await steps.sanitise(bytes, input.mime, input.group, { maxPixels: deps.maxPixels });
     if (!r.ok) return r;
@@ -345,8 +379,8 @@ export const assetIngest = {
 
   /**
    * Records the terminal outcome on the intent (rejected with the reason, or held in quarantine when the scanner
-   * gave no verdict) and deletes the intent's quarantine objects. Only keys under this intent's quarantine prefix
-   * are deleted; anything else is refused.
+   * gave no verdict) and deletes the intent's quarantine objects: the workflow's cleanup keys and the received copy
+   * (derived here, not passed). Only keys under this intent's quarantine prefix are deleted; anything else is refused.
    */
   async finalise(deps: IngestDeps, input: IngestFinaliseInput & { detail?: string }): Promise<void> {
     await withTransaction(async (tx) => {
@@ -395,7 +429,8 @@ export const assetIngest = {
     });
     const { tenantId } = requireTenant();
     const prefix = storageKeys.quarantine(tenantId, input.intentId);
-    for (const key of input.cleanupKeys) {
+    const keys = new Set([...input.cleanupKeys, receivedKey({ id: input.intentId })]);
+    for (const key of keys) {
       if (key !== prefix && !key.startsWith(`${prefix}/`))
         throw new PolicyDeniedError(
           'cleanup_key_outside_quarantine',

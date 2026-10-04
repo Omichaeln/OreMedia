@@ -67,6 +67,13 @@ type RunRow = Awaited<ReturnType<typeof runsRepo.getById>>;
 
 const actorRef = (actor: ResolvedActor) => ({ kind: actor.kind, id: actor.id });
 const tenantResource = (tenantId: string) => ({ type: 'tenant', tenantId, id: tenantId });
+/** A brand's spend position and limits: billing.manage on the brand (a brand-restricted member sees only theirs). */
+const brandBudgetResource = (tenantId: string, brandId: string) => ({
+  type: 'brand',
+  tenantId,
+  brandId,
+  id: brandId,
+});
 
 const brandResource = (run: RunRow) => ({
   type: 'agent_run',
@@ -656,7 +663,8 @@ export const agentsService = {
       const parsed = BudgetRead.parse(input);
       const { tenantId } = requireTenant();
       await brandService.assertExist([parsed.brandId], tx); // NOT_FOUND for a foreign brand
-      await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
+      // On the brand: a member restricted to some brands reads none of another brand's spend.
+      await policy.assert(actor, 'billing.manage', brandBudgetResource(tenantId, parsed.brandId), {}, tx);
       return { brandId: parsed.brandId, ...(await budgets.summary(parsed.brandId, tx)) };
     },
 
@@ -664,7 +672,7 @@ export const agentsService = {
       const parsed = BudgetSetLimit.parse(input);
       const { tenantId } = requireTenant();
       await brandService.assertExist([parsed.brandId], tx);
-      await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
+      await policy.assert(actor, 'billing.manage', brandBudgetResource(tenantId, parsed.brandId), {}, tx);
       // The month limit is the company's (one row, brandId ''); the day limit is the brand's own.
       await budgets.setLimit(
         parsed.period === 'month' ? null : parsed.brandId,

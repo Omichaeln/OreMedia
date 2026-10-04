@@ -10,7 +10,6 @@ import { useStarterBrand } from './create/use-starter-brand';
 import { DocumentTitle } from './document-title';
 import { InsertToolbar } from './insert-toolbar';
 import { newElementId } from '../../lib/ids';
-import type { FontOption } from './properties-panel';
 import { useTheme } from '../../lib/theme';
 import { AssetsPanel } from './assets-panel';
 import { Canvas } from './canvas';
@@ -20,7 +19,7 @@ import { assetVersionIdsOf, fontRefsOf, logoVersionIdsOf } from './document-help
 import { FormatStrip } from './format-strip';
 import { HistoryPanel } from './history-panel';
 import { LayersPanel } from './layers-panel';
-import { PropertiesPanel } from './properties-panel';
+import { PropertiesPanel, toFontOption, type FontOption } from './properties-panel';
 import { AgentPanel } from './agent-panel';
 import { GeneratePanel } from './generate-panel';
 import { RenderPanel } from './render-panel';
@@ -103,13 +102,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
     : null;
   const brandFonts = useBrandFonts(brandId);
   const fontOptions: FontOption[] = useMemo(
-    () =>
-      (brandFonts.data?.items ?? []).map((f) => ({
-        assetVersionId: f.assetVersionId,
-        label: [f.family ?? f.name, f.subfamily ?? (f.weight ? String(f.weight) : null)]
-          .filter(Boolean)
-          .join(' '),
-      })),
+    () => (brandFonts.data?.items ?? []).map(toFontOption),
     [brandFonts.data],
   );
   const generatedIds = useGeneratedAssetIds(
@@ -156,6 +149,32 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
       })),
       summary:
         removable.length === 1 ? `Remove ${removable[0]?.name}` : `Remove ${removable.length} elements`,
+      origin: 'user',
+    });
+  };
+  /**
+   * Shows or hides elements as one undoable step: hides them all when any is shown, else shows them. Locked elements
+   * (or ones in a locked group, or anything on a locked page) are left as they are, as removal leaves them.
+   */
+  const toggleVisibility = (ids: string[]) => {
+    if (!page || page.locked) return;
+    const targets = ids
+      .map((id) => findWithAncestors(page, id))
+      .filter((f): f is NonNullable<typeof f> => f !== null && !isLockedInContext(f.element, f.ancestors))
+      .map((f) => f.element);
+    if (targets.length === 0) return;
+    const visible = !targets.some((el) => el.visible);
+    studio.applyIntent({
+      operations: targets.map((el) => ({
+        op: 'setVisibility' as const,
+        pageId: page.id,
+        elementId: el.id,
+        visible,
+      })),
+      summary:
+        targets.length === 1
+          ? `${visible ? 'Show' : 'Hide'} ${targets[0]?.name}`
+          : `${visible ? 'Show' : 'Hide'} ${targets.length} elements`,
       origin: 'user',
     });
   };
@@ -370,6 +389,8 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   selection={state.selection}
                   onSelect={selectNew}
                   onActivate={() => setFocusText((n) => n + 1)}
+                  readOnly={readOnly}
+                  onToggleVisibility={(id) => toggleVisibility([id])}
                 />
               </TabPanel>
               <TabPanel value="assets">
@@ -429,6 +450,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
             onDeleteSelected={deleteSelected}
             onGroup={groupSelection}
             onUngroup={ungroupSelection}
+            onToggleVisibility={() => toggleVisibility(state.selection)}
             onUndo={studio.undo}
             onRedo={studio.redo}
             onSave={() => void studio.saveNow()}

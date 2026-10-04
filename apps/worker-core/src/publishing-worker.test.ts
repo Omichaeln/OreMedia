@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowNotFoundError, type Client } from '@temporalio/client';
-import { TemporalWorkflowProbe } from './publishing-worker';
+import { ScheduleOverlapPolicy, WorkflowNotFoundError, type Client } from '@temporalio/client';
+import { describeScheduleReconcile } from '@oremedia/activities/testing/schedules';
+import {
+  TemporalWorkflowProbe,
+  ensureBrandFactSweepScheduled,
+  ensureConnectChoicePurgeScheduleRunning,
+  ensureDestinationTokenRefreshScheduled,
+  ensureRemoteChangeSweepScheduled,
+} from './publishing-worker';
 
 /** A client whose describe() answers as scripted: a status name, or a thrown error. */
 const clientDescribing = (answer: string | Error): Pick<Client, 'workflow'> =>
@@ -33,3 +40,57 @@ describe('TemporalWorkflowProbe (the sweeper asks before declaring worker loss, 
     expect(await new TemporalWorkflowProbe(clientDescribing(unavailable)).isRunning('pub:1')).toBe(true);
   });
 });
+
+const SKIP = ScheduleOverlapPolicy.SKIP;
+
+describeScheduleReconcile(
+  'ensureConnectChoicePurgeScheduleRunning',
+  ensureConnectChoicePurgeScheduleRunning,
+  [
+    {
+      scheduleId: 'connect-choice-purge',
+      workflowType: 'connectChoicePurgeWorkflowV1',
+      taskQueue: 'core',
+      args: [{}],
+      spec: { intervals: [{ every: '15 minutes' }] },
+      overlap: SKIP,
+      catchupWindow: '1 hour',
+    },
+  ],
+);
+
+describeScheduleReconcile('ensureDestinationTokenRefreshScheduled', ensureDestinationTokenRefreshScheduled, [
+  {
+    scheduleId: 'destination-token-refresh',
+    workflowType: 'destinationTokenRefreshWorkflowV1',
+    taskQueue: 'core',
+    args: [{}],
+    spec: { calendars: [{ hour: 3, minute: 10 }] },
+    overlap: SKIP,
+    catchupWindow: '1 day',
+  },
+]);
+
+describeScheduleReconcile('ensureBrandFactSweepScheduled', ensureBrandFactSweepScheduled, [
+  {
+    scheduleId: 'brand-fact-sweep',
+    workflowType: 'brandFactSweepWorkflowV1',
+    taskQueue: 'core',
+    args: [{}],
+    spec: { calendars: [{ hour: 3, minute: 20 }] },
+    overlap: SKIP,
+    catchupWindow: '1 day',
+  },
+]);
+
+describeScheduleReconcile('ensureRemoteChangeSweepScheduled', ensureRemoteChangeSweepScheduled, [
+  {
+    scheduleId: 'remote-change-sweep',
+    workflowType: 'remoteChangeSweepWorkflowV1',
+    taskQueue: 'core',
+    args: [],
+    spec: { intervals: [{ every: '1 hour' }] },
+    overlap: SKIP,
+    catchupWindow: '1 hour',
+  },
+]);

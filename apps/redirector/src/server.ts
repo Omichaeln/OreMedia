@@ -48,7 +48,9 @@ export function redirectTarget(
 export function createRedirector(opts: RedirectorOptions): express.Express {
   const app = express();
   const log = logger().child('redirector');
-  if (opts.trustProxy) app.set('trust proxy', true);
+  // One hop (the platform's edge): req.ip is the address that edge saw, the rightmost X-Forwarded-For entry. Trusting
+  // every hop would make it the leftmost entry, which the client writes (a chosen experiment arm, inflated visitors).
+  if (opts.trustProxy) app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.get(['/health', '/healthz'], (_req, res) => {
     res.json({ ok: true, buffered: opts.clicks.size() });

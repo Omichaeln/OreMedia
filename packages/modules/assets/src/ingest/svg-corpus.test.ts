@@ -63,6 +63,13 @@ const SAFE: Array<{ name: string; file: string; keeps: string[] }> = [
     keeps: ['data:image/png;base64,'],
   },
   {
+    name: 'fragment references in double-quoted CSS, a filter and a mask (kept after the serialiser escapes the quotes)',
+    file: svg(
+      `<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/></linearGradient><filter id="f"><feGaussianBlur stdDeviation="1"/></filter><mask id="m"><rect width="9" height="9" fill="#fff"/></mask></defs><rect width="9" height="9" style='fill:url("#g")'/><rect x="10" width="9" height="9" filter='url("#f")' mask="url( #m )"/>`,
+    ),
+    keeps: ['fill:url(&quot;#g&quot;)', 'filter="url(&quot;#f&quot;)"', 'mask="url( #m )"'],
+  },
+  {
     name: 'the public SVG 1.1 DOCTYPE a design tool writes (dropped; nothing fetches the DTD)',
     file: `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">${svg('<rect width="9" height="9"/>')}`,
     keeps: ['<rect'],
@@ -177,6 +184,58 @@ const UNSAFE: Array<{ name: string; file: string; reason: IngestRejectionReason 
     file: svg(
       '<style>.a{background-image:image-set("https://evil.example/x.png" 1x)}</style><rect class="a" width="9" height="9"/>',
     ),
+    reason: 'svg_external_reference',
+  },
+  // Security review: the serialiser writes an attribute's `"` as `&quot;`, which hid a double-quoted external url().
+  {
+    name: 'a double-quoted external url() in a style attribute',
+    file: svg(`<rect width="9" height="9" style='fill:url("https://evil.example/x")'/>`),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a double-quoted external url() in a fill attribute',
+    file: svg(`<rect width="9" height="9" fill='url("https://evil.example/p.svg#a")'/>`),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a double-quoted external url() in a filter attribute',
+    file: svg(`<rect width="9" height="9" filter='url("//evil.example/f.svg#f")'/>`),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a double-quoted remote image-set() in a style attribute',
+    file: svg(`<rect width="9" height="9" style='background:image-set("https://evil.example/x.png" 1x)'/>`),
+    reason: 'svg_external_reference',
+  },
+  // Security review: relative references resolve against wherever the file is served from.
+  {
+    name: 'a relative href on <use>',
+    file: svg('<use href="other.svg#a"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a relative xlink:href on <use>',
+    file: svg('<use xlink:href="/sprites/other.svg#a"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a relative href on <image>',
+    file: svg('<image width="20" height="20" href="pic.png"/>'),
+    reason: 'svg_remote_image',
+  },
+  {
+    name: 'a relative url() in a fill attribute',
+    file: svg('<rect width="9" height="9" fill="url(other.svg#f)"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a root-relative url() in a <style> block',
+    file: svg('<style>.a{fill:url(/path)}</style><rect class="a" width="9" height="9"/>'),
+    reason: 'svg_external_reference',
+  },
+  {
+    name: 'a relative href on a link',
+    file: svg('<a href="page.html"><rect width="9" height="9"/></a>'),
     reason: 'svg_external_reference',
   },
   {
