@@ -4,15 +4,18 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
-  EmptyState,
   Field,
   Input,
-  Panel,
+  KpiStrip,
   Skeleton,
-  StatusBanner,
+  StatusDot,
   Textarea,
+  cn,
+  toneGlyph,
+  type Tone,
 } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
+import { Drawer, DrawerContent } from '../../components/drawer';
 import { RequestError } from '../../components/request-state';
 import { useToast } from '../../components/toast';
 import { brandPath } from '../brand/brand-context';
@@ -21,22 +24,32 @@ import { intentContext, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { JsonTree } from './json-tree';
 import {
-  OUTCOME_TONE,
-  POLICY_DECISION_TONE,
   STEP_KIND_LABEL,
+  formatCompactTokens,
   formatDuration,
   formatMicros,
   formatTokens,
+  humanise,
+  invocationLine,
   isTerminalState,
   modifyBatchOf,
   needsAttention,
   pendingProposal,
   reviewedOperations,
+  runFigures,
   runStateChip,
+  runTitle,
+  stepTone,
   type PendingProposal,
   type ReviewedOperation,
 } from './run-helpers';
-import { useAgentRun, useAgentRunSteps, type RunDto, type StepDto } from './use-agent-runs';
+import {
+  useAgentRun,
+  useAgentRunSteps,
+  type InvocationDto,
+  type RunDto,
+  type StepDto,
+} from './use-agent-runs';
 
 export interface RunDetailProps {
   companyId: string;
@@ -46,7 +59,15 @@ export interface RunDetailProps {
 
 const when = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : '—');
 
-/** Run detail: state, needs-attention, the pending proposal and the step timeline (spec 12.7: never reasoning). */
+/** The detail column's gutter: the interface's 32 × 36 px, less at phone width. */
+const GUTTER = 'px-5 py-6 sm:px-9 sm:py-8';
+
+/**
+ * Run detail as the interface sets it: the id, principal, task and mode as an eyebrow, the goal as the title, the
+ * state as a dot and a word, the figures (tool calls, tokens, cost) in a ruled strip, anything that needs attention
+ * as tinted notes, the steps with their tool lines and timings, the redaction note, then the actions. Never
+ * reasoning (spec 12.7): the steps show what was called, what came back and what it cost.
+ */
 export function RunDetail({ companyId, brandId, runId }: RunDetailProps) {
   const run = useAgentRun(runId);
   const live = run.data ? !isTerminalState(run.data.state) : false;
@@ -58,13 +79,13 @@ export function RunDetail({ companyId, brandId, runId }: RunDetailProps) {
 
   if (run.isPending)
     return (
-      <Panel title="Run" data-testid="run-detail">
+      <div className={GUTTER} data-testid="run-detail">
         <Skeleton label="Loading run" lines={4} />
-      </Panel>
+      </div>
     );
   if (run.isError)
     return (
-      <Panel title="Run" data-testid="run-detail">
+      <div className={GUTTER} data-testid="run-detail">
         <RequestError
           error={run.error}
           onRetry={() => void run.refetch()}
@@ -74,33 +95,91 @@ export function RunDetail({ companyId, brandId, runId }: RunDetailProps) {
               : undefined
           }
         />
-      </Panel>
+      </div>
     );
   const chip = runStateChip(run.data.state);
   const items = steps.data?.items ?? [];
   const attention = needsAttention(run.data, items);
   const proposal = run.data.state === 'waiting_for_review' ? pendingProposal(items) : null;
+  const figures = runFigures(run.data, items);
   return (
-    <Panel
-      title={`Run ${run.data.id}`}
+    <section
+      aria-labelledby="run-title"
+      className={cn('om-in flex max-w-[760px] flex-col gap-6 pb-12 sm:pb-16', GUTTER)}
       data-testid="run-detail"
       data-run-state={run.data.state}
-      actions={<CancelRun run={run.data} />}
     >
       <div
         ref={headingRef}
         tabIndex={-1}
-        className="flex flex-col gap-4 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex flex-col gap-1.5 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Badge tone={chip.tone} data-testid="run-state">
-            {chip.label}
-          </Badge>
-          <span className="font-medium">{run.data.taskKind.replace(/_/g, ' ')}</span>
-          <Badge glyph={false}>{run.data.autonomyMode}</Badge>
-          {live && <span className="text-xs text-muted-foreground">Refreshing every 5 s</span>}
-        </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        <p className="text-xs tabular-nums text-muted-foreground">
+          {run.data.id} · {run.data.servicePrincipalId} · {humanise(run.data.taskKind)} ·{' '}
+          {humanise(run.data.autonomyMode)} mode
+        </p>
+        <h2 id="run-title" className="text-xl font-bold tracking-title">
+          {runTitle(run.data)}
+        </h2>
+        <p className="flex flex-wrap items-center gap-1.5 text-sm">
+          <StatusDot tone={chip.tone} />
+          <span className="sr-only">{toneGlyph[chip.tone]} </span>
+          <span data-testid="run-state">{chip.label}</span>
+          {live && <span className="text-xs text-muted-foreground">· refreshing every 5 s</span>}
+        </p>
+      </div>
+      <KpiStrip
+        size="md"
+        items={[
+          { label: 'Tool calls', value: steps.isSuccess ? figures.toolCalls : '—' },
+          { label: 'Tokens', value: steps.isSuccess ? formatCompactTokens(figures.tokens) : '—' },
+          { label: 'Cost', value: formatMicros(figures.costMicros), testId: 'run-cost' },
+        ]}
+      />
+      {attention.length > 0 && (
+        <section
+          aria-labelledby="run-attention"
+          data-testid="needs-attention"
+          className="flex flex-col gap-2"
+        >
+          <h3 id="run-attention" className="sr-only">
+            Needs attention
+          </h3>
+          {attention.map((a, i) => (
+            <Note key={i} tone={a.tone} title={a.title} detail={a.detail} />
+          ))}
+        </section>
+      )}
+      {run.data.state === 'waiting_for_review' && steps.isSuccess && !proposal && (
+        <Note
+          tone="warning"
+          title="Proposal not found"
+          detail="The run is waiting for review but no proposal invocation is recorded yet; it refreshes automatically."
+        />
+      )}
+      <section aria-labelledby="run-steps" className="flex flex-col">
+        <h3 id="run-steps" className="sr-only">
+          Steps
+        </h3>
+        {steps.isPending && <Skeleton label="Loading steps" lines={3} />}
+        {steps.isError && <RequestError error={steps.error} onRetry={() => void steps.refetch()} />}
+        {steps.isSuccess && items.length === 0 && (
+          <p role="status" className="border-t border-border py-3 text-sm text-muted-foreground">
+            {live
+              ? 'No steps recorded yet: the run has not reached its first step; this list refreshes automatically.'
+              : 'No steps recorded: the run ended before any step was recorded.'}
+          </p>
+        )}
+        {steps.isSuccess && items.length > 0 && <Timeline steps={items} />}
+      </section>
+      <p className="text-xs text-muted-foreground">
+        Model reasoning isn’t stored. Inputs are redacted; actions, outputs and costs are kept.
+      </p>
+      <details className="text-xs">
+        <summary className="inline-flex min-h-6 cursor-pointer items-center rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Run record
+        </summary>
+        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
           <dt className="text-muted-foreground">Initiator</dt>
           <dd>
             {run.data.initiatorKind} <code>{run.data.initiatorId}</code>
@@ -109,8 +188,6 @@ export function RunDetail({ companyId, brandId, runId }: RunDetailProps) {
           <dd>
             <code>{run.data.servicePrincipalId}</code>
           </dd>
-          <dt className="text-muted-foreground">Cost</dt>
-          <dd data-testid="run-cost">{formatMicros(run.data.costMicros)}</dd>
           <dt className="text-muted-foreground">Started</dt>
           <dd>{when(run.data.createdAt)}</dd>
           <dt className="text-muted-foreground">Finished</dt>
@@ -126,115 +203,107 @@ export function RunDetail({ companyId, brandId, runId }: RunDetailProps) {
             <code>{run.data.correlationId}</code>
           </dd>
         </dl>
-        {attention.length > 0 && (
-          <section aria-label="Needs attention" data-testid="needs-attention" className="flex flex-col gap-2">
-            <h3 className="text-sm font-semibold">Needs attention</h3>
-            {attention.map((a, i) => (
-              <StatusBanner key={i} tone={a.tone} title={a.title} description={a.detail} live="polite" />
-            ))}
-          </section>
-        )}
-        {run.data.state === 'waiting_for_review' && steps.isSuccess && !proposal && (
-          <StatusBanner
-            tone="warning"
-            title="Proposal not found"
-            description="The run is waiting for review but no proposal invocation is recorded yet; it refreshes automatically."
-          />
-        )}
-        {proposal && (
-          <ProposalDecision companyId={companyId} brandId={brandId} run={run.data} proposal={proposal} />
-        )}
-        <section aria-label="Timeline" className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Timeline</h3>
-          {steps.isPending && <Skeleton label="Loading steps" lines={3} />}
-          {steps.isError && <RequestError error={steps.error} onRetry={() => void steps.refetch()} />}
-          {steps.isSuccess && items.length === 0 && (
-            <EmptyState
-              title="No steps recorded yet"
-              description={
-                live
-                  ? 'The run has not reached its first step; this list refreshes automatically.'
-                  : 'The run ended before any step was recorded.'
-              }
-            />
+      </details>
+      {(proposal || !isTerminalState(run.data.state)) && (
+        <div className="flex flex-wrap gap-2">
+          {proposal && (
+            <ReviewProposal companyId={companyId} brandId={brandId} run={run.data} proposal={proposal} />
           )}
-          {steps.isSuccess && items.length > 0 && <Timeline steps={items} />}
-        </section>
-      </div>
-    </Panel>
+          <CancelRun run={run.data} />
+        </div>
+      )}
+    </section>
   );
 }
 
+/** The interface's tinted note: what happened or what is needed, polite (the run is a record), never colour alone. */
+function Note({ tone, title, detail }: { tone: Tone; title: string; detail: string }) {
+  return (
+    <p
+      role="status"
+      className={cn(
+        'om-in rounded-lg px-3.5 py-2.5 text-sm text-pretty',
+        tone === 'critical'
+          ? 'bg-status-critical-tint'
+          : tone === 'warning'
+            ? 'bg-status-warning-tint'
+            : 'bg-accent-tint',
+      )}
+    >
+      <span className="sr-only">{toneGlyph[tone]} </span>
+      <strong className="font-bold">{title}.</strong> {detail}
+    </p>
+  );
+}
+
+/** The steps as the interface's rows: a dot, what the step did, its tool lines, and its timing on the right. */
 function Timeline({ steps }: { steps: StepDto[] }) {
   return (
-    <ol className="flex flex-col gap-2" aria-label="Steps" data-testid="timeline">
-      {steps.map((s) => (
-        <li
-          key={s.id}
-          className="rounded-md border border-border p-2 text-sm"
-          data-testid="step"
-          data-step-kind={s.kind}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">#{s.index}</span>
-            <Badge glyph={false}>{STEP_KIND_LABEL[s.kind]}</Badge>
-            <span className="min-w-0 flex-1 break-words">{s.summary}</span>
-          </div>
-          <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            <div>
-              <dt className="inline">Tokens </dt>
-              <dd className="inline">
-                {formatTokens(s.tokensIn)} in / {formatTokens(s.tokensOut)} out
-              </dd>
-            </div>
-            <div>
-              <dt className="inline">Cost </dt>
-              <dd className="inline">{formatMicros(s.costMicros)}</dd>
-            </div>
-            <div>
-              <dt className="inline">Duration </dt>
-              <dd className="inline">{formatDuration(s.durationMs)}</dd>
-            </div>
-            <div>
-              <dt className="inline">At </dt>
-              <dd className="inline">{when(s.createdAt)}</dd>
-            </div>
-          </dl>
-          {s.invocations.length > 0 && (
-            <ul className="mt-2 flex flex-col gap-2" aria-label="Tool invocations">
-              {s.invocations.map((i) => (
-                <li
-                  key={i.id}
-                  className="rounded-md bg-muted p-2"
-                  data-testid="invocation"
-                  data-policy-decision={i.policyDecision}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <code className="text-xs font-semibold">{i.toolName}</code>
-                    <Badge tone={POLICY_DECISION_TONE[i.policyDecision]}>policy {i.policyDecision}</Badge>
-                    {i.policyReason && <span className="text-xs">{i.policyReason}</span>}
-                    <Badge tone={OUTCOME_TONE[i.outcome]}>outcome {i.outcome}</Badge>
-                    {i.outputRef && (
-                      <span className="text-xs text-muted-foreground">
-                        output <code>{i.outputRef}</code>
-                      </span>
-                    )}
-                  </div>
-                  <details className="mt-1">
-                    <summary className="cursor-pointer rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      Redacted input (hash {i.inputHash.slice(0, 12)}…)
-                    </summary>
-                    <div className="mt-1">
-                      <JsonTree value={i.inputRedacted} label={`Redacted input of ${i.toolName}`} />
-                    </div>
-                  </details>
-                </li>
+    <ol className="flex flex-col" aria-label="Steps" data-testid="timeline">
+      {steps.map((s, i) => {
+        const tone = stepTone(s);
+        const metrics = [
+          s.tokensIn + s.tokensOut > 0 && `${formatTokens(s.tokensIn)} in / ${formatTokens(s.tokensOut)} out`,
+          s.costMicros > 0 && formatMicros(s.costMicros),
+        ].filter((m): m is string => typeof m === 'string');
+        return (
+          <li
+            key={s.id}
+            className="om-in grid grid-cols-[20px_minmax(0,1fr)_auto] gap-3 border-t border-border py-3"
+            style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+            data-testid="step"
+            data-step-kind={s.kind}
+          >
+            <span className="flex items-start pt-1.5">
+              <StatusDot tone={tone} />
+              <span className="sr-only">
+                {toneGlyph[tone]} {STEP_KIND_LABEL[s.kind]}
+              </span>
+            </span>
+            <div className="flex min-w-0 flex-col gap-1">
+              <span className="text-sm">{s.summary}</span>
+              {s.invocations.map((inv) => (
+                <Invocation key={inv.id} invocation={inv} />
               ))}
-            </ul>
-          )}
-        </li>
-      ))}
+              {metrics.length > 0 && (
+                <code className="truncate font-sans text-xs tabular-nums text-muted-foreground">
+                  {metrics.join(' · ')}
+                </code>
+              )}
+            </div>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {s.durationMs > 0 ? formatDuration(s.durationMs) : '—'}
+            </span>
+          </li>
+        );
+      })}
     </ol>
+  );
+}
+
+/** One tool call: "tool → result", its policy and outcome when they are not the ordinary allowed/ok, and the redacted input. */
+function Invocation({ invocation: i }: { invocation: InvocationDto }) {
+  const line = invocationLine(i);
+  const notable = i.policyDecision !== 'allowed' || i.outcome !== 'ok';
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-0.5"
+      data-testid="invocation"
+      data-policy-decision={i.policyDecision}
+    >
+      <code className="truncate font-sans text-xs tabular-nums text-muted-foreground" title={line}>
+        {line}
+        {notable && ` · policy ${i.policyDecision} · outcome ${i.outcome}`}
+      </code>
+      <details className="text-xs">
+        <summary className="inline-flex min-h-6 cursor-pointer items-center rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Redacted input (hash {i.inputHash.slice(0, 12)}…)
+        </summary>
+        <div className="mt-1">
+          <JsonTree value={i.inputRedacted} label={`Redacted input of ${i.toolName}`} />
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -259,9 +328,7 @@ function CancelRun({ run }: { run: RunDto }) {
   if (isTerminalState(run.state)) return null;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button size="sm" variant="danger" onClick={() => setOpen(true)}>
-        Cancel run
-      </Button>
+      <Button onClick={() => setOpen(true)}>Cancel run</Button>
       <DialogContent
         role="alertdialog"
         title="Cancel this run?"
@@ -286,6 +353,39 @@ function CancelRun({ run }: { run: RunDto }) {
   );
 }
 
+/** The interface's "Review proposal": the pending proposal opens in a side sheet for the decision. */
+function ReviewProposal({
+  companyId,
+  brandId,
+  run,
+  proposal,
+}: {
+  companyId: string;
+  brandId: string;
+  run: RunDto;
+  proposal: PendingProposal;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Drawer open={open} onOpenChange={setOpen}>
+      <Button variant="primary" onClick={() => setOpen(true)}>
+        Review proposal
+      </Button>
+      <DrawerContent title="Review proposal" side="right" className="w-[min(92vw,34rem)] overflow-y-auto p-5">
+        {open && (
+          <ProposalDecision
+            companyId={companyId}
+            brandId={brandId}
+            run={run}
+            proposal={proposal}
+            onDecided={() => setOpen(false)}
+          />
+        )}
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 /**
  * Spec 12.2 proposalDecision through agents.runs.approveProposal: Accept applies the batch as the run's principal,
  * Reject sends the model back, Modify applies the person's own batch: the proposed operations reviewed one by one
@@ -297,11 +397,13 @@ function ProposalDecision({
   brandId,
   run,
   proposal,
+  onDecided,
 }: {
   companyId: string;
   brandId: string;
   run: RunDto;
   proposal: PendingProposal;
+  onDecided: () => void;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -319,6 +421,7 @@ function ProposalDecision({
       onSuccess: (res) => {
         intent.renew();
         setModifying(false);
+        onDecided();
         void queryClient.invalidateQueries(trpc.agents.pathFilter());
         toast({
           tone: 'good',
@@ -352,29 +455,31 @@ function ProposalDecision({
   const decideUi = decide.isError ? toUiError(decide.error) : null;
   const batchIssue = decideUi?.details.find((d) => d.path?.startsWith('batch'));
   return (
-    <section aria-label="Proposal" data-testid="proposal" className="flex flex-col gap-3">
-      <StatusBanner
+    <section aria-labelledby="proposal-title" data-testid="proposal" className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
+        <p className="text-xs tabular-nums text-muted-foreground">
+          {run.id} · {humanise(run.taskKind)} · base revision {proposal.payload.baseRevisionId}
+        </p>
+        <h2 id="proposal-title" className="text-lg font-bold tracking-title">
+          Review proposal
+        </h2>
+        <p className="text-sm">
+          {proposal.payload.summary || `${proposal.payload.operations.length} operation(s)`}
+        </p>
+      </div>
+      <Note
         tone={blocking.length > 0 ? 'critical' : 'warning'}
         title="Agent proposal pending"
-        description={proposal.payload.summary || `${proposal.payload.operations.length} operation(s)`}
+        detail={`${proposal.payload.operations.length} operation${proposal.payload.operations.length === 1 ? '' : 's'} on the document, awaiting a person.`}
       />
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">Document</dt>
-        <dd>
-          <Link
-            to={brandPath(companyId, brandId, `studio/${encodeURIComponent(proposal.payload.documentId)}`)}
-            className="underline"
-          >
-            Open <code>{proposal.payload.documentId}</code> in the studio
-          </Link>
-        </dd>
-        <dt className="text-muted-foreground">Base revision</dt>
-        <dd>
-          <code>{proposal.payload.baseRevisionId}</code>
-        </dd>
-        <dt className="text-muted-foreground">Operations</dt>
-        <dd>{proposal.payload.operations.length}</dd>
-      </dl>
+      <p className="text-sm">
+        <Link
+          to={brandPath(companyId, brandId, `studio/${encodeURIComponent(proposal.payload.documentId)}`)}
+          className="underline"
+        >
+          Open <code>{proposal.payload.documentId}</code> in the studio
+        </Link>
+      </p>
       {proposal.payload.findings.length > 0 && (
         <ul className="flex flex-col gap-1 text-sm" aria-label="Findings">
           {proposal.payload.findings.map((f, i) => (
@@ -390,8 +495,8 @@ function ProposalDecision({
         </ul>
       )}
       {!modifying && (
-        <details>
-          <summary className="cursor-pointer rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <details className="text-xs">
+          <summary className="inline-flex min-h-6 cursor-pointer items-center rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             Proposed operations
           </summary>
           <div className="mt-1">
@@ -404,7 +509,6 @@ function ProposalDecision({
         <div className="flex flex-wrap gap-2">
           <Button
             variant="primary"
-            size="sm"
             disabled={decide.isPending}
             disabledReason={
               blocking.length > 0
@@ -415,11 +519,10 @@ function ProposalDecision({
           >
             Accept
           </Button>
-          <Button size="sm" disabled={decide.isPending} onClick={() => setModifying(true)}>
+          <Button disabled={decide.isPending} onClick={() => setModifying(true)}>
             Modify
           </Button>
           <Button
-            size="sm"
             variant="danger"
             disabled={decide.isPending}
             onClick={() => decide.mutate({ runId: run.id, stepId: proposal.stepId, decision: 'reject' })}
@@ -446,7 +549,7 @@ function ProposalDecision({
             {rows.map((r) => (
               <li
                 key={r.index}
-                className={`flex flex-col gap-2 rounded-md border border-border p-2 text-sm${r.kept ? '' : ' opacity-60'}`}
+                className={`flex flex-col gap-2 rounded-lg border border-border p-3 text-sm${r.kept ? '' : ' opacity-60'}`}
                 data-testid="modify-operation"
                 data-kept={r.kept}
               >
@@ -487,12 +590,12 @@ function ProposalDecision({
             <Input id="modify-summary" value={summary} onChange={(e) => setSummary(e.target.value)} />
           </Field>
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" variant="primary" size="sm" disabled={decide.isPending}>
+            <Button type="submit" variant="primary" disabled={decide.isPending}>
               {decide.isPending
                 ? 'Applying…'
                 : `Apply ${kept.length} of ${rows.length} operation${rows.length === 1 ? '' : 's'}`}
             </Button>
-            <Button type="button" size="sm" onClick={() => setModifying(false)}>
+            <Button type="button" onClick={() => setModifying(false)}>
               Back
             </Button>
           </div>

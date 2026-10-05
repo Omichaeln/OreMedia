@@ -638,7 +638,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     await close();
   });
 
-  it('lists every run of the brand from the server with a state chip, task kind, initiator, cost and times', async () => {
+  it('lists every run of the brand from the server with its goal, state and when it started; the newest run opens beside it', async () => {
     await signIn(E2E.ownerToken);
     await page.goto(`${origin}${agentsPath()}`);
     await expect.poll(() => page.getByRole('heading', { level: 1 }).textContent()).toBe('Agent runs');
@@ -670,10 +670,16 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
       'Completed',
     ])
       expect(list).toContain(label);
-    expect(list).toContain('$2.50'); // 2_500_000 micros, never raw
+    // The interface's row: the goal from the brief, then the state and a relative time; the rest is in the detail.
+    expect(list).toContain('spring launch');
+    expect(list).toContain('min ago');
     expect(list).not.toContain('2500000');
-    expect(list).toContain('user usr_e2e');
-    expect(list).toContain('copywriting');
+    // Without a run in the URL the newest run is shown, as the interface opens on a run.
+    await expect.poll(() => detail().getAttribute('data-run-state'), { timeout: 15_000 }).not.toBeNull();
+    const shown = (await detail().textContent()) ?? '';
+    expect(shown).toContain('copywriting');
+    expect(shown).toContain('user usr_e2e');
+    expect(shown).toContain('Model reasoning isn’t stored');
     // No horizontal overflow at phone width (spec 21.3 / WCAG reflow).
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -699,9 +705,14 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(timeline).toContain('$0.0062'); // 6_170 micros
     expect(timeline).toContain('2.3 s');
     expect(timeline).toContain('brand.getSnapshot');
+    // The ordinary allowed/ok call shows as "tool → result"; policy and outcome are named when they are not that.
     expect(timeline).toContain('policy allowed');
     expect(timeline).toContain('outcome proposal');
     expect(await page.getByTestId('run-cost').textContent()).toBe('$0.0123');
+    // The interface's figure strip: tool calls and tokens from the recorded steps.
+    const figures = (await detail().textContent()) ?? '';
+    expect(figures).toContain('Tool calls');
+    expect(figures).toContain('3.2k'); // 1,200 + 300 + 1,400 + 250 tokens
     // The redacted input is a collapsible text tree; expanding it shows the redaction marker, never a secret.
     const first = page.getByTestId('invocation').first();
     await first.locator('summary').first().click();
@@ -711,6 +722,8 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   }, 45_000);
 
   it('waiting_for_review shows the proposal verbatim and Accept records the decision with an Idempotency-Key', async () => {
+    // The interface's "Review proposal" opens the pending proposal in a side sheet for the decision.
+    await page.getByRole('button', { name: 'Review proposal' }).click();
     const proposal = page.getByTestId('proposal');
     await expect.poll(() => proposal.count()).toBe(1);
     expect(await proposal.textContent()).toContain('Tighten the headline for the spring launch');
@@ -731,11 +744,13 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     expect(typeof req?.headers['idempotency-key']).toBe('string');
     await expect.poll(() => detail().getAttribute('data-run-state'), { timeout: 15_000 }).toBe('running');
     await expect.poll(() => page.getByTestId('proposal').count()).toBe(0);
+    expect(await page.getByRole('button', { name: 'Review proposal' }).count()).toBe(0);
     expect(await page.getByTestId('timeline').textContent()).toContain('accept by user usr_e2e');
   }, 45_000);
 
   it('Modify applies the kept operations with the edited text as the person’s own batch (RA-07: no JSON)', async () => {
     await page.goto(`${origin}${agentsPath()}?run=run_waiting_modify`);
+    await page.getByRole('button', { name: 'Review proposal' }).click({ timeout: 15_000 });
     await expect.poll(() => page.getByTestId('proposal').count(), { timeout: 15_000 }).toBe(1);
     await page.getByRole('button', { name: 'Modify' }).click();
     await expect.poll(() => page.getByTestId('modify-operation').count()).toBe(2);
@@ -769,6 +784,7 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
     const attention = await page.getByTestId('needs-attention').textContent();
     expect(attention).toContain('Budget exhausted');
     expect(attention).toContain('$2.50');
+    expect(await page.getByTestId('run-cost').textContent()).toBe('$2.50'); // 2_500_000 micros, never raw
     expect(await page.getByTestId('run-state').textContent()).toContain('Budget exhausted');
     expect(await page.getByRole('button', { name: 'Cancel run' }).count()).toBe(0); // terminal: nothing to cancel
   }, 30_000);
