@@ -20,28 +20,36 @@ document"), the Portfolio's per-brand channel flags (the interface shows "Instag
 brand; the application shows the brand's setup state here and channel health on the brand's Settings and Calendar,
 since reading every brand's channels on the portfolio would be one request per brand).
 
-## Review and the external portal (PR: ui-review)
+## Agents (PR: `claude/ui-agents`, base `claude/ui-foundation`)
 
-| Check                                                           | Result                                                                                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm --filter @oremedia/web typecheck`                         | pass                                                                                                                           |
-| `pnpm lint`                                                     | pass                                                                                                                           |
-| `pnpm vitest run --project unit apps/web packages/ui`           | 176 tests pass (22 files; the review-attention file gains 5 tests for the new derivations)                                     |
-| e2e (built app, mock transport): phase5 (review inbox + portal) | 16 pass                                                                                                                        |
-| e2e: responsive, journey, a11y, shell                           | **E2E_OTHERS**                                                                                                                 |
-| Screenshots                                                     | application vs interface at 1440, 768 and 390 px, light and dark, with a request selected and the portal open (PR description) |
+| Check                                                                           | Result                                                                                                                                                       |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm --filter @oremedia/ui typecheck`, `pnpm --filter @oremedia/web typecheck` | pass                                                                                                                                                         |
+| `pnpm lint`, `pnpm format`                                                      | pass on the branch's files (`prettier --check` on every changed file); the root run flagged only the scratch screenshot script, deleted before commit        |
+| `pnpm vitest run --project unit apps/web packages/ui`                           | 176 tests pass (5 new helper tests: run title, relative time, figures, step tone, tool line)                                                                 |
+| e2e (built app, mock transport): `apps/web/e2e/agents.e2e.test.ts`              | 10 of 10 pass (the list, the steps and figures, Accept through the sheet, Modify, budget exhausted, policy denied, failed, cancel, start, permission denied) |
+| e2e: a11y, responsive, shell                                                    | not run locally (the shared machine's lock queue); CI runs them on the PR                                                                                    |
+| Screenshots                                                                     | application at 1440, 768 and 390 px, light and dark, plus the start form, against `ui-ref/shots/agents-1440.png` / `agents-390.png` (below and in the PR)    |
 
-Visual comparison (the interface's `review.html` / `portal.html` against the built application on the mock data):
+Visual comparison (the mock has one completed copywriting run with one model step, so the application shows one
+row and one step where the prototype shows six runs and five steps):
 
-- Matches at 1440: the two columns (`300px minmax(0,1fr)`), the list header (title, one explanatory line, four
-  filter chips wrapping to two rows at 300 px), the request rows (bold title, due at the right in small tabular
-  figures, a dot and the state, a further flag after a dot in the accent colour, the selected row tinted), the
-  request header (id · revision · created above the title, the state pill at the top right), the change note as a
-  tinted box, FROZEN MANIFEST with the hash · brand · policy line at the right and one row per variant (file or
-  hatched placeholder at 160 px, channel, caption, ALT, the bound hashes in 10 px), REVIEWERS and EXTERNAL LINKS
-  side by side with "+ New link", COMMENTS with the OUTDATED tag, the "Your decision" card with its note, the ink
-  "Approve revision N" and the outlined "Request changes".
-- Matches at 768: the two columns hold (the interface stacks below 760 px, the application below 768 px).
-- Matches at 390: the list stacks above the detail; REVIEWERS and EXTERNAL LINKS stack; the manifest row keeps the
-  thumbnail at 112 px beside the text.
-- Deviations, and why: the interface's list has no Refresh; the application keeps a small ghost "Refresh" at the header's right (an existing behaviour). The chips carry no counts (the interface's form; the navigation badge keeps the count). The interface draws a hatched thumbnail with the size for every variant; the application shows the frozen file itself where one was rendered (image, video or "Open file"), with the size and the other channels it serves under it, and the hatched placeholder reading "no rendered file" or "same file as <channel>" where there is none — one file frozen for several channels is shown once, under the first channel it serves (spec 13.3; the e2e counts them). "text sha256 · export sha256 · settings sha256 bound" carries the real short hashes. A muted line under FROZEN MANIFEST names the revision, content hash, creative revisions and the frozen timing, which the decision binds and which the interface shows nowhere. The interface has one free-text change note; the application has typed notes (stale, changed since freeze, changes requested, approval invalidated, link revoked), each in the tinted-box form, warning and critical tints by tone. "Preview" appears only on the link just created: the token is shown once and never stored, so an older link cannot be previewed. REVIEWERS names a member only when the session may list members (owner, admin); other roles see the user id. After approval the interface's "Approved and bound …" line reads "Approved and bound · Approval apr_… binds this exact package until …" (the e2e reads the approval id from it). "Your decision" adds the manifest's short hash and the refusal rule to the interface's sentence. The portal cannot greet the reviewer by name or name the person who asked (the reviewer view carries neither), so it reads "You were asked to review"; the wordmark is the deployment's name (the portal has no company), the h1 is the article's title when there is one and "Your review" otherwise (no package title in the reviewer view); the hash · brand · policy line is shown (the e2e requires the full hash); "Exit preview" has no counterpart because the portal is its own origin. The application keeps its "Nothing selected" state (the interface always has a selection). The captures use the fallback face because Lato is not reachable offline (as in the foundation's captures). Dark theme holds in both views; the hatched placeholder is faint on the dark surfaces (the foundation's tint values).
+- Matches at 1440: the two columns (330 px rule-divided list, the detail at 32 × 36 px gutters and 760 px max),
+  "Agent runs" with the ink "New run", the row (bold goal, dot + state · relative time, the selected row tinted), the
+  eyebrow (id · principal · task · mode), the 22 px title, the dot + state, the three figures in a ruled strip, the
+  step rows (dot, summary, tool line, timing on the right), the redaction note, and the ink / white action pair.
+- Deviates: the eyebrow shows the service principal id and the task kind (the run DTO carries ids, not the agent's
+  name or the skill key); "Tool calls" and "Tokens" have no "/ 20" and "/ 40k" ceiling because the run DTO does not
+  carry its budget; a tool line names policy and outcome only when they are not allowed/ok, and the redacted input
+  sits under a disclosure; a "Run record" disclosure keeps the initiator, times, model and correlation id the
+  prototype does not show; the prototype's Retry / Run again / Open result / Create a mandate have no procedure
+  behind them and are not shown; the list heading is 22 px (`text-xl`) where the prototype sets 20 px.
+- 768: the two columns hold (list at 330 px, the detail beside it) under the narrow bar; no horizontal scroll.
+- 390: stacks as the prototype does, list first, then the detail at 20 px gutters; the figure strip keeps its three
+  columns; no horizontal scroll.
+- Dark: every surface, rule, dot and tint comes from the tokens; checked at 1440, 768 and 390.
+- Start a run (1440): the prototype's order (title, selects, segmented Mode with its note, three budget figures,
+  brief, Start run / Cancel) with the application's fields: a service principal select (the prototype has none), the
+  skill select, the budget figures read-only (the server sets them from the principal's budget) with the granted
+  mode, remaining spend and denied actions under them, and the skill's schema fields in place of one "Instructions"
+  textarea; no "Target" select (nothing behind it).
