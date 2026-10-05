@@ -20,7 +20,7 @@ document"), the Portfolio's per-brand channel flags (the interface shows "Instag
 brand; the application shows the brand's setup state here and channel health on the brand's Settings and Calendar,
 since reading every brand's channels on the portfolio would be one request per brand).
 
-## Reports (PR: claude/ui-reports, D-29)
+## Reports (PR #108, D-29)
 
 | Check                                                                                                         | Result                                                                                                                                                                                                                                                                                            |
 | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
