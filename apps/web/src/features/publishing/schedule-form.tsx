@@ -5,7 +5,7 @@ import {
   PublicationAuthority,
   type PublicationAuthority as PublicationAuthorityT,
 } from '@oremedia/contracts/publishing';
-import { Badge, Button, Field, Input, Panel, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Badge, Button, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
@@ -146,7 +146,13 @@ export function ScheduleForm({
     options.length === 0 && (authority === 'approval' ? approvals.isSuccess : mandates.isSuccess);
 
   return (
-    <Panel title="Schedule a publication">
+    <section
+      aria-labelledby="schedule-title"
+      className="om-in flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+    >
+      <h2 id="schedule-title" className="text-base font-bold">
+        Schedule a channel variant
+      </h2>
       {variantId === null && (
         <p className="text-sm text-muted-foreground" data-testid="schedule-empty">
           Choose a channel variant on its content package (Campaigns → package → Schedule) to schedule it
@@ -228,7 +234,7 @@ export function ScheduleForm({
             </p>
           )}
           <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
               <Field label="Authority" htmlFor="schedule-authority">
                 <Select
                   id="schedule-authority"
@@ -319,6 +325,6 @@ export function ScheduleForm({
           </form>
         </div>
       )}
-    </Panel>
+    </section>
   );
 }
