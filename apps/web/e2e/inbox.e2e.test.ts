@@ -127,7 +127,7 @@ describe.skipIf(!enabled)('comment inbox (built app in Chromium, mock transport,
       .poll(async () => (await sent.getByTestId('reply-state').allTextContents()).join('|'), {
         timeout: 15_000,
       })
-      .toBe('✓Sent');
+      .toBe('✓ Sent');
     expect(await page.getByTestId(`thread-${queued.id}`).count()).toBe(0); // the draft entry gave way to the message
   }, 45_000);
 

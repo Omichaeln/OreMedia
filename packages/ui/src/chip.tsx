@@ -20,7 +20,9 @@ export const Chip = React.forwardRef<HTMLButtonElement, ChipProps>(function Chip
       className={cn(
         'inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border bg-card px-3 text-xs font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        selected ? 'border-foreground text-foreground' : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground',
+        selected
+          ? 'border-foreground text-foreground'
+          : 'border-border text-muted-foreground hover:border-border-strong hover:text-foreground',
         className,
       )}
       {...props}

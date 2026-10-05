@@ -28,7 +28,7 @@ export function Section({
         <Heading id={id} className="om-label">
           {title}
         </Heading>
-        {action && <div className="text-xs text-muted-foreground">{action}</div>}
+        {action && <div className="flex min-h-6 items-center text-xs text-muted-foreground">{action}</div>}
       </div>
       {children}
     </section>

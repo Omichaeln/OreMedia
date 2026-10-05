@@ -15,7 +15,8 @@ export const buttonClasses = (variant: ButtonVariant = 'secondary', size: Button
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
     'aria-disabled:cursor-not-allowed aria-disabled:opacity-60 disabled:cursor-not-allowed disabled:opacity-60',
     size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
-    variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover',
+    variant === 'primary' &&
+      'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover',
     variant === 'secondary' && 'border-border bg-card text-foreground hover:border-border-strong',
     variant === 'ghost' && 'border-transparent bg-transparent text-foreground hover:bg-muted',
     variant === 'danger' && 'border-border bg-card text-status-critical hover:border-status-critical',
