@@ -280,6 +280,13 @@ export const BrandSystemDocumentV1 = z.object({
         weight: z.number(),
         minSizePx: z.number(),
         tracking: z.number().optional(),
+        /**
+         * The size the role is set at, in px, where the guidance names one besides its minimum; absent reads as the
+         * minimum (as before). Optional with no default, so stored documents parse and hash as they did.
+         */
+        sizePx: z.number().positive().optional(),
+        /** Line height as a multiple of the size (1.5 is 150%); absent where the guidance does not set one. */
+        lineHeight: z.number().positive().optional(),
       }),
     ),
     spacingScale: z.array(z.number()),

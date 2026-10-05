@@ -105,13 +105,16 @@ describe.skipIf(!enabled)('typography specimen (built app in Chromium)', () => {
       expect(s.size).toBe(`${size}px`);
       expect(parseFloat(s.lineHeight)).toBeCloseTo(size * 1.2, 1);
       expect(['0px', 'normal']).toContain(s.letterSpacing); // no tracking configured: drawn at 0
+      expect(await page.getByTestId(`type-size-warning-${role}`).count()).toBe(0);
       const spec = (await page.getByTestId(`type-spec-${role}`).innerText()).replace(/\s+/g, ' ');
       expect(spec).toContain(`scale ${i + 1} of ${CONFIGURED.length}`);
       expect(spec).toContain(`role ${role}`);
       expect(spec).toContain('font Karla');
       expect(spec).toContain(`weight ${weight}`);
-      expect(spec).toContain(`size ${size} px (minimum)`);
-      expect(spec).toContain('line height 1.2 (preview only)');
+      // The fixture roles store a minimum and no size or line height: each is said, not presented as a rule.
+      expect(spec).toContain(`specimen size ${size} px (the minimum; no size set)`);
+      expect(spec).toContain(`minimum size ${size} px`);
+      expect(spec).toContain('line height 1.2 (default; not set)');
       expect(spec).toContain('tracking 0 em (not set)');
     }
     // The variable Karla file draws 600 and 500 (the face is listed as 400): no warning on any specimen.
@@ -150,7 +153,7 @@ describe.skipIf(!enabled)('typography specimen (built app in Chromium)', () => {
     expect(JSON.stringify(backend.savedBrandDocument ?? {})).not.toContain('Only on this screen');
   }, 45_000);
 
-  it('editing size, weight and tracking redraws the specimen immediately; Save applies it and it holds after a reload', async () => {
+  it('editing size, weight, tracking and line height redraws the specimen immediately; Save applies it and it holds after a reload', async () => {
     await openTypography();
     await page.getByRole('button', { name: /^Edit / }).click({ timeout: 15_000 });
     const editor = page.getByTestId('brand-kit-editor');
@@ -168,6 +171,11 @@ describe.skipIf(!enabled)('typography specimen (built app in Chromium)', () => {
     expect((await page.getByTestId('type-spec-display').innerText()).replace(/\s+/g, ' ')).toContain(
       'tracking -0.02 em',
     );
+    await page.locator('#kit-type-display-line-height').fill('1.1');
+    expect(parseFloat((await computed('display')).lineHeight)).toBeCloseTo(52 * 1.1, 1);
+    const displaySpec = (await page.getByTestId('type-spec-display').innerText()).replace(/\s+/g, ' ');
+    expect(displaySpec).toContain('line height 1.1');
+    expect(displaySpec).not.toContain('default; not set');
 
     await editor.getByRole('button', { name: 'Save', exact: true }).click();
     const dialog = page.getByRole('alertdialog', { name: 'Save and apply the brand system?' });
@@ -180,6 +188,7 @@ describe.skipIf(!enabled)('typography specimen (built app in Chromium)', () => {
         weight: 700,
         minSizePx: 52,
         tracking: -0.02,
+        lineHeight: 1.1,
       });
     await expect.poll(() => editor.count(), { timeout: 15_000 }).toBe(0);
 
@@ -188,7 +197,49 @@ describe.skipIf(!enabled)('typography specimen (built app in Chromium)', () => {
     await expect.poll(async () => (await computed('display')).size, { timeout: 15_000 }).toBe('52px');
     expect((await computed('display')).weight).toBe('700');
     expect(parseFloat((await computed('display')).letterSpacing)).toBeCloseTo(52 * -0.02, 1);
+    expect(parseFloat((await computed('display')).lineHeight)).toBeCloseTo(52 * 1.1, 1);
   }, 60_000);
+
+  it('applied guidance with a size and line height draws them, labels the minimum apart and warns below it', async () => {
+    const before = backend.appliedBrandDocument(E2E.brandId);
+    const roles = before.tokens.typeRoles.map((r) =>
+      r.role === 'body'
+        ? { ...r, lineHeight: 1.5 }
+        : r.role === 'heading'
+          ? { ...r, sizePx: 24 } // its minimum is 28
+          : r.role === 'caption'
+            ? { ...r, sizePx: 13 } // its minimum is 12
+            : r,
+    );
+    backend.applyBrandSystem(E2E.brandId, { ...before, tokens: { ...before.tokens, typeRoles: roles } });
+    try {
+      await openTypography();
+      await fontLoaded();
+      const spec = async (role: string) =>
+        (await page.getByTestId(`type-spec-${role}`).innerText()).replace(/\s+/g, ' ');
+      // The configured line height, not the default.
+      expect(parseFloat((await computed('body')).lineHeight)).toBeCloseTo(18 * 1.5, 1);
+      expect(await spec('body')).toContain('line height 1.5');
+      expect(await spec('body')).not.toContain('default; not set');
+      expect(parseFloat((await computed('label')).lineHeight)).toBeCloseTo(14 * 1.2, 1);
+      expect(await spec('label')).toContain('line height 1.2 (default; not set)');
+      // The intended size is drawn; the minimum is labelled beside it.
+      expect((await computed('heading')).size).toBe('24px');
+      expect(await spec('heading')).toContain('specimen size 24 px');
+      expect(await spec('heading')).toContain('minimum size 28 px');
+      expect((await computed('caption')).size).toBe('13px');
+      expect(await spec('caption')).toContain('minimum size 12 px');
+      // Below its minimum: said on that specimen only, apart from the font warnings.
+      const warning = page.getByTestId('type-size-warning-heading');
+      await warning.waitFor({ timeout: 15_000 });
+      expect(await warning.innerText()).toContain('Set at 24 px, below this role’s 28 px minimum');
+      expect(await warning.innerText()).toContain('Raise the size to at least 28 px');
+      expect(await page.locator('[data-testid^="type-size-warning-"]').count()).toBe(1);
+      expect(await page.locator('[data-testid^="type-warning-"]').count()).toBe(0);
+    } finally {
+      backend.applyBrandSystem(E2E.brandId, before);
+    }
+  }, 45_000);
 
   it('a font file that does not load is named on every specimen it affects, with what to do', async () => {
     await page.route(`**/e2e-object/${FAMILY}*`, (route) => route.fulfill({ status: 404, body: 'gone' }));
