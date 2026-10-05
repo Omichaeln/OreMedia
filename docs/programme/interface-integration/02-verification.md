@@ -22,13 +22,13 @@ since reading every brand's channels on the portfolio would be one request per b
 
 ## Campaigns (PR: `claude/ui-campaigns`)
 
-| Check                                                                     | Result                                                                               |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `pnpm --filter @oremedia/web typecheck`                                   | pass                                                                                 |
-| `pnpm lint`, `pnpm format`                                                | pass                                                                                 |
-| `pnpm vitest run --project unit apps/web packages/ui`                     | 173 tests pass (two new: the brief row's state line, the variant line's status text) |
-| e2e (built app, mock transport): phase6, journey, a11y, responsive, shell | see the PR description for the run                                                   |
-| Screenshots                                                               | prototype vs application at 1440, 768 and 390 px, light and dark (PR description)    |
+| Check                                                                                                                | Result                                                                               |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `pnpm --filter @oremedia/web typecheck`                                                                              | pass                                                                                 |
+| `pnpm lint`, `pnpm format`                                                                                           | pass                                                                                 |
+| `pnpm vitest run --project unit apps/web packages/ui`                                                                | 173 tests pass (two new: the brief row's state line, the variant line's status text) |
+| e2e (built app, mock transport): phase6, journey (the screen's files); a11y and responsive once before the lock rule | see the PR description for the run                                                   |
+| Screenshots                                                                                                          | prototype vs application at 1440, 768 and 390 px, light and dark (PR description)    |
 
 ### Visual comparison
 
@@ -41,8 +41,8 @@ its objective, rows of the message and one dot-and-state line, the selected row 
 rows at `100px minmax(0,1fr)`, the PLAN label with its rows date · channel · item · format divided by rules, the
 CONTENT PACKAGES label with "rev N · state" at the right of each name and a dot-and-text line per variant, and the
 action row "Open in studio" (ink) / "Draft variants with agent" / "Send package for review"); the incomplete note
-as the interface's accent-tinted row; the "Suggested … · not accepted" accent line beside PLAN; the `om-in` entry
-with a short stagger on the rows.
+as the interface's accent-tinted row; the "Suggested … · not accepted" accent line beside PLAN; the `om-in` entry on
+the screen (rows arriving from queries do not animate, as the foundation sets).
 
 Deviates, and why:
 
