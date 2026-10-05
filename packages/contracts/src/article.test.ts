@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ARTICLE_REGION_MAX_DEPTH,
+  ARTICLE_REGION_MAX_TOKENS,
   ArticleRegionSelector,
+  DEFAULT_ARTICLE_REGION_SELECTORS,
+  RENDERED_PAGE_MAX_BYTES,
   articleFirstParagraph,
   articleHtmlBlocks,
   articleManifest,
@@ -505,13 +509,14 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     expect(growth.ratio).toBeLessThan(LINEAR_RATIO_MAX);
     expect(growth.largeMs).toBeLessThan(LINEAR_SAFETY_MS);
   };
-  const check = (html: string) =>
+  const check = (html: string, remoteUrl?: string) =>
     validateRenderedPage({
       status: 200,
       html,
       title: 't',
       manifest: articleManifest('<p>p</p><p>q</p>'),
       draft: false,
+      ...(remoteUrl ? { remoteUrl, slug: 't' } : {}),
     });
 
   it.each([
@@ -554,6 +559,74 @@ describe('reading untrusted markup in linear time (the sanitiser and the rendere
     },
     30_000,
   );
+
+  // M-1: many open elements and close tags that never match them made the region search rescan the open elements
+  // per close tag, per selector (O(n²): 54 s for a 360 KB page). The open elements stay within the depth cap here, so
+  // the region search really runs over every token.
+  it.each([
+    [
+      'unclosed elements, then unmatched close tags',
+      (n: number) => '<div>'.repeat(4_000) + '</x>'.repeat(n / 4),
+    ],
+    [
+      'unclosed elements interleaved with unmatched close tags',
+      (n: number) => '<div class="a">'.repeat(4_000) + '<span></x>'.repeat(n / 10),
+    ],
+    [
+      'unclosed paragraphs closed by their container',
+      (n: number) => `<div class="entry-content">${'<p>x'.repeat(n / 4)}</div>`.repeat(4),
+    ],
+  ])(
+    'looks for the article region in a page of %s in linear time',
+    (_, input) => {
+      linear(input, (html) =>
+        compareArticleRegion(html, articleManifest('<p>p</p>'), DEFAULT_ARTICLE_REGION_SELECTORS),
+      );
+      linear(input, check);
+    },
+    30_000,
+  );
+
+  it('an adversarial page at the byte cap is read in well under a second, and never passes', () => {
+    const pages = [
+      // Within the token cap: the deepest tree allowed, then close tags that match nothing up to the byte cap.
+      '<div>'.repeat(4_000) + '</xxxxxxxxx>'.repeat((RENDERED_PAGE_MAX_BYTES - 20_000) / 12),
+      // The page the review measured, at the byte cap.
+      '<div>'.repeat(RENDERED_PAGE_MAX_BYTES / 9) + '</x>'.repeat(RENDERED_PAGE_MAX_BYTES / 9),
+      // Past the token cap.
+      '<i>'.repeat(RENDERED_PAGE_MAX_BYTES / 6) + '</i>'.repeat(RENDERED_PAGE_MAX_BYTES / 8),
+    ];
+    for (const html of pages) {
+      expect(html.length).toBeLessThanOrEqual(RENDERED_PAGE_MAX_BYTES);
+      check(html);
+      const started = process.cpuUsage();
+      const result = check(html);
+      const { user, system } = process.cpuUsage(started);
+      expect((user + system) / 1000).toBeLessThan(1_000);
+      expect(result.outcome).toBe('unverified');
+    }
+  }, 30_000);
+
+  it('a page past the region search caps is unverified (page_too_complex), whatever its region carries', () => {
+    const body = '<p>p</p><p>q</p>';
+    const page = (inner: string) =>
+      `<html><head><title>t</title><link rel="canonical" href="https://site.example/t/"></head><body>${inner}</body></html>`;
+    const at = (html: string) => check(html, 'https://site.example/t/');
+    const nested = (depth: number) => '<span>'.repeat(depth) + body + '</span>'.repeat(depth);
+    // Deep but within the cap: verified as before.
+    expect(at(page(`<article>${nested(ARTICLE_REGION_MAX_DEPTH - 10)}</article>`)).outcome).toBe('verified');
+    expect(at(page(`<article>${nested(ARTICLE_REGION_MAX_DEPTH)}</article>`))).toMatchObject({
+      outcome: 'unverified',
+      reason: 'page_too_complex',
+      content: { selector: null, tooComplex: true },
+    });
+    const tokens = `<article>${body}</article>${'<br>'.repeat(ARTICLE_REGION_MAX_TOKENS)}`;
+    expect(at(page(tokens))).toMatchObject({ outcome: 'unverified', reason: 'page_too_complex' });
+    // Stray close tags are still ignored, and a region closed after them still ends where it did.
+    expect(at(page(`<article>${'</div></x>'.repeat(1_000)}${body}</article><p>after</p>`)).outcome).toBe(
+      'verified',
+    );
+  });
 
   it('sanitises well-formed article markup exactly as before', () => {
     // Expected values are the earlier implementation's output for the same input.
