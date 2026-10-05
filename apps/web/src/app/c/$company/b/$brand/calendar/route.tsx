@@ -98,7 +98,13 @@ export function CalendarRoute() {
   return (
     <main
       id="main"
-      className="om-in flex w-full min-w-0 flex-col gap-[22px] px-4 py-8 sm:px-9 sm:pb-20 sm:pt-9"
+      className={cn(
+        'om-in flex w-full min-w-0 flex-col gap-[22px] px-4 py-8 sm:px-9 sm:pb-20 sm:pt-9',
+        // The open drawer takes the right 360 px (the interface's `calDetailW`): the content keeps that much
+        // padding plus the gutter, so the controls, the banner and the grid sit beside the drawer, never under it,
+        // and a focused control is never covered (WCAG 2.4.11).
+        selectedId !== null && 'md:pr-[calc(min(360px,92vw)+2.25rem)]',
+      )}
     >
       <PageHeader
         title={periodTitle(view, anchorKey)}
