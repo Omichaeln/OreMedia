@@ -603,10 +603,14 @@ export function corsRulesLacking(rules: CORSRule[], origins: string[]): string[]
   return lacking;
 }
 
+/** Hosts a plain `http://` origin may name: a developer's own machine, never a deployed web origin. */
+const LOCAL_HTTP_HOSTS = new Set(['localhost', '127.0.0.1']);
+
 /**
  * The opt-in origins, or null when OBJECT_STORE_CORS_ORIGINS is unset or blank. Each entry must be a bare origin
- * (scheme and host, no path or trailing slash), as a browser's Origin header carries it; anything else throws, so a
- * typo stops the api at start instead of leaving uploads blocked.
+ * (scheme and host, no path or trailing slash), as a browser's Origin header carries it, and `https:` unless it names
+ * localhost or 127.0.0.1 (a page served in plaintext could be altered in transit to upload anything); anything else
+ * throws, so a typo stops the api at start instead of leaving uploads blocked.
  */
 export function objectStoreCorsOrigins(env: Env): string[] | null {
   const raw = env[OBJECT_STORE_CORS_SETTING]?.trim();
@@ -622,9 +626,13 @@ export function objectStoreCorsOrigins(env: Env): string[] | null {
     } catch {
       origin = null;
     }
-    if (origin !== value || !/^https?:$/.test(new URL(value).protocol))
+    const url = origin === value ? new URL(value) : null;
+    if (
+      !url ||
+      !(url.protocol === 'https:' || (url.protocol === 'http:' && LOCAL_HTTP_HOSTS.has(url.hostname)))
+    )
       throw new Error(
-        `${OBJECT_STORE_CORS_SETTING} entries must be bare http(s) origins such as https://app.example.com`,
+        `${OBJECT_STORE_CORS_SETTING} entries must be bare https origins such as https://app.example.com (http only for localhost and 127.0.0.1)`,
       );
   }
   return [...new Set(origins)];

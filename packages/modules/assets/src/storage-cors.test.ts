@@ -79,14 +79,28 @@ describe('objectStoreCorsOrigins', () => {
       }),
     ).toEqual(['https://app.example.com', 'http://localhost:5173']);
   });
-  it.each(['https://app.example.com/', 'https://app.example.com/path', 'app.example.com', 'ftp://x.example'])(
-    'refuses %s',
-    (value) => {
-      expect(() => objectStoreCorsOrigins({ OBJECT_STORE_CORS_ORIGINS: value })).toThrow(
-        /bare http\(s\) origins/,
-      );
-    },
-  );
+  it.each([
+    'https://app.example.com/',
+    'https://app.example.com/path',
+    'app.example.com',
+    'ftp://x.example',
+    // Plain http only for a developer's own machine.
+    'http://app.example.com',
+    'http://10.0.0.5:8080',
+    'http://localhost.app.example.com',
+    'https://app.example.com,http://staging.example.com',
+  ])('refuses %s', (value) => {
+    expect(() => objectStoreCorsOrigins({ OBJECT_STORE_CORS_ORIGINS: value })).toThrow(
+      /bare https origins .*\(http only for localhost and 127\.0\.0\.1\)/,
+    );
+  });
+  it('accepts plain http for localhost and 127.0.0.1 only', () => {
+    expect(
+      objectStoreCorsOrigins({
+        OBJECT_STORE_CORS_ORIGINS: 'http://localhost,http://127.0.0.1:5173,https://localhost:8443',
+      }),
+    ).toEqual(['http://localhost', 'http://127.0.0.1:5173', 'https://localhost:8443']);
+  });
 });
 
 describe('ensureObjectStoreCors', () => {
