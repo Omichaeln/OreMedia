@@ -21,10 +21,10 @@ export function Section({
   return (
     <section aria-labelledby={id} className="flex min-w-0 flex-col gap-2" data-testid={testId}>
       <div className="flex items-baseline justify-between gap-2 border-b border-border pb-2">
-        <h2 id={id} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <h2 id={id} className="om-label">
           {title}
         </h2>
-        {action && <div className="text-sm">{action}</div>}
+        {action && <div className="text-xs text-muted-foreground">{action}</div>}
       </div>
       {children}
     </section>

@@ -11,14 +11,14 @@ export type ButtonSize = 'sm' | 'md';
  */
 export const buttonClasses = (variant: ButtonVariant = 'secondary', size: ButtonSize = 'md'): string =>
   cn(
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-medium transition-colors',
+    'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border font-medium transition-colors',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
     'aria-disabled:cursor-not-allowed aria-disabled:opacity-60 disabled:cursor-not-allowed disabled:opacity-60',
-    size === 'sm' ? 'h-8 px-2.5 text-sm' : 'h-9 px-3.5 text-sm',
-    variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:opacity-90',
-    variant === 'secondary' && 'border-border bg-secondary text-secondary-foreground hover:bg-muted',
+    size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3 text-sm',
+    variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover',
+    variant === 'secondary' && 'border-border bg-card text-foreground hover:border-border-strong',
     variant === 'ghost' && 'border-transparent bg-transparent text-foreground hover:bg-muted',
-    variant === 'danger' && 'border-status-critical bg-transparent text-status-critical hover:bg-muted',
+    variant === 'danger' && 'border-border bg-card text-status-critical hover:border-status-critical',
   );
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -76,7 +76,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
       aria-label={label}
       title={props.disabledReason ?? label}
       size={size}
-      className={cn(size === 'sm' ? 'h-8 w-8 px-0' : 'h-9 w-9 px-0', className)}
+      className={cn(size === 'sm' ? 'h-7 w-7 px-0' : 'h-8 w-8 px-0', className)}
       {...props}
     >
       <span aria-hidden="true" className="inline-flex">

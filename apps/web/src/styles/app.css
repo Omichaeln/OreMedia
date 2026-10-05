@@ -14,7 +14,22 @@
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+  ::selection {
+    background: var(--accent-tint);
+  }
+  ::placeholder {
+    color: var(--muted-foreground);
   }
   /* Spec 21.3: focus is always visible, on every interactive element, in both themes. */
   :focus-visible {
@@ -26,8 +41,76 @@
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-delay: 0s !important;
       transition-duration: 0.01ms !important;
     }
+  }
+}
+
+/* The supplied interface's motion: content settles in from 8 px below; a drawer slides from the right; a bar grows. */
+@keyframes om-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes om-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes om-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+@keyframes om-drawer {
+  from {
+    opacity: 0.4;
+    transform: translateX(24px);
+  }
+}
+@keyframes om-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@layer utilities {
+  .om-in {
+    animation: om-in 0.42s var(--ease-out-soft) both;
+  }
+  .om-fade {
+    animation: om-fade 0.35s ease both;
+  }
+  .om-pop {
+    animation: om-pop 0.22s var(--ease-out-soft) both;
+  }
+  .om-drawer {
+    animation: om-drawer 0.34s var(--ease-out-soft) both;
+  }
+  .om-grow {
+    transform-origin: left;
+    animation: om-grow 0.9s var(--ease-out-soft) both;
+  }
+  /* A placeholder for media that has no thumbnail: diagonal hatching in the surface's own tints. */
+  .om-stripes {
+    background: repeating-linear-gradient(135deg, var(--muted) 0 6px, var(--card-tint) 6px 12px);
+  }
+  /* Uppercase labels and eyebrows as the interface sets them: small, spaced, muted. */
+  .om-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  .om-eyebrow {
+    font-size: 0.6875rem;
+    letter-spacing: var(--tracking-wide-label);
+    text-transform: uppercase;
+    color: var(--muted-foreground);
   }
 }
 
@@ -40,7 +123,7 @@
     padding: 0.5rem 0.75rem;
     background: var(--primary);
     color: var(--primary-foreground);
-    border-radius: var(--radius);
+    border-radius: var(--radius-control);
   }
   .skip-link:focus {
     top: 0.5rem;

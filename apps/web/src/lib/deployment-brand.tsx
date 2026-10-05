@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import { addStylesheet } from './fonts';
 
 /**
  * D-12: the product keeps its own neutral brand in code; each deployment loads its own brand at deploy time. The web
@@ -40,14 +41,6 @@ const parse = (value: unknown): Pack | null => {
       : null;
   const fonts = typeof v.fonts === 'string' && FONT_STYLESHEET.test(v.fonts) ? v.fonts : null;
   return { name: v.name.trim(), logo, stylesheet: v.stylesheet === true, fonts };
-};
-
-const addStylesheet = (href: string): HTMLLinkElement => {
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
-  return link;
 };
 
 const stylesheetLoaded = (): Promise<void> =>

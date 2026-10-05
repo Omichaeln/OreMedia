@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { cn } from './cn';
-import { toneBorderClass, toneGlyph, toneTextClass, type Tone } from './badge';
+import { StatusDot, toneGlyph, type Tone } from './badge';
 
 export interface StatusBannerProps extends React.HTMLAttributes<HTMLDivElement> {
   tone: Tone;
@@ -25,28 +25,27 @@ export const StatusBanner = React.forwardRef<HTMLDivElement, StatusBannerProps>(
       role={assertive ? 'alert' : 'status'}
       aria-busy={busy || undefined}
       className={cn(
-        'flex items-start gap-3 rounded-md border-l-4 border border-border bg-muted px-3 py-2 text-sm',
-        toneBorderClass[tone],
+        'om-in flex items-start gap-3.5 rounded-xl border border-border bg-card px-4 py-3 text-sm',
+        tone === 'critical' && 'bg-status-critical-tint',
+        tone === 'warning' && 'bg-status-warning-tint',
         className,
       )}
       {...props}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          'mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-bold',
-          toneBorderClass[tone],
-          toneTextClass[tone],
-          busy && 'animate-spin border-dashed',
-        )}
-      >
-        {busy ? '' : toneGlyph[tone]}
-      </span>
+      {busy ? (
+        <span
+          aria-hidden="true"
+          className="mt-1.5 inline-block h-[7px] w-[7px] shrink-0 animate-pulse rounded-full bg-status-info-dot"
+        />
+      ) : (
+        <StatusDot tone={tone} className="mt-1.5" />
+      )}
+      <span className="sr-only">{toneGlyph[tone]} </span>
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-foreground">{title}</p>
-        {description && <div className="mt-0.5 text-muted-foreground">{description}</div>}
+        <p className="text-base font-bold text-foreground">{title}</p>
+        {description && <div className="mt-0.5 text-pretty text-muted-foreground">{description}</div>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions && <div className="flex shrink-0 items-center gap-2 self-center">{actions}</div>}
     </div>
   );
 });

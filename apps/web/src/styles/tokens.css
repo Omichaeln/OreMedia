@@ -1,30 +1,77 @@
 /*
- * Spec 8.4 / 21.1: the semantic tokens come from packages/ui (neutral placeholders until D-12). This file only maps
- * them to Tailwind utilities; nothing here invents a colour. `@theme inline` keeps the utilities pointing at the
- * custom properties, so the dark set in tokens.css applies without regenerating CSS.
+ * Spec 8.4 / 21.1: the semantic tokens come from packages/ui (the supplied interface's palette, D-27). This file only
+ * maps them to Tailwind utilities; nothing here invents a colour. `@theme inline` keeps the utilities pointing at the
+ * custom properties, so the dark set in tokens.css and a deployment pack's overrides apply without regenerating CSS.
  */
 @import '@oremedia/ui/tokens.css';
+
+@theme {
+  /* The shell's one breakpoint (D-28): the sidebar sits beside the screen from 900 px, below it a drawer. */
+  --breakpoint-wide: 56.25rem;
+  /* Lato is requested at start-up (lib/fonts.ts); text shows in the fallback face until it arrives. */
+  --font-sans: 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-display: 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 2.125rem;
+  --text-3xl: 2.25rem;
+  --text-3xl--line-height: 2.5rem;
+  --tracking-label: 0.06em;
+  --tracking-wide-label: 0.12em;
+  --tracking-title: -0.02em;
+  --ease-out-soft: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-tint: var(--card-tint);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-ring: var(--ring);
+  --color-scrim: var(--scrim);
   --color-status-good: var(--status-good);
   --color-status-warning: var(--status-warning);
   --color-status-critical: var(--status-critical);
   --color-status-info: var(--status-info);
-  --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 4px);
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --color-status-good-dot: var(--status-good-dot);
+  --color-status-warning-dot: var(--status-warning-dot);
+  --color-status-critical-dot: var(--status-critical-dot);
+  --color-status-info-dot: var(--status-info-dot);
+  --color-status-neutral-dot: var(--status-neutral-dot);
+  --color-status-warning-tint: var(--status-warning-tint);
+  --color-status-critical-tint: var(--status-critical-tint);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  --shadow-drawer: var(--shadow-drawer);
 }

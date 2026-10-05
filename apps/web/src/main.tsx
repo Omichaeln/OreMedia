@@ -5,6 +5,7 @@ import { RouterProvider } from 'react-router';
 import './styles/app.css';
 import { createAppRouter } from './app/router';
 import { DeploymentBrandProvider, loadDeploymentBrand } from './lib/deployment-brand';
+import { requestAppFont } from './lib/fonts';
 import { createQueryClient } from './lib/query-client';
 import { TRPCProvider, createClient, createOptionsProxy, keyPrefixFor } from './lib/trpc';
 
@@ -18,6 +19,8 @@ const router = createAppRouter({
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root');
 void loadDeploymentBrand().then((brand) => {
+  // After the pack, as its own fonts are: a pending stylesheet added before `load` would hold the first paint.
+  requestAppFont();
   document.title = brand.name;
   createRoot(root).render(
     <StrictMode>

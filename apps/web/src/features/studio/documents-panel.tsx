@@ -34,6 +34,65 @@ export function NewDocumentLink({ disabledReason }: { disabledReason?: string })
 
 type DocumentRow = ReturnType<typeof useDocuments>['items'][number];
 
+const RECENT = 4;
+
+/** When a document last changed, as the interface shows it: minutes or hours today, otherwise the weekday or date. */
+const whenChanged = (iso: string, now = new Date()): string => {
+  const minutes = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 60) return `${Math.max(1, minutes)} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return new Date(iso).toLocaleDateString(undefined, { weekday: 'short' });
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
+/**
+ * The brand's most recent documents on the home (creative.documents.list, newest first): the title, what it is
+ * and when it last changed; each opens in the studio. The Studio section lists them all.
+ */
+export function RecentDocuments() {
+  const { companyId, brandId } = useBrandContext();
+  const documents = useDocuments(brandId, { archived: false });
+  const recent = documents.items.slice(0, RECENT);
+  if (documents.isPending) return <Skeleton label="Loading documents" lines={3} />;
+  if (documents.isError)
+    return (
+      <RequestError
+        error={documents.error}
+        onRetry={() => void documents.refetch()}
+        title="Documents could not be loaded"
+      />
+    );
+  if (recent.length === 0)
+    return (
+      <EmptyState
+        title="No documents yet"
+        description="Start one in the studio; the brand's documents are listed here as they change."
+      />
+    );
+  return (
+    <ul className="flex flex-col" aria-label="Recent documents" data-testid="recent-documents">
+      {recent.map((d) => (
+        <li key={d.id} className="border-b border-border last:border-b-0">
+          <Link
+            to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.id)}`)}
+            className="flex items-center justify-between gap-3 py-[11px] text-sm hover:text-accent-ink"
+          >
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate">{d.title}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {d.kind === 'video' ? 'Motion' : 'Still'}
+              </span>
+            </span>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{whenChanged(d.updatedAt)}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * G12: a document's menu in the index: archive (it leaves the default list) or, in the archived list, restore it
  * (creative.documents.archive / unarchive, version-checked). Nothing else about the document changes.

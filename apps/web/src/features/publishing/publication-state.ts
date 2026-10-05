@@ -18,6 +18,8 @@ export interface StateChip {
 }
 
 /** Spec 13.1 publication states, each with text and a tone; colour is never the only carrier (spec 21.3). */
+export type { PublicationStateT };
+
 export const PUBLICATION_CHIP: Record<PublicationStateT, StateChip> = {
   scheduled: {
     tone: 'info',

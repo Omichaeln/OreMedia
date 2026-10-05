@@ -25,11 +25,7 @@ export function ColumnHeader({
       <div className="min-w-0">
         <Heading
           id={id}
-          className={
-            level === 1
-              ? 'text-xl font-semibold'
-              : 'text-xs font-semibold uppercase tracking-wide text-muted-foreground'
-          }
+          className={level === 1 ? 'text-xl font-bold tracking-title' : 'om-label'}
         >
           {title}
         </Heading>

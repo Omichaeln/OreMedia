@@ -1,12 +1,11 @@
 import { Outlet, Link, useLocation } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button } from '@oremedia/ui';
 import { TooltipProvider } from '../components/tooltip';
 import { ToastProvider } from '../components/toast';
-import { useDeploymentBrand } from '../lib/deployment-brand';
 import { useTheme } from '../lib/theme';
 import { TRPCProvider, keyPrefixFor, tenantFromPath, useTRPCClient } from '../lib/trpc';
-import { SessionControls } from '../features/session/session-controls';
+import { AccountMenu } from '../features/session/account-menu';
+import { ProductMark } from '../features/shell/brand-sidebar';
 
 export interface RootContext {
   theme: 'light' | 'dark';
@@ -43,27 +42,22 @@ export function RootLayout() {
   );
 }
 
-/** The slim top bar used by the portfolio-level screens (brand screens render their own header, spec 11.1). */
+/** The 56 px top bar of the portfolio-level screens (brand screens render their own shell, spec 11.1). */
 export function TopBar({ title, children }: { title: string; children?: React.ReactNode }) {
-  const { theme, toggle } = useTheme();
-  const brand = useDeploymentBrand();
   return (
-    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border px-4 py-2">
-      <div className="flex items-center gap-3">
-        <Link to="/portfolio" className="text-sm font-semibold">
-          {brand.name}
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 sm:px-8">
+      <div className="flex min-w-0 items-center gap-3">
+        <Link to="/portfolio" className="rounded-md hover:opacity-60">
+          <ProductMark />
         </Link>
         <span aria-hidden="true" className="text-muted-foreground">
           /
         </span>
-        <span className="text-sm">{title}</span>
+        <span className="truncate text-sm text-muted-foreground">{title}</span>
       </div>
       <div className="flex items-center gap-2">
         {children}
-        <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
-          {theme === 'dark' ? 'Light theme' : 'Dark theme'}
-        </Button>
-        <SessionControls />
+        <AccountMenu role={null} />
       </div>
     </header>
   );
