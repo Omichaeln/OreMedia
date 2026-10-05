@@ -34,6 +34,7 @@ import {
   callbackError,
   callbackParams,
   channelLimitsLine,
+  connectReturnTab,
   providerLabel,
   connectRedirectUri,
   rememberConnect,
@@ -755,8 +756,11 @@ export function ChannelSettings() {
   const channels = useChannels(brandId);
   const limits = useChannelLimits(brandId);
   const [params, setParams] = useSearchParams();
-  const callback = callbackParams(params.toString());
-  const providerError = callbackError(params.toString());
+  // A destination's return (R2-1) carries `tab=destinations` (connectReturnTab) and is finished by the websites
+  // and sources group under this list, never here.
+  const ownReturn = params.get('tab') !== connectReturnTab('destination');
+  const callback = ownReturn ? callbackParams(params.toString()) : null;
+  const providerError = ownReturn ? callbackError(params.toString()) : null;
   const [unavailable, setUnavailable] = useState<Record<string, string>>({});
   const redirectUri = connectRedirectUri(window.location.origin);
   const clearCallback = () => setParams({}, { replace: true });
