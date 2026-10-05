@@ -349,11 +349,59 @@ describe('object restore', { timeout: 60_000 }, () => {
   });
 });
 
+describe('backup.sh dump integrity (mysqldump stand-in)', { timeout: 60_000 }, () => {
+  // Enough incompressible SQL comments that the gzipped dump is well over the 1 KB floor.
+  const body = `echo '-- MySQL dump'; head -c 6000 /dev/urandom | od -An -tx1 | sed 's/^/-- /'`;
+  const db = {
+    SRC_HOST: 'mysql-source.invalid',
+    SRC_DB: 'oremedia',
+    SRC_PW: 'pw',
+    BACKUP_LOCAL_DIR: '/nonexistent-volume',
+  };
+  const stored = () => h.keys(BACKUP, 'backups', 'db-backups/test/oremedia/');
+
+  beforeEach(() => {
+    h.tool('mysql', 'echo 0');
+  });
+
+  it('a dump killed mid-stream prints DB_BACKUP_FAIL and uploads neither the dump nor a sidecar', () => {
+    h.tool('mysqldump', `${body}\nkill -KILL $$`);
+    const r = h.run('backup.sh', ['--databases'], db);
+    expect(r.status, r.out).toBe(1);
+    expect(r.lines).toContain(
+      'DB_BACKUP_FAIL oremedia mysqldump exited 137, gzip exited 0: dump incomplete, nothing uploaded',
+    );
+    expect(line(r, 'DB_BACKUP_PASS')).toBeUndefined();
+    expect(stored()).toEqual([]);
+    expect(h.calls()).toEqual([]);
+  });
+
+  it('a dump that exits 0 without the "-- Dump completed" trailer is refused the same way', () => {
+    h.tool('mysqldump', body);
+    const r = h.run('backup.sh', ['--databases'], db);
+    expect(r.status, r.out).toBe(1);
+    expect(r.lines).toContain(
+      "DB_BACKUP_FAIL oremedia dump has no '-- Dump completed' trailer: dump incomplete, nothing uploaded",
+    );
+    expect(stored()).toEqual([]);
+  });
+
+  it('a complete dump is uploaded with its sidecar', () => {
+    h.tool('mysqldump', `${body}\necho '-- Dump completed on 2026-10-05 10:15:00'`);
+    const r = h.run('backup.sh', ['--databases'], db);
+    expect(r.status, r.out).toBe(0);
+    expect(line(r, 'DB_BACKUP_PASS oremedia ')).toBeDefined();
+    const keys = stored();
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(`${keys[0]}.sha256`);
+  });
+});
+
 describe('verify.sh', { timeout: 60_000 }, () => {
   function seedDump(
     name: string,
     minutesAgo: number,
-    body = gzipSync(`-- dump\nCREATE TABLE t (id int);\n`),
+    body = gzipSync(`-- dump\nCREATE TABLE t (id int);\n-- Dump completed on 2026-10-05 10:15:00\n`),
   ) {
     const file = `${name}-${stamp(minutesAgo)}.sql.gz`;
     const key = `db-backups/test/${name}/${file}`;
@@ -370,6 +418,7 @@ describe('verify.sh', { timeout: 60_000 }, () => {
     expect(r.status, r.out).toBe(0);
     expect(r.lines.at(-1)).toMatch(/^BACKUP_VERIFY_PASS \d+ checks$/);
     expect(line(r, 'BACKUP_VERIFY_CHECK ok dump db-backups/test/oremedia/')).toBeDefined();
+    expect(r.lines.filter((l) => l.endsWith(": ends with the '-- Dump completed' trailer"))).toHaveLength(1);
     expect(r.lines.filter((l) => / objects assets: assets\/.* sha256 and size match$/.test(l))).toHaveLength(
       3,
     );
@@ -409,6 +458,24 @@ describe('verify.sh', { timeout: 60_000 }, () => {
     expect(r.lines).toContain(
       `BACKUP_VERIFY_CHECK FAIL objects assets: ${k} content ${sha256(files[k] as string)} missing or does not match`,
     );
+  });
+
+  it('fails on a newest dump without the "-- Dump completed" trailer, even with a matching sidecar', () => {
+    seed();
+    expect(h.run('object-backup.sh').status).toBe(0);
+    seedDump('oremedia', 10);
+    const key = seedDump(
+      'oremedia',
+      2,
+      gzipSync('-- dump\nCREATE TABLE t (id int);\nINSERT INTO t VALUES (1'),
+    );
+    const r = h.run('verify.sh');
+    expect(r.status, r.out).toBe(1);
+    expect(r.lines).toContain(`BACKUP_VERIFY_CHECK ok dump ${key}: sha256 matches the sidecar`);
+    expect(r.lines).toContain(
+      `BACKUP_VERIFY_CHECK FAIL dump ${key}: no '-- Dump completed' trailer (dump cut short)`,
+    );
+    expect(line(r, 'BACKUP_VERIFY_FAIL 1 of')).toBeDefined();
   });
 
   it('fails when there is no dump or no object backup at all', () => {

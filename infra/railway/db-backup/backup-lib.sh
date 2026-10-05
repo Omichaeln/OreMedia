@@ -135,6 +135,10 @@ stamp_before() {
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
+# True when the gzipped dump $1 ends with mysqldump's "-- Dump completed" trailer, which mysqldump writes only after
+# the last table: a dump without it was cut short (backup.sh refuses to upload one; verify.sh reports one).
+dump_completed() { gzip -dc "$1" 2>/dev/null | tail -n 1 | grep -q '^-- Dump completed'; }
+
 # The newest object (by the UTC stamp in its name) directly under s3://BACKUP_BUCKET/$1 whose name matches the
 # extended regular expression $2; empty when there is none.
 newest_backup_object() {

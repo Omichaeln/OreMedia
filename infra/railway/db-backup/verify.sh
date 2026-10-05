@@ -3,8 +3,8 @@
 # daily, docs/runbooks/backup-and-restore.md). Read-only: it never writes to any bucket or database.
 #
 #   Dumps, per name in VERIFY_NAMES (default oremedia, plus temporal when SRC2_HOST is set): the newest dump under
-#   BACKUP_PREFIX/<name>/ is at most VERIFY_MAX_AGE_MINUTES old (default 30), matches its sha256 sidecar and
-#   passes gzip -t.
+#   BACKUP_PREFIX/<name>/ is at most VERIFY_MAX_AGE_MINUTES old (default 30), matches its sha256 sidecar, passes
+#   gzip -t and ends with mysqldump's "-- Dump completed" trailer (a dump cut short has none).
 #   Objects, per source bucket (OBJECT_STORE_BUCKET_ASSETS, OBJECT_STORE_BUCKET_RELEASES): the newest manifest
 #   under OBJECT_BACKUP_PREFIX/<bucket>/manifests/ is at most VERIFY_MAX_AGE_MINUTES old and passes gzip -t, and
 #   VERIFY_OBJECT_SAMPLE (default 5) random live objects of it match their sha256 and size in the backup.
@@ -71,7 +71,16 @@ for name in $NAMES; do
     got="$(sha256_of "$WORK/dump.sql.gz")"
     if [ "$want" = "$got" ]; then ok "dump $key: sha256 matches the sidecar"; else bad "dump $key: sha256 $got, sidecar $want"; fi
   fi
-  if gzip -t "$WORK/dump.sql.gz" 2>/dev/null; then ok "dump $key: gzip -t"; else bad "dump $key: gzip -t failed"; fi
+  if ! gzip -t "$WORK/dump.sql.gz" 2>/dev/null; then
+    bad "dump $key: gzip -t failed"
+  else
+    ok "dump $key: gzip -t"
+    if dump_completed "$WORK/dump.sql.gz"; then
+      ok "dump $key: ends with the '-- Dump completed' trailer"
+    else
+      bad "dump $key: no '-- Dump completed' trailer (dump cut short)"
+    fi
+  fi
   rm -f "$WORK/dump.sql.gz" "$WORK/dump.sha256"
 done
 

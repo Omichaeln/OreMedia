@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP, BACKUP, Harness, line, sha256 } from './harness';
+import { APP, BACKUP, Harness, line, sha256, stamp } from './harness';
 
 /**
  * PR-09: the database halves of the db-backup image against a real MySQL (TEST_DATABASE_URL, root): backup.sh dumps a
@@ -53,6 +54,9 @@ function aliasHost(): string {
     'no second name reaches the test MySQL server (tried localhost and the non-loopback addresses)',
   );
 }
+
+/** The real mysqldump, for the stand-ins that cut its output short. */
+const MYSQLDUMP = spawnSync('sh', ['-c', 'command -v mysqldump'], { encoding: 'utf8' }).stdout.trim();
 
 let h: Harness;
 const db = () => ({ MYSQL_TCP_PORT: PORT, BACKUP_LOCAL_DIR: `${h.dir}/no-volume` });
@@ -110,6 +114,51 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
     expect(r.status, r.out).toBe(0);
     expect(line(r, 'BACKUP_VERIFY_CHECK ok dump db-backups/test/oremedia/')).toBeDefined();
     expect(r.lines.at(-1)).toMatch(/^BACKUP_VERIFY_PASS \d+ checks$/);
+  });
+
+  it('a dump killed mid-stream, or cut short with exit 0, prints DB_BACKUP_FAIL and uploads no dump or sidecar', () => {
+    const before = h.keys(BACKUP, 'backups', 'db-backups/test/oremedia/');
+    const env = { ...db(), SRC_HOST: HOST, SRC_DB: SRC, SRC_PW: PW };
+    try {
+      // The real dump's first 20 KB (well over the 1 KB floor once gzipped), then the process is killed.
+      h.tool('mysqldump', `"${MYSQLDUMP}" "$@" | head -c 20000\nkill -KILL $$`);
+      const killed = h.run('backup.sh', ['--databases'], env);
+      expect(killed.status, killed.out).toBe(1);
+      expect(killed.lines).toContain(
+        'DB_BACKUP_FAIL oremedia mysqldump exited 137, gzip exited 0: dump incomplete, nothing uploaded',
+      );
+      // Everything but the last line, and exit 0: only the missing trailer gives it away.
+      h.tool('mysqldump', `"${MYSQLDUMP}" "$@" | sed '$d'`);
+      const cut = h.run('backup.sh', ['--databases'], env);
+      expect(cut.status, cut.out).toBe(1);
+      expect(cut.lines).toContain(
+        "DB_BACKUP_FAIL oremedia dump has no '-- Dump completed' trailer: dump incomplete, nothing uploaded",
+      );
+    } finally {
+      h.tool('mysqldump', `exec "${MYSQLDUMP}" "$@"`);
+    }
+    expect(h.keys(BACKUP, 'backups', 'db-backups/test/oremedia/')).toEqual(before);
+  });
+
+  it('verify.sh fails on a newest dump without the trailer, even with a matching sidecar', () => {
+    const dumps = h.keys(BACKUP, 'backups', 'db-backups/test/oremedia/').filter((k) => k.endsWith('.sql.gz'));
+    const real = gunzipSync(h.get(BACKUP, 'backups', dumps[dumps.length - 1] as string) as Buffer).toString();
+    expect(real.trimEnd().split('\n').at(-1)).toMatch(/^-- Dump completed/);
+    const cut = gzipSync(real.trimEnd().split('\n').slice(0, -1).join('\n'));
+    const file = `oremedia-${stamp(-1)}.sql.gz`;
+    const key = `db-backups/test/oremedia/${file}`;
+    h.put(BACKUP, 'backups', key, cut, 'application/gzip');
+    h.put(BACKUP, 'backups', `${key}.sha256`, `${sha256(cut)}  ${file}\n`, 'text/plain');
+    try {
+      const r = h.run('verify.sh', [], db());
+      expect(r.status, r.out).toBe(1);
+      expect(r.lines).toContain(
+        `BACKUP_VERIFY_CHECK FAIL dump ${key}: no '-- Dump completed' trailer (dump cut short)`,
+      );
+    } finally {
+      h.remove(BACKUP, 'backups', key);
+      h.remove(BACKUP, 'backups', `${key}.sha256`);
+    }
   });
 
   it('restore.sh checks the sidecar, loads the dump into another database and verifies the tables', () => {
