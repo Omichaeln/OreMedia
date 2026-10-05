@@ -312,10 +312,10 @@ export function CampaignsScreen() {
                 <span className="text-xs text-muted-foreground">Every brief of the brand</span>
               </button>
             </li>
-            {campaigns.items.map((c, i) => {
+            {campaigns.items.map((c) => {
               const chip = campaignChip(c.state);
               return (
-                <li key={c.id} className="om-in" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
+                <li key={c.id}>
                   <button
                     type="button"
                     aria-pressed={c.id === campaignId}
@@ -411,10 +411,10 @@ export function CampaignsScreen() {
         )}
         {briefs.isSuccess && briefs.items.length > 0 && (
           <ul className="flex flex-col divide-y divide-border border-y border-border" aria-label="Briefs">
-            {briefs.items.map((b, i) => {
+            {briefs.items.map((b) => {
               const row = briefRowState(b);
               return (
-                <li key={b.id} className="om-in" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
+                <li key={b.id}>
                   <button
                     type="button"
                     aria-pressed={b.id === briefId}
