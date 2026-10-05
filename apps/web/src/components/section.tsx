@@ -24,7 +24,7 @@ export function Section({
         <h2 id={id} className="om-label">
           {title}
         </h2>
-        {action && <div className="text-xs text-muted-foreground">{action}</div>}
+        {action && <div className="flex min-h-6 items-center text-xs text-muted-foreground">{action}</div>}
       </div>
       {children}
     </section>

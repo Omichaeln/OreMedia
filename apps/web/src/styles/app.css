@@ -78,6 +78,8 @@
 }
 
 @layer utilities {
+  /* Screen-level only (a `main` at mount): rows that load later must not animate, or an audit or a person reading
+     mid-load sees them at zero opacity. */
   .om-in {
     animation: om-in 0.42s var(--ease-out-soft) both;
   }
