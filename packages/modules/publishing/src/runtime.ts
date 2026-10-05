@@ -75,6 +75,7 @@ import {
   ProviderRateLimitWaitExceeded,
   ProviderTransportError,
   outcomeFromClass,
+  publishCapabilitiesOf,
   truncateForTemporal,
   type ProviderIO,
   type PublishRequest,
@@ -108,7 +109,7 @@ import {
   type DestinationMutationResult,
   type DestinationPublishResult,
 } from './hooks';
-import { adapterFor, providerIO, registry } from './providers';
+import { adapterFor, certificationRefusal, providerIO, registry } from './providers';
 import {
   ChannelConnectionRepository,
   CredentialRefRepository,
@@ -877,6 +878,21 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
           });
           return result;
         }
+        // #89: the publish kinds this variant exercises must still be certified now, not only at release.
+        const uncertified = certificationRefusal(
+          loaded.providerKey,
+          publishCapabilitiesOf({ media: await publishMedia.describeForVariant(variant) }),
+        );
+        if (uncertified) {
+          result = {
+            attemptId,
+            outcome: 'rejected',
+            errorCode: uncertified,
+            errorDetail: 'the provider is no longer certified for this publish; nothing was sent',
+          };
+          await withTransaction((tx) => recordAttemptOutcome(attemptId, result, tx));
+          return result;
+        }
         const { connection, adapter } = channelOf(loaded);
         const media = await publishMedia.forVariant(variant, {
           providerProcessingWindowSec: adapter.capability.media.publicUrlFetch.processingWindowSec,
@@ -1496,6 +1512,14 @@ export function createPublishingRuntime(opts: PublishingRuntimeOptions = {}): Pu
         message: 'the channel cannot revert posts',
       };
     const connection = await connectionsRepo.getById(row.channelConnectionId ?? '');
+    // #89: the change must still be certified when it runs, not only when it was requested.
+    const uncertified = certificationRefusal(connection.providerKey, [kind]);
+    if (uncertified)
+      return {
+        outcome: 'rejected',
+        code: uncertified,
+        message: `the provider is no longer certified to ${kind} posts; nothing was sent`,
+      };
     const adapter = adapterFor(connection.providerKey);
     const deletePost = adapter.deletePost?.bind(adapter);
     const editPost = adapter.editPost?.bind(adapter);
