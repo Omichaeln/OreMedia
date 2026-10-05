@@ -11,11 +11,16 @@ import {
   INVALIDATED_REASON_TEXT,
   REQUEST_STATE_CHIP,
   STALE_REASON_TEXT,
+  commentOutdated,
+  dueText,
+  inboxRowState,
   invalidatedReasonText,
   manifestChannels,
   orderAttention,
   parsePortalFragment,
+  requestHeadline,
   reviewLinkUrl,
+  reviewerRows,
   staleReasonText,
   timingText,
 } from './review-attention';
@@ -114,5 +119,69 @@ describe('portal links', () => {
       token: 'rl_x',
       expiresAt: null,
     });
+  });
+});
+
+describe('the interface forms', () => {
+  const now = new Date('2026-09-25T12:00:00Z');
+  it('says "due today" for today and "due 28 Sep" otherwise', () => {
+    expect(dueText('2026-09-25T18:00:00Z', now)).toBe('due today');
+    expect(dueText('2026-09-28T09:00:00Z', now)).toBe('due 28 Sep');
+    expect(dueText('2027-01-02T09:00:00Z', now)).toBe('due 2 Jan 2027');
+  });
+  it('puts the state first in a row and the other flags after it', () => {
+    const row = inboxRowState({ state: 'open', attention: ['external_access_revoked', 'awaiting_decision'] });
+    expect(row.label).toBe('Awaiting decision');
+    expect(row.flags.map((f) => f.label)).toEqual(['External link revoked']);
+    expect(inboxRowState({ state: 'decided', attention: [] }).label).toBe('Decided');
+    expect(inboxRowState({ state: 'decided', attention: ['approval_invalidated'] }).tone).toBe('critical');
+  });
+  it('names the request header state from the decision and approvals', () => {
+    expect(requestHeadline({ state: 'open', revisionState: 'in_review', approvals: [] }).label).toBe(
+      'Awaiting decision',
+    );
+    expect(
+      requestHeadline({ state: 'decided', revisionState: 'approved', approvals: [{ state: 'valid' }] }).label,
+    ).toBe('Approved');
+    expect(
+      requestHeadline({ state: 'decided', revisionState: 'draft', approvals: [{ state: 'invalidated' }] }).label,
+    ).toBe('Approval invalidated');
+    expect(
+      requestHeadline({ state: 'decided', revisionState: 'changes_requested', approvals: [] }).label,
+    ).toBe('Changes requested');
+    expect(requestHeadline({ state: 'stale', revisionState: 'in_review', approvals: [] }).label).toBe('Stale');
+  });
+  it('lists every reviewer once with their decision, members first', () => {
+    const rows = reviewerRows(
+      {
+        state: 'open',
+        assignees: ['usr_a', 'usr_b'],
+        decisions: [
+          { deciderKind: 'user', deciderId: 'usr_a', decision: 'request_changes', verifiedEmail: null },
+          { deciderKind: 'external_reviewer', deciderId: 'rl_1', decision: 'approve', verifiedEmail: 'x@c.example' },
+        ],
+        externalLinks: [
+          { id: 'rl_1', email: 'x@c.example', revokedAt: null, expiresAt: '2026-10-01T00:00:00Z' },
+          { id: 'rl_2', email: 'y@c.example', revokedAt: '2026-09-20T00:00:00Z', expiresAt: '2026-10-01T00:00:00Z' },
+          { id: 'rl_3', email: 'z@c.example', revokedAt: null, expiresAt: '2026-09-01T00:00:00Z' },
+        ],
+      },
+      (id) => (id === 'usr_a' ? 'Kofi Asare' : id),
+      now,
+    );
+    expect(rows.map((r) => [r.who, r.kind, r.decision])).toEqual([
+      ['Kofi Asare', 'Team', 'Changes requested'],
+      ['usr_b', 'Team', 'Pending'],
+      ['x@c.example', 'External', 'Approved'],
+      ['y@c.example', 'External', 'Link revoked'],
+      ['z@c.example', 'External', 'Link expired'],
+    ]);
+  });
+  it('marks a comment outdated when its manifest is no longer the one that would publish', () => {
+    const r = { manifestHash: 'h1', state: 'open' as const, changedSinceFreeze: [] };
+    expect(commentOutdated({ manifestHash: 'h1' }, r)).toBe(false);
+    expect(commentOutdated({ manifestHash: 'h0' }, r)).toBe(true);
+    expect(commentOutdated({ manifestHash: 'h1' }, { ...r, state: 'stale' })).toBe(true);
+    expect(commentOutdated({ manifestHash: 'h1' }, { ...r, changedSinceFreeze: ['captions'] })).toBe(true);
   });
 });

@@ -221,7 +221,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       'Stale',
       'Changes requested',
       'Approval invalidated',
-      'External access revoked',
+      'External link revoked',
       'Approved',
     ])
       expect(text).toContain(label);
@@ -298,6 +298,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
   it('RA-09: an external reviewer sees the same frozen preview and statement through a request-bound link', async () => {
     await page.goto(`${origin}${brandPath('review')}?request=${P5.requests.article}`);
     await expect.poll(() => page.getByTestId('manifest-hash').count(), { timeout: 15_000 }).toBe(1);
+    await page.getByRole('button', { name: '+ New link' }).click();
     await page.getByLabel('Reviewer email').fill('editor@example.com');
     await page.getByRole('button', { name: 'Create link' }).click();
     await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);
@@ -305,7 +306,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     await openPortal(link);
     await expect
       .poll(() => page.getByTestId('portal-state').textContent(), { timeout: 15_000 })
-      .toContain('Open');
+      .toContain('Awaiting decision');
     const intent = page.getByTestId('website-intent');
     await expect.poll(() => intent.count(), { timeout: 15_000 }).toBe(1);
     expect(await intent.textContent()).toContain('save a draft on acme.example (/how-ore-is-weighed)');
@@ -348,6 +349,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
       .poll(() => page.getByTestId('manifest-media-item').count(), { timeout: 15_000 })
       .toBe(frozenFiles);
     expect(await page.getByTestId('manifest-media').getByRole('img').count()).toBe(frozenFiles);
+    await page.getByRole('button', { name: '+ New link' }).click();
     await page.getByLabel('Reviewer email').fill('client@example.com');
     await page.getByRole('button', { name: 'Create link' }).click();
     await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);
@@ -370,7 +372,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     await openPortal(reviewLink);
     await expect
       .poll(() => page.getByTestId('portal-state').textContent(), { timeout: 15_000 })
-      .toContain('Open');
+      .toContain('Awaiting decision');
     // The token left the address bar and nothing of the app's session is used.
     expect(page.url()).not.toContain('rl_');
     expect(await page.getByTestId('manifest-hash').textContent()).toBe(
@@ -404,7 +406,7 @@ describe.skipIf(!enabled)('phase 5 screens (built app in Chromium, mock transpor
     await openPortal(portalUrl(P5.requests.revoked, P5.links.active, future));
     await expect
       .poll(() => page.getByTestId('portal-state').textContent(), { timeout: 15_000 })
-      .toContain('Open');
+      .toContain('Awaiting decision');
     await page.goto(`${origin}${brandPath('review')}?request=${P5.requests.revoked}`);
     await expect
       .poll(() => page.getByRole('button', { name: 'Revoke link for approver@client.example' }).count(), {
