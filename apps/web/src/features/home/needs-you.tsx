@@ -166,7 +166,11 @@ export function NeedsYou({ rows: needs }: { rows: NeedsYouRows }) {
   return (
     <Section id="needs-you" title="Needs you">
       {failed && (
-        <RequestError error={failed.error} onRetry={failed.refetch} title="Part of this list could not load" />
+        <RequestError
+          error={failed.error}
+          onRetry={failed.refetch}
+          title="Part of this list could not load"
+        />
       )}
       {rows.length === 0 && pending && <Skeleton label="Loading what needs you" lines={3} />}
       {rows.length === 0 && settled && (
@@ -177,11 +181,11 @@ export function NeedsYou({ rows: needs }: { rows: NeedsYouRows }) {
       )}
       {rows.length > 0 && (
         <ul className="flex flex-col" data-testid="needs-you">
-          {rows.map((r, i) => (
-            <li key={r.key} className="om-in border-b border-border last:border-b-0" style={{ animationDelay: `${i * 40}ms` }}>
+          {rows.map((r) => (
+            <li key={r.key} className="border-b border-border last:border-b-0">
               <Link
                 to={r.href}
-                className="grid grid-cols-[10px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-1 px-1 py-3.5 hover:bg-muted sm:grid-cols-[10px_minmax(0,1fr)_auto]"
+                className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-3.5 px-1 py-3.5 hover:bg-muted"
               >
                 <StatusDot tone={r.tone} />
                 <span className="flex min-w-0 flex-col gap-0.5">
@@ -201,10 +205,7 @@ export function NeedsYou({ rows: needs }: { rows: NeedsYouRows }) {
                     </span>
                   )}
                 </span>
-                <span
-                  aria-hidden="true"
-                  className="col-start-2 whitespace-nowrap text-sm text-muted-foreground sm:col-start-3"
-                >
+                <span aria-hidden="true" className="whitespace-nowrap text-sm text-muted-foreground">
                   {r.action} →
                 </span>
               </Link>
