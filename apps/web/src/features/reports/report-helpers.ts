@@ -94,8 +94,10 @@ export function pageOrder(sections: readonly ReportSection[]): ReportSection[] {
 export const pageNumber = (order: readonly ReportSection[], section: ReportSection) =>
   order.indexOf(section) + 1;
 /** The content pages' running number ("01", "02"): the cover is not counted. */
-export const kicker = (order: readonly ReportSection[], section: ReportSection) =>
-  String(order.filter((s) => s !== 'cover').indexOf(section) + 1).padStart(2, '0');
+export const kicker = (order: readonly ReportSection[], section: ReportSection) => {
+  const content: readonly ReportSection[] = order.filter((s) => s !== 'cover');
+  return String(content.indexOf(section) + 1).padStart(2, '0');
+};
 export const sectionLabel = (s: ReportSection) => REPORT_SECTION_LABEL[s];
 
 /** The report's state in the Recent list: "Draft" or "Sent 2 Sep". */
