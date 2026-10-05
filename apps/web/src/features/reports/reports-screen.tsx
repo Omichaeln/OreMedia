@@ -488,7 +488,7 @@ export function ReportsScreen() {
               type="button"
               onClick={() => draft.mutate({ brandId, periodMonth, compareMode: fields.compareMode })}
               disabled={draft.isPending || !figures.data}
-              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex min-h-6 items-center text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             >
               {draft.isPending ? 'Drafting…' : 'Re-draft'}
             </button>
@@ -620,7 +620,7 @@ export function ReportsScreen() {
             </h2>
             <Link
               to={brandPath(companyId, brandId, 'system')}
-              className="text-xs text-muted-foreground hover:text-foreground"
+              className="inline-flex min-h-6 items-center text-xs text-muted-foreground hover:text-foreground"
             >
               {version.data ? `Brand system v${version.data.number} · published →` : 'Brand system →'}
             </Link>
