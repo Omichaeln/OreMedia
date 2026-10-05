@@ -188,13 +188,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
   it('assets: All assets names every state with its issues; a pending asset is approved and rights recorded from the inspector; an upload settles (UX-05, R1-B)', async () => {
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/assets')}`);
-    await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'All assets' }).click();
+    await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'All', exact: true }).click();
     const list = page.getByTestId('asset-list');
     await expect.poll(() => list.getByRole('listitem').count(), { timeout: 15_000 }).toBe(4);
     expect(await page.getByTestId('asset-ast_pending').textContent()).toContain('Pending review');
     expect(await page.getByTestId('asset-ast_logo').textContent()).toContain('Missing rights');
     expect(await page.getByTestId('asset-ast_retired').textContent()).toContain('Retired');
-    expect(await page.getByTestId('asset-ast_e2e').textContent()).toContain('Usable');
+    expect(await page.getByTestId('asset-ast_e2e').textContent()).toContain('Cleared');
     // Needs attention keeps the three with an issue.
     await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Needs attention' }).click();
     await expect.poll(() => list.getByRole('listitem').count(), { timeout: 15_000 }).toBe(3);
