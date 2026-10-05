@@ -109,9 +109,38 @@ export class NotFoundError extends OremediaError {
 
 export class PolicyDeniedError extends OremediaError {
   readonly reason: string;
-  constructor(reason: string, message = 'You are not allowed to perform this action') {
-    super('FORBIDDEN', message);
+  constructor(
+    reason: string,
+    message = 'You are not allowed to perform this action',
+    opts?: { details?: ErrorDetail[] },
+  ) {
+    super('FORBIDDEN', message, opts);
     this.reason = reason;
+  }
+}
+
+/**
+ * Why a demo workspace refused: `demo_simulated` for a command that would reach outside (connect, AI, crawl, fetch,
+ * invite), refused in the service so every surface answers the same; `demo_no_egress` for an outbound call that got
+ * as far as a choke point (provider I/O, the model gateway, Google Fonts), the last line of defence.
+ */
+export type DemoRefusalReason = 'demo_simulated' | 'demo_no_egress';
+
+export const isDemoRefusalReason = (reason: string): reason is DemoRefusalReason =>
+  reason === 'demo_simulated' || reason === 'demo_no_egress';
+
+/** The demo refusal in general terms, for a surface that carries only the reason (an MCP tool's denial). */
+export const DEMO_REFUSAL_MESSAGE =
+  'Not available in the demo workspace: nothing in a demo reaches an outside platform, site, model or person.';
+
+/**
+ * A demo workspace (tenants.kind = 'demo') never reaches a real platform, site, model or person. FORBIDDEN with the
+ * reason as the envelope's single detail, so a client (web, REST, MCP) can tell this refusal from a missing permission
+ * without reading the message, and a message that says plainly what the demo does not do.
+ */
+export class DemoRefusedError extends PolicyDeniedError {
+  constructor(reason: DemoRefusalReason, message: string) {
+    super(reason, message, { details: [{ issue: reason }] });
   }
 }
 

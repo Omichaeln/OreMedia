@@ -1,5 +1,6 @@
 import { modelsCapability } from '@oremedia/ai';
-import { registerBrandChecker } from '@oremedia/module-access';
+import { configureEgressGuard } from '@oremedia/providers';
+import { registerBrandChecker, assertEgressAllowed } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import {
   configureSourceActivation,
@@ -45,6 +46,8 @@ export function composeModules(env: NodeJS.ProcessEnv = process.env): void {
   registerPublishingBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerMeasurementBrandChecker({ assertExist: (ids, tx) => brandService.assertExist(ids, tx) });
   registerProviderClients(providerClientsFromEnv(env));
+  // Architecture §4.4: metric, comment and report pulls refuse a demo company before any socket.
+  configureEgressGuard((tenantId) => assertEgressAllowed(tenantId));
   // R2-1 part B: the report sweep reads only the sources this deployment enables (PROVIDER_<KIND>_* set, not disabled).
   configureSourceActivation(sourceActivationFromEnv(env));
   // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.

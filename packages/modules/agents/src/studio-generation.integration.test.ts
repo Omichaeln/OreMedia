@@ -350,6 +350,64 @@ describe('STU-1b studio generation against MySQL 8 (scripted model)', () => {
     await tdb?.drop();
   });
 
+  it('in a demo workspace the preflight says AI generation is not available (no budget figure) and start is refused', async () => {
+    const tenantD = newId('tenant');
+    const brandD = newId('brand');
+    const D = manager(tenantD);
+    await tdb.db.insert(tenants).values({
+      id: tenantD,
+      name: 'Demo',
+      slug: 'stu1b-d-' + tenantD.slice(-6).toLowerCase(),
+      kind: 'demo',
+    });
+    await tdb.db.insert(brands).values({
+      id: brandD,
+      tenantId: tenantD,
+      name: 'D1',
+      timezone: 'UTC',
+      defaultLocale: 'en',
+      status: 'active',
+    });
+    const versionD = await publishBrand(tenantD, brandD);
+    const { document } = instantiateStarter(starterByKey('post-photo-feature')!, starterBrand(versionD));
+    const created = await run(tenantD, (tx) =>
+      creativeService.documents.create(
+        D,
+        { brandId: brandD, title: 'Demo post', document, contentType: document.contentType },
+        tx,
+      ),
+    );
+    const request = {
+      kind: 'generate' as const,
+      brief: { keyMessage: 'October offer', channelKeys: ['instagram'], factIds: [] },
+    };
+    const preflight = await inTenant(tenantD, () =>
+      generationService.preflight(D, {
+        documentId: created.documentId,
+        baseRevisionId: created.revisionId,
+        request,
+      }),
+    );
+    expect(preflight.blocking).toBe(true);
+    expect(preflight.issues[0]).toMatchObject({ code: 'demo_simulated', severity: 'blocking' });
+    expect(preflight.issues[0]?.message).toMatch(/not available in the demo workspace/);
+    expect(preflight.cost.remainingMicros).toBeNull();
+    await expect(
+      run(tenantD, (tx) =>
+        generationService.start(
+          D,
+          { documentId: created.documentId, baseRevisionId: created.revisionId, request },
+          tx,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', reason: 'demo_simulated' });
+    const jobs = await tdb.db
+      .select()
+      .from(studioGenerationJobs)
+      .where(eq(studioGenerationJobs.tenantId, tenantD));
+    expect(jobs).toEqual([]);
+  });
+
   it('generates into a fresh starter: one revision with editable text, the image placed, the logo kept, inputs recorded', async () => {
     const d = await starterDocument();
     const headline = el(d.document, 'Headline');

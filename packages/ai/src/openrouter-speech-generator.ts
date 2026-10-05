@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import type { AutonomyMode } from '@oremedia/contracts/tenancy';
-import { ProviderUnavailableError } from '@oremedia/contracts/errors';
+import { DemoRefusedError, ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
 import { generatedAssetSink, type GeneratedAssetSink } from './generated-asset-sink';
 import {
@@ -116,7 +116,8 @@ export class OpenRouterSpeechGenerator implements SpeechGenerator {
         }),
         signal: AbortSignal.timeout(this.opts.timeoutMs ?? 120_000),
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof DemoRefusedError) throw err; // the egress guard refused: nothing was sent
       throw unavailable('connection failed or timed out');
     }
     if (res.status === 429 || res.status >= 500) throw unavailable(`status ${res.status}`);

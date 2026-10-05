@@ -31,22 +31,27 @@ const videoJobWorkflowId = (jobId: string, attempt: number) => `studio-video:${j
  * Temporal client), like agent run cancellations.
  */
 export function registerCreativeOutboxRoutes(): void {
-  registerOutboxRoute('creative.render_requested', (evt) => {
-    const p = evt.payload;
-    const input = RenderJobInputV1.parse({
-      tenantId: evt.tenantId,
-      actor: { kind: p['actorKind'], id: p['actorId'] },
-      correlationId: evt.correlationId,
-      renderJobId: p['renderJobId'],
-    });
-    const video = p['kind'] === 'video';
-    return {
-      workflowType: video ? VIDEO_RENDER_WORKFLOW_TYPE : 'renderJobWorkflowV1',
-      taskQueue: video ? VIDEO_RENDER_TASK_QUEUE : RENDER_TASK_QUEUE,
-      workflowId: renderWorkflowId(input.renderJobId),
-      args: [input],
-    };
-  });
+  // Demo workspaces too (architecture §4.3): rendering is local (Chromium, ffmpeg), nothing leaves.
+  registerOutboxRoute(
+    'creative.render_requested',
+    (evt) => {
+      const p = evt.payload;
+      const input = RenderJobInputV1.parse({
+        tenantId: evt.tenantId,
+        actor: { kind: p['actorKind'], id: p['actorId'] },
+        correlationId: evt.correlationId,
+        renderJobId: p['renderJobId'],
+      });
+      const video = p['kind'] === 'video';
+      return {
+        workflowType: video ? VIDEO_RENDER_WORKFLOW_TYPE : 'renderJobWorkflowV1',
+        taskQueue: video ? VIDEO_RENDER_TASK_QUEUE : RENDER_TASK_QUEUE,
+        workflowId: renderWorkflowId(input.renderJobId),
+        args: [input],
+      };
+    },
+    { demo: 'same' },
+  );
   // STU-1b: start and retry → studioGenerationWorkflowV1 (one workflow per attempt); cancel → a relay that signals it.
   registerOutboxRoute('creative.generation_requested', (evt) => {
     const p = evt.payload;
@@ -76,18 +81,23 @@ export function registerCreativeOutboxRoutes(): void {
       args: [signal],
     };
   });
-  registerOutboxRoute('creative.render_cancel_requested', (evt) => {
-    const signal = VideoRenderSignalV1.parse({
-      workflowId: renderWorkflowId(String(evt.payload['renderJobId'])),
-      signal: 'cancelRender',
-    });
-    return {
-      workflowType: VIDEO_RENDER_SIGNAL_WORKFLOW_TYPE,
-      taskQueue: VIDEO_RENDER_TASK_QUEUE,
-      workflowId: `${signal.workflowId}:signal:${evt.id}`,
-      args: [signal],
-    };
-  });
+  // Demo workspaces too: the cancel of a render that demo workspaces may run.
+  registerOutboxRoute(
+    'creative.render_cancel_requested',
+    (evt) => {
+      const signal = VideoRenderSignalV1.parse({
+        workflowId: renderWorkflowId(String(evt.payload['renderJobId'])),
+        signal: 'cancelRender',
+      });
+      return {
+        workflowType: VIDEO_RENDER_SIGNAL_WORKFLOW_TYPE,
+        taskQueue: VIDEO_RENDER_TASK_QUEUE,
+        workflowId: `${signal.workflowId}:signal:${evt.id}`,
+        args: [signal],
+      };
+    },
+    { demo: 'same' },
+  );
   // STU-3: start and retry → studioVideoJobWorkflowV1 (one workflow per attempt); cancel → a relay that signals it.
   registerOutboxRoute('creative.video_job_requested', (evt) => {
     const p = evt.payload;

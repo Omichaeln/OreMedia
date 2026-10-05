@@ -38,7 +38,7 @@ import { requireTenant, type Tx } from '@oremedia/db';
 import { hashCanonical, hashText } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import type { PublicationEvent } from '@oremedia/domain/state-machines/publication';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
 import {
   actorRef,
@@ -1147,6 +1147,7 @@ export const publicationService = {
    */
   async validateRendered(actor: ResolvedActor, input: PublicationValidateRendered, tx: Tx) {
     const parsed = PublicationValidateRendered.parse(input);
+    await assertTenantCapability('rendered_validation', tx);
     const row = await publicationsRepo.getById(parsed.publicationId, tx);
     await policy.assert(actor, 'brand.read', brandResource(row.brandId), {}, tx);
     // The public fetch runs before the row lock is taken (as the delayed workflow's activity does), so a slow

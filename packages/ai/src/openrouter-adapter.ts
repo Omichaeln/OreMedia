@@ -9,7 +9,12 @@ import type {
   ModelUsage,
 } from '@oremedia/contracts/agents';
 import type { GenerationRestrictions } from '@oremedia/contracts/brand';
-import { ProviderUnavailableError } from '@oremedia/contracts/errors';
+import {
+  DemoRefusedError,
+  ProviderUnavailableError,
+  ValidationFailedError,
+} from '@oremedia/contracts/errors';
+import { assertCurrentTenantEgress } from '@oremedia/module-access';
 import { logger } from '@oremedia/observability';
 import { ModelRequestRejectedError, toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 
@@ -57,8 +62,12 @@ interface OpenRouterError {
  * staging acceptance probe records it) and the staging model evaluation saw OpenRouter answer `401: Missing
  * Authentication header` to a request that carried one. Tests inject their own fetch.
  */
-export const openRouterFetch: typeof fetch = (input, init) =>
-  undiciFetch(input as never, init as never) as unknown as Promise<Response>;
+export const openRouterFetch: typeof fetch = async (input, init) => {
+  // Architecture §4.4: the model gateway's choke point. A demo company's call is refused before any socket opens
+  // (DemoRefusedError, which the callers rethrow as it is); a call outside any tenant context is a platform call.
+  await assertCurrentTenantEgress();
+  return undiciFetch(input as never, init as never) as unknown as Promise<Response>;
+};
 
 /**
  * ADR-11: every model call goes through OpenRouter's OpenAI-compatible chat API with tool use. The model id is the
@@ -115,7 +124,8 @@ export class OpenRouterModelAdapter implements ModelAdapter {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(req.timeoutMs),
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof DemoRefusedError) throw err; // the egress guard refused: nothing was sent
       throw unavailable('connection failed or timed out');
     }
     if (res.status === 429 || res.status >= 500) {

@@ -53,7 +53,7 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { assetMachine, uploadIntentMachine } from '@oremedia/domain';
 import { newId } from '@oremedia/domain/ids';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { brandService } from '@oremedia/module-brand';
 import { audit, outbox } from '@oremedia/module-operations';
 import { logger } from '@oremedia/observability';
@@ -469,6 +469,7 @@ export const assetService = {
     run: <T>(command: (tx: Tx) => Promise<T>) => Promise<T> = (command) => withTransaction(command),
   ): Promise<GoogleFontImportResult> {
     const parsed = GoogleFontImport.parse(input);
+    await assertTenantCapability('google_fonts_import');
     await withTransaction(async (tx) => {
       await brandService.assertExist([parsed.brandId], tx);
       assetsRepo.assertBrandVisible(parsed.brandId);

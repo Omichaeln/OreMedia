@@ -64,7 +64,7 @@ import {
   SHOT_KINDS,
   type StoryboardAsset,
 } from '@oremedia/editor/video/index';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, isDemoTenant, policy } from '@oremedia/module-access';
 import { budgets } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import { StudioVideoJobRepository } from './repositories';
@@ -326,7 +326,9 @@ async function prepare(
   const videoSources = timedAssetIds(project).filter((id) => media[id]?.kind === 'video');
   const waveforms = request.kind === 'recut' ? await waveformLookup(videoSources, tx) : {};
   const caps = await capabilitySource(doc.tenantId, tx);
-  const remainingMicros = await remainingBudget(doc.brandId, tx);
+  // A demo workspace calls no model: its preflight says so instead of showing a (zero) budget figure.
+  const demo = await isDemoTenant(tx);
+  const remainingMicros = demo ? null : await remainingBudget(doc.brandId, tx);
   const logoRule = snapshot.document.logoRules.find((r) => r.variant === 'primary');
   return {
     base,
@@ -340,6 +342,7 @@ async function prepare(
     media,
     waveforms,
     caps,
+    demo,
     remainingMicros,
     logoMinWidthPx: logoRule?.minWidthPx ?? 0,
     estimateMicros: pricing.modelCallMicros,
@@ -404,7 +407,15 @@ function ctaTextProblems(
 
 /** The preflight answer: material inputs, issues and cost (also what start checks). */
 function preflightOf(prepared: Prepared, request: VideoAiRequest) {
-  const issues: VideoAiIssue[] = [];
+  const issues: VideoAiIssue[] = prepared.demo
+    ? [
+        {
+          code: 'demo_simulated',
+          severity: 'blocking',
+          message: 'AI video jobs are not available in the demo workspace: no model is called here.',
+        },
+      ]
+    : [];
   const { project, eligible, effectiveFactIds } = prepared;
   const factIds = request.kind === 'storyboard' ? request.brief.factIds : request.recut.factIds;
   for (const id of factIds)
@@ -724,6 +735,7 @@ export const videoAiService = {
    */
   async start(actor: ResolvedActor, input: z.input<typeof VideoAiStart>, tx: Tx) {
     const parsed = VideoAiStart.parse(input);
+    await assertTenantCapability('video_ai', tx);
     const found = await engine.documentsRepo.getById(parsed.documentId, tx);
     await policy.assert(actor, 'creative.edit', engine.documentResource(found), {}, tx);
     await policy.assert(actor, 'agent.start_run', engine.brandResource(found.brandId), {}, tx);
@@ -862,6 +874,7 @@ export const videoAiService = {
    */
   async retry(actor: ResolvedActor, input: z.input<typeof VideoAiRetry>, tx: Tx) {
     const parsed = VideoAiRetry.parse(input);
+    await assertTenantCapability('video_ai', tx);
     const job = await jobsRepo.lock(parsed.jobId, tx);
     await policy.assert(actor, 'creative.edit', jobResource(job), {}, tx);
     await policy.assert(actor, 'agent.start_run', engine.brandResource(job.brandId), {}, tx);

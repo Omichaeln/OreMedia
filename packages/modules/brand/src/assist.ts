@@ -65,7 +65,7 @@ import {
 } from '@oremedia/domain/brand-suggestions';
 import { hashCanonical, sha256Hex } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
-import { accessService, policy } from '@oremedia/module-access';
+import { accessService, assertTenantCapability, policy } from '@oremedia/module-access';
 import { budgets, entitlements } from '@oremedia/module-billing';
 import { audit, killSwitch, outbox } from '@oremedia/module-operations';
 import { BlockedAddressError, assertSafeUrl } from '@oremedia/providers';
@@ -649,6 +649,7 @@ export const brandAssistService = {
      */
     async add(actor: ResolvedActor, input: z.input<typeof BrandSourceAdd>, tx: Tx) {
       const parsed = BrandSourceAdd.parse(input);
+      await assertTenantCapability('brand_source_capture', tx);
       const brand = await brandsRepo.lock(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       if (actor.kind !== 'user' && actor.kind !== 'service_principal')
@@ -836,6 +837,7 @@ export const brandAssistService = {
     /** What a job would cost and what would stop it, read before it starts; nothing is reserved or written. */
     async estimate(actor: ResolvedActor, input: BrandAssistRequest, tx?: Tx): Promise<BrandAssistEstimateV1> {
       const parsed = BrandAssistRequest.parse(input);
+      await assertTenantCapability('brand_assist', tx);
       const brand = await brandsRepo.getById(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       const sources = await sourcesRepo.listByIds(brand.id, parsed.sourceIds, tx);
@@ -874,6 +876,7 @@ export const brandAssistService = {
       extra: { answers?: Array<{ question: string; answer: string }>; parentJobId?: string } = {},
     ) {
       const parsed = BrandAssistRequest.parse(input);
+      await assertTenantCapability('brand_assist', tx);
       const brand = await brandsRepo.lock(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       if (actor.kind !== 'user' && actor.kind !== 'service_principal')
@@ -1037,6 +1040,7 @@ export const brandAssistService = {
     /** Records answers to a finished job's questions and starts a follow-up section job that reads them. */
     async answer(actor: ResolvedActor, input: z.input<typeof BrandAssistAnswer>, tx: Tx) {
       const parsed = BrandAssistAnswer.parse(input);
+      await assertTenantCapability('brand_assist', tx);
       const brand = await brandsRepo.getById(parsed.brandId, tx);
       await policy.assert(actor, 'brand.edit_standards', brandResource(brand), {}, tx);
       const job = await jobsRepo.lock(brand.id, parsed.jobId, tx);

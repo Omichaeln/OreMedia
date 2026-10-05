@@ -387,19 +387,24 @@ export const deletionWorkflowId = (deletionRequestId: string): string => `deleti
  * event joins the running workflow; the request row's fan-out map is the dedupe authority for each step.
  */
 export function registerOperationsOutboxRoutes(): void {
-  registerOutboxRoute('operations.deletion_requested', (evt) => {
-    const p = evt.payload;
-    const input = DeletionWorkflowInputV1.parse({
-      tenantId: evt.tenantId,
-      actor: { kind: p['actorKind'], id: p['actorId'] },
-      correlationId: evt.correlationId,
-      deletionRequestId: p['deletionRequestId'],
-    });
-    return {
-      workflowType: DELETION_WORKFLOW_TYPE,
-      taskQueue: OPERATIONS_TASK_QUEUE,
-      workflowId: deletionWorkflowId(input.deletionRequestId),
-      args: [input],
-    };
-  });
+  // Demo workspaces too (architecture §4.3): deleting a demo (reset, idle cleanup) is internal work.
+  registerOutboxRoute(
+    'operations.deletion_requested',
+    (evt) => {
+      const p = evt.payload;
+      const input = DeletionWorkflowInputV1.parse({
+        tenantId: evt.tenantId,
+        actor: { kind: p['actorKind'], id: p['actorId'] },
+        correlationId: evt.correlationId,
+        deletionRequestId: p['deletionRequestId'],
+      });
+      return {
+        workflowType: DELETION_WORKFLOW_TYPE,
+        taskQueue: OPERATIONS_TASK_QUEUE,
+        workflowId: deletionWorkflowId(input.deletionRequestId),
+        args: [input],
+      };
+    },
+    { demo: 'same' },
+  );
 }

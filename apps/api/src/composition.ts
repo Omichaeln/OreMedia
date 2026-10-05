@@ -1,5 +1,6 @@
 import type { AssetKind } from '@oremedia/contracts/assets';
-import { registerBrandChecker, MembershipRepository } from '@oremedia/module-access';
+import { configureEgressGuard } from '@oremedia/providers';
+import { registerBrandChecker, MembershipRepository, assertEgressAllowed } from '@oremedia/module-access';
 import {
   experimentsService,
   registerExperimentArmLinks,
@@ -259,6 +260,8 @@ export function composeModules(): void {
   registerReviewImageSigner((assetVersionId, tx) => assetService.signVersionPreview(assetVersionId, tx));
   registerCalendarSource((brandId, from, to, tx) => publicationService.calendarRange(brandId, from, to, tx));
   registerProviderClients(providerClientsFromEnv());
+  // Architecture §4.4: provider I/O (OAuth code exchanges, account lookups) refuses a demo company before any socket.
+  configureEgressGuard((tenantId) => assertEgressAllowed(tenantId));
   // Ledger R2-1: the sources this deployment connects (app credentials present, not disabled).
   configureSourceActivation(sourceActivationFromEnv());
   // RA-01: the channels this deployment connects (not disabled, app credentials present), and the facts behind it.

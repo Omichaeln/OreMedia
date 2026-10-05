@@ -485,6 +485,9 @@ importers:
       '@oremedia/editor':
         specifier: workspace:*
         version: link:../../packages/editor
+      '@oremedia/module-access':
+        specifier: workspace:*
+        version: link:../../packages/modules/access
       '@oremedia/module-assets':
         specifier: workspace:*
         version: link:../../packages/modules/assets
@@ -497,6 +500,9 @@ importers:
       '@oremedia/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@oremedia/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@oremedia/workflows':
         specifier: workspace:*
         version: link:../../packages/workflows

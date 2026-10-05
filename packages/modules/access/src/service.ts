@@ -41,6 +41,7 @@ import type { ResolvedActor } from '@oremedia/contracts/policy';
 import { requireTenant, runAsPlatform, runInTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { DEFAULT_ROLE_GRANTS } from '@oremedia/domain/role-grants';
+import { budgets } from '@oremedia/module-billing';
 import { audit, outbox } from '@oremedia/module-operations';
 import {
   ApiClientRepository,
@@ -54,6 +55,7 @@ import {
 } from './repositories';
 import { RECENT_SIGN_IN_MS, SESSION_ABSOLUTE_MS, hashToken, newOpaqueToken } from './authenticator';
 import { hashPassword, needsRehash, verifyPassword } from './password';
+import { assertTenantCapability } from './demo';
 import { policy } from './policy';
 
 const directory = new UserDirectory();
@@ -401,6 +403,21 @@ export const accessService = {
           },
           tx,
         );
+        // Demo workspace (architecture §4.6): no paid call ever runs in a demo, so its spend limits start at zero and
+        // the budget reservation refuses anything that got past the demo refusals and the egress guards.
+        if (kind === 'demo')
+          await runInTenant(
+            {
+              tenantId,
+              actor: { kind: 'user', id: ownerUserId },
+              brandIds: 'all',
+              correlationId,
+            },
+            async () => {
+              await budgets.setLimit(null, 'month', 0, tx);
+              await budgets.setLimit(null, 'day', 0, tx);
+            },
+          );
         // An existing user becoming owner of a second live company: a setup-link password does not follow them.
         await confineSetupLinkPassword(ownerUserId, { correlationId, ipHash: null, userAgentHash: null }, tx);
       }),
@@ -1014,6 +1031,9 @@ export const accessService = {
 
   async inviteMember(actor: ResolvedActor, input: z.infer<typeof MemberInvite>, tx: Tx) {
     const parsed = MemberInvite.parse(input);
+    // A demo workspace is one person's sandbox (architecture §3.2): nobody else joins it, which is also what makes
+    // it safe for a setup-link password to sign in to it (confineSetupLinkPassword counts live companies only).
+    await assertTenantCapability('member_invite', tx);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
     const person = requirePerson(actor, 'Only a person can invite a member');
     if (parsed.role === 'owner' && person.role !== 'owner')
@@ -1159,6 +1179,7 @@ export const accessService = {
     tx: Tx,
   ): Promise<PasswordSetupLink> {
     const parsed = MemberIssuePasswordSetup.parse(input);
+    await assertTenantCapability('password_setup_link', tx);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
     if (actor.kind !== 'user')
       throw new PolicyDeniedError('agent_never', 'Only a person can issue a password setup link');
@@ -1268,6 +1289,7 @@ export const accessService = {
 
   async createServicePrincipal(actor: ResolvedActor, input: z.infer<typeof ServicePrincipalCreate>, tx: Tx) {
     const parsed = ServicePrincipalCreate.parse(input);
+    await assertTenantCapability('service_principal', tx);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
     const person = requirePerson(actor, 'Only a person can create a service principal');
     const scope = grantsBrandScope(parsed.grants);
@@ -1353,6 +1375,8 @@ export const accessService = {
   /** Returns the plaintext key exactly once; only the hash and prefix are stored (spec 7.6). */
   async createApiClient(actor: ResolvedActor, input: z.infer<typeof ApiClientCreate>, tx: Tx) {
     const parsed = ApiClientCreate.parse(input);
+    // An API key is another party acting in the company: a demo workspace has none.
+    await assertTenantCapability('api_client', tx);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
     const person = requirePerson(actor, 'Only a person can create an API key');
     const sp = await principalsRepo.getById(parsed.servicePrincipalId, tx);
@@ -1386,6 +1410,7 @@ export const accessService = {
 
   async rotateApiClient(actor: ResolvedActor, input: z.infer<typeof ApiClientRotate>, tx: Tx) {
     const parsed = ApiClientRotate.parse(input);
+    await assertTenantCapability('api_client', tx);
     await policy.assert(actor, 'membership.manage', tenantResource(actor), {}, tx);
     const person = requirePerson(actor, 'Only a person can rotate an API key');
     const old = await apiClientsRepo.getById(parsed.apiClientId, tx);

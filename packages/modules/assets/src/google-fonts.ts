@@ -6,6 +6,7 @@ import {
   type FontStyle,
 } from '@oremedia/contracts/assets';
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { assertCurrentTenantEgress } from '@oremedia/module-access';
 import { logger } from '@oremedia/observability';
 import { assertSafeUrl, ssrfSafeDispatcher } from '@oremedia/providers';
 import * as fontkit from './ingest/fontkit-loader';
@@ -171,6 +172,8 @@ async function get(
   if (remaining <= 0) throw unavailable();
   const target = assertSafeUrl(url, options.insecureAllowLoopback ? { insecureAllowLoopback: true } : {});
   if (target.origin !== allowedOrigin) throw untrusted('request outside the allowed host');
+  // Architecture §4.4: a demo company never downloads from Google Fonts (the import is refused in its service first).
+  await assertCurrentTenantEgress();
   let res: Awaited<ReturnType<typeof fetch>>;
   try {
     res = await fetch(target, {

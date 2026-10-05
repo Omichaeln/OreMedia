@@ -27,7 +27,7 @@ import { hashCanonical } from '@oremedia/domain/hash';
 import { newId } from '@oremedia/domain/ids';
 import { IllegalTransitionError, type StateMachine } from '@oremedia/domain/state-machines/machine';
 import { skillVersionMachine } from '@oremedia/domain/state-machines/skill-version';
-import { policy } from '@oremedia/module-access';
+import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
 import { logger } from '@oremedia/observability';
 import { z as zod } from 'zod';
@@ -473,6 +473,7 @@ export const skillsService = {
      */
     async evaluate(actor: ResolvedActor, input: z.infer<typeof SkillVersionEvaluate>, tx: Tx) {
       const parsed = SkillVersionEvaluate.parse(input);
+      await assertTenantCapability('skill_evaluation', tx);
       const { version, skill } = await loadVersion(parsed.skillVersionId, tx);
       await policy.assert(
         actor,
