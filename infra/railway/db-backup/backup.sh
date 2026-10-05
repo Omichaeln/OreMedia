@@ -3,7 +3,9 @@
 # database) with mysqldump, gzips each dump, copies it to the object store under BACKUP_PREFIX and deletes copies
 # older than BACKUP_RETENTION_DAYS (default 14) from the store and from the local volume when one is mounted.
 # Prints one DB_BACKUP_PASS line per database with the object key and size, or DB_BACKUP_FAIL and exits 1.
-# Each dump gets a sha256 sidecar (<dump>.sha256, sha256sum format) that restore.sh and verify.sh check.
+# Each dump gets a sha256 sidecar (<dump>.sha256, sha256sum format) that restore.sh and verify.sh check, and only
+# after mysqldump exited 0 and the dump ends with mysqldump's "-- Dump completed" trailer: a dump cut short prints
+# DB_BACKUP_FAIL and nothing of it is uploaded.
 # After the dumps the same run backs up the assets and releases buckets (object-backup.sh); the two halves run as
 # separate processes, so a failing dump never skips the object backup or the reverse, and the run exits 1 if
 # either failed. Secrets come from the environment only; nothing is echoed.
@@ -38,6 +40,10 @@ export AWS_EC2_METADATA_DISABLED=true
 S3="aws --endpoint-url $OBJECT_STORE_ENDPOINT s3"
 S3API="aws --endpoint-url $OBJECT_STORE_ENDPOINT s3api"
 
+# True when the gzipped dump $1 ends with mysqldump's "-- Dump completed" trailer (verify.sh checks the same; this
+# script does not source backup-lib.sh, so its uploads keep the store's default addressing).
+dump_completed() { gzip -dc "$1" 2>/dev/null | tail -n 1 | grep -q '^-- Dump completed'; }
+
 dump_one() {
   name="$1"; host="$2"; db="$3"; pw="$4"
   file="${TMPDIR:-/tmp}/${name}-${STAMP}.sql.gz"
@@ -53,9 +59,32 @@ dump_one() {
     *" "*) dbs="--databases $db" ;;
     *) dbs="$db" ;;
   esac
-  # shellcheck disable=SC2086
-  MYSQL_PWD="$pw" mysqldump -h "$host" -uroot --single-transaction --routines --triggers --events \
-    --set-gtid-purged=OFF $extra $dbs | gzip -6 > "$file"
+  # The image's /bin/sh may be dash (no pipefail), where a pipeline's status is gzip's alone: mysqldump's own exit
+  # status is written to a file from inside the pipeline and checked, so a dump that dies part-way (a lost
+  # connection, a killed process) is never taken for a complete one.
+  rc_file="$file.rc"
+  rm -f "$rc_file"
+  gzip_rc=0
+  {
+    dump_rc=0
+    # shellcheck disable=SC2086
+    MYSQL_PWD="$pw" mysqldump -h "$host" -uroot --single-transaction --routines --triggers --events \
+      --set-gtid-purged=OFF $extra $dbs || dump_rc=$?
+    echo "$dump_rc" > "$rc_file"
+  } | gzip -6 > "$file" || gzip_rc=$?
+  dump_rc="$(cat "$rc_file" 2>/dev/null || echo unknown)"
+  rm -f "$rc_file"
+  if [ "$dump_rc" != "0" ] || [ "$gzip_rc" != "0" ]; then
+    rm -f "$file"
+    echo "DB_BACKUP_FAIL $name mysqldump exited $dump_rc, gzip exited $gzip_rc: dump incomplete, nothing uploaded"
+    exit 1
+  fi
+  # mysqldump ends a complete dump with its "-- Dump completed" comment: a dump without it was cut short.
+  if ! dump_completed "$file"; then
+    rm -f "$file"
+    echo "DB_BACKUP_FAIL $name dump has no '-- Dump completed' trailer: dump incomplete, nothing uploaded"
+    exit 1
+  fi
   size="$(stat -c %s "$file")"
   [ "$size" -gt 1024 ] || { echo "DB_BACKUP_FAIL $name dump too small ($size bytes)"; exit 1; }
   key="$BACKUP_PREFIX/$name/${name}-${STAMP}.sql.gz"

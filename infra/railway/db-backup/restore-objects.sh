@@ -3,8 +3,9 @@
 # target bucket, then verifies every restored object against the manifest's sha256 by reading it back from the
 # target. Never a live bucket: the target must differ from RESTORE_BUCKET, OBJECT_STORE_BUCKET_ASSETS,
 # OBJECT_STORE_BUCKET_RELEASES and PROTECTED_BUCKETS (the backups bucket only under a restore-scratch/ prefix), an
-# existing target key is never overwritten (it is verified instead, and a different content fails the restore),
-# and in production the target must be named in RESTORE_ALLOW_PRODUCTION.
+# existing target key is never overwritten (it is verified instead, and a different content fails the restore), and
+# the environment name must be known (staging, development, test, local, or production only when
+# RESTORE_ALLOW_PRODUCTION names the target exactly; an empty or other name is refused).
 #
 #   RESTORE_BUCKET      the source bucket whose backup is restored (its name under OBJECT_BACKUP_PREFIX)
 #   DST_BUCKET          the target bucket; DST_PREFIX (optional, e.g. restore-scratch/drill-1/) is put before each key

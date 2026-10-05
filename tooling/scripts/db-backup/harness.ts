@@ -101,6 +101,13 @@ export class Harness {
     return { status: r.status ?? -1, out, lines: out.split('\n').filter(Boolean) };
   }
 
+  /** Puts an executable `name` (a POSIX sh script body) first on the scripts' PATH, e.g. a stand-in mysqldump. */
+  tool(name: string, script: string): void {
+    const file = join(this.bin, name);
+    writeFileSync(file, `#!/bin/sh\n${script}\n`);
+    chmodSync(file, 0o755);
+  }
+
   bucket(endpoint: string, name: string): void {
     mkdirSync(join(this.root, encodeURIComponent(endpoint), name), { recursive: true });
   }

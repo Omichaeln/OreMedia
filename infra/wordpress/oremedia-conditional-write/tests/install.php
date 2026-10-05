@@ -1,11 +1,13 @@
 <?php
 /**
- * Test-only installer (run.sh): installs WordPress into the throwaway database, activates the plugin, creates an
- * editor and an application password for it, and prints the credentials as JSON for the test to use.
+ * Test-only installer (run.sh): installs WordPress into the throwaway database, activates the plugin, creates two
+ * editors and a contributor with an application password each, and prints the credentials as JSON for the test.
  *
  *   php install.php <wordpress dir> <site url>
  */
-if ( PHP_SAPI !== 'cli' ) {
+// Test-only and command line only (tests/ is never installed on a site): it loads WordPress itself, so ABSPATH is
+// not defined yet when it starts. Over HTTP, or if WordPress has already loaded it, it stops here.
+if ( PHP_SAPI !== 'cli' || defined( 'ABSPATH' ) ) {
 	exit( 1 );
 }
 $dir = rtrim( $argv[1], '/' );
@@ -40,11 +42,21 @@ $author_id = wp_insert_user(
 		'role'       => 'editor',
 	)
 );
-list( $password ) = WP_Application_Passwords::create_new_application_password( $editor_id, array( 'name' => 'oremedia' ) );
-list( $other )    = WP_Application_Passwords::create_new_application_password( $author_id, array( 'name' => 'person' ) );
+$contributor_id = wp_insert_user(
+	array(
+		'user_login' => 'site-contributor',
+		'user_pass'  => wp_generate_password( 24 ),
+		'user_email' => 'contributor@example.test',
+		'role'       => 'contributor',
+	)
+);
+list( $password )    = WP_Application_Passwords::create_new_application_password( $editor_id, array( 'name' => 'oremedia' ) );
+list( $other )       = WP_Application_Passwords::create_new_application_password( $author_id, array( 'name' => 'person' ) );
+list( $contributor ) = WP_Application_Passwords::create_new_application_password( $contributor_id, array( 'name' => 'contributor' ) );
 echo wp_json_encode(
 	array(
-		'editor' => array( 'user' => 'ore-editor', 'password' => $password ),
-		'person' => array( 'user' => 'site-author', 'password' => $other ),
+		'editor'      => array( 'user' => 'ore-editor', 'password' => $password ),
+		'person'      => array( 'user' => 'site-author', 'password' => $other ),
+		'contributor' => array( 'user' => 'site-contributor', 'password' => $contributor ),
 	)
 );

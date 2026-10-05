@@ -9,7 +9,9 @@
  *
  *   php conditional-write-test.php <wordpress dir> <site url> <credentials.json> <on|off: revisions>
  */
-if ( PHP_SAPI !== 'cli' ) {
+// Test-only and command line only (tests/ is never installed on a site): it loads WordPress itself, so ABSPATH is
+// not defined yet when it starts. Over HTTP, or if WordPress has already loaded it, it stops here.
+if ( PHP_SAPI !== 'cli' || defined( 'ABSPATH' ) ) {
 	exit( 1 );
 }
 list( , $dir, $base, $credentials_file, $revisions ) = $argv;
@@ -135,6 +137,10 @@ check( ! isset( read_post( $core_id )['etag'] ), 'core: no ETag or revision prec
 list( $code, $caps ) = call( 'GET', '/oremedia/v1/capabilities' );
 check( 200 === $code && 'oremedia-conditional-write' === $caps['plugin'] && 1 === $caps['protocol'], 'capabilities: plugin and protocol 1' );
 check( true === ( $caps['features']['conditional_update'] ?? null ), 'capabilities: conditional updates available on InnoDB' );
+check( isset( $caps['storage']['engines'], $caps['wordpress'] ), 'capabilities: an editor also gets the storage engines and WordPress version' );
+list( $code, $caps ) = call( 'GET', '/oremedia/v1/capabilities', null, 'contributor' );
+check( 200 === $code && 'oremedia-conditional-write' === $caps['plugin'] && 1 === $caps['protocol'] && true === ( $caps['features']['conditional_update'] ?? null ), 'capabilities: a contributor gets the handshake' );
+check( ! array_key_exists( 'storage', (array) $caps ) && ! array_key_exists( 'wordpress', (array) $caps ), 'capabilities: a contributor gets no storage engines and no WordPress version' );
 list( $code ) = call( 'GET', '/oremedia/v1/capabilities', null, null );
 check( 401 === $code, 'capabilities: refused without credentials (401)' );
 
