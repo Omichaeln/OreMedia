@@ -49,14 +49,13 @@ export function RunsList({ runs, selectedId, hrefFor, onSelect, isPending, error
       )}
       {runs.length > 0 && (
         <ul className="flex flex-col" aria-label="Runs">
-          {runs.map((run, i) => {
+          {runs.map((run) => {
             const selected = run.id === selectedId;
             const chip = runStateChip(run.state);
             return (
               <li
                 key={run.id}
-                className="om-in border-t border-border"
-                style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+                className="border-t border-border"
                 data-testid="run-row"
                 data-run-state={run.state}
               >

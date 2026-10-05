@@ -222,7 +222,7 @@ function Note({ tone, title, detail }: { tone: Tone; title: string; detail: stri
     <p
       role="status"
       className={cn(
-        'om-in rounded-lg px-3.5 py-2.5 text-sm text-pretty',
+        'rounded-lg px-3.5 py-2.5 text-sm text-pretty',
         tone === 'critical'
           ? 'bg-status-critical-tint'
           : tone === 'warning'
@@ -240,7 +240,7 @@ function Note({ tone, title, detail }: { tone: Tone; title: string; detail: stri
 function Timeline({ steps }: { steps: StepDto[] }) {
   return (
     <ol className="flex flex-col" aria-label="Steps" data-testid="timeline">
-      {steps.map((s, i) => {
+      {steps.map((s) => {
         const tone = stepTone(s);
         const metrics = [
           s.tokensIn + s.tokensOut > 0 && `${formatTokens(s.tokensIn)} in / ${formatTokens(s.tokensOut)} out`,
@@ -249,8 +249,7 @@ function Timeline({ steps }: { steps: StepDto[] }) {
         return (
           <li
             key={s.id}
-            className="om-in grid grid-cols-[20px_minmax(0,1fr)_auto] gap-3 border-t border-border py-3"
-            style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}
+            className="grid grid-cols-[20px_minmax(0,1fr)_auto] gap-3 border-t border-border py-3"
             data-testid="step"
             data-step-kind={s.kind}
           >
