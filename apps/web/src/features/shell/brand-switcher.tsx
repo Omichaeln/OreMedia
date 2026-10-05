@@ -39,13 +39,11 @@ export function BrandSwitcher({
           'hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         )}
       >
-        <span className="block w-full truncate text-xs text-muted-foreground" aria-label="Company">
+        <span className="block w-full truncate text-xs text-muted-foreground">
           {companyName ?? companyId}
         </span>
         <span className="flex w-full items-center justify-between gap-2 text-sm font-medium">
-          <span className="truncate" aria-label="Brand">
-            {brandName}
-          </span>
+          <span className="truncate">{brandName}</span>
           <span aria-hidden="true" className="text-muted-foreground">
             ⌄
           </span>

@@ -5,11 +5,11 @@ and the `Oremedia UI prototype.zip` variants — by implementing that design in 
 reproducing it statically or by introducing a different aesthetic. The application's capabilities, tenant isolation,
 approval safeguards, revision history and existing access stay as they are.
 
-| Document                                             | What it holds                                                                                                                                                                  |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [00-mapping.md](00-mapping.md)                       | The design reference and its provenance; the feature-to-interface coverage matrix (screen, controls, functionality, status, required changes); gaps in both directions.         |
-| [01-decisions.md](01-decisions.md)                   | D-27 onwards: appearance tokens, navigation placement, the Reports screen, the studio entry, breakpoints. Registered in `docs/decisions/DECISIONS.md`.                          |
-| [02-verification.md](02-verification.md)             | Visual comparison evidence per screen and width, test results, UAT steps, and the implemented / locally verified / externally verified / unverified statement, kept per PR.      |
+| Document                                 | What it holds                                                                                                                                                               |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [00-mapping.md](00-mapping.md)           | The design reference and its provenance; the feature-to-interface coverage matrix (screen, controls, functionality, status, required changes); gaps in both directions.     |
+| [01-decisions.md](01-decisions.md)       | D-27 onwards: appearance tokens, navigation placement, the Reports screen, the studio entry, breakpoints. Registered in `docs/decisions/DECISIONS.md`.                      |
+| [02-verification.md](02-verification.md) | Visual comparison evidence per screen and width, test results, UAT steps, and the implemented / locally verified / externally verified / unverified statement, kept per PR. |
 
 ## References
 
