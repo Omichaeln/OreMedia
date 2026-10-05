@@ -61,6 +61,10 @@ export class AnthropicModelAdapter implements ModelAdapter {
             tool_choice: { type: 'auto' as const },
           }
         : {}),
+      // Structured output: the answer is constrained to the caller's schema (strict form, see ModelRequest).
+      ...(req.responseSchema
+        ? { output_config: { format: { type: 'json_schema' as const, schema: req.responseSchema.schema } } }
+        : {}),
       metadata: { user_id: req.metadata.runId },
     };
     let message: Anthropic.Message;

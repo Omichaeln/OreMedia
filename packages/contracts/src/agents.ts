@@ -148,6 +148,18 @@ export interface ModelRequest {
   temperature?: number;
   timeoutMs: number;
   metadata: { runId: string; tenantId: string };
+  /**
+   * Structured output: the answer's JSON Schema, sent to providers that constrain their answer to it. The schema is
+   * in strict form (every object closed and every property required; an optional field is nullable). The caller
+   * still validates the answer, because a provider or model may not honour it.
+   */
+  responseSchema?: ModelResponseSchema;
+}
+
+/** A named JSON Schema for a model's answer (`name` matches `^[a-zA-Z0-9_-]{1,64}$`, as tool names do). */
+export interface ModelResponseSchema {
+  name: string;
+  schema: Record<string, unknown>;
 }
 
 export interface ModelCompletion {

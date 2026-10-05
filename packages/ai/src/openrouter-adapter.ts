@@ -93,6 +93,16 @@ export class OpenRouterModelAdapter implements ModelAdapter {
             tool_choice: 'auto',
           }
         : {}),
+      // Structured output (OpenAI-compatible `json_schema`, strict): the answer is constrained to the caller's schema
+      // where the routed provider supports it; elsewhere it is ignored and the caller's own validation still decides.
+      ...(req.responseSchema
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: req.responseSchema.name, strict: true, schema: req.responseSchema.schema },
+            },
+          }
+        : {}),
       provider: { data_collection: 'deny' },
       user: req.metadata.runId,
     };

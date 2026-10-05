@@ -112,6 +112,25 @@ describe('AnthropicModelAdapter (spec 12.7, tool-use API)', () => {
     expect(f.calls[0]!.body).not.toHaveProperty('tool_choice');
   });
 
+  it('sends the response schema as a json_schema output format when the request names one, and none otherwise', async () => {
+    const schema = {
+      type: 'object',
+      properties: { items: { type: 'array', items: { type: 'string' } } },
+      required: ['items'],
+      additionalProperties: false,
+    };
+    const f = fakeFetch();
+    const adapter = new AnthropicModelAdapter({
+      apiKey: 'k',
+      baseURL: 'https://anthropic.invalid',
+      fetch: f.fetch as never,
+    });
+    await adapter.complete({ ...request, tools: [], responseSchema: { name: 'answer_v1', schema } });
+    expect(f.calls[0]!.body['output_config']).toEqual({ format: { type: 'json_schema', schema } });
+    await adapter.complete({ ...request, tools: [] });
+    expect(f.calls[1]!.body).not.toHaveProperty('output_config');
+  });
+
   it('maps the response to text, tool calls, usage and stop reason, dropping private reasoning blocks', async () => {
     const f = fakeFetch();
     const adapter = new AnthropicModelAdapter({

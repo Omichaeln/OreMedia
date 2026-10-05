@@ -7,8 +7,18 @@ import {
   type BrandAssistModelResultV1,
   type BrandAssistModelV1,
 } from '@oremedia/contracts/brand-assist';
+import type { ModelRequest, ModelResponseSchema } from '@oremedia/contracts/agents';
+import { ValidationFailedError } from '@oremedia/contracts/errors';
+import { logger } from '@oremedia/observability';
 import { assertRoutingAllowed } from './routing-policy';
-import { estimateCostMicros, modelConfigFromEnv, type ModelAdapter, type ModelConfig } from './model-adapter';
+import {
+  estimateCostMicros,
+  modelConfigFromEnv,
+  strictJsonSchema,
+  withoutNullOptionals,
+  type ModelAdapter,
+  type ModelConfig,
+} from './model-adapter';
 import {
   EVIDENCE_CLOSE,
   EVIDENCE_OPEN,
@@ -21,8 +31,10 @@ import {
  * BSC-4: the one bounded model call behind each section of an assist job. The prompt carries the brand's approved
  * guidance (so every suggestion is a reviewable update to it), what the person asked for, and the sources as
  * untrusted evidence blocks (markers neutralised: a source cannot close its block or forge a heading). The answer is
- * JSON in the section's shape; the brand module checks it against the strict schema and never repairs it. The routing
- * policy is asserted before every call (spec 12.7); the model id is configuration.
+ * JSON in the section's shape, constrained by structured output (the section's JSON Schema, derived from its strict
+ * zod schema) where the gateway and model support it, and described by the prompt for those that do not. The brand
+ * module checks it against the strict schema and never repairs it. The routing policy is asserted before every call
+ * (spec 12.7); the model id is configuration.
  */
 
 const COMMON = {
@@ -167,13 +179,13 @@ const SECTION_TASK: Record<AssistSection, string> = {
 };
 
 const RULES = [
-  'Reply with one JSON object and nothing else: no prose, no code fences. Use exactly the fields of the example; omit optional fields you do not need; use [] for empty lists.',
+  'Reply with one JSON object and nothing else: no prose, no code fences. Use exactly the fields of the example. Every list field is always present: write [] when you have nothing to propose for it, never leave it out.',
   'Every suggestion, a single one (such as a summary) or each entry of a list, is an object of "value", "rationale", "basis", "confidence" and "evidence" as in the example: what you propose goes inside "value", never in its place.',
   'Every item has basis: "stated" when a source says it (quote the exact words in evidence), "inferred" when it is a pattern across examples (quote at least two passages), or "suggested" when no source supports it; and confidence "high", "medium" or "low".',
   'Never invent facts. A fact must be stated by a source and quoted exactly; anything else is basis "suggested" and will be treated as a question for a person.',
   'Cite evidence by the source id shown on its EVIDENCE block, with a short exact excerpt (at most 300 characters) copied from that block.',
   `The approved guidance below is the brand system as it is now. Suggest only additions or changes that improve it; do not repeat what it already says. To remove an item, list it under "remove" with its collection and key and the same rationale, basis, confidence and evidence as any item, e.g. ${JSON.stringify(REMOVAL_EXAMPLE)}.`,
-  'An item may state its uncertainty in an optional "uncertainty" (text) and disagreements between sources in an optional "conflicts" ([{"note": "…", "sourceIds": ["…"]}]), next to its rationale; nowhere else. Ask at most two questions, only where the answer would materially change your suggestions.',
+  'An item may state its uncertainty in an optional "uncertainty" (text) and disagreements between sources in an optional "conflicts" ([{"note": "…", "sourceIds": ["…"]}]), next to its rationale; nowhere else; leave them out when there is nothing to say. Ask at most two questions, only where the answer would materially change your suggestions.',
   'Write every value in the brand’s locale and spelling. Never change items the person asked to keep.',
 ];
 
@@ -189,14 +201,38 @@ export function optionalFields(section: AssistSection): string[] {
   return Object.keys(shape).filter((k) => shape[k]?.isOptional());
 }
 
-const optionalLine = (section: AssistSection): string[] => {
+/**
+ * The answer with nothing to propose: every list empty, every optional single suggestion left out. Shown in the
+ * prompt so a model that has nothing for a list writes [] rather than dropping the field (staging, 4 October, after
+ * #92: voice refused for `personality`, `claimRules`, `remove` and `questions` missing).
+ */
+export function emptyAnswer(section: AssistSection): Record<string, unknown[]> {
+  return Object.fromEntries(
+    Object.keys(MODEL_SECTION_OUTPUT[section].shape)
+      .filter((k) => !optionalFields(section).includes(k))
+      .map((k) => [k, []]),
+  );
+}
+
+const fieldsLine = (section: AssistSection): string[] => {
   const fields = optionalFields(section);
-  return fields.length
-    ? [
-        `Leave out ${fields.map((f) => `"${f}"`).join(', ')} when you have no change to suggest for it; the approved guidance stands as it is.`,
-      ]
-    : [];
+  return [
+    ...(fields.length
+      ? [
+          `Only ${fields.map((f) => `"${f}"`).join(', ')} may be left out: leave one out when you have no change to suggest for it; the approved guidance stands as it is. Every other field is always present.`,
+        ]
+      : ['Every field is always present.']),
+    `With nothing to propose at all, the answer is ${JSON.stringify(emptyAnswer(section))}.`,
+  ];
 };
+
+/**
+ * The section's structured-output schema: its strict zod schema in strict JSON Schema form (one source of truth).
+ * The answer is still checked against the zod schema; an optional field the model writes as null is read as absent.
+ */
+export function sectionResponseSchema(section: AssistSection): ModelResponseSchema {
+  return { name: `brand_assist_${section}`, schema: strictJsonSchema(MODEL_SECTION_OUTPUT[section]) };
+}
 
 export interface BrandAssistPrompt {
   system: string;
@@ -212,7 +248,7 @@ export function buildBrandAssistPrompt(req: BrandAssistModelRequestV1): BrandAss
     'You only suggest. People review every suggestion before anything changes.',
     ...RULES.map((r) => `- ${r}`),
     `Answer in exactly this shape (an example; replace every value): ${JSON.stringify(SECTION_EXAMPLES[req.section])}`,
-    ...optionalLine(req.section),
+    ...fieldsLine(req.section),
     '',
     '# 2. Approved brand guidance (the brand system now)',
     sanitiseBrandText(
@@ -284,7 +320,7 @@ export function createBrandAssistModel(opts: {
     async propose(req): Promise<BrandAssistModelResultV1> {
       await assertRoutingAllowed(req.tenantId, opts.adapter.provider, cfg.model);
       const prompt = buildBrandAssistPrompt(req);
-      const completion = await opts.adapter.complete({
+      const call: ModelRequest = {
         model: cfg.model,
         system: prompt.system,
         messages: [{ role: 'user', content: [{ type: 'text', text: prompt.user }] }],
@@ -293,10 +329,25 @@ export function createBrandAssistModel(opts: {
         temperature: 0.2,
         timeoutMs: cfg.timeoutMs,
         metadata: { runId: req.jobId, tenantId: req.tenantId },
-      });
+        responseSchema: sectionResponseSchema(req.section),
+      };
+      let completion;
+      try {
+        completion = await opts.adapter.complete(call);
+      } catch (err) {
+        // A provider that refuses the schema itself (unsupported or too complex for it) still gets the prompt's
+        // contract: the call is made once more without it, and the answer is checked the same way.
+        if (!(err instanceof ValidationFailedError)) throw err;
+        logger().warn(
+          { errorMessage: `brand assist ${req.section}: structured output refused` },
+          'model call retried without structured output',
+        );
+        const { responseSchema: _schema, ...plain } = call;
+        completion = await opts.adapter.complete(plain);
+      }
       const { value, error } = parseModelJson(completion.content.map((c) => c.text).join(''));
       return {
-        raw: value,
+        raw: value === null ? null : withoutNullOptionals(MODEL_SECTION_OUTPUT[req.section], value),
         parseError: error,
         usage: completion.usage,
         costMicros: estimateCostMicros(cfg, completion.usage),
