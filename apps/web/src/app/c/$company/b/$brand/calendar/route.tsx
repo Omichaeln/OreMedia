@@ -231,12 +231,12 @@ export function CalendarRoute() {
           </p>
         ) : (
           <ul className="flex flex-col" aria-label="Publications" data-testid="day-list">
-            {dayItems.map((p, i) => {
+            {dayItems.map((p) => {
               const chip = publicationChip(p.state, p.remoteStatus);
               const selected = p.publicationId === selectedId;
               const target = channelLabel(p, channelMap, destinationMap);
               return (
-                <li key={p.publicationId} className="om-in" style={{ animationDelay: `${i * 30}ms` }}>
+                <li key={p.publicationId}>
                   <button
                     type="button"
                     data-publication={p.publicationId}

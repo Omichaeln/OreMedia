@@ -148,7 +148,7 @@ export function ScheduleForm({
   return (
     <section
       aria-labelledby="schedule-title"
-      className="om-in flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
     >
       <h2 id="schedule-title" className="text-base font-bold">
         Schedule a channel variant

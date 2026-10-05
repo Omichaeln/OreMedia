@@ -35,7 +35,12 @@ export function BrandHomeRoute() {
   const hour = Number(
     new Intl.DateTimeFormat('en-GB', { timeZone, hour: 'numeric', hourCycle: 'h23' }).format(now),
   );
-  const date = now.toLocaleDateString('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short' });
+  const date = now.toLocaleDateString('en-GB', {
+    timeZone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
   const firstName = user.data?.name.split(' ')[0];
   const needs = useNeedsYouRows();
   // The same week read the strip below makes (one query); today's publications are the ones that go out.
@@ -43,7 +48,9 @@ export function BrandHomeRoute() {
   const weekRange = useMemo(() => rangeFor('week', todayKey, timeZone), [todayKey, timeZone]);
   const week = useCalendarRange(brandId, weekRange.from, weekRange.to);
   const goingOut = week.data
-    ? (groupByDay(week.data.publications, timeZone).get(todayKey) ?? []).filter((p) => p.state !== 'cancelled').length
+    ? (groupByDay(week.data.publications, timeZone).get(todayKey) ?? []).filter(
+        (p) => p.state !== 'cancelled',
+      ).length
     : undefined;
   const summary =
     needs.rows.length === 0 && needs.settled
@@ -89,7 +96,10 @@ export function BrandHomeRoute() {
           title="Outdated standards."
           description="A proposed update is newer than the published brand system. Documents keep the published version until the update is reviewed and saved."
           actions={
-            <Link to={system} className="text-sm font-medium hover:opacity-60">
+            <Link
+              to={system}
+              className="inline-flex min-h-6 items-center text-sm font-medium hover:opacity-60"
+            >
               Review update <span aria-hidden="true">→</span>
             </Link>
           }

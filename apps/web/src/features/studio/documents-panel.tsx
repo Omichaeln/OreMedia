@@ -85,7 +85,9 @@ export function RecentDocuments() {
                 {d.kind === 'video' ? 'Motion' : 'Still'}
               </span>
             </span>
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{whenChanged(d.updatedAt)}</span>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {whenChanged(d.updatedAt)}
+            </span>
           </Link>
         </li>
       ))}
