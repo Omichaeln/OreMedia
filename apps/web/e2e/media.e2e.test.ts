@@ -173,6 +173,7 @@ describe.skipIf(!enabled)('video and audio media (built app in Chromium, mock tr
       await expect.poll(() => metadataLoaded(page, 'inline-video'), { timeout: 15_000 }).toBe(true);
       expect(await media.textContent()).toContain('0:02 · 30 fps');
       // The same player in the external reviewer portal, through a request-bound link.
+      await page.getByRole('button', { name: '+ New link' }).click();
       await page.getByLabel('Reviewer email').fill('video.reviewer@example.com');
       await page.getByRole('button', { name: 'Create link' }).click();
       await expect.poll(() => page.getByTestId('link-once').count(), { timeout: 15_000 }).toBe(1);

@@ -921,7 +921,7 @@ function ExternalLinks({ request: r }: { request: MemberReviewRequestDto }) {
             aria-expanded={open}
             aria-controls={formId}
             onClick={() => setOpen((o) => !o)}
-            className="hover:text-foreground"
+            className="inline-flex min-h-6 items-center px-1 hover:text-foreground"
           >
             {open ? 'Close' : '+ New link'}
           </button>
@@ -997,13 +997,13 @@ function ExternalLinks({ request: r }: { request: MemberReviewRequestDto }) {
                     {l.lastUsedAt && ` · last used ${shortDate(l.lastUsedAt)}`}
                   </span>
                 </span>
-                <span className="flex gap-2 text-xs">
+                <span className="flex items-center gap-3 text-xs">
                   {created?.linkId === l.id && (
                     <a
                       href={link}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-muted-foreground hover:text-foreground"
+                      className="inline-flex min-h-6 items-center px-1 text-muted-foreground hover:text-foreground"
                     >
                       Preview
                     </a>
@@ -1011,7 +1011,7 @@ function ExternalLinks({ request: r }: { request: MemberReviewRequestDto }) {
                   {!l.revokedAt && (
                     <button
                       type="button"
-                      className="text-status-critical hover:opacity-60 disabled:opacity-60"
+                      className="inline-flex min-h-6 items-center px-1 text-status-critical hover:opacity-60 disabled:opacity-60"
                       onClick={() => revoke.mutate({ linkId: l.id })}
                       disabled={revoke.isPending}
                       aria-label={`Revoke link for ${l.email}`}
