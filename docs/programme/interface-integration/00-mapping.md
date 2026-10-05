@@ -111,13 +111,13 @@ structure or missing a control the interface has; **Missing** = no functionality
 
 ### Campaigns
 
-| Interface element                                                     | Application functionality                            | Status | Required change                                                                                  | PR                    |
-| --------------------------------------------------------------------- | ---------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ | --------------------- |
-| Campaign column (+), brief column (+ Brief), brief detail             | `campaigns-screen`, `brief-detail`                   | Done   | Three columns `240px 290px minmax(0,1fr)`, stacked below 768 px; rows as the interface sets them | `claude/ui-campaigns` |
-| Brief header BRIEF · PLAN ACCEPTED; Audience / Channels / Constraints | brief fields                                         | Done   | Eyebrow, 22 px title, definition rows                                                            | `claude/ui-campaigns` |
-| Plan table (date, channel, item, format)                              | `plan-grid` (D-21 plan items)                        | Done   | Table rows; a draft brief's rows edited in place                                                 | `claude/ui-campaigns` |
-| Content packages with per-variant validity                            | `package-detail`, variant checks                     | Done   | "rev N · state" and a dot-and-text line per variant, read per package                            | `claude/ui-campaigns` |
-| Open in studio / Draft variants with agent / Send package for review  | document link, `agents.runs.start`, `request-review` | Done   | Action row; studio link from the chosen package, copywriting run form, review drawer             | `claude/ui-campaigns` |
+| Interface element                                                     | Application functionality                            | Status | Required change                                                                                  | PR   |
+| --------------------------------------------------------------------- | ---------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ | ---- |
+| Campaign column (+), brief column (+ Brief), brief detail             | `campaigns-screen`, `brief-detail`                   | Done   | Three columns `240px 290px minmax(0,1fr)`, stacked below 768 px; rows as the interface sets them | #105 |
+| Brief header BRIEF · PLAN ACCEPTED; Audience / Channels / Constraints | brief fields                                         | Done   | Eyebrow, 22 px title, definition rows                                                            | #105 |
+| Plan table (date, channel, item, format)                              | `plan-grid` (D-21 plan items)                        | Done   | Table rows; a draft brief's rows edited in place                                                 | #105 |
+| Content packages with per-variant validity                            | `package-detail`, variant checks                     | Done   | "rev N · state" and a dot-and-text line per variant, read per package                            | #105 |
+| Open in studio / Draft variants with agent / Send package for review  | document link, `agents.runs.start`, `request-review` | Done   | Action row; studio link from the chosen package, copywriting run form, review drawer             | #105 |
 
 ### Studio
 
