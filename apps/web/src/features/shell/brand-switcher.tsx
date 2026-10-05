@@ -35,18 +35,20 @@ export function BrandSwitcher({
     <DropdownMenu>
       <DropdownMenuTrigger
         className={cn(
-          'flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-left',
-          'hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'flex w-full flex-col items-start gap-0.5 rounded-lg border border-border bg-card px-2.5 py-2 text-left transition-colors',
+          'hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         )}
       >
-        <span className="min-w-0">
-          <span className="block truncate text-xs text-muted-foreground">{companyName ?? companyId}</span>
-          <span className="block truncate text-sm font-medium">{brandName}</span>
+        <span className="block w-full truncate text-xs text-muted-foreground">
+          {companyName ?? companyId}
+        </span>
+        <span className="flex w-full items-center justify-between gap-2 text-sm font-medium">
+          <span className="truncate">{brandName}</span>
+          <span aria-hidden="true" className="text-muted-foreground">
+            ⌄
+          </span>
         </span>
         <span className="sr-only">. Switch brand or company</span>
-        <span aria-hidden="true" className="text-muted-foreground">
-          ⌄
-        </span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <p className="px-2 pb-1 pt-1.5 text-xs text-muted-foreground">

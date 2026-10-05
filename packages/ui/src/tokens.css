@@ -1,45 +1,88 @@
 /*
- * Spec 8.4: Oremedia's UI identity is applied as a token file, not a refactor. These are NEUTRAL PLACEHOLDERS
- * until D-12 names the governing brand system; customer brand tokens style creative documents, never this chrome.
+ * Spec 8.4 / D-27: Oremedia's UI identity is applied as a token file, not a refactor. The values are the supplied
+ * interface's palette (docs/programme/interface-integration/01-decisions.md): a warm paper ground, ink text, one
+ * orange accent, and status colours carried by dots and text. A deployment pack (apps/web/deployment-brands) may
+ * still override these at deploy time; customer brand tokens style creative documents, never this chrome.
  * All styling uses these semantic properties only.
+ *
+ * Text tokens meet WCAG 1.4.3 (4.5:1) on --background, --card and --muted; the lighter `-dot` set is for 6–7 px
+ * status dots and bars beside text that already carries the state, never for text.
  */
 :root {
-  --background: #f6f7f5;
-  --foreground: #172120;
-  --primary: #1f2a28;
-  --primary-foreground: #f6f7f5;
-  --secondary: #e7ebe8;
-  --secondary-foreground: #172120;
-  --accent: #0f6e63;
+  --background: #f7f6f3;
+  --foreground: #1a1917;
+  --card: #ffffff;
+  --card-tint: #fbfaf8;
+  --primary: #1a1917;
+  --primary-foreground: #ffffff;
+  --primary-hover: #38352f;
+  --secondary: #efede8;
+  --secondary-foreground: #1a1917;
+  --accent: oklch(0.62 0.13 45);
   --accent-foreground: #ffffff;
-  --muted: #eef1ee;
-  --muted-foreground: #5d6966;
-  --border: #d3dad5;
-  --ring: #0f6e63;
-  --radius: 6px;
-  --status-good: #1e7a4c;
-  /* ≥ 4.5:1 on --background and --muted (WCAG 1.4.3); #a56a00 measured 4.19:1 and 3.96:1. */
-  --status-warning: #8f5c00;
-  --status-critical: #b2271f;
-  --status-info: #4b5a76;
+  /* The accent as text (4.5:1 on every light surface); the lighter --accent is for marks and fills. */
+  --accent-ink: oklch(0.5 0.12 45);
+  --accent-tint: oklch(0.975 0.012 45);
+  --muted: #f1efea;
+  --muted-foreground: #6f6b64;
+  /* Below 4.5:1 on every surface: for non-text marks (rules, hatching) only, never for text or glyphs. */
+  --subtle-foreground: #9a958c;
+  --border: #e7e4de;
+  --border-strong: #cfcac1;
+  --ring: oklch(0.7 0.13 45);
+  --radius: 8px;
+  --radius-control: 6px;
+  --status-good: oklch(0.5 0.1 150);
+  --status-warning: oklch(0.5 0.12 60);
+  --status-critical: oklch(0.5 0.15 25);
+  --status-info: oklch(0.5 0.08 250);
+  --status-good-dot: oklch(0.6 0.1 150);
+  --status-warning-dot: oklch(0.68 0.12 75);
+  --status-critical-dot: oklch(0.58 0.15 25);
+  --status-info-dot: oklch(0.58 0.08 250);
+  --status-neutral-dot: #cfcac1;
+  --status-warning-tint: oklch(0.97 0.02 75);
+  --status-critical-tint: oklch(0.97 0.02 25);
+  --shadow-card: 0 1px 2px rgba(26, 25, 23, 0.08), 0 14px 36px rgba(26, 25, 23, 0.1);
+  --shadow-pop: 0 1px 2px rgba(26, 25, 23, 0.06), 0 10px 28px rgba(26, 25, 23, 0.12);
+  --shadow-drawer: -12px 0 40px rgba(26, 25, 23, 0.08);
+  --scrim: rgba(26, 25, 23, 0.25);
 }
 .dark,
 [data-theme='dark'] {
   color-scheme: dark;
-  --background: #111514;
-  --foreground: #e6eae7;
-  --primary: #e6eae7;
-  --primary-foreground: #111514;
-  --secondary: #222a27;
-  --secondary-foreground: #e6eae7;
-  --accent: #5fc3b1;
-  --accent-foreground: #0b1513;
-  --muted: #191f1d;
-  --muted-foreground: #9ba6a2;
-  --border: #2c3532;
-  --ring: #5fc3b1;
-  --status-good: #5cbb86;
-  --status-warning: #e2a53d;
-  --status-critical: #ea7169;
-  --status-info: #93a3c6;
+  --background: #161513;
+  --foreground: #ece9e3;
+  --card: #1d1c1a;
+  --card-tint: #23211f;
+  --primary: #ece9e3;
+  --primary-foreground: #161513;
+  --primary-hover: #d6d2ca;
+  --secondary: #2a2825;
+  --secondary-foreground: #ece9e3;
+  --accent: oklch(0.74 0.13 45);
+  --accent-foreground: #161513;
+  --accent-ink: oklch(0.74 0.13 45);
+  --accent-tint: #2b241d;
+  --muted: #23211f;
+  --muted-foreground: #a39e95;
+  --subtle-foreground: #857f76;
+  --border: #34312d;
+  --border-strong: #4a4641;
+  --ring: oklch(0.74 0.13 45);
+  --status-good: oklch(0.72 0.1 150);
+  --status-warning: oklch(0.78 0.12 75);
+  --status-critical: oklch(0.72 0.14 25);
+  --status-info: oklch(0.74 0.08 250);
+  --status-good-dot: oklch(0.72 0.1 150);
+  --status-warning-dot: oklch(0.78 0.12 75);
+  --status-critical-dot: oklch(0.72 0.14 25);
+  --status-info-dot: oklch(0.74 0.08 250);
+  --status-neutral-dot: #4a4641;
+  --status-warning-tint: #2d2719;
+  --status-critical-tint: #2e1f1c;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 36px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px rgba(0, 0, 0, 0.55);
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.5);
 }

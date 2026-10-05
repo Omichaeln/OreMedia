@@ -1,26 +1,31 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
-import { Skeleton, cn, toneGlyph, toneTextClass } from '@oremedia/ui';
+import { Skeleton, StatusDot, cn, type Tone } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import {
+  PUBLICATION_CHIP,
   channelOutcomeSummary,
   dayKey,
   groupByDay,
   parseKey,
   rangeFor,
   weekDays,
+  type PublicationStateT,
 } from '../publishing/publication-state';
 import { useCalendarRange } from '../publishing/use-publishing';
 import { Section } from '../../components/section';
 
 const weekday = (key: string) =>
-  parseKey(key).toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
+  parseKey(key).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' }).toUpperCase();
+
+const MAX_DOTS = 6;
+const toneOf = (state: string): Tone => PUBLICATION_CHIP[state as PublicationStateT]?.tone ?? 'neutral';
 
 /**
- * This week at a glance: seven days of the brand's calendar in the brand's timezone. Each day says how many
- * publications it holds and names any that failed, are held or have an unknown outcome, in text with a glyph; the
- * day links to the calendar's week view with that day selected.
+ * This week at a glance, as the interface draws it: seven cards, one per day of the brand's week in its timezone,
+ * each with a dot per publication in the state's colour; the count and any that need a person are also said in
+ * text, so nothing rests on colour. A day links to the calendar's week view with that day selected.
  */
 export function WeekStrip() {
   const { companyId, brandId, brand } = useBrandContext();
@@ -36,7 +41,7 @@ export function WeekStrip() {
       id="this-week"
       title="This week"
       action={
-        <Link to={`${calendarHref}?view=week`} className="underline-offset-2 hover:underline">
+        <Link to={`${calendarHref}?view=week`} className="hover:text-foreground">
           Calendar <span aria-hidden="true">→</span>
         </Link>
       }
@@ -50,35 +55,41 @@ export function WeekStrip() {
       )}
       {calendar.isPending && <Skeleton label="Loading this week" lines={2} />}
       {calendar.isSuccess && (
-        <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7" data-testid="week-strip">
+        <ol className="grid grid-cols-7 gap-1.5" data-testid="week-strip">
           {days.map((d) => {
             const pubs = byDay.get(d.key) ?? [];
             const summary = channelOutcomeSummary(pubs);
             const problems = summary.failed + summary.held + summary.unknown;
             const isToday = d.key === todayKey;
+            const spoken =
+              pubs.length === 0
+                ? 'Nothing scheduled'
+                : `${pubs.length} ${pubs.length === 1 ? 'post' : 'posts'}${
+                    problems > 0 ? `, ${problems} need${problems === 1 ? 's' : ''} attention` : ''
+                  }`;
             return (
               <li key={d.key}>
                 <Link
                   to={`${calendarHref}?view=week&day=${d.key}`}
                   aria-current={isToday ? 'date' : undefined}
                   className={cn(
-                    'flex h-full flex-col gap-1 rounded-md border bg-background p-2.5 text-sm hover:bg-secondary',
+                    'flex h-full min-h-[84px] flex-col items-start gap-2 rounded-lg border bg-card p-2 sm:p-2.5 transition-colors hover:border-border-strong',
                     isToday ? 'border-foreground' : 'border-border',
                   )}
                 >
-                  <span className="font-mono text-xs uppercase text-muted-foreground">{weekday(d.key)}</span>
-                  <span className="text-lg font-semibold tabular-nums">{d.dayOfMonth}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {pubs.length === 0
-                      ? 'Nothing scheduled'
-                      : `${pubs.length} ${pubs.length === 1 ? 'post' : 'posts'}`}
+                  <span className="text-2xs tabular-nums text-muted-foreground">{weekday(d.key)}</span>
+                  <span className="text-lg font-bold tabular-nums">{d.dayOfMonth}</span>
+                  <span className="flex flex-wrap gap-[3px]">
+                    {pubs.slice(0, MAX_DOTS).map((p) => (
+                      <StatusDot key={p.publicationId} tone={toneOf(p.state)} size="sm" />
+                    ))}
+                    {pubs.length > MAX_DOTS && (
+                      <span aria-hidden="true" className="text-2xs leading-[6px] text-muted-foreground">
+                        +{pubs.length - MAX_DOTS}
+                      </span>
+                    )}
+                    <span className="sr-only">{spoken}</span>
                   </span>
-                  {problems > 0 && (
-                    <span className={cn('text-xs', toneTextClass.critical)}>
-                      <span aria-hidden="true">{toneGlyph.critical} </span>
-                      {problems} need{problems === 1 ? 's' : ''} attention
-                    </span>
-                  )}
                 </Link>
               </li>
             );

@@ -852,10 +852,11 @@ describe.skipIf(!enabled)('agent runs smoke (built app in Chromium, mock transpo
   }, 45_000);
 
   it('a reviewer without agent.start_run still sees the brand’s runs and gets a Permission denied state on start', async () => {
-    // At phone width Sign out is in the Menu drawer with the brand navigation.
+    // Sign out is in the account menu at the foot of the brand navigation (the Menu drawer at phone width).
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByRole('button', { name: 'Account and session' }).first().click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     // Sign out navigates to /sign-in itself; a second navigation started before it lands is aborted (ERR_ABORTED).
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
     await signIn(E2E.reviewerToken);

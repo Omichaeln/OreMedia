@@ -7,7 +7,7 @@ import { cn } from './cn';
  * neither `:focus` nor `:focus-visible`, only `:focus-within`; without this that stop shows no indicator (WCAG 2.4.7).
  */
 const controlClasses =
-  'w-full rounded-md border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground ' +
+  'w-full rounded-lg border border-border bg-card px-2.5 text-sm text-foreground placeholder:text-muted-foreground hover:border-border-strong ' +
   'focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1 focus-within:ring-offset-background ' +
   'disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-status-critical';
 
@@ -17,7 +17,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
   { className, ...props },
   ref,
 ) {
-  return <input ref={ref} className={cn(controlClasses, 'h-9', className)} {...props} />;
+  return <input ref={ref} className={cn(controlClasses, 'h-8', className)} {...props} />;
 });
 
 export type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement>;

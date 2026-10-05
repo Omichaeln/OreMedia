@@ -17,7 +17,7 @@ export function DropdownMenuContent({
       <RadixMenu.Content
         align={align}
         sideOffset={4}
-        className="z-50 min-w-44 rounded-md border border-border bg-background p-1 text-sm text-foreground shadow-md"
+        className="om-pop z-50 min-w-44 rounded-lg border border-border bg-card p-1 text-sm text-foreground shadow-pop"
       >
         {children}
       </RadixMenu.Content>
@@ -33,7 +33,7 @@ export function DropdownMenuItem({ className, tone = 'default', ...props }: Drop
   return (
     <RadixMenu.Item
       className={cn(
-        'flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none',
+        'flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 outline-none',
         'data-[highlighted]:bg-muted data-[disabled]:opacity-50',
         tone === 'danger' && 'text-status-critical',
         className,

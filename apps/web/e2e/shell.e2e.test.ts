@@ -139,8 +139,9 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       const page = await signedIn(1280);
       await page.goto(`${origin}/portfolio`);
       const company = page.getByRole('region', { name: E2E.companyName }).getByTestId('summary-counts');
-      await expect.poll(() => company.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');
-      expect(await company.textContent()).toContain(`${needsPerson} post`);
+      // The portfolio's brand rows: "<n> overdue · <n> failed · <n> upcoming" per brand.
+      await expect.poll(() => company.textContent(), { timeout: 15_000 }).toContain('1 overdue');
+      expect(await company.textContent()).toContain(`${needsPerson} failed`);
       await page.goto(`${origin}/c/${encodeURIComponent(E2E.tenantId)}`);
       const brand = page.getByRole('region', { name: E2E.brandName }).getByTestId('summary-counts');
       await expect.poll(() => brand.textContent(), { timeout: 15_000 }).toContain('1 overdue approval');

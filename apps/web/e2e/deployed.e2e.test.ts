@@ -125,7 +125,8 @@ describe.skipIf(!webOrigin)('deployed origin (real web, api and fixtures in Chro
   it('signing out ends the session: the brand home then asks for a sign-in', async () => {
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
-    await page.getByRole('button', { name: 'Sign out' }).first().click();
+    await page.getByRole('button', { name: 'Account and session' }).first().click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await page.waitForURL('**/sign-in*', { timeout: 30_000 });
     await page.goto(`${origin}${brandPath(people.a, 'home')}`);
     await page.waitForURL('**/sign-in*', { timeout: 30_000 });

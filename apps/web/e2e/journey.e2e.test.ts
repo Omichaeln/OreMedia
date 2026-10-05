@@ -64,14 +64,15 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await page.getByRole('button', { name: 'Continue' }).click();
     await page.waitForURL('**/portfolio*', { timeout: 15_000 });
   };
-  /** At phone width the brand navigation (and Sign out) is in the Menu drawer. */
+  /** At phone width the brand navigation (and the account menu with Sign out) is in the Menu drawer. */
   const openMenu = async () => {
     const menu = page.getByRole('button', { name: 'Menu' });
     if (await menu.isVisible()) await menu.click();
   };
   const signOut = async () => {
     await openMenu();
-    await page.getByRole('button', { name: 'Sign out' }).first().click();
+    await page.getByRole('button', { name: 'Account and session' }).first().click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await page.waitForURL('**/sign-in*', { timeout: 15_000 });
   };
   const publicationState = () =>
@@ -138,8 +139,8 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
     await expect.poll(() => companies.getByRole('listitem').count(), { timeout: 15_000 }).toBe(2);
     const a = page.getByRole('region', { name: E2E.companyName });
     const b = page.getByRole('region', { name: E2E_B.companyName });
-    expect(await a.textContent()).toContain('owner');
-    expect(await b.textContent()).toContain('brand_manager');
+    expect(await a.textContent()).toContain('Owner');
+    expect(await b.textContent()).toContain('Brand manager');
     // Company A has two brands and the owner sees both.
     await a.getByRole('link', { name: 'Open' }).click();
     await expect
@@ -508,15 +509,19 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
       .toBe(2);
     // Each company's counts are asked with its own tenant: A's failed and held posts never show under B.
     const countsOf = (name: string) => page.getByRole('region', { name }).getByTestId('summary-counts');
+    // The brand rows read "<n> overdue · <n> failed · <n> upcoming"; B's failed count is zero.
     await expect
       .poll(() => countsOf(E2E.companyName).textContent(), { timeout: 15_000 })
-      .toContain('failed or held');
+      .toMatch(/[1-9]\d* failed/);
     await expect
       .poll(() => countsOf(E2E_B.companyName).textContent(), { timeout: 15_000 })
-      .toContain('due in the next 7 days');
-    expect(await countsOf(E2E_B.companyName).textContent()).not.toContain('failed or held');
+      .toContain('upcoming');
+    expect(await countsOf(E2E_B.companyName).textContent()).toContain('0 failed');
+    // The portfolio lists the person's own memberships (each company with its brands, asked with that tenant),
+    // never another company's rows: company A's packages, requests and ids do not appear.
     const portfolio = (await page.locator('main').textContent()) ?? '';
-    for (const marker of aMarkers.filter((m) => m !== E2E.companyName))
+    const ownMemberships = new Set([E2E.companyName, E2E.brandName, BRAND_2.name]);
+    for (const marker of aMarkers.filter((m) => !ownMemberships.has(m)))
       expect(portfolio, `portfolio must not show "${marker}"`).not.toContain(marker);
     // Every request B's screens made carried B's tenant, and company A's ids are unknown there.
     expect(companyB.requests.length).toBeGreaterThan(requestsBefore);

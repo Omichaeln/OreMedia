@@ -23,11 +23,11 @@ export function DrawerContent({
 }) {
   return (
     <RadixDialog.Portal>
-      <RadixDialog.Overlay className="fixed inset-0 z-40 bg-foreground/40" />
+      <RadixDialog.Overlay className="om-fade fixed inset-0 z-40 bg-scrim" />
       <RadixDialog.Content
         className={cn(
-          'fixed inset-y-0 z-50 flex w-[min(85vw,18rem)] flex-col border-border bg-background text-foreground shadow-lg outline-none',
-          side === 'left' ? 'left-0 border-r' : 'right-0 border-l',
+          'fixed inset-y-0 z-50 flex w-[min(85vw,22rem)] flex-col border-border bg-card text-foreground shadow-drawer outline-none',
+          side === 'left' ? 'left-0 border-r' : 'om-drawer right-0 border-l',
           className,
         )}
       >

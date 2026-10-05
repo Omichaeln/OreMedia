@@ -24,21 +24,21 @@ export const Panel = React.forwardRef<HTMLElement, PanelProps>(function Panel(
       ref={ref}
       id={id}
       aria-labelledby={headingId}
-      className={cn('flex min-h-0 flex-col rounded-md border border-border bg-background', className)}
+      className={cn('flex min-h-0 flex-col rounded-lg border border-border bg-card', className)}
       {...props}
     >
       <div
         className={cn(
-          'flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2',
+          'flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5',
           hideTitle && !actions && 'sr-only',
         )}
       >
-        <Heading id={headingId} className={cn('text-sm font-semibold', hideTitle && 'sr-only')}>
+        <Heading id={headingId} className={cn('text-base font-bold', hideTitle && 'sr-only')}>
           {title}
         </Heading>
         {actions && <div className="flex items-center gap-1">{actions}</div>}
       </div>
-      <div className={cn('min-h-0 flex-1 overflow-auto p-3', bodyClassName)}>{children}</div>
+      <div className={cn('min-h-0 flex-1 overflow-auto p-4', bodyClassName)}>{children}</div>
     </section>
   );
 });

@@ -28,24 +28,80 @@ export const toneBorderClass: Record<Tone, string> = {
   info: 'border-status-info',
 };
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
-  tone?: Tone;
-  /** Hide the glyph when the text itself is the status (e.g. "Locked"). */
-  glyph?: boolean;
+/** The dot colours: lighter than the text set, for marks beside text that already carries the state. */
+export const toneDotClass: Record<Tone, string> = {
+  neutral: 'bg-status-neutral-dot',
+  good: 'bg-status-good-dot',
+  warning: 'bg-status-warning-dot',
+  critical: 'bg-status-critical-dot',
+  info: 'bg-status-info-dot',
+};
+
+export interface StatusDotProps extends React.HTMLAttributes<HTMLSpanElement> {
+  tone: Tone;
+  size?: 'sm' | 'md';
 }
 
-export function Badge({ tone = 'neutral', glyph = true, className, children, ...props }: BadgeProps) {
+/** A 6 or 7 px status mark; decorative, so the text beside it names the state (spec 21.3). */
+export function StatusDot({ tone, size = 'md', className, ...props }: StatusDotProps) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'inline-block shrink-0 rounded-full',
+        size === 'sm' ? 'h-1.5 w-1.5' : 'h-[7px] w-[7px]',
+        toneDotClass[tone],
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+  tone?: Tone;
+  /**
+   * Hide the mark when the text itself is the status (e.g. "Locked"). The mark is a dot in the tone's colour; the
+   * glyph the tone also has is kept for assistive technology only, so colour is never the only carrier of state.
+   */
+  glyph?: boolean;
+  /** `pill`: an outlined chip (filters, counts); default: a dot and the label, as the interface sets states. */
+  variant?: 'dot' | 'pill';
+}
+
+export function Badge({
+  tone = 'neutral',
+  glyph = true,
+  variant = 'dot',
+  className,
+  children,
+  ...props
+}: BadgeProps) {
+  if (variant === 'pill')
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium leading-4',
+          toneTextClass[tone],
+          className,
+        )}
+        {...props}
+      >
+        {glyph && <span aria-hidden="true">{toneGlyph[tone]}</span>}
+        {children}
+      </span>
+    );
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-xs font-medium leading-4',
-        toneBorderClass[tone],
-        toneTextClass[tone],
+        'inline-flex items-center gap-1.5 text-xs font-medium leading-4',
+        tone === 'neutral' ? 'text-muted-foreground' : 'text-foreground',
         className,
       )}
       {...props}
     >
-      {glyph && <span aria-hidden="true">{toneGlyph[tone]}</span>}
+      {glyph && <StatusDot tone={tone} size="sm" />}
+      {glyph && <span className="sr-only">{toneGlyph[tone]} </span>}
       {children}
     </span>
   );

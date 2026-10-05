@@ -1,5 +1,5 @@
 import { Link } from 'react-router';
-import { Badge, EmptyState, Skeleton, type Tone } from '@oremedia/ui';
+import { Skeleton, StatusDot, toneGlyph, type Tone } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useFacts } from '../brand/use-brand';
@@ -84,12 +84,21 @@ const publicationRow = (p: PublicationSummaryDto, calendarHref: string): NeedsYo
   };
 };
 
+export interface NeedsYouRows {
+  rows: NeedsYouRow[];
+  /** Every list has answered (so an empty list is really empty). */
+  settled: boolean;
+  pending: boolean;
+  failed: { error: unknown; refetch: () => void } | null;
+  timeZone: string;
+}
+
 /**
  * Spec 21.2 "action needed" as one list: review requests that wait on a person, publications that failed, have an
  * unknown outcome or are held, proposed facts and facts due for review. Every row says what happened and what to do, and links to the
  * exact item. Only what the lists return; nothing is estimated.
  */
-export function NeedsYou() {
+export function useNeedsYouRows(): NeedsYouRows {
   const { companyId, brandId, brand } = useBrandContext();
   const timeZone = brand.timezone || 'UTC';
   const inbox = useReviewInboxPages(brandId);
@@ -140,42 +149,65 @@ export function NeedsYou() {
       : []),
   ].sort((a, b) => ORDER[a.tone] - ORDER[b.tone]);
   const failedQuery = queries.find((q) => q.isError);
+  return {
+    rows,
+    settled: queries.every((q) => q.isSuccess),
+    pending: queries.some((q) => q.isPending),
+    failed: failedQuery
+      ? { error: failedQuery.error, refetch: () => queries.forEach((q) => void q.refetch()) }
+      : null,
+    timeZone,
+  };
+}
+
+/** The rows as the interface sets them: a dot, a bold title with its detail under it, the action on the right. */
+export function NeedsYou({ rows: needs }: { rows: NeedsYouRows }) {
+  const { rows, settled, pending, failed, timeZone } = needs;
   return (
     <Section id="needs-you" title="Needs you">
-      {failedQuery && (
+      {failed && (
         <RequestError
-          error={failedQuery.error}
-          onRetry={() => queries.forEach((q) => void q.refetch())}
+          error={failed.error}
+          onRetry={failed.refetch}
           title="Part of this list could not load"
         />
       )}
-      {rows.length === 0 && queries.some((q) => q.isPending) && (
-        <Skeleton label="Loading what needs you" lines={3} />
-      )}
-      {rows.length === 0 && queries.every((q) => q.isSuccess) && (
-        <EmptyState
-          title="Nothing needs you"
-          description="No review is waiting on a person, no publication failed or is unconfirmed, and no facts are proposed or due for review."
-        />
+      {rows.length === 0 && pending && <Skeleton label="Loading what needs you" lines={3} />}
+      {rows.length === 0 && settled && (
+        <p role="status" className="py-3.5 text-base text-muted-foreground">
+          Nothing needs attention. No review is waiting on a person, no publication failed or is unconfirmed,
+          and no facts are proposed or due for review.
+        </p>
       )}
       {rows.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border" data-testid="needs-you">
+        <ul className="flex flex-col" data-testid="needs-you">
           {rows.map((r) => (
-            <li key={r.key} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                  <Badge tone={r.tone}>{r.state}</Badge>
-                  <span className="min-w-0 break-words">{r.title}</span>
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">{r.detail}</p>
-                {(r.at || r.meta) && (
-                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
-                    {[r.at && `${r.atLabel} ${when(r.at, timeZone)}`, r.meta].filter(Boolean).join(' · ')}
-                  </p>
-                )}
-              </div>
-              <Link to={r.href} className="shrink-0 text-sm font-medium underline-offset-2 hover:underline">
-                {r.action} <span aria-hidden="true">→</span>
+            <li key={r.key} className="border-b border-border last:border-b-0">
+              <Link
+                to={r.href}
+                className="grid grid-cols-[10px_minmax(0,1fr)_auto] items-center gap-x-3.5 px-1 py-3.5 hover:bg-muted"
+              >
+                <StatusDot tone={r.tone} />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-base font-bold">
+                    <span className="sr-only">
+                      {r.action}: {toneGlyph[r.tone]} {r.state}:{' '}
+                    </span>
+                    {r.title}
+                  </span>
+                  <span className="text-pretty text-sm text-muted-foreground">
+                    {r.state === 'Proposed' || r.state === 'Review due' ? '' : `${r.state}. `}
+                    {r.detail}
+                  </span>
+                  {(r.at || r.meta) && (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {[r.at && `${r.atLabel} ${when(r.at, timeZone)}`, r.meta].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                </span>
+                <span aria-hidden="true" className="whitespace-nowrap text-sm text-muted-foreground">
+                  {r.action} →
+                </span>
               </Link>
             </li>
           ))}

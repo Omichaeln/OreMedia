@@ -252,7 +252,7 @@ describe.skipIf(!enabled)('responsive parity (built app in Chromium, mock transp
     // dialog can be gone a tick before focus returns: wait for it rather than reading it once.
     await expect
       .poll(() =>
-        phone.page.evaluate(() => (document.activeElement as HTMLElement | null)?.textContent?.trim()),
+        phone.page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('aria-label')),
       )
       .toBe('Menu');
     await phone.context.close();

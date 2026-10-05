@@ -17,7 +17,19 @@ export {
   type ButtonVariant,
 } from './button';
 export { Input, Textarea, Field, type InputProps, type TextareaProps, type FieldProps } from './input';
-export { Badge, toneGlyph, toneTextClass, toneBorderClass, type BadgeProps, type Tone } from './badge';
+export {
+  Badge,
+  StatusDot,
+  toneGlyph,
+  toneTextClass,
+  toneBorderClass,
+  toneDotClass,
+  type BadgeProps,
+  type StatusDotProps,
+  type Tone,
+} from './badge';
+export { PageHeader, KpiStrip, type PageHeaderProps, type KpiStripProps } from './page-header';
+export { Chip, type ChipProps } from './chip';
 export { Panel, type PanelProps } from './panel';
 export { EmptyState, type EmptyStateProps } from './empty-state';
 export { StatusBanner, type StatusBannerProps } from './status-banner';

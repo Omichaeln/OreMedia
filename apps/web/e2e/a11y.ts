@@ -53,10 +53,28 @@ export interface AuditOptions {
 
 /** Runs every static rule in the page and returns the violations (empty = clean). */
 export async function auditPage(page: Page, opts: AuditOptions): Promise<A11yViolation[]> {
-  // Computed styles settle a frame after a change (the reduced-motion rule keeps a 0.01 ms transition everywhere).
-  await page.evaluate(
-    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-  );
+  // The audit reads the resting state: entrance animations finish first (under reduced motion they are 0.01 ms),
+  // then computed styles settle a frame after the change.
+  await page.evaluate(async () => {
+    // Entrance animations are jumped to their end state (an infinite one, e.g. a pulse, is left running); rows that
+    // arrive after the first pass (a list that loads after its screen) are caught by the next, bounded.
+    for (let round = 0; round < 10; round++) {
+      const running = document.getAnimations().filter((a) => a.playState !== 'finished');
+      const finite = running.filter((a) =>
+        Number.isFinite(a.effect?.getComputedTiming().endTime ?? Infinity),
+      );
+      if (finite.length === 0) break;
+      for (const a of finite) {
+        try {
+          a.finish();
+        } catch {
+          // already finished or not finishable: the next frame settles it
+        }
+      }
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
   return page.evaluate(auditDom, opts);
 }
 
