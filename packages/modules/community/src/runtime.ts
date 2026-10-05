@@ -20,6 +20,7 @@ import { audit } from '@oremedia/module-operations';
 import {
   ChannelConnectionRepository,
   adapterFor,
+  certificationRefusal,
   channelService,
   credentialBroker,
   providerIO,
@@ -182,6 +183,14 @@ export function createCommunityReplyRuntime(
       if (!draft.replyToMessageId)
         return { outcome: 'rejected', code: 'no_parent_comment', message: 'the draft answers no comment' };
       const parent = await messagesRepo.getById(draft.replyToMessageId);
+      // #89: replying must still be certified when the reply is sent, not only when it was queued.
+      const uncertified = certificationRefusal(connection.providerKey, ['comment_reply']);
+      if (uncertified)
+        return {
+          outcome: 'rejected',
+          code: uncertified,
+          message: 'the channel is no longer certified to reply; nothing was sent',
+        };
       const adapter = adapterFor(connection.providerKey);
       const comment = adapter.comment?.bind(adapter);
       if (!comment || !adapter.capability.comments.reply)

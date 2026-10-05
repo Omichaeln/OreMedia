@@ -3,8 +3,24 @@
 # database) with mysqldump, gzips each dump, copies it to the object store under BACKUP_PREFIX and deletes copies
 # older than BACKUP_RETENTION_DAYS (default 14) from the store and from the local volume when one is mounted.
 # Prints one DB_BACKUP_PASS line per database with the object key and size, or DB_BACKUP_FAIL and exits 1.
-# Secrets come from the environment only; nothing is echoed.
+# Each dump gets a sha256 sidecar (<dump>.sha256, sha256sum format) that restore.sh and verify.sh check, and only
+# after mysqldump exited 0 and the dump ends with mysqldump's "-- Dump completed" trailer: a dump cut short prints
+# DB_BACKUP_FAIL and nothing of it is uploaded.
+# After the dumps the same run backs up the assets and releases buckets (object-backup.sh); the two halves run as
+# separate processes, so a failing dump never skips the object backup or the reverse, and the run exits 1 if
+# either failed. Secrets come from the environment only; nothing is echoed.
 set -eu
+
+if [ "${1:-}" != "--databases" ]; then
+  status=0
+  sh "$0" --databases || status=1
+  if [ -n "${OBJECT_STORE_BUCKET_ASSETS:-}${OBJECT_STORE_BUCKET_RELEASES:-}" ]; then
+    sh "$(dirname "$0")/object-backup.sh" || status=1
+  else
+    echo "OBJECT_BACKUP_SKIPPED no source bucket (OBJECT_STORE_BUCKET_ASSETS, OBJECT_STORE_BUCKET_RELEASES)"
+  fi
+  exit "$status"
+fi
 
 : "${SRC_HOST:?SRC_HOST is required}"
 : "${SRC_DB:?SRC_DB is required}"
@@ -24,9 +40,13 @@ export AWS_EC2_METADATA_DISABLED=true
 S3="aws --endpoint-url $OBJECT_STORE_ENDPOINT s3"
 S3API="aws --endpoint-url $OBJECT_STORE_ENDPOINT s3api"
 
+# True when the gzipped dump $1 ends with mysqldump's "-- Dump completed" trailer (verify.sh checks the same; this
+# script does not source backup-lib.sh, so its uploads keep the store's default addressing).
+dump_completed() { gzip -dc "$1" 2>/dev/null | tail -n 1 | grep -q '^-- Dump completed'; }
+
 dump_one() {
   name="$1"; host="$2"; db="$3"; pw="$4"
-  file="/tmp/${name}-${STAMP}.sql.gz"
+  file="${TMPDIR:-/tmp}/${name}-${STAMP}.sql.gz"
   # --source-data records the binary log position when binary logging is on, so a later binlog replay can
   # continue from this dump; without binary logging the option is dropped (the dump is the whole recovery point).
   binlog="$(MYSQL_PWD="$pw" mysql -h "$host" -uroot -N -e "SELECT @@log_bin" 2>/dev/null || echo 0)"
@@ -39,20 +59,47 @@ dump_one() {
     *" "*) dbs="--databases $db" ;;
     *) dbs="$db" ;;
   esac
-  # shellcheck disable=SC2086
-  MYSQL_PWD="$pw" mysqldump -h "$host" -uroot --single-transaction --routines --triggers --events \
-    --set-gtid-purged=OFF $extra $dbs | gzip -6 > "$file"
+  # The image's /bin/sh may be dash (no pipefail), where a pipeline's status is gzip's alone: mysqldump's own exit
+  # status is written to a file from inside the pipeline and checked, so a dump that dies part-way (a lost
+  # connection, a killed process) is never taken for a complete one.
+  rc_file="$file.rc"
+  rm -f "$rc_file"
+  gzip_rc=0
+  {
+    dump_rc=0
+    # shellcheck disable=SC2086
+    MYSQL_PWD="$pw" mysqldump -h "$host" -uroot --single-transaction --routines --triggers --events \
+      --set-gtid-purged=OFF $extra $dbs || dump_rc=$?
+    echo "$dump_rc" > "$rc_file"
+  } | gzip -6 > "$file" || gzip_rc=$?
+  dump_rc="$(cat "$rc_file" 2>/dev/null || echo unknown)"
+  rm -f "$rc_file"
+  if [ "$dump_rc" != "0" ] || [ "$gzip_rc" != "0" ]; then
+    rm -f "$file"
+    echo "DB_BACKUP_FAIL $name mysqldump exited $dump_rc, gzip exited $gzip_rc: dump incomplete, nothing uploaded"
+    exit 1
+  fi
+  # mysqldump ends a complete dump with its "-- Dump completed" comment: a dump without it was cut short.
+  if ! dump_completed "$file"; then
+    rm -f "$file"
+    echo "DB_BACKUP_FAIL $name dump has no '-- Dump completed' trailer: dump incomplete, nothing uploaded"
+    exit 1
+  fi
   size="$(stat -c %s "$file")"
   [ "$size" -gt 1024 ] || { echo "DB_BACKUP_FAIL $name dump too small ($size bytes)"; exit 1; }
   key="$BACKUP_PREFIX/$name/${name}-${STAMP}.sql.gz"
+  sum="$(sha256sum "$file" | awk '{print $1}')"
+  printf '%s  %s\n' "$sum" "${name}-${STAMP}.sql.gz" > "$file.sha256"
   $S3 cp --only-show-errors "$file" "s3://$BACKUP_BUCKET/$key"
   remote="$($S3API head-object --bucket "$BACKUP_BUCKET" --key "$key" --query ContentLength --output text)"
   [ "$remote" = "$size" ] || { echo "DB_BACKUP_FAIL $name stored size $remote differs from $size"; exit 1; }
+  # The sidecar goes up after the dump is confirmed, so a sidecar always names a complete dump.
+  $S3 cp --only-show-errors "$file.sha256" "s3://$BACKUP_BUCKET/$key.sha256"
   if [ -d "$LOCAL_DIR" ]; then
     cp "$file" "$LOCAL_DIR/" && find "$LOCAL_DIR" -name "${name}-*.sql.gz" -mtime "+$RETENTION_DAYS" -delete
   fi
-  rm -f "$file"
-  echo "DB_BACKUP_PASS $name s3://$BACKUP_BUCKET/$key $size bytes binlog=$binlog"
+  rm -f "$file" "$file.sha256"
+  echo "DB_BACKUP_PASS $name s3://$BACKUP_BUCKET/$key $size bytes binlog=$binlog sha256=$sum"
 }
 
 prune_remote() {
@@ -60,9 +107,9 @@ prune_remote() {
   cutoff="$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -v-"${RETENTION_DAYS}"d +%Y%m%dT%H%M%SZ)"
   $S3 ls "s3://$BACKUP_BUCKET/$BACKUP_PREFIX/$name/" | awk '{print $4}' | while read -r f; do
     [ -n "$f" ] || continue
-    stamp="$(echo "$f" | sed -n "s/^${name}-\([0-9TZ]*\)\.sql\.gz$/\1/p")"
+    stamp="$(echo "$f" | sed -n "s/^${name}-\([0-9TZ]*\)\.sql\.gz\(\.sha256\)\{0,1\}$/\1/p")"
     [ -n "$stamp" ] || continue
-    if [ "$stamp" \< "$cutoff" ]; then
+    if [ "$(echo "$stamp" | tr -d TZ)" -lt "$(echo "$cutoff" | tr -d TZ)" ]; then
       $S3 rm --only-show-errors "s3://$BACKUP_BUCKET/$BACKUP_PREFIX/$name/$f"
       echo "DB_BACKUP_PRUNED $name $f"
     fi

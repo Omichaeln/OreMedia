@@ -553,4 +553,63 @@ describe('community module (comment inbox) against MySQL 8', () => {
       configurePublishingProviders({ registry, insecureAllowLoopback: true });
     }
   });
+
+  it('PR-06: a reply the channel supports but nobody certified is refused, and the inbox labels the channel', async () => {
+    const uncertifiedReplies = new ProviderRegistry();
+    const { comment_reply: _withdrawn, ...others } = fixture.capability.certifications ?? {};
+    const notCertified = new ReplyingFixture({ ...fixture.capability, certifications: others });
+    uncertifiedReplies.register(notCertified);
+    configurePublishingProviders({ registry: uncertifiedReplies, insecureAllowLoopback: true });
+    try {
+      const err = await reply(ids['c1']!, 'Hi').then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(CapabilityUnsupportedError);
+      expect((err as CapabilityUnsupportedError).details?.[0]?.issue).toBe(
+        `capability_not_certified:${FIXTURE_PROVIDER_KEY}:comment_reply`,
+      );
+      expect(notCertified.replies).toEqual([]);
+      const page = await inTenant(tenantA, () =>
+        communityService.conversations.list(member(tenantA, 'community'), { brandId: brandA }),
+      );
+      expect(page.items[0]?.channel).toMatchObject({ replySupported: false, replyUncertified: true });
+    } finally {
+      configurePublishingProviders({ registry, insecureAllowLoopback: true });
+    }
+    const page = await inTenant(tenantA, () =>
+      communityService.conversations.list(member(tenantA, 'community'), { brandId: brandA }),
+    );
+    expect(page.items[0]?.channel).toMatchObject({ replySupported: true, replyUncertified: false });
+  });
+
+  it('#89: a reply queued while certified is refused when it runs after replying lost its certification, and nothing is sent', async () => {
+    const queued = await reply(ids['c1']!, 'Queued earlier');
+    const input = wf(queued.responseDraftId);
+    const uncertifiedReplies = new ProviderRegistry();
+    const { comment_reply: _withdrawn, ...others } = fixture.capability.certifications ?? {};
+    const notCertified = new ReplyingFixture({ ...fixture.capability, certifications: others });
+    uncertifiedReplies.register(notCertified);
+    const before = fixture.replies.length;
+    configurePublishingProviders({ registry: uncertifiedReplies, insecureAllowLoopback: true });
+    try {
+      const result = await inTenant(tenantA, () => runtime.sendReplyOnce(input));
+      expect(result).toEqual({
+        outcome: 'rejected',
+        code: `capability_not_certified:${FIXTURE_PROVIDER_KEY}:comment_reply`,
+        message: 'the channel is no longer certified to reply; nothing was sent',
+      });
+      expect(notCertified.replies).toEqual([]);
+      expect(fixture.replies).toHaveLength(before);
+      expect((await draft(queued.responseDraftId)).sentAt).toBeNull();
+      const recorded = await inTenant(tenantA, () => runtime.recordReplyOutcome({ ...input, result }));
+      expect(recorded).toMatchObject({ state: 'failed', changed: true });
+      expect(await draft(queued.responseDraftId)).toMatchObject({
+        state: 'failed',
+        failureCode: `capability_not_certified:${FIXTURE_PROVIDER_KEY}:comment_reply`,
+      });
+    } finally {
+      configurePublishingProviders({ registry, insecureAllowLoopback: true });
+    }
+  });
 });

@@ -5,7 +5,10 @@ import {
   HOLD_REASON_TEXT,
   PUBLICATION_CHIP,
   actionsFor,
+  articleConflictOf,
+  articleVerificationStages,
   channelOutcomeSummary,
+  compareArticleBlocks,
   dayKey,
   groupByDay,
   holdReasonText,
@@ -287,5 +290,147 @@ describe('channel health (RA-01): every value has a chip; a dead or unreachable 
     expect(channelNeedsAction({ status: 'active', health: 'unreachable' })).toBe(true);
     expect(channelNeedsAction({ status: 'reconnect_needed', health: 'ok' })).toBe(true);
     expect(channelNeedsAction({ status: 'disabled', health: 'revoked' })).toBe(true); // by status
+  });
+});
+
+describe('article verification stages (PR-04)', () => {
+  const readback = { verification: { outcome: 'verified', matched: ['content'], mismatched: [] } };
+  const passing = {
+    ok: true,
+    outcome: 'verified',
+    content: {
+      selector: '.entry-content',
+      expectedBlocks: 5,
+      matchedBlocks: 5,
+      missingBlocks: [],
+      missingImages: [],
+    },
+    indexability: { meta: 'index', header: 'index' },
+  };
+  const states = (stages: ReturnType<typeof articleVerificationStages>) =>
+    Object.fromEntries(stages.map((s) => [s.key, s.state]));
+
+  it('write, read-back, rendered article and live visibility are proven separately', () => {
+    expect(
+      states(articleVerificationStages({ remotePostId: '42', remoteStatus: 'live' }, readback, passing)),
+    ).toEqual({
+      write: 'verified',
+      readback: 'verified',
+      rendered: 'verified',
+      visibility: 'verified',
+    });
+  });
+
+  it('a header-only noindex fails visibility while the content passes; a missing block fails the rendered stage and names it', () => {
+    const hidden = articleVerificationStages({ remotePostId: '42', remoteStatus: 'live' }, readback, {
+      ...passing,
+      ok: false,
+      outcome: 'failed',
+      checks: [
+        { key: 'status_ok', ok: true },
+        { key: 'content_complete', ok: true },
+        { key: 'indexable', ok: true },
+        { key: 'header_indexable', ok: false },
+      ],
+      indexability: { meta: 'index', header: 'noindex' },
+    });
+    expect(states(hidden)).toMatchObject({ rendered: 'verified', visibility: 'failed' });
+    expect(hidden[3]?.detail).toContain('X-Robots-Tag');
+    const changed = articleVerificationStages({ remotePostId: '42', remoteStatus: 'live' }, readback, {
+      ...passing,
+      ok: false,
+      outcome: 'failed',
+      content: {
+        ...passing.content,
+        matchedBlocks: 4,
+        missingBlocks: [{ index: 2, text: 'the third block' }],
+      },
+    });
+    expect(states(changed)).toMatchObject({ rendered: 'failed' });
+    expect(changed[2]?.detail).toContain('first block 3: “the third block”');
+  });
+
+  it('an unavailable page or no check at all stays unverified, never passing; a draft is not expected to be visible', () => {
+    const down = articleVerificationStages({ remotePostId: '42', remoteStatus: 'live' }, readback, {
+      ok: false,
+      outcome: 'unverified',
+      reason: 'page_unavailable_503',
+    });
+    expect(states(down)).toMatchObject({ rendered: 'unverified', visibility: 'unverified' });
+    expect(down[2]?.detail).toContain('page_unavailable_503');
+    expect(states(articleVerificationStages({ remotePostId: null, remoteStatus: null }, null, null))).toEqual(
+      {
+        write: 'unverified',
+        readback: 'unverified',
+        rendered: 'unverified',
+        visibility: 'not_applicable',
+      },
+    );
+    // Evidence recorded before PR-04 carries no outcome: read by its `ok`.
+    expect(
+      states(
+        articleVerificationStages({ remotePostId: '42', remoteStatus: 'live' }, readback, { ok: false }),
+      ),
+    ).toMatchObject({
+      rendered: 'failed',
+      visibility: 'unverified',
+    });
+  });
+});
+
+describe('website edit conflicts (PR-03)', () => {
+  const payload = {
+    remoteId: '42',
+    changeId: 'chg_1',
+    refreshedAfter: 'conflict',
+    conflict: {
+      reason: 'remote_changed',
+      current: {
+        remoteId: '42',
+        modifiedAt: '2026-10-04T10:00:00.000Z',
+        html: '<p>Kept.</p><p>Changed on the site.</p>',
+      },
+      editUrl: 'https://site.example/wp-admin/post.php?post=42&action=edit',
+      attemptedHtml: '<p>Kept.</p><p>The approved edit.</p>',
+    },
+  };
+
+  it('reads the conflict of the failed change only; an unsafe editor link is dropped', () => {
+    expect(articleConflictOf(payload, 'chg_1')).toEqual({
+      changeId: 'chg_1',
+      reason: 'remote_changed',
+      currentHtml: '<p>Kept.</p><p>Changed on the site.</p>',
+      currentModifiedAt: '2026-10-04T10:00:00.000Z',
+      attemptedHtml: '<p>Kept.</p><p>The approved edit.</p>',
+      editUrl: 'https://site.example/wp-admin/post.php?post=42&action=edit',
+    });
+    expect(articleConflictOf(payload, 'chg_2')).toBeNull();
+    expect(articleConflictOf({ ...payload, conflict: undefined }, 'chg_1')).toBeNull();
+    expect(articleConflictOf(null, 'chg_1')).toBeNull();
+    expect(
+      articleConflictOf(
+        { ...payload, conflict: { ...payload.conflict, editUrl: 'javascript:alert(1)' } },
+        'chg_1',
+      )?.editUrl,
+    ).toBeNull();
+    expect(
+      articleConflictOf(
+        { ...payload, conflict: { reason: 'limited_mode', current: null, editUrl: null } },
+        'chg_1',
+      ),
+    ).toMatchObject({ reason: 'limited_mode', currentHtml: null, attemptedHtml: '' });
+  });
+
+  it('marks the blocks one side has and the other lacks', () => {
+    expect(compareArticleBlocks(payload.conflict.current.html, payload.conflict.attemptedHtml)).toEqual({
+      current: [
+        { text: 'Kept.', changed: false },
+        { text: 'Changed on the site.', changed: true },
+      ],
+      attempted: [
+        { text: 'Kept.', changed: false },
+        { text: 'The approved edit.', changed: true },
+      ],
+    });
   });
 });

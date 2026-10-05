@@ -27,7 +27,7 @@ import {
 } from './guidance-editors';
 import { EditorSection as Section } from './guidance-fields';
 import { LogosSection } from './logo-rules';
-import { TYPE_ROLES } from './typography-helpers';
+import { DEFAULT_LINE_HEIGHT, TYPE_ROLES } from './typography-helpers';
 import { TypographySpecimen } from './typography-specimen';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { useTRPC } from '../../lib/trpc';
@@ -607,8 +607,9 @@ const weightsFor = (f: BrandFontFaceDto | undefined) => {
 
 /**
  * Typography (spec 8.1 type roles): the brand's fonts (uploaded files, or a family imported from Google Fonts,
- * each file an asset with its provenance and licence) and, per type role, the face, weight and minimum size, with a
- * live specimen of every role drawn in its font loaded from its pinned files. Saved with the rest of the brand system.
+ * each file an asset with its provenance and licence) and, per type role, the face, weight, size, minimum size, line
+ * height and tracking, with a live specimen of every role drawn in its font loaded from its pinned files. Saved with
+ * the rest of the brand system.
  */
 function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => void }) {
   const { brandId } = useBrandContext();
@@ -630,7 +631,7 @@ function TypographySection({ doc, onChange }: { doc: Doc; onChange: (d: Doc) => 
   return (
     <Section
       title="Typography"
-      hint="Upload font files (WOFF2, WOFF, TTF or OTF) or import a family from Google Fonts, then give each type role a font, weight and minimum size. Creative work and exports use these files, never system fonts."
+      hint="Upload font files (WOFF2, WOFF, TTF or OTF) or import a family from Google Fonts, then give each type role a font, weight, size, minimum size and line height. Creative work and exports use these files, never system fonts."
     >
       <div className="flex flex-wrap items-start gap-3">
         <UploadButton label="Upload font" kind="font" accept={FONT_ACCEPT} />
@@ -738,6 +739,8 @@ function TypeRoleSlot({
               weight: allowed.includes(wanted) ? wanted : (face?.weight ?? allowed[0] ?? 400),
               minSizePx: value?.minSizePx ?? spec.minSizePx,
               ...(value?.tracking !== undefined ? { tracking: value.tracking } : {}),
+              ...(value?.sizePx !== undefined ? { sizePx: value.sizePx } : {}),
+              ...(value?.lineHeight !== undefined ? { lineHeight: value.lineHeight } : {}),
             });
           }}
           options={options}
@@ -768,6 +771,23 @@ function TypeRoleSlot({
                   .map((w) => ({ value: String(w), label: String(w) }))}
               />
             </Field>
+            <Field
+              label="Size (px)"
+              htmlFor={`${id}-size`}
+              hint="The size it is set at; empty is the minimum."
+            >
+              <Input
+                id={`${id}-size`}
+                type="number"
+                min={1}
+                value={value.sizePx ?? ''}
+                onChange={(e) => {
+                  const { sizePx: _unset, ...rest } = value;
+                  const n = e.target.value === '' ? Number.NaN : Number(e.target.value);
+                  onChange(Number.isFinite(n) && n > 0 ? { ...rest, sizePx: n } : rest);
+                }}
+              />
+            </Field>
             <Field label="Minimum size (px)" htmlFor={`${id}-min`}>
               <Input
                 id={`${id}-min`}
@@ -789,6 +809,25 @@ function TypeRoleSlot({
                   const { tracking: _unset, ...rest } = value;
                   const n = e.target.value === '' ? Number.NaN : Number(e.target.value);
                   onChange(Number.isFinite(n) ? { ...rest, tracking: n } : rest);
+                }}
+              />
+            </Field>
+            <Field
+              label="Line height"
+              htmlFor={`${id}-line-height`}
+              hint={`A multiple of the size; empty uses ${DEFAULT_LINE_HEIGHT}.`}
+            >
+              <Input
+                id={`${id}-line-height`}
+                type="number"
+                step={0.05}
+                min={0.5}
+                max={3}
+                value={value.lineHeight ?? ''}
+                onChange={(e) => {
+                  const { lineHeight: _unset, ...rest } = value;
+                  const n = e.target.value === '' ? Number.NaN : Number(e.target.value);
+                  onChange(Number.isFinite(n) && n > 0 ? { ...rest, lineHeight: n } : rest);
                 }}
               />
             </Field>

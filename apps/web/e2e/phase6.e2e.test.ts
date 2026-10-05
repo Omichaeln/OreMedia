@@ -717,6 +717,23 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await noHorizontalOverflow()).toBe(true);
   }, 30_000);
 
+  it('PR-06: each provider lists every capability with its certification state; an uncertified one is labelled', async () => {
+    const ready = page.getByTestId('provider-linkedin_page');
+    const caps = ready.getByTestId('capability-certifications');
+    const state = (capability: string) =>
+      caps.locator(`[data-capability="${capability}"]`).getAttribute('data-capability-state');
+    expect(await state('connect')).toBe('certified');
+    expect(await state('publish_video')).toBe('uncertified');
+    expect(await caps.locator('[data-capability="publish_video"]').textContent()).toContain(
+      'Publish video: not certified',
+    );
+    // A provider that is not certified at all shows every capability it supports as not certified.
+    const facebook = page.getByTestId('provider-facebook_page').getByTestId('capability-certifications');
+    expect(await facebook.locator('[data-capability-state="certified"]').count()).toBe(0);
+    expect(await facebook.locator('[data-capability-state="uncertified"]').count()).toBeGreaterThan(0);
+    expect(await noHorizontalOverflow()).toBe(true);
+  }, 30_000);
+
   it('RA-01: a channel shows its health as text beside its status, with the time of the last check', async () => {
     const ok = page.getByTestId(`channel-${P5.channels.ok}`);
     expect(await ok.getAttribute('data-channel-health')).toBe('ok');

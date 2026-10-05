@@ -1,5 +1,42 @@
 import { z } from 'zod';
 
+/**
+ * PR-06: the capabilities a provider is certified for one by one (connect, the page picker, each publish kind,
+ * changing a live post, replying to comments, analytics, token refresh, reconnect). A provider-level `certifiedAt`
+ * says the adapter may be handed to tenants; it says nothing about which of these were exercised against the
+ * platform, so each one carries its own record and an absent record means uncertified.
+ */
+export const CertifiableCapability = z.enum([
+  'connect',
+  'page_picker',
+  'publish_text',
+  'publish_image',
+  'publish_video',
+  'edit',
+  'delete',
+  'comment_reply',
+  'analytics',
+  'token_refresh',
+  'reconnect',
+]);
+export type CertifiableCapability = z.infer<typeof CertifiableCapability>;
+
+/**
+ * One capability's certification (docs/runbooks/certify-a-provider.md): when the harness attested it, the
+ * environment whose platform app and designated test account the run used, and where the evidence is kept (the
+ * decision log entry and the recording file of the run). Set by hand from the attested record, like `certifiedAt`.
+ */
+export const CapabilityCertificationV1 = z.object({
+  certifiedAt: z.string().datetime(),
+  environment: z.string().min(1).max(40),
+  evidence: z.string().min(1).max(300),
+});
+export type CapabilityCertificationV1 = z.infer<typeof CapabilityCertificationV1>;
+
+/** The per-capability records of one provider; a capability without an entry is uncertified. */
+export const CapabilityCertifications = z.record(CertifiableCapability, CapabilityCertificationV1);
+export type CapabilityCertifications = z.infer<typeof CapabilityCertifications>;
+
 /** Spec 14.6: versioned capability register read by the UI, the adaptation skill and validateVariant. */
 export const ProviderCapabilityV1 = z.object({
   key: z.string(),
@@ -42,6 +79,8 @@ export const ProviderCapabilityV1 = z.object({
   ),
   requiredScopes: z.array(z.string()),
   certifiedAt: z.string().datetime().nullable(), // null = not certified; cannot be enabled for tenants
+  /** PR-06: the capabilities certified one by one; absent or without an entry means uncertified. */
+  certifications: CapabilityCertifications.optional(),
   /** RA-01: the platform the person authorises at ("Meta", "LinkedIn", "X"), as the settings screens name it. */
   vendor: z.string().optional(),
   /**
@@ -242,16 +281,58 @@ export interface ProviderActivationV1 {
   state: ProviderActivationState;
   /** The machine-readable reason behind `state` (`provider_not_certified:<key>`, ...); null when ready. */
   reason: string | null;
+  /** PR-06: every certifiable capability with its state on this provider (what the settings screens label). */
+  capabilities: CapabilityCertificationStatusV1[];
 }
 
 /** The activation state from its facts, in the order the reasons are checked (uncertified first). */
 export function providerActivationState(
-  p: Pick<ProviderActivationV1, 'key' | 'certifiedAt' | 'disabled' | 'credentialRefs'>,
+  p: Pick<ProviderActivationV1, 'key' | 'certifiedAt' | 'disabled' | 'credentialRefs'> &
+    Partial<Pick<ProviderActivationV1, 'capabilities'>>,
 ): { state: ProviderActivationState; reason: string | null } {
   if (!p.certifiedAt) return { state: 'uncertified', reason: `provider_not_certified:${p.key}` };
+  // PR-06: a certified provider whose connect is not certified on its own cannot be connected either.
+  if (p.capabilities?.find((c) => c.capability === 'connect')?.state === 'uncertified')
+    return { state: 'uncertified', reason: capabilityNotCertifiedIssue(p.key, 'connect') };
   if (p.disabled) return { state: 'disabled', reason: `provider_disabled:${p.key}` };
   const missing = p.credentialRefs.filter((c) => !c.present).map((c) => c.name);
   if (missing.length > 0)
     return { state: 'credentials_missing', reason: `credentials_missing:${missing.join(',')}` };
   return { state: 'ready', reason: null };
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// PR-06 capability certification (appended; additive only).
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * A capability's state on one provider: `not_supported` when the adapter or its capability register does not offer
+ * it (whatever is recorded), `certified` when a record exists, else `uncertified` (unknown means uncertified).
+ */
+export const CapabilityCertificationState = z.enum(['certified', 'uncertified', 'not_supported']);
+export type CapabilityCertificationState = z.infer<typeof CapabilityCertificationState>;
+
+export interface CapabilityCertificationStatusV1 {
+  capability: CertifiableCapability;
+  state: CapabilityCertificationState;
+  /** The record behind `certified`; null otherwise. */
+  certification: CapabilityCertificationV1 | null;
+}
+
+/** Every certifiable capability's state, in the enum's order, from what the provider supports and what is recorded. */
+export function capabilityCertificationStatuses(
+  supported: ReadonlySet<CertifiableCapability>,
+  records: CapabilityCertifications | undefined,
+): CapabilityCertificationStatusV1[] {
+  return CertifiableCapability.options.map((capability) => {
+    const record = records?.[capability];
+    if (!supported.has(capability)) return { capability, state: 'not_supported', certification: null };
+    return record
+      ? { capability, state: 'certified', certification: record }
+      : { capability, state: 'uncertified', certification: null };
+  });
+}
+
+/** The refusal issue of a supported capability that is not certified (CAPABILITY_UNSUPPORTED, like an uncertified provider). */
+export const capabilityNotCertifiedIssue = (key: string, capability: CertifiableCapability): string =>
+  `capability_not_certified:${key}:${capability}`;

@@ -17,7 +17,17 @@ export interface FetchedPage {
   /** Redirects followed before the final response. */
   hops: number;
   contentType: string | null;
+  /**
+   * PR-04: the response headers a rendered-article check reads (live visibility and canonical identity), each as
+   * the server sent it (several of one name joined with `, `) and cut to 2000 characters; null when absent.
+   */
+  xRobotsTag: string | null;
+  link: string | null;
 }
+
+const HEADER_MAX_CHARS = 2000;
+const boundedHeader = (value: string | null): string | null =>
+  value === null ? null : value.slice(0, HEADER_MAX_CHARS);
 
 export interface FetchPageOptions extends SafeDispatcherOptions {
   /** The site's host (with port when present): a redirect elsewhere is refused, never followed. */
@@ -90,6 +100,8 @@ export async function fetchPageBounded(
       url: current,
       hops: hop,
       contentType: res.headers.get('content-type'),
+      xRobotsTag: boundedHeader(res.headers.get('x-robots-tag')),
+      link: boundedHeader(res.headers.get('link')),
     };
   }
 }

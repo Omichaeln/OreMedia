@@ -612,6 +612,60 @@ export class Phase5Backend {
     return p;
   }
 
+  /**
+   * Test backdoor (PR-03): the website refused the requested article edit, as the runtime records it: the change
+   * fails with `conflict` (the site moved since the read-back) or `limited_mode` (no atomic update on the site), and
+   * a refreshed read-back carries what the site holds now beside the refused text.
+   */
+  refuseArticleEdit(
+    publicationId: string,
+    reason: 'remote_changed' | 'limited_mode',
+    siteHtml: string,
+  ): void {
+    const p = this.publication(publicationId);
+    for (const c of p.remoteChanges.filter((x) => x.state === 'requested' && x.kind === 'edit')) {
+      const code = reason === 'remote_changed' ? 'conflict' : 'limited_mode';
+      Object.assign(c, {
+        state: 'failed',
+        finishedAt: now(),
+        errorCode: code,
+        errorDetail: 'nothing was written',
+      });
+      const current = {
+        remoteId: p.remotePostId,
+        remoteUrl: p.remoteUrl,
+        title: P5_ARTICLE.title,
+        slug: P5_ARTICLE.slug,
+        status: 'publish',
+        modifiedAt: now(),
+        contentHash: hash(siteHtml),
+      };
+      const payload = {
+        ...current,
+        changeId: c.id,
+        refreshedAfter: code,
+        conflict: {
+          reason,
+          current: { ...current, html: siteHtml },
+          editUrl:
+            reason === 'remote_changed' ? 'https://acme.example/wp-admin/post.php?post=42&action=edit' : null,
+          attemptedHtml: c.text ?? '',
+        },
+      };
+      this.evidence.push({
+        id: rid('ev'),
+        publicationId: p.id,
+        attemptId: null,
+        kind: 'remote_readback',
+        remotePostId: p.remotePostId,
+        remoteUrl: p.remoteUrl,
+        payload,
+        payloadHash: hash(payload),
+        capturedAt: now(),
+      });
+    }
+  }
+
   /** Test backdoor: the requested change's workflow was lost; past the stale threshold it no longer blocks. */
   makeRemoteChangeStale(publicationId: string): void {
     for (const c of this.publication(publicationId).remoteChanges)
@@ -646,6 +700,7 @@ export class Phase5Backend {
     return {
       ...rules,
       allowed: { edit: allowed, delete: allowed, unpublish: allowed },
+      uncertified: [] as Array<'edit' | 'delete' | 'unpublish'>,
       currentText: p.currentText,
       changes: p.remoteChanges.map(({ text: _text, ...c }) => c),
       article: p.destinationId
@@ -663,18 +718,37 @@ export class Phase5Backend {
     return this.renderedEvidence(publicationId, this.renderedResult(publicationId, ok, at), at);
   }
 
-  /** What the API's rendered-page check returns (RenderedValidationV1), passing or not. */
+  /**
+   * What the API's rendered-page check returns (RenderedValidationV1, PR-04): passing (the article region carries
+   * every block, indexable), or failing as a changed page does (an interior block missing and an X-Robots-Tag
+   * noindex the meta tags do not show).
+   */
   private renderedResult(publicationId: string, ok: boolean, at: string): RenderedValidationV1 {
     const p = this.publication(publicationId);
+    const failing = new Set(['content_complete', 'header_indexable']);
     return {
       url: p.remoteUrl ?? '',
       fetchedAt: at,
-      status: ok ? 200 : 404,
-      bytes: ok ? 2048 : 512,
+      status: 200,
+      bytes: 2048,
       truncated: false,
       ok,
-      checks: RenderedCheckKey.options.map((key) => ({ key, ok: ok || key === 'title_present' })),
+      checks: RenderedCheckKey.options
+        .filter((key) => key !== 'body_present' && key !== 'last_paragraph_present')
+        .map((key) => ({ key, ok: ok || !failing.has(key) })),
       error: null,
+      outcome: ok ? 'verified' : 'failed',
+      reason: ok ? null : 'content_changed',
+      content: {
+        selector: '.entry-content',
+        expectedBlocks: 4,
+        matchedBlocks: ok ? 4 : 3,
+        missingBlocks: ok ? [] : [{ index: 1, text: 'ore is heavy & tar is <sticky>.' }],
+        expectedImages: 0,
+        missingImages: [],
+        manifestVersion: 1,
+      },
+      indexability: { meta: 'index', header: ok ? 'index' : 'noindex' },
     };
   }
 

@@ -1,7 +1,13 @@
 // Agent runtime building blocks (spec 12): model adapters, routing policy, context resolver, prompt assembly,
 // the tool registry and dispatcher, the Release 1 tools and the evaluation harness. Durable run state and the
 // Temporal workflow live in @oremedia/module-agents, @oremedia/workflows and @oremedia/activities.
-export { type ModelAdapter, type ModelConfig, modelConfigFromEnv, estimateCostMicros } from './model-adapter';
+export {
+  type ModelAdapter,
+  type ModelConfig,
+  modelConfigFromEnv,
+  estimateCostMicros,
+  ModelRequestRejectedError,
+} from './model-adapter';
 export { createModelAdapterFromEnv, modelsCapability } from './adapter-factory';
 export {
   AnthropicModelAdapter,
@@ -46,6 +52,8 @@ export {
   resetRoutingPolicies,
   routingPolicyFor,
   assertRoutingAllowed,
+  routeDenial,
+  modelRouteConfigured,
   configureModelRegion,
   modelRegion,
   type RoutingPolicySource,

@@ -10,7 +10,7 @@ import type {
 import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
 import { assertCurrentTenantEgress } from '@oremedia/module-access';
 import { logger } from '@oremedia/observability';
-import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
+import { ModelRequestRejectedError, toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 import { rejectionDetail } from './openrouter-adapter';
 
 type ClientOptions = NonNullable<ConstructorParameters<typeof Anthropic>[0]>;
@@ -64,6 +64,10 @@ export class AnthropicModelAdapter implements ModelAdapter {
             })),
             tool_choice: { type: 'auto' as const },
           }
+        : {}),
+      // Structured output: the answer is constrained to the caller's schema (strict form, see ModelRequest).
+      ...(req.responseSchema
+        ? { output_config: { format: { type: 'json_schema' as const, schema: req.responseSchema.schema } } }
         : {}),
       metadata: { user_id: req.metadata.runId },
     };
@@ -129,10 +133,7 @@ function mapError(err: unknown): Error {
     }
     const detail = rejectionDetail(err.message, status);
     logger().warn({ errorMessage: `anthropic ${detail}` }, 'model provider rejected the request');
-    return new ValidationFailedError(
-      [{ path: 'model', issue: `provider rejected the request (${detail})` }],
-      `The model provider rejected the request (${detail})`,
-    );
+    return new ModelRequestRejectedError(status, detail);
   }
   if (err instanceof Anthropic.APIConnectionError) return new ProviderUnavailableError('anthropic');
   return err instanceof Error ? err : new Error(String(err));

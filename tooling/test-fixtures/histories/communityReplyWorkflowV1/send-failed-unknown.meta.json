@@ -1,0 +1,12 @@
+{
+  "workflowType": "communityReplyWorkflowV1",
+  "case": "send-failed-unknown",
+  "description": "The send activity fails (a lost worker): recorded as an unknown outcome, never sent again.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:10:32.263Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "e6ce43e4043fb5bc4dcd862216047c086d7924d28f58545f04f97fefa6a84a26"
+}

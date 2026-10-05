@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAssistWorkflowV1",
+  "case": "full-run",
+  "description": "A URL captured on ingest-metrics, a document extracted on media, two sections proposed, finished ready.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:13:31.003Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "cfd0d0b5005de281af6796fbe40e0ff125c5e78b6e7beb614324bacc95ac9dd6"
+}

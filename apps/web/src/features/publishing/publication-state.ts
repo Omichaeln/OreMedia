@@ -8,6 +8,7 @@ import {
   type PublicationState as PublicationStateT,
 } from '@oremedia/contracts/publishing';
 import type { ChannelConnectionStatus, ChannelHealth } from '@oremedia/contracts/providers';
+import { articleHtmlBlocks } from '@oremedia/contracts/article';
 
 export interface StateChip {
   tone: Tone;
@@ -113,6 +114,144 @@ export function remoteStatusChip(remoteStatus: string | null | undefined): State
 export function remoteVerificationChip(remoteVerification: string | null | undefined): StateChip | null {
   const parsed = PublicationRemoteVerification.safeParse(remoteVerification);
   return parsed.success ? REMOTE_VERIFICATION_CHIP[parsed.data] : null;
+}
+
+/**
+ * PR-04: the four things a website article's verification proves, each on its own: the website acknowledged the
+ * write, the CMS read-back matched what was sent, the rendered article region carries the whole approved content,
+ * and the live page may be indexed (meta robots and the X-Robots-Tag header). Read from the evidence payloads as
+ * data; anything not proven reads `unverified`, never as a pass.
+ */
+export type VerificationStageKey = 'write' | 'readback' | 'rendered' | 'visibility';
+export interface VerificationStage {
+  key: VerificationStageKey;
+  label: string;
+  state: 'verified' | 'failed' | 'unverified' | 'not_applicable';
+  detail: string;
+}
+
+const obj = (v: unknown): Record<string, unknown> | null =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+export function articleVerificationStages(
+  p: { remotePostId: string | null; remoteStatus?: string | null },
+  readback: Record<string, unknown> | null,
+  validation: Record<string, unknown> | null,
+): VerificationStage[] {
+  const write: VerificationStage = p.remotePostId
+    ? {
+        key: 'write',
+        label: 'Write acknowledged',
+        state: 'verified',
+        detail: `The website accepted the write (post ${p.remotePostId}).`,
+      }
+    : {
+        key: 'write',
+        label: 'Write acknowledged',
+        state: 'unverified',
+        detail: 'No write has been acknowledged yet.',
+      };
+  const rb = obj(readback?.['verification'])?.['outcome'];
+  const readbackStage: VerificationStage = {
+    key: 'readback',
+    label: 'CMS read-back',
+    ...(rb === 'verified'
+      ? { state: 'verified' as const, detail: 'The article read back from the CMS matched what was sent.' }
+      : rb === 'mismatch'
+        ? {
+            state: 'failed' as const,
+            detail: 'The article read back from the CMS differs from what was sent.',
+          }
+        : { state: 'unverified' as const, detail: 'The CMS read-back has not proven the write.' }),
+  };
+  const overall =
+    validation === null
+      ? null
+      : typeof validation['outcome'] === 'string'
+        ? validation['outcome']
+        : validation['ok'] === true
+          ? 'verified'
+          : 'failed';
+  // The rendered stage reads the page's own checks without the two visibility ones (shown as their own stage).
+  const checks = Array.isArray(validation?.['checks']) ? (validation['checks'] as unknown[]).map(obj) : [];
+  const VISIBILITY = ['indexable', 'header_indexable'];
+  const pageChecks = checks.filter((c) => c && !VISIBILITY.includes(String(c['key'])));
+  const outcome =
+    overall === 'failed' && pageChecks.length > 0 && pageChecks.every((c) => c?.['ok'] === true)
+      ? 'verified'
+      : overall;
+  const content = obj(validation?.['content']);
+  const missing = Array.isArray(content?.['missingBlocks']) ? (content['missingBlocks'] as unknown[]) : [];
+  const firstMissing = obj(missing[0]);
+  const missingImages = Array.isArray(content?.['missingImages'])
+    ? (content['missingImages'] as unknown[])
+    : [];
+  const reason = typeof validation?.['reason'] === 'string' ? validation['reason'] : null;
+  const rendered: VerificationStage = {
+    key: 'rendered',
+    label: 'Rendered article',
+    ...(outcome === 'verified'
+      ? {
+          state: 'verified' as const,
+          detail:
+            content && typeof content['expectedBlocks'] === 'number'
+              ? `All ${content['expectedBlocks']} blocks of the approved content are on the page${typeof content['selector'] === 'string' ? ` (in ${content['selector']})` : ''}.`
+              : 'The page passed every check.',
+        }
+      : outcome === 'failed'
+        ? {
+            state: 'failed' as const,
+            detail: firstMissing
+              ? `${missing.length === 1 ? 'A block' : `${missing.length} blocks`} of the approved content ${missing.length === 1 ? 'is' : 'are'} missing or changed on the page, first block ${Number(firstMissing['index']) + 1}: “${String(firstMissing['text'] ?? '')}”.`
+              : missingImages.length > 0
+                ? `${missingImages.length} image${missingImages.length === 1 ? ' is' : 's are'} missing from the article: ${missingImages.map(String).join(', ')}.`
+                : `The page did not pass every check${reason ? ` (${reason})` : ''}.`,
+          }
+        : {
+            state: 'unverified' as const,
+            detail:
+              outcome === null
+                ? 'The page has not been checked yet.'
+                : `The page could not be verified${reason ? ` (${reason})` : ''}; it is not counted as verified.`,
+          }),
+  };
+  const indexability = obj(validation?.['indexability']);
+  const visibility: VerificationStage =
+    p.remoteStatus !== 'live'
+      ? {
+          key: 'visibility',
+          label: 'Live visibility',
+          state: 'not_applicable',
+          detail: 'Not live: a draft is expected to be hidden from search.',
+        }
+      : outcome === null || outcome === 'unverified' || !indexability
+        ? {
+            key: 'visibility',
+            label: 'Live visibility',
+            state: 'unverified',
+            detail: 'Whether search engines may index the page is not proven.',
+          }
+        : indexability['header'] === 'noindex'
+          ? {
+              key: 'visibility',
+              label: 'Live visibility',
+              state: 'failed',
+              detail: 'The page’s X-Robots-Tag header tells search engines not to index it.',
+            }
+          : indexability['meta'] === 'noindex'
+            ? {
+                key: 'visibility',
+                label: 'Live visibility',
+                state: 'failed',
+                detail: 'The page’s robots meta tag tells search engines not to index it.',
+              }
+            : {
+                key: 'visibility',
+                label: 'Live visibility',
+                state: 'verified',
+                detail: 'Nothing on the page or in its headers stops search engines indexing it.',
+              };
+  return [write, readbackStage, rendered, visibility];
 }
 
 /**
@@ -307,6 +446,68 @@ export function remoteChangeStatus<C extends RemoteChangeLike>(changes: readonly
   const stale = requested?.stale ? requested : null;
   const latest = changes[0] ?? null;
   return { open, stale, failed: !requested && latest?.state === 'failed' ? latest : null };
+}
+
+/**
+ * PR-03: a refused website edit as the server recorded it with the refreshed read-back (evidence payload, read as
+ * data): why, what the site holds now, the edit that was not applied and where the article opens on the site.
+ */
+export interface ArticleConflictView {
+  changeId: string;
+  reason: 'remote_changed' | 'limited_mode';
+  currentHtml: string | null;
+  currentModifiedAt: string | null;
+  attemptedHtml: string;
+  editUrl: string | null;
+}
+
+/** The conflict a read-back payload carries for the given failed change; null when it carries none (or another's). */
+export function articleConflictOf(
+  readback: Record<string, unknown> | null,
+  failedChangeId: string | null,
+): ArticleConflictView | null {
+  if (!readback || !failedChangeId || readback['changeId'] !== failedChangeId) return null;
+  const conflict = readback['conflict'];
+  if (!conflict || typeof conflict !== 'object') return null;
+  const c = conflict as Record<string, unknown>;
+  const reason = c['reason'];
+  if (reason !== 'remote_changed' && reason !== 'limited_mode') return null;
+  const current =
+    c['current'] && typeof c['current'] === 'object' ? (c['current'] as Record<string, unknown>) : null;
+  const editUrl = typeof c['editUrl'] === 'string' && /^https:\/\//.test(c['editUrl']) ? c['editUrl'] : null;
+  return {
+    changeId: failedChangeId,
+    reason,
+    currentHtml: typeof current?.['html'] === 'string' ? current['html'] : null,
+    currentModifiedAt: typeof current?.['modifiedAt'] === 'string' ? current['modifiedAt'] : null,
+    attemptedHtml: typeof c['attemptedHtml'] === 'string' ? c['attemptedHtml'] : '',
+    editUrl,
+  };
+}
+
+/** One block of a side of the comparison, marked when the other side has no block reading the same. */
+export interface ComparedBlock {
+  text: string;
+  changed: boolean;
+}
+
+/**
+ * PR-03: the website's current article and the refused edit, block by block (paragraphs, headings, list items as
+ * they read): a block is marked changed when the other side has no block with the same text, so what the site
+ * changed and what the edit would have replaced stand out.
+ */
+export function compareArticleBlocks(
+  currentHtml: string,
+  attemptedHtml: string,
+): { current: ComparedBlock[]; attempted: ComparedBlock[] } {
+  const current = articleHtmlBlocks(currentHtml);
+  const attempted = articleHtmlBlocks(attemptedHtml);
+  const inCurrent = new Set(current);
+  const inAttempted = new Set(attempted);
+  return {
+    current: current.map((text) => ({ text, changed: !inAttempted.has(text) })),
+    attempted: attempted.map((text) => ({ text, changed: !inCurrent.has(text) })),
+  };
 }
 
 export const remoteChangeNoun = (kind: RemoteChangeLike['kind']): string =>

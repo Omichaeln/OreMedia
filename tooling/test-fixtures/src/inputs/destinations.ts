@@ -24,6 +24,15 @@ export const DESTINATIONS_INPUTS: Record<string, CrossTenantFixture> = {
       expectedVersion: 0,
     }),
   },
+  // PR-04: the destination is read in the caller's tenant first (NOT_FOUND), so a foreign selector is never set.
+  'destinations.setArticleSelector': {
+    buildInput: (f) => ({
+      brandId: f['brandId'],
+      destinationId: f['destinationId'],
+      articleSelector: '.entry-content',
+      expectedVersion: 0,
+    }),
+  },
   'destinations.disconnect': {
     buildInput: (f) => ({ brandId: f['brandId'], destinationId: f['destinationId'], expectedVersion: 0 }),
   },

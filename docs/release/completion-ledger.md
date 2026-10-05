@@ -66,6 +66,11 @@ Tenant-level channel connections and destinations (OAuth grants per brand) are r
 API in section 5; none can exist for the social channels while the adapters are uncertified (the connect start
 returns `provider_not_certified`).
 
+Provider certification per capability (PR-06, 4 October 2026 audit): `docs/release/connection-inventory.md` lists
+every provider × capability (connect, page picker, publish text, image and video, edit, delete, comment reply,
+analytics, token refresh, reconnect) with its status, evidence and owner action, derived from the registries and
+kept in step with them by a unit test. At this increment: 0 certified, 60 uncertified, 28 not supported.
+
 ## 2. Requirement and finding rows
 
 Columns: ID · user outcome · current state · dependency · implementation · acceptance · tested commit ·
@@ -341,7 +346,7 @@ CI and the unchecked hand-written mock (#68), and video creation and timeline ed
 run evidence, AI image fill for empty Studio image areas (`registerGenerationImageAvailability` not registered), and
 replay of histories recorded from a deployed version.
 
-### Owner checklist (current; only actions that need the owner's identity, accounts or decisions)
+### Owner checklist (superseded by section 6; only actions that need the owner's identity, accounts or decisions)
 
 1. Railway "Wait for CI" on the ten repo-sourced production services (no API exposes the setting).
 2. Staging object store: a real R2 bucket and token, or a Railway bucket pair, for the staging api, worker-core and
@@ -360,3 +365,184 @@ replay of histories recorded from a deployed version.
   `temporal` service so the total pool across Temporal's services sits well under `temporal-db`'s `max_connections`,
   or raise `max_connections`; add a connection-count alert once an alert destination exists. Until then the outbox
   retry absorbs short stalls, but a backup point can be missed.
+
+## 6. Increment of 4 and 5 October 2026 (production-readiness remediation, PRs #80 to #97)
+
+Mandate: the owner's production-readiness remediation of 4 October 2026 (audit baseline `aa2c5d8`), findings PR-01 to
+PR-10. The audit files themselves (`oremedia-production-readiness-2026-10-04.md`, its findings JSON and backlog CSV)
+were not available in this environment, so the finding wording below is taken from the mandate summary, not from the
+audit. Evidence below was gathered by the lead session between 4 and 5 October 2026 (UTC) from Railway deploy and
+service logs, the production smoke workflow and CI; anything it does not state is marked "not recorded".
+
+### State at the end of the increment (5 October 2026, 07:20 UTC)
+
+- `main` at `047ed1d` (#97, merged 07:20 UTC). Main CI on it is green (all jobs) and production smoke run 91 passed
+  on it. #96 (`211df8d`, CI run 323 green) is also evidenced by the production `db-backup` run at 07:16 UTC passing
+  on the new code.
+- Migration level 0032 (`0032_destination_article_selector`). This increment added 0030 (`0030_tenant_kind`, #81),
+  0031 (`0031_destination_write_safety`, #90, applied in production at 22:12 UTC on 4 October) and 0032 (#91, applied
+  at 23:03 UTC). `db-roles` logged PASS after 0031 in both environments and after 0032.
+- Open work not on `main`: the demo stage 2 branch `claude/demo-stage-2` (head `4e0fac4`), built and tested, no pull
+  request opened (owner decision).
+
+### Merged changes and their production evidence
+
+#80 (`4101af8`, Typography live specimen), #82 (`089ae7c`, routing under the deployment's policy, the
+`model_routing_denied` fix of section 5), #81 (`98d5b3e`, demo stage 1, migration 0030) and #83 (`4f10e48`,
+acceptance grades the shipped skill package) merged after #79; their production smoke runs are not recorded in this
+increment's evidence. The rows below are #84 to #97.
+
+| PR  | Finding         | Change                                                                                                                                    | Merge commit | Migration | Production evidence                                                                                                              |
+| --- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| #84 | PR-07           | Bucket CORS as code: opt-in `OBJECT_STORE_CORS_ORIGINS` on the api                                                                        | 495f20a      |           | smoke 78                                                                                                                         |
+| #85 | R19             | Temporal SQL pool capped (`SQL_MAX_CONNS` 10, idle 5)                                                                                     | dc489d3      |           | production `temporal` redeployed 18:33 on 4 October, no persistence errors after; `db-backup` Temporal dump PASS 18:47; smoke 79 |
+| #86 | PR-05           | Video preview sound matches the export: one gain and fade envelope for both                                                               | 55a6608      |           | smoke 80                                                                                                                         |
+| #87 | PR-08           | Historical workflow replay as a release gate: 127 retained histories of 45 workflow types, negative tests                                 | e6f9102      |           | gate green on `main` after the squash; smoke 81                                                                                  |
+| #89 | PR-06           | Certification per provider capability; `connection-inventory.md` 88 rows: 0 certified, 60 uncertified, 28 not supported                   | e321755      |           | smoke 83                                                                                                                         |
+| #88 | PR-07           | Staging acceptance follow-ups; the api's model route                                                                                      | 6821c47      |           | smoke 84, after the api model variables were set                                                                                 |
+| #90 | PR-03           | WordPress conditional-write plugin, limited mode and conflict resolution                                                                  | cf81948      | 0031      | 0031 applied 22:12; `db-roles` PASS in both environments; smoke 85                                                               |
+| #91 | PR-04           | Rendered article verification: content manifest in the article region, canonical, `X-Robots-Tag`, unverified states                       | c94e69d      | 0032      | 0032 applied 23:03; `db-roles` PASS; smoke 86                                                                                    |
+| #92 | PR-07           | Acceptance follow-ups 2: assist prompt, Studio hero photo                                                                                 | 8e6fc28      |           | smoke 87                                                                                                                         |
+| #93 | PR-07           | Brand assist through structured output, with a prompt fallback                                                                            | 9519b1b      |           | smoke 88; staging acceptance 131/131 (15 skipped)                                                                                |
+| #94 | PR-09           | Object backup, dump sha256 sidecars, daily verify job, restore guards, timed drill                                                        | 7577c5b      |           | smoke 89; see "Recovery (PR-09)" below                                                                                           |
+| #95 | PR-02           | Typography follow-up: configured line height, `sizePx` beside `minSizePx`, below-minimum warning                                          | 203224b      |           | smoke 90                                                                                                                         |
+| #96 | security review | Dump trailer and mysqldump exit status, fail-closed restore guards, WordPress plugin disclosure                                           | 211df8d      |           | CI run 323 green; production `db-backup` 07:16 on 5 October PASS on the new code                                                 |
+| #97 | security review | Linear article-region scan, structured-output retry narrowed with both costs counted, certification at execution, https-only CORS origins | 047ed1d      |           | main CI green; smoke 91                                                                                                          |
+
+### Configuration changes (variable and service names only; no values were read or written here)
+
+- Staging: Railway bucket `staging-media`; `OBJECT_STORE_*` on the api and workers; `OBJECT_STORE_CORS_ORIGINS`;
+  `SQL_MAX_CONNS` and `SQL_MAX_IDLE_CONNS` on `temporal`.
+- api, staging and production: `OREMEDIA_MODEL_PROVIDER` (`openrouter`) and `OREMEDIA_MODEL_ID` as a reference to
+  worker-core's.
+- `db-backup`, both environments: the object backup variables (`OBJECT_STORE_BUCKET_*`, `SRC_OBJECT_STORE_*`,
+  `OBJECT_BACKUP_PREFIX`); production `SRC_OBJECT_STORE_REGION` set to `auto` (R2 rejected `sjc` on the 05:00 run);
+  `OBJECT_BACKUP_MAX_OBJECTS` 300.
+- New service `db-backup-verify` in both environments (cron `47 5 * * *`, start command `verify.sh`).
+- Staging `restore-rehearsal`: start command `drill.sh all` and the object restore variables.
+- Staging worker-core `RETENTION_SWEEP_APPLY` was set to true briefly, then reverted to false (blocked by the agent
+  safety classifier). Retention apply mode is not enabled in any environment.
+
+### Production-readiness findings (PR-01 to PR-10)
+
+Dispositions: **fixed and verified in production** (the behaviour itself was observed on Railway), **fixed,
+verification pending** (merged and deployed with passing smoke, but the behaviour has not been observed against real
+data, a real site or a real provider), **partially done**, **blocked on owner**, **not started**. A passing smoke run
+proves the deployment is healthy, not the finding's behaviour; a skipped test is not a pass. PR-08 is a CI release
+gate with no production behaviour, so its "fixed and verified" means green on `main` with its negative test.
+
+| Finding                                 | Disposition                 | Evidence                                                                                                                                                                                                                                   | What remains                                                                                                                                                                                                                                        |
+| --------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR-01 Ore and Tar demonstration         | partially done              | Stage 1 merged earlier (#81, `98d5b3e`, migration 0030: tenant kind; a demo no longer clears a setup-link password). Stage 2 built and tested on `claude/demo-stage-2` (`4e0fac4`); no pull request opened                                 | Stage 2 pull request (owner: open it or authorise it). Stages 3 to 8 not started. Source content needs network egress to oreandtar.co.zw or an export, and the five O&T source conflicts resolved (owner)                                           |
+| PR-02 Typography specimen               | fixed, verification pending | #80 (live specimens, no clamp, font failure warnings) and #95 (configured line height, intended `sizePx` beside the usage minimum `minSizePx`, below-minimum warning); smoke 90                                                            | No production observation of a specimen with values outside the old 12 to 40 px clamp is recorded                                                                                                                                                   |
+| PR-03 Concurrent CMS overwrites         | fixed, verification pending | #90: conditional-write plugin with a capability handshake, limited mode without it, conflict resolution; migration 0031 applied; smoke 85. #96: the handshake no longer discloses storage engines or the WordPress version to Contributors | The plugin is installed on no site, so the pilot site stays in limited mode. Owner: a WordPress test site with the plugin installed, then the external-edit acceptance against it                                                                   |
+| PR-04 Rendered article verification     | fixed, verification pending | #91: manifest checked against the rendered article region, canonical, `X-Robots-Tag` (header-only noindex), explicit unverified states; migration 0032 applied; smoke 86. #97: the article-region scan is linear (54 s to 61 ms at 360 KB) | No rendered verification against a real WordPress page is recorded (same owner action as PR-03)                                                                                                                                                     |
+| PR-05 Video audio preview parity        | fixed, verification pending | #86: one gain and fade envelope for preview and export; fixture tests in CI; smoke 80                                                                                                                                                      | No production preview-against-export comparison is recorded                                                                                                                                                                                         |
+| PR-06 Capability-specific certification | blocked on owner            | #89: certification per provider and capability; `connection-inventory.md` 88 rows: 0 certified, 60 uncertified, 28 not supported; gates stay closed; #97 checks certification when the command is carried out; smoke 83                    | 0 capabilities certified. Owner: Meta App Review and Business Verification, LinkedIn Community Management API review; then `docs/runbooks/certify-a-provider.md`                                                                                    |
+| PR-07 Staging repair and acceptance     | partially done              | Staging repaired (bucket `staging-media`, CORS #84, api model route #88, #92, #93). Staging acceptance 4 October 94/96, 105/119, 124/127, 126/127; 5 October 00:36 UTC 131/131 (15 skipped)                                                | 15 skipped checks: 7 journeys and 1 Studio review-request need a certified channel (PR-06); 6 accessibility and 2 Studio cases are mock-only and cannot run deployed. Which of the mandate's video journeys the deployed run covers is not recorded |
+| PR-08 Historical replay release gate    | fixed and verified          | #87: 127 retained histories of 45 workflow types replayed against candidate bundles; CI fails on a missing history; a negative test proves an incompatible change fails; gate green on `main` after the squash                             | Nothing for the finding. The gate runs in CI, so there is no production behaviour to observe                                                                                                                                                        |
+| PR-09 Retention, alerting, recovery     | partially done              | #94, #96: dumps with sha256 sidecars, object backup, daily verify job, fail-closed restore guards. Staging drill: database and objects restored and verified in 128 s. `db-backup-verify` PASS in both environments                        | Application steps of the drill not run live (RTO evidenced for database and objects only). Retention apply mode not enabled (owner). No alert destination (owner). See "Recovery (PR-09)"                                                           |
+| PR-10 Ledger reconciled with reality    | fixed, verification pending | This section and `completion-report.md`, from the lead session's evidence and the repository                                                                                                                                               | Owner review. Reconcile against the audit files once they are available here                                                                                                                                                                        |
+
+Also closed in this increment: R19 (Temporal pool cap, #85), fixed and verified in production (see residual risks).
+
+### Recovery (PR-09)
+
+RPO and RTO evidence:
+
+| Objective                 | Evidence                                                                                                                                                                                                                                     | Level                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| RPO 15 minutes, databases | Dumps every 15 minutes in both environments with sha256 sidecars (production sidecars from 01:46 UTC on 5 October); the drill's dump `oremedia-20261005T041614Z` was 4 minutes old at T0                                                     | Deployed, observed on Railway |
+| RPO, objects              | Production `omichael-uploads`: 451 objects copied (300, 34,871,214 bytes, at 05:16 with `CARRYOVER` 143; the rest by 05:30; the 07:16 run copied 0 new); `omichaelone` is empty. Staging 01:46 run: 234 objects, 3.5 MB, manifest `live=234` | Deployed, observed on Railway |
+| Backup integrity          | `db-backup-verify` first runs: staging `BACKUP_VERIFY_PASS` 13 checks at 05:51, production 15 checks at 05:48. At 01:34 `restore.sh` refused an unverified pre-sidecar dump (`RESTORE_FAIL no sha256 sidecar`) before touching the target    | Deployed, observed on Railway |
+| RTO 4 hours, database     | Staging drill: `RESTORE_PASS` 115/115 tables, 33 migration rows, sha256 matches the sidecar, 8 s (the first run, deployment `7bed28a3`, 9 s)                                                                                                 | Staging drill                 |
+| RTO 4 hours, objects      | Staging drill: `OBJECT_RESTORE_PASS` `staging-media`, 234 objects, 3,506,051 bytes, each read back against the manifest sha256, 120 s, into `restore-scratch/drill-20261005T042612Z/`                                                        | Staging drill                 |
+| RTO 4 hours, application  | Kill switches, re-point to the restored database, `holdRestored` and smoke on restored data: integration-tested only (`runbooks.integration.test.ts`)                                                                                        | Not measured on Railway       |
+
+The 451 production total and the 300 + 143 of the 05:16 run are both as recorded; the evidence does not explain the
+difference.
+
+Drill timings (staging, `restore-rehearsal` deployment `8c67765d`, 5 October 2026 UTC):
+
+| Step                 | Mark                                                           | Time                          |
+| -------------------- | -------------------------------------------------------------- | ----------------------------- |
+| Detect and decide    | `DRILL_MARK detect start 2026-10-05T04:20:18Z` (T0, simulated) | no `detect end` mark recorded |
+| Database restore     | `RESTORE_PASS`                                                 | 8 s                           |
+| Object restore       | `OBJECT_RESTORE_PASS`                                          | 120 s                         |
+| Database and objects | `DRILL_PASS all`                                               | 128 s                         |
+| Application steps    | `kill-switches`, `repoint`, `hold-restored`, `smoke`           | not run                       |
+
+Not measured: the detect-and-decide step (T0 was simulated and has no end mark); provisioning (the drill reused the
+existing `restore-rehearsal` and `mysql-restore`); the application steps, because there was no staging admin session
+and re-pointing the staging services would overwrite variable templates that cannot be read back; a restore of the
+Temporal database; any production restore; and a full-size object set (234 objects, 3.5 MB on staging). The RTO is
+therefore evidenced for the database and objects only (residual risk R21). The cleanup of the drill's scratch copy is
+not recorded.
+
+New services and variables (names only): `db-backup-verify` (both environments; `verify.sh`, cron `47 5 * * *`;
+`VERIFY_MAX_AGE_MINUTES`, `VERIFY_NAMES`, `VERIFY_OBJECTS`, `VERIFY_OBJECT_SAMPLE`); `db-backup` object backup
+(`OBJECT_STORE_BUCKET_ASSETS`, `OBJECT_STORE_BUCKET_RELEASES`, `SRC_OBJECT_STORE_ENDPOINT`,
+`SRC_OBJECT_STORE_ACCESS_KEY_ID`, `SRC_OBJECT_STORE_SECRET_ACCESS_KEY`, `SRC_OBJECT_STORE_REGION`,
+`OBJECT_BACKUP_PREFIX`, `OBJECT_BACKUP_MAX_OBJECTS`); staging `restore-rehearsal` drill and object restore
+(`DST_BUCKET`, `DST_PREFIX`, `DRILL_BUCKETS`, `RESTORE_PARALLEL`); `temporal` (`SQL_MAX_CONNS`,
+`SQL_MAX_IDLE_CONNS`); api (`OBJECT_STORE_CORS_ORIGINS`, `OREMEDIA_MODEL_PROVIDER`, `OREMEDIA_MODEL_ID`). The
+runbook is `docs/runbooks/backup-and-restore.md`.
+
+### Staging acceptance
+
+4 October: 94/96, then 105/119, 124/127 and 126/127; 5 October 00:36 UTC: `131/131 (15 skipped)`. The skips: seven
+journeys and one Studio review request need a certified channel provider; six accessibility and two Studio cases are
+mock-only and cannot run against a deployment. Skipped is not passed. Brand assist passed through the prompt
+fallback: the gateway refused the structured-output request (`structured output refused` warning); the cause
+(schema complexity or OpenRouter passthrough) is not verified (residual risk R20).
+
+### Security review (5 October 2026)
+
+A review of #78 to #94 and the demo stage 2 branch (report kept outside the repository). No blockers.
+
+- Fixed: the one major finding, the quadratic article-region matcher of #91 (#97: linear scan, 54 s to 61 ms on a
+  360 KB page). Minors: dumps checked for mysqldump's exit status and `-- Dump completed` trailer before a sidecar is
+  written, restore guards that fail closed on an unknown environment or source, and the plugin's handshake
+  disclosure and `tests/` directory (#96); the structured-output fallback narrowed with both calls' cost counted,
+  certification checked when a command is carried out, and https-only bucket CORS origins (#97).
+- Open "verify whether" items (not confirmed findings): model egress on platform calls without a tenant context
+  (demo branch); scheduled sweeps' retry behaviour for demo tenants; external reviewer links in a demo; the video
+  generator hiding a refusal as retryable; plugin atomicity on HyperDB or read replicas; backup credential separation
+  and object lock; the dump and its sidecar in the same bucket (corruption, not tampering, is detected);
+  zero-cost estimates against a zero budget; a tab in a stored content type breaking the object manifest.
+
+### Owner checklist (current; supersedes the list in section 5)
+
+Done since section 5 and removed: the staging object store (Railway bucket `staging-media`); the staging fixture
+skill version (#83).
+
+1. Demo stage 2: open the pull request from `claude/demo-stage-2` (`4e0fac4`), or authorise engineering to open it.
+2. Retention: approve apply mode on staging first, then confirm the D-09 retention periods for production
+   (`RETENTION_SWEEP_APPLY`).
+3. An alert destination (Slack, Discord or email webhook) for missed backups, failed verify runs, crashes and deploy
+   failures.
+4. Meta App Review and Business Verification (app `1111601258212850`) and LinkedIn Community Management API review;
+   then certification per `docs/runbooks/certify-a-provider.md`.
+5. A WordPress test site with the conditional-write plugin installed (PR-03, PR-04).
+6. Access for the application half of the recovery drill: check the staging api and worker `DATABASE_URL` templates
+   in the Railway dashboard, or authorise the acceptance admin to run the application steps.
+7. Network egress to oreandtar.co.zw for the demo sources, or an export of them, and decisions on the five O&T
+   source conflicts.
+8. Railway "Wait for CI" on the repo-sourced production services (no API exposes the setting).
+9. Staging approval monitor: real staging Gmail credentials, or disable its cron (still open as last recorded).
+
+### Residual risks
+
+- R19 (production Temporal persistence): **closed**. #85 caps the pool (`SQL_MAX_CONNS` 10, `SQL_MAX_IDLE_CONNS` 5);
+  production `temporal` redeployed at 18:33 UTC on 4 October with no persistence errors after, and the 18:47
+  `db-backup` Temporal dump passed.
+- R20 (brand assist structured output): the model gateway refuses the structured-output request for brand assist;
+  the root cause (schema complexity or OpenRouter passthrough) is not verified. The prompt fallback of #93 carries
+  the feature (staging acceptance passes through it); #97 narrowed it to the provider's own 400 or 422 refusal and
+  counts the refused call's usage with the answer's. Exposure: while the refusal persists, each assist request makes
+  two model calls, and the fallback answer is checked against the section schema only after it is generated
+  (`packages/ai/src/brand-assist.ts`). Mitigation: establish the cause with the gateway, then rely on structured
+  output again where it is accepted.
+- R21 (recovery time objective): the 4-hour RTO is evidenced for the database and objects only (128 s on staging).
+  The application steps (kill switches, re-point, `holdRestored`, smoke on restored data) are integration-tested
+  only and have no Railway timing. Mitigation: owner action 6, then the timed application half of the drill.

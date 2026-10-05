@@ -10,6 +10,7 @@ import {
   verifyEvidence,
   type ConvertContext,
   type SuggestionSource,
+  shapeIssues,
 } from './assist-suggestions';
 
 const SRC: SuggestionSource = {
@@ -258,5 +259,33 @@ describe('merge rules (BSC-4)', () => {
         questions: [],
       }),
     ).toThrow();
+  });
+});
+
+describe('shapeIssues', () => {
+  it('names where an answer left the schema (paths and codes only, never the model’s text); the schema stays strict', () => {
+    // What a model wrote for spelling when the voice example did not show the field: a bare string value.
+    const answer = {
+      personality: [],
+      principles: [],
+      spelling: { value: 'en-GB', rationale: 'r', basis: 'stated', confidence: 'high', evidence: [] },
+      styleRules: [],
+      claimRules: [],
+      remove: [],
+      questions: [],
+      uncertainty: 'SECRET-ish model prose',
+    };
+    let caught: unknown;
+    try {
+      parseSectionOutput('voice', answer);
+    } catch (err) {
+      caught = err;
+    }
+    const issues = shapeIssues(caught);
+    expect(issues).toEqual(
+      expect.arrayContaining(['spelling.value: invalid_type', '(answer): unrecognized_keys']),
+    );
+    expect(issues.join(' ')).not.toContain('SECRET');
+    expect(shapeIssues(new Error('invalid_json'))).toEqual(['invalid_json']);
   });
 });

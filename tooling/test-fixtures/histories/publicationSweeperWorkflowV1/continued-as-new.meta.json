@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationSweeperWorkflowV1",
+  "case": "continued-as-new",
+  "description": "Two passes one second apart, then continue-as-new with the same configuration.",
+  "queue": "core",
+  "state": "continued_as_new",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:33.280Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "a553cc550828d5325357669adad2a96e3a8135631c5f56bde0d0df7bf5ad6662"
+}

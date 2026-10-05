@@ -1,0 +1,12 @@
+{
+  "workflowType": "studioVideoJobSignalRelayV1",
+  "case": "target-gone",
+  "description": "The job is no longer running: the external signal fails and the relay completes anyway.",
+  "queue": "agents",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:14:25.740Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "3cca5bf81359a2b040ee32d9e98f49853fa31adafbb37d27fb4b940fa3a4f8b1"
+}

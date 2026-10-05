@@ -7,11 +7,14 @@ import { useBrandFonts, type BrandFontFaceDto } from '../assets/use-assets';
 import { useFontFaceStatus } from '../assets/use-font-faces';
 import { brandPath, useBrandContext } from './brand-context';
 import {
-  SPECIMEN_LINE_HEIGHT,
+  DEFAULT_LINE_HEIGHT,
   TYPE_ROLES,
   faceName,
   fontStatus,
+  minSizeWarning,
+  resolveLineHeight,
   specRows,
+  specimenSizePx,
   typeScale,
   weightCoverage,
   type FontLoadState,
@@ -47,12 +50,15 @@ function inkDiffers(family: string, a: number, b: number): boolean | null {
   return false;
 }
 
-/** How a role is drawn: its face's registered family (no generic fallback to pass for it), weight, size and tracking. */
+/**
+ * How a role is drawn: its face's registered family (no generic fallback to pass for it), weight, intended size (else
+ * its minimum), configured line height (else the labelled default) and tracking.
+ */
 const roleStyle = (role: TypeRole, family: string | null): CSSProperties => ({
   fontFamily: family ? `"${family}", sans-serif` : 'sans-serif',
   fontWeight: role.weight,
-  fontSize: `${role.minSizePx}px`,
-  lineHeight: SPECIMEN_LINE_HEIGHT,
+  fontSize: `${specimenSizePx(role)}px`,
+  lineHeight: resolveLineHeight(role).value,
   letterSpacing: `${role.tracking ?? 0}em`,
 });
 
@@ -143,7 +149,7 @@ export function TypographySpecimen({ doc, editing = false }: { doc: Doc; editing
         <p className="max-w-prose text-sm text-muted-foreground">
           {roles.length === 0
             ? 'No type roles yet.'
-            : `${roles.length} role${roles.length === 1 ? '' : 's'}, each bound to a font file, weight, minimum size and tracking. Specimens are drawn at 100% of the brand's sizes; line height is not part of the brand system, so they use ${SPECIMEN_LINE_HEIGHT}.`}
+            : `${roles.length} role${roles.length === 1 ? '' : 's'}, each bound to a font file, weight, size, minimum size, line height and tracking. Specimens are drawn at 100% of each role's size (its minimum where no size is set); a role with no line height uses ${DEFAULT_LINE_HEIGHT}, labelled as the default.`}
         </p>
         {!editing && (
           <Button asChild size="sm">
@@ -254,6 +260,7 @@ export function TypographySpecimen({ doc, editing = false }: { doc: Doc; editing
                     </div>
                     {spec && <p className="text-xs text-muted-foreground">{spec.use}</p>}
                     {s.status && <SpecimenWarning role={s.role.role} status={s.status} />}
+                    <MinSizeWarning role={s.role} />
                   </div>
                   <dl
                     className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px]"
@@ -354,6 +361,21 @@ function SpecimenWarning({ role, status }: { role: TypeRoleKey; status: FontStat
       description={status.action}
       live="polite"
       data-testid={`type-warning-${role}`}
+    />
+  );
+}
+
+/** A role set below its own minimum size, said on its specimen (apart from the font warnings). */
+function MinSizeWarning({ role }: { role: TypeRole }) {
+  const warning = minSizeWarning(role);
+  if (!warning) return null;
+  return (
+    <StatusBanner
+      tone={warning.tone}
+      title={warning.title}
+      description={warning.action}
+      live="polite"
+      data-testid={`type-size-warning-${role.role}`}
     />
   );
 }

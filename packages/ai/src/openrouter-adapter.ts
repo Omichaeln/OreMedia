@@ -6,6 +6,7 @@ import type {
   ModelMessage,
   ModelRequest,
   ModelToolCall,
+  ModelUsage,
 } from '@oremedia/contracts/agents';
 import type { GenerationRestrictions } from '@oremedia/contracts/brand';
 import {
@@ -15,7 +16,7 @@ import {
 } from '@oremedia/contracts/errors';
 import { assertCurrentTenantEgress } from '@oremedia/module-access';
 import { logger } from '@oremedia/observability';
-import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
+import { ModelRequestRejectedError, toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 
 export interface OpenRouterAdapterOptions {
   apiKey: string;
@@ -102,6 +103,16 @@ export class OpenRouterModelAdapter implements ModelAdapter {
             tool_choice: 'auto',
           }
         : {}),
+      // Structured output (OpenAI-compatible `json_schema`, strict): the answer is constrained to the caller's schema
+      // where the routed provider supports it; elsewhere it is ignored and the caller's own validation still decides.
+      ...(req.responseSchema
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: req.responseSchema.name, strict: true, schema: req.responseSchema.schema },
+            },
+          }
+        : {}),
       provider: { data_collection: 'deny' },
       user: req.metadata.runId,
     };
@@ -121,14 +132,17 @@ export class OpenRouterModelAdapter implements ModelAdapter {
       const retryAfter = Number(res.headers.get('retry-after'));
       throw unavailable(`status ${res.status}`, Number.isFinite(retryAfter) ? retryAfter * 1000 : undefined);
     }
-    if (!res.ok) throw rejected(res.status, await errorDetail(res));
+    if (!res.ok) {
+      const refusal = await errorBody(res);
+      throw rejected(res.status, refusal.message, refusal.usage);
+    }
     const json = (await res.json()) as ChatResponse;
     // OpenRouter can report an upstream failure inside a 200 body.
     if (json.error) {
       const code = json.error.code ?? 500;
       throw code === 429 || code >= 500
         ? unavailable(`upstream ${code}`)
-        : rejected(code, errorMessageOf(json.error));
+        : rejected(code, errorMessageOf(json.error), usageOf(json));
     }
     return toCompletion(json, toolNamesOf(req.tools));
   }
@@ -221,13 +235,20 @@ export function rejectionDetail(message: string | undefined, status: number): st
   return detail ? `${status}: ${detail}` : String(status);
 }
 
-async function errorDetail(res: Response): Promise<string | undefined> {
+/** A refusal's message and the usage the provider reported with it, when its body is JSON. */
+async function errorBody(res: Response): Promise<{ message?: string; usage: ModelUsage | null }> {
   try {
     const json = (await res.json()) as ChatResponse;
-    return json.error ? errorMessageOf(json.error) : undefined;
+    return { ...(json.error ? { message: errorMessageOf(json.error) } : {}), usage: usageOf(json) };
   } catch {
-    return undefined;
+    return { usage: null };
   }
+}
+
+/** The usage a response reported, or null when it reported none (a refusal usually reports none). */
+function usageOf(json: ChatResponse): ModelUsage | null {
+  if (!json.usage) return null;
+  return { inputTokens: json.usage.prompt_tokens ?? 0, outputTokens: json.usage.completion_tokens ?? 0 };
 }
 
 /**
@@ -262,13 +283,14 @@ function upstreamMessage(raw: unknown): string | undefined {
   return typeof raw === 'string' ? raw : undefined;
 }
 
-function rejected(status: number, message?: string): ValidationFailedError {
+function rejected(
+  status: number,
+  message?: string,
+  usage: ModelUsage | null = null,
+): ModelRequestRejectedError {
   const detail = rejectionDetail(message, status);
   logger().warn({ errorMessage: `openrouter ${detail}` }, 'model provider rejected the request');
-  return new ValidationFailedError(
-    [{ path: 'model', issue: `provider rejected the request (${detail})` }],
-    `The model provider rejected the request (${detail})`,
-  );
+  return new ModelRequestRejectedError(status, detail, usage);
 }
 
 /** OpenRouter's provider-routing object for one request (only / ignore / data_collection / zdr). */

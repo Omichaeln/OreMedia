@@ -8,7 +8,7 @@ import superjson from 'superjson';
 import type { Operation } from '@oremedia/contracts/creative';
 import { fixtureDocument, ids } from '@oremedia/editor/fixtures';
 import type { AppRouter } from '@oremedia/api';
-import { deployedWebOrigin, signInWithPasswordForm } from './deployed';
+import { deployedWebOrigin, outOfBandFetch, signInWithPasswordForm } from './deployed';
 import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
 
@@ -16,7 +16,8 @@ import { startStaticServer } from './static-server';
  * Studio smoke (spec 22 Phase 3 gate: save/reopen; stale edits return 409 and rebase; undo is a new revision).
  * Runs the BUILT app (apps/web/dist) in headless Chromium against either:
  *  - the in-memory mock transport (default; `OREMEDIA_E2E=1`), or
- *  - the real API (`OREMEDIA_E2E_API_URL`, `OREMEDIA_E2E_TOKEN`, `OREMEDIA_E2E_TENANT`, `OREMEDIA_E2E_BRAND`);
+ *  - the real API (`OREMEDIA_E2E_API_URL`, `OREMEDIA_E2E_TOKEN`, `OREMEDIA_E2E_TENANT`, `OREMEDIA_E2E_BRAND`,
+ *    `OREMEDIA_E2E_FONT`, `OREMEDIA_E2E_PHOTO`);
  *    the outage and render-failure cases need the mock's hooks and are skipped there; or
  *  - a deployed origin (`OREMEDIA_E2E_WEB_ORIGIN`, the staging acceptance job): the deployed web serves the app and
  *    proxies the api, the person signs in with `OREMEDIA_E2E_EMAIL` and `OREMEDIA_E2E_PASSWORD` through the form,
@@ -38,7 +39,10 @@ const session = {
   token: realApi ? (process.env['OREMEDIA_E2E_TOKEN'] ?? '') : E2E.token,
   tenantId: realApi ? (process.env['OREMEDIA_E2E_TENANT'] ?? '') : E2E.tenantId,
   brandId: realApi ? (process.env['OREMEDIA_E2E_BRAND'] ?? '') : E2E.brandId,
-  /** Real API only: approved asset versions the seeded layers may reference (the service authorises every one). */
+  /**
+   * Real API only: approved asset versions the seeded layers reference (the service authorises every one). Both are
+   * required there: the rebase and hide-layer cases act on the hero image layer seeded from the photo.
+   */
   fontAssetVersionId: process.env['OREMEDIA_E2E_FONT'] ?? 'av_font',
   photoAssetVersionId: process.env['OREMEDIA_E2E_PHOTO'] ?? null,
 };
@@ -55,6 +59,10 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   let headText: (documentId: string, elementId: string) => Promise<string | null>;
 
   beforeAll(async () => {
+    if (realApi && (!process.env['OREMEDIA_E2E_FONT'] || !session.photoAssetVersionId))
+      throw new Error(
+        'against a real API set OREMEDIA_E2E_FONT and OREMEDIA_E2E_PHOTO (approved font and photo asset versions of the brand): the seeded document needs both',
+      );
     if (webOrigin) {
       origin = webOrigin;
     } else {
@@ -67,13 +75,14 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
       close = served.close;
     }
     if (realApi) {
+      const transport = outOfBandFetch();
       const client = createTRPCClient<AppRouter>({
         links: [
           httpLink({
             url: `${realApi}/trpc`,
             transformer: superjson,
             fetch: async (input, init) => {
-              const res = await fetch(input, init);
+              const res = await transport(input, init);
               if (!res.ok && process.env['OREMEDIA_E2E_DEBUG'])
                 console.error(
                   '[e2e] out-of-band request failed',
@@ -201,12 +210,7 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
       // colour values because the seeded brand has no colour tokens yet.
       const seedPage = fixtureDocument().pages[0]!;
       const elements = seedPage.elements
-        .filter(
-          (e) =>
-            e.type === 'background' ||
-            e.type === 'text' ||
-            (e.type === 'image' && session.photoAssetVersionId),
-        )
+        .filter((e) => e.type === 'background' || e.type === 'text' || e.type === 'image')
         .map((e) =>
           e.type === 'text'
             ? {

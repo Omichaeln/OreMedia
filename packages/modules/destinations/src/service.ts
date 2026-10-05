@@ -13,6 +13,7 @@ import {
   DestinationGet,
   DestinationList,
   DestinationRegister,
+  DestinationSetArticleSelector,
   DestinationSetHealth,
   SourceUse,
   SourceUseCheck,
@@ -34,7 +35,11 @@ import {
   ValidationFailedError,
 } from '@oremedia/contracts/errors';
 import type { Decision, ResolvedActor } from '@oremedia/contracts/policy';
-import type { DecryptedCredentials, RemoteRevokeOutcome } from '@oremedia/contracts/providers';
+import type {
+  CertifiableCapability,
+  DecryptedCredentials,
+  RemoteRevokeOutcome,
+} from '@oremedia/contracts/providers';
 import { requireTenant, withTransaction, type Tx } from '@oremedia/db';
 import { newId } from '@oremedia/domain/ids';
 import { assertTenantCapability, policy } from '@oremedia/module-access';
@@ -123,16 +128,16 @@ const listSources = (): DestinationSourceV1[] => [
 ];
 
 /** A certified source adapter the deployment has enabled; the other refusals read as a channel's (spec 14.6). */
-function enabledSourceAdapter(kind: DestinationKind): SourceAdapter {
-  const adapter = sourceAdapterFor(kind); // CAPABILITY_UNSUPPORTED unless registered and certified
+function enabledSourceAdapter(kind: DestinationKind, capability?: CertifiableCapability): SourceAdapter {
+  const adapter = sourceAdapterFor(kind, capability); // CAPABILITY_UNSUPPORTED unless registered and certified
   if (!sourceAvailable(kind))
     throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
   return adapter;
 }
 
 /** A certified CMS adapter the deployment has enabled (R2-3), with the same refusals. */
-export function enabledCmsAdapter(kind: DestinationKind): CmsAdapter {
-  const adapter = cmsAdapterFor(kind); // CAPABILITY_UNSUPPORTED unless registered and certified
+export function enabledCmsAdapter(kind: DestinationKind, capability?: CertifiableCapability): CmsAdapter {
+  const adapter = cmsAdapterFor(kind, capability); // CAPABILITY_UNSUPPORTED unless registered and certified
   if (!sourceAvailable(kind))
     throw new CapabilityUnsupportedError([{ path: 'kind', issue: `source_not_enabled:${kind}` }]);
   return adapter;
@@ -312,6 +317,9 @@ const toDestinationDto = (d: DestinationRow): DestinationV1 => ({
   status: d.status,
   reportingTimeZone: d.reportingTimeZone,
   currencyCode: d.currencyCode,
+  writeSafety: d.writeSafety,
+  writeSafetyCheckedAt: d.writeSafetyCheckedAt ? d.writeSafetyCheckedAt.toISOString() : null,
+  articleSelector: d.articleSelector,
   version: d.version,
   createdAt: d.createdAt.toISOString(),
   updatedAt: d.updatedAt.toISOString(),
@@ -422,7 +430,7 @@ export const destinationService = {
       await assertTenantCapability('destination_connect', tx);
       await visibleBrand(actor, parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
-      const adapter = enabledSourceAdapter(parsed.kind);
+      const adapter = enabledSourceAdapter(parsed.kind, 'connect'); // PR-06: connect certified on its own
       const redirectUri = connectCallbackUriInUse() ?? parsed.redirectUri;
       if (!redirectUri)
         throw new ValidationFailedError(
@@ -482,7 +490,7 @@ export const destinationService = {
       await policy.assert(actor, 'destination.connect', brandResource(pending.brandId), {}, tx);
       await destroyExpiredFlows();
       const kind = StoredKind.parse(pending.providerKey);
-      const adapter = enabledSourceAdapter(kind);
+      const adapter = enabledSourceAdapter(kind, 'connect');
       const client = providerClientFor(adapter.key);
       const io = sourceIO(adapter.key, tenantId);
       const grant = await adapter.exchangeCode(
@@ -544,7 +552,7 @@ export const destinationService = {
           'Choose one of the targets offered',
         );
       const kind = StoredKind.parse(row.kind);
-      const adapter = sourceAdapterFor(kind);
+      const adapter = sourceAdapterFor(kind, 'page_picker'); // PR-06: the target picker is certified on its own
       const { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad } = row;
       const envelope: EnvelopeRow = { kmsKeyId, wrappedDataKey, ciphertext, iv, authTag, aad };
       await pendingRepo.deletePending(row.id, tx);
@@ -578,7 +586,7 @@ export const destinationService = {
       await assertTenantCapability('destination_connect', tx);
       await visibleBrand(actor, parsed.brandId, tx);
       await policy.assert(actor, 'destination.connect', brandResource(parsed.brandId), {}, tx);
-      const adapter = enabledCmsAdapter(parsed.kind);
+      const adapter = enabledCmsAdapter(parsed.kind, 'connect'); // PR-06: connect certified on its own
       let site: URL;
       try {
         site = assertSafeUrl(parsed.siteUrl);
@@ -685,6 +693,41 @@ export const destinationService = {
       'allowed',
       tx,
       { brandId: row.brandId, fromState: row.health, toState: parsed.health },
+    );
+    return toDestinationDto(await destinationsRepo.getById(row.id, tx));
+  },
+
+  /**
+   * PR-04: where the website's theme puts an article's body, tried before the defaults when a rendered article is
+   * verified (destination.manage, a write-capable kind only, under the row version); null clears it.
+   */
+  async setArticleSelector(
+    actor: ResolvedActor,
+    input: z.infer<typeof DestinationSetArticleSelector>,
+    tx: Tx,
+  ) {
+    const parsed = DestinationSetArticleSelector.parse(input);
+    const row = await destinationOf(
+      parsed.brandId,
+      parsed.destinationId,
+      await destinationsRepo.lock(parsed.destinationId, tx),
+    );
+    await policy.assert(actor, 'destination.manage', destinationResource(row), {}, tx);
+    if (!cmsWritable(row.kind))
+      throw new ValidationFailedError(
+        [{ path: 'destinationId', issue: `destination_not_writable:${row.kind}` }],
+        'Only a website destination has an article region',
+      );
+    if (row.version !== parsed.expectedVersion)
+      throw new ConflictError('Destination', row.id, parsed.expectedVersion);
+    await destinationsRepo.update(row.id, row.version, { articleSelector: parsed.articleSelector }, tx);
+    await audit.record(
+      actorRef(actor),
+      'destination.article_selector',
+      { type: 'brand_destination', id: row.id },
+      'allowed',
+      tx,
+      { brandId: row.brandId, kind: row.kind, reason: parsed.articleSelector === null ? 'cleared' : 'set' },
     );
     return toDestinationDto(await destinationsRepo.getById(row.id, tx));
   },

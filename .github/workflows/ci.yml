@@ -33,6 +33,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm check:schema
       - run: pnpm check:secrets
+      # PR-09: the db-backup scripts, with a pinned ShellCheck (checksum-verified release download; no service).
+      - name: ShellCheck (infra/railway/db-backup)
+        run: |
+          curl -sSfL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          PATH="/tmp/shellcheck-v0.10.0:$PATH" pnpm check:shell
       - name: Gitleaks (secrets in history)
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -110,6 +117,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The gate compares retained histories with their first commit and the manifest with origin/main.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.6.1
@@ -119,6 +129,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # Spec 19.4 release gate: every retained history in tooling/test-fixtures/histories replays against the
+      # candidate bundles; fails on nondeterminism, on a registered workflow type without a retained history, on a
+      # missing, unlisted or edited history, or when nothing is discovered (docs/runbooks/workflow-replay-histories.md).
       - run: pnpm test:replay
 
   workflow-time-skipping:

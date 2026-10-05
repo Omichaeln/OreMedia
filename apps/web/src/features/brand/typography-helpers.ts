@@ -53,10 +53,35 @@ export const TYPE_ROLES: Array<{
 ];
 
 /**
- * Line height is not part of the brand system (type roles carry a face, weight, minimum size and tracking), so every
- * specimen is set at the design reference's 1.2 and says so; it is never presented as a brand rule.
+ * The line height a specimen uses for a role the guidance gives none: the design reference's 1.2. It is labelled as
+ * the default wherever it is used, never presented as the brand's rule.
  */
-export const SPECIMEN_LINE_HEIGHT = 1.2;
+export const DEFAULT_LINE_HEIGHT = 1.2;
+
+/** The line height a role is drawn with: the configured one, else the labelled default. */
+export const resolveLineHeight = (role: Pick<TypeRole, 'lineHeight'>) =>
+  role.lineHeight === undefined
+    ? { value: DEFAULT_LINE_HEIGHT, configured: false }
+    : { value: role.lineHeight, configured: true };
+
+/** The size a specimen is drawn at: the role's intended size, else its minimum (all a role stored before sizes). */
+export const specimenSizePx = (role: Pick<TypeRole, 'sizePx' | 'minSizePx'>) => role.sizePx ?? role.minSizePx;
+
+/** Whether the guidance defines a minimum: the editor stores an emptied minimum as 0. */
+const hasMinimum = (role: Pick<TypeRole, 'minSizePx'>) => role.minSizePx > 0;
+
+/**
+ * A role whose intended size is below its own minimum: null when it is not (or either is not set); otherwise what is
+ * wrong and what to do. Studio checks flag text set below the minimum, so the specimen says so before they do.
+ */
+export function minSizeWarning(role: Pick<TypeRole, 'sizePx' | 'minSizePx'>): FontStatus | null {
+  if (role.sizePx === undefined || !hasMinimum(role) || role.sizePx >= role.minSizePx) return null;
+  return {
+    tone: 'warning',
+    title: `Set at ${role.sizePx} px, below this role’s ${role.minSizePx} px minimum; text at this size is flagged as off brand.`,
+    action: `Raise the size to at least ${role.minSizePx} px, or lower the minimum if the guidance allows it.`,
+  };
+}
 
 export interface ScaleStep {
   role: TypeRole;
@@ -65,11 +90,14 @@ export interface ScaleStep {
   of: number;
 }
 
-/** The brand's type scale: its roles largest first (by minimum size; equal sizes keep the contract's role order). */
+/**
+ * The brand's type scale: its roles largest first (by the size each is drawn at; equal sizes keep the contract's role
+ * order).
+ */
 export function typeScale(roles: readonly TypeRole[]): ScaleStep[] {
   const order = (r: TypeRoleKey) => TYPE_ROLES.findIndex((x) => x.role === r);
   return [...roles]
-    .sort((a, b) => b.minSizePx - a.minSizePx || order(a.role) - order(b.role))
+    .sort((a, b) => specimenSizePx(b) - specimenSizePx(a) || order(a.role) - order(b.role))
     .map((role, i, all) => ({ role, step: i + 1, of: all.length }));
 }
 
@@ -81,14 +109,25 @@ export const formatTracking = (tracking: number | undefined) =>
 export const faceName = (face: Pick<BrandFontFace, 'family' | 'name'> | undefined) =>
   face ? (face.family ?? face.name) : 'A font not in this brand';
 
-/** The secondary label under a specimen: every value the specimen is drawn with, true size included. */
+/**
+ * The secondary label under a specimen: every value the specimen is drawn with, its true size and, apart from it,
+ * the minimum the guidance allows; a value the guidance does not set says so.
+ */
 export function specRows(role: TypeRole, face: Pick<BrandFontFace, 'family' | 'name'> | undefined) {
+  const lineHeight = resolveLineHeight(role);
   return [
     ['role', role.role],
     ['font', faceName(face)],
     ['weight', String(role.weight)],
-    ['size', `${role.minSizePx} px (minimum)`],
-    ['line height', `${SPECIMEN_LINE_HEIGHT} (preview only)`],
+    [
+      'specimen size',
+      role.sizePx === undefined ? `${role.minSizePx} px (the minimum; no size set)` : `${role.sizePx} px`,
+    ],
+    ['minimum size', hasMinimum(role) ? `${role.minSizePx} px` : 'not set'],
+    [
+      'line height',
+      lineHeight.configured ? String(lineHeight.value) : `${lineHeight.value} (default; not set)`,
+    ],
     ['tracking', formatTracking(role.tracking)],
   ] as const;
 }

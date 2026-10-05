@@ -457,6 +457,30 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await ga4.textContent()).toContain('Healthy');
     expect(await ga4.getAttribute('data-destination-health')).toBe('healthy');
     expect(await page.getByTestId('destination-dst_e2e_gbp').textContent()).toContain('Not checked');
+    // PR-03: the website verified without the conditional-write plugin is in limited mode and says what that means;
+    // a destination that never updates articles shows no such state.
+    const cms = page.getByTestId('destination-dst_e2e_cms');
+    expect(await cms.getByTestId('destination-write-safety').textContent()).toContain('Limited mode');
+    expect(await cms.getByTestId('destination-limited-mode').textContent()).toContain(
+      'Oremedia conditional-write plugin',
+    );
+    expect(await ga4.getByTestId('destination-write-safety').count()).toBe(0);
+    // PR-04: a website's article region selector is set (and validated) on its row; other kinds have none.
+    const selector = cms.getByLabel('Article region selector');
+    await selector.fill('div p');
+    await cms.getByRole('button', { name: 'Save selector' }).click();
+    await expect
+      .poll(() => cms.getByTestId('article-selector-form').textContent())
+      .toContain('simple selectors only');
+    await selector.fill('div.post-body');
+    await cms.getByRole('button', { name: 'Save selector' }).click();
+    await expect
+      .poll(() => backend.destinations.destinations.find((d) => d.id === 'dst_e2e_cms')?.articleSelector)
+      .toBe('div.post-body');
+    await expect
+      .poll(() => cms.getByTestId('destination-article-selector').textContent())
+      .toContain('div.post-body');
+    expect(await ga4.getByTestId('article-selector-form').count()).toBe(0);
     // Register a Search Console site: it joins the list under its own kind, owned by the signed-in person.
     await page.locator('#destination-kind').click();
     await page.getByRole('option', { name: 'Search Console site' }).click();
@@ -1075,7 +1099,23 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await confirm.waitFor({ timeout: 15_000 });
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     expect(backend.routingPolicy?.version).toBe(3);
-    await form.getByRole('button', { name: 'Cancel' }).click();
+    // Confirming is the explicit choice the server requires to store a policy that refuses the model in use.
+    await form.getByRole('button', { name: 'Save policy' }).click();
+    await confirm.waitFor({ timeout: 15_000 });
+    await confirm.getByRole('button', { name: 'Save and stop agent runs' }).click();
+    await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('Stored version 4.');
+    expect(backend.routingPolicy?.policy.permittedVendors).toEqual(['anthropic']);
+    // An api that is not told the deployment's model shows no made-up model in use, and offers no editing.
+    const inUseBefore = backend.modelInUse;
+    backend.modelInUse = null;
+    await page.reload();
+    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await expect
+      .poll(() => routing.textContent(), { timeout: 15_000 })
+      .toContain('The model in use is not known here');
+    expect(await routing.getByTestId('model-in-use').count()).toBe(0);
+    expect(await routing.getByRole('button', { name: 'Edit' }).count()).toBe(0);
+    backend.modelInUse = inUseBefore;
     backend.routingPolicy = storedBefore;
     backend.killSwitches.clear();
     await page.close();
@@ -1689,6 +1729,12 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       'matched what was sent',
     );
     expect(await panel.getByTestId('article-validation').textContent()).toContain('Page validated');
+    // PR-04: each thing the verification proves is shown on its own.
+    for (const key of ['write', 'readback', 'rendered', 'visibility'])
+      expect(await panel.getByTestId(`article-stage-${key}`).getAttribute('data-state')).toBe('verified');
+    expect(await panel.getByTestId('article-stage-rendered').textContent()).toContain(
+      'All 4 blocks of the approved content are on the page (in .entry-content)',
+    );
     const dayList = page.getByTestId('day-list');
     expect(await dayList.textContent()).toContain('Live');
     await panel.getByTestId('validate-article').click();
@@ -1699,6 +1745,12 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await expect
       .poll(() => panel.getByTestId('article-verification').textContent(), { timeout: 15_000 })
       .toContain('Verification failed');
+    // PR-04: the changed interior block is named, and the header-only noindex shows as the live visibility failing.
+    expect(await panel.getByTestId('article-stage-rendered').getAttribute('data-state')).toBe('failed');
+    expect(await panel.getByTestId('article-stage-rendered').textContent()).toContain('first block 2');
+    expect(await panel.getByTestId('article-stage-visibility').getAttribute('data-state')).toBe('failed');
+    expect(await panel.getByTestId('article-stage-visibility').textContent()).toContain('X-Robots-Tag');
+    expect(await panel.getByTestId('article-stage-readback').getAttribute('data-state')).toBe('verified');
     expect(
       backend.phase5.evidence.filter(
         (e) => e.publicationId === 'pub_article' && e.kind === 'rendered_validation',

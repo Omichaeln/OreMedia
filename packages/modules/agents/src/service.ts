@@ -34,6 +34,8 @@ import { IllegalTransitionError } from '@oremedia/domain/state-machines/machine'
 import {
   applyProposalBatch,
   assertRoutingAllowed,
+  modelRouteConfigured,
+  routeDenial,
   CreativeProposalPayload,
   PersonCompletedProposal,
   RELEASE_1_TOOLS,
@@ -87,10 +89,22 @@ const INITIAL_DEADLINE_SECONDS = 1800;
 
 /** Model configuration is read once per process from the environment (Appendix A names). */
 let modelConfig: ModelConfig | null = null;
+let modelConfigPinned = false;
 const currentModelConfig = (): ModelConfig => (modelConfig ??= modelConfigFromEnv());
 /** Test seam / composition: pin the configuration explicitly. */
 export const configureAgentModel = (cfg: ModelConfig | null): void => {
   modelConfig = cfg;
+  modelConfigPinned = cfg !== null;
+};
+/**
+ * The deployment's model route as this process knows it, or null when it is not told it (modelRouteConfigured):
+ * the api makes no model call, and without OREMEDIA_MODEL_PROVIDER / OREMEDIA_MODEL_ID its model configuration is
+ * the built-in Anthropic default, not what worker-core runs. Spec 12.7 settings show and check policies against it.
+ */
+const modelRouteInUse = (): { provider: string; model: string; region: string | null } | null => {
+  if (!modelConfigPinned && !modelRouteConfigured()) return null;
+  const cfg = currentModelConfig();
+  return { provider: cfg.provider, model: cfg.model, region: modelRegion() };
 };
 
 /** Spec 13.1: state is written only by transition(); an illegal move is rejected as a validation failure. */
@@ -604,9 +618,9 @@ export const agentsService = {
       const { tenantId } = requireTenant();
       await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
       const row = await routingPoliciesRepo.current(tx);
-      // The route agents.runs.start checks (deployment configuration), so an admin sees what a policy would stop.
-      const cfg = currentModelConfig();
-      const inUse = { provider: cfg.provider, model: cfg.model, region: modelRegion() };
+      // The deployment's route (configuration), so an admin sees what a policy would stop; null when this process
+      // is not told it, rather than the built-in default presented as the model in use.
+      const inUse = modelRouteInUse();
       return row
         ? {
             policy: ModelRoutingPolicy.parse(row.document),
@@ -622,6 +636,15 @@ export const agentsService = {
       const { tenantId } = requireTenant();
       await policy.assert(actor, 'billing.manage', tenantResource(tenantId), {}, tx);
       const row = await routingPoliciesRepo.current(tx);
+      // A policy that refuses the deployment's model in use stops every model call of the company: stored only on
+      // an explicit choice, never by a form default (the editor warns and asks; the server holds the rule).
+      const inUse = modelRouteInUse();
+      const stops = inUse && routeDenial(parsed.policy, inUse.provider, inUse.model, inUse.region);
+      if (stops && !parsed.confirmStopsRuns)
+        throw new ValidationFailedError(
+          [{ path: 'policy', issue: 'stops_model_in_use' }],
+          `${stops}: this policy refuses the model in use (${inUse.model} through ${inUse.provider}) and would stop every run; confirm to store it`,
+        );
       const values = { document: parsed.policy, updatedByKind: actor.kind, updatedById: actor.id };
       let version: number;
       if (row) {

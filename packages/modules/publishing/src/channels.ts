@@ -8,6 +8,7 @@ import {
 } from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import {
+  capabilityNotCertifiedIssue,
   providerActivationState,
   type AccountGrant,
   type ChannelVariantInput,
@@ -31,7 +32,12 @@ import { newId } from '@oremedia/domain/ids';
 import { assertTenantCapability, policy } from '@oremedia/module-access';
 import { audit, outbox } from '@oremedia/module-operations';
 import { logger } from '@oremedia/observability';
-import { missingScopes, type ProviderAdapter, type ProviderIO } from '@oremedia/providers';
+import {
+  missingScopes,
+  publishCapabilitiesOf,
+  type ProviderAdapter,
+  type ProviderIO,
+} from '@oremedia/providers';
 import { credentialBroker } from './broker';
 import { actorRef, connectionUsable, toConnectionDto, transition, type ConnectionRow } from './common';
 import type { EnvelopeRow } from './envelope';
@@ -359,7 +365,8 @@ export const channelService = {
       await assertTenantCapability('channel_connect', tx);
       await assertBrandExists(parsed.brandId, tx); // a foreign or invisible brand is NOT_FOUND
       await policy.assert(actor, 'channel.connect', brandResource(parsed.brandId), {}, tx);
-      const adapter = adapterFor(parsed.providerKey); // CAPABILITY_UNSUPPORTED unless certified (spec 14.6)
+      // CAPABILITY_UNSUPPORTED unless the provider is certified (spec 14.6) and so is its connect (PR-06).
+      const adapter = adapterFor(parsed.providerKey, 'connect');
       // RA-01: a certified provider this environment disabled, or whose app credentials are not set, is refused
       // with the reason the providers listing shows, before any state is issued.
       const activation = channelActivationOf(adapter.key);
@@ -435,7 +442,7 @@ export const channelService = {
         );
       await policy.assert(actor, 'channel.connect', brandResource(pending.brandId), {}, tx);
       await destroyExpiredChoices();
-      const adapter = adapterFor(pending.providerKey);
+      const adapter = adapterFor(pending.providerKey, 'connect');
       const io = providerIO(adapter.key, tenantId);
       const grant = await adapter.exchangeCode(
         {
@@ -525,7 +532,7 @@ export const channelService = {
           [{ path: 'remoteAccountId', issue: 'account_not_offered' }],
           'Choose one of the accounts offered',
         );
-      const adapter = adapterFor(chosen.providerKey);
+      const adapter = adapterFor(chosen.providerKey, 'page_picker'); // PR-06: the picker is certified on its own
       const target = await connectionTarget(adapter.key, chosen.brandId, chosen.remoteAccountId, tx);
       if (!target) throw anotherBrand('remoteAccountId');
       // The grant is sealed for the connection it was offered as; one connected or removed since cannot take it.
@@ -733,7 +740,22 @@ export const channelService = {
       })),
       settings: variant.settings,
     };
-    return adapter.validateVariant(input);
+    // PR-06: each publish kind the variant exercises (text, image, video) must be certified on the provider.
+    const result = adapter.validateVariant(input);
+    const uncertified = publishCapabilitiesOf(input).filter((needed) =>
+      registry().isUncertified(adapter.key, needed),
+    );
+    if (uncertified.length === 0) return result;
+    return {
+      ok: false,
+      issues: [
+        ...result.issues,
+        ...uncertified.map((c) => ({
+          path: 'providerKey',
+          issue: capabilityNotCertifiedIssue(adapter.key, c),
+        })),
+      ],
+    };
   },
   async validateVariant(variantId: string, tx?: Tx): Promise<boolean> {
     return (await channelService.validateVariantDetailed(variantId, tx)).ok;

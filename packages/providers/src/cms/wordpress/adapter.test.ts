@@ -144,6 +144,7 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
         modifiedAt: '2026-09-30T10:00:00Z',
         contentHash: hashOf('draft', '<p>Ore is heavy.</p>'),
         html: '<p>Ore is heavy.</p>',
+        editUrl: 'https://site.example/wp-admin/post.php?post=42&action=edit',
       },
     });
     // RA-12: the hash moves with the title, the slug, the status or a term, not only the content.
@@ -250,7 +251,7 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
     expect(io.calls.some((c) => c.mutation)).toBe(false);
   });
 
-  it('updateArticle: with the precondition met the post is written once, the new revision comes back with the pre-write read, and the replaced revision is the one read', async () => {
+  it("updateArticle (PR-03): with the legacy precondition met the post is written once, through the plugin's conditional endpoint with the read's write token, never core's unconditional update", async () => {
     load('update_ok');
     const result = await adapter.updateArticle(
       site,
@@ -265,21 +266,23 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
       article: {
         modifiedAt: '2026-09-30T13:00:00Z',
         contentHash: hashOf('publish', '<p>Ore is heavy and tar is sticky.</p>'),
+        writeToken: `wpcw1:9:${'b'.repeat(64)}`,
       },
-      previous: { modifiedAt: '2026-09-30T10:00:00Z', html: '<p>Ore is heavy.</p>' },
+      previous: {
+        modifiedAt: '2026-09-30T10:00:00Z',
+        html: '<p>Ore is heavy.</p>',
+        writeToken: `wpcw1:7:${'a'.repeat(64)}`,
+      },
     });
-    expect(result.outcome === 'done' && result.overwritten).toBeUndefined();
-    expect(io.calls.filter((c) => c.mutation)).toHaveLength(1);
-    expect(io.calls.at(-1)).toMatchObject({
-      method: 'GET',
-      url: 'https://site.example/wp-json/wp/v2/posts/42/revisions?context=edit&per_page=2',
-      mutation: false,
-    });
+    expect(io.calls.filter((c) => c.mutation)).toEqual([
+      { method: 'POST', url: 'https://site.example/wp-json/oremedia/v1/posts/42', mutation: true },
+    ]);
     expect(server.remaining()).toEqual([]);
+    expect(server.unmatched).toEqual([]);
   });
 
-  it('updateArticle (RA-12): a site edit that slipped between the read and the write is detected after the write and returned as what was overwritten; an unreadable revision list claims nothing', async () => {
-    load('update_overwritten');
+  it('updateArticle (PR-03): a site edit that slipped between the read and the write is refused by the site (412) and returned as the current revision; nothing was written', async () => {
+    load('update_precondition_failed');
     const result = await adapter.updateArticle(
       site,
       creds,
@@ -289,38 +292,50 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
       { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
     );
     expect(result).toMatchObject({
-      outcome: 'done',
-      article: { modifiedAt: '2026-09-30T13:00:00Z' },
-      previous: { modifiedAt: '2026-09-30T10:00:00Z' },
-      overwritten: {
-        remoteId: '42',
-        remoteUrl: 'https://site.example/why-ore-and-tar/',
+      outcome: 'conflict',
+      current: {
         title: 'Why ore & tar (edited on the site)',
-        modifiedAt: '2026-09-30T12:30:00Z',
         html: '<p>Someone changed this in the window.</p>',
+        writeToken: `wpcw1:8:${'c'.repeat(64)}`,
       },
     });
     expect(server.remaining()).toEqual([]);
-    load('update_revisions_unavailable');
-    const unknown = await adapter.updateArticle(
+  });
+
+  it('updateArticle (PR-03): without the plugin (limited mode) an update that replaces content is refused with the current revision and nothing is sent', async () => {
+    load('update_limited');
+    const result = await adapter.updateArticle(
       site,
       creds,
       io,
       '42',
       { html: '<p>Ore is heavy and tar is sticky.</p>' },
-      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>') },
+      { expectedHash: hashOf('publish', '<p>Ore is heavy.</p>'), expectedModifiedAt: '2026-09-30T10:00:00Z' },
     );
-    expect(unknown).toMatchObject({ outcome: 'done', previous: { modifiedAt: '2026-09-30T10:00:00Z' } });
-    expect(unknown.outcome === 'done' && unknown.overwritten).toBeUndefined();
+    expect(result).toMatchObject({
+      outcome: 'limited',
+      reason: 'extension_absent',
+      current: { html: '<p>Ore is heavy.</p>' },
+    });
+    expect(io.calls.some((c) => c.mutation)).toBe(false);
+    expect(server.remaining()).toEqual([]);
   });
 
-  it('unpublishArticle sets a live article back to a draft under the precondition it read; deleteArticle reports one already gone', async () => {
+  it('unpublishArticle sets a live article back to a draft under the precondition it read (atomically with the plugin, status alone without it); deleteArticle reports one already gone', async () => {
     load('unpublish');
     expect(await adapter.unpublishArticle(site, creds, io, '42')).toMatchObject({
       outcome: 'done',
-      article: { status: 'draft' },
-      previous: { status: 'publish', modifiedAt: '2026-09-30T13:00:00Z' },
+      article: { status: 'draft', writeToken: `wpcw1:8:${'d'.repeat(64)}` },
     });
+    expect(server.remaining()).toEqual([]);
+    expect(server.unmatched).toEqual([]);
+    load('unpublish_limited');
+    expect(await adapter.unpublishArticle(site, creds, io, '42')).toMatchObject({
+      outcome: 'done',
+      article: { status: 'draft', html: '<p>Ore is heavy.</p>' },
+      previous: { status: 'publish' },
+    });
+    expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ status: 'draft' });
     expect(server.remaining()).toEqual([]);
     expect(server.unmatched).toEqual([]);
     load('delete_gone');
@@ -352,6 +367,18 @@ describe('WordPress CMS adapter (ledger R2-3, D-16; spec 14.5 / 14.6)', () => {
     await expect(adapter.fetchRendered(site, io, 'http://site.example/x', 1024)).rejects.toMatchObject({
       name: 'BlockedAddressError',
     });
+    // PR-04: the robots and canonical headers travel with the page; absent ones are null.
+    load('rendered_headers');
+    expect(
+      await adapter.fetchRendered(site, io, 'https://site.example/why-ore-and-tar/', 1024 * 1024),
+    ).toMatchObject({
+      status: 200,
+      headers: {
+        xRobotsTag: 'noindex, nofollow',
+        link: '<https://site.example/why-ore-and-tar/>; rel="canonical"',
+      },
+    });
+    expect(page.headers).toEqual({ xRobotsTag: null, link: null });
     load('rendered_large');
     const large = await adapter.fetchRendered(site, io, 'https://site.example/big/', 16);
     expect(large).toMatchObject({ status: 200, truncated: true, bytes: 16 });

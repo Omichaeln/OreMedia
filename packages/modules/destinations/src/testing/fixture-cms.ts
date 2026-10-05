@@ -1,5 +1,6 @@
 import type { DecryptedCredentials, ProviderErrorClass, RevokeResult } from '@oremedia/contracts/providers';
 import {
+  ProviderTransportError,
   classifyByStatus,
   textFingerprint,
   type CmsAdapter,
@@ -15,8 +16,10 @@ import {
   type CmsUpdatePrecondition,
   type CmsVerifyResult,
   type CmsWriteResult,
+  type CmsWriteSafety,
   type ProviderIO,
 } from '@oremedia/providers';
+import { allCapabilitiesCertifiedForTest } from '@oremedia/providers/testing/certified';
 
 /**
  * Test fixture only (never registered in production): an in-memory website whose articles live in a map, so what
@@ -33,7 +36,9 @@ export const fixtureCmsCapability = (over: Partial<CmsCapabilityV1> = {}): CmsCa
   edit: true,
   delete: true,
   unpublish: true,
+  conditionalWrite: 'extension',
   certifiedAt: '2026-01-01T00:00:00.000Z',
+  certifications: allCapabilitiesCertifiedForTest('2026-01-01T00:00:00.000Z'),
   ...over,
 });
 
@@ -63,14 +68,28 @@ export class FixtureCmsAdapter implements CmsAdapter {
   verifyBehaviour: VerifyBehaviour = { kind: 'ok', canPublish: true };
   /** What the next write does: succeed, or fail as the platform would. */
   writeBehaviour: 'ok' | 'forbidden' | 'outage' = 'ok';
-  /** The rendered page the site serves for an article's URL (status and HTML); absent: a 404. */
-  readonly pages = new Map<string, { status: number; html: string }>();
   /**
-   * RA-12 test hook: a change someone makes on the site between an update's pre-write read and its write (the
-   * window no compare-and-swap closes). Applied once, then cleared; the write then replaces it and reports it as
-   * `overwritten`, as the WordPress adapter reads it from the revisions.
+   * The rendered page the site serves for an article's URL (status, HTML and, PR-04, the X-Robots-Tag and Link
+   * headers); absent: a 404. `unreachable` throws as a transport failure (a timeout) would.
+   */
+  readonly pages = new Map<
+    string,
+    { status: number; html: string; xRobotsTag?: string; link?: string; unreachable?: true }
+  >();
+  /**
+   * RA-12 / PR-03 test hook: a change someone makes on the site between an update's pre-write read and its write.
+   * Applied once, then cleared. It advances the article's write counter as any save on the site does, so the
+   * conditional write that follows is refused (`conflict`, nothing written), as the WordPress plugin refuses it.
    */
   editInWindow: ((current: CmsRemoteArticle) => Partial<CmsRemoteArticle>) | null = null;
+  /**
+   * PR-03: what the site's handshake reports. `conditional` (default): updates are compared and written atomically
+   * against the write token (`fx:<counter>`); `limited`: an update that replaces content is refused, a status-only
+   * one runs; `unknown`: nothing is sent.
+   */
+  writeSafetyMode: CmsWriteSafety = { mode: 'conditional', mechanism: 'fixture', version: '1' };
+  /** The write counter per article: every save on the site advances it (the plugin's `_oremedia_write_counter`). */
+  readonly counters = new Map<string, number>();
   private nextId = 100;
 
   constructor(capability?: CmsCapabilityV1) {
@@ -106,6 +125,38 @@ export class FixtureCmsAdapter implements CmsAdapter {
     return result;
   }
 
+  async writeSafety(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    _io: ProviderIO,
+  ): Promise<CmsWriteSafety> {
+    this.record('write_safety', site, credentials);
+    return this.writeSafetyMode;
+  }
+
+  /** The article as a read shows it: with its write token where the site offers conditional writes. */
+  private view(article: CmsRemoteArticle): CmsRemoteArticle {
+    const { writeToken: _stored, ...rest } = article;
+    return this.writeSafetyMode.mode === 'conditional'
+      ? { ...rest, writeToken: `fx:${this.counters.get(article.remoteId) ?? 1}` }
+      : { ...rest };
+  }
+
+  /** Someone saves the article on the site (outside Oremedia): the fields change and the counter advances. */
+  editOnSite(remoteId: string, change: Partial<CmsRemoteArticle>): CmsRemoteArticle {
+    const previous = this.articles.get(remoteId);
+    if (!previous) throw new Error(`no article ${remoteId}`);
+    const edited = { ...previous, ...change };
+    const next = {
+      ...edited,
+      contentHash: fixtureArticleHash(edited),
+      modifiedAt: new Date(Date.now() + 500).toISOString(),
+    };
+    this.articles.set(remoteId, next);
+    this.counters.set(remoteId, (this.counters.get(remoteId) ?? 1) + 1);
+    return next;
+  }
+
   async readArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -114,7 +165,7 @@ export class FixtureCmsAdapter implements CmsAdapter {
   ): Promise<CmsReadResult> {
     this.record('read', site, credentials);
     const article = this.articles.get(remoteId);
-    return article ? { outcome: 'found', article: { ...article } } : { outcome: 'absent' };
+    return article ? { outcome: 'found', article: this.view(article) } : { outcome: 'absent' };
   }
 
   async uploadMedia(
@@ -160,9 +211,16 @@ export class FixtureCmsAdapter implements CmsAdapter {
       contentHash: fixtureArticleHash(fields),
     };
     this.articles.set(remoteId, article);
-    return { outcome: 'done', article: { ...article } };
+    this.counters.set(remoteId, 1);
+    return { outcome: 'done', article: this.view(article) };
   }
 
+  /**
+   * PR-03, as the WordPress adapter with its plugin: the precondition (the stored token, or a legacy hash and
+   * modified instant compared with a read whose token then carries the write) is compared with the site's counter
+   * right before the write, with nothing in between; a site edit in the window (`editInWindow`) advanced the
+   * counter, so the write is refused and nothing is written. Limited mode refuses a content update outright.
+   */
   async updateArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -172,27 +230,32 @@ export class FixtureCmsAdapter implements CmsAdapter {
     precondition: CmsUpdatePrecondition,
   ): Promise<CmsWriteResult> {
     this.record('update', site, credentials);
+    const safety = this.writeSafetyMode;
+    if (safety.mode === 'unknown')
+      return { outcome: 'retryable_error', code: 'write_safety_unknown', message: safety.reason };
     const previous = this.articles.get(remoteId);
     if (!previous) return { outcome: 'rejected', code: 'remote_absent', message: 'gone' };
-    if (
-      (precondition.expectedHash !== undefined && precondition.expectedHash !== previous.contentHash) ||
-      (precondition.expectedModifiedAt !== undefined &&
-        precondition.expectedModifiedAt !== previous.modifiedAt)
-    )
-      return { outcome: 'conflict', current: { ...previous } };
-    // The window between the read and the write: a site edit lands here and the write replaces it (RA-12).
-    let replaced: CmsRemoteArticle | null = null;
+    const statusOnly = Object.keys(input).every((k) => k === 'status') && input.status !== undefined;
+    if (safety.mode === 'limited' && !statusOnly)
+      return { outcome: 'limited', reason: safety.reason, current: this.view(previous) };
+    let token = precondition.expectedWriteToken;
+    if (token === undefined || safety.mode === 'limited') {
+      if (
+        (precondition.expectedHash !== undefined && precondition.expectedHash !== previous.contentHash) ||
+        (precondition.expectedModifiedAt !== undefined &&
+          precondition.expectedModifiedAt !== previous.modifiedAt)
+      )
+        return { outcome: 'conflict', current: this.view(previous) };
+      token = this.view(previous).writeToken ?? undefined;
+    }
+    // The window between the read and the write: a site edit lands here and advances the counter.
     if (this.editInWindow) {
-      const edited = { ...previous, ...this.editInWindow(previous) };
-      replaced = {
-        ...edited,
-        contentHash: fixtureArticleHash(edited),
-        modifiedAt: new Date(Date.now() + 500).toISOString(),
-      };
-      this.articles.set(remoteId, replaced);
+      this.editOnSite(remoteId, this.editInWindow(previous));
       this.editInWindow = null;
     }
-    const current = replaced ?? previous;
+    const current = this.articles.get(remoteId) as CmsRemoteArticle;
+    if (safety.mode === 'conditional' && token !== `fx:${this.counters.get(remoteId) ?? 1}`)
+      return { outcome: 'conflict', current: this.view(current) };
     const fields = {
       title: input.title ?? current.title,
       slug: input.slug ?? current.slug,
@@ -206,11 +269,11 @@ export class FixtureCmsAdapter implements CmsAdapter {
       modifiedAt: new Date(Date.now() + 1000).toISOString(),
     };
     this.articles.set(remoteId, next);
+    this.counters.set(remoteId, (this.counters.get(remoteId) ?? 1) + 1);
     return {
       outcome: 'done',
-      article: { ...next },
-      previous: { ...previous },
-      ...(replaced ? { overwritten: { ...replaced } } : {}),
+      article: this.view(next),
+      ...(token === precondition.expectedWriteToken ? {} : { previous: this.view(previous) }),
     };
   }
 
@@ -223,13 +286,16 @@ export class FixtureCmsAdapter implements CmsAdapter {
     this.record('unpublish', site, credentials);
     const current = this.articles.get(remoteId);
     if (!current) return { outcome: 'already_absent' };
+    const read = this.view(current);
     const written = await this.updateArticle(
       site,
       credentials,
       io,
       remoteId,
       { status: 'draft' },
-      { expectedHash: current.contentHash, expectedModifiedAt: current.modifiedAt },
+      read.writeToken
+        ? { expectedWriteToken: read.writeToken }
+        : { expectedHash: current.contentHash, expectedModifiedAt: current.modifiedAt },
     );
     return written.outcome === 'done'
       ? written
@@ -256,8 +322,20 @@ export class FixtureCmsAdapter implements CmsAdapter {
     maxBytes: number,
   ): Promise<CmsRenderedPage> {
     const page = this.pages.get(url) ?? { status: 404, html: '<html><title>Not found</title></html>' };
+    if (page.unreachable)
+      throw new ProviderTransportError(
+        Object.assign(new Error('timeout'), { name: 'TimeoutError' }),
+        'after_send',
+      );
     const html = page.html.slice(0, maxBytes);
-    return { status: page.status, html, bytes: html.length, truncated: html.length < page.html.length, url };
+    return {
+      status: page.status,
+      html,
+      bytes: html.length,
+      truncated: html.length < page.html.length,
+      url,
+      headers: { xRobotsTag: page.xRobotsTag ?? null, link: page.link ?? null },
+    };
   }
 
   classifyError(input: {

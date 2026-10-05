@@ -1,5 +1,6 @@
 import type { ArticleReadbackV1, DestinationKind } from '@oremedia/contracts/destinations';
 import type {
+  CapabilityCertifications,
   DecryptedCredentials,
   ProviderCapabilityV1,
   ProviderErrorClass,
@@ -10,8 +11,9 @@ import type { ProviderIO } from './io';
 /**
  * Ledger R2-3 (D-16): the CMS-agnostic write contract behind a `cms_site` destination. An adapter verifies the
  * site's integration identity, reads the current remote revision of an article, creates one (a draft by default:
- * preview/staging publication, D-16), updates one only when the remote has not moved since it was read back
- * (never an overwrite), sets one back to a draft (the rollback) or deletes it, and fetches the rendered page for
+ * preview/staging publication, D-16), updates one only when the remote has not moved since it was read back,
+ * compared and written atomically on the site (PR-03; never an overwrite, and no update at all where the site
+ * cannot do that), sets one back to a draft (the rollback) or deletes it, and fetches the rendered page for
  * validation. Credentials are passed in explicitly (never a DB row); every outbound call goes through ProviderIO
  * (SSRF-safe, rate-limited, logged); errors are classified the same way as a channel's (spec 14.5). Certification
  * gates tenant use exactly as for channels and sources (14.6).
@@ -28,8 +30,28 @@ export interface CmsCapabilityV1 {
   edit: boolean;
   delete: boolean;
   unpublish: boolean;
+  /**
+   * PR-03: how an update of an existing article can be made atomic. `native`: the platform itself compares a
+   * precondition and writes in one step; `extension`: only with a server-side extension the adapter detects per site
+   * (`writeSafety`), else the site is in limited mode; `none`: never (every update of an existing article refused).
+   */
+  conditionalWrite: 'native' | 'extension' | 'none';
   certifiedAt: string | null;
+  /** PR-06: the capabilities certified one by one; absent or without an entry means uncertified. */
+  certifications?: CapabilityCertifications;
 }
+
+/**
+ * PR-03: what a site offers for updating an existing article, as the adapter's handshake found it right now.
+ * `conditional`: the site compares the stored precondition (`writeToken`) and writes in one atomic step, refusing a
+ * stale write with the current revision; `limited`: it cannot (no extension, or storage that cannot lock), so an
+ * update that would replace content is refused and nothing is written; `unknown`: the handshake could not be read
+ * (transient), so nothing is decided and a write is retried later, never sent unconditionally.
+ */
+export type CmsWriteSafety =
+  | { mode: 'conditional'; mechanism: string; version: string | null }
+  | { mode: 'limited'; reason: string }
+  | { mode: 'unknown'; reason: string };
 
 /** The site an adapter addresses: its origin (https) and the integration identity it authenticates as. */
 export interface CmsSite {
@@ -79,6 +101,8 @@ export type CmsMediaResult =
 /** The remote article as the adapter reads it: identity, state, content hash; the body for a diff, never stored. */
 export interface CmsRemoteArticle extends ArticleReadbackV1 {
   html: string;
+  /** PR-03: where a person opens the article in the site's own editor (shown when an update is refused). */
+  editUrl?: string;
 }
 
 export type CmsVerifyResult =
@@ -92,14 +116,16 @@ export type CmsReadResult =
   | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number };
 
 /**
- * The classified result of a write. `conflict` is the refusal of an update whose precondition (the hash or the
- * modified timestamp the caller read back) no longer matches the remote: nothing was written, the current remote
- * revision is returned so the person can decide. The outcomes otherwise follow PublishOutcome (spec 14.5).
+ * The classified result of a write. `conflict` is the refusal of an update whose precondition (the write token, or
+ * for a read-back stored before PR-03 the hash and modified timestamp) no longer matches the remote: nothing was
+ * written, the current remote revision is returned so the person can decide. `limited` (PR-03) is the refusal of
+ * an update the site cannot apply atomically (CmsWriteSafety `limited`): nothing was written; `current` is the
+ * remote revision when it could be read, for the person to reconcile on the site. The outcomes otherwise follow
+ * PublishOutcome (spec 14.5).
  *
- * RA-12: an update's `done` carries `previous`, the remote revision read immediately before the write (the
- * precondition was checked against it), and `overwritten` when the adapter could prove that the revision the write
- * replaced was not `previous` (the remote changed between the read and the write): that replaced revision, so the
- * caller records what was lost. A CMS without compare-and-swap cannot close that window, only narrow and detect it.
+ * An update's `done` carries `previous` when the adapter read the remote before the write (to compare a legacy
+ * precondition). `overwritten` is for an adapter that can only detect, after the write, that it replaced a revision
+ * other than `previous`; an adapter with conditional writes never needs it (RA-12, PR-03).
  */
 export type CmsWriteResult =
   | {
@@ -109,6 +135,7 @@ export type CmsWriteResult =
       overwritten?: CmsRemoteArticle;
     }
   | { outcome: 'conflict'; current: CmsRemoteArticle }
+  | { outcome: 'limited'; reason: string; current: CmsRemoteArticle | null }
   | { outcome: 'rejected'; code: string; message: string }
   | { outcome: 'retryable_error'; code: string; message: string; retryAfterMs?: number }
   | { outcome: 'unknown'; code: string; message: string };
@@ -127,13 +154,18 @@ export interface CmsRenderedPage {
   truncated: boolean;
   /** The URL the page was finally read from (after re-checked redirects). */
   url: string;
+  /** PR-04: the `X-Robots-Tag` and `Link` response headers (live visibility, canonical identity); null when absent. */
+  headers: { xRobotsTag: string | null; link: string | null };
 }
 
 /**
- * What an update must match on the remote before it writes: the hash read back and the modified timestamp (both,
- * when the caller has both: the hash covers the content and identity, the timestamp a change that kept them).
+ * What an update must match on the remote. `expectedWriteToken` (PR-03) is the site's own precondition stored with
+ * the read-back: the site compares it and writes in one atomic step. A read-back stored before PR-03 has none; its
+ * hash and modified timestamp are then compared with a fresh read whose own write token carries the write, so a
+ * change after that read is still refused by the site.
  */
 export interface CmsUpdatePrecondition {
+  expectedWriteToken?: string;
   expectedHash?: string;
   expectedModifiedAt?: string | null;
 }
@@ -175,7 +207,17 @@ export interface CmsAdapter {
     input: CmsArticleInput,
     idempotencyKey: string,
   ): Promise<CmsWriteResult>;
-  /** Updates the article only when the remote still matches the precondition; otherwise `conflict`, nothing written. */
+  /**
+   * PR-03: the site's conditional-write support right now (a read-only handshake before any update, and on
+   * verification so the destination records it). Never throws.
+   */
+  writeSafety(site: CmsSite, credentials: DecryptedCredentials, io: ProviderIO): Promise<CmsWriteSafety>;
+  /**
+   * Updates the article only when the remote still matches the precondition, atomically on the site (PR-03);
+   * otherwise `conflict`, nothing written. On a site without conditional writes an update that would replace
+   * content is `limited`, nothing written; a status-only update (the revert to a draft) still runs there, since it
+   * replaces no content.
+   */
   updateArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,

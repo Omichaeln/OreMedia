@@ -148,6 +148,18 @@ export interface ModelRequest {
   temperature?: number;
   timeoutMs: number;
   metadata: { runId: string; tenantId: string };
+  /**
+   * Structured output: the answer's JSON Schema, sent to providers that constrain their answer to it. The schema is
+   * in strict form (every object closed and every property required; an optional field is nullable). The caller
+   * still validates the answer, because a provider or model may not honour it.
+   */
+  responseSchema?: ModelResponseSchema;
+}
+
+/** A named JSON Schema for a model's answer (`name` matches `^[a-zA-Z0-9_-]{1,64}$`, as tool names do). */
+export interface ModelResponseSchema {
+  name: string;
+  schema: Record<string, unknown>;
 }
 
 export interface ModelCompletion {
@@ -331,4 +343,10 @@ export const RoutingPolicySet = z.object({
   policy: ModelRoutingPolicy,
   /** The stored row's version; omitted only when the tenant has no stored policy yet. */
   expectedVersion: z.number().int().min(0).optional(),
+  /**
+   * The administrator's explicit choice to store a policy that refuses the deployment's model in use (it stops
+   * every model call for the company). Without it such a policy is refused with VALIDATION_FAILED
+   * `policy: stops_model_in_use`, so the only configured gateway is never excluded silently.
+   */
+  confirmStopsRuns: z.boolean().optional(),
 });

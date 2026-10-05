@@ -1,0 +1,12 @@
+{
+  "workflowType": "videoIngestWorkflowV1",
+  "case": "accepted",
+  "description": "A video passes every step; the longer played duration is recorded.",
+  "queue": "video",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:17:14.905Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "1afe9ab5b6f22e6162d4a3162fc777701f37f07c6d984714f3a5657465aa48e0"
+}

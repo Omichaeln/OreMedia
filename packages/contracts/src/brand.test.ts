@@ -91,6 +91,35 @@ describe('BrandSystemDocumentV1 guidance additions (BSC-1)', () => {
   });
 });
 
+describe('BrandSystemDocumentV1 type roles: size and line height', () => {
+  const withRole = (extra: Record<string, unknown>) => ({
+    ...emptyBrandSystemDocument(),
+    tokens: {
+      ...emptyBrandSystemDocument().tokens,
+      typeRoles: [{ role: 'body', fontAssetId: 'ast_font', weight: 400, minSizePx: 16, ...extra }],
+    },
+  });
+
+  it('keeps a stored role without them as it was: no keys are added', () => {
+    const parsed = BrandSystemDocumentV1.parse(withRole({}));
+    expect(parsed.tokens.typeRoles[0]).toEqual({
+      role: 'body',
+      fontAssetId: 'ast_font',
+      weight: 400,
+      minSizePx: 16,
+    });
+  });
+
+  it('keeps an intended size and a line height, and rejects a size or line height that is not positive', () => {
+    const parsed = BrandSystemDocumentV1.parse(withRole({ sizePx: 18, lineHeight: 1.5 }));
+    expect(parsed.tokens.typeRoles[0]).toMatchObject({ sizePx: 18, lineHeight: 1.5 });
+    // A size below the minimum is guidance to warn about, not a malformed document.
+    expect(BrandSystemDocumentV1.safeParse(withRole({ sizePx: 12 })).success).toBe(true);
+    expect(BrandSystemDocumentV1.safeParse(withRole({ lineHeight: 0 })).success).toBe(false);
+    expect(BrandSystemDocumentV1.safeParse(withRole({ sizePx: -1 })).success).toBe(false);
+  });
+});
+
 describe('channelOverride', () => {
   const entry = {
     providerKey: 'x',

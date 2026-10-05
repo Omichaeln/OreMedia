@@ -1,0 +1,12 @@
+{
+  "workflowType": "publicationWorkflowV1",
+  "case": "pending-finalized",
+  "description": "An asynchronous publish: processing, ready, finalised once and published.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:06:54.043Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "08d05a604fa9331885f3002c7682aa0af61f3225784658daca7f291d85eda514"
+}

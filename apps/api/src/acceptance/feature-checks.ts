@@ -16,6 +16,7 @@ import { operationsOfGroups } from '@oremedia/editor/generation';
 import { instantiateStarter, starterByKey, type StarterBrand } from '@oremedia/editor/starters/index';
 import type { AcceptanceConfig } from '../../../../tooling/scripts/acceptance/config';
 import { fail, pass, skip, type AcceptanceResult } from '../../../../tooling/scripts/acceptance/report';
+import { randomPng } from '../../../../tooling/scripts/smoke/checks';
 import { ensureFontAssetVersion, sessionKey, type Sessions } from './checks';
 import { mutate, putObject, query, sleep, type ApiSession } from './client';
 import type { FixtureTenant } from './fixtures';
@@ -863,6 +864,79 @@ async function retireAsset(api: ApiSession, assetId: string): Promise<string | n
     : `${assetId} reads ${after.data?.state ?? after.error} after retiring`;
 }
 
+// ---- the Studio browser suite's photo ------------------------------------------------------------------------
+
+const PHOTO_PREFIX = 'oremedia-acceptance-photo';
+
+/**
+ * An approved photo with recorded rights (the `creative` purpose requires both) for the Studio browser suite: its
+ * real-API path seeds the fixture's hero image layer from it, and the rebase and hide-layer cases act on that layer.
+ * An earlier run's photo is reused; otherwise a small PNG goes through the real upload flow, its rights are recorded
+ * and it is approved unless ingest approved it already. Without a usable store there is none, and the suite skips.
+ */
+export async function ensurePhotoAssetVersion(
+  cfg: AcceptanceConfig,
+  sessions: Sessions,
+  tenant: FixtureTenant,
+  store: StoreState,
+  opts: JourneyOptions = {},
+): Promise<{ assetVersionId: string | null; detail: string }> {
+  const owner = sessions.get(sessionKey(tenant, 'owner'));
+  if (!owner) return { assetVersionId: null, detail: 'company A owner has no session' };
+  if (!store.usable) return { assetVersionId: null, detail: store.reason };
+  const listed = await query<{ items: Array<{ id: string; name: string; state: string }> }>(
+    owner,
+    'assets.list',
+    { brandId: tenant.brandId, kinds: ['photo'], query: PHOTO_PREFIX, page: { limit: 100 } },
+  );
+  for (const a of listed.data?.items ?? []) {
+    if (!a.name.startsWith(PHOTO_PREFIX) || a.state !== 'approved') continue;
+    const got = await query<AssetRead>(owner, 'assets.get', { assetId: a.id });
+    if (got.data?.state === 'approved' && got.data.rightsState === 'recorded' && got.data.currentVersion)
+      return { assetVersionId: got.data.currentVersion.id, detail: `approved photo ${a.id}` };
+  }
+  const uploaded = await uploadThroughIntent(
+    owner,
+    {
+      brandId: tenant.brandId,
+      kind: 'photo',
+      mime: 'image/png',
+      filename: `${PHOTO_PREFIX}-${runMarker()}.png`,
+      bytes: randomPng(64),
+    },
+    cfg.journeys.timeoutMs,
+    opts.pollMs ?? 3000,
+  );
+  if (uploaded.kind !== 'accepted')
+    return { assetVersionId: null, detail: `photo upload: ${uploaded.reason}` };
+  const assetId = uploaded.assetId;
+  const rights = await mutate(owner, 'assets.rights.set', {
+    assetId,
+    owner: tenant.brandName,
+    permittedChannels: 'all',
+    territories: 'all',
+  });
+  if (rights.status !== 200) return { assetVersionId: null, detail: `assets.rights.set: ${rights.error}` };
+  const current = await query<AssetRead>(owner, 'assets.get', { assetId });
+  // An owner's upload is approved at ingest; approve is a pending_review transition only (as the logo journey).
+  if (current.data && current.data.state !== 'approved') {
+    const approved = await mutate(owner, 'assets.approve', {
+      assetId,
+      expectedVersion: current.data.version,
+    });
+    if (approved.status !== 200) return { assetVersionId: null, detail: `assets.approve: ${approved.error}` };
+  }
+  const after = await query<AssetRead>(owner, 'assets.get', { assetId });
+  return after.data?.state === 'approved' &&
+    after.data.rightsState === 'recorded' &&
+    after.data.currentVersion
+    ? { assetVersionId: after.data.currentVersion.id, detail: `uploaded and approved photo ${assetId}` }
+    : {
+        assetVersionId: null,
+        detail: `${assetId} reads ${after.data?.state ?? after.error}, rights ${after.data?.rightsState}`,
+      };
+}
+
 // ---- SVG logo (BSC-2) ---------------------------------------------------------------------------------------
 
 const LOGO_PREFIX = 'oremedia-acceptance-logo';
@@ -956,12 +1030,20 @@ export async function logoChecks(
     territories: 'all',
   });
   const current = await query<AssetRead>(owner, 'assets.get', { assetId });
+  // Spec 9.1 step 8: ingest catalogues the upload as approved when the uploader holds asset.approve (the owner
+  // does), and approve is a pending_review transition only (assetMachine), so an approved asset is not approved again.
+  const atIngest = current.data?.state === 'approved';
   const approved =
-    rights.status === 200 && current.data
+    rights.status === 200 && current.data && !atIngest
       ? await mutate(owner, 'assets.approve', { assetId, expectedVersion: current.data.version })
       : null;
   const after = await query<AssetRead>(owner, 'assets.get', { assetId });
-  if (approved?.status !== 200 || after.data?.state !== 'approved' || after.data.rightsState !== 'recorded')
+  if (
+    rights.status !== 200 ||
+    (approved && approved.status !== 200) ||
+    after.data?.state !== 'approved' ||
+    after.data.rightsState !== 'recorded'
+  )
     return {
       results: [
         ...out,
@@ -969,13 +1051,21 @@ export async function logoChecks(
           'logo:approve',
           rights.status !== 200
             ? `assets.rights.set: ${rights.error}`
-            : (approved?.error ?? '') ||
-                `${assetId} reads ${after.data?.state}, rights ${after.data?.rightsState}`,
+            : approved?.error
+              ? `assets.approve (the asset read ${current.data?.state} at version ${current.data?.version}): ${approved.error}`
+              : `${assetId} reads ${after.data?.state ?? after.error}, rights ${after.data?.rightsState}`,
         ),
       ],
       store,
     };
-  out.push(pass('logo:approve', `${assetId} approved with its rights recorded`));
+  out.push(
+    pass(
+      'logo:approve',
+      atIngest
+        ? `${assetId} approved at ingest (the uploader holds asset.approve) with its rights recorded`
+        : `${assetId} approved with its rights recorded`,
+    ),
+  );
 
   const system = await appliedSystem(owner, brandId);
   if ('error' in system) return { results: [...out, fail('logo:primary', system.error)], store };
@@ -1219,20 +1309,25 @@ export async function studioChecks(
         },
       },
     };
-    const preflight = await query<{
+    type Preflight = {
       blocking: boolean;
-      issues: Array<{ code: string; message: string }>;
+      issues: Array<{ code: string; severity: 'blocking' | 'warning'; message: string }>;
       cost: GenerationCostEstimate;
-    }>(owner, 'creative.generation.preflight', request);
+    };
+    const preflightOf = () => query<Preflight>(owner, 'creative.generation.preflight', request);
+    const blocks = (p: Preflight, ignore: string[] = []) => {
+      const blocking = p.issues.filter((i) => i.severity === 'blocking' && !ignore.includes(i.code));
+      return blocking.length || (p.blocking && !ignore.length)
+        ? `preflight blocks: ${p.issues.map((i) => `${i.code} (${i.message})`).join('; ')}`
+        : null;
+    };
+    const preflight = await preflightOf();
     if (!preflight.data) return [...out, fail('studio:generate', `preflight: ${preflight.error}`)];
-    if (preflight.data.blocking)
-      return [
-        ...out,
-        fail(
-          'studio:generate',
-          `preflight blocks: ${preflight.data.issues.map((i) => `${i.code} (${i.message})`).join('; ')}`,
-        ),
-      ];
+    // budget_insufficient is judged once the spend is capped: an earlier journey today (brand assist) spends under
+    // the day limit it set, which can leave less than this estimate; capModelSpend sets today's limit to what is
+    // committed plus the cap, and the preflight is asked again.
+    const blocked = blocks(preflight.data, ['budget_insufficient']);
+    if (blocked) return [...out, fail('studio:generate', blocked)];
     const room = await capModelSpend(
       owner,
       brandId,
@@ -1240,6 +1335,12 @@ export async function studioChecks(
       cfg.journeys.modelBudgetMicros,
     );
     if (!room.ok) return [...out, fail('studio:generate', room.reason)];
+    if (preflight.data.blocking) {
+      const again = await preflightOf();
+      if (!again.data) return [...out, fail('studio:generate', `preflight: ${again.error}`)];
+      const still = blocks(again.data);
+      if (still) return [...out, fail('studio:generate', `${still}; after the cap: ${room.detail}`)];
+    }
     const started = await mutate<{ id: string }>(owner, 'creative.generation.start', request);
     if (!started.data)
       return [...out, fail('studio:generate', `creative.generation.start: ${started.error}`)];

@@ -42,6 +42,17 @@ describe('unavailableReason (spec 14.6)', () => {
       activationReason({ state: 'credentials_missing', reason: 'credentials_missing:PROVIDER_X_SECRET_REF' }),
     ).toContain('PROVIDER_X_SECRET_REF is not set');
   });
+
+  it('PR-06: a capability that is not certified is named in the reason', () => {
+    expect(
+      unavailableReason([{ path: 'providerKey', issue: 'capability_not_certified:linkedin_page:connect' }]),
+    ).toBe(
+      'Connect is not certified for this provider yet: it has not been exercised against the platform with a designated test account.',
+    );
+    expect(
+      activationReason({ state: 'uncertified', reason: 'capability_not_certified:x:page_picker' }),
+    ).toContain('Page picker is not certified');
+  });
 });
 
 describe('callback parsing (spec 14.7)', () => {

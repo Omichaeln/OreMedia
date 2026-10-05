@@ -14,6 +14,7 @@ import {
   type CmsUpdatePrecondition,
   type CmsVerifyResult,
   type CmsWriteResult,
+  type CmsWriteSafety,
 } from '../../cms-contract';
 import { ProviderTransportError, type ProviderIO } from '../../io';
 import {
@@ -42,6 +43,14 @@ export const WP_TERMS_PER_PAGE = 100;
 const WP_TERMS_MAX_PAGES = 10;
 /** Redirects of a rendered page are followed this many hops, each re-checked (https, the site's host). */
 export const WP_RENDERED_MAX_HOPS = 3;
+/**
+ * PR-03: the Oremedia conditional-write plugin (infra/wordpress/oremedia-conditional-write) under the site's REST
+ * root: its handshake, its conditional update, the protocol this adapter speaks and the token scheme it stores.
+ */
+export const WP_EXTENSION_ROOT = '/wp-json/oremedia/v1';
+export const WP_EXTENSION_PLUGIN = 'oremedia-conditional-write';
+export const WP_EXTENSION_PROTOCOL = 1;
+const WRITE_TOKEN_PREFIX = 'wpcw1';
 
 /** HTTP Basic with the application password (WordPress strips the spaces it shows; sent as given either way). */
 const basic = (site: CmsSite, credentials: DecryptedCredentials): Record<string, string> => ({
@@ -49,6 +58,26 @@ const basic = (site: CmsSite, credentials: DecryptedCredentials): Record<string,
 });
 const siteOrigin = (site: CmsSite): string => assertSafeUrl(site.siteUrl).origin;
 const api = (site: CmsSite, path: string): string => `${siteOrigin(site)}${WP_REST_ROOT}${path}`;
+const extension = (site: CmsSite, path: string): string => `${siteOrigin(site)}${WP_EXTENSION_ROOT}${path}`;
+
+/**
+ * PR-03: the plugin's precondition as stored with a read-back (`wpcw1:<version>:<fingerprint>`): the post's write
+ * counter and the SHA-256 fingerprint of its row. Opaque to everything but this adapter.
+ */
+export const wpWriteToken = (version: number, fingerprint: string): string =>
+  `${WRITE_TOKEN_PREFIX}:${version}:${fingerprint}`;
+const parseWriteToken = (token: string): { version: number; fingerprint: string } | null => {
+  const m = /^wpcw1:(\d{1,15}):([0-9a-f]{64})$/.exec(token);
+  return m ? { version: Number(m[1]), fingerprint: m[2] as string } : null;
+};
+/** The `oremedia_write` field a post carries (context=edit) where the plugin is active; null elsewhere. */
+const writeTokenOf = (json: unknown): string | null => {
+  const version = num(get(json, 'version'));
+  const fingerprint = str(get(json, 'fingerprint'));
+  return version !== undefined && fingerprint && /^[0-9a-f]{64}$/.test(fingerprint)
+    ? wpWriteToken(version, fingerprint)
+    : null;
+};
 
 async function request(
   io: ProviderIO,
@@ -91,14 +120,18 @@ const termIds = (json: unknown, taxonomy: 'categories' | 'tags'): number[] =>
     .map((t) => num(t))
     .filter((t): t is number => t !== undefined);
 
-/** The post object as the API returns it with `context=edit` (raw title and content); never the rendered HTML only. */
-function toArticle(json: unknown): CmsRemoteArticle | null {
+/**
+ * The post object as the API returns it with `context=edit` (raw title and content); never the rendered HTML only.
+ * With the site's origin, the article names its edit screen (`/wp-admin/post.php?post=<id>&action=edit`).
+ */
+function toArticle(json: unknown, origin?: string): CmsRemoteArticle | null {
   const id = num(get(json, 'id'));
   if (id === undefined) return null;
   const html = str(get(json, 'content', 'raw')) ?? str(get(json, 'content', 'rendered')) ?? '';
   const title = str(get(json, 'title', 'raw')) ?? str(get(json, 'title', 'rendered')) ?? '';
   const slug = str(get(json, 'slug')) ?? '';
   const status = str(get(json, 'status')) ?? 'unknown';
+  const writeToken = writeTokenOf(get(json, 'oremedia_write'));
   return {
     remoteId: String(id),
     remoteUrl: str(get(json, 'link')) ?? '',
@@ -115,23 +148,17 @@ function toArticle(json: unknown): CmsRemoteArticle | null {
       html,
     }),
     html,
+    ...(writeToken ? { writeToken } : {}),
+    ...(origin ? { editUrl: `${origin}/wp-admin/post.php?post=${id}&action=edit` } : {}),
   };
 }
 
 /**
- * A revision object (`/posts/<id>/revisions`, context=edit): the parent's fields as they were when it was saved.
- * The remote id is the parent's; the hash leaves the terms out (a revision carries none), so it is never compared
- * with a post's hash, only recorded as what the write replaced.
- */
-function toRevisionArticle(json: unknown, parentId: string, link: string): CmsRemoteArticle | null {
-  const article = toArticle(json);
-  return article && { ...article, remoteId: parentId, remoteUrl: link };
-}
-
-/**
  * WordPress REST (ledger R2-3, D-16 working assumption): posts under `/wp-json/wp/v2/posts` with an application
- * password over HTTP Basic. Writes land as drafts unless asked to publish; an update first reads the current
- * revision and refuses (`conflict`) when the remote moved since the caller's read-back, so nothing is overwritten.
+ * password over HTTP Basic. Writes land as drafts unless asked to publish. PR-03: core WordPress applies
+ * `POST /wp/v2/posts/<id>` unconditionally (no ETag, no If-Match), so an update of an existing post goes through the
+ * Oremedia conditional-write plugin, compared and written atomically on the site against the precondition stored
+ * with the read-back; a site without the plugin is in limited mode and no update that replaces content is sent.
  * Terms are resolved by exact name among the site's categories and tags (created when missing).
  */
 export class WordPressCmsAdapter implements CmsAdapter {
@@ -226,7 +253,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
     }
     if (res.status === 404 || res.status === 410) return { outcome: 'absent' };
     if (res.status !== 200) return readFailure(this.classifyError.bind(this), res);
-    const article = toArticle(res.json);
+    const article = toArticle(res.json, siteOrigin(site));
     if (!article) return { outcome: 'rejected', code: 'malformed_response', message: summarise(res, 300) };
     return { outcome: 'found', article };
   }
@@ -291,7 +318,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
           ? { outcome: 'retryable_error', code: 'media_fetch_failed', message: err.message }
           : { outcome: 'rejected', code: `media_${err.reason}`, message: err.message };
       const failed = writeTransportFailure(err, boundary);
-      return failed.outcome === 'done' || failed.outcome === 'conflict'
+      return failed.outcome === 'done' || failed.outcome === 'conflict' || failed.outcome === 'limited'
         ? { outcome: 'unknown', code: 'transport_after_send', message: 'unreachable' }
         : failed;
     }
@@ -335,7 +362,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
       );
       if (res.status !== 201 && res.status !== 200)
         return writeFailure(this.classifyError.bind(this), res, boundary);
-      const article = toArticle(res.json);
+      const article = toArticle(res.json, siteOrigin(site));
       if (!article) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
       return { outcome: 'done', article };
     } catch (err) {
@@ -343,6 +370,54 @@ export class WordPressCmsAdapter implements CmsAdapter {
     }
   }
 
+  /**
+   * PR-03: the handshake with the conditional-write plugin (`GET /wp-json/oremedia/v1/capabilities`). `conditional`
+   * only when the plugin answers with this adapter's protocol and reports conditional updates available (InnoDB
+   * storage); absent (404), refused or not transactional is `limited`; a transport failure or a 5xx is `unknown`
+   * (nothing is decided on it, and no write is sent unconditionally because of it).
+   */
+  async writeSafety(
+    site: CmsSite,
+    credentials: DecryptedCredentials,
+    io: ProviderIO,
+  ): Promise<CmsWriteSafety> {
+    let res: ProviderResponse;
+    try {
+      res = await request(
+        io,
+        extension(site, '/capabilities'),
+        { method: 'GET', headers: { ...basic(site, credentials), accept: 'application/json' } },
+        false,
+      );
+    } catch (err) {
+      if (err instanceof ProviderTransportError) return { mode: 'unknown', reason: `transport_${err.phase}` };
+      throw err;
+    }
+    if (res.status >= 500 || res.status === 429) return { mode: 'unknown', reason: `http_${res.status}` };
+    if (res.status === 404) return { mode: 'limited', reason: 'extension_absent' };
+    if (res.status !== 200) return { mode: 'limited', reason: `extension_http_${res.status}` };
+    if (str(get(res.json, 'plugin')) !== WP_EXTENSION_PLUGIN)
+      return { mode: 'limited', reason: 'extension_unrecognised' };
+    if (num(get(res.json, 'protocol')) !== WP_EXTENSION_PROTOCOL)
+      return { mode: 'limited', reason: 'extension_protocol_unsupported' };
+    if (get(res.json, 'features', 'conditional_update') !== true)
+      return { mode: 'limited', reason: 'extension_not_transactional' };
+    return {
+      mode: 'conditional',
+      mechanism: WP_EXTENSION_PLUGIN,
+      version: str(get(res.json, 'version')) ?? null,
+    };
+  }
+
+  /**
+   * PR-03: an update is sent only as the plugin's conditional write: the site compares the precondition (the write
+   * token stored with the caller's read-back) with the post's write counter and row fingerprint under a row lock and
+   * applies the write in the same transaction, or answers 412 with the current post and writes nothing. A read-back
+   * stored before PR-03 carries no token: its hash and modified instant are compared with a fresh read, whose own
+   * token then carries the write (a change after that read is still refused by the site). Without the plugin
+   * (limited mode) an update that would replace content is refused here and nothing is sent; a status-only update
+   * (the revert to a draft) replaces no content and is still written under the compared read.
+   */
   async updateArticle(
     site: CmsSite,
     credentials: DecryptedCredentials,
@@ -353,25 +428,38 @@ export class WordPressCmsAdapter implements CmsAdapter {
   ): Promise<CmsWriteResult> {
     const boundary = new EffectBoundary();
     try {
-      const current = await this.readArticle(site, credentials, io, remoteId);
-      if (current.outcome === 'absent')
+      const safety = await this.writeSafety(site, credentials, io);
+      if (safety.mode === 'unknown')
         return {
-          outcome: 'rejected',
-          code: 'remote_absent',
-          message: 'the article no longer exists on the site',
+          outcome: 'retryable_error',
+          code: 'write_safety_unknown',
+          message: `the site's conditional-write support could not be read (${safety.reason})`,
         };
-      if (current.outcome !== 'found') return current;
-      // The precondition is the caller's read-back: a remote that moved since is never overwritten.
-      // RA-12: WordPress core REST offers no compare-and-swap (no If-Match / ETag on POST /posts/<id>), so this
-      // read-then-write only narrows the window in which the site can change under the write; the revisions read
-      // after the write detects a change that slipped into it (`overwritten`), it cannot prevent one.
-      if (
-        (precondition.expectedHash !== undefined &&
-          precondition.expectedHash !== current.article.contentHash) ||
-        (precondition.expectedModifiedAt !== undefined &&
-          precondition.expectedModifiedAt !== current.article.modifiedAt)
-      )
-        return { outcome: 'conflict', current: current.article };
+      const statusOnly = Object.keys(input).every((k) => k === 'status') && input.status !== undefined;
+      let previous: CmsRemoteArticle | undefined;
+      let token = precondition.expectedWriteToken;
+      if (safety.mode === 'limited' || token === undefined) {
+        const current = await this.readArticle(site, credentials, io, remoteId);
+        if (current.outcome === 'absent')
+          return {
+            outcome: 'rejected',
+            code: 'remote_absent',
+            message: 'the article no longer exists on the site',
+          };
+        if (current.outcome !== 'found') return current;
+        if (safety.mode === 'limited' && !statusOnly)
+          return { outcome: 'limited', reason: safety.reason, current: current.article };
+        // A legacy precondition (no token stored): the read-back must still describe the remote.
+        if (
+          (precondition.expectedHash !== undefined &&
+            precondition.expectedHash !== current.article.contentHash) ||
+          (precondition.expectedModifiedAt !== undefined &&
+            precondition.expectedModifiedAt !== current.article.modifiedAt)
+        )
+          return { outcome: 'conflict', current: current.article };
+        previous = current.article;
+        token = current.article.writeToken ?? undefined;
+      }
       const body: Record<string, unknown> = {};
       if (input.title !== undefined) body['title'] = input.title;
       if (input.slug !== undefined) body['slug'] = input.slug;
@@ -382,10 +470,39 @@ export class WordPressCmsAdapter implements CmsAdapter {
       if (input.categories)
         body['categories'] = await this.resolveTerms(site, credentials, io, 'categories', input.categories);
       if (input.tags) body['tags'] = await this.resolveTerms(site, credentials, io, 'tags', input.tags);
+      if (safety.mode === 'limited') {
+        // Status only (checked above): core's update replaces no content when only the status is sent.
+        boundary.cross();
+        const res = await request(
+          io,
+          api(site, `/posts/${encodeURIComponent(remoteId)}`),
+          {
+            method: 'POST',
+            headers: {
+              ...basic(site, credentials),
+              accept: 'application/json',
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(body),
+          },
+          true,
+        );
+        if (res.status !== 200) return writeFailure(this.classifyError.bind(this), res, boundary);
+        const article = toArticle(res.json, siteOrigin(site));
+        if (!article) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
+        return { outcome: 'done', article, ...(previous ? { previous } : {}) };
+      }
+      const expected = token === undefined ? null : parseWriteToken(token);
+      if (!expected)
+        return {
+          outcome: 'rejected',
+          code: 'write_token_missing',
+          message: 'the site reports conditional writes but the article carries no valid write precondition',
+        };
       boundary.cross();
       const res = await request(
         io,
-        api(site, `/posts/${encodeURIComponent(remoteId)}`),
+        extension(site, `/posts/${encodeURIComponent(remoteId)}`),
         {
           method: 'POST',
           headers: {
@@ -393,52 +510,40 @@ export class WordPressCmsAdapter implements CmsAdapter {
             accept: 'application/json',
             'content-type': 'application/json',
           },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            expected_version: expected.version,
+            expected_fingerprint: expected.fingerprint,
+            post: body,
+          }),
         },
         true,
       );
+      if (res.status === 412) {
+        const current = toArticle(get(res.json, 'data', 'current', 'post'), siteOrigin(site));
+        if (!current) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
+        // The 412 names the precondition the site holds now (its counter and fingerprint at the refusal).
+        const now = writeTokenOf(get(res.json, 'data', 'current'));
+        return { outcome: 'conflict', current: now ? { ...current, writeToken: now } : current };
+      }
+      if (res.status === 404 && get(res.json, 'code') === 'rest_post_invalid_id')
+        return {
+          outcome: 'rejected',
+          code: 'remote_absent',
+          message: 'the article no longer exists on the site',
+        };
       if (res.status !== 200) return writeFailure(this.classifyError.bind(this), res, boundary);
-      const article = toArticle(res.json);
-      if (!article) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
-      const overwritten = await this.replacedRevision(site, credentials, io, current.article);
-      return { outcome: 'done', article, previous: current.article, ...(overwritten ? { overwritten } : {}) };
+      const written = toArticle(get(res.json, 'post'), siteOrigin(site));
+      if (!written) return { outcome: 'unknown', code: 'malformed_response', message: summarise(res, 300) };
+      // The precondition after the write is the one the response names (the counter the commit left).
+      const after = writeTokenOf(res.json);
+      return {
+        outcome: 'done',
+        article: after ? { ...written, writeToken: after } : written,
+        ...(previous ? { previous } : {}),
+      };
     } catch (err) {
       return writeTransportFailure(err, boundary);
     }
-  }
-
-  /**
-   * RA-12: after an update, the revision the write replaced. WordPress saves a revision of a post on every update
-   * (the original too, when the first update is made), newest first; the second-newest after the write is the
-   * state the write replaced. When its modified instant is not the pre-write read's, the site changed between the
-   * read and the write and that revision is what was lost. A listing that cannot be read (revisions off, refused)
-   * proves nothing: null, never a claim either way. modified_gmt is second-granular, so a site save within the same
-   * second as the pre-write read is not told apart from it: the window is narrowed and detected, not closed.
-   */
-  private async replacedRevision(
-    site: CmsSite,
-    credentials: DecryptedCredentials,
-    io: ProviderIO,
-    previous: CmsRemoteArticle,
-  ): Promise<CmsRemoteArticle | null> {
-    let res: ProviderResponse;
-    try {
-      res = await request(
-        io,
-        `${api(site, `/posts/${encodeURIComponent(previous.remoteId)}/revisions`)}?context=edit&per_page=2`,
-        { method: 'GET', headers: { ...basic(site, credentials), accept: 'application/json' } },
-        false,
-      );
-    } catch (err) {
-      if (err instanceof ProviderTransportError) return null;
-      throw err;
-    }
-    if (res.status !== 200) return null;
-    const replaced = arr(res.json)[1];
-    if (replaced === undefined) return null;
-    const article = toRevisionArticle(replaced, previous.remoteId, previous.remoteUrl);
-    if (!article || article.modifiedAt === null || article.modifiedAt === previous.modifiedAt) return null;
-    return article;
   }
 
   async unpublishArticle(
@@ -451,14 +556,17 @@ export class WordPressCmsAdapter implements CmsAdapter {
     if (current.outcome === 'absent') return { outcome: 'already_absent' };
     if (current.outcome !== 'found') return current;
     if (current.article.status === 'draft') return { outcome: 'done', article: current.article };
-    // RA-12: the revert matches what it just read, never a remote that moved in between.
+    // RA-12, PR-03: the revert matches what it just read (atomically on the site where the plugin is active), never
+    // a remote that moved in between; it sends the status alone, so no content is replaced either way.
     const written = await this.updateArticle(
       site,
       credentials,
       io,
       remoteId,
       { status: 'draft' },
-      { expectedHash: current.article.contentHash, expectedModifiedAt: current.article.modifiedAt },
+      current.article.writeToken
+        ? { expectedWriteToken: current.article.writeToken }
+        : { expectedHash: current.article.contentHash, expectedModifiedAt: current.article.modifiedAt },
     );
     if (written.outcome === 'done') return written;
     if (written.outcome === 'conflict')
@@ -467,6 +575,8 @@ export class WordPressCmsAdapter implements CmsAdapter {
         code: 'conflict',
         message: 'the article changed while it was being reverted',
       };
+    if (written.outcome === 'limited')
+      return { outcome: 'rejected', code: 'limited_mode', message: written.reason };
     if (written.outcome === 'unknown')
       return { outcome: 'retryable_error', code: written.code, message: written.message };
     return written;
@@ -497,7 +607,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
     }
     if (res.status === 404 || res.status === 410) return { outcome: 'already_absent' };
     if (res.status !== 200) return removeFailure(this.classifyError.bind(this), res);
-    return { outcome: 'done', article: toArticle(res.json) };
+    return { outcome: 'done', article: toArticle(res.json, siteOrigin(site)) };
   }
 
   /**
@@ -521,6 +631,7 @@ export class WordPressCmsAdapter implements CmsAdapter {
       bytes: page.bytes,
       truncated: page.truncated,
       url: page.url,
+      headers: { xRobotsTag: page.xRobotsTag, link: page.link },
     };
   }
 
@@ -603,7 +714,7 @@ const featuredMediaField = (media: CmsArticleInput['featuredMedia']): Record<str
 /** A refused media upload, classified as a write: the upload is the effect, so a failure after it is ambiguous. */
 function mediaFailure(res: ProviderResponse, boundary: EffectBoundary): CmsMediaResult {
   const failed = writeFailure(classifyByStatus, res, boundary);
-  return failed.outcome === 'done' || failed.outcome === 'conflict'
+  return failed.outcome === 'done' || failed.outcome === 'conflict' || failed.outcome === 'limited'
     ? { outcome: 'unknown', code: `http_${res.status}`, message: summarise(res, 300) }
     : failed;
 }

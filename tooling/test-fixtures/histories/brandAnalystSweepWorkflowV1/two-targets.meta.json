@@ -1,0 +1,12 @@
+{
+  "workflowType": "brandAnalystSweepWorkflowV1",
+  "case": "two-targets",
+  "description": "The weekly sweep starts one abandoned child analysis per brand.",
+  "queue": "core",
+  "state": "completed",
+  "generatedFromCommit": "4101af8c8ae9d829f6a692aeb3f0b89ee9347862",
+  "generatedAt": "2026-10-04T17:12:19.355Z",
+  "generator": "packages/workflows/replay/record.ts on the Temporal CLI dev server (temporal version 1.4.1 (Server 1.28.0, UI 2.39.0))",
+  "temporalSdk": "1.24.0",
+  "historySha256": "6d01c394d400791181060848f7bda17dc96cc5a0c34ef1b207c776b3deb07d03"
+}
