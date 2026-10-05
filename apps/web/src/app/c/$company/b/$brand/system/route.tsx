@@ -258,9 +258,6 @@ const SECTIONS: Array<{
 const OVERVIEW = SECTIONS[0] as (typeof SECTIONS)[number];
 const OVERVIEW_GROUP = GROUPS[0] as (typeof GROUPS)[number];
 
-/** The applied brand system's record, shortened as the interface shows it (the full id is the title). */
-const shortId = (id: string) => (id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-4)}` : id);
-
 /** What is open in the editor: one section of the brand system, or a proposed update with every section. */
 type Editing = { kind: 'section'; section: SectionKey } | { kind: 'proposal' } | null;
 
@@ -276,7 +273,8 @@ function StatePill({ tone, children }: { tone: Tone; children: ReactNode }) {
 
 /**
  * Spec 21.2 brand system, D-22: one brand system per brand, edited in place. The interface's secondary navigation
- * on the left, the brand's name with its state in the header, the applied brand system read section by section; a
+ * on the left, the brand's name with its state in the header (no record id: the application never shows ids), the
+ * applied brand system read section by section; a
  * person who may save it edits a section in place and the save applies at once. A proposed update (an imported
  * brand skill, an agent's suggestion) waits at the top until a person reviews and saves it, or discards it. Facts,
  * objectives and the history are their own sections.
@@ -435,11 +433,6 @@ export function BrandSystemRoute() {
               <StatePill tone="neutral">Not saved yet</StatePill>
             )}
             {proposal && <StatePill tone="info">Proposed update</StatePill>}
-            {appliedId !== null && (
-              <span className="text-xs tabular-nums text-muted-foreground" title={appliedId}>
-                {shortId(appliedId)}
-              </span>
-            )}
           </div>
           {canSave && (
             <div className="flex flex-wrap gap-1.5">

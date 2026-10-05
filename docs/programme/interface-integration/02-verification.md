@@ -32,7 +32,7 @@ since reading every brand's channels on the portfolio would be one request per b
 Visual comparison (interface `brand-system-*.png` against the application's `system-*.png`):
 
 - 1440: the secondary navigation column (200 px, "BRAND SYSTEM" label, the eleven headings, the Facts count in
-  accent) and the header row (brand name, state pill, short id, the two secondary buttons on the right) match. The
+  accent) and the header row (brand name, state pill, the two secondary buttons on the right) match; the interface's short record id (`bv_4:9a3d…41bc`) is not shown, since the application never surfaces record ids (the e2e suites enforce it). The
   overview's dark statement card beside the voice summary and tone pills, the eight ruled white summary cards in
   three columns with the ninth cell showing the grid's ground, and the "HOW THIS IS USED" label and note follow the
   interface. Deviations: the interface's "Version 4 · Published" pill and the "v4 · published / v5 · in review"
