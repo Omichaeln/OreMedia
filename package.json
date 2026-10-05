@@ -22,6 +22,7 @@
     "check:boundaries": "eslint . --max-warnings=0",
     "check:secrets": "tsx tooling/scripts/check-secrets.ts",
     "check:openapi": "tsx tooling/scripts/check-openapi-diff.ts",
+    "check:shell": "shellcheck -x infra/railway/db-backup/*.sh",
     "certify": "tsx tooling/scripts/certify/certify.ts",
     "smoke:prod": "tsx tooling/scripts/smoke/smoke-prod.ts",
     "db:roles:check": "tsx tooling/scripts/db-roles/check.ts",
