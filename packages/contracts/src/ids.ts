@@ -101,6 +101,9 @@ export const ID_PREFIXES = {
   metricSnapshot: 'ms',
   trackedLink: 'tl',
   conversion: 'cnv',
+  /** D-29: a brand's monthly client report and its per-brand report preferences. */
+  report: 'rpt',
+  reportPreference: 'rpp',
   insight: 'ins',
   recommendation: 'rec',
   learningRecord: 'lrn',

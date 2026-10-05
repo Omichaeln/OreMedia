@@ -54,6 +54,10 @@ export const DEFAULT_ROLE_GRANTS: Readonly<Record<Action, readonly MembershipRol
   'billing.manage': ADMINS,
   'membership.manage': ADMINS,
   'audit.read': ADMINS,
+  // D-29: a report is client-facing material, edited by the roles that read insights and shape the month
+  // (managers, analysts), sent by the roles that release work outward (managers, publishers).
+  'report.edit': [...MANAGERS, 'analyst'],
+  'report.send': [...MANAGERS, 'publisher'],
 };
 
 /** Actions an agent (service principal) may never perform, whatever its grants (spec 5.5 "Never"). */
@@ -73,6 +77,7 @@ export const AGENT_NEVER: ReadonlySet<Action> = new Set<Action>([
   'mandate.manage',
   'skill.publish',
   'audit.read',
+  'report.send',
 ]);
 
 /** Actions where an agent may only propose (obligation propose_only). */
@@ -84,6 +89,7 @@ export const AGENT_PROPOSE_ONLY: ReadonlySet<Action> = new Set<Action>([
   'inbox.respond',
   'publication.schedule',
   'review.request',
+  'report.edit',
 ]);
 
 /** Read-only actions a platform operator support session may perform without escalation (spec 5.7). */

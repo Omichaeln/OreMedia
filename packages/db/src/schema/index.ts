@@ -9,6 +9,7 @@ export * from './agents';
 export * from './publishing';
 export * from './measurement';
 export * from './intelligence';
+export * from './reports';
 export * from './experiments';
 export * from './community';
 export * from './destinations';

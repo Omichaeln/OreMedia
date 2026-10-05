@@ -77,6 +77,7 @@ export const API_SCOPE_AREAS = [
   'operations',
   'community',
   'destinations',
+  'reports',
 ] as const;
 export type ApiScopeArea = (typeof API_SCOPE_AREAS)[number];
 export const ApiScope = z.enum(

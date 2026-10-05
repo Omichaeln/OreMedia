@@ -113,8 +113,10 @@ import {
   createVideoAiCapabilitySource,
   estimateCostMicros,
   modelConfigFromEnv,
+  reportDrafterFromEnv,
 } from '@oremedia/ai';
 import { agentsService, onboardingRunSource } from '@oremedia/module-agents';
+import { registerReportDrafter } from '@oremedia/module-reports';
 import { SEO_FINDING_WORK_TYPE } from '@oremedia/contracts/seo-audit';
 import type { CapabilityCheck } from '@oremedia/observability';
 import { webOriginCapability } from './web-origin';
@@ -421,6 +423,9 @@ export function composeModules(): void {
   // BSC-4: an assist estimate and start read the deployment's model and the tenant's routing policy; documents are
   // uploaded to the assets module's store (quarantine prefix, deleted once read) and assets are described by it.
   registerAssistModelGate(brandAssistModelGate());
+  // D-29: a report's summary and assistant draft through the same adapter and routing policy; without one the
+  // reports module answers model_unavailable and the summary stays a text field.
+  registerReportDrafter(reportDrafterFromEnv());
   registerSourceUploadStore({
     signUpload: (key, { contentType, contentLength }) =>
       storage().signUploadUrl(key, { contentType, contentLength, expiresInSec: UPLOAD_INTENT_TTL_SEC }),

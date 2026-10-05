@@ -22,6 +22,7 @@ const AREA_BY_PREFIX: ReadonlyArray<[prefix: string, area: ApiScopeArea]> = [
   ['measurement.', 'measurement'],
   // R2-5: the overview reads the measurement module's numbers beside the web sources; it is a measurement read.
   ['overview.', 'measurement'],
+  ['reports.', 'reports'],
   ['community.', 'community'],
   ['destinations.', 'destinations'],
   ['operations.', 'operations'],

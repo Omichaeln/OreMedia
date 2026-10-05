@@ -14,6 +14,7 @@ const OWNERSHIP = {
   // community module's service would remove this entry.
   measurement: ['measurement', 'community'],
   intelligence: ['intelligence'],
+  reports: ['reports'],
   experiments: ['experiments'],
   community: ['community'],
   destinations: ['destinations'],

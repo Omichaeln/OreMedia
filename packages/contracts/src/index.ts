@@ -20,6 +20,7 @@ export * from './community';
 export * from './destinations';
 export * from './seo-audit';
 export * from './overview';
+export * from './reports';
 export * from './intelligence';
 export * from './experiments';
 export * from './billing';
