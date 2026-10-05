@@ -319,6 +319,14 @@ describe('object restore', { timeout: 60_000 }, () => {
         'OBJECT_RESTORE_FAIL refusing to run in environment',
       ],
       [
+        { DST_BUCKET: 'restored', OREMEDIA_ENV: undefined, OBJECT_BACKUP_PREFIX: 'object-backups/test' },
+        'OBJECT_RESTORE_FAIL environment name unknown',
+      ],
+      [
+        { DST_BUCKET: 'restored', OREMEDIA_ENV: 'live', OBJECT_BACKUP_PREFIX: 'object-backups/test' },
+        "OBJECT_RESTORE_FAIL refusing to run in unrecognised environment 'live'",
+      ],
+      [
         {
           DST_BUCKET: 'restored',
           OREMEDIA_ENV: 'production',
@@ -494,7 +502,12 @@ describe('verify.sh', { timeout: 60_000 }, () => {
 });
 
 describe('restore.sh guards and checksum (before any database is touched)', { timeout: 60_000 }, () => {
-  const db = { DST_HOST: 'mysql-restore.invalid', DST_PW: 'pw', RESTORE_DB: 'oremedia' };
+  const db = {
+    DST_HOST: 'mysql-restore.invalid',
+    DST_PW: 'pw',
+    RESTORE_DB: 'oremedia',
+    RESTORE_ALLOW_UNVERIFIED_TARGET: 'mysql-restore.invalid',
+  };
 
   it('refuses a target that is a source host, and production without the exact override, before any request', () => {
     for (const [env, expected] of [
@@ -515,6 +528,91 @@ describe('restore.sh guards and checksum (before any database is touched)', { ti
       expect(line(r, expected), r.out).toBeDefined();
     }
     expect(h.calls()).toEqual([]);
+  });
+
+  it('refuses an empty or unrecognised environment name before any request', () => {
+    for (const [env, expected] of [
+      [{ OREMEDIA_ENV: undefined }, 'RESTORE_FAIL environment name unknown'],
+      [{ OREMEDIA_ENV: '', RAILWAY_ENVIRONMENT_NAME: '' }, 'RESTORE_FAIL environment name unknown'],
+      [{ OREMEDIA_ENV: 'live' }, "RESTORE_FAIL refusing to run in unrecognised environment 'live'"],
+      [
+        { OREMEDIA_ENV: undefined, RAILWAY_ENVIRONMENT_NAME: 'main' },
+        "RESTORE_FAIL refusing to run in unrecognised environment 'main'",
+      ],
+    ] as const) {
+      const r = h.run('restore.sh', [], { ...db, ...env });
+      expect(r.status, r.out).toBe(1);
+      expect(line(r, expected), r.out).toBeDefined();
+    }
+    expect(h.calls()).toEqual([]);
+    // A known name gets past the environment guard (and, with nothing stored, stops at the missing dump).
+    for (const name of ['staging', 'Staging-EU', 'development', 'local']) {
+      const r = h.run('restore.sh', [], { ...db, OREMEDIA_ENV: name });
+      expect(line(r, 'RESTORE_FAIL no dump under'), r.out).toBeDefined();
+    }
+  });
+
+  it("refuses unless the source server's identity is readable and differs from the target's, or the exact override is set", () => {
+    const strict = { ...db, RESTORE_ALLOW_UNVERIFIED_TARGET: undefined };
+    // @@server_uuid per host: the source answers, the target answers what TARGET_UUID says (nothing: unreadable).
+    h.tool(
+      'mysql',
+      'case "$*" in *mysql-source.invalid*) [ -n "$SOURCE_UUID" ] && echo "$SOURCE_UUID" && exit 0; exit 1 ;; esac\n' +
+        '[ -n "$TARGET_UUID" ] && echo "$TARGET_UUID" && exit 0\nexit 1',
+    );
+    const src = { SRC_HOST: 'mysql-source.invalid', SRC_PW: 'pw' };
+    const required =
+      'RESTORE_FAIL SRC_HOST and SRC_PW are required to prove the target is not the source server';
+    for (const [env, expected] of [
+      [{}, required],
+      [{ SRC_HOST: 'mysql-source.invalid' }, required],
+      [{ ...src }, 'RESTORE_FAIL source server identity (SRC_HOST @@server_uuid) not readable'],
+      [
+        { ...src, TARGET_UUID: 'uuid-b' },
+        'RESTORE_FAIL source server identity (SRC_HOST @@server_uuid) not readable',
+      ],
+      [{ ...src, SOURCE_UUID: 'uuid-a' }, 'RESTORE_FAIL target server identity (@@server_uuid) not readable'],
+      [
+        { ...src, SOURCE_UUID: 'uuid-a', TARGET_UUID: 'uuid-a' },
+        'RESTORE_FAIL target is the same MySQL server as SRC_HOST (server_uuid)',
+      ],
+      // The override must name the exact target host, and never excuses a matching identity.
+      [{ RESTORE_ALLOW_UNVERIFIED_TARGET: '1' }, required],
+      [{ RESTORE_ALLOW_UNVERIFIED_TARGET: 'MYSQL-RESTORE.invalid' }, required],
+      [
+        {
+          ...src,
+          SOURCE_UUID: 'uuid-a',
+          TARGET_UUID: 'uuid-a',
+          RESTORE_ALLOW_UNVERIFIED_TARGET: 'mysql-restore.invalid',
+        },
+        'RESTORE_FAIL target is the same MySQL server as SRC_HOST (server_uuid)',
+      ],
+    ] as const) {
+      const r = h.run('restore.sh', [], { ...strict, ...env });
+      expect(r.status, `${JSON.stringify(env)}\n${r.out}`).toBe(1);
+      expect(line(r, expected), `${JSON.stringify(env)}\n${r.out}`).toBeDefined();
+    }
+    expect(h.calls()).toEqual([]);
+
+    const differs = h.run('restore.sh', [], {
+      ...strict,
+      ...src,
+      SOURCE_UUID: 'uuid-a',
+      TARGET_UUID: 'uuid-b',
+    });
+    expect(differs.lines).toContain("RECOVERY_GUARD target server identity differs from SRC_HOST's");
+    expect(line(differs, 'RESTORE_FAIL no dump under'), differs.out).toBeDefined();
+    const unverified = h.run('restore.sh', [], {
+      ...strict,
+      ...src,
+      SOURCE_UUID: 'uuid-a',
+      RESTORE_ALLOW_UNVERIFIED_TARGET: 'mysql-restore.invalid',
+    });
+    expect(unverified.lines).toContain(
+      'RECOVERY_GUARD server identity not verified; RESTORE_ALLOW_UNVERIFIED_TARGET names this target',
+    );
+    expect(line(unverified, 'RESTORE_FAIL no dump under'), unverified.out).toBeDefined();
   });
 
   it('fails on a dump whose sha256 sidecar does not match, and on a dump without a sidecar', () => {
@@ -543,7 +641,7 @@ describe('restore.sh guards and checksum (before any database is touched)', { ti
 });
 
 describe('drill.sh', { timeout: 60_000 }, () => {
-  it('refuses production, an unknown environment and a live bucket; marks manual steps with timestamps', () => {
+  it('refuses production, an empty or unrecognised environment, an unverified source and a live bucket; marks manual steps with timestamps', () => {
     expect(
       line(
         h.run('drill.sh', ['objects'], { OREMEDIA_ENV: undefined }),
@@ -553,6 +651,16 @@ describe('drill.sh', { timeout: 60_000 }, () => {
     const prod = h.run('drill.sh', ['objects'], { OREMEDIA_ENV: 'production', DST_BUCKET: 'restored' });
     expect(prod.status).toBe(1);
     expect(line(prod, 'DRILL_FAIL refusing to run in environment')).toBeDefined();
+    const unknown = h.run('drill.sh', ['objects'], { OREMEDIA_ENV: 'main', DST_BUCKET: 'restored' });
+    expect(unknown.status).toBe(1);
+    expect(line(unknown, "DRILL_FAIL refusing to run in unrecognised environment 'main'")).toBeDefined();
+    const noSource = h.run('drill.sh', ['db'], {
+      OREMEDIA_ENV: 'staging',
+      DST_HOST: 'x.invalid',
+      DST_PW: 'p',
+    });
+    expect(noSource.status).toBe(1);
+    expect(line(noSource, 'DRILL_FAIL SRC_HOST and SRC_PW are required')).toBeDefined();
     const live = h.run('drill.sh', ['objects'], { DST_BUCKET: 'assets' });
     expect(line(live, 'DRILL_FAIL target bucket is a live source bucket')).toBeDefined();
     const dbProd = h.run('drill.sh', ['db'], {

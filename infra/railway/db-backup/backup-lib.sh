@@ -59,25 +59,41 @@ object_backup_prefix() {
   fi
 }
 
-# Refuses a restore or drill whose environment is production, unless RESTORE_ALLOW_PRODUCTION names the exact
-# target: an operator who means it types the target, nothing else unlocks it. $1 the target, $2 the failure tag.
+# Refuses a restore or drill unless the environment name is known: a production name (anything containing "prod")
+# needs RESTORE_ALLOW_PRODUCTION set to the exact target (an operator who means it types the target, nothing else
+# unlocks it); the non-production names are staging (or staging-<suffix>), development, test and local; an empty or
+# any other name (a laptop or a one-off container without OREMEDIA_ENV, an environment named "live" or "main") is
+# refused, since nothing then says the target is not production. $1 the target, $2 the failure tag.
 guard_production() {
-  case "$(env_name)" in
+  g_env="$(env_name)"
+  case "$g_env" in
+    '')
+      echo "$2 environment name unknown: set OREMEDIA_ENV (Railway sets RAILWAY_ENVIRONMENT_NAME); refusing to run"
+      exit 1
+      ;;
     *prod*)
       if [ "${RESTORE_ALLOW_PRODUCTION:-}" != "$1" ]; then
-        echo "$2 refusing to run in environment '$(env_name)': set RESTORE_ALLOW_PRODUCTION to the exact target to override"
+        echo "$2 refusing to run in environment '$g_env': set RESTORE_ALLOW_PRODUCTION to the exact target to override"
         exit 1
       fi
       echo "RECOVERY_GUARD production override accepted for this target"
+      ;;
+    staging | staging-?* | development | test | local) ;;
+    *)
+      echo "$2 refusing to run in unrecognised environment '$g_env': set OREMEDIA_ENV to staging, development, test, local or the production name"
+      exit 1
       ;;
   esac
 }
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# Refuses a database target that is a source database: by name (SRC_HOST, SRC2_HOST, PROTECTED_DB_HOSTS) and,
-# when the source is reachable, by server identity (@@server_uuid), which also catches an alias of the same server.
-# $1 the target host, $2 its root password, $3 the failure tag.
+# Refuses a database target that is a source database: by name (SRC_HOST, SRC2_HOST, PROTECTED_DB_HOSTS) and by
+# server identity (@@server_uuid), which also catches an alias or an IP address of the same server. The identity
+# check is required: SRC_HOST and SRC_PW must be set and both servers' @@server_uuid readable, or the restore is
+# refused, unless RESTORE_ALLOW_UNVERIFIED_TARGET names the exact target host (an operator restoring with no
+# reachable source, e.g. after losing it, types the target; nothing else unlocks it). Even then a readable source
+# identity that matches the target still refuses. $1 the target host, $2 its root password, $3 the failure tag.
 guard_db_target() {
   g_dst="$(lower "$1")"
   for g_src in ${SRC_HOST:-} ${SRC2_HOST:-} ${PROTECTED_DB_HOSTS:-}; do
@@ -86,6 +102,8 @@ guard_db_target() {
       exit 1
     fi
   done
+  g_src_uuid=""
+  g_dst_uuid=""
   if [ -n "${SRC_HOST:-}" ] && [ -n "${SRC_PW:-}" ]; then
     g_src_uuid="$(MYSQL_PWD="$SRC_PW" mysql -h "$SRC_HOST" -uroot --connect-timeout=10 -N -e 'SELECT @@server_uuid' 2>/dev/null || true)"
     g_dst_uuid="$(MYSQL_PWD="$2" mysql -h "$1" -uroot --connect-timeout=10 -N -e 'SELECT @@server_uuid' 2>/dev/null || true)"
@@ -93,8 +111,23 @@ guard_db_target() {
       echo "$3 target is the same MySQL server as SRC_HOST (server_uuid); refusing to restore over it"
       exit 1
     fi
-    [ -n "$g_src_uuid" ] || echo "RECOVERY_GUARD source server identity not readable; name check only"
   fi
+  if [ -n "$g_src_uuid" ] && [ -n "$g_dst_uuid" ]; then
+    echo "RECOVERY_GUARD target server identity differs from SRC_HOST's"
+    return 0
+  fi
+  if [ -n "${RESTORE_ALLOW_UNVERIFIED_TARGET:-}" ] && [ "$RESTORE_ALLOW_UNVERIFIED_TARGET" = "$1" ]; then
+    echo "RECOVERY_GUARD server identity not verified; RESTORE_ALLOW_UNVERIFIED_TARGET names this target"
+    return 0
+  fi
+  if [ -z "${SRC_HOST:-}" ] || [ -z "${SRC_PW:-}" ]; then
+    echo "$3 SRC_HOST and SRC_PW are required to prove the target is not the source server (or set RESTORE_ALLOW_UNVERIFIED_TARGET to the exact target host)"
+  elif [ -z "$g_src_uuid" ]; then
+    echo "$3 source server identity (SRC_HOST @@server_uuid) not readable; refusing (or set RESTORE_ALLOW_UNVERIFIED_TARGET to the exact target host)"
+  else
+    echo "$3 target server identity (@@server_uuid) not readable; refusing (or set RESTORE_ALLOW_UNVERIFIED_TARGET to the exact target host)"
+  fi
+  exit 1
 }
 
 # Refuses an object restore target that is a live or backup bucket. Restoring into the backups bucket is allowed

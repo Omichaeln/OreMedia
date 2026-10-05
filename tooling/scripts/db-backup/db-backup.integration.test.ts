@@ -162,8 +162,19 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
   });
 
   it('restore.sh checks the sidecar, loads the dump into another database and verifies the tables', () => {
-    const r = h.run('restore.sh', [], { ...db(), DST_HOST: HOST, DST_PW: PW, RESTORE_DB: DST });
+    // The test restores into another database of the source server, so the identity check is waived by naming the
+    // exact target; the refusals below run without it.
+    const r = h.run('restore.sh', [], {
+      ...db(),
+      DST_HOST: HOST,
+      DST_PW: PW,
+      RESTORE_DB: DST,
+      RESTORE_ALLOW_UNVERIFIED_TARGET: HOST,
+    });
     expect(r.status, r.out).toBe(0);
+    expect(r.lines).toContain(
+      'RECOVERY_GUARD server identity not verified; RESTORE_ALLOW_UNVERIFIED_TARGET names this target',
+    );
     expect(line(r, 'RESTORE_CHECKSUM sha256=')).toMatch(/matches the sidecar$/);
     expect(r.lines.filter((l) => l.startsWith('RESTORE_STEP')).map((l) => l.split(' ')[1])).toEqual([
       'downloaded',
@@ -178,7 +189,7 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
     );
   });
 
-  it('restore.sh refuses the source server under another name, production, and a mismatched sidecar, leaving the target as it was', () => {
+  it('restore.sh refuses the source server under another name, an unset or unreadable source, an empty or unknown environment, production, and a mismatched sidecar, leaving the target as it was', () => {
     sql(`CREATE TABLE \`${DST}\`.marker (id int); INSERT INTO \`${DST}\`.marker VALUES (7)`);
     const base = { ...db(), DST_PW: PW, RESTORE_DB: DST };
 
@@ -187,6 +198,32 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
     expect(alias.lines).toContain(
       'RESTORE_FAIL target is the same MySQL server as SRC_HOST (server_uuid); refusing to restore over it',
     );
+
+    // Another name for the server, so the name check alone does not decide: the identity check must.
+    const other = aliasHost();
+    for (const [env, expected] of [
+      [{}, 'RESTORE_FAIL SRC_HOST and SRC_PW are required to prove the target is not the source server'],
+      [
+        { SRC_HOST: HOST, SRC_PW: `${PW}-wrong` },
+        'RESTORE_FAIL source server identity (SRC_HOST @@server_uuid) not readable',
+      ],
+      [
+        { SRC_HOST: 'mysql-source.invalid', SRC_PW: PW },
+        'RESTORE_FAIL source server identity (SRC_HOST @@server_uuid) not readable',
+      ],
+      [
+        { RESTORE_ALLOW_UNVERIFIED_TARGET: other, OREMEDIA_ENV: undefined },
+        'RESTORE_FAIL environment name unknown',
+      ],
+      [
+        { RESTORE_ALLOW_UNVERIFIED_TARGET: other, OREMEDIA_ENV: 'live' },
+        "RESTORE_FAIL refusing to run in unrecognised environment 'live'",
+      ],
+    ] as const) {
+      const r = h.run('restore.sh', [], { ...base, DST_HOST: other, ...env });
+      expect(r.status, r.out).toBe(1);
+      expect(line(r, expected), r.out).toBeDefined();
+    }
 
     const prod = h.run('restore.sh', [], {
       ...base,
@@ -199,7 +236,7 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
     const dumps = h.keys(BACKUP, 'backups', 'db-backups/test/oremedia/').filter((k) => k.endsWith('.sql.gz'));
     const newest = dumps[dumps.length - 1] as string;
     h.put(BACKUP, 'backups', `${newest}.sha256`, `${sha256('tampered')}  x\n`, 'text/plain');
-    const bad = h.run('restore.sh', [], { ...base, DST_HOST: HOST });
+    const bad = h.run('restore.sh', [], { ...base, DST_HOST: HOST, RESTORE_ALLOW_UNVERIFIED_TARGET: HOST });
     expect(bad.status).toBe(1);
     expect(line(bad, 'RESTORE_FAIL checksum mismatch')).toBeDefined();
 
@@ -211,7 +248,14 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
   it('drill.sh times the database restore and refuses production', () => {
     const r0 = h.run('backup.sh', [], { ...db(), SRC_HOST: HOST, SRC_DB: SRC, SRC_PW: PW });
     expect(r0.status, r0.out).toBe(0);
-    const env = { ...db(), OREMEDIA_ENV: 'staging', DST_HOST: HOST, DST_PW: PW, RESTORE_DB: DST };
+    const env = {
+      ...db(),
+      OREMEDIA_ENV: 'staging',
+      DST_HOST: HOST,
+      DST_PW: PW,
+      RESTORE_DB: DST,
+      RESTORE_ALLOW_UNVERIFIED_TARGET: HOST,
+    };
     const r = h.run('drill.sh', ['db'], env);
     expect(r.status, r.out).toBe(0);
     expect(
@@ -222,5 +266,9 @@ describe('db-backup against MySQL', { timeout: 120_000 }, () => {
     const prod = h.run('drill.sh', ['db'], { ...env, OREMEDIA_ENV: 'production' });
     expect(prod.status).toBe(1);
     expect(line(prod, 'RESTORE_PASS')).toBeUndefined();
+    const unverified = h.run('drill.sh', ['db'], { ...env, RESTORE_ALLOW_UNVERIFIED_TARGET: undefined });
+    expect(unverified.status).toBe(1);
+    expect(line(unverified, 'DRILL_FAIL SRC_HOST and SRC_PW are required')).toBeDefined();
+    expect(line(unverified, 'RESTORE_PASS')).toBeUndefined();
   });
 });

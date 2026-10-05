@@ -10,9 +10,11 @@
 #   drill.sh mark <step> start|end     a DRILL_MARK line for a manual step (kill switches, re-point, holdRestored,
 #                                      smoke), run where the operator works
 #
-# Guards, before anything runs: the environment name must be known (OREMEDIA_ENV or RAILWAY_ENVIRONMENT_NAME) and
-# not production unless RESTORE_ALLOW_PRODUCTION names the exact target; DST_HOST must not be a source database
-# host or server; DST_BUCKET must not be a live bucket (restore.sh and restore-objects.sh check the same again).
+# Guards, before anything runs: the environment name must be known (OREMEDIA_ENV or RAILWAY_ENVIRONMENT_NAME:
+# staging, development, test or local) and not production unless RESTORE_ALLOW_PRODUCTION names the exact target;
+# DST_HOST must not be a source database host or server (SRC_HOST's @@server_uuid must be readable, unless
+# RESTORE_ALLOW_UNVERIFIED_TARGET names DST_HOST exactly); DST_BUCKET must not be a live bucket (restore.sh and
+# restore-objects.sh check the same again).
 set -eu
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/backup-lib.sh"
