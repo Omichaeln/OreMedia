@@ -51,6 +51,7 @@ import {
   PlaybookPropose,
   RecommendationAccept,
   RecommendationDismiss,
+  RecommendationList,
   VoiceClustersList,
   WorkspaceGet,
   type EvidenceStrength,
@@ -1318,6 +1319,19 @@ export function phase6Routers(b: Phase6Backend, { router, query, mutation }: Pha
       }),
     }),
     recommendations: router({
+      /** As the API: the brand's recommendations by state, unranked without an objective (spec 16.1). */
+      list: query.input(RecommendationList).query(({ input }) => {
+        brandOf(input.brandId);
+        const rows = [...b.recommendations.values()]
+          .filter((r) => r.brandId === input.brandId && (!input.state || r.state === input.state))
+          .sort((x, y) => x.rank - y.rank || x.id.localeCompare(y.id));
+        return {
+          items: rows.slice(0, input.page.limit).map((r) => b.recommendationDto(r)),
+          nextCursor: null,
+          ranked: b.objective !== null,
+          objective: b.objective,
+        };
+      }),
       accept: mutation.input(RecommendationAccept).mutation(({ input }) => {
         const r = b.recommendations.get(input.recommendationId);
         if (!r) throw new NotFoundError('Recommendation', input.recommendationId);
