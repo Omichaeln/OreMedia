@@ -1,3 +1,4 @@
+import type { ZodTypeAny } from 'zod';
 import type { ModelCompletion, ModelRequest, ModelUsage } from '@oremedia/contracts/agents';
 import { routingPolicyFromEnv } from './routing-policy';
 
@@ -15,6 +16,69 @@ export interface ModelAdapter {
 export const wireToolName = (name: string): string => name.replace(/\./g, '__');
 export const toolNamesOf = (tools: readonly { name: string }[]): ReadonlyMap<string, string> =>
   new Map(tools.map((t) => [wireToolName(t.name), t.name]));
+
+type ZodDef = { typeName?: string } & Record<string, unknown>;
+const defOf = (schema: ZodTypeAny): ZodDef => schema._def as ZodDef;
+
+/**
+ * A request's `responseSchema` from the zod schema its answer is validated with, so the two never disagree. Strict
+ * structured output accepts a closed object whose properties are all required, so an optional field is written as
+ * nullable (`withoutNullOptionals` turns the null back into an absent field before validation). Bounds (lengths,
+ * counts, numeric limits) are left out, as providers reject or ignore them in strict mode; zod still enforces them.
+ * Covers the subset answer schemas use and throws on anything else, so a new construct is never sent loosened.
+ */
+export function strictJsonSchema(schema: ZodTypeAny): Record<string, unknown> {
+  const def = defOf(schema);
+  switch (def.typeName) {
+    case 'ZodObject': {
+      const shape = (def['shape'] as () => Record<string, ZodTypeAny>)();
+      const properties: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(shape)) properties[k] = strictJsonSchema(v);
+      return { type: 'object', properties, required: Object.keys(shape), additionalProperties: false };
+    }
+    case 'ZodOptional':
+    case 'ZodNullable':
+      return { anyOf: [strictJsonSchema(def['innerType'] as ZodTypeAny), { type: 'null' }] };
+    case 'ZodArray':
+      return { type: 'array', items: strictJsonSchema(def['type'] as ZodTypeAny) };
+    case 'ZodString':
+      return { type: 'string' };
+    case 'ZodNumber': {
+      const checks = (def['checks'] ?? []) as Array<{ kind: string }>;
+      return { type: checks.some((c) => c.kind === 'int') ? 'integer' : 'number' };
+    }
+    case 'ZodBoolean':
+      return { type: 'boolean' };
+    case 'ZodEnum':
+      return { type: 'string', enum: [...(def['values'] as string[])] };
+    default:
+      throw new Error(`strictJsonSchema: ${def.typeName ?? 'unknown'} is not supported`);
+  }
+}
+
+/**
+ * The answer as its zod schema reads it: a null in an optional, non-nullable field (how strict structured output
+ * writes "left out") becomes an absent field. Nothing else changes; a null anywhere else is still refused by zod.
+ */
+export function withoutNullOptionals(schema: ZodTypeAny, value: unknown): unknown {
+  const def = defOf(schema);
+  if (def.typeName === 'ZodOptional' || def.typeName === 'ZodNullable')
+    return value === null ? value : withoutNullOptionals(def['innerType'] as ZodTypeAny, value);
+  if (def.typeName === 'ZodArray' && Array.isArray(value))
+    return value.map((v) => withoutNullOptionals(def['type'] as ZodTypeAny, v));
+  if (def.typeName === 'ZodObject' && value && typeof value === 'object' && !Array.isArray(value)) {
+    const shape = (def['shape'] as () => Record<string, ZodTypeAny>)();
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      const field = shape[k];
+      if (!field) out[k] = v;
+      else if (v === null && field.isOptional() && !field.isNullable()) continue;
+      else out[k] = withoutNullOptionals(field, v);
+    }
+    return out;
+  }
+  return value;
+}
 
 /** The model configuration a run records (agent_runs.model_config) and prices its usage with. */
 export interface ModelConfig {

@@ -203,6 +203,26 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
     expect(calls[0]!.body).not.toHaveProperty('tool_choice');
   });
 
+  it('sends a strict json_schema response_format when the request names a response schema, and none otherwise', async () => {
+    const schema = {
+      type: 'object',
+      properties: { items: { type: 'array', items: { type: 'string' } } },
+      required: ['items'],
+      additionalProperties: false,
+    };
+    const { fetch: f, calls } = fakeFetch();
+    const adapter = new OpenRouterModelAdapter({ apiKey: 'k', fetch: f });
+    await adapter.complete({ ...request, tools: [], responseSchema: { name: 'answer_v1', schema } });
+    expect(calls[0]!.body['response_format']).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'answer_v1', strict: true, schema },
+    });
+    // The rest of the request is unchanged (routing still denies collection).
+    expect(calls[0]!.body).toMatchObject({ model: 'vendor/model-x', provider: { data_collection: 'deny' } });
+    await adapter.complete({ ...request, tools: [] });
+    expect(calls[1]!.body).not.toHaveProperty('response_format');
+  });
+
   it("names the upstream provider and its own message when OpenRouter answers 'Provider returned error'", async () => {
     const run = (status: number, body: unknown) =>
       new OpenRouterModelAdapter({ apiKey: 'k', fetch: fakeFetch(status, body).fetch }).complete(request);
