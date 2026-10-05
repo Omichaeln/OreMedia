@@ -161,6 +161,12 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       ready: (page) => testId(page, 'overview-limits'),
     },
     {
+      // D-29: the builder column with the send form open beside the preview pages.
+      name: 'reports',
+      path: () => brandPath('reports'),
+      ready: (page) => testId(page, 'report-page-cover'),
+    },
+    {
       name: 'intelligence',
       path: () => brandPath('intelligence'),
       ready: (page) => testId(page, 'anomaly'),

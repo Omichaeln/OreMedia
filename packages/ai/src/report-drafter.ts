@@ -78,7 +78,9 @@ export function createReportDrafter(opts: { adapter: ModelAdapter; modelConfig: 
       inputMicrosPerMillionTokens: cfg.inputMicrosPerMillionTokens,
       outputMicrosPerMillionTokens: cfg.outputMicrosPerMillionTokens,
     }),
-    assertRouting: (tenantId) => assertRoutingAllowed(tenantId, opts.adapter.provider, cfg.model),
+    assertRouting: async (tenantId) => {
+      await assertRoutingAllowed(tenantId, opts.adapter.provider, cfg.model);
+    },
     async draft(req): Promise<ReportDraftResultV1> {
       await assertRoutingAllowed(req.tenantId, opts.adapter.provider, cfg.model);
       const prompt = buildReportDraftPrompt(req);

@@ -169,6 +169,7 @@ import { GenerationBackend, generationRouter, type GenerationHost } from './mock
 import type { GenerationInputs } from '@oremedia/contracts/generation';
 import { AssistBackend, assistRouters } from './mock-assist';
 import { overviewRouters } from './mock-overview';
+import { ReportsBackend, reportsRouters } from './mock-reports';
 import { VideoAiMockBackend, VideoMockBackend } from './mock-video';
 
 /**
@@ -805,6 +806,7 @@ export class MockBackend {
   readonly community: CommunityBackend;
   /** Brand destinations and the source-use policy (mock-destinations.ts). */
   readonly destinations: DestinationsBackend;
+  readonly reports: ReportsBackend;
   /** BSC-3 brand facts (mock-facts.ts); empty unless a suite seeds the workspace fixtures. */
   readonly facts: FactsBackend;
   /** STU-1b generation jobs (mock-generation.ts). */
@@ -1085,6 +1087,7 @@ export class MockBackend {
     };
     this.community = new CommunityBackend(company.brandId, () => this.role, seed);
     this.destinations = new DestinationsBackend(company.brandId, () => this.role, seed);
+    this.reports = new ReportsBackend(company.brandId, company.brandName, () => this.role, seed);
     this.facts = new FactsBackend(company.brandId, () => this.role);
     this.generation = new GenerationBackend(this.generationHost());
     const brandId = company.brandId;
@@ -1650,6 +1653,18 @@ export function createMockRouter(backend: MockBackend) {
     },
   );
 
+  // D-29: the report's figures compose the same procedures the API's reports module composes.
+  const reports = reportsRouters(
+    backend.reports,
+    { router: t.router, query, mutation },
+    {
+      measurement: t.createCallerFactory(p6.measurement),
+      publishing: t.createCallerFactory(p5.publishing),
+      content: t.createCallerFactory(p5.content),
+      intelligence: t.createCallerFactory(p6.intelligence),
+    },
+  );
+
   return t.router({
     content: t.mergeRouters(p5.content, p6.content),
     publishing: p5.publishing,
@@ -1660,6 +1675,7 @@ export function createMockRouter(backend: MockBackend) {
     community: communityRouters(backend.community, { router: t.router, query, mutation }),
     destinations,
     overview,
+    reports,
     access: t.router({
       /** UX-08: the agent principals a run on the brand can start under; gated as the API gates it (agent.start_run). */
       servicePrincipals: t.router({

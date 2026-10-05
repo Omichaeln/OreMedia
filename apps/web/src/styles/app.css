@@ -212,3 +212,39 @@
     padding-top: 0.75rem;
   }
 }
+
+/*
+ * D-29 "Download PDF": the browser prints the report pages (A4, one page per section) and nothing else; the pages
+ * keep their own inline colours, so a dark app theme never reaches the print.
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+  body * {
+    visibility: hidden;
+  }
+  [data-report-pages],
+  [data-report-pages] * {
+    visibility: visible;
+  }
+  [data-report-pages] {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 210mm;
+    overflow: visible;
+  }
+  [data-report-pages] [data-testid='report-pages'] {
+    zoom: 1 !important;
+  }
+  [data-report-page] {
+    width: 210mm !important;
+    height: 297mm !important;
+    box-shadow: none !important;
+    break-after: page;
+    page-break-after: always;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}

@@ -89,6 +89,8 @@ GRANT SELECT, INSERT ON `__DB_NAME__`.`remote_evidence` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`render_jobs` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`render_previews` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`rendered_exports` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`report_preferences` TO '__APP_USER__'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`reports` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`response_drafts` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON `__DB_NAME__`.`retention_policies` TO '__APP_USER__'@'%';
 GRANT SELECT, INSERT ON `__DB_NAME__`.`review_decisions` TO '__APP_USER__'@'%';
