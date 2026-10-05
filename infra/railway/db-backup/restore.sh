@@ -4,10 +4,12 @@
 # RESTORE_KEY names the object (default: the newest under BACKUP_PREFIX/RESTORE_NAME). Prints the elapsed time
 # of each step for the recovery-time evidence, then RESTORE_PASS or RESTORE_FAIL. The application-level steps
 # that follow a restore (holdRestored, reconciliation) are in docs/runbooks/backup-and-restore.md.
-# Before anything is loaded: the target must not be a source database (SRC_HOST, SRC2_HOST, PROTECTED_DB_HOSTS, or
-# the same server by @@server_uuid), the environment must not be production unless RESTORE_ALLOW_PRODUCTION names
-# DST_HOST exactly, and the dump must match its sha256 sidecar and pass gzip -t. A dump without a sidecar (taken
-# before sidecars existed) is refused unless RESTORE_ALLOW_UNVERIFIED=1.
+# Before anything is loaded: the environment name must be known (OREMEDIA_ENV or RAILWAY_ENVIRONMENT_NAME: staging,
+# development, test, local, or production only when RESTORE_ALLOW_PRODUCTION names DST_HOST exactly); the target must
+# not be a source database (SRC_HOST, SRC2_HOST, PROTECTED_DB_HOSTS by name, and SRC_HOST by @@server_uuid, which
+# must be readable on both servers unless RESTORE_ALLOW_UNVERIFIED_TARGET names DST_HOST exactly); and the dump must
+# match its sha256 sidecar and pass gzip -t. A dump without a sidecar (taken before sidecars existed) is refused
+# unless RESTORE_ALLOW_UNVERIFIED=1.
 set -eu
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/backup-lib.sh"

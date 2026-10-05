@@ -9,7 +9,9 @@
  * (wp_set_post_terms only: the row and its modified instant do not change), bypass (a direct table update that
  * fires no WordPress hook), engine (ALTER the postmeta table to the given storage engine).
  */
-if ( PHP_SAPI !== 'cli' ) {
+// Test-only and command line only (tests/ is never installed on a site): it loads WordPress itself, so ABSPATH is
+// not defined yet when it starts. Over HTTP, or if WordPress has already loaded it, it stops here.
+if ( PHP_SAPI !== 'cli' || defined( 'ABSPATH' ) ) {
 	exit( 1 );
 }
 list( , $dir, $post_id, $mode ) = $argv;

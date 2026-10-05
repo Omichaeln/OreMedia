@@ -3977,6 +3977,12 @@
                                 },
                                 "tracking": {
                                   "type": "number"
+                                },
+                                "sizePx": {
+                                  "type": "number"
+                                },
+                                "lineHeight": {
+                                  "type": "number"
                                 }
                               },
                               "required": ["role", "fontAssetId", "weight", "minSizePx"]
@@ -5709,6 +5715,12 @@
                                   "type": "number"
                                 },
                                 "tracking": {
+                                  "type": "number"
+                                },
+                                "sizePx": {
+                                  "type": "number"
+                                },
+                                "lineHeight": {
                                   "type": "number"
                                 }
                               },
@@ -22377,6 +22389,12 @@
                           },
                           "tracking": {
                             "type": "number"
+                          },
+                          "sizePx": {
+                            "type": "number"
+                          },
+                          "lineHeight": {
+                            "type": "number"
                           }
                         },
                         "required": ["role", "fontAssetId", "weight", "minSizePx"]
@@ -24032,6 +24050,12 @@
                             "type": "number"
                           },
                           "tracking": {
+                            "type": "number"
+                          },
+                          "sizePx": {
+                            "type": "number"
+                          },
+                          "lineHeight": {
                             "type": "number"
                           }
                         },

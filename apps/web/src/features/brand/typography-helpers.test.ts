@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SPECIMEN_LINE_HEIGHT,
+  DEFAULT_LINE_HEIGHT,
   TYPE_ROLES,
   fontStatus,
   formatTracking,
+  minSizeWarning,
+  resolveLineHeight,
   specRows,
+  specimenSizePx,
   typeScale,
   weightCoverage,
 } from './typography-helpers';
@@ -55,21 +58,60 @@ describe('type scale', () => {
 });
 
 describe('spec label', () => {
-  it('lists role, font, weight, true size, the preview line height and tracking', () => {
-    expect(specRows({ ...role('display', 48, -0.02), weight: 600 }, staticFace)).toEqual([
+  it('lists role, font, weight, the size drawn and the minimum apart, line height and tracking', () => {
+    expect(
+      specRows({ ...role('display', 40, -0.02), weight: 600, sizePx: 56, lineHeight: 1.05 }, staticFace),
+    ).toEqual([
       ['role', 'display'],
       ['font', 'Karla'],
       ['weight', '600'],
-      ['size', '48 px (minimum)'],
-      ['line height', `${SPECIMEN_LINE_HEIGHT} (preview only)`],
+      ['specimen size', '56 px'],
+      ['minimum size', '40 px'],
+      ['line height', '1.05'],
       ['tracking', '-0.02 em'],
     ]);
+  });
+  it('labels what a stored role does not set: the size is the minimum and the line height the default', () => {
+    expect(specRows(role('display', 48), staticFace).slice(3, 6)).toEqual([
+      ['specimen size', '48 px (the minimum; no size set)'],
+      ['minimum size', '48 px'],
+      ['line height', `${DEFAULT_LINE_HEIGHT} (default; not set)`],
+    ]);
+    // An emptied minimum is stored as 0: no minimum is claimed.
+    expect(specRows({ ...role('body', 0), sizePx: 16 }, staticFace)[4]).toEqual(['minimum size', 'not set']);
   });
   it('says when tracking is not set and when the font is not one of the brand’s', () => {
     expect(formatTracking(undefined)).toBe('0 em (not set)');
     expect(formatTracking(0)).toBe('0 em');
     expect(specRows(role('body', 16), undefined)[1]).toEqual(['font', 'A font not in this brand']);
     expect(specRows(role('body', 16), { family: null, name: 'Brand.otf' })[1]).toEqual(['font', 'Brand.otf']);
+  });
+});
+
+describe('line height and size', () => {
+  it('uses the configured line height where the guidance stores one, else the labelled default', () => {
+    expect(resolveLineHeight({ lineHeight: 1.5 })).toEqual({ value: 1.5, configured: true });
+    expect(resolveLineHeight({})).toEqual({ value: DEFAULT_LINE_HEIGHT, configured: false });
+  });
+  it('draws a role at its intended size, else at its minimum', () => {
+    expect(specimenSizePx({ minSizePx: 16, sizePx: 18 })).toBe(18);
+    expect(specimenSizePx({ minSizePx: 16 })).toBe(16);
+  });
+  it('orders the scale by the size each role is drawn at', () => {
+    const scale = typeScale([{ ...role('heading', 28), sizePx: 32 }, { ...role('display', 30) }]);
+    expect(scale.map((s) => s.role.role)).toEqual(['heading', 'display']);
+  });
+  it('warns when a role is set below its own minimum, naming both sizes and what to do', () => {
+    const w = minSizeWarning({ minSizePx: 28, sizePx: 24 });
+    expect(w?.tone).toBe('warning');
+    expect(w?.title).toContain('Set at 24 px, below this role’s 28 px minimum');
+    expect(w?.action).toContain('at least 28 px');
+  });
+  it('is quiet at or above the minimum, without an intended size, or without a minimum', () => {
+    expect(minSizeWarning({ minSizePx: 28, sizePx: 28 })).toBeNull();
+    expect(minSizeWarning({ minSizePx: 28, sizePx: 40 })).toBeNull();
+    expect(minSizeWarning({ minSizePx: 28 })).toBeNull();
+    expect(minSizeWarning({ minSizePx: 0, sizePx: 12 })).toBeNull();
   });
 });
 

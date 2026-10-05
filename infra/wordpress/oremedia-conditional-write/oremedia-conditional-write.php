@@ -17,7 +17,9 @@
  * What it adds (namespace `oremedia/v1`, authenticated users who can edit posts only):
  *
  *   GET  /oremedia/v1/capabilities      the handshake: plugin, version, protocol and whether conditional updates
- *                                       are available on this database (transactional storage required).
+ *                                       are available on this database (transactional storage required). The
+ *                                       storage engines and the WordPress version are added only for users who
+ *                                       can edit others' posts (editors, administrators).
  *   POST /oremedia/v1/posts/<id>        { expected_version, expected_fingerprint, post: { ...core post fields } }
  *                                       applies `post` through core's own `/wp/v2/posts/<id>` handler (its
  *                                       validation, permissions and hooks) only if the post is still at
@@ -41,6 +43,9 @@
  *     slug, password, parent, menu order and modified instant) also catches a writer that bypasses WordPress hooks.
  *   - The handshake reports `conditional_update: false` when the posts or postmeta table is not InnoDB (no
  *     transactions or row locks, e.g. MyISAM or a SQLite drop-in): Oremedia then stays in its limited mode.
+ *
+ * Install only this file: the tests/ directory is the development test suite (it needs a throwaway WordPress and
+ * database) and must not be copied to a site.
  *
  * Limits (documented in docs/platform-apps/wordpress.md): a later blind write by someone else (the block editor
  * saving a stale screen) still lands after Oremedia's write; that is the editor's own behaviour and Oremedia's
@@ -296,22 +301,25 @@ function register_routes() {
 				return current_user_can( 'edit_posts' );
 			},
 			'callback'            => function () {
-				$storage = storage_report();
-				return rest_ensure_response(
-					array(
-						'plugin'    => PLUGIN_SLUG,
-						'version'   => VERSION,
-						'protocol'  => PROTOCOL,
-						'features'  => array(
-							'conditional_update' => $storage['transactional'],
-							'write_counter'      => true,
-							'fingerprint'        => 'sha256-v1',
-							'post_types'         => array_values( covered_post_types() ),
-						),
-						'storage'   => $storage,
-						'wordpress' => get_bloginfo( 'version' ),
-					)
+				$storage  = storage_report();
+				$response = array(
+					'plugin'   => PLUGIN_SLUG,
+					'version'  => VERSION,
+					'protocol' => PROTOCOL,
+					'features' => array(
+						'conditional_update' => $storage['transactional'],
+						'write_counter'      => true,
+						'fingerprint'        => 'sha256-v1',
+						'post_types'         => array_values( covered_post_types() ),
+					),
 				);
+				// The handshake above is all Oremedia reads. The storage engines and the WordPress version are
+				// diagnostics for the site's editors and administrators only, never for a Contributor or Author.
+				if ( current_user_can( 'edit_others_posts' ) ) {
+					$response['storage']   = $storage;
+					$response['wordpress'] = get_bloginfo( 'version' );
+				}
+				return rest_ensure_response( $response );
 			},
 		)
 	);
