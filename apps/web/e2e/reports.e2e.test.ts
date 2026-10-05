@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import type { ReportFiguresV1 } from '@oremedia/contracts/reports';
 import { auditPage, formatViolations, keyboardPath } from './a11y';
 import { createMockHandler, createMockRouter, E2E, MockBackend, t } from './mock-api';
@@ -29,17 +29,18 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
   let origin = '';
   let close: () => Promise<void> = async () => {};
   let browser: Browser;
-  let context: BrowserContext;
   let page: Page;
   const brandPath = (rest: string) =>
     `/c/${encodeURIComponent(E2E.tenantId)}/b/${encodeURIComponent(E2E.brandId)}/${rest}`;
   const month = new Date().toISOString().slice(0, 7);
   /** What the mock composes for the month, as the API would: the expectation the preview is checked against. */
   const figures = (): Promise<ReportFiguresV1> =>
-    t.createCallerFactory(createMockRouter(backend))({
-      headers: { authorization: `Bearer ${E2E.token}`, 'x-oremedia-tenant': E2E.tenantId },
-      correlationId: 'e2e-reports',
-    }).reports.figures({ brandId: E2E.brandId, periodMonth: month, compareMode: 'previous_month' });
+    t
+      .createCallerFactory(createMockRouter(backend))({
+        headers: { authorization: `Bearer ${E2E.token}`, 'x-oremedia-tenant': E2E.tenantId },
+        correlationId: 'e2e-reports',
+      })
+      .reports.figures({ brandId: E2E.brandId, periodMonth: month, compareMode: 'previous_month' });
 
   const open = async (rest = 'reports') => {
     await page.goto('about:blank');
@@ -47,7 +48,12 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     await page.getByTestId('report-page-cover').waitFor({ timeout: 20_000 });
   };
   const newContext = async (width: number, theme: 'light' | 'dark' = 'light') => {
-    const ctx = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, timezoneId: 'UTC', reducedMotion: 'reduce' });
+    const ctx = await browser.newContext({
+      viewport: { width, height: 900 },
+      colorScheme: theme,
+      timezoneId: 'UTC',
+      reducedMotion: 'reduce',
+    });
     await ctx.addInitScript((th) => {
       try {
         localStorage.setItem('oremedia.theme', th);
@@ -71,7 +77,7 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     origin = served.origin;
     close = served.close;
     browser = await chromium.launch(launchOptions);
-    ({ ctx: context, p: page } = await newContext(1280));
+    ({ p: page } = await newContext(1280));
   }, 60_000);
   afterAll(async () => {
     await browser?.close();
@@ -102,12 +108,19 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     const engagement = f.figures.find((x) => x.key === 'engagement')!;
     const rate = f.figures.find((x) => x.key === 'rate:engagement/impressions')!;
     expect(impressions.value).not.toBeNull();
-    expect(await page.getByTestId('report-figure-impressions').textContent()).toContain(fmtN(impressions.value));
-    expect(await page.getByTestId('report-figure-engagement').textContent()).toContain(fmtN(engagement.value));
-    expect(await page.getByTestId('report-figure-rate:engagement/impressions').textContent()).toContain(fmtRate(rate.value));
+    expect(await page.getByTestId('report-figure-impressions').textContent()).toContain(
+      fmtN(impressions.value),
+    );
+    expect(await page.getByTestId('report-figure-engagement').textContent()).toContain(
+      fmtN(engagement.value),
+    );
+    expect(await page.getByTestId('report-figure-rate:engagement/impressions').textContent()).toContain(
+      fmtRate(rate.value),
+    );
     expect(await page.getByTestId('report-figure-reach').textContent()).toContain('Not summed');
     expect(await page.getByTestId('report-sample').textContent()).toContain(`${f.sample.current}`);
-    if (!f.sample.sufficient) expect(await page.getByTestId('report-sample').textContent()).toContain('insufficient sample');
+    if (!f.sample.sufficient)
+      expect(await page.getByTestId('report-sample').textContent()).toContain('insufficient sample');
     for (const c of f.channels) {
       const row = page.getByTestId(`report-channel-${c.channelConnectionId}`);
       expect(await row.textContent()).toContain(c.displayName);
@@ -115,7 +128,10 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
       expect(await row.textContent()).toContain(fmtRate(c.engagementRate));
     }
     const top = f.posts.ranked[0];
-    if (top) expect(await page.getByTestId(`report-post-${top.publicationId}`).textContent()).toContain(fmtN(top.engagement));
+    if (top)
+      expect(await page.getByTestId(`report-post-${top.publicationId}`).textContent()).toContain(
+        fmtN(top.engagement),
+      );
     for (const r of f.recommendations)
       expect(await page.getByTestId(`report-recommendation-${r.id}`).textContent()).toContain(r.title);
   }, 45_000);
@@ -130,16 +146,21 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     expect(await page.getByTestId('report-page-posts').textContent()).toContain('3 / 4');
     await page.getByTestId('report-section-channels').click();
     await expect.poll(() => page.getByTestId('report-page-channels').count()).toBe(1);
-    for (const s of ['overview', 'channels', 'posts', 'recommendations']) await page.getByTestId(`report-section-${s}`).click();
+    for (const s of ['overview', 'channels', 'posts', 'recommendations'])
+      await page.getByTestId(`report-section-${s}`).click();
     // The fourth click is refused: the toggle stays on and the toast says why.
-    expect(await page.getByTestId('report-section-recommendations').getAttribute('aria-checked')).toBe('true');
+    expect(await page.getByTestId('report-section-recommendations').getAttribute('aria-checked')).toBe(
+      'true',
+    );
     await page.getByText('Keep at least one content section').waitFor({ timeout: 5_000 });
   }, 45_000);
 
   it('the summary is edited and saved as the month’s draft (version 0), then updated at its version; Recent lists it', async () => {
     await open();
     await page.getByTestId('report-summary').fill('September in one paragraph.');
-    expect(await page.getByTestId('report-summary-preview').textContent()).toContain('September in one paragraph.');
+    expect(await page.getByTestId('report-summary-preview').textContent()).toContain(
+      'September in one paragraph.',
+    );
     const before = backend.requests.filter((r) => r.path === 'reports.save').length;
     await page.getByTestId('report-save').click();
     await page.getByText('Draft saved').waitFor({ timeout: 10_000 });
@@ -147,7 +168,11 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers['idempotency-key']).toBeTruthy();
     const saved = backend.reports.reports.get(month)!;
-    expect(saved).toMatchObject({ executiveSummary: 'September in one paragraph.', state: 'draft', version: 0 });
+    expect(saved).toMatchObject({
+      executiveSummary: 'September in one paragraph.',
+      state: 'draft',
+      version: 0,
+    });
     await page.getByTestId('report-summary').fill('September, edited.');
     await page.getByTestId('report-save').click();
     await expect.poll(() => backend.reports.reports.get(month)?.version, { timeout: 10_000 }).toBe(1);
@@ -162,24 +187,35 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
   it('Re-draft fills the summary from the gateway, labelled a draft over the computed facts; without a gateway it says so', async () => {
     await open();
     await page.getByRole('button', { name: 'Re-draft' }).click();
-    await expect.poll(() => page.getByTestId('report-summary').inputValue(), { timeout: 10_000 }).toContain('Draft:');
+    await expect
+      .poll(() => page.getByTestId('report-summary').inputValue(), { timeout: 10_000 })
+      .toContain('Draft:');
     expect(await page.getByTestId('report-summary-note').textContent()).toContain('a draft, edit freely');
     expect(backend.reports.drafts.at(-1)?.facts.join('\n')).toContain('Impressions');
     backend.reports.drafterAvailable = false;
     await page.getByRole('button', { name: 'Re-draft' }).click();
     await page.getByText('No AI model is configured for this service.').first().waitFor({ timeout: 10_000 });
     // The assistant answers the same way, and the summary stays editable.
-    await page.getByLabel('What’s missing from the report?').fill('We should test a weekly reel series next month');
+    await page
+      .getByLabel('What’s missing from the report?')
+      .fill('We should test a weekly reel series next month');
     await page.getByRole('button', { name: 'Ask' }).click();
-    await page.getByRole('log', { name: 'Assistant conversation' }).getByText('No AI model is configured for this service.').waitFor({ timeout: 10_000 });
+    await page
+      .getByRole('log', { name: 'Assistant conversation' })
+      .getByText('No AI model is configured for this service.')
+      .waitFor({ timeout: 10_000 });
     backend.reports.drafterAvailable = true;
-    await page.getByLabel('What’s missing from the report?').fill('We should test a weekly reel series next month');
+    await page
+      .getByLabel('What’s missing from the report?')
+      .fill('We should test a weekly reel series next month');
     await page.getByRole('button', { name: 'Ask' }).click();
     const proposal = page.getByTestId('report-proposal');
     await proposal.waitFor({ timeout: 10_000 });
     expect(await proposal.textContent()).toContain('Recommendations · draft');
     await proposal.getByRole('button', { name: 'Add to report' }).click();
-    await expect.poll(() => page.getByTestId('report-page-recommendations').textContent(), { timeout: 10_000 }).toContain('We should test a weekly reel series next month.');
+    await expect
+      .poll(() => page.getByTestId('report-page-recommendations').textContent(), { timeout: 10_000 })
+      .toContain('We should test a weekly reel series next month.');
   }, 60_000);
 
   it('Send to client: email is not configured, so the send is recorded as "Mark as sent" with the PDF, never claimed', async () => {
@@ -195,7 +231,9 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
     await page.getByText('Nothing was emailed: send the PDF yourself.').waitFor({ timeout: 10_000 });
     expect(backend.reports.reports.get(month)).toMatchObject({ state: 'sent', sentTo: 'kofi@acme.example' });
     const recent = page.getByRole('list', { name: 'Recent reports' });
-    await expect.poll(() => recent.getByRole('button').nth(0).textContent(), { timeout: 10_000 }).toContain('Sent');
+    await expect
+      .poll(() => recent.getByRole('button').nth(0).textContent(), { timeout: 10_000 })
+      .toContain('Sent');
     // Download PDF prints: the pages carry their print attributes and the browser's print is what runs.
     await page.evaluate(() => {
       (window as unknown as { __printed: number }).__printed = 0;
@@ -204,7 +242,11 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
       };
     });
     await page.getByRole('button', { name: 'Download PDF' }).click();
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __printed: number }).__printed), { timeout: 5_000 }).toBe(1);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __printed: number }).__printed), {
+        timeout: 5_000,
+      })
+      .toBe(1);
     expect(await page.locator('[data-report-page]').count()).toBeGreaterThanOrEqual(4);
   }, 60_000);
 
@@ -242,11 +284,20 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
           await p.getByTestId('report-send').waitFor({ timeout: 10_000 });
           const violations = await auditPage(p, { narrow: width <= 400 });
           expect(violations, formatViolations(`reports (${theme}, ${width}px)`, violations)).toEqual([]);
-          expect(await p.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+          expect(
+            await p.evaluate(
+              () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            ),
+          ).toBe(true);
           if (theme === 'light') {
             const result = await keyboardPath(p);
-            expect(result.unreached, formatViolations('reports keyboard reach', result.unreached)).toEqual([]);
-            expect(result.invisibleFocus, formatViolations('reports focus visible', result.invisibleFocus)).toEqual([]);
+            expect(result.unreached, formatViolations('reports keyboard reach', result.unreached)).toEqual(
+              [],
+            );
+            expect(
+              result.invisibleFocus,
+              formatViolations('reports focus visible', result.invisibleFocus),
+            ).toEqual([]);
           }
         } finally {
           await ctx.close();

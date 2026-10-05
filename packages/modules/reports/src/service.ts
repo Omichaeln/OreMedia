@@ -1,5 +1,10 @@
 import type { z } from 'zod';
-import { BudgetExhaustedError, ConflictError, NotFoundError, PolicyDeniedError } from '@oremedia/contracts/errors';
+import {
+  BudgetExhaustedError,
+  ConflictError,
+  NotFoundError,
+  PolicyDeniedError,
+} from '@oremedia/contracts/errors';
 import type { ResolvedActor } from '@oremedia/contracts/policy';
 import {
   REPORT_SECTIONS,
@@ -126,12 +131,14 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
     tx?: Tx,
   ): Promise<WindowData> => {
     const { start, end } = monthWindow(periodMonth, timeZone);
-    const publications: ReportPublication[] = (await releasedPublications(brandId, start, end, tx)).map((p) => ({
-      publicationId: p.publicationId,
-      contentRevisionId: p.contentRevisionId,
-      channelConnectionId: p.channelConnectionId,
-      scheduledFor: p.scheduledFor,
-    }));
+    const publications: ReportPublication[] = (await releasedPublications(brandId, start, end, tx)).map(
+      (p) => ({
+        publicationId: p.publicationId,
+        contentRevisionId: p.contentRevisionId,
+        channelConnectionId: p.channelConnectionId,
+        scheduledFor: p.scheduledFor,
+      }),
+    );
     const values =
       publications.length > 0 && keys.length > 0
         ? (
@@ -180,7 +187,8 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
         (req.facts.join('\n').length + req.voice.summary.length + (req.instruction?.length ?? 0)) / 4,
       );
     return Math.ceil(
-      (inputTokens * model.inputMicrosPerMillionTokens + req.maxOutputTokens * model.outputMicrosPerMillionTokens) /
+      (inputTokens * model.inputMicrosPerMillionTokens +
+        req.maxOutputTokens * model.outputMicrosPerMillionTokens) /
         1_000_000,
     );
   };
@@ -200,7 +208,9 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
     brandId: string,
     req: ReportDraftRequestV1,
     tx?: Tx,
-  ): Promise<ReportDraftUnavailableV1 | { available: true; text: string; model: string; costMicros: number }> => {
+  ): Promise<
+    ReportDraftUnavailableV1 | { available: true; text: string; model: string; costMicros: number }
+  > => {
     const drafter = reportDrafter();
     if (!drafter) return unavailable('model_unavailable', 'No AI model is configured for this service.');
     const { tenantId } = requireTenant();
@@ -230,7 +240,10 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
       );
     } catch (err) {
       if (err instanceof BudgetExhaustedError)
-        return unavailable('budget_exhausted', "The brand's remaining AI budget is below what this draft would reserve.");
+        return unavailable(
+          'budget_exhausted',
+          "The brand's remaining AI budget is below what this draft would reserve.",
+        );
       throw err;
     }
     let result;
@@ -350,7 +363,11 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
     },
 
     /** What this deployment can do with a finished report; the controls read it rather than assume. */
-    async delivery(actor: ResolvedActor, input: z.infer<typeof ReportDelivery>, tx?: Tx): Promise<ReportDeliveryV1> {
+    async delivery(
+      actor: ResolvedActor,
+      input: z.infer<typeof ReportDelivery>,
+      tx?: Tx,
+    ): Promise<ReportDeliveryV1> {
       const parsed = ReportDelivery.parse(input);
       await brandService.get(actor, parsed.brandId, tx);
       return {
@@ -379,7 +396,12 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
         const parsed = ReportPreferencesGet.parse(input);
         const brand = await brandService.get(actor, parsed.brandId, tx);
         const row = await preferencesRepo.findForBrand(brand.id, tx);
-        return { brandId: brand.id, autoDraft: row?.autoDraft ?? false, scheduleActive: false, version: row?.version ?? 0 };
+        return {
+          brandId: brand.id,
+          autoDraft: row?.autoDraft ?? false,
+          scheduleActive: false,
+          version: row?.version ?? 0,
+        };
       },
       /** The stored preference only: no job drafts on the 1st on this deployment yet, and the answer says so. */
       async set(
@@ -398,7 +420,12 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
             tx,
           );
         const saved = await preferencesRepo.findForBrand(brand.id, tx);
-        return { brandId: brand.id, autoDraft: saved?.autoDraft ?? false, scheduleActive: false, version: saved?.version ?? 0 };
+        return {
+          brandId: brand.id,
+          autoDraft: saved?.autoDraft ?? false,
+          scheduleActive: false,
+          version: saved?.version ?? 0,
+        };
       },
     },
 
@@ -409,7 +436,11 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
      * brand; the measurement reads assert insight.read, so a role without it reads the same refusal the
      * Performance screen would.
      */
-    async figures(actor: ResolvedActor, input: z.infer<typeof ReportFigures>, tx?: Tx): Promise<ReportFiguresV1> {
+    async figures(
+      actor: ResolvedActor,
+      input: z.infer<typeof ReportFigures>,
+      tx?: Tx,
+    ): Promise<ReportFiguresV1> {
       const parsed = ReportFigures.parse(input);
       const brand = await brandService.get(actor, parsed.brandId, tx);
       await policy.assert(actor, 'brand.read', brandResource(brand.id), {}, tx);
@@ -452,8 +483,16 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
           { brandId: brand.id, windowStart: window.start.toISOString(), windowEnd: window.end.toISOString() },
           tx,
         ),
-        intelligenceService.recommendations.list(actor, { brandId: brand.id, state: 'proposed', page: { limit: 10 } }, tx),
-        intelligenceService.recommendations.list(actor, { brandId: brand.id, state: 'accepted', page: { limit: 10 } }, tx),
+        intelligenceService.recommendations.list(
+          actor,
+          { brandId: brand.id, state: 'proposed', page: { limit: 10 } },
+          tx,
+        ),
+        intelligenceService.recommendations.list(
+          actor,
+          { brandId: brand.id, state: 'accepted', page: { limit: 10 } },
+          tx,
+        ),
       ]);
       return composeFigures({
         brand: { id: brand.id, name: brand.name, timeZone },
@@ -483,11 +522,21 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
       const brand = await brandService.get(actor, parsed.brandId, tx);
       await policy.assert(actor, 'report.edit', brandResource(brand.id), {}, tx);
       const figures = await service.figures(actor, parsed, tx);
-      const req = draftRequest('summary', brand, figures, await voiceOf(actor, brand, tx), parsed.instruction ?? null);
+      const req = draftRequest(
+        'summary',
+        brand,
+        figures,
+        await voiceOf(actor, brand, tx),
+        parsed.instruction ?? null,
+      );
       const outcome = await callDrafter(brand.id, req, tx);
       if (!outcome.available) return outcome;
       const text = outcome.text.trim();
-      if (!text) return unavailable('model_failed', 'The model answered with nothing; write the text yourself or try again.');
+      if (!text)
+        return unavailable(
+          'model_failed',
+          'The model answered with nothing; write the text yourself or try again.',
+        );
       return { available: true, draft: true, text, model: outcome.model, costMicros: outcome.costMicros };
     },
 
@@ -512,7 +561,10 @@ export function createReportsService(opts: ReportsServiceOptions = {}) {
       try {
         answer = ReportAdditionOutput.parse(JSON.parse(match ? match[0] : outcome.text));
       } catch {
-        return unavailable('model_failed', 'The model’s answer did not fit the expected shape; try rephrasing.');
+        return unavailable(
+          'model_failed',
+          'The model’s answer did not fit the expected shape; try rephrasing.',
+        );
       }
       return {
         available: true,

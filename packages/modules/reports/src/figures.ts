@@ -120,7 +120,14 @@ const zoneOffsetMs = (instant: number, timeZone: string): number => {
     return 0;
   }
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const asUtc = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour'),
+    get('minute'),
+    get('second'),
+  );
   return asUtc - Math.floor(instant / 1000) * 1000;
 };
 /** The instant a calendar month starts (local midnight of its 1st) in the zone. */
@@ -140,7 +147,8 @@ export function monthWindow(periodMonth: string, timeZone: string): { start: Dat
   };
 }
 
-const usable = (v: MetricValueV1) => v.series === null && v.value !== null && v.completeness !== 'unavailable';
+const usable = (v: MetricValueV1) =>
+  v.series === null && v.value !== null && v.completeness !== 'unavailable';
 
 /** A flow's total over the values (summed within its group, D-15); null when none carries a number. */
 const flowOf = (values: readonly MetricValueV1[], group: string): number | null => {
@@ -174,7 +182,9 @@ const groupBySubject = (values: readonly MetricValueV1[]) => {
 };
 /** Relative change; null below the sample, without both sides, or against nothing. */
 const changeOf = (sufficient: boolean, current: number | null, previous: number | null): number | null =>
-  sufficient && current !== null && previous !== null && previous > 0 ? (current - previous) / previous : null;
+  sufficient && current !== null && previous !== null && previous > 0
+    ? (current - previous) / previous
+    : null;
 
 export const sampleOf = (current: number, previous: number) => ({
   current,
@@ -234,7 +244,8 @@ const postOf = (p: ReportPublication, values: MetricValueV1[]): ReportPostV1 => 
     engagement,
     reach: uniqueOf(values, 'reach'),
     clicks: flowOf(values, 'clicks'),
-    engagementRate: engagement !== null && impressions !== null && impressions > 0 ? engagement / impressions : null,
+    engagementRate:
+      engagement !== null && impressions !== null && impressions > 0 ? engagement / impressions : null,
     stale: values.some((v) => usable(v) && v.freshness.stale),
   };
 };
@@ -439,7 +450,9 @@ export function factsOf(f: ReportFiguresV1): string[] {
         : fig.previous !== null
           ? ` (${cmp}: ${fig.kind === 'rate' ? `${(fig.previous * 100).toFixed(1)}%` : num(fig.previous)}, not compared)`
           : '';
-    facts.push(`${fig.label}: ${value}${change}; ${fig.coverage.withData} of ${fig.coverage.requested} posts have a number.`);
+    facts.push(
+      `${fig.label}: ${value}${change}; ${fig.coverage.withData} of ${fig.coverage.requested} posts have a number.`,
+    );
   }
   for (const c of f.channels)
     facts.push(
@@ -459,9 +472,13 @@ export function factsOf(f: ReportFiguresV1): string[] {
     );
   }
   if (f.posts.topShare !== null)
-    facts.push(`The top ${Math.min(REPORT_TOP_POSTS, f.posts.ranked.length)} posts earned ${(f.posts.topShare * 100).toFixed(0)}% of engagements.`);
+    facts.push(
+      `The top ${Math.min(REPORT_TOP_POSTS, f.posts.ranked.length)} posts earned ${(f.posts.topShare * 100).toFixed(0)}% of engagements.`,
+    );
   for (const r of f.recommendations) facts.push(`Recommendation (${r.state}): ${r.title}. ${r.rationale}`);
   if (f.freshness.staleValues > 0)
-    facts.push(`${f.freshness.staleValues} of ${f.freshness.valuesWithData} values are stale (past the provider's reporting latency).`);
+    facts.push(
+      `${f.freshness.staleValues} of ${f.freshness.valuesWithData} values are stale (past the provider's reporting latency).`,
+    );
   return facts;
 }

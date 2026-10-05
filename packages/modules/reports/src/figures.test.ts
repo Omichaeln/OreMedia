@@ -14,7 +14,13 @@ import {
   type WindowData,
 } from './figures';
 
-const value = (subjectId: string, metricKey: string, comparableGroup: string, v: number | null, stale = false): MetricValueV1 => ({
+const value = (
+  subjectId: string,
+  metricKey: string,
+  comparableGroup: string,
+  v: number | null,
+  stale = false,
+): MetricValueV1 => ({
   snapshotId: `ms_${subjectId}_${metricKey}`,
   subjectType: 'publication',
   subjectId,
@@ -39,7 +45,13 @@ const pub = (id: string, channel: string, day: number): ReportPublication => ({
   scheduledFor: `2026-09-${String(day).padStart(2, '0')}T12:00:00.000Z`,
 });
 /** n posts on a channel, each with impressions, engagement and its own reach. */
-const month = (n: number, channel: string, impressions: number, engagement: number, reach: number): WindowData => {
+const month = (
+  n: number,
+  channel: string,
+  impressions: number,
+  engagement: number,
+  reach: number,
+): WindowData => {
   const publications = Array.from({ length: n }, (_, i) => pub(`${channel}_${i}`, channel, i + 1));
   const values = publications.flatMap((p) => [
     value(p.publicationId, 'impressions', 'impressions', impressions),
@@ -59,10 +71,27 @@ describe('report figures (D-14, D-15)', () => {
     const previous = month(5, 'cc_a', 80, 4, 70);
     const figures = figuresOf(current, previous, true);
     const by = (k: string) => figures.find((f) => f.key === k);
-    expect(by('impressions')).toMatchObject({ kind: 'flow', value: 600, previous: 400, change: 0.5, notSummed: null });
+    expect(by('impressions')).toMatchObject({
+      kind: 'flow',
+      value: 600,
+      previous: 400,
+      change: 0.5,
+      notSummed: null,
+    });
     expect(by('engagement')).toMatchObject({ value: 60, previous: 20, change: 2 });
-    expect(by('rate:engagement/impressions')).toMatchObject({ kind: 'rate', value: 0.1, previous: 0.05, change: 1 });
-    expect(by('reach')).toMatchObject({ kind: 'unique', value: null, previous: null, change: null, notSummed: 'unique people: never summed across posts' });
+    expect(by('rate:engagement/impressions')).toMatchObject({
+      kind: 'rate',
+      value: 0.1,
+      previous: 0.05,
+      change: 1,
+    });
+    expect(by('reach')).toMatchObject({
+      kind: 'unique',
+      value: null,
+      previous: null,
+      change: null,
+      notSummed: 'unique people: never summed across posts',
+    });
     expect(by('reach')?.coverage).toEqual({ withData: 6, requested: 6 });
     expect(by('clicks')).toMatchObject({ value: null, change: null });
   });
@@ -83,7 +112,11 @@ describe('report figures (D-14, D-15)', () => {
       computedAt: new Date('2026-10-05T00:00:00Z'),
     });
     expect(composed.sample).toEqual({ current: 6, previous: 4, minimum: 5, sufficient: false });
-    expect(composed.figures.find((f) => f.key === 'impressions')).toMatchObject({ value: 600, previous: 320, change: null });
+    expect(composed.figures.find((f) => f.key === 'impressions')).toMatchObject({
+      value: 600,
+      previous: 320,
+      change: null,
+    });
     expect(factsOf(composed).join('\n')).toContain('insufficient sample');
   });
 
@@ -94,7 +127,13 @@ describe('report figures (D-14, D-15)', () => {
       ['c', [value('c', 'engagement', 'engagement', 50)]], // no impressions: left out, never a zero
     ]);
     expect(pooledRate(byPost)).toBeCloseTo(15 / 1010, 10);
-    expect(pooledRate(new Map([['d', [value('d', 'impressions', 'impressions', 0), value('d', 'engagement', 'engagement', 1)]]]))).toBeNull();
+    expect(
+      pooledRate(
+        new Map([
+          ['d', [value('d', 'impressions', 'impressions', 0), value('d', 'engagement', 'engagement', 1)]],
+        ]),
+      ),
+    ).toBeNull();
   });
 
   it('rows a channel per connection with its own flows, pooled rate and share of impressions (never of reach)', () => {
@@ -110,9 +149,24 @@ describe('report figures (D-14, D-15)', () => {
       previous,
     );
     expect(rows.map((r) => r.channelConnectionId)).toEqual(['cc_b', 'cc_a']);
-    expect(rows[1]).toMatchObject({ publications: 6, previousPublications: 5, impressions: 600, engagement: 60, engagementRate: 0.1, impressionsChange: 1.4, sufficient: true, shareOfImpressions: 600 / 2100 });
+    expect(rows[1]).toMatchObject({
+      publications: 6,
+      previousPublications: 5,
+      impressions: 600,
+      engagement: 60,
+      engagementRate: 0.1,
+      impressionsChange: 1.4,
+      sufficient: true,
+      shareOfImpressions: 600 / 2100,
+    });
     // Two posts the month before: no comparison for LinkedIn, but its share and rate stand.
-    expect(rows[0]).toMatchObject({ impressions: 1500, impressionsChange: null, sufficient: false, shareOfImpressions: 1500 / 2100, engagementRate: 30 / 1500 });
+    expect(rows[0]).toMatchObject({
+      impressions: 1500,
+      impressionsChange: null,
+      sufficient: false,
+      shareOfImpressions: 1500 / 2100,
+      engagementRate: 30 / 1500,
+    });
     expect(rows[0]?.bestPublicationId).toBe('cc_b_0');
   });
 
@@ -120,12 +174,19 @@ describe('report figures (D-14, D-15)', () => {
     const current = month(8, 'cc_a', 100, 10, 80);
     // One post well ahead, one trailing, one without any number.
     current.values.push(value('cc_a_7', 'engagement', 'engagement', 90));
-    current.values = current.values.map((v) => (v.subjectId === 'cc_a_0' && v.metricKey === 'engagement' ? { ...v, value: 1 } : v));
+    current.values = current.values.map((v) =>
+      v.subjectId === 'cc_a_0' && v.metricKey === 'engagement' ? { ...v, value: 1 } : v,
+    );
     current.publications.push(pub('cc_a_none', 'cc_a', 20));
     const page = postPageOf(current);
     expect(page.total).toBe(9);
     expect(page.withNumbers).toBe(8);
-    expect(page.ranked[0]).toMatchObject({ publicationId: 'cc_a_7', engagement: 100, reach: 80, engagementRate: 1 });
+    expect(page.ranked[0]).toMatchObject({
+      publicationId: 'cc_a_7',
+      engagement: 100,
+      reach: 80,
+      engagementRate: 1,
+    });
     expect(page.ranked).toHaveLength(5);
     expect(page.lowest[0]).toMatchObject({ publicationId: 'cc_a_0', engagementRate: 0.01 });
     expect(page.topShare).toBeCloseTo((100 + 10 * 4) / (100 + 10 * 6 + 1), 10);
@@ -135,8 +196,13 @@ describe('report figures (D-14, D-15)', () => {
     expect(compareMonthOf('2026-01', 'previous_month')).toBe('2025-12');
     expect(compareMonthOf('2026-09', 'last_year')).toBe('2025-09');
     expect(shiftMonth('2026-09', -5)).toBe('2026-04');
-    expect(monthWindow('2026-09', 'UTC')).toEqual({ start: new Date('2026-09-01T00:00:00.000Z'), end: new Date('2026-09-30T23:59:59.999Z') });
-    expect(monthWindow('2026-09', 'Africa/Johannesburg').start.toISOString()).toBe('2026-08-31T22:00:00.000Z');
+    expect(monthWindow('2026-09', 'UTC')).toEqual({
+      start: new Date('2026-09-01T00:00:00.000Z'),
+      end: new Date('2026-09-30T23:59:59.999Z'),
+    });
+    expect(monthWindow('2026-09', 'Africa/Johannesburg').start.toISOString()).toBe(
+      '2026-08-31T22:00:00.000Z',
+    );
     expect(monthWindow('2026-03', 'Europe/London').end.toISOString()).toBe('2026-03-31T22:59:59.999Z');
   });
 
@@ -152,7 +218,16 @@ describe('report figures (D-14, D-15)', () => {
         trend: [],
         channels: [{ id: 'cc_a', providerKey: 'x', displayName: 'X' }],
         formats: [],
-        recommendations: [{ id: 'rec', title: 'Post more', rationale: 'Because.', state: 'proposed', expectedBenefit: { metricKey: 'engagement', direction: 'up' }, rank: 1 }],
+        recommendations: [
+          {
+            id: 'rec',
+            title: 'Post more',
+            rationale: 'Because.',
+            state: 'proposed',
+            expectedBenefit: { metricKey: 'engagement', direction: 'up' },
+            rank: 1,
+          },
+        ],
         computedAt: new Date('2026-10-05T00:00:00Z'),
       }),
     );

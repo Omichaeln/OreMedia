@@ -3,7 +3,17 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import { REPORT_SECTIONS, type ReportSection } from '@oremedia/contracts/reports';
-import { Button, EmptyState, Field, Input, Skeleton, StatusBanner, StatusDot, Textarea, cn } from '@oremedia/ui';
+import {
+  Button,
+  EmptyState,
+  Field,
+  Input,
+  Skeleton,
+  StatusBanner,
+  StatusDot,
+  Textarea,
+  cn,
+} from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { useToast } from '../../components/toast';
@@ -85,11 +95,7 @@ export function ReportsScreen() {
   const fonts = useBrandFonts(brandId);
 
   const defaults = useMemo(
-    () =>
-      DEFAULT_FIELDS(
-        brand.name,
-        [user.data?.name, companyName].filter(Boolean).join(', '),
-      ),
+    () => DEFAULT_FIELDS(brand.name, [user.data?.name, companyName].filter(Boolean).join(', ')),
     [brand.name, user.data?.name, companyName],
   );
   const [fields, setFields] = useState(defaults);
@@ -123,12 +129,18 @@ export function ReportsScreen() {
   const document = version.data ? BrandSystemDocumentV1.parse(version.data.document) : null;
   const kit = useMemo(() => kitOf(document), [document]);
   const face = kit.displayFontRef
-    ? (fonts.data?.items.find((f) => f.assetId === kit.displayFontRef || f.assetVersionId === kit.displayFontRef) ?? null)
+    ? (fonts.data?.items.find(
+        (f) => f.assetId === kit.displayFontRef || f.assetVersionId === kit.displayFontRef,
+      ) ?? null)
     : null;
   const fontFiles = useMemo(
     () =>
       face
-        ? face.files.map((x) => ({ family: face.assetVersionId, assetVersionId: x.assetVersionId, unicodeRange: x.unicodeRange }))
+        ? face.files.map((x) => ({
+            family: face.assetVersionId,
+            assetVersionId: x.assetVersionId,
+            unicodeRange: x.unicodeRange,
+          }))
         : [],
     [face],
   );
@@ -171,7 +183,11 @@ export function ReportsScreen() {
         setSendOpen(false);
         setLoadedFor(`${periodMonth}:${r.version}`);
         invalidate();
-        toast({ tone: 'good', title: `Marked as sent to ${r.sentTo ?? ''}`, description: 'Nothing was emailed: send the PDF yourself.' });
+        toast({
+          tone: 'good',
+          title: `Marked as sent to ${r.sentTo ?? ''}`,
+          description: 'Nothing was emailed: send the PDF yourself.',
+        });
       },
     }),
   );
@@ -185,8 +201,13 @@ export function ReportsScreen() {
         if (res.available) {
           set('executiveSummary', res.text);
           setDrafted(res.text);
-          toast({ tone: 'good', title: 'Summary drafted from this month’s figures', description: 'A draft: read it before it goes out.' });
-        } else toast({ tone: 'warning', title: 'The summary could not be drafted', description: res.message });
+          toast({
+            tone: 'good',
+            title: 'Summary drafted from this month’s figures',
+            description: 'A draft: read it before it goes out.',
+          });
+        } else
+          toast({ tone: 'warning', title: 'The summary could not be drafted', description: res.message });
       },
     }),
   );
@@ -224,9 +245,18 @@ export function ReportsScreen() {
       set('recommendations', [fields.recommendations, text].filter(Boolean).join('\n\n'));
     else set('executiveSummary', [fields.executiveSummary, text].filter(Boolean).join('\n\n'));
     if (!fields.sections.includes(proposal.section === 'recommendations' ? 'recommendations' : 'overview'))
-      set('sections', [...fields.sections, proposal.section === 'recommendations' ? 'recommendations' : 'overview']);
+      set('sections', [
+        ...fields.sections,
+        proposal.section === 'recommendations' ? 'recommendations' : 'overview',
+      ]);
     setAdded((a) => [...a, { section: proposal.section, text }]);
-    setChat((c) => [...c, { me: false, text: `Added to ${proposal.section === 'recommendations' ? 'Recommendations' : 'the executive summary'}. Save the draft to keep it.` }]);
+    setChat((c) => [
+      ...c,
+      {
+        me: false,
+        text: `Added to ${proposal.section === 'recommendations' ? 'Recommendations' : 'the executive summary'}. Save the draft to keep it.`,
+      },
+    ]);
     setProposal(null);
   };
   const prefIntent = useIntentKey();
@@ -239,7 +269,9 @@ export function ReportsScreen() {
         toast({
           tone: 'info',
           title: res.autoDraft ? 'Automatic drafts switched on' : 'Automatic drafts off',
-          description: res.scheduleActive ? undefined : 'Stored as a preference: no job drafts on the 1st on this deployment yet.',
+          description: res.scheduleActive
+            ? undefined
+            : 'Stored as a preference: no job drafts on the 1st on this deployment yet.',
         });
       },
     }),
@@ -252,7 +284,12 @@ export function ReportsScreen() {
   const doMarkSent = (e: FormEvent) => {
     e.preventDefault();
     if (!report.data || !sendTo.trim()) return;
-    markSent.mutate({ brandId, reportId: report.data.id, expectedVersion: report.data.version, sentTo: sendTo.trim() });
+    markSent.mutate({
+      brandId,
+      reportId: report.data.id,
+      expectedVersion: report.data.version,
+      sentTo: sendTo.trim(),
+    });
   };
   const download = () => {
     const t0 = window.document.title;
@@ -263,7 +300,9 @@ export function ReportsScreen() {
     }, 150);
   };
   const toggleSection = (s: ReportSection) => {
-    const next = fields.sections.includes(s) ? fields.sections.filter((x) => x !== s) : [...fields.sections, s];
+    const next = fields.sections.includes(s)
+      ? fields.sections.filter((x) => x !== s)
+      : [...fields.sections, s];
     if (!CONTENT_SECTIONS.some((x) => next.includes(x))) {
       toast({ tone: 'warning', title: 'Keep at least one content section' });
       return;
@@ -313,7 +352,9 @@ export function ReportsScreen() {
           {reports.isPending && <Skeleton label="Loading reports" lines={3} />}
           {reports.isError && <RequestError error={reports.error} onRetry={() => void reports.refetch()} />}
           {reports.isSuccess && reports.data.items.length === 0 && (
-            <p className="border-t border-border py-2 text-xs text-muted-foreground">No reports saved for this brand yet. Save a draft to keep one.</p>
+            <p className="border-t border-border py-2 text-xs text-muted-foreground">
+              No reports saved for this brand yet. Save a draft to keep one.
+            </p>
           )}
           {reports.isSuccess && reports.data.items.length > 0 && (
             <ul aria-label="Recent reports" data-testid="reports-recent" className="flex flex-col">
@@ -358,7 +399,10 @@ export function ReportsScreen() {
               onValueChange={(id) => {
                 if (id !== brandId) void navigate(brandPath(companyId, id, 'reports'));
               }}
-              options={(brands.data ?? [{ id: brandId, name: brand.name }]).map((b) => ({ value: b.id, label: b.name }))}
+              options={(brands.data ?? [{ id: brandId, name: brand.name }]).map((b) => ({
+                value: b.id,
+                label: b.name,
+              }))}
             />
           </Field>
           <Field label="Month" htmlFor="report-month">
@@ -373,7 +417,11 @@ export function ReportsScreen() {
             <span className="text-xs font-medium text-muted-foreground" id="report-compare">
               Compare with
             </span>
-            <div role="group" aria-labelledby="report-compare" className="flex overflow-hidden rounded-lg border border-border bg-card">
+            <div
+              role="group"
+              aria-labelledby="report-compare"
+              className="flex overflow-hidden rounded-lg border border-border bg-card"
+            >
               {(
                 [
                   ['previous_month', 'Previous month'],
@@ -385,7 +433,10 @@ export function ReportsScreen() {
                   type="button"
                   aria-pressed={fields.compareMode === k}
                   onClick={() => set('compareMode', k)}
-                  className={cn('h-8 flex-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', fields.compareMode === k ? 'bg-secondary font-medium' : 'hover:bg-muted')}
+                  className={cn(
+                    'h-8 flex-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    fields.compareMode === k ? 'bg-secondary font-medium' : 'hover:bg-muted',
+                  )}
                 >
                   {label}
                 </button>
@@ -410,11 +461,19 @@ export function ReportsScreen() {
                 onClick={() => toggleSection(s)}
                 className="flex items-center gap-2.5 border-t border-border px-0.5 py-2 text-left text-sm hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
-                <span aria-hidden="true" className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded border text-2xs', on ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong bg-card')}>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'flex h-4 w-4 shrink-0 items-center justify-center rounded border text-2xs',
+                    on ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong bg-card',
+                  )}
+                >
                   {on ? '✓' : ''}
                 </span>
                 <span className="flex-1">{sectionLabel(s)}</span>
-                <span className="text-xs tabular-nums text-muted-foreground">{on ? `p. ${pageNumber(order, s)}` : '—'}</span>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {on ? `p. ${pageNumber(order, s)}` : '—'}
+                </span>
               </button>
             );
           })}
@@ -448,59 +507,131 @@ export function ReportsScreen() {
           </span>
         </section>
 
-        <section aria-labelledby="reports-assistant" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5" data-testid="report-assistant">
+        <section
+          aria-labelledby="reports-assistant"
+          className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5"
+          data-testid="report-assistant"
+        >
           <div className="flex items-baseline justify-between gap-2">
-            <h2 id="reports-assistant" className="text-2xs tabular-nums uppercase tracking-wider text-accent-ink">
+            <h2
+              id="reports-assistant"
+              className="text-2xs tabular-nums uppercase tracking-wider text-accent-ink"
+            >
               Report assistant
             </h2>
-            <span className="text-xs text-muted-foreground">{added.length ? `${added.length} added` : 'Writes in brand voice'}</span>
+            <span className="text-xs text-muted-foreground">
+              {added.length ? `${added.length} added` : 'Writes in brand voice'}
+            </span>
           </div>
-          <div className="flex max-h-[260px] flex-col gap-2 overflow-auto" role="log" aria-label="Assistant conversation">
+          <div
+            className="flex max-h-[260px] flex-col gap-2 overflow-auto"
+            role="log"
+            aria-label="Assistant conversation"
+          >
             <p className="max-w-[92%] self-start rounded-xl border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed">
-              Tell me what’s missing and I’ll write it in {brand.name}’s voice and place it in the right section. Every answer is a draft over this month’s figures; you add it, and the draft keeps it once saved.
+              Tell me what’s missing and I’ll write it in {brand.name}’s voice and place it in the right
+              section. Every answer is a draft over this month’s figures; you add it, and the draft keeps it
+              once saved.
             </p>
             {chat.map((m, i) => (
-              <p key={i} className={cn('max-w-[92%] rounded-xl border px-2.5 py-1.5 text-xs leading-relaxed', m.me ? 'self-end border-primary bg-primary text-primary-foreground' : 'self-start border-border bg-background')}>
+              <p
+                key={i}
+                className={cn(
+                  'max-w-[92%] rounded-xl border px-2.5 py-1.5 text-xs leading-relaxed',
+                  m.me
+                    ? 'self-end border-primary bg-primary text-primary-foreground'
+                    : 'self-start border-border bg-background',
+                )}
+              >
                 {m.text}
               </p>
             ))}
-            {ask.isPending && <p className="text-xs text-muted-foreground" role="status">Drafting in {brand.name}’s voice…</p>}
+            {ask.isPending && (
+              <p className="text-xs text-muted-foreground" role="status">
+                Drafting in {brand.name}’s voice…
+              </p>
+            )}
           </div>
           {proposal && (
-            <div className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent-tint p-2.5" data-testid="report-proposal">
-              <span className="text-2xs uppercase tracking-wider text-accent-ink">Adds to · {sectionLabel(proposal.section)} · draft</span>
-              <Textarea aria-label="Text to add" rows={4} value={proposal.text} onChange={(e) => setProposal({ ...proposal, text: e.target.value })} className="bg-card" />
+            <div
+              className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent-tint p-2.5"
+              data-testid="report-proposal"
+            >
+              <span className="text-2xs uppercase tracking-wider text-accent-ink">
+                Adds to · {sectionLabel(proposal.section)} · draft
+              </span>
+              <Textarea
+                aria-label="Text to add"
+                rows={4}
+                value={proposal.text}
+                onChange={(e) => setProposal({ ...proposal, text: e.target.value })}
+                className="bg-card"
+              />
               <div className="flex gap-1.5">
-                <Button size="sm" variant="primary" onClick={accept}>Add to report</Button>
-                <Button size="sm" onClick={() => setProposal(null)}>Discard</Button>
+                <Button size="sm" variant="primary" onClick={accept}>
+                  Add to report
+                </Button>
+                <Button size="sm" onClick={() => setProposal(null)}>
+                  Discard
+                </Button>
               </div>
             </div>
           )}
           <form onSubmit={submitAsk} className="flex gap-1.5">
-            <Input aria-label="What’s missing from the report?" placeholder="What’s missing from the report?" value={question} onChange={(e) => setQuestion(e.target.value)} className="min-w-0 flex-1" />
-            <Button type="submit" variant="primary" disabled={ask.isPending || !question.trim()}>Ask</Button>
+            <Input
+              aria-label="What’s missing from the report?"
+              placeholder="What’s missing from the report?"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              className="min-w-0 flex-1"
+            />
+            <Button type="submit" variant="primary" disabled={ask.isPending || !question.trim()}>
+              Ask
+            </Button>
           </form>
         </section>
 
         <section aria-label="Prepared for and by" className="flex flex-col gap-3">
           <Field label="Prepared for" htmlFor="report-for">
-            <Input id="report-for" value={fields.preparedFor} onChange={(e) => set('preparedFor', e.target.value)} className="bg-card" />
+            <Input
+              id="report-for"
+              value={fields.preparedFor}
+              onChange={(e) => set('preparedFor', e.target.value)}
+              className="bg-card"
+            />
           </Field>
           <Field label="Prepared by" htmlFor="report-by">
-            <Input id="report-by" value={fields.preparedBy} onChange={(e) => set('preparedBy', e.target.value)} className="bg-card" />
+            <Input
+              id="report-by"
+              value={fields.preparedBy}
+              onChange={(e) => set('preparedBy', e.target.value)}
+              className="bg-card"
+            />
           </Field>
         </section>
 
-        <section aria-labelledby="reports-kit" className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5">
+        <section
+          aria-labelledby="reports-kit"
+          className="flex flex-col gap-2.5 rounded-xl border border-border bg-card p-3.5"
+        >
           <div className="flex items-baseline justify-between gap-2">
-            <h2 id="reports-kit" className="text-sm font-medium">Brand kit</h2>
-            <Link to={brandPath(companyId, brandId, 'system')} className="text-xs text-muted-foreground hover:text-foreground">
+            <h2 id="reports-kit" className="text-sm font-medium">
+              Brand kit
+            </h2>
+            <Link
+              to={brandPath(companyId, brandId, 'system')}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
               {version.data ? `Brand system v${version.data.number} · published →` : 'Brand system →'}
             </Link>
           </div>
           <span className="flex gap-1" aria-hidden="true">
             {kit.swatches.map((w, i) => (
-              <span key={i} className="h-[22px] flex-1 rounded border border-border" style={{ background: w }} />
+              <span
+                key={i}
+                className="h-[22px] flex-1 rounded border border-border"
+                style={{ background: w }}
+              />
             ))}
           </span>
           <span className="text-xs text-muted-foreground">
@@ -509,10 +640,25 @@ export function ReportsScreen() {
               : 'Nothing published yet: the report uses the fallback kit.'}
           </span>
           <div className="flex flex-col gap-1">
-            <span id="report-theme" className="text-xs text-muted-foreground">Cover</span>
-            <div role="group" aria-labelledby="report-theme" className="flex overflow-hidden rounded-lg border border-border">
+            <span id="report-theme" className="text-xs text-muted-foreground">
+              Cover
+            </span>
+            <div
+              role="group"
+              aria-labelledby="report-theme"
+              className="flex overflow-hidden rounded-lg border border-border"
+            >
               {(['dark', 'light'] as const).map((k) => (
-                <button key={k} type="button" aria-pressed={fields.theme === k} onClick={() => set('theme', k)} className={cn('h-[30px] flex-1 text-xs capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', fields.theme === k ? 'bg-secondary font-medium' : 'hover:bg-muted')}>
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={fields.theme === k}
+                  onClick={() => set('theme', k)}
+                  className={cn(
+                    'h-[30px] flex-1 text-xs capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    fields.theme === k ? 'bg-secondary font-medium' : 'hover:bg-muted',
+                  )}
+                >
                   {k}
                 </button>
               ))}
@@ -521,33 +667,79 @@ export function ReportsScreen() {
         </section>
 
         <div className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="report-freshness">
-          <StatusDot tone={!figures.data ? 'neutral' : stale || figures.data.freshness.valuesWithData === 0 ? 'warning' : 'good'} size="sm" className="mt-1.5" />
+          <StatusDot
+            tone={
+              !figures.data
+                ? 'neutral'
+                : stale || figures.data.freshness.valuesWithData === 0
+                  ? 'warning'
+                  : 'good'
+            }
+            size="sm"
+            className="mt-1.5"
+          />
           <span className="flex-1">{freshText}</span>
         </div>
 
         {mutationError && <RequestError error={mutationError.error} onRetry={() => mutationError.reset()} />}
         <div className="flex flex-col gap-2">
-          <Button variant="primary" className="h-[38px]" onClick={download} disabled={!figures.data}>Download PDF</Button>
+          <Button variant="primary" className="h-[38px]" onClick={download} disabled={!figures.data}>
+            Download PDF
+          </Button>
           <div className="flex gap-2">
-            <Button className="h-[34px] flex-1" aria-expanded={sendOpen} onClick={() => setSendOpen((o) => !o)}>Send to client</Button>
-            <Button className="h-[34px] flex-1" onClick={doSave} disabled={save.isPending || (!dirty && Boolean(report.data))} data-testid="report-save">
+            <Button
+              className="h-[34px] flex-1"
+              aria-expanded={sendOpen}
+              onClick={() => setSendOpen((o) => !o)}
+            >
+              Send to client
+            </Button>
+            <Button
+              className="h-[34px] flex-1"
+              onClick={doSave}
+              disabled={save.isPending || (!dirty && Boolean(report.data))}
+              data-testid="report-save"
+            >
               {save.isPending ? 'Saving…' : 'Save draft'}
             </Button>
           </div>
           {sendOpen && (
-            <form onSubmit={doMarkSent} className="om-pop flex flex-col gap-2 rounded-xl border border-border bg-card p-3" data-testid="report-send">
+            <form
+              onSubmit={doMarkSent}
+              className="om-pop flex flex-col gap-2 rounded-xl border border-border bg-card p-3"
+              data-testid="report-send"
+            >
               {delivery.isPending && <Skeleton label="Checking delivery" lines={1} />}
               {delivery.data && (
-                <StatusBanner tone="warning" title="Email delivery is not configured" description={`${delivery.data.email.reason} ${delivery.data.link.reason} ${delivery.data.pdf.note} Then record the send here.`} />
+                <StatusBanner
+                  tone="warning"
+                  title="Email delivery is not configured"
+                  description={`${delivery.data.email.reason} ${delivery.data.link.reason} ${delivery.data.pdf.note} Then record the send here.`}
+                />
               )}
-              {!report.data && <p className="text-xs text-muted-foreground">Save the draft first, then mark it as sent.</p>}
+              {!report.data && (
+                <p className="text-xs text-muted-foreground">Save the draft first, then mark it as sent.</p>
+              )}
               <Field label="Sent to" htmlFor="report-send-to">
-                <Input id="report-send-to" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="client@example.com" />
+                <Input
+                  id="report-send-to"
+                  value={sendTo}
+                  onChange={(e) => setSendTo(e.target.value)}
+                  placeholder="client@example.com"
+                />
               </Field>
-              <Button type="submit" variant="primary" disabled={!report.data || !sendTo.trim() || markSent.isPending}>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!report.data || !sendTo.trim() || markSent.isPending}
+              >
                 {markSent.isPending ? 'Recording…' : 'Mark as sent'}
               </Button>
-              {state?.sent && <p className="text-xs text-muted-foreground">{state.label} to {report.data?.sentTo}.</p>}
+              {state?.sent && (
+                <p className="text-xs text-muted-foreground">
+                  {state.label} to {report.data?.sentTo}.
+                </p>
+              )}
             </form>
           )}
           <button
@@ -555,22 +747,43 @@ export function ReportsScreen() {
             role="switch"
             aria-checked={preferences.data?.autoDraft ?? false}
             disabled={!preferences.data || setPreference.isPending}
-            onClick={() => preferences.data && setPreference.mutate({ brandId, autoDraft: !preferences.data.autoDraft })}
+            onClick={() =>
+              preferences.data && setPreference.mutate({ brandId, autoDraft: !preferences.data.autoDraft })
+            }
             className="flex items-start gap-2.5 pt-1.5 text-left text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             data-testid="report-auto-draft"
           >
-            <span aria-hidden="true" className={cn('relative mt-px h-4 w-7 shrink-0 rounded-full transition-colors', preferences.data?.autoDraft ? 'bg-primary' : 'bg-border-strong')}>
-              <span className={cn('absolute top-0.5 h-3 w-3 rounded-full bg-card transition-[left]', preferences.data?.autoDraft ? 'left-3.5' : 'left-0.5')} />
+            <span
+              aria-hidden="true"
+              className={cn(
+                'relative mt-px h-4 w-7 shrink-0 rounded-full transition-colors',
+                preferences.data?.autoDraft ? 'bg-primary' : 'bg-border-strong',
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-3 w-3 rounded-full bg-card transition-[left]',
+                  preferences.data?.autoDraft ? 'left-3.5' : 'left-0.5',
+                )}
+              />
             </span>
             <span>
               Draft this report automatically on the 1st of each month
-              {preferences.data && !preferences.data.scheduleActive && <span className="block">Stored as a preference: the schedule is not active on this deployment yet.</span>}
+              {preferences.data && !preferences.data.scheduleActive && (
+                <span className="block">
+                  Stored as a preference: the schedule is not active on this deployment yet.
+                </span>
+              )}
             </span>
           </button>
         </div>
       </div>
 
-      <div ref={previewRef} className="flex min-h-screen min-w-0 justify-center overflow-hidden bg-muted px-6 pb-20 pt-8 print:min-h-0 print:bg-card print:p-0" data-report-pages="">
+      <div
+        ref={previewRef}
+        className="flex min-h-screen min-w-0 justify-center overflow-hidden bg-muted px-6 pb-20 pt-8 print:min-h-0 print:bg-card print:p-0"
+        data-report-pages=""
+      >
         {(figures.isPending || report.isPending) && (
           <div className="w-full max-w-md">
             <Skeleton label="Composing the report’s figures" lines={6} />
@@ -578,14 +791,26 @@ export function ReportsScreen() {
         )}
         {figures.isError && (
           <div className="w-full max-w-md">
-            <RequestError error={figures.error} onRetry={() => void figures.refetch()} title={toUiError(figures.error).kind === 'forbidden' ? 'Restricted access: you cannot read this brand’s figures' : undefined} />
+            <RequestError
+              error={figures.error}
+              onRetry={() => void figures.refetch()}
+              title={
+                toUiError(figures.error).kind === 'forbidden'
+                  ? 'Restricted access: you cannot read this brand’s figures'
+                  : undefined
+              }
+            />
           </div>
         )}
         {figures.isSuccess && report.isSuccess && order.length === 0 && (
           <EmptyState title="No pages" description="Switch a section on to see its page." />
         )}
         {figures.isSuccess && report.isSuccess && order.length > 0 && (
-          <div className="flex flex-col items-center gap-7 print:gap-0" style={{ zoom }} data-testid="report-pages">
+          <div
+            className="flex flex-col items-center gap-7 print:gap-0"
+            style={{ zoom }}
+            data-testid="report-pages"
+          >
             <ReportPages
               figures={figures.data}
               sections={fields.sections}

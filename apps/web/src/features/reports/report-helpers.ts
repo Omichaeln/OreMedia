@@ -50,12 +50,15 @@ export const compareShort = (compareMonth: string, mode: ReportCompareMode) =>
   `vs. ${monthShort(compareMonth, mode === 'last_year')}`;
 /** The current month in the brand's zone, as the builder's default. */
 export function currentMonth(now: Date, timeZone: string): string {
-  const p = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' }).formatToParts(now);
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' }).formatToParts(
+    now,
+  );
   const get = (t: string) => p.find((x) => x.type === t)?.value ?? '';
   return `${get('year')}-${get('month')}`;
 }
 /** The months the builder offers: the current one and the eleven before it. */
-export const monthOptions = (current: string) => Array.from({ length: 12 }, (_, i) => shiftMonth(current, -i));
+export const monthOptions = (current: string) =>
+  Array.from({ length: 12 }, (_, i) => shiftMonth(current, -i));
 /** The number of days in the month. */
 export function daysIn(periodMonth: string): number {
   const { year, month } = parts(periodMonth);
@@ -152,7 +155,9 @@ export function kitOf(doc: BrandSystemDocumentV1 | null): ReportKit {
   const accent = byRole(doc, 'accent') ?? byRole(doc, 'secondary');
   const second = byRole(doc, 'secondary') ?? byRole(doc, 'accent', 1);
   const neutral = byRole(doc, 'neutral');
-  const display = doc.tokens.typeRoles.find((t) => t.role === 'display') ?? doc.tokens.typeRoles.find((t) => t.role === 'heading');
+  const display =
+    doc.tokens.typeRoles.find((t) => t.role === 'display') ??
+    doc.tokens.typeRoles.find((t) => t.role === 'heading');
   const dark = primary ?? text ?? FALLBACK_KIT.dark;
   const kit: ReportKit = {
     dark,
@@ -176,7 +181,9 @@ export function kitOf(doc: BrandSystemDocumentV1 | null): ReportKit {
 export function highlightsOf(f: ReportFiguresDto, cmp: string): Array<{ up: boolean; text: string }> {
   const out: Array<{ up: boolean; text: string }> = [];
   const compared = f.channels.filter((c) => c.impressionsChange !== null);
-  const byGrowth = [...compared].sort((a, b) => (b.impressionsChange as number) - (a.impressionsChange as number));
+  const byGrowth = [...compared].sort(
+    (a, b) => (b.impressionsChange as number) - (a.impressionsChange as number),
+  );
   const best = byGrowth[0];
   if (best)
     out.push({

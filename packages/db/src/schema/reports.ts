@@ -1,4 +1,14 @@
-import { boolean, foreignKey, index, json, mysqlEnum, mysqlTable, text, uniqueIndex, varchar } from 'drizzle-orm/mysql-core';
+import {
+  boolean,
+  foreignKey,
+  index,
+  json,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  uniqueIndex,
+  varchar,
+} from 'drizzle-orm/mysql-core';
 import { brandId, createdAt, id, tenantId, ts, updatedAt, version } from './_columns';
 import { brands } from './brand';
 
@@ -15,7 +25,9 @@ export const reports = mysqlTable(
     brandId: brandId(),
     /** The calendar month the report covers, YYYY-MM in the brand's zone. */
     periodMonth: varchar('period_month', { length: 7 }).notNull(),
-    compareMode: mysqlEnum('compare_mode', ['previous_month', 'last_year']).notNull().default('previous_month'),
+    compareMode: mysqlEnum('compare_mode', ['previous_month', 'last_year'])
+      .notNull()
+      .default('previous_month'),
     sections: json('sections').$type<string[]>().notNull(),
     executiveSummary: text('executive_summary').notNull(),
     recommendations: text('recommendations').notNull(),

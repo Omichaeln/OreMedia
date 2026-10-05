@@ -62,17 +62,27 @@ export interface ReportsCallers {
     definitions: {
       list: (
         input: Record<string, never>,
-      ) => Promise<Array<{ key: string; providerKey: string | null; aggregation: string; comparableGroup: string }>>;
+      ) => Promise<
+        Array<{ key: string; providerKey: string | null; aggregation: string; comparableGroup: string }>
+      >;
     };
     attributes: {
       aggregate: (input: { brandId: string; windowStart: string; windowEnd: string }) => Promise<{
-        features: Array<{ feature: string; value: string; publications: number; rate: number | null; sufficient: boolean }>;
+        features: Array<{
+          feature: string;
+          value: string;
+          publications: number;
+          rate: number | null;
+          sufficient: boolean;
+        }>;
       }>;
     };
   };
   publishing: (ctx: CallerCtx) => {
     channels: {
-      list: (input: { brandId: string }) => Promise<Array<{ id: string; providerKey: string; displayName: string }>>;
+      list: (input: {
+        brandId: string;
+      }) => Promise<Array<{ id: string; providerKey: string; displayName: string }>>;
     };
   };
   content: (ctx: CallerCtx) => {
@@ -90,7 +100,11 @@ export interface ReportsCallers {
   };
   intelligence: (ctx: CallerCtx) => {
     recommendations: {
-      list: (input: { brandId: string; state?: 'proposed' | 'accepted'; page: { limit: number } }) => Promise<{
+      list: (input: {
+        brandId: string;
+        state?: 'proposed' | 'accepted';
+        page: { limit: number };
+      }) => Promise<{
         items: Array<{
           id: string;
           title: string;
@@ -165,14 +179,21 @@ interface ReportsBuilders {
   mutation: MockBuilders['mutation'];
 }
 
-export function reportsRouters(b: ReportsBackend, { router, query, mutation }: ReportsBuilders, callers: ReportsCallers) {
+export function reportsRouters(
+  b: ReportsBackend,
+  { router, query, mutation }: ReportsBuilders,
+  callers: ReportsCallers,
+) {
   const unavailable = (): ReportDraftUnavailableV1 => ({
     available: false,
     reason: 'model_unavailable',
     message: 'No AI model is configured for this service.',
   });
 
-  const figuresOf = async (ctx: CallerCtx, input: { brandId: string; periodMonth: string; compareMode: 'previous_month' | 'last_year' }): Promise<ReportFiguresV1> => {
+  const figuresOf = async (
+    ctx: CallerCtx,
+    input: { brandId: string; periodMonth: string; compareMode: 'previous_month' | 'last_year' },
+  ): Promise<ReportFiguresV1> => {
     b.brandOf(input.brandId);
     const measurement = callers.measurement(ctx);
     const calendar = callers.content(ctx).calendar;
@@ -184,16 +205,32 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
     const keys = [
       ...new Set(
         definitions
-          .filter((d) => d.aggregation !== 'series' && !d.comparableGroup.startsWith('rate:') && (d.providerKey === null || providers.has(d.providerKey)))
+          .filter(
+            (d) =>
+              d.aggregation !== 'series' &&
+              !d.comparableGroup.startsWith('rate:') &&
+              (d.providerKey === null || providers.has(d.providerKey)),
+          )
           .map((d) => d.key),
       ),
     ].slice(0, 50);
     const windowData = async (month: string): Promise<WindowData> => {
       const { start, end } = monthWindow(month, 'UTC');
-      const range = await calendar.range({ brandId: input.brandId, from: start.toISOString(), to: end.toISOString() });
+      const range = await calendar.range({
+        brandId: input.brandId,
+        from: start.toISOString(),
+        to: end.toISOString(),
+      });
       const publications = range.publications.flatMap((p) =>
         p.channelConnectionId !== null && (p.state === 'published' || p.state === 'removed')
-          ? [{ publicationId: p.publicationId, contentRevisionId: p.contentRevisionId, channelConnectionId: p.channelConnectionId, scheduledFor: p.scheduledFor }]
+          ? [
+              {
+                publicationId: p.publicationId,
+                contentRevisionId: p.contentRevisionId,
+                channelConnectionId: p.channelConnectionId,
+                scheduledFor: p.scheduledFor,
+              },
+            ]
           : [],
       );
       const values: MetricValueV1[] = [];
@@ -214,14 +251,24 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
       return { publications, values };
     };
     const compareMonth = compareMonthOf(input.periodMonth, input.compareMode);
-    const months = Array.from({ length: REPORT_TREND_MONTHS }, (_, i) => shiftMonth(input.periodMonth, i - (REPORT_TREND_MONTHS - 1)));
+    const months = Array.from({ length: REPORT_TREND_MONTHS }, (_, i) =>
+      shiftMonth(input.periodMonth, i - (REPORT_TREND_MONTHS - 1)),
+    );
     const read = new Map<string, WindowData>();
     for (const month of new Set([...months, compareMonth])) read.set(month, await windowData(month));
     const window = monthWindow(input.periodMonth, 'UTC');
     const [attributes, proposed, accepted] = await Promise.all([
-      measurement.attributes.aggregate({ brandId: input.brandId, windowStart: window.start.toISOString(), windowEnd: window.end.toISOString() }),
-      callers.intelligence(ctx).recommendations.list({ brandId: input.brandId, state: 'proposed', page: { limit: 10 } }),
-      callers.intelligence(ctx).recommendations.list({ brandId: input.brandId, state: 'accepted', page: { limit: 10 } }),
+      measurement.attributes.aggregate({
+        brandId: input.brandId,
+        windowStart: window.start.toISOString(),
+        windowEnd: window.end.toISOString(),
+      }),
+      callers
+        .intelligence(ctx)
+        .recommendations.list({ brandId: input.brandId, state: 'proposed', page: { limit: 10 } }),
+      callers
+        .intelligence(ctx)
+        .recommendations.list({ brandId: input.brandId, state: 'accepted', page: { limit: 10 } }),
     ]);
     return composeFigures({
       brand: { id: input.brandId, name: b.brandName, timeZone: 'UTC' },
@@ -240,7 +287,10 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
   return router({
     list: query.input(ReportList).query(({ input }) => {
       b.brandOf(input.brandId);
-      return { items: [...b.reports.values()].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)), nextCursor: null };
+      return {
+        items: [...b.reports.values()].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt)),
+        nextCursor: null,
+      };
     }),
     get: query.input(ReportGet).query(({ input }) => {
       b.brandOf(input.brandId);
@@ -250,9 +300,19 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
     delivery: query.input(ReportDelivery).query(({ input }): ReportDeliveryV1 => {
       b.brandOf(input.brandId);
       return {
-        email: { configured: false, reason: 'Email delivery is not configured on this deployment: the platform has no mail service.' },
-        link: { available: false, reason: 'View-only report links are not available: external links exist for review requests only (spec 5.6).' },
-        pdf: { method: 'print', note: 'Download PDF prints the report pages through the browser (A4, one page per section).' },
+        email: {
+          configured: false,
+          reason: 'Email delivery is not configured on this deployment: the platform has no mail service.',
+        },
+        link: {
+          available: false,
+          reason:
+            'View-only report links are not available: external links exist for review requests only (spec 5.6).',
+        },
+        pdf: {
+          method: 'print',
+          note: 'Download PDF prints the report pages through the browser (A4, one page per section).',
+        },
       };
     }),
     save: mutation.input(ReportSave).mutation(({ input }): ReportV1 => {
@@ -263,13 +323,32 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
       if (input.expectedVersion === null) {
         if (existing) throw new ConflictError('Report', existing.id, existing.version);
         const at = now();
-        const row: ReportV1 = { id: `rpt_e2e_${++seq}`, brandId: input.brandId, periodMonth: input.periodMonth, ...input.fields, sections, state: 'draft', sentAt: null, sentTo: null, createdAt: at, updatedAt: at, version: 0 };
+        const row: ReportV1 = {
+          id: `rpt_e2e_${++seq}`,
+          brandId: input.brandId,
+          periodMonth: input.periodMonth,
+          ...input.fields,
+          sections,
+          state: 'draft',
+          sentAt: null,
+          sentTo: null,
+          createdAt: at,
+          updatedAt: at,
+          version: 0,
+        };
         b.reports.set(input.periodMonth, row);
         return row;
       }
       if (!existing) throw new NotFoundError('Report', input.periodMonth);
-      if (existing.version !== input.expectedVersion) throw new ConflictError('Report', existing.id, input.expectedVersion);
-      const row: ReportV1 = { ...existing, ...input.fields, sections, updatedAt: now(), version: existing.version + 1 };
+      if (existing.version !== input.expectedVersion)
+        throw new ConflictError('Report', existing.id, input.expectedVersion);
+      const row: ReportV1 = {
+        ...existing,
+        ...input.fields,
+        sections,
+        updatedAt: now(),
+        version: existing.version + 1,
+      };
       b.reports.set(input.periodMonth, row);
       return row;
     }),
@@ -278,29 +357,55 @@ export function reportsRouters(b: ReportsBackend, { router, query, mutation }: R
       b.assert('report.send');
       const existing = [...b.reports.values()].find((r) => r.id === input.reportId);
       if (!existing) throw new NotFoundError('Report', input.reportId);
-      if (existing.version !== input.expectedVersion) throw new ConflictError('Report', existing.id, input.expectedVersion);
-      const row: ReportV1 = { ...existing, state: 'sent', sentAt: now(), sentTo: input.sentTo, updatedAt: now(), version: existing.version + 1 };
+      if (existing.version !== input.expectedVersion)
+        throw new ConflictError('Report', existing.id, input.expectedVersion);
+      const row: ReportV1 = {
+        ...existing,
+        state: 'sent',
+        sentAt: now(),
+        sentTo: input.sentTo,
+        updatedAt: now(),
+        version: existing.version + 1,
+      };
       b.reports.set(existing.periodMonth, row);
       return row;
     }),
-    draftSummary: mutation.input(ReportDraftSummary).mutation(async ({ ctx, input }): Promise<ReportSummaryDraftV1 | ReportDraftUnavailableV1> => {
-      b.brandOf(input.brandId);
-      b.assert('report.edit');
-      if (!b.drafterAvailable) return unavailable();
-      const facts = factsOf(await figuresOf(ctx, input));
-      b.drafts.push({ kind: 'summary', facts });
-      // The scripted draft repeats the facts it was given: nothing invented, as the real prompt demands.
-      return { available: true, draft: true, text: `Draft: ${facts.slice(0, 3).join(' ')}`, model: 'fake-model', costMicros: 120 };
-    }),
-    ask: mutation.input(ReportAsk).mutation(async ({ ctx, input }): Promise<ReportAdditionV1 | ReportDraftUnavailableV1> => {
-      b.brandOf(input.brandId);
-      b.assert('report.edit');
-      if (!b.drafterAvailable) return unavailable();
-      const facts = factsOf(await figuresOf(ctx, input));
-      b.drafts.push({ kind: 'addition', facts });
-      const section = /recommend|should|next month/i.test(input.question) ? 'recommendations' : 'overview';
-      return { available: true, draft: true, section, text: input.question.replace(/\.?$/, '.'), reply: `Placed under ${section}; tightened the wording.`, model: 'fake-model', costMicros: 80 };
-    }),
+    draftSummary: mutation
+      .input(ReportDraftSummary)
+      .mutation(async ({ ctx, input }): Promise<ReportSummaryDraftV1 | ReportDraftUnavailableV1> => {
+        b.brandOf(input.brandId);
+        b.assert('report.edit');
+        if (!b.drafterAvailable) return unavailable();
+        const facts = factsOf(await figuresOf(ctx, input));
+        b.drafts.push({ kind: 'summary', facts });
+        // The scripted draft repeats the facts it was given: nothing invented, as the real prompt demands.
+        return {
+          available: true,
+          draft: true,
+          text: `Draft: ${facts.slice(0, 3).join(' ')}`,
+          model: 'fake-model',
+          costMicros: 120,
+        };
+      }),
+    ask: mutation
+      .input(ReportAsk)
+      .mutation(async ({ ctx, input }): Promise<ReportAdditionV1 | ReportDraftUnavailableV1> => {
+        b.brandOf(input.brandId);
+        b.assert('report.edit');
+        if (!b.drafterAvailable) return unavailable();
+        const facts = factsOf(await figuresOf(ctx, input));
+        b.drafts.push({ kind: 'addition', facts });
+        const section = /recommend|should|next month/i.test(input.question) ? 'recommendations' : 'overview';
+        return {
+          available: true,
+          draft: true,
+          section,
+          text: input.question.replace(/\.?$/, '.'),
+          reply: `Placed under ${section}; tightened the wording.`,
+          model: 'fake-model',
+          costMicros: 80,
+        };
+      }),
     preferences: router({
       get: query.input(ReportPreferencesGet).query(({ input }) => {
         b.brandOf(input.brandId);

@@ -35,7 +35,9 @@ const NOTE_CLOSE = 'NOTE>>>';
 
 /** The person's note as untrusted text: markers neutralised so it cannot close its block or forge a heading. */
 const neutralise = (text: string): string =>
-  sanitiseBrandText(text).replace(/<<<|>>>/g, '').slice(0, 2000);
+  sanitiseBrandText(text)
+    .replace(/<<<|>>>/g, '')
+    .slice(0, 2000);
 
 export function buildReportDraftPrompt(req: ReportDraftRequestV1): { system: string; user: string } {
   const voice = [
@@ -62,13 +64,18 @@ export function buildReportDraftPrompt(req: ReportDraftRequestV1): { system: str
       : `${common}\nSections: ${Object.entries(REPORT_SECTION_LABEL)
           .filter(([key]) => key !== 'cover')
           .map(([key, label]) => `${key} (${label})`)
-          .join(', ')}.\nRewrite the note as polished, client-ready prose of one to three sentences (at most 60 words), keep its facts, choose the best section, and say in one short sentence where you placed it and what you changed. Reply with JSON only: {"section":"overview|channels|posts|recommendations","text":"the polished text","reply":"one short sentence"}.`;
+          .join(
+            ', ',
+          )}.\nRewrite the note as polished, client-ready prose of one to three sentences (at most 60 words), keep its facts, choose the best section, and say in one short sentence where you placed it and what you changed. Reply with JSON only: {"section":"overview|channels|posts|recommendations","text":"the polished text","reply":"one short sentence"}.`;
   const facts = `${FACTS_OPEN}\n${req.facts.map((f) => `- ${neutralise(f)}`).join('\n')}\n${FACTS_CLOSE}`;
   const note = req.instruction ? `\n${NOTE_OPEN}\n${neutralise(req.instruction)}\n${NOTE_CLOSE}` : '';
   return { system, user: `${facts}${note}` };
 }
 
-export function createReportDrafter(opts: { adapter: ModelAdapter; modelConfig: ModelConfig }): ReportDrafterV1 {
+export function createReportDrafter(opts: {
+  adapter: ModelAdapter;
+  modelConfig: ModelConfig;
+}): ReportDrafterV1 {
   const cfg = opts.modelConfig;
   return {
     describe: () => ({
@@ -103,7 +110,8 @@ export function createReportDrafter(opts: { adapter: ModelAdapter; modelConfig: 
         completion = await opts.adapter.complete(call);
       } catch (err) {
         // As brand assist: a provider that refuses the schema itself is asked once more without it.
-        if (!(err instanceof ModelRequestRejectedError) || !SCHEMA_REFUSAL_STATUSES.has(err.status)) throw err;
+        if (!(err instanceof ModelRequestRejectedError) || !SCHEMA_REFUSAL_STATUSES.has(err.status))
+          throw err;
         refusedUsage = err.usage;
         logger().warn(
           { errorMessage: `report draft ${req.kind}: structured output refused (${err.status})` },
@@ -134,7 +142,10 @@ export function createReportDrafter(opts: { adapter: ModelAdapter; modelConfig: 
  */
 export function reportDrafterFromEnv(env: NodeJS.ProcessEnv = process.env): ReportDrafterV1 | null {
   try {
-    return createReportDrafter({ adapter: createModelAdapterFromEnv(env), modelConfig: modelConfigFromEnv(env) });
+    return createReportDrafter({
+      adapter: createModelAdapterFromEnv(env),
+      modelConfig: modelConfigFromEnv(env),
+    });
   } catch (err) {
     logger().warn(
       { errorMessage: err instanceof Error ? err.message : String(err) },
