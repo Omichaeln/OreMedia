@@ -21,14 +21,17 @@ export function PortfolioRoute() {
   return (
     <>
       <TopBar title="Portfolio" />
-      <main id="main" className="om-fade mx-auto flex w-full max-w-[960px] flex-col gap-9 px-4 py-8 sm:px-8 sm:py-12">
+      <main
+        id="main"
+        className="om-fade mx-auto flex w-full max-w-[960px] flex-col gap-9 px-4 py-8 sm:px-8 sm:py-12"
+      >
         <PageHeader
           title="Portfolio"
           description="Companies and brands you have access to. Each company is a separate tenant; nothing is shared between them."
         />
         <Link
           to="/portfolio/performance"
-          className="-mt-6 self-start text-sm font-medium hover:opacity-60"
+          className="-mt-6 inline-flex min-h-6 items-center self-start text-sm font-medium hover:opacity-60"
         >
           Performance across all brands <span aria-hidden="true">→</span>
         </Link>
@@ -133,19 +136,24 @@ function Company({ company }: { company: CompanyDto }) {
       {brands.isSuccess && brands.data.length === 0 && (
         <p className="border-t border-border py-3.5 text-sm text-muted-foreground">
           No brands yet.{' '}
-          <Link to={`/c/${encodeURIComponent(company.tenantId)}`} className="font-medium text-foreground hover:opacity-60">
+          <Link
+            to={`/c/${encodeURIComponent(company.tenantId)}`}
+            className="inline-flex min-h-6 items-center font-medium text-foreground hover:opacity-60"
+          >
             Open the company <span aria-hidden="true">→</span>
           </Link>
         </p>
       )}
       {brands.isSuccess && brands.data.length > 0 && (
         <div className="flex flex-col" data-testid="summary-counts">
-          {brands.data.map((b, i) => (
-            <div key={b.id} className="om-in" style={{ animationDelay: `${i * 40}ms` }}>
+          {brands.data.map((b) => (
+            <div key={b.id}>
               <BrandRow
                 companyId={company.tenantId}
                 brand={b}
-                counts={summary.data?.brands.find((row) => row.brandId === b.id) ?? (summary.data ? ZERO : null)}
+                counts={
+                  summary.data?.brands.find((row) => row.brandId === b.id) ?? (summary.data ? ZERO : null)
+                }
                 countsFailed={summary.isError}
               />
             </div>
@@ -155,7 +163,7 @@ function Company({ company }: { company: CompanyDto }) {
       {brands.isSuccess && (
         <Link
           to={`/c/${encodeURIComponent(company.tenantId)}`}
-          className="mt-2 self-end text-xs text-muted-foreground hover:text-foreground"
+          className="mt-1 inline-flex min-h-6 items-center self-end text-xs text-muted-foreground hover:text-foreground"
         >
           Open <span aria-hidden="true">→</span>
           <span className="sr-only"> {company.name}: manage its brands</span>
