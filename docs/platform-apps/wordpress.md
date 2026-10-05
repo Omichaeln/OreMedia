@@ -126,11 +126,18 @@ meta_value + 1`. It depends on neither the clock nor revisions;
   until the commit; a writer that bypasses WordPress hooks changes the row and is caught by the fingerprint;
 - `GET /wp-json/oremedia/v1/capabilities` (users who can edit posts) reports the plugin, its version, protocol 1 and
   `conditional_update`, which is false unless the posts and postmeta tables are InnoDB (no transactions or row locks
-  on MyISAM or a SQLite drop-in).
+  on MyISAM or a SQLite drop-in). That handshake is all the adapter reads (`writeSafety`: `plugin`, `protocol`,
+  `features.conditional_update`, `version`). The storage engines (`storage`) and the WordPress version (`wordpress`)
+  are diagnostics added only for users who can edit others' posts (editors and administrators); a Contributor or
+  Author gets the handshake without them.
 
-**Install** (the site administrator; a test site first): copy the directory `oremedia-conditional-write` (without
-`tests/`) into `wp-content/plugins/` and activate it, or into `wp-content/mu-plugins/` with a loader that requires the
-main file. Then run Verify on the destination in Settings → Destinations: the destination shows **Safe updates**.
+**Install** (the site administrator; a test site first): copy only `oremedia-conditional-write.php` into
+`wp-content/plugins/oremedia-conditional-write/` and activate it, or into `wp-content/mu-plugins/` with a loader that
+requires it. **Never install the `tests/` directory**: it is the development test suite (an installer, a helper that
+edits posts and a must-use hook that delays writes), meant for a throwaway WordPress only. Its files stop when served
+over HTTP (the command-line scripts exit unless run by the PHP CLI, the hook file exits without `ABSPATH`), but they
+have no place on a site. There is no packaged zip of the plugin; anyone who builds one must leave `tests/` out. Then
+run Verify on the destination in Settings → Destinations: the destination shows **Safe updates**.
 
 **Limited mode** (no plugin, protocol mismatch, or non-transactional tables): the adapter refuses every update that
 would replace content before anything is sent (`limited_mode`), with the site's current revision for the person;
@@ -161,7 +168,8 @@ WP_CORE_DIR=/tmp/wordpress MYSQL_SOCKET=/path/to/mysql.sock \
 ```
 
 It installs WordPress into a temporary copy, activates the plugin and runs `tests/conditional-write-test.php` twice
-(revisions on, `WP_POST_REVISIONS = false`): core ignoring preconditions, the handshake, a write on the current token,
+(revisions on, `WP_POST_REVISIONS = false`): core ignoring preconditions, the handshake (an editor gets the storage and version diagnostics, a Contributor
+only the handshake), a write on the current token,
 replay refused, stale writes refused with the content untouched after an edit by another user over REST, an edit by
 another process, a same-second term change (row and `modified_gmt` unchanged), a same-second content save, a direct
 table update, eight concurrent writes on one token (one 200, seven 412), a writer held off while the compare and

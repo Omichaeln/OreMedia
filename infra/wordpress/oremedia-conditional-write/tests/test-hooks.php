@@ -4,6 +4,8 @@
  * carries `X-Oremedia-Test-Hold: <ms>`, it waits that long while holding its locks, so the test can prove that a
  * concurrent writer is held off until the compare-and-write commits.
  */
+defined( 'ABSPATH' ) || exit;
+
 add_action(
 	'oremedia_conditional_write_locked',
 	function () {
