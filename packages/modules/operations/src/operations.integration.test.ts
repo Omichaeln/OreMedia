@@ -151,8 +151,14 @@ describe('operations module against MySQL 8', () => {
           return 'first';
         }),
       );
-      await new Promise((r) => setTimeout(r, 100));
-      expect((await row('k6')).expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(IN_PROGRESS_LEASE_MS);
+      // Wait for the in_progress marker itself rather than a fixed delay: under load the marker can commit later.
+      let marker: Awaited<ReturnType<typeof row>> | undefined;
+      for (let i = 0; i < 100 && !marker; i++) {
+        marker = await row('k6');
+        if (!marker) await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(marker).toBeDefined();
+      expect(marker!.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(IN_PROGRESS_LEASE_MS);
       release();
       expect(await running).toBe('first');
       expect((await row('k6')).expiresAt.getTime() - Date.now()).toBeGreaterThan(23 * 3600 * 1000);
