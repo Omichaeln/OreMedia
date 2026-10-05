@@ -25,7 +25,7 @@ export const StatusBanner = React.forwardRef<HTMLDivElement, StatusBannerProps>(
       role={assertive ? 'alert' : 'status'}
       aria-busy={busy || undefined}
       className={cn(
-        'om-in flex items-start gap-3.5 rounded-xl border border-border bg-card px-4 py-3 text-sm',
+        'flex items-start gap-3.5 rounded-xl border border-border bg-card px-4 py-3 text-sm',
         tone === 'critical' && 'bg-status-critical-tint',
         tone === 'warning' && 'bg-status-warning-tint',
         className,
