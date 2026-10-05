@@ -7,9 +7,9 @@ import type {
   ModelRequest,
   ModelToolCall,
 } from '@oremedia/contracts/agents';
-import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contracts/errors';
+import { ProviderUnavailableError } from '@oremedia/contracts/errors';
 import { logger } from '@oremedia/observability';
-import { toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
+import { ModelRequestRejectedError, toolNamesOf, wireToolName, type ModelAdapter } from './model-adapter';
 import { rejectionDetail } from './openrouter-adapter';
 
 type ClientOptions = NonNullable<ConstructorParameters<typeof Anthropic>[0]>;
@@ -129,10 +129,7 @@ function mapError(err: unknown): Error {
     }
     const detail = rejectionDetail(err.message, status);
     logger().warn({ errorMessage: `anthropic ${detail}` }, 'model provider rejected the request');
-    return new ValidationFailedError(
-      [{ path: 'model', issue: `provider rejected the request (${detail})` }],
-      `The model provider rejected the request (${detail})`,
-    );
+    return new ModelRequestRejectedError(status, detail);
   }
   if (err instanceof Anthropic.APIConnectionError) return new ProviderUnavailableError('anthropic');
   return err instanceof Error ? err : new Error(String(err));

@@ -18,7 +18,7 @@ import {
 } from './brand-assist';
 import { validateJsonSchema } from './evaluation/json-schema';
 import { FakeModelAdapter } from './fake-adapter';
-import { withoutNullOptionals } from './model-adapter';
+import { estimateCostMicros, ModelRequestRejectedError, withoutNullOptionals } from './model-adapter';
 import { EVIDENCE_CLOSE } from './prompt';
 import { configureRoutingPolicy, resetRoutingPolicies } from './routing-policy';
 
@@ -479,24 +479,97 @@ describe('brand assist structured output (one schema: the strict zod section sch
       deniedModels: [],
     });
     try {
-      const refused = new FakeModelAdapter((req) =>
-        req.responseSchema
-          ? { kind: 'error', error: new ValidationFailedError([{ path: 'model', issue: 'schema refused' }]) }
-          : { kind: 'done', text: JSON.stringify(emptyAnswer('facts')) },
-      );
-      const out = await createBrandAssistModel({ adapter: refused, modelConfig: cfg }).propose(
-        request({ section: 'facts' }),
-      );
-      expect(refused.requests).toHaveLength(2);
-      expect(refused.requests[1]).not.toHaveProperty('responseSchema');
-      expect(refused.requests[1]!.system).toBe(refused.requests[0]!.system);
-      expect(out.raw).toEqual({ facts: [], questions: [] });
+      for (const status of [400, 422]) {
+        const refused = new FakeModelAdapter((req) =>
+          req.responseSchema
+            ? { kind: 'error', error: new ModelRequestRejectedError(status, `${status}: schema refused`) }
+            : { kind: 'done', text: JSON.stringify(emptyAnswer('facts')) },
+        );
+        const out = await createBrandAssistModel({ adapter: refused, modelConfig: cfg }).propose(
+          request({ section: 'facts' }),
+        );
+        expect(refused.requests).toHaveLength(2);
+        expect(refused.requests[1]).not.toHaveProperty('responseSchema');
+        expect(refused.requests[1]!.system).toBe(refused.requests[0]!.system);
+        expect(out.raw).toEqual({ facts: [], questions: [] });
+      }
 
       const down = new FakeModelAdapter([{ kind: 'error', error: new ProviderUnavailableError('fake') }]);
       await expect(
         createBrandAssistModel({ adapter: down, modelConfig: cfg }).propose(request({ section: 'facts' })),
       ).rejects.toBeInstanceOf(ProviderUnavailableError);
       expect(down.requests).toHaveLength(1);
+    } finally {
+      resetRoutingPolicies();
+    }
+  });
+
+  it('retries only a provider refusal of the request as malformed, never local validation or another refusal', async () => {
+    configureRoutingPolicy({
+      schemaVersion: 1,
+      defaultModel: 'scripted',
+      permittedVendors: ['fake'],
+      permittedRegions: [],
+      deniedModels: [],
+    });
+    try {
+      const failures: Error[] = [
+        // Validation of our own (not the provider's): never sent again.
+        new ValidationFailedError([{ path: 'model', issue: 'schema refused' }]),
+        // The provider refused something the schema does not decide: a key, credit, access, a model id.
+        new ModelRequestRejectedError(401, '401: No auth credentials found'),
+        new ModelRequestRejectedError(402, '402: Insufficient credits'),
+        new ModelRequestRejectedError(403, '403: Forbidden'),
+        new ModelRequestRejectedError(404, '404: No endpoints found'),
+      ];
+      for (const failure of failures) {
+        const adapter = new FakeModelAdapter((req) =>
+          req.responseSchema
+            ? { kind: 'error', error: failure }
+            : { kind: 'done', text: JSON.stringify(emptyAnswer('facts')) },
+        );
+        await expect(
+          createBrandAssistModel({ adapter, modelConfig: cfg }).propose(request({ section: 'facts' })),
+        ).rejects.toBe(failure);
+        expect(adapter.requests).toHaveLength(1);
+      }
+    } finally {
+      resetRoutingPolicies();
+    }
+  });
+
+  it('accounts both attempts when the refused one reported usage, and the answer alone when it reported none', async () => {
+    configureRoutingPolicy({
+      schemaVersion: 1,
+      defaultModel: 'scripted',
+      permittedVendors: ['fake'],
+      permittedRegions: [],
+      deniedModels: [],
+    });
+    try {
+      // Priced as a frontier model is, so the refused attempt's tokens show in the cost.
+      const priced = {
+        ...cfg,
+        inputMicrosPerMillionTokens: 3_000_000,
+        outputMicrosPerMillionTokens: 15_000_000,
+      };
+      const answer = { inputTokens: 1_000, outputTokens: 200 };
+      const run = (refusedUsage: { inputTokens: number; outputTokens: number } | null) =>
+        createBrandAssistModel({
+          adapter: new FakeModelAdapter((req) =>
+            req.responseSchema
+              ? { kind: 'error', error: new ModelRequestRejectedError(400, '400: bad schema', refusedUsage) }
+              : { kind: 'done', text: JSON.stringify(emptyAnswer('facts')), usage: answer },
+          ),
+          modelConfig: priced,
+        }).propose(request({ section: 'facts' }));
+      const billed = await run({ inputTokens: 900, outputTokens: 0 });
+      expect(billed.usage).toEqual({ inputTokens: 1_900, outputTokens: 200 });
+      expect(billed.costMicros).toBe(estimateCostMicros(priced, { inputTokens: 1_900, outputTokens: 200 }));
+      expect(billed.costMicros).toBeGreaterThan(estimateCostMicros(priced, answer));
+      const free = await run(null);
+      expect(free.usage).toEqual(answer);
+      expect(free.costMicros).toBe(estimateCostMicros(priced, answer));
     } finally {
       resetRoutingPolicies();
     }

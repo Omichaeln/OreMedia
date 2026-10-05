@@ -7,6 +7,7 @@ import type { ModelRequest } from '@oremedia/contracts/agents';
 import { createModelAdapterFromEnv } from './adapter-factory';
 import { AnthropicModelAdapter, anthropicApiKeyFromEnv, toCompletion } from './anthropic-adapter';
 import { FakeModelAdapter } from './fake-adapter';
+import { ModelRequestRejectedError } from './model-adapter';
 
 const request: ModelRequest = {
   model: 'claude-opus-5',
@@ -176,6 +177,9 @@ describe('AnthropicModelAdapter (spec 12.7, tool-use API)', () => {
     const rejected = (await adapter2.complete(request).catch((e: unknown) => e)) as ValidationFailedError;
     expect(rejected).toBeInstanceOf(ValidationFailedError);
     expect(rejected.message).toMatch(/^The model provider rejected the request \(400: .*bad.*\)$/);
+    expect(rejected).toBeInstanceOf(ModelRequestRejectedError);
+    expect((rejected as ModelRequestRejectedError).status).toBe(400);
+    expect((rejected as ModelRequestRejectedError).usage).toBeNull();
   });
 });
 
