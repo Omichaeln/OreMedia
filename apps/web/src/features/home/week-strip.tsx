@@ -55,8 +55,8 @@ export function WeekStrip() {
       )}
       {calendar.isPending && <Skeleton label="Loading this week" lines={2} />}
       {calendar.isSuccess && (
-        <ol className="grid grid-cols-4 gap-1.5 sm:grid-cols-7" data-testid="week-strip">
-          {days.map((d, i) => {
+        <ol className="grid grid-cols-7 gap-1.5" data-testid="week-strip">
+          {days.map((d) => {
             const pubs = byDay.get(d.key) ?? [];
             const summary = channelOutcomeSummary(pubs);
             const problems = summary.failed + summary.held + summary.unknown;
@@ -68,12 +68,12 @@ export function WeekStrip() {
                     problems > 0 ? `, ${problems} need${problems === 1 ? 's' : ''} attention` : ''
                   }`;
             return (
-              <li key={d.key} className="om-in" style={{ animationDelay: `${i * 30}ms` }}>
+              <li key={d.key}>
                 <Link
                   to={`${calendarHref}?view=week&day=${d.key}`}
                   aria-current={isToday ? 'date' : undefined}
                   className={cn(
-                    'flex h-full min-h-[84px] flex-col items-start gap-2 rounded-lg border bg-card p-2.5 transition-colors hover:border-border-strong',
+                    'flex h-full min-h-[84px] flex-col items-start gap-2 rounded-lg border bg-card p-2 sm:p-2.5 transition-colors hover:border-border-strong',
                     isToday ? 'border-foreground' : 'border-border',
                   )}
                 >

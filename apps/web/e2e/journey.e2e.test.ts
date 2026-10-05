@@ -517,8 +517,11 @@ describe.skipIf(!enabled)('two-company journey (built app in Chromium, mock tran
       .poll(() => countsOf(E2E_B.companyName).textContent(), { timeout: 15_000 })
       .toContain('upcoming');
     expect(await countsOf(E2E_B.companyName).textContent()).toContain('0 failed');
+    // The portfolio lists the person's own memberships (each company with its brands, asked with that tenant),
+    // never another company's rows: company A's packages, requests and ids do not appear.
     const portfolio = (await page.locator('main').textContent()) ?? '';
-    for (const marker of aMarkers.filter((m) => m !== E2E.companyName))
+    const ownMemberships = new Set([E2E.companyName, E2E.brandName, BRAND_2.name]);
+    for (const marker of aMarkers.filter((m) => !ownMemberships.has(m)))
       expect(portfolio, `portfolio must not show "${marker}"`).not.toContain(marker);
     // Every request B's screens made carried B's tenant, and company A's ids are unknown there.
     expect(companyB.requests.length).toBeGreaterThan(requestsBefore);
