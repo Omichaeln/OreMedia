@@ -216,7 +216,14 @@ export function CampaignSummary({ campaign, canPlan }: { campaign: CampaignDto; 
       </p>
       {campaign.objectiveId && (
         <p>
-          Objective · {objective ? objective.name : objectives.isPending ? 'Loading…' : 'Not readable here'}
+          Objective ·{' '}
+          {objective
+            ? objective.name
+            : objectives.isPending
+              ? 'Loading…'
+              : objectives.isError
+                ? 'the objectives could not be read'
+                : 'an objective that is no longer listed'}
         </p>
       )}
       {canPlan && open && (

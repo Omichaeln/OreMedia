@@ -300,7 +300,7 @@ export function CampaignsScreen() {
           </div>
         )}
         {campaigns.isSuccess && (
-          <ul className="flex flex-col divide-y divide-border border-b border-border" aria-label="Campaigns">
+          <ul className="flex flex-col divide-y divide-border border-y border-border" aria-label="Campaigns">
             <li>
               <button
                 type="button"
@@ -410,7 +410,7 @@ export function CampaignsScreen() {
           </p>
         )}
         {briefs.isSuccess && briefs.items.length > 0 && (
-          <ul className="flex flex-col divide-y divide-border border-b border-border" aria-label="Briefs">
+          <ul className="flex flex-col divide-y divide-border border-y border-border" aria-label="Briefs">
             {briefs.items.map((b, i) => {
               const row = briefRowState(b);
               return (
