@@ -376,11 +376,9 @@ service logs, the production smoke workflow and CI; anything it does not state i
 
 ### State at the end of the increment (5 October 2026, 07:20 UTC)
 
-- `main` at `047ed1d` (#97, merged 07:20 UTC). Its CI (run 325) was still running when this was written: the
-  replay, unit, time-skipping and dependency-scan jobs had passed, the format and lint job and the integration job
-  were in progress; no production smoke run on it is recorded yet. The last recorded production smoke run is 90, on
-  `203224b` (#95); #96 (`211df8d`, CI run 323 green) is evidenced by the production `db-backup` run at 07:16 UTC
-  passing on the new code.
+- `main` at `047ed1d` (#97, merged 07:20 UTC). Main CI on it is green (all jobs) and production smoke run 91 passed
+  on it. #96 (`211df8d`, CI run 323 green) is also evidenced by the production `db-backup` run at 07:16 UTC passing
+  on the new code.
 - Migration level 0032 (`0032_destination_article_selector`). This increment added 0030 (`0030_tenant_kind`, #81),
   0031 (`0031_destination_write_safety`, #90, applied in production at 22:12 UTC on 4 October) and 0032 (#91, applied
   at 23:03 UTC). `db-roles` logged PASS after 0031 in both environments and after 0032.
@@ -409,7 +407,7 @@ increment's evidence. The rows below are #84 to #97.
 | #94 | PR-09           | Object backup, dump sha256 sidecars, daily verify job, restore guards, timed drill                                                        | 7577c5b      |           | smoke 89; see "Recovery (PR-09)" below                                                                                           |
 | #95 | PR-02           | Typography follow-up: configured line height, `sizePx` beside `minSizePx`, below-minimum warning                                          | 203224b      |           | smoke 90                                                                                                                         |
 | #96 | security review | Dump trailer and mysqldump exit status, fail-closed restore guards, WordPress plugin disclosure                                           | 211df8d      |           | CI run 323 green; production `db-backup` 07:16 on 5 October PASS on the new code                                                 |
-| #97 | security review | Linear article-region scan, structured-output retry narrowed with both costs counted, certification at execution, https-only CORS origins | 047ed1d      |           | CI run 325 and production smoke pending at the time of writing                                                                   |
+| #97 | security review | Linear article-region scan, structured-output retry narrowed with both costs counted, certification at execution, https-only CORS origins | 047ed1d      |           | main CI green; smoke 91                                                                                                          |
 
 ### Configuration changes (variable and service names only; no values were read or written here)
 
