@@ -4,6 +4,7 @@ import { cn } from '@oremedia/ui';
 
 export const Tabs = RadixTabs.Root;
 
+/** A row of tabs on one rule, as the interface draws them (Settings, Intelligence): 20 px apart, scrolling sideways when narrow. */
 export function TabList({
   label,
   className,
@@ -16,21 +17,22 @@ export function TabList({
   return (
     <RadixTabs.List
       aria-label={label}
-      className={cn('flex shrink-0 gap-1 border-b border-border px-1', className)}
+      className={cn('flex shrink-0 gap-5 overflow-x-auto border-b border-border', className)}
     >
       {children}
     </RadixTabs.List>
   );
 }
 
+/** The active tab is ink with a 2 px ink underline on the list's rule; the others are muted text. */
 export function Tab({ value, children }: { value: string; children: React.ReactNode }) {
   return (
     <RadixTabs.Trigger
       value={value}
       className={cn(
-        'relative -mb-px rounded-t-md border-b-2 border-transparent px-2.5 py-1.5 text-sm text-muted-foreground',
+        'relative -mb-px whitespace-nowrap rounded-t-md border-b-2 border-transparent py-2.5 text-sm text-muted-foreground',
         'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        'data-[state=active]:border-accent data-[state=active]:font-medium data-[state=active]:text-foreground',
+        'data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground',
       )}
     >
       {children}

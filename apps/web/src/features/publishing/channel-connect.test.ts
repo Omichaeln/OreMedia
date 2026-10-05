@@ -3,6 +3,7 @@ import {
   activationReason,
   callbackError,
   callbackParams,
+  channelLimitsLine,
   connectRedirectUri,
   connectReturnTab,
   providerLabel,
@@ -145,5 +146,44 @@ describe('the shared callback finds its brand (spec 14.7)', () => {
     expect(returnQuery('state=s&error=access_denied&error_description=No')).toBe(
       'state=s&error=access_denied&error_description=No',
     );
+  });
+});
+
+describe('channelLimitsLine (the limits line under a channel row)', () => {
+  const text = {
+    maxLength: 2200,
+    weighted: false,
+    supportsLinks: true,
+    supportsMentions: true,
+    supportsHashtags: true,
+  };
+  it('names the media forms with their caps, then the caption length with thousands separators', () => {
+    expect(
+      channelLimitsLine({
+        text,
+        image: { maxCount: 10, aspectRatios: [] },
+        video: { maxDurationSec: 900 },
+        carousel: { min: 2, max: 10 },
+      }),
+    ).toBe('Image ≤ 10, video ≤ 15 min, carousel ≤ 10 · 2,200 chars');
+    expect(
+      channelLimitsLine({
+        text: { ...text, maxLength: 280 },
+        image: { maxCount: 4, aspectRatios: [] },
+        video: { maxDurationSec: 140 },
+        carousel: null,
+      }),
+    ).toBe('Image ≤ 4, video ≤ 2 min 20 s · 280 chars');
+  });
+  it('a text-only provider states the caption length alone; a single image has no cap', () => {
+    expect(channelLimitsLine({ text, image: null, video: null, carousel: null })).toBe('2,200 chars');
+    expect(
+      channelLimitsLine({
+        text,
+        image: { maxCount: 1, aspectRatios: [] },
+        video: { maxDurationSec: 30 },
+        carousel: null,
+      }),
+    ).toBe('Image, video ≤ 30 s · 2,200 chars');
   });
 });
