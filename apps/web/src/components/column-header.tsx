@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react';
 import { Button } from '@oremedia/ui';
 
-/** A list row in a column screen (campaigns, experiments, agent runs): unboxed, divided by rules, selected tinted. */
-export const listButton = (selected: boolean) =>
-  `flex w-full flex-col gap-1 px-4 py-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? 'bg-secondary' : 'hover:bg-muted'}`;
+/**
+ * A list row in a column screen (campaigns, experiments, agent runs): unboxed, divided by rules, selected tinted.
+ * On a tinted column (the briefs column) the selected row is the card white instead of the secondary tint.
+ */
+export const listButton = (selected: boolean, selectedTint: 'secondary' | 'card' = 'secondary') =>
+  `flex w-full flex-col gap-1 px-4 py-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? (selectedTint === 'card' ? 'bg-card' : 'bg-secondary') : 'hover:bg-muted'}`;
 
 /** A column's heading row: the title and the one action that adds to it. */
 export function ColumnHeader({
@@ -23,10 +26,7 @@ export function ColumnHeader({
   return (
     <div className="flex items-start justify-between gap-2 border-b border-border px-4 pb-3 pt-6">
       <div className="min-w-0">
-        <Heading
-          id={id}
-          className={level === 1 ? 'text-xl font-bold tracking-title' : 'om-label'}
-        >
+        <Heading id={id} className={level === 1 ? 'text-xl font-bold tracking-title' : 'om-label'}>
           {title}
         </Heading>
         {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}

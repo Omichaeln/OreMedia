@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Field, Input, StatusBanner } from '@oremedia/ui';
+import { Button, Field, Input, StatusBanner } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { useObjectives } from '../brand/use-brand';
 import { isoToLocalInput, localInputToIso } from '../publishing/publication-state';
 import { campaignChip, campaignIsClosed, isClosedCampaignRefusal } from './content-helpers';
 import type { CampaignDto } from './use-content';
@@ -190,21 +191,36 @@ function CloseCampaign({ campaign }: { campaign: CampaignDto }) {
   );
 }
 
-/** G12: the selected campaign's summary above its briefs, with edit and close while it is open (draft or active). */
+/**
+ * G12: the selected campaign's summary above its briefs, in the interface's muted line under the column label:
+ * the name and state, the objective it serves (when it has one), then edit and close while it is open (draft or
+ * active).
+ */
 export function CampaignSummary({ campaign, canPlan }: { campaign: CampaignDto; canPlan: boolean }) {
   const chip = campaignChip(campaign.state);
   const open = !campaignIsClosed(campaign.state);
+  const objectives = useObjectives(campaign.brandId);
+  const objective = campaign.objectiveId
+    ? objectives.data?.items.find((o) => o.id === campaign.objectiveId)
+    : undefined;
   return (
-    <div className="flex flex-col gap-2 border-b border-border px-4 py-3" data-testid="campaign-summary">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm font-medium">{campaign.name}</p>
-        <Badge tone={chip.tone}>{chip.label}</Badge>
-      </div>
-      <p className="font-mono text-xs text-muted-foreground">
-        {dayText(campaign.startsAt)} – {dayText(campaign.endsAt)}
+    <div
+      className="flex flex-col gap-1 px-4 pb-3 text-xs text-muted-foreground"
+      data-testid="campaign-summary"
+    >
+      <p>
+        <span className="font-medium text-foreground">{campaign.name}</span> · {chip.label} ·{' '}
+        <span className="tabular-nums">
+          {dayText(campaign.startsAt)} – {dayText(campaign.endsAt)}
+        </span>
       </p>
+      {campaign.objectiveId && (
+        <p>
+          Objective · {objective ? objective.name : objectives.isPending ? 'Loading…' : 'Not readable here'}
+        </p>
+      )}
       {canPlan && open && (
-        <div className="flex flex-wrap gap-2">
+        <div className="mt-1 flex flex-wrap gap-2">
           <EditCampaign key={`${campaign.id}:${campaign.version}`} campaign={campaign} />
           <CloseCampaign campaign={campaign} />
         </div>
