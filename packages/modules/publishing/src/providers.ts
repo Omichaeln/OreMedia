@@ -1,4 +1,5 @@
 import type { ActivityHooks } from '@oremedia/contracts/agents';
+import { CapabilityUnsupportedError } from '@oremedia/contracts/errors';
 import type { CertifiableCapability } from '@oremedia/contracts/providers';
 import {
   MemoryProviderRateLimiter,
@@ -49,6 +50,26 @@ export const registry = (): ProviderRegistry => options.registry;
  */
 export const adapterFor = (providerKey: string, capability?: CertifiableCapability): ProviderAdapter =>
   options.registry.get(providerKey, capability);
+
+/**
+ * #89: the registry gate again when a scheduled call runs (a publish, an edit or delete, a reply), not only when it
+ * was asked for: the issue of the refusal `adapterFor` gives for the provider or for any of `capabilities`
+ * (`provider_not_certified:<key>`, `capability_not_certified:<key>:<capability>`), or null when all are certified.
+ * The activity ends that attempt with the issue as its definitive refusal code before anything is sent.
+ */
+export function certificationRefusal(
+  providerKey: string,
+  capabilities: readonly CertifiableCapability[],
+): string | null {
+  try {
+    adapterFor(providerKey);
+    for (const capability of capabilities) adapterFor(providerKey, capability);
+    return null;
+  } catch (err) {
+    if (!(err instanceof CapabilityUnsupportedError)) throw err;
+    return (err.details?.[0]?.issue ?? 'capability_unsupported').slice(0, 80);
+  }
+}
 
 function rateLimiter(): RateLimiter {
   return (limiter ??=

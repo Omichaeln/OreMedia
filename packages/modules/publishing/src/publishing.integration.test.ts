@@ -1468,6 +1468,48 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       });
     });
 
+    it('#89: a publish kind de-certified after scheduling is refused when the attempt runs, with the reason, and nothing is sent', async () => {
+      const v = newVariant(tenantA, brandA, connA, 'Scheduled before the withdrawal');
+      const pub = await schedule(tenantA, v.id);
+      const { attemptId } = await dispatch(pub.id);
+      const callsBefore = fixture.calls.length;
+      const postsBefore = fixture.posts.length;
+      const issue = `capability_not_certified:${FIXTURE_PROVIDER_KEY}:publish_text`;
+      const result = await withoutCertification(['publish_text'], () =>
+        inTenant(tenantA, () =>
+          runtime.provider.publishOnce({ ...wfInput(pub.id), attemptId, fencingToken: 1 }),
+        ),
+      );
+      expect(result).toEqual({
+        attemptId,
+        outcome: 'rejected',
+        errorCode: issue,
+        errorDetail: 'the provider is no longer certified for this publish; nothing was sent',
+      });
+      expect(fixture.calls.length).toBe(callsBefore);
+      expect(fixture.posts.length).toBe(postsBefore);
+      expect((await attemptsOf(pub.id))[0]).toMatchObject({
+        sentAt: null,
+        outcome: 'rejected',
+        errorCode: issue,
+      });
+      // The workflow records a rejected attempt as the definitive failure it is.
+      expect(
+        await inTenant(tenantA, () => runtime.control.markFailed({ ...wfInput(pub.id), attempt: result })),
+      ).toMatchObject({ state: 'failed', changed: true });
+      expect((await row(pub.id)).stateReason).toBe(issue);
+      // A capability this variant does not exercise does not stop it.
+      const v2 = newVariant(tenantA, brandA, connA, 'Text only, video withdrawn');
+      const pub2 = await schedule(tenantA, v2.id);
+      const d2 = await dispatch(pub2.id);
+      const sent = await withoutCertification(['publish_video', 'edit'], () =>
+        inTenant(tenantA, () =>
+          runtime.provider.publishOnce({ ...wfInput(pub2.id), attemptId: d2.attemptId, fencingToken: 1 }),
+        ),
+      );
+      expect(sent.outcome).toBe('accepted');
+    });
+
     it('rejected → failed; pending → processing → poll (finalize) → published', async () => {
       const v = newVariant(tenantA, brandA, connA);
       const pub = await schedule(tenantA, v.id);
@@ -1870,6 +1912,41 @@ describe('publishing module (spec 14) against MySQL 8', () => {
       });
       const detail = await inTenant(tenantA, () => publicationService.get(A, { publicationId: pub.id }));
       expect(detail.remote).toMatchObject({ edit: true, delete: true, uncertified: [] });
+    });
+
+    it('#89: an edit or delete requested while certified is refused when it runs after losing its certification', async () => {
+      for (const kind of ['edit', 'delete'] as const) {
+        const { pub, remotePostId } = await published(`Change after withdrawal: ${kind}`);
+        const requested = await run(tenantA, (tx) =>
+          kind === 'edit'
+            ? publicationService.editRemote(A, { publicationId: pub.id, text: 'Edited' }, tx)
+            : publicationService.deleteRemote(A, { publicationId: pub.id, reason: 'x' }, tx),
+        );
+        const input = changeInput(pub.id, requested.changeId);
+        const callsBefore = fixture.calls.length;
+        const issue = `capability_not_certified:${FIXTURE_PROVIDER_KEY}:${kind}`;
+        const result = await withoutCertification([kind], () =>
+          inTenant(tenantA, () =>
+            kind === 'edit'
+              ? runtime.remoteChangeProvider.editRemotePost(input, A)
+              : runtime.remoteChangeProvider.deleteRemotePost(input, A),
+          ),
+        );
+        expect(result).toEqual({
+          outcome: 'rejected',
+          code: issue,
+          message: `the provider is no longer certified to ${kind} posts; nothing was sent`,
+        });
+        expect(fixture.calls.length).toBe(callsBefore);
+        expect(fixture.posts.find((p) => p.id === remotePostId)?.deleted ?? false).toBe(false);
+        if (result.outcome !== 'rejected') throw new Error(`expected a refusal, got ${result.outcome}`);
+        expect(
+          await inTenant(tenantA, () =>
+            runtime.remoteChangeControl.recordRemoteChangeOutcome({ ...input, result }),
+          ),
+        ).toMatchObject({ state: 'failed', publicationState: 'published', changed: true });
+        expect((await changesOf(pub.id))[0]).toMatchObject({ state: 'failed', errorCode: issue });
+      }
     });
 
     it('delete: recorded, emitted with the change, carried out once; the publication becomes removed with evidence', async () => {

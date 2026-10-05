@@ -83,6 +83,7 @@ export {
 export {
   configurePublishingProviders,
   adapterFor,
+  certificationRefusal,
   providerIO,
   registry as providerRegistryInUse,
   type PublishingProviderOptions,

@@ -5,6 +5,7 @@ import { ProviderUnavailableError, ValidationFailedError } from '@oremedia/contr
 import type { ModelRequest } from '@oremedia/contracts/agents';
 import { createModelAdapterFromEnv, modelsCapability } from './adapter-factory';
 import { OpenRouterModelAdapter, toCompletion } from './openrouter-adapter';
+import { ModelRequestRejectedError } from './model-adapter';
 import { routingPolicyFromEnv } from './routing-policy';
 
 const request: ModelRequest = {
@@ -170,6 +171,34 @@ describe('OpenRouterModelAdapter (ADR-11, OpenAI-compatible tool use)', () => {
       (e: unknown) => e,
     )) as ValidationFailedError;
     expect(inBody.message).toBe(`The model provider rejected the request (400: ${'x'.repeat(200)})`);
+  });
+
+  it('a refusal carries the provider status and any usage reported with it, so a caller can tell it apart', async () => {
+    const run = (status: number, body: unknown = {}) =>
+      new OpenRouterModelAdapter({ apiKey: 'k', fetch: fakeFetch(status, body).fetch })
+        .complete(request)
+        .catch((e: unknown) => e);
+    const schema = (await run(400, {
+      error: { code: 400, message: 'Invalid schema for response_format' },
+    })) as ModelRequestRejectedError;
+    expect(schema).toBeInstanceOf(ModelRequestRejectedError);
+    expect(schema).toBeInstanceOf(ValidationFailedError);
+    expect(schema.status).toBe(400);
+    expect(schema.name).toBe('ValidationFailedError');
+    expect(schema.code).toBe('VALIDATION_FAILED');
+    expect(schema.usage).toBeNull();
+    expect(((await run(401)) as ModelRequestRejectedError).status).toBe(401);
+    const inBody = (await run(200, {
+      error: { code: 422, message: 'unprocessable' },
+      usage: { prompt_tokens: 900, completion_tokens: 3 },
+    })) as ModelRequestRejectedError;
+    expect(inBody.status).toBe(422);
+    expect(inBody.usage).toEqual({ inputTokens: 900, outputTokens: 3 });
+    const withUsage = (await run(400, {
+      error: { code: 400, message: 'bad' },
+      usage: { prompt_tokens: 10 },
+    })) as ModelRequestRejectedError;
+    expect(withUsage.usage).toEqual({ inputTokens: 10, outputTokens: 0 });
   });
 
   it('sends the key in the Authorization header through its default transport (no injected fetch)', async () => {

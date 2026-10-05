@@ -372,7 +372,10 @@ export async function checkUpload(
         'access-control-request-headers': 'content-type',
       },
     });
-    // The browser's PUT (apps/web use-upload.ts) is a credential-less fetch with a non-safelisted content type.
+    // The browser's PUT (apps/web use-upload.ts) is a credential-less fetch with a non-safelisted content type. A store
+    // answering `*` passes on purpose: for a request without credentials a browser admits `*` exactly as it admits the
+    // echoed origin, and the authority is the presigned URL's signature, which `*` does not widen. Were the PUT ever
+    // credentialed, corsPreflightRefusal refuses `*` (Fetch standard), so the check tightens with it.
     const refusal =
       preflight.status >= 300
         ? `HTTP ${preflight.status}`

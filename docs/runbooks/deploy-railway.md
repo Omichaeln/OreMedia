@@ -218,7 +218,7 @@ shows previews of the brand's own font files in the browser.
    `object store CORS applied: GET, HEAD and PUT from <origins>`, or `object store CORS not applied` with the store's
    error (the api keeps serving; browser uploads stay blocked until it succeeds, and `upload:cors` in the smoke run
    names it). PutBucketCors replaces a bucket's whole CORS configuration, so rules set by hand are replaced. A value
-   that is not a list of bare http(s) origins stops the api at start. Unset (production today), nothing is sent and
+   that is not a list of bare https origins (plain http only for localhost and 127.0.0.1) stops the api at start. Unset (production today), nothing is sent and
    the buckets keep the CORS they have.
 5. **One bucket for assets and releases** is supported (Railway Storage Buckets issue one key pair per bucket, the
    code uses one pair): point `OBJECT_STORE_BUCKET_ASSETS` and `OBJECT_STORE_BUCKET_RELEASES` at the same bucket.

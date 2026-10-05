@@ -1,11 +1,34 @@
 import type { ZodTypeAny } from 'zod';
 import type { ModelCompletion, ModelRequest, ModelUsage } from '@oremedia/contracts/agents';
+import { ValidationFailedError } from '@oremedia/contracts/errors';
 import { routingPolicyFromEnv } from './routing-policy';
 
 /** Spec 12.7 / CONVENTIONS "Model calls": every model call goes through ModelAdapter.complete. */
 export interface ModelAdapter {
   readonly provider: 'anthropic' | string;
   complete(req: ModelRequest): Promise<ModelCompletion>;
+}
+
+/**
+ * The model provider refused a request (an HTTP 4xx other than 429, or the same code in an OpenRouter error body):
+ * a ValidationFailedError with the same code, message and detail as before, which also carries the provider's status
+ * and any usage it reported with the refusal, so a caller can tell the provider's refusal from its own validation
+ * and account an attempt the provider billed.
+ */
+export class ModelRequestRejectedError extends ValidationFailedError {
+  readonly status: number;
+  readonly usage: ModelUsage | null;
+  /** `detail` is the status and the provider's bounded message (`rejectionDetail`). */
+  constructor(status: number, detail: string, usage: ModelUsage | null = null) {
+    super(
+      [{ path: 'model', issue: `provider rejected the request (${detail})` }],
+      `The model provider rejected the request (${detail})`,
+    );
+    // Failure types and retry policies read the name (`ValidationFailedError` non-retryable): it stays the same.
+    this.name = 'ValidationFailedError';
+    this.status = status;
+    this.usage = usage;
+  }
 }
 
 /**

@@ -386,7 +386,8 @@ export interface RenderedCheck {
  * PR-04: what a rendered validation proved. `verified`: the page answered, its article region carries the whole
  * manifest, its canonical names the article and (live) nothing hides it from indexing; `failed`: the page answered
  * and contradicts one of those; `unverified`: the page could not be read (a timeout, a 5xx or 429, a transport
- * failure), was cut at the byte cap before the article was complete, or its article region could not be located:
+ * failure), was cut at the byte cap before the article was complete, or its article region could not be located
+ * (none matched, or the page is past the region search's depth or token cap):
  * nothing was proven either way, and it never counts as a pass.
  */
 export const RenderedOutcome = z.enum(['verified', 'failed', 'unverified']);
@@ -423,6 +424,8 @@ export interface RenderedContentReportV1 {
   expectedImages: number;
   missingImages: string[];
   manifestVersion: 1;
+  /** The page was past the region search's depth or token cap, so no region was looked for (no selector then). */
+  tooComplex?: true;
 }
 
 /** PR-04: the outcome of a validation, reading evidence recorded before PR-04 by its `ok`. */
@@ -714,37 +717,56 @@ const matchesSelector = (sel: SimpleSelector, name: string, attrs: Map<string, s
 };
 
 /**
- * PR-04: the elements a selector names in a page, each as its own token stream (open to matching close, nested
- * matches inside a captured element belong to it). Close tags pop the open elements back to their match, as a
- * browser closes unclosed paragraphs and list items; a stray close tag is ignored.
+ * A page is searched for its article region only while its element tree stays within this depth and the page within
+ * this many tokens; beyond either its region check is `unverified` (`page_too_complex`), never a pass. A rendered
+ * WordPress page is a few hundred levels deep at most and far below the token count even at the byte cap; a page
+ * past them is crafted, and bounding it keeps a validation's cost fixed whatever the page holds.
  */
-function regionsOf(html: string, selector: SimpleSelector): MarkupToken[][] {
-  const regions: MarkupToken[][] = [];
+export const ARTICLE_REGION_MAX_DEPTH = 4096;
+export const ARTICLE_REGION_MAX_TOKENS = 250_000;
+
+/**
+ * PR-04: the elements each selector names in a page, each as its own token stream (open to matching close, nested
+ * matches inside a captured element belong to it), read for every selector in one pass. Close tags pop the open
+ * elements back to their match, as a browser closes unclosed paragraphs and list items; a stray close tag is ignored.
+ * Linear in the page: a count of the open elements per tag name skips a close tag with no open match without
+ * searching the stack, and a matched close pops what it searched. Null when the page is past the depth or token cap.
+ */
+function regionsOf(html: string, selectors: readonly SimpleSelector[]): MarkupToken[][][] | null {
+  const regions = selectors.map((): MarkupToken[][] => []);
+  const captures: Array<{ tokens: MarkupToken[]; depth: number } | null> = selectors.map(() => null);
   const stack: string[] = [];
-  let capture: { tokens: MarkupToken[]; depth: number } | null = null;
+  const openCount = new Map<string, number>();
+  let tokens = 0;
   for (const t of scanMarkup(html)) {
+    if (++tokens > ARTICLE_REGION_MAX_TOKENS) return null;
     if (t.type === 'open') {
       const opens = !HTML_VOID_TAGS.has(t.name) && !t.selfClosing;
-      if (!capture && opens && matchesSelector(selector, t.name, t.attrs)) {
-        capture = { tokens: [], depth: stack.length };
-        stack.push(t.name);
-        continue;
-      }
-      if (opens) stack.push(t.name);
-      capture?.tokens.push(t);
+      selectors.forEach((selector, i) => {
+        const capture = captures[i];
+        if (!capture && opens && matchesSelector(selector, t.name, t.attrs))
+          captures[i] = { tokens: [], depth: stack.length };
+        else capture?.tokens.push(t);
+      });
+      if (!opens) continue;
+      if (stack.length >= ARTICLE_REGION_MAX_DEPTH) return null;
+      stack.push(t.name);
+      openCount.set(t.name, (openCount.get(t.name) ?? 0) + 1);
     } else if (t.type === 'close') {
+      if (!openCount.get(t.name)) continue;
       const at = stack.lastIndexOf(t.name);
-      if (at < 0) continue;
+      for (const name of stack.slice(at)) openCount.set(name, (openCount.get(name) ?? 1) - 1);
       stack.length = at;
-      if (capture && stack.length <= capture.depth) {
-        regions.push(capture.tokens);
-        capture = null;
-        continue;
-      }
-      capture?.tokens.push(t);
-    } else capture?.tokens.push(t);
+      captures.forEach((capture, i) => {
+        if (capture && stack.length <= capture.depth) {
+          (regions[i] as MarkupToken[][]).push(capture.tokens);
+          captures[i] = null;
+        } else capture?.tokens.push(t);
+      });
+    } else for (const capture of captures) capture?.tokens.push(t);
   }
-  if (capture) regions.push(capture.tokens); // a page cut at the byte cap: the region read so far
+  // A page cut at the byte cap: the region read so far.
+  captures.forEach((capture, i) => capture && (regions[i] as MarkupToken[][]).push(capture.tokens));
   return regions;
 }
 
@@ -797,19 +819,26 @@ export function compareArticleRegion(
       manifestVersion: 1,
     };
   };
-  for (const source of selectors) {
-    for (const part of source.split(',')) {
+  const parts = selectors
+    .flatMap((source) => source.split(','))
+    .flatMap((part) => {
       const selector = parseSimpleSelector(part);
-      if (!selector) continue;
-      const regions = regionsOf(html, selector).map(manifestOfTokens);
-      if (regions.length === 0) continue;
-      let best = report(part.trim(), regions[0] as ArticleManifestV1);
-      for (const region of regions.slice(1)) {
-        const candidate = report(part.trim(), region);
-        if (candidate.matchedBlocks > best.matchedBlocks) best = candidate;
-      }
-      return best;
+      return selector ? [{ source: part.trim(), selector }] : [];
+    });
+  const found = regionsOf(
+    html,
+    parts.map((p) => p.selector),
+  );
+  if (!found) return { ...report(null, null), tooComplex: true };
+  for (const [i, part] of parts.entries()) {
+    const regions = (found[i] ?? []).map(manifestOfTokens);
+    if (regions.length === 0) continue;
+    let best = report(part.source, regions[0] as ArticleManifestV1);
+    for (const region of regions.slice(1)) {
+      const candidate = report(part.source, region);
+      if (candidate.matchedBlocks > best.matchedBlocks) best = candidate;
     }
+    return best;
   }
   return report(null, null);
 }
@@ -903,7 +932,8 @@ export function validateRenderedPage(input: {
     { key: 'header_indexable', ok: input.draft || !headerNoindex },
   ];
   const failed = checks.filter((c) => !c.ok).map((c) => c.key);
-  // Nothing proven either way: the page did not answer, was cut before the article ended, or has no region.
+  // Nothing proven either way: the page did not answer, was cut before the article ended, has no region or is past
+  // the region search's caps (no selector then).
   const unavailable =
     input.status === null || input.status === 408 || input.status === 429 || input.status >= 500;
   const outcome: RenderedOutcome =
@@ -917,13 +947,15 @@ export function validateRenderedPage(input: {
       ? null
       : unavailable
         ? `page_unavailable_${input.status ?? 'none'}`
-        : content.selector === null
-          ? 'article_region_not_found'
-          : input.truncated === true && !contentComplete
-            ? 'page_truncated'
-            : failed.includes('content_complete') || failed.includes('images_present')
-              ? 'content_changed'
-              : (failed[0] ?? null);
+        : content.tooComplex
+          ? 'page_too_complex'
+          : content.selector === null
+            ? 'article_region_not_found'
+            : input.truncated === true && !contentComplete
+              ? 'page_truncated'
+              : failed.includes('content_complete') || failed.includes('images_present')
+                ? 'content_changed'
+                : (failed[0] ?? null);
   return {
     checks,
     outcome,

@@ -7,12 +7,12 @@ import {
   type BrandAssistModelResultV1,
   type BrandAssistModelV1,
 } from '@oremedia/contracts/brand-assist';
-import type { ModelRequest, ModelResponseSchema } from '@oremedia/contracts/agents';
-import { ValidationFailedError } from '@oremedia/contracts/errors';
+import type { ModelRequest, ModelResponseSchema, ModelUsage } from '@oremedia/contracts/agents';
 import { logger } from '@oremedia/observability';
 import { assertRoutingAllowed } from './routing-policy';
 import {
   estimateCostMicros,
+  ModelRequestRejectedError,
   modelConfigFromEnv,
   strictJsonSchema,
   withoutNullOptionals,
@@ -310,6 +310,9 @@ export function parseModelJson(text: string): { value: unknown; error: string | 
   }
 }
 
+/** The provider statuses a refusal of the response schema comes back with (a malformed or unprocessable request). */
+const SCHEMA_REFUSAL_STATUSES = new Set([400, 422]);
+
 /** The model behind assist jobs (worker-core): routing asserted before every call, usage priced from configuration. */
 export function createBrandAssistModel(opts: {
   adapter: ModelAdapter;
@@ -332,25 +335,38 @@ export function createBrandAssistModel(opts: {
         responseSchema: sectionResponseSchema(req.section),
       };
       let completion;
+      // What a refused first attempt reported using (a provider may bill one): counted with the answer's own.
+      let refusedUsage: ModelUsage | null = null;
       try {
         completion = await opts.adapter.complete(call);
       } catch (err) {
         // A provider that refuses the schema itself (unsupported or too complex for it) still gets the prompt's
-        // contract: the call is made once more without it, and the answer is checked the same way.
-        if (!(err instanceof ValidationFailedError)) throw err;
+        // contract: the call is made once more without it, and the answer is checked the same way. Only the
+        // provider's own refusal of the request as malformed qualifies (400 or 422): its message does not name the
+        // schema reliably across providers, and every other refusal (a key, credit, a model id, local validation)
+        // would be refused again or is not the provider's at all.
+        if (!(err instanceof ModelRequestRejectedError) || !SCHEMA_REFUSAL_STATUSES.has(err.status))
+          throw err;
+        refusedUsage = err.usage;
         logger().warn(
-          { errorMessage: `brand assist ${req.section}: structured output refused` },
+          { errorMessage: `brand assist ${req.section}: structured output refused (${err.status})` },
           'model call retried without structured output',
         );
         const { responseSchema: _schema, ...plain } = call;
         completion = await opts.adapter.complete(plain);
       }
+      const usage: ModelUsage = refusedUsage
+        ? {
+            inputTokens: refusedUsage.inputTokens + completion.usage.inputTokens,
+            outputTokens: refusedUsage.outputTokens + completion.usage.outputTokens,
+          }
+        : completion.usage;
       const { value, error } = parseModelJson(completion.content.map((c) => c.text).join(''));
       return {
         raw: value === null ? null : withoutNullOptionals(MODEL_SECTION_OUTPUT[req.section], value),
         parseError: error,
-        usage: completion.usage,
-        costMicros: estimateCostMicros(cfg, completion.usage),
+        usage,
+        costMicros: estimateCostMicros(cfg, usage),
       };
     },
   };
