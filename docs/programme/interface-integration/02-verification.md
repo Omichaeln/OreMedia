@@ -22,14 +22,14 @@ since reading every brand's channels on the portfolio would be one request per b
 
 ## Assets (PR ASSETS_PR)
 
-| Check                                                                     | Result                                                                                                                             |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm --filter @oremedia/web typecheck`                                   | pass                                                                                                                               |
-| `pnpm lint`                                                               | LINT_RESULT                                                                                                                        |
-| `pnpm format`                                                             | FORMAT_RESULT                                                                                                                      |
-| `pnpm vitest run --project unit apps/web packages/ui`                     | UNIT_RESULT                                                                                                                        |
-| e2e (built app, mock transport, Chromium): shell, media, a11y, responsive | E2E_RESULT                                                                                                                         |
-| Screenshots                                                               | prototype vs application at 1440, 768 and 390 px (below and in the PR description); light and dark, grid, eligible grid and drawer |
+| Check                                                                     | Result                                                                                                                                                          |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`                                   | pass                                                                                                                                                            |
+| `pnpm lint`                                                               | pass on every committed file (the only errors were in the uncommitted screenshot scratch tool)                                                                  |
+| `pnpm format`                                                             | pass on every file this PR changes (`prettier --check` on the diff against main)                                                                                |
+| `pnpm vitest run --project unit apps/web packages/ui`                     | 178 tests pass (23 files; 7 new in `use-assets.test.ts`)                                                                                                        |
+| e2e (built app, mock transport, Chromium): shell, media, a11y, responsive | media: 5 pass; shell `assets:` tests: 2 pass (the full shell, a11y and responsive suites are left to CI on the PR per the coordinator, the box being saturated) |
+| Screenshots                                                               | prototype vs application at 1440, 768 and 390 px (below and in the PR description); light and dark, grid, eligible grid and drawer                              |
 
 Visual comparison (`ui-ref/shots/assets-*.png` against the built application on the mock transport):
 
