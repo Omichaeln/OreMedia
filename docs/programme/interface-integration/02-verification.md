@@ -5,13 +5,13 @@ Kept per PR. "Locally verified" means the built application against the in-proce
 
 ## Foundation (PR: tokens, Lato, shell, primitives, Portfolio, Home)
 
-| Check                                                                              | Result                                                                                                   |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `pnpm --filter @oremedia/ui typecheck`, `pnpm --filter @oremedia/web typecheck`     | pass                                                                                                     |
-| `pnpm lint`                                                                        | pass                                                                                                     |
-| `pnpm vitest run --project unit apps/web packages/ui`                              | 171 tests pass                                                                                           |
-| e2e (built app, mock transport): shell, responsive, deployment-brand, a11y, journey, agents | see the PR description for the run                                                               |
-| Screenshots                                                                        | prototype vs application at 1440 and 390 px for Portfolio and Home (PR description); other screens follow in their own PRs |
+| Check                                                                                       | Result                                                                                                                     |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/ui typecheck`, `pnpm --filter @oremedia/web typecheck`             | pass                                                                                                                       |
+| `pnpm lint`                                                                                 | pass                                                                                                                       |
+| `pnpm vitest run --project unit apps/web packages/ui`                                       | 171 tests pass                                                                                                             |
+| e2e (built app, mock transport): shell, responsive, deployment-brand, a11y, journey, agents | see the PR description for the run                                                                                         |
+| Screenshots                                                                                 | prototype vs application at 1440 and 390 px for Portfolio and Home (PR description); other screens follow in their own PRs |
 
 Deviations recorded in this PR: the interface's lighter glyph colours (`#CFCAC1` separators, `#9A958C` chevrons,
 arrows and placeholders) read below 4.5:1 on its surfaces, so glyphs and placeholders use the muted text colour
@@ -22,14 +22,14 @@ since reading every brand's channels on the portfolio would be one request per b
 
 ## Assets (PR ASSETS_PR)
 
-| Check                                                                              | Result                                                                                                   |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `pnpm --filter @oremedia/web typecheck`                                            | pass                                                                                                     |
-| `pnpm lint`                                                                        | LINT_RESULT                                                                                              |
-| `pnpm format`                                                                      | FORMAT_RESULT                                                                                            |
-| `pnpm vitest run --project unit apps/web packages/ui`                              | UNIT_RESULT                                                                                              |
-| e2e (built app, mock transport, Chromium): shell, media, a11y, responsive          | E2E_RESULT                                                                                               |
-| Screenshots                                                                        | prototype vs application at 1440, 768 and 390 px (below and in the PR description); light and dark, grid, eligible grid and drawer |
+| Check                                                                     | Result                                                                                                                             |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`                                   | pass                                                                                                                               |
+| `pnpm lint`                                                               | LINT_RESULT                                                                                                                        |
+| `pnpm format`                                                             | FORMAT_RESULT                                                                                                                      |
+| `pnpm vitest run --project unit apps/web packages/ui`                     | UNIT_RESULT                                                                                                                        |
+| e2e (built app, mock transport, Chromium): shell, media, a11y, responsive | E2E_RESULT                                                                                                                         |
+| Screenshots                                                               | prototype vs application at 1440, 768 and 390 px (below and in the PR description); light and dark, grid, eligible grid and drawer |
 
 Visual comparison (`ui-ref/shots/assets-*.png` against the built application on the mock transport):
 

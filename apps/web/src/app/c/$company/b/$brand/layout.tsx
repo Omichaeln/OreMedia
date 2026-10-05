@@ -36,9 +36,7 @@ const OTHER_TITLES: Record<string, string> = { overview: 'Web overview' };
 
 const screenTitle = (pathname: string): string => {
   const segment = pathname.split('/b/')[1]?.split('/')[1] ?? 'home';
-  return (
-    [...WORK, ...STANDING].find((n) => n.segment === segment)?.label ?? OTHER_TITLES[segment] ?? 'Home'
-  );
+  return [...WORK, ...STANDING].find((n) => n.segment === segment)?.label ?? OTHER_TITLES[segment] ?? 'Home';
 };
 
 /**
@@ -128,6 +126,9 @@ export function BrandLayout() {
             </DrawerContent>
           </Drawer>
           <p className="flex min-w-0 items-center gap-2 text-sm">
+            <span className="sr-only" aria-label="Company">
+              {companyName ?? company}
+            </span>
             <span className="truncate text-muted-foreground" aria-label="Brand">
               {brandName}
             </span>
