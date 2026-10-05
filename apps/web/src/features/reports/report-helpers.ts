@@ -119,14 +119,16 @@ export const fmtK = (n: number | null) => (n === null ? '—' : `${Math.round(n 
 export interface ReportKit {
   dark: string;
   light: string;
+  /** The accent as a mark (bars, rules); `accentInk` reads on white, `accentOnDark` on the dark surface. */
   accent: string;
   accentInk: string;
+  accentOnDark: string;
   second: string;
   third: string;
   ink: string;
   muted: string;
   rule: string;
-  /** The display face's asset version (loaded as a FontFace under this id) or null for the fallback face. */
+  /** The display face's asset (loaded as a FontFace by its version) or null for the fallback face. */
   displayFontRef: string | null;
   displayWeight: number;
   swatches: string[];
@@ -136,6 +138,7 @@ export const FALLBACK_KIT: ReportKit = {
   light: '#f1efea',
   accent: '#d9a35b',
   accentInk: '#8a5a1e',
+  accentOnDark: '#d9a35b',
   second: '#6f6b64',
   third: '#9a958c',
   ink: '#1a1917',
@@ -145,6 +148,50 @@ export const FALLBACK_KIT: ReportKit = {
   displayWeight: 700,
   swatches: ['#1a1917', '#f1efea', '#d9a35b', '#6f6b64', '#9a958c'],
 };
+
+type Rgb = [number, number, number];
+/** A brand colour as RGB; null for anything but a hex value (the only form the pages can reason about). */
+const rgbOf = (value: string): Rgb | null => {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+  if (!m) return null;
+  const h = m[1] as string;
+  const full = h.length === 3 ? [...h].map((c) => c + c).join('') : h;
+  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as Rgb;
+};
+const hexOf = (c: Rgb) => `#${c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
+const luminance = ([r, g, b]: Rgb) => {
+  const f = (v: number) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+};
+/** WCAG contrast ratio of two hex colours; 1 when either cannot be read. */
+export function contrastOf(a: string, b: string): number {
+  const x = rgbOf(a);
+  const y = rgbOf(b);
+  if (!x || !y) return 1;
+  const [l1, l2] = [luminance(x), luminance(y)].sort((p, q) => q - p) as [number, number];
+  return (l1 + 0.05) / (l2 + 0.05);
+}
+const MIN_CONTRAST = 4.5;
+/**
+ * A text colour that reads on its surface: the brand's colour mixed step by step toward black (on a light surface)
+ * or white (on a dark one) until it meets 4.5:1, so it stays the brand's hue; the fallback when it never does.
+ */
+export function legible(colour: string | null, surface: string, fallback: string): string {
+  if (!colour) return fallback;
+  const c = rgbOf(colour);
+  const s = rgbOf(surface);
+  if (!c || !s) return fallback;
+  if (contrastOf(colour, surface) >= MIN_CONTRAST) return colour;
+  const target: Rgb = luminance(s) > 0.5 ? [0, 0, 0] : [255, 255, 255];
+  for (let step = 1; step <= 10; step++) {
+    const mixed = c.map((v, i) => v + ((target[i] as number) - v) * (step / 10)) as Rgb;
+    if (contrastOf(hexOf(mixed), surface) >= MIN_CONTRAST) return hexOf(mixed);
+  }
+  return fallback;
+}
 const byRole = (doc: BrandSystemDocumentV1, role: string, i = 0) =>
   doc.tokens.colours.filter((c) => c.role === role)[i]?.value ?? null;
 export function kitOf(doc: BrandSystemDocumentV1 | null): ReportKit {
@@ -158,16 +205,22 @@ export function kitOf(doc: BrandSystemDocumentV1 | null): ReportKit {
   const display =
     doc.tokens.typeRoles.find((t) => t.role === 'display') ??
     doc.tokens.typeRoles.find((t) => t.role === 'heading');
-  const dark = primary ?? text ?? FALLBACK_KIT.dark;
+  const white = '#ffffff';
+  const ink = legible(text, white, FALLBACK_KIT.ink);
+  const light = background && contrastOf(ink, background) >= MIN_CONTRAST ? background : FALLBACK_KIT.light;
+  const darkCandidate = primary ?? text;
+  const dark =
+    darkCandidate && contrastOf(light, darkCandidate) >= MIN_CONTRAST ? darkCandidate : FALLBACK_KIT.dark;
   const kit: ReportKit = {
     dark,
-    light: background ?? FALLBACK_KIT.light,
+    light,
     accent: accent ?? FALLBACK_KIT.accent,
-    accentInk: accent ?? FALLBACK_KIT.accentInk,
+    accentInk: legible(accent, white, FALLBACK_KIT.accentInk),
+    accentOnDark: legible(accent, dark, light),
     second: second ?? FALLBACK_KIT.second,
     third: neutral ?? FALLBACK_KIT.third,
-    ink: text ?? FALLBACK_KIT.ink,
-    muted: neutral ?? FALLBACK_KIT.muted,
+    ink,
+    muted: legible(neutral, white, FALLBACK_KIT.muted),
     rule: FALLBACK_KIT.rule,
     displayFontRef: display?.fontAssetId ?? null,
     displayWeight: display?.weight ?? 700,

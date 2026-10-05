@@ -12,6 +12,7 @@ import {
   fmtRate,
   highlightsOf,
   kicker,
+  legible,
   monthLabel,
   monthName,
   pageNumber,
@@ -57,6 +58,8 @@ export function ReportPages(p: ReportPagesProps) {
   const order = pageOrder(p.sections);
   const cmp = compareShort(f.compareMonth, f.compareMode);
   const dark = p.theme === 'dark';
+  // The light cover is the brand's light surface, not white: the accent must read on it too.
+  const coverAccent = legible(kit.accentInk, kit.light, kit.ink);
   const font = p.displayFamily ? `'${p.displayFamily}', Georgia, serif` : 'var(--font-sans)';
   const text = 'var(--font-sans)';
   const pageStyle = {
@@ -223,7 +226,7 @@ export function ReportPages(p: ReportPagesProps) {
                 fontSize: 12,
                 letterSpacing: '.14em',
                 textTransform: 'uppercase',
-                color: dark ? kit.accent : kit.accentInk,
+                color: dark ? kit.accentOnDark : coverAccent,
               }}
             >
               {monthLabel(f.periodMonth)}
@@ -275,7 +278,7 @@ export function ReportPages(p: ReportPagesProps) {
                     fontSize: 10,
                     letterSpacing: '.12em',
                     textTransform: 'uppercase',
-                    color: dark ? kit.accent : kit.accentInk,
+                    color: dark ? kit.accentOnDark : coverAccent,
                   }}
                 >
                   {k}
@@ -389,7 +392,7 @@ export function ReportPages(p: ReportPagesProps) {
                   fontSize: 10,
                   letterSpacing: '.12em',
                   textTransform: 'uppercase',
-                  color: kit.accent,
+                  color: kit.accentOnDark,
                 }}
               >
                 Posts published · sample
