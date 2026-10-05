@@ -225,7 +225,10 @@ export interface InboxRowState {
  * One state per row, the way the interface lists requests: the dot and the state label first (the most urgent
  * attention flag, or the request's own state when nothing needs attention), then any further flag after a dot.
  */
-export function inboxRowState(item: { state: ReviewRequestState; attention: readonly InboxAttention[] }): InboxRowState {
+export function inboxRowState(item: {
+  state: ReviewRequestState;
+  attention: readonly InboxAttention[];
+}): InboxRowState {
   const ordered = orderAttention(item.attention);
   const primary = ordered.find((f) => STATE_FLAGS.has(f));
   const head = primary ? ATTENTION_CHIP[primary] : REQUEST_STATE_CHIP[item.state];
@@ -277,7 +280,11 @@ interface ReviewerSource {
  * The interface's REVIEWERS list from the request's assignees, deciders and external links: every person once,
  * members before external reviewers, each with the decision they recorded or "Pending".
  */
-export function reviewerRows(r: ReviewerSource, memberName: (userId: string) => string, now = new Date()): ReviewerRow[] {
+export function reviewerRows(
+  r: ReviewerSource,
+  memberName: (userId: string) => string,
+  now = new Date(),
+): ReviewerRow[] {
   const pending = r.state === 'open' ? 'Pending' : '—';
   const members = new Map<string, string>();
   for (const id of r.assignees) members.set(id, pending);
@@ -286,7 +293,9 @@ export function reviewerRows(r: ReviewerSource, memberName: (userId: string) => 
   const external = new Map<string, string>();
   for (const l of r.externalLinks) {
     if (external.has(l.email)) continue;
-    const decided = r.decisions.find((d) => d.deciderKind === 'external_reviewer' && d.verifiedEmail === l.email);
+    const decided = r.decisions.find(
+      (d) => d.deciderKind === 'external_reviewer' && d.verifiedEmail === l.email,
+    );
     external.set(
       l.email,
       decided
@@ -299,8 +308,18 @@ export function reviewerRows(r: ReviewerSource, memberName: (userId: string) => 
     );
   }
   return [
-    ...[...members].map(([id, decision]) => ({ key: `member:${id}`, who: memberName(id), kind: 'Team' as const, decision })),
-    ...[...external].map(([email, decision]) => ({ key: `external:${email}`, who: email, kind: 'External' as const, decision })),
+    ...[...members].map(([id, decision]) => ({
+      key: `member:${id}`,
+      who: memberName(id),
+      kind: 'Team' as const,
+      decision,
+    })),
+    ...[...external].map(([email, decision]) => ({
+      key: `external:${email}`,
+      who: email,
+      kind: 'External' as const,
+      decision,
+    })),
   ];
 }
 

@@ -113,7 +113,13 @@ function Note({
 }
 
 /** The manifest's identity, as the interface sets it beside FROZEN MANIFEST: hash · brand version · policy. */
-export function ManifestMeta({ manifest, manifestHash }: { manifest: FrozenManifestV1; manifestHash: string }) {
+export function ManifestMeta({
+  manifest,
+  manifestHash,
+}: {
+  manifest: FrozenManifestV1;
+  manifestHash: string;
+}) {
   return (
     <span className="flex flex-wrap items-baseline gap-x-1 text-xs tabular-nums text-muted-foreground">
       <code
@@ -451,7 +457,9 @@ export function ManifestSummary({
           <li
             className={cn(
               'border-t border-border',
-              portal ? 'flex flex-col gap-3 pt-5' : 'grid grid-cols-[112px_minmax(0,1fr)] gap-4 py-4 sm:grid-cols-[160px_minmax(0,1fr)] sm:gap-5',
+              portal
+                ? 'flex flex-col gap-3 pt-5'
+                : 'grid grid-cols-[112px_minmax(0,1fr)] gap-4 py-4 sm:grid-cols-[160px_minmax(0,1fr)] sm:gap-5',
             )}
           >
             <div className={cn('flex flex-col gap-2', portal && 'w-[min(100%,340px)]')}>
@@ -467,12 +475,16 @@ export function ManifestSummary({
               ))}
             </div>
             <span className="text-sm font-medium">
-              Rendered files for {orphans.flatMap((i) => i.channelConnectionIds).map(name).join(', ')}
+              Rendered files for{' '}
+              {orphans
+                .flatMap((i) => i.channelConnectionIds)
+                .map(name)
+                .join(', ')}
             </span>
           </li>
         )}
       </ul>
-      {(manifest.article || manifest.websites) && (
+      {(manifest.article || (manifest.websites?.length ?? 0) > 0) && (
         <FrozenArticle reviewRequestId={reviewRequestId} manifest={manifest} />
       )}
     </div>
@@ -519,8 +531,7 @@ export function RequestDetail({
               {member && (
                 <>
                   {' '}
-                  · revision{' '}
-                  {revisionNumber ?? <code>{member.contentRevisionId}</code>} · created{' '}
+                  · revision {revisionNumber ?? <code>{member.contentRevisionId}</code>} · created{' '}
                   {shortDate(member.createdAt)}
                 </>
               )}
@@ -590,7 +601,9 @@ function MemberDetail({
   const comments = r.decisions.filter((d) => d.comment);
   const reviewers = reviewerRows(r, memberName);
   const who = (d: MemberReviewRequestDto['decisions'][number]) =>
-    d.deciderKind === 'external_reviewer' ? (d.verifiedEmail ?? 'external reviewer') : memberName(d.deciderId);
+    d.deciderKind === 'external_reviewer'
+      ? (d.verifiedEmail ?? 'external reviewer')
+      : memberName(d.deciderId);
   return (
     <>
       {r.state === 'stale' && (
@@ -625,7 +638,8 @@ function MemberDetail({
       {revokedLinks.length > 0 && (
         <Note tone="info" title={`${ATTENTION_CHIP.external_access_revoked.label}.`}>
           {revokedLinks.length} external reviewer link{revokedLinks.length === 1 ? '' : 's'} revoked (
-          {revokedLinks.map((l) => l.email).join(', ')}). Revocation takes effect on the reviewer's next request.
+          {revokedLinks.map((l) => l.email).join(', ')}). Revocation takes effect on the reviewer's next
+          request.
         </Note>
       )}
 
@@ -649,7 +663,11 @@ function MemberDetail({
           {reviewers.length === 0 ? (
             <p className="py-2.5 text-sm text-muted-foreground">No reviewers assigned.</p>
           ) : (
-            <ul className="flex flex-col divide-y divide-border" aria-label="Reviewers" data-testid="reviewers">
+            <ul
+              className="flex flex-col divide-y divide-border"
+              aria-label="Reviewers"
+              data-testid="reviewers"
+            >
               {reviewers.map((p) => (
                 <li key={p.key} className="flex justify-between gap-3 py-2.5 text-sm">
                   <span className="min-w-0 truncate">
@@ -812,7 +830,12 @@ export function DecisionForm({
               ? `Approve revision ${revisionNumber}`
               : 'Approve'}
         </Button>
-        <Button type="button" variant="secondary" onClick={() => decide('request_changes')} disabled={submit.isPending}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => decide('request_changes')}
+          disabled={submit.isPending}
+        >
           {pending === 'request_changes' ? 'Recording…' : 'Request changes'}
         </Button>
       </div>

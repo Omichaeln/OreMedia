@@ -144,12 +144,15 @@ describe('the interface forms', () => {
       requestHeadline({ state: 'decided', revisionState: 'approved', approvals: [{ state: 'valid' }] }).label,
     ).toBe('Approved');
     expect(
-      requestHeadline({ state: 'decided', revisionState: 'draft', approvals: [{ state: 'invalidated' }] }).label,
+      requestHeadline({ state: 'decided', revisionState: 'draft', approvals: [{ state: 'invalidated' }] })
+        .label,
     ).toBe('Approval invalidated');
     expect(
       requestHeadline({ state: 'decided', revisionState: 'changes_requested', approvals: [] }).label,
     ).toBe('Changes requested');
-    expect(requestHeadline({ state: 'stale', revisionState: 'in_review', approvals: [] }).label).toBe('Stale');
+    expect(requestHeadline({ state: 'stale', revisionState: 'in_review', approvals: [] }).label).toBe(
+      'Stale',
+    );
   });
   it('lists every reviewer once with their decision, members first', () => {
     const rows = reviewerRows(
@@ -158,11 +161,21 @@ describe('the interface forms', () => {
         assignees: ['usr_a', 'usr_b'],
         decisions: [
           { deciderKind: 'user', deciderId: 'usr_a', decision: 'request_changes', verifiedEmail: null },
-          { deciderKind: 'external_reviewer', deciderId: 'rl_1', decision: 'approve', verifiedEmail: 'x@c.example' },
+          {
+            deciderKind: 'external_reviewer',
+            deciderId: 'rl_1',
+            decision: 'approve',
+            verifiedEmail: 'x@c.example',
+          },
         ],
         externalLinks: [
           { id: 'rl_1', email: 'x@c.example', revokedAt: null, expiresAt: '2026-10-01T00:00:00Z' },
-          { id: 'rl_2', email: 'y@c.example', revokedAt: '2026-09-20T00:00:00Z', expiresAt: '2026-10-01T00:00:00Z' },
+          {
+            id: 'rl_2',
+            email: 'y@c.example',
+            revokedAt: '2026-09-20T00:00:00Z',
+            expiresAt: '2026-10-01T00:00:00Z',
+          },
           { id: 'rl_3', email: 'z@c.example', revokedAt: null, expiresAt: '2026-09-01T00:00:00Z' },
         ],
       },

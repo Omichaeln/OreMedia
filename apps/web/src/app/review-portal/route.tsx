@@ -2,12 +2,7 @@ import { useMemo, useState } from 'react';
 import { QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Button, Skeleton, StatusBanner } from '@oremedia/ui';
 import { ToastProvider } from '../../components/toast';
-import {
-  DecisionForm,
-  ManifestMeta,
-  ManifestSummary,
-  StatePill,
-} from '../../features/review/request-detail';
+import { DecisionForm, ManifestMeta, ManifestSummary, StatePill } from '../../features/review/request-detail';
 import {
   ATTENTION_CHIP,
   REQUEST_STATE_CHIP,
@@ -180,7 +175,9 @@ function Portal({ link, teamName }: { link: PortalLink; teamName: string }) {
     <>
       <div className="flex flex-col gap-2">
         <p className="text-sm text-muted-foreground">You were asked to review</p>
-        <h1 className="text-2xl font-bold tracking-title">{r.frozenManifest.article?.title ?? 'Your review'}</h1>
+        <h1 className="text-2xl font-bold tracking-title">
+          {r.frozenManifest.article?.title ?? 'Your review'}
+        </h1>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           <StatePill tone={state.tone} label={state.label} data-testid="portal-state" />
           <span>

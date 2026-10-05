@@ -136,7 +136,11 @@ export function ReviewInboxRoute() {
               const row = inboxRowState(item);
               const isSelected = item.id === selectedId;
               return (
-                <li key={item.id} className="om-in" style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}>
+                <li
+                  key={item.id}
+                  className="om-in"
+                  style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
+                >
                   <button
                     type="button"
                     aria-pressed={isSelected}
