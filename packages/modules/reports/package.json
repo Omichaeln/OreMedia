@@ -16,6 +16,7 @@
     "@oremedia/module-access": "workspace:*",
     "@oremedia/module-billing": "workspace:*",
     "@oremedia/module-brand": "workspace:*",
+    "@oremedia/module-content": "workspace:*",
     "@oremedia/module-intelligence": "workspace:*",
     "@oremedia/module-measurement": "workspace:*",
     "@oremedia/module-operations": "workspace:*",

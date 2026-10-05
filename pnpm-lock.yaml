@@ -1296,6 +1296,9 @@ importers:
       '@oremedia/module-brand':
         specifier: workspace:*
         version: link:../brand
+      '@oremedia/module-content':
+        specifier: workspace:*
+        version: link:../content
       '@oremedia/module-intelligence':
         specifier: workspace:*
         version: link:../intelligence

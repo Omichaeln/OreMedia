@@ -488,7 +488,7 @@ describe('reports module against MySQL 8 (D-29)', () => {
       state: 'draft',
     });
     const a = member(tenantA);
-    for (const call of [
+    const calls: Array<() => Promise<unknown>> = [
       () => service.list(a, { brandId: brandB, page: { limit: 10 } }),
       () => service.get(a, { brandId: brandB, periodMonth: '2026-09' }),
       () => service.figures(a, { brandId: brandB, periodMonth: '2026-09', compareMode: 'previous_month' }),
@@ -496,8 +496,8 @@ describe('reports module against MySQL 8 (D-29)', () => {
       () => service.preferences.get(a, { brandId: brandB }),
       () =>
         service.draftSummary(a, { brandId: brandB, periodMonth: '2026-09', compareMode: 'previous_month' }),
-    ])
-      await expect(read(tenantA, call)).rejects.toBeInstanceOf(NotFoundError);
+    ];
+    for (const call of calls) await expect(read(tenantA, call)).rejects.toBeInstanceOf(NotFoundError);
     await expect(
       run(tenantA, (tx) =>
         service.save(a, { brandId: brandB, periodMonth: '2026-09', expectedVersion: 0, fields: FIELDS }, tx),
