@@ -456,7 +456,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.keyboard.press('Escape');
     await expect.poll(() => imported.textContent(), { timeout: 15_000 }).toContain('Published');
     // Import a package: manifest.json names the skill; it appears as a new draft.
-    await page.getByRole('button', { name: 'Import a skill package' }).click();
+    await page.getByRole('button', { name: 'Import SKILL.md package' }).click();
     await page.getByLabel('Skill package files').setInputFiles([
       {
         name: 'manifest.json',
@@ -493,7 +493,8 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
     await page.getByTestId('destinations').waitFor({ timeout: 15_000 });
-    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    // Destinations are the "Websites and sources" group of the Channels tab; the former deep link opens it.
+    expect(await page.getByRole('tab', { name: 'Channels' }).getAttribute('aria-selected')).toBe('true');
     const ga4 = page.getByTestId('destination-dst_e2e_ga4');
     await ga4.waitFor({ timeout: 15_000 });
     expect(await ga4.textContent()).toContain('Acme web');
@@ -964,7 +965,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_ga4`);
     await page.getByTestId('destination-connect-callback').waitFor({ timeout: 15_000 });
     expect(page.url()).toContain('tab=destinations');
-    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    expect(await page.getByRole('tab', { name: 'Channels' }).getAttribute('aria-selected')).toBe('true');
     await page.getByRole('button', { name: 'Finish connecting' }).click();
     const choose = page.getByTestId('destination-connect-choose');
     await choose.waitFor({ timeout: 15_000 });
@@ -1047,16 +1048,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
       .toEqual([
         'Channels',
-        'Destinations',
         'Mandates',
-        'Policy',
+        'Release policy',
         'Skills',
         'Members',
-        'Budgets',
-        'Model routing',
-        'Account',
+        'Budgets & models',
+        'Appearance',
       ]);
-    await page.getByRole('tab', { name: 'Policy' }).click();
+    await page.getByRole('tab', { name: 'Release policy' }).click();
     const policy = page.getByTestId('release-policy');
     await expect
       .poll(() => policy.textContent(), { timeout: 15_000 })
@@ -1109,7 +1108,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await mandateBrand.getByRole('button', { name: 'Release' }).getAttribute('aria-disabled')).toBe(
       'true',
     );
-    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await page.getByRole('tab', { name: 'Budgets & models' }).click();
     const routing = page.getByTestId('model-routing');
     await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('anthropic/claude-sonnet');
     // What is checked is apart from what is only recorded, and the model in use comes from the deployment.
@@ -1153,7 +1152,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const inUseBefore = backend.modelInUse;
     backend.modelInUse = null;
     await page.reload();
-    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await page.getByRole('tab', { name: 'Budgets & models' }).click();
     await expect
       .poll(() => routing.textContent(), { timeout: 15_000 })
       .toContain('The model in use is not known here');
@@ -1317,13 +1316,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=policy')}`);
     await page.getByTestId('release-policy').waitFor({ timeout: 15_000 });
     expect(await page.getByTestId('kill-switches').count()).toBe(0);
-    expect(await page.getByRole('tab', { name: 'Model routing' }).count()).toBe(0);
+    expect(await page.getByRole('tab', { name: 'Budgets & models' }).count()).toBe(0);
     expect(await page.getByRole('tab', { name: 'Members' }).count()).toBe(0);
     await page.getByRole('tab', { name: 'Mandates' }).click();
     await expect.poll(() => page.getByTestId('mandate').count(), { timeout: 15_000 }).toBe(2);
     expect(await page.getByTestId('mandates').getByRole('button', { name: 'Pause' }).count()).toBe(0);
-    // Destinations: a brand manager reads the policy table and registers nothing.
-    await page.getByRole('tab', { name: 'Destinations' }).click();
+    // Websites and sources (on Channels): a brand manager reads the policy table and registers nothing.
+    await page.getByRole('tab', { name: 'Channels' }).click();
     await page.getByTestId('source-use-sup_e2e_gbp_reviews').waitFor({ timeout: 15_000 });
     expect(await page.getByTestId('source-use').getByRole('button', { name: 'Save' }).count()).toBe(0);
     expect(await page.getByTestId('register-destination').count()).toBe(0);
