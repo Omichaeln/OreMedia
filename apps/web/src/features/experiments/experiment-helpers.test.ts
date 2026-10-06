@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allocationText,
   conclusionText,
+  experimentProgress,
+  modeNote,
+  stoppingText,
+  variantsLine,
+  windowText,
   EMPTY_DESIGN,
-  estimateText,
+  differenceText,
+  intervalText,
   experimentStateChip,
   formatRate,
   isDesignChanged,
@@ -45,8 +52,10 @@ describe('formatting', () => {
   it('formats rates, estimates, hashes, labels and window ends', () => {
     expect(formatRate(null)).toBe('unavailable');
     expect(formatRate(0.1234)).toBe('12.3%');
-    expect(estimateText(null, null)).toContain('No estimate');
-    expect(estimateText(0.02, [-0.01, 0.05])).toBe('Difference +2.0 pp (95% interval -1.0 pp to +5.0 pp).');
+    expect(differenceText(null)).toContain('No estimate');
+    expect(differenceText(0.02)).toBe('Difference +2.0 pp');
+    expect(intervalText([-0.01, 0.05], 0.0123)).toBe('95% interval -1.0 pp to +5.0 pp · p = 0.012');
+    expect(intervalText(null, null)).toBe('');
     expect(shortHash(null)).toBe('—');
     expect(shortHash('a'.repeat(64))).toBe(`${'a'.repeat(12)}…`);
     expect(conclusionText('directional; not causal')).toBe('directional; not causal');
@@ -94,5 +103,45 @@ describe('parseDesign', () => {
       expect(r.design.stoppingRule.kind).toBe('sequential_msprt');
       expect(r.design.minSamplePerArm).toBe(30);
     }
+  });
+});
+
+describe('detail lines (interface pre-registration table)', () => {
+  it('names the arms, the split, the window and the stopping rule', () => {
+    expect(variantsLine([{ label: 'A' }, { label: 'B' }])).toBe('A vs. B');
+    expect(allocationText('matched_slots', [{ allocationWeight: 1 }, { allocationWeight: 1 }])).toBe(
+      'Matched slots, 50/50',
+    );
+    expect(windowText(168)).toBe('7 days');
+    expect(windowText(24)).toBe('1 day');
+    expect(windowText(36)).toBe('36 h');
+    expect(stoppingText({ kind: 'fixed_horizon', alpha: 0.05 })).toBe('Fixed horizon, α = 0.05');
+  });
+  it('keeps the conclusion label verbatim in the mode note', () => {
+    expect(modeNote('structured_comparison', 'directional; not causal')).toContain('directional; not causal');
+    expect(modeNote('randomised', 'causal_when_sound')).toContain('Can support causal claims');
+  });
+});
+
+describe('experimentProgress', () => {
+  const x = {
+    startedAt: '2026-10-01T00:00:00.000Z',
+    observationWindowHours: 168,
+    minSamplePerArm: 1000,
+    variants: [{ id: 'a' }, { id: 'b' }],
+  };
+  it('with a result, measures the smallest arm against the minimum sample', () => {
+    const p = experimentProgress(x, { perVariant: { a: { n: 1000 }, b: { n: 400 } } });
+    expect(p.fraction).toBe(0.4);
+    expect(p.label).toBe(`${(400).toLocaleString()} / ${(1000).toLocaleString()} per arm`);
+  });
+  it('running without a result, shows the window passed, never an invented sample', () => {
+    const p = experimentProgress(x, null, new Date('2026-10-03T12:00:00.000Z'));
+    expect(p.label).toBe('Day 3 of 7 · window');
+    expect(p.fraction).toBeCloseTo(60 / 168);
+    expect(experimentProgress(x, null, new Date('2026-11-01T00:00:00.000Z')).fraction).toBe(1);
+  });
+  it('not started: nothing has passed', () => {
+    expect(experimentProgress({ ...x, startedAt: null }, null).fraction).toBe(0);
   });
 });
