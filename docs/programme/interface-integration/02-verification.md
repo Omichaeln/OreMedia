@@ -72,6 +72,41 @@ Deviates, and why:
 - Lato does not load against the mock transport (no network), so the captures fall back to the system face; the
   interface's captures have Lato.
 
+## Calendar (PR #101)
+
+| Check                                                                                 | Result                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`                                               | pass                                                                                                                                                                                                                                                                                                                                                |
+| `pnpm lint`                                                                           | pass                                                                                                                                                                                                                                                                                                                                                |
+| `pnpm vitest run --project unit apps/web packages/ui`                                 | 171 tests pass (528 e2e cases skipped without `OREMEDIA_E2E`)                                                                                                                                                                                                                                                                                       |
+| gitleaks (`origin/main..HEAD`)                                                        | no leaks                                                                                                                                                                                                                                                                                                                                            |
+| e2e `phase5` (calendar and publishing, review, portal) and `remote-changes`           | pass (the PR carries the final run's counts)                                                                                                                                                                                                                                                                                                        |
+| e2e `journey` (phone width)                                                           | 32 / 34: the two failures ("switching to company B shows none of company A's rows", "a creator restricted to brand 1 sees only it") assert the Portfolio's markers and the shell's single "Brand" label and fail on the foundation base without this change (the foundation worktree carries their fix); every calendar step of the journey passes  |
+| e2e `a11y`, calendar audits at 390 / 1280 px, light and dark, with a publication open | zero violations. The keyboard path at 1280 px first reported the header controls and the banner's link as covered by the open drawer (WCAG 2.4.11); the content column now pads its right edge by the drawer's width (verified in the screenshots). The keyboard path and the dialog test then timed out under machine load; CI runs them on the PR |
+| e2e `responsive`, `shell`                                                             | CI runs them on the PR (the shared machine's e2e lock); the screenshot run reports no horizontal overflow at 1440, 768 or 390 px in any variant                                                                                                                                                                                                     |
+| Screenshots                                                                           | 1440, 768 and 390 px, light and dark, month, week and with a publication open, against `ui-ref/shots/calendar-*.png` (below and in the PR)                                                                                                                                                                                                          |
+
+Visual comparison. 1440: the layout and hierarchy match the interface: the period as a 28 px bold title with the
+muted timezone line; the segmented Month / Week, white ‹ Today ›, the ink Schedule at the right; the channel banner;
+the ruled white grid with the MON…SUN row, today's number on an ink circle, the selected day tinted, one dot per
+publication in its state's colour; the eyebrow "MONDAY, OCTOBER 5" and rows of time · title · channel · dot + state;
+the open publication as a 360 px right sheet (id, ×, title, channel · time, the state in bold, the explanation, the
+sections, the actions at the foot). 768: the same, the drawer beside a narrowed column. 390: as the interface's phone
+shot (the wrapped header, the banner, the seven-column grid at 86 px rows, the eyebrow and rows), with the open
+publication as a card under the day list. Dark: every surface from the tokens.
+
+Deviations and why: the banner is the foundation's `StatusBanner` (bold title, explanation, ghost "Reconnect →",
+critical tint) rather than the interface's one-line accent-tint row, because the application has a title and an
+explanation to show and the phase 5 suite asserts them; the day-list rows carry the publication id under the channel
+(the journey suite reads rows by id, and a person reconciling a partial success needs it); the state labels are the
+application's ("Processing", "Live", "Draft saved"); the drawer is a fixed non-modal `aside` from 768 px and a card
+under the list below that width (the interface's 92 vw sheet would cover the rows and controls the phone-width suites
+use while a publication is open), and the content column makes room for it (the interface's own `calDetailW`); the
+schedule form stays on the screen as the interface's card "Schedule a channel variant" (the suites expect it on a
+plain day URL and open it by `?schedule=`), reached by the header's Schedule; Refresh stays as a ghost control; the
+week title keeps the year; out-of-month numbers and the weekday row use the muted text colour (4.5:1); Lato does not
+render in the capture environment.
+
 ## Agents (PR: `claude/ui-agents`, base `claude/ui-foundation`)
 
 | Check                                                                           | Result                                                                                                                                                       |
@@ -148,6 +183,51 @@ Visual comparison (interface `brand-system-*.png` against the application's `sys
   `Panel`, `Field` and `Input`.
 - Wording changed in a test: `brand-kit.e2e.test.ts` opens the voice section from the overview card named "Voice &
   writing" (the interface's label; it was "Voice & personality").
+
+## Performance and portfolio performance (PR #112: claude/ui-performance)
+
+| Check                                                                                           | Result                                                                                         |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`, `pnpm lint`, `pnpm format`                             | pass                                                                                           |
+| `pnpm vitest run --project unit apps/web packages/ui`                                           | pass (new: median, lift, signed percent, channel freshness, best slot)                         |
+| e2e (built app, mock transport): shell (performance, web, overview, audit), journey, responsive | pass locally; a11y and the rest in CI on the PR                                                |
+| New assertions run against `origin/main`'s screen                                               | fail there (no "not compared" tile line, no expandable row), pass here                         |
+| Screenshots                                                                                     | application at 1440, 768 and 390 px, light, and 1440 and 390 dark, against `performance-*.png` |
+
+Visual comparison (interface `performance-1440.png` / `-390.png` against the application):
+
+- Matches at 1440: the 28 px title with the brand · company · objective line; the controls on the right (brand
+  select, the 7 / 30 / 90 days segment, a secondary button); the channel chips with dots and the freshness line on
+  the right with a stale channel in the warning colour; the figure tiles as one ruled strip (12 px radius, 1 px
+  rules between tiles, label, 22 px figure, change line, the OBJECTIVE tag); the trend in a white card (title,
+  muted line, readout top right, y axis 0 / mid / max, x labels, publication dots under the axis); By channel and
+  When it lands side by side; What the creative did as three-or-more columns of uppercase feature labels with a
+  diverging bar per value; the CONTENT label with the sort chips on the right and the ruled table; the AI review
+  and Next content cycle cards with accent eyebrows, ruled lists and Keep / Drop on each row.
+- Deviations and why: the trend is columns per day published, not a line of daily reach (collection pulls
+  lifetime totals at fixed ages, so there is no honest per-calendar-day series; a line across empty days would
+  invent continuity), with the previous period as the dashed series instead of an 8-week rolling baseline; no
+  sparklines in the tiles (per-day latest values mix post ages, so recent days would always read low); "Monthly
+  report" absent (PR #108's Reports route is not on main) and "Export" absent (no export exists); the content
+  table has no thumbnail column and no per-post "AI review of this post" (no such read model), the open row shows
+  the post's engagement quality and tracked links; the AI review's Worked / Didn't / Likely reasons become
+  Movements / Findings / Likely reasons, because insights carry no direction and only experimentally supported
+  entries are findings (spec 16.3); the steer field and "Create briefs for kept items" are not shown (the analyst
+  run takes no steer, and Keep already creates the brief on the server); channel dots are one neutral mark, not
+  per-provider colours (no provider-specific styling in generic code); the slot rows are six-hour clock ranges,
+  not Morning / Midday / Afternoon / Evening, and each cell prints its rate and measured / posted. The web
+  sources and audit sections remain below the interface's content (the overview's drill-downs land on them).
+- 768: tiles fall to four, then two per row; By channel and When it lands stay side by side; the content table
+  shows Post, Channel, the selected metric and vs. median, the other columns from 768 px up.
+- 390: the controls wrap under the title, tiles two per row, cards stack, the table keeps Post (channel in its
+  meta line), the selected metric and vs. median. No horizontal scrolling (responsive e2e).
+- Dark: every surface, rule, bar and text uses tokens; checked at 1440 and 390.
+- Portfolio performance: the interface draws its brands table inside Performance with "All brands"; the
+  application keeps `/portfolio/performance` (the brand select's "All brands" goes there) with the same header
+  and period control and a ruled table per company. The interface's Approval time, Objective and Trend columns
+  have no read model per brand and are not shown.
+- Wording changed in a test: `shell.e2e.test.ts` reads the posts as table rows and opens a post from the row's
+  button (it was a "Details" button in a list).
 
 ## Intelligence and Experiments (PR #111, `claude/ui-intelligence`, base `main`)
 

@@ -235,11 +235,20 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await impressions.textContent()).toContain((7800).toLocaleString('en-US'));
     expect(await page.getByTestId('coverage').textContent()).toContain('3 of 3 publications have numbers');
     expect(await page.getByTestId('coverage').textContent()).toContain('2 stale values');
+    // Three posts against none before: under the minimum sample the change is not compared (D-14), never a number.
+    await expect
+      .poll(() => impressions.textContent(), { timeout: 15_000 })
+      .toContain('not compared: under 5 posts');
+    // The freshness line: each channel's oldest fetch; a stale channel says so in words, not only in colour.
+    const fresh = page.getByTestId('freshness-line');
+    expect(await fresh.textContent()).toContain('Acme LinkedIn');
+    expect(await fresh.textContent()).toContain('stale');
     const clicks = metric.getByRole('button', { name: /^Clicks/ });
     expect(await clicks.textContent()).toContain('2 of 3 posts');
     await clicks.click();
     await expect.poll(() => clicks.getAttribute('aria-pressed')).toBe('true');
-    const posts = page.getByTestId('performance-posts').getByRole('listitem');
+    // The interface's content table: one row per post (the detail row of an open post carries no publication).
+    const posts = page.getByTestId('performance-posts').locator('tbody tr[data-publication]');
     expect(await posts.count()).toBe(3);
     // LinkedIn did not return clicks: the row says so and sorts last, never shown as 0.
     await expect.poll(() => posts.last().textContent()).toContain('Unavailable');
@@ -359,8 +368,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await attributes.textContent()).toContain('Small sample');
     expect(await attributes.textContent()).not.toContain('Above brand');
     // One post: its quality composite with what is unavailable named, and its tracked link with the clicks.
+    // The interface opens a post under its row of the content table: the row's button (its title) toggles it.
     const row = page.getByTestId('performance-posts').locator('[data-publication="pub_published"]');
-    await row.getByRole('button', { name: 'Details' }).click();
+    await row.getByRole('button').click();
+    await expect.poll(() => row.getByRole('button').getAttribute('aria-expanded')).toBe('true');
     const detail = page.getByTestId('post-detail');
     await detail.getByTestId('post-quality').waitFor({ timeout: 15_000 });
     expect(new URL(page.url()).searchParams.get('post')).toBe('pub_published');
@@ -382,6 +393,38 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await next.getByTestId('recommendation').count()).toBe(1);
     expect(await next.textContent()).toContain('Answer the shipping question in a post');
     expect(await next.textContent()).not.toContain('Test price-first carousels');
+    // Keep is the recommendation's proposed action (the brief form), Drop is dismiss with a reason: nothing reads
+    // as kept or dropped before the server answers, so opening either form changes no state.
+    const brief = next.getByTestId('recommendation').first();
+    await brief.getByRole('button', { name: 'Keep' }).click();
+    await brief.getByLabel('Audience').waitFor({ timeout: 15_000 });
+    expect(await brief.getByRole('button', { name: 'Keep: create brief' }).count()).toBe(1);
+    await brief.getByRole('button', { name: 'Cancel' }).click();
+    await brief.getByRole('button', { name: 'Drop' }).click();
+    await brief.getByLabel('Reason for dismissing').waitFor({ timeout: 15_000 });
+    expect(await brief.getByRole('button', { name: 'Drop' }).last().getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    await brief.getByRole('button', { name: 'Cancel' }).click();
+    expect(await brief.getAttribute('data-recommendation-state')).toBe('proposed');
+    expect(await next.textContent()).not.toContain('Kept');
+    // The AI review: the analyst's movements, findings and hypotheses, each labelled as what it is.
+    const review = page.getByTestId('ai-review');
+    expect(await review.getByTestId('ai-review-movements').textContent()).toContain(
+      'Qualified enquiries fell 12% week on week.',
+    );
+    expect(await review.getByTestId('ai-review-findings').textContent()).toContain('Landing page B');
+    expect(await review.getByTestId('ai-review-hypotheses').textContent()).toContain(
+      'hypotheses, not findings',
+    );
+    // The objective (qualified enquiries) has no post metric here: its tile says so instead of a number.
+    expect(await page.getByTestId('objective-tile').textContent()).toContain('Unavailable');
+    expect(await page.getByRole('heading', { level: 1, name: 'Performance' }).count()).toBe(1);
+    // No export exists in the application, so the screen offers none; the overview is reached from here (D-28).
+    expect(await page.getByRole('button', { name: 'Export' }).count()).toBe(0);
+    expect(await page.getByRole('link', { name: /Web, search and audit/ }).getAttribute('href')).toContain(
+      '/overview?period=30',
+    );
     await page.close();
   }, 60_000);
 
