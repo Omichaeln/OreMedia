@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router';
 import { changedElementIds, findElement, findWithAncestors, isLockedInContext } from '@oremedia/editor';
-import { Badge, Button, EmptyState, Panel, StatusBanner } from '@oremedia/ui';
+import { Badge, Button, EmptyState, StatusBanner } from '@oremedia/ui';
 import { Tab, TabList, TabPanel, Tabs } from '../../components/tabs';
 import { useBrandVersion } from '../brand/use-brand';
 import { brandPath, useBrandContext } from '../brand/brand-context';
@@ -24,7 +23,8 @@ import { AgentPanel } from './agent-panel';
 import { GeneratePanel } from './generate-panel';
 import { RenderPanel } from './render-panel';
 import { ReviewPanel } from './review-panel';
-import { ConflictDialog, LeaveDialog, SaveIndicator } from './save-indicator';
+import { ConflictDialog, LeaveDialog, SaveBanners, SaveIndicator } from './save-indicator';
+import { StudioBar } from './studio-bar';
 import { hasLocalWork } from './studio-reducer';
 import { TemplatesPanel } from './templates-panel';
 import { useCommentPages } from './use-document';
@@ -51,26 +51,28 @@ function TabCount({ n, label }: { n: number; label: string }) {
 }
 
 /**
- * Spec 11.1 layout: header with company + brand; assets/templates/layers left; canvas centre; properties right with
- * the agent, comments, checks and history as tabs under them (the v3 prototype's arrangement); page strip bottom.
- */
-/**
+ * Spec 11.1 layout, in the interface's chrome: the studio bar; layers, assets and templates in a flush column on the
+ * left; the canvas on the tinted ground in the centre with the insert bar above it and the page strip below; on the
+ * right the properties over the document panels (generate, agent, comments, checks, history).
+ *
  * UX-18: the three columns by breakpoint. The canvas column keeps a minimum (20rem, 24rem from xl) whichever side
- * panels are shown, so panels give way, never the canvas; below md everything stacks. Full class strings so
- * Tailwind sees them.
+ * panels are shown, so panels give way, never the canvas; below md everything stacks. From xl the side columns take
+ * the interface's widths (232 and 300 px). Full class strings so Tailwind sees them.
  */
 const GRID = {
-  both: 'md:grid-cols-[12rem_minmax(20rem,1fr)_14rem] lg:grid-cols-[16rem_minmax(20rem,1fr)_22rem] xl:grid-cols-[18rem_minmax(24rem,1fr)_24rem]',
-  left: 'md:grid-cols-[12rem_minmax(20rem,1fr)] lg:grid-cols-[16rem_minmax(20rem,1fr)] xl:grid-cols-[18rem_minmax(24rem,1fr)]',
+  both: 'md:grid-cols-[12rem_minmax(20rem,1fr)_14rem] lg:grid-cols-[14.5rem_minmax(20rem,1fr)_18rem] xl:grid-cols-[14.5rem_minmax(24rem,1fr)_18.75rem]',
+  left: 'md:grid-cols-[12rem_minmax(20rem,1fr)] lg:grid-cols-[14.5rem_minmax(20rem,1fr)] xl:grid-cols-[14.5rem_minmax(24rem,1fr)]',
   right:
-    'md:grid-cols-[minmax(20rem,1fr)_14rem] lg:grid-cols-[minmax(20rem,1fr)_22rem] xl:grid-cols-[minmax(24rem,1fr)_24rem]',
+    'md:grid-cols-[minmax(20rem,1fr)_14rem] lg:grid-cols-[minmax(20rem,1fr)_18rem] xl:grid-cols-[minmax(24rem,1fr)_18.75rem]',
   none: 'md:grid-cols-[minmax(20rem,1fr)]',
 } as const;
+/** The save states the banners under the bar speak for (SaveBanners). */
+const BANNER_SAVE_KINDS: ReadonlySet<string> = new Set(['failed', 'rebasing', 'conflict']);
 const gridKey = (p: { left: boolean; right: boolean }): keyof typeof GRID =>
   p.left && p.right ? 'both' : p.left ? 'left' : p.right ? 'right' : 'none';
 
 export function Studio({ documentId, initial }: { documentId: string; initial: DocumentDto }) {
-  const { companyId, companyName, brandId, brand } = useBrandContext();
+  const { companyId, brandId, brand } = useBrandContext();
   const studio = useStudio(documentId, initial);
   const { state, doc, page } = studio;
   const { theme, toggle } = useTheme();
@@ -222,98 +224,81 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
     );
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="studio">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
-          <Link
-            to={brandPath(companyId, brandId, 'studio')}
-            aria-label="Studio"
-            title="Back to the Studio documents"
-            className="rounded-md px-1.5 py-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <span aria-hidden="true">←</span>
-          </Link>
-          <Link to={`/c/${encodeURIComponent(companyId)}`} className="truncate">
-            {companyName ?? companyId}
-          </Link>
-          <span aria-hidden="true" className="text-muted-foreground">
-            /
-          </span>
-          <Link to={brandPath(companyId, brandId)} className="truncate font-medium">
-            {brand.name}
-          </Link>
-          <span aria-hidden="true" className="text-muted-foreground">
-            /
-          </span>
-          <DocumentTitle documentId={documentId} title={initial.title} />
-        </div>
-        <SaveIndicator
-          save={state.save}
-          revisionNumber={state.committed.number}
-          onRetry={() => void studio.saveNow()}
-        />
-        <div className="ml-auto flex flex-wrap items-center gap-1">
-          <Button
-            size="sm"
-            onClick={studio.undo}
-            disabledReason={studio.undoBlocked ?? undefined}
-            data-testid="undo"
-          >
-            Undo
-          </Button>
-          <Button
-            size="sm"
-            onClick={studio.redo}
-            disabledReason={studio.redoBlocked ?? undefined}
-            data-testid="redo"
-          >
-            Redo
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void studio.saveNow()}
-            disabled={!state.pending || Boolean(state.inFlight)}
-            data-testid="save-now"
-          >
-            Save now
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => setReviewOpen((open) => !open)}
-            aria-expanded={reviewOpen}
-            aria-controls="studio-review"
-          >
-            Send for review
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => togglePanel('left')}
-            aria-pressed={panels.left}
-            data-testid="toggle-left-panels"
-          >
-            {panels.left ? 'Hide layers' : 'Show layers'}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => togglePanel('right')}
-            aria-pressed={panels.right}
-            data-testid="toggle-right-panels"
-          >
-            {panels.right ? 'Hide properties' : 'Show properties'}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
-            {theme === 'dark' ? 'Light theme' : 'Dark theme'}
-          </Button>
-        </div>
-      </header>
+    <div className="flex h-full min-h-0 flex-col bg-background" data-testid="studio">
+      <StudioBar
+        back={{ to: brandPath(companyId, brandId, 'studio'), label: 'Studio', title: 'Back to the Studio' }}
+        crumbs={['Still', <DocumentTitle key="title" documentId={documentId} title={initial.title} />]}
+        status={
+          <SaveIndicator
+            save={state.save}
+            revisionNumber={state.committed.number}
+            onRetry={() => void studio.saveNow()}
+          />
+        }
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => togglePanel('left')}
+              aria-pressed={panels.left}
+              data-testid="toggle-left-panels"
+            >
+              {panels.left ? 'Hide layers' : 'Show layers'}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => togglePanel('right')}
+              aria-pressed={panels.right}
+              data-testid="toggle-right-panels"
+            >
+              {panels.right ? 'Hide properties' : 'Show properties'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={toggle} aria-pressed={theme === 'dark'}>
+              {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={studio.undo}
+              disabledReason={studio.undoBlocked ?? undefined}
+              data-testid="undo"
+            >
+              Undo
+            </Button>
+            <Button
+              size="sm"
+              onClick={studio.redo}
+              disabledReason={studio.redoBlocked ?? undefined}
+              data-testid="redo"
+            >
+              Redo
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void studio.saveNow()}
+              disabled={!state.pending || Boolean(state.inFlight)}
+              data-testid="save-now"
+            >
+              Save now
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setReviewOpen((open) => !open)}
+              aria-expanded={reviewOpen}
+              aria-controls="studio-review"
+            >
+              Send for review
+            </Button>
+          </>
+        }
+      />
 
       {/* Above the canvas rather than a right-sidebar tab: it holds a form and a package list that need the width,
           and it is a hand-off out of the studio, not a view of the document like the sidebar tabs. */}
       {reviewOpen && (
-        <div id="studio-review" className="px-3 pt-2">
+        <div id="studio-review" className="shrink-0 border-b border-border bg-card px-4 py-3">
           <ReviewPanel
             companyId={companyId}
             brandId={brandId}
@@ -327,61 +312,59 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
         </div>
       )}
 
-      {state.notice && (
-        <div className="px-3 pt-2">
-          <StatusBanner
-            tone={state.notice.tone}
-            title={state.notice.text}
-            actions={
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => studio.dispatch({ type: 'notice', notice: null })}
-              >
-                Dismiss
-              </Button>
-            }
+      {(state.notice || studio.localError || BANNER_SAVE_KINDS.has(state.save.kind)) && (
+        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+          <SaveBanners
+            save={state.save}
+            headNumber={state.conflict?.head.number ?? state.committed.number}
+            onRetry={() => void studio.saveNow()}
           />
-        </div>
-      )}
-      {studio.localError && (
-        <div className="px-3 pt-2">
-          <StatusBanner
-            tone="critical"
-            title="A local change could not be rendered"
-            description={studio.localError}
-          />
-        </div>
-      )}
-      {state.save.kind === 'failed' && (
-        <div className="px-3 pt-2">
-          <StatusBanner
-            tone="critical"
-            title="Autosave failed"
-            description={`${state.save.error.message} Your changes are kept locally; retry when ready.`}
-            actions={
-              <Button size="sm" onClick={() => void studio.saveNow()}>
-                Retry save
-              </Button>
-            }
-          />
+          {state.notice && (
+            <StatusBanner
+              tone={state.notice.tone}
+              title={state.notice.text}
+              actions={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => studio.dispatch({ type: 'notice', notice: null })}
+                >
+                  Dismiss
+                </Button>
+              }
+            />
+          )}
+          {studio.localError && (
+            <StatusBanner
+              tone="critical"
+              title="A local change could not be rendered"
+              description={studio.localError}
+            />
+          )}
         </div>
       )}
 
-      <main id="main" className={`grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 ${GRID[gridKey(panels)]}`}>
+      <main id="main" className={`grid min-h-0 flex-1 grid-cols-1 ${GRID[gridKey(panels)]}`}>
         {panels.left && (
-          <Panel
-            title="Left panels"
-            hideTitle
-            className="min-h-48 md:min-h-0"
-            bodyClassName="flex flex-col p-0"
+          <section
+            aria-labelledby="left-panels-heading"
+            className="flex min-h-48 min-w-0 flex-col overflow-hidden border-b border-border bg-card md:min-h-0 md:border-b-0 md:border-r"
             data-testid="left-panels"
           >
+            <h2 id="left-panels-heading" className="sr-only">
+              Left panels
+            </h2>
             <Tabs defaultValue="layers" className="flex min-h-0 flex-1 flex-col">
-              <TabList label="Studio panels">
-                <Tab value="layers">Layers</Tab>
-                <Tab value="assets">Assets</Tab>
-                <Tab value="templates">Templates</Tab>
+              <TabList label="Studio panels" variant="pill">
+                <Tab value="layers" variant="pill">
+                  Layers
+                </Tab>
+                <Tab value="assets" variant="pill">
+                  Assets
+                </Tab>
+                <Tab value="templates" variant="pill">
+                  Templates
+                </Tab>
               </TabList>
               <TabPanel value="layers">
                 <LayersPanel
@@ -416,12 +399,12 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 />
               </TabPanel>
             </Tabs>
-          </Panel>
+          </section>
         )}
 
         <div
           ref={canvasRef}
-          className="flex min-h-72 min-w-0 flex-col rounded-md border border-border md:min-h-0"
+          className="flex min-h-72 min-w-0 flex-col bg-secondary md:min-h-0"
           data-testid="canvas-column"
         >
           <InsertToolbar
@@ -470,8 +453,17 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
         </div>
 
         {panels.right && (
-          <div className="flex min-h-0 flex-col gap-2" data-testid="right-panels">
-            <Panel title="Properties" level={2} className="shrink-0 md:max-h-[45%] md:overflow-auto">
+          <div
+            className="flex min-h-0 min-w-0 flex-col border-t border-border bg-card md:border-l md:border-t-0"
+            data-testid="right-panels"
+          >
+            <section
+              aria-labelledby="properties-heading"
+              className="flex shrink-0 flex-col gap-2.5 border-b border-border px-4 py-3.5 md:max-h-[46%] md:overflow-auto"
+            >
+              <h2 id="properties-heading" className="text-sm font-medium">
+                Properties
+              </h2>
               <PropertiesPanel
                 page={page}
                 selection={state.selection}
@@ -484,38 +476,41 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                 onSelect={selectNew}
                 focusTextRequest={focusText}
               />
-            </Panel>
-            <Panel
-              title="Document panels"
-              hideTitle
-              className="min-h-72 flex-1 md:min-h-0"
-              bodyClassName="flex flex-col p-0"
+            </section>
+            <section
+              aria-labelledby="document-panels-heading"
+              className="flex min-h-72 flex-1 flex-col md:min-h-0"
             >
+              <h2 id="document-panels-heading" className="sr-only">
+                Document panels
+              </h2>
               <Tabs
                 value={rightTab}
                 onValueChange={(v) => setRightTab(v as RightTab)}
                 className="flex min-h-0 flex-1 flex-col"
               >
-                <TabList label="Document panels" className="flex-wrap">
-                  <Tab value="generate">
+                <TabList label="Document panels" variant="pill" className="flex-wrap">
+                  <Tab value="generate" variant="pill">
                     Generate
                     {state.proposal?.generation && <TabCount n={1} label="proposal waiting" />}
                   </Tab>
-                  <Tab value="agent">
+                  <Tab value="agent" variant="pill">
                     Agent
                     {state.proposal && !state.proposal.generation && (
                       <TabCount n={1} label="proposal waiting" />
                     )}
                   </Tab>
-                  <Tab value="comments">
+                  <Tab value="comments" variant="pill">
                     Comments
                     <TabCount n={openComments} label="open" />
                   </Tab>
-                  <Tab value="checks">
+                  <Tab value="checks" variant="pill">
                     Checks
                     <TabCount n={state.findings.length} label="on the last save" />
                   </Tab>
-                  <Tab value="history">History</Tab>
+                  <Tab value="history" variant="pill">
+                    History
+                  </Tab>
                 </TabList>
                 <TabPanel value="generate" className="flex flex-col gap-3 p-3" keepMounted>
                   <GeneratePanel
@@ -594,7 +589,7 @@ export function Studio({ documentId, initial }: { documentId: string; initial: D
                   </section>
                 </TabPanel>
               </Tabs>
-            </Panel>
+            </section>
           </div>
         )}
       </main>

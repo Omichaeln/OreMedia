@@ -1,479 +1,404 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import type { ContentType, CreativeDocumentV1 } from '@oremedia/contracts/creative';
-import { VIDEO_FORMAT_KEYS, VIDEO_FORMATS, type VideoFormatKey } from '@oremedia/contracts/video';
+import { useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router';
+import type { ContentType, CreativeDocumentV1, FormatDefinition } from '@oremedia/contracts/creative';
+import { VIDEO_FORMATS, type VideoFormatKey } from '@oremedia/contracts/video';
 import {
+  FORMAT_DEFINITIONS,
   STARTERS,
+  aspectLabel,
   blankDocument,
   customFormatIssue,
   customFormatKey,
   formatFor,
   instantiateStarter,
-  type InstantiatedStarter,
-  type StarterSpec,
 } from '@oremedia/editor';
-import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, cn } from '@oremedia/ui';
-import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../components/dialog';
+import { Button, Chip, EmptyState, Field, Input, Skeleton, StatusBanner, cn } from '@oremedia/ui';
 import { RequestError } from '../../../components/request-state';
 import { Select } from '../../../components/select';
 import { toUiError } from '../../../lib/errors';
-import { useBrandContext } from '../../brand/brand-context';
+import { brandPath, useBrandContext } from '../../brand/brand-context';
+import { useBrandVersions } from '../../brand/use-brand';
 import type { TemplateWithCurrentDto } from '../types';
-import { useDocuments, useTemplatesWithCurrent, useVideoTemplates } from '../use-document';
+import { useTemplatesWithCurrent, useVideoTemplates } from '../use-document';
 import {
-  CHANNELS,
-  CONTENT_TYPES,
+  KINDS,
+  KIND_FORMATS,
   contentTypeOf,
+  contentTypesFor,
   dimensionsLabel,
-  formatLabel,
+  platformsOf,
   suggestTitle,
+  type StudioKind,
 } from './content-types';
-import { ScenePreview, usePreviewResolvers, type PreviewResolvers } from './scene-preview';
+import { ScenePreview, usePreviewResolvers } from './scene-preview';
 import { useStarterBrand } from './use-starter-brand';
 import { useStartDocument, type StartRequest } from './use-create-document';
 
-type TypeFilter = ContentType | 'all';
-type SourceFilter = 'all' | 'builtin' | 'brand';
-interface Filters {
-  type: TypeFilter;
-  channel: string;
-  format: string;
-  source: SourceFilter;
-}
-
-const PREVIEW_WIDTH = 216;
-
-/** A starter or brand template as the gallery shows it. */
-interface GalleryEntry {
+/** A layout the format step offers: blank, a built-in starter or an approved brand template, at one format. */
+interface LayoutEntry {
   id: string;
   name: string;
-  description: string;
   contentType: ContentType;
   formatKey: string;
-  channels: readonly string[];
   document: CreativeDocumentV1;
-  badge: string;
+  /** Where it comes from, said under its name. */
+  detail: string;
   notes: string[];
   start: (title: string) => StartRequest;
 }
 
-const matches = (
-  e: Pick<GalleryEntry, 'contentType' | 'formatKey' | 'channels'>,
-  f: Filters,
-  brandOwned: boolean,
-) =>
-  (f.type === 'all' || e.contentType === f.type) &&
-  (f.format === 'all' || e.formatKey === f.format) &&
-  (f.channel === 'all' || e.channels.includes(f.channel)) &&
-  (f.source === 'all' || (f.source === 'brand') === brandOwned);
+const PREVIEW_BOX = 128;
+/** A preview's width inside the square box the interface draws layouts in. */
+const previewWidth = (w: number, h: number) => Math.round(w >= h ? PREVIEW_BOX : (PREVIEW_BOX * w) / h);
+
+export const kindLabel = (kind: StudioKind) => (kind === 'still' ? 'Still' : 'Motion');
+
+/** The step the address names (refresh and Back keep it): `?kind=` and, once chosen, `&platform=&format=`. */
+export const studioKindOf = (params: URLSearchParams): StudioKind | null => {
+  const kind = params.get('kind');
+  return kind === 'still' || kind === 'motion' ? kind : null;
+};
+
+/** The format a `format=` value names for a kind: a page format (custom sizes too) or a video output preset. */
+export function formatOf(kind: StudioKind, key: string | null): FormatDefinition | null {
+  if (!key) return null;
+  if (kind === 'motion') return (VIDEO_FORMATS as Record<string, FormatDefinition>)[key] ?? null;
+  return formatFor(key) ?? null;
+}
 
 /**
- * STU-1a creation screen: start from what the document is for. Content types first, then the gallery of built-in
- * starters (instantiated with this brand's published system, previewed by the scene renderer) and approved brand
- * templates, filtered by type, channel, format and source; then blank, custom size and duplicate. Choosing a card
- * creates the document with a suggested title and opens the studio on it; "Details" shows the start first, with the
- * title editable.
+ * The interface's create screen (STU-1a, D-30): "What are you making?", the Still and Motion cards with the number
+ * of formats each can make, and the brand-system warning when creation is blocked. The route puts the brand's
+ * documents to continue under it.
  */
-export function NewDocumentGallery({ disabledReason }: { disabledReason?: string }) {
+export function StudioStart({ children }: { children: ReactNode }) {
   const { brandId, brand } = useBrandContext();
-  const starterBrand = useStarterBrand(brandId, brand.publishedVersionId ?? null);
-  const templates = useTemplatesWithCurrent(brandId);
-  const [filters, setFilters] = useState<Filters>({
-    type: 'all',
-    channel: 'all',
-    format: 'all',
-    source: 'all',
-  });
-  const [details, setDetails] = useState<GalleryEntry | null>(null);
-  const [other, setOther] = useState<'blank' | 'custom' | 'duplicate' | 'video' | null>(null);
-  const start = useStartDocument({
-    onCreated: () => {
-      setDetails(null);
-      setOther(null);
-    },
-  });
-  const set = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
-
-  const starters = useMemo((): Array<{ spec: StarterSpec; made: InstantiatedStarter }> => {
-    const b = starterBrand.brand;
-    if (!b || starterBrand.issue) return [];
-    return STARTERS.map((spec) => ({ spec, made: instantiateStarter(spec, b) }));
-  }, [starterBrand.brand, starterBrand.issue]);
-  const colours = starterBrand.brand?.colours ?? [];
-  const resolvers = usePreviewResolvers(
-    useMemo(() => starters.map((s) => s.made.document), [starters]),
-    colours,
-  );
-  const entries: GalleryEntry[] = starters.map(({ spec, made }) => ({
-    id: `starter:${spec.key}`,
-    name: spec.name,
-    description: spec.description,
-    contentType: spec.contentType,
-    formatKey: spec.formatKey,
-    channels: spec.channels,
-    document: made.document,
-    badge: 'Built-in',
-    notes: made.notes,
-    start: (title) => ({
-      kind: 'create',
-      input: {
-        brandId,
-        title,
-        document: made.document,
-        contentType: spec.contentType,
-        source: { kind: 'starter', starterKey: spec.key },
-      },
-    }),
-  }));
-  const shownStarters = entries.filter((e) => matches(e, filters, false));
-  const brandTemplates = (templates.data?.items ?? []).filter(
-    (t) => t.state === 'active' && t.currentVersionId,
-  );
-  const formatsInUse = [
-    ...new Set([...STARTERS.map((s) => s.formatKey), ...CONTENT_TYPES.flatMap((c) => c.formats)]),
-  ];
-  const startEntry = (e: GalleryEntry) => start.mutate(e.start(suggestTitle(e.contentType, e.name)));
-  const busy = start.isPending;
-
+  const versions = useBrandVersions(brandId);
+  const published = versions.data?.items.find((v) => v.id === brand.publishedVersionId);
+  const noBrandSystem = brand.status !== 'setup' && !brand.publishedVersionId;
   return (
-    <div className="flex flex-col gap-4" data-testid="new-document">
-      <div
-        role="group"
-        aria-label="Content type"
-        className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7"
-      >
-        <TypeTile
-          label="Everything"
-          description="Every start"
-          pressed={filters.type === 'all'}
-          onClick={() => set({ type: 'all' })}
-        />
-        {CONTENT_TYPES.map((c) => (
-          <TypeTile
-            key={c.key}
-            label={c.label}
-            description={c.available ? c.description : (c.unavailableReason ?? '')}
-            pressed={filters.type === c.key}
-            disabled={!c.available}
-            // STU-2b: a video has no page starters to filter; its tile opens the video start.
-            onClick={() => (c.key === 'video' ? setOther('video') : set({ type: c.key }))}
-          />
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Field label="Channel" htmlFor="gallery-channel">
-          <Select
-            id="gallery-channel"
-            size="sm"
-            value={filters.channel}
-            onValueChange={(channel) => channel && set({ channel })}
-            options={[
-              { value: 'all', label: 'All channels' },
-              ...CHANNELS.map((c) => ({ value: c.key, label: c.label })),
-            ]}
-          />
-        </Field>
-        <Field label="Format" htmlFor="gallery-format">
-          <Select
-            id="gallery-format"
-            size="sm"
-            value={filters.format}
-            onValueChange={(format) => format && set({ format })}
-            options={[
-              { value: 'all', label: 'All formats' },
-              ...formatsInUse.map((k) => ({ value: k, label: formatLabel(k) })),
-            ]}
-          />
-        </Field>
-        <Field label="Templates" htmlFor="gallery-source">
-          <Select
-            id="gallery-source"
-            size="sm"
-            value={filters.source}
-            onValueChange={(source) => source && set({ source: source as SourceFilter })}
-            options={[
-              { value: 'all', label: 'Built-in and brand templates' },
-              { value: 'builtin', label: 'Built-in starters' },
-              { value: 'brand', label: 'Brand templates' },
-            ]}
-          />
-        </Field>
-      </div>
-
-      {start.isError && (
-        <StatusBanner
-          tone="critical"
-          title="The document could not be created"
-          description={toUiError(start.error).message}
-        />
-      )}
-      {starterBrand.isPending && <Skeleton label="Loading the brand's starters" lines={3} />}
-      {starterBrand.isError && <RequestError error={starterBrand.error} onRetry={starterBrand.refetch} />}
-      {starterBrand.notes.length > 0 && (
-        <StatusBanner
-          tone="info"
-          title="About the logos in the starters"
-          description={starterBrand.notes.join(' ')}
-        />
-      )}
-      {templates.isError && <RequestError error={templates.error} onRetry={() => void templates.refetch()} />}
-      {starterBrand.brand && starterBrand.issue && (
-        <StatusBanner
-          tone="info"
-          title="Built-in starters need more of the brand system"
-          description={`${starterBrand.issue} You can still start from a blank canvas or a custom size.`}
-        />
-      )}
-
-      <ul
-        aria-label="Templates"
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
-        data-testid="template-gallery"
-      >
-        {filters.source !== 'builtin' &&
-          brandTemplates.map((t) => (
-            <BrandTemplateCard
-              key={t.id}
-              template={t}
-              filters={filters}
-              colours={colours}
-              disabledReason={disabledReason}
-              busy={busy}
-              onStart={startEntry}
-              onDetails={setDetails}
-            />
+    <main id="main" className="om-in min-h-0 flex-1 overflow-auto">
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-9 px-4 pb-20 pt-10 sm:px-8 sm:pt-16">
+        <header className="flex flex-col gap-1.5">
+          <h1 className="text-2xl font-bold tracking-title">What are you making?</h1>
+          <p className="text-pretty text-base text-muted-foreground">
+            {brand.publishedVersionId
+              ? `Every format starts from ${brand.name}’s published brand system${published ? ` v${published.number}` : ''}. Colour, type, logo rules and approved assets come with it.`
+              : `Every format starts from ${brand.name}’s published brand system, so documents can be created once it is saved.`}
+          </p>
+        </header>
+        {noBrandSystem && <NoBrandSystemBanner />}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-4">
+          {KINDS.map((k) => (
+            <KindCard key={k.key} kind={k} />
           ))}
-        {filters.source !== 'brand' &&
-          shownStarters.map((e) => (
-            <GalleryCard
-              key={e.id}
-              entry={e}
-              resolvers={resolvers}
-              disabledReason={disabledReason}
-              busy={busy}
-              onStart={() => startEntry(e)}
-              onDetails={() => setDetails(e)}
-            />
-          ))}
-      </ul>
-      {starterBrand.brand && shownStarters.length === 0 && filters.source === 'builtin' && (
-        <EmptyState
-          title="No starter matches"
-          description="Change the content type, channel or format filter."
-        />
-      )}
-      {templates.isSuccess && brandTemplates.length === 0 && filters.source === 'brand' && (
-        <EmptyState
-          title="No approved brand templates"
-          description="Save a document as a template from the studio; once a brand manager approves it, it appears here."
-        />
-      )}
-
-      <section aria-labelledby="other-starts" className="flex flex-col gap-2">
-        <h3 id="other-starts" className="text-sm font-semibold">
-          Start another way
-        </h3>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <OtherStart
-            title="Blank canvas"
-            description="An empty page in the format you choose."
-            onClick={() => setOther('blank')}
-            disabledReason={disabledReason}
-          />
-          <OtherStart
-            title="Custom size"
-            description="Any width and height from 64 to 4096 px."
-            onClick={() => setOther('custom')}
-            disabledReason={disabledReason}
-          />
-          <OtherStart
-            title="Duplicate a document"
-            description="A copy of an existing document to change."
-            onClick={() => setOther('duplicate')}
-            disabledReason={disabledReason}
-          />
         </div>
-      </section>
-
-      {details && (
-        <DetailsDialog
-          entry={details}
-          resolvers={resolvers}
-          busy={busy}
-          disabledReason={disabledReason}
-          onClose={() => setDetails(null)}
-          onStart={(title) => start.mutate(details.start(title))}
-        />
-      )}
-      {other === 'blank' && (
-        <BlankDialog
-          initialType={filters.type === 'all' ? 'social_post' : filters.type}
-          colours={colours}
-          brandVersionId={brand.publishedVersionId ?? ''}
-          busy={busy}
-          onClose={() => setOther(null)}
-          onStart={(req) => start.mutate(req)}
-        />
-      )}
-      {other === 'custom' && (
-        <CustomDialog
-          colours={colours}
-          brandVersionId={brand.publishedVersionId ?? ''}
-          busy={busy}
-          onClose={() => setOther(null)}
-          onStart={(req) => start.mutate(req)}
-        />
-      )}
-      {other === 'duplicate' && (
-        <DuplicateDialog busy={busy} onClose={() => setOther(null)} onStart={(req) => start.mutate(req)} />
-      )}
-      {other === 'video' && (
-        <VideoDialog
-          busy={busy}
-          disabledReason={disabledReason}
-          onClose={() => setOther(null)}
-          onStart={(req) => start.mutate(req)}
-        />
-      )}
-    </div>
+        {children}
+      </div>
+    </main>
   );
 }
 
-function TypeTile(props: {
-  label: string;
-  description: string;
-  pressed: boolean;
-  disabled?: boolean;
-  onClick: () => void;
+function NoBrandSystemBanner() {
+  const { companyId, brandId } = useBrandContext();
+  return (
+    <StatusBanner
+      tone="warning"
+      title="No brand system yet"
+      description="The brand has no saved brand system. Documents cannot be created until the brand system is saved."
+      actions={
+        <Button asChild size="sm">
+          <Link to={brandPath(companyId, brandId, 'system')}>Open brand system</Link>
+        </Button>
+      }
+    />
+  );
+}
+
+/** The interface's illustration of each kind: three frames in the ink, the accent and the card surface. */
+const FRAMES: Record<StudioKind, Array<{ className: string; glyph?: string }>> = {
+  still: [
+    { className: 'h-[95px] w-[76px] bg-primary' },
+    { className: 'h-24 w-24 bg-accent' },
+    { className: 'h-24 w-[68px] bg-card' },
+  ],
+  motion: [
+    { className: 'h-[100px] w-14 bg-primary text-primary-foreground', glyph: '▶' },
+    { className: 'h-[84px] w-[150px] bg-accent text-accent-foreground', glyph: '▶' },
+    { className: 'h-[100px] w-14 bg-card text-foreground', glyph: '▶' },
+  ],
+};
+
+function KindCard({ kind }: { kind: (typeof KINDS)[number] }) {
+  const count = KIND_FORMATS[kind.key].length;
+  return (
+    <Link
+      to={{ search: `?kind=${kind.key}` }}
+      className="flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-[transform,box-shadow,border-color] duration-200 ease-out-soft hover:-translate-y-0.5 hover:border-border-strong hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      data-testid="studio-kind"
+    >
+      <span aria-hidden="true" className="flex h-[200px] items-center justify-center gap-3 bg-muted">
+        {FRAMES[kind.key].map((f, i) => (
+          <span
+            key={i}
+            // The glyph is large text (22 px bold), so the accent frame's light glyph keeps 3:1 (WCAG large text).
+            className={cn(
+              'flex items-center justify-center rounded-sm text-xl font-bold shadow-card',
+              f.className,
+            )}
+          >
+            {f.glyph}
+          </span>
+        ))}
+      </span>
+      <span className="flex flex-col gap-1.5 px-5 pb-5 pt-[18px]">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="text-xl font-bold tracking-title">{kind.label}</span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {count} format{count === 1 ? '' : 's'}
+          </span>
+        </span>
+        <span className="text-pretty text-sm text-muted-foreground">{kind.description}</span>
+        <span className="mt-1 text-xs">{kind.tools}</span>
+      </span>
+    </Link>
+  );
+}
+
+/**
+ * The interface's format step: Still / Motion and the platforms on the left (each with how many of its formats the
+ * application makes), the platform's sizes in the centre with a custom size for pages, and once a size is chosen
+ * the layouts for it on the right, with the title and "Open in canvas" / "Open in timeline". The step lives in the
+ * address, so a refresh or Back keeps it.
+ */
+export function FormatPicker({ kind }: { kind: StudioKind }) {
+  const { brand } = useBrandContext();
+  const [params, setParams] = useSearchParams();
+  const platforms = platformsOf(kind);
+  const platform = platforms.find((p) => p.key === params.get('platform')) ?? platforms[0];
+  const format = formatOf(kind, params.get('format'));
+  const go = (next: { kind?: StudioKind; platform?: string; format?: string }) => {
+    const search = new URLSearchParams({ kind: next.kind ?? kind });
+    if (next.platform) search.set('platform', next.platform);
+    if (next.format) search.set('format', next.format);
+    setParams(search);
+  };
+  const disabledReason = brand.publishedVersionId ? undefined : 'Save the brand system first';
+  if (!platform) return null;
+
+  return (
+    <main
+      id="main"
+      className={cn(
+        'om-in grid min-h-0 flex-1 grid-cols-1 overflow-auto md:overflow-hidden',
+        format
+          ? 'md:grid-cols-[170px_minmax(0,1fr)_280px] lg:grid-cols-[200px_minmax(0,1fr)_340px]'
+          : 'md:grid-cols-[170px_minmax(0,1fr)] lg:grid-cols-[200px_minmax(0,1fr)]',
+      )}
+    >
+      <nav
+        aria-label="Formats"
+        className="flex min-w-0 flex-col gap-px border-b border-border bg-card px-3 py-[18px] md:overflow-auto md:border-b-0 md:border-r"
+      >
+        <div
+          role="group"
+          aria-label="Kind"
+          className="mb-4 flex overflow-hidden rounded-lg border border-border"
+        >
+          {KINDS.map((k) => (
+            <button
+              key={k.key}
+              type="button"
+              aria-pressed={k.key === kind}
+              onClick={() => go({ kind: k.key })}
+              className={cn(
+                'h-[30px] flex-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                k.key === kind
+                  ? 'bg-secondary text-foreground'
+                  : 'bg-card text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+        <h2 className="om-label px-2.5 pb-1.5">Platform</h2>
+        <ul className="flex flex-col gap-px">
+          {platforms.map((p) => (
+            <li key={p.key}>
+              <button
+                type="button"
+                aria-pressed={p.key === platform.key}
+                onClick={() => go({ platform: p.key })}
+                className={cn(
+                  'flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  p.key === platform.key
+                    ? 'bg-secondary font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <span>{p.label}</span>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {p.formats.length}
+                  <span className="sr-only"> {p.formats.length === 1 ? 'format' : 'formats'}</span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <section
+        aria-labelledby="platform-title"
+        className="flex min-w-0 flex-col gap-[18px] px-4 pb-16 pt-7 sm:px-8 md:overflow-auto"
+      >
+        <div className="flex flex-col gap-1">
+          <h1 id="platform-title" className="text-xl font-bold tracking-title">
+            {platform.label}
+            {kind === 'motion' ? ' video' : ''}
+          </h1>
+          <p className="text-pretty text-sm text-muted-foreground">
+            {kind === 'still'
+              ? `Pick a size. Layouts for it open beside it: ${brand.name}’s approved templates and the built-in starters, made from its brand system.`
+              : 'Pick a size. The timeline starts blank or from a video template made for that size.'}
+          </p>
+        </div>
+        <ul aria-label="Sizes" className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-3">
+          {platform.formats.map((f) => (
+            <li key={f.key}>
+              <SizeCard
+                format={f}
+                selected={format?.key === f.key}
+                onSelect={() => go({ platform: platform.key, format: f.key })}
+              />
+            </li>
+          ))}
+        </ul>
+        {kind === 'still' && <CustomSizeForm onUse={(key) => go({ platform: platform.key, format: key })} />}
+      </section>
+
+      {format &&
+        (kind === 'still' ? (
+          <StillLayouts key={format.key} format={format} disabledReason={disabledReason} />
+        ) : (
+          <MotionLayouts key={format.key} format={format} disabledReason={disabledReason} />
+        ))}
+    </main>
+  );
+}
+
+/** A size as the interface draws it: the frame at its proportions, the name and the dimensions. */
+function SizeCard({
+  format,
+  selected,
+  onSelect,
+}: {
+  format: FormatDefinition;
+  selected: boolean;
+  onSelect: () => void;
 }) {
+  const scale = Math.min(120 / format.width, 76 / format.height);
   return (
     <button
       type="button"
-      aria-pressed={props.pressed}
-      disabled={props.disabled}
-      onClick={props.onClick}
+      aria-pressed={selected}
+      onClick={onSelect}
       className={cn(
-        'flex flex-col items-start gap-0.5 rounded-md border p-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        props.pressed ? 'border-accent bg-secondary' : 'border-border hover:bg-muted',
-        props.disabled && 'cursor-not-allowed opacity-60 hover:bg-transparent',
+        'flex w-full flex-col gap-3 rounded-xl border bg-card p-3 text-left hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        selected ? 'border-foreground ring-1 ring-foreground' : 'border-border',
       )}
+      data-testid="format-card"
     >
-      <span className="font-medium">{props.label}</span>
-      <span className="text-xs text-muted-foreground">{props.description}</span>
+      <span aria-hidden="true" className="flex h-24 items-center justify-center rounded-lg bg-background">
+        <span
+          className={cn(
+            'rounded-sm border transition-colors',
+            selected ? 'border-foreground bg-accent-tint' : 'border-border-strong bg-card',
+          )}
+          style={{ width: Math.round(format.width * scale), height: Math.round(format.height * scale) }}
+        />
+      </span>
+      <span className="flex flex-col gap-0.5">
+        <span className="text-sm font-medium">{format.label}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {format.width} × {format.height} px · {aspectLabel(format.width, format.height)}
+        </span>
+      </span>
     </button>
   );
 }
 
-function Facts({
-  entry,
-}: {
-  entry: Pick<GalleryEntry, 'contentType' | 'formatKey' | 'document' | 'description'>;
-}) {
-  const page = entry.document.pages[0];
+/** Any size the renderer can export (64 to 4096 px a side, at most 8:1), checked before it is used. */
+function CustomSizeForm({ onUse }: { onUse: (formatKey: string) => void }) {
+  const [width, setWidth] = useState('1080');
+  const [height, setHeight] = useState('1350');
+  const w = Number(width);
+  const h = Number(height);
+  const issue = width && height ? customFormatIssue(w, h) : 'Enter a width and a height';
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!issue) onUse(customFormatKey(w, h));
+  };
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs">
-      <dt className="text-muted-foreground">Use</dt>
-      <dd>{entry.description}</dd>
-      <dt className="text-muted-foreground">Format</dt>
-      <dd>{formatLabel(entry.formatKey)}</dd>
-      <dt className="text-muted-foreground">Size</dt>
-      <dd>{page ? dimensionsLabel(page.width, page.height) : '–'}</dd>
-      <dt className="text-muted-foreground">Pages</dt>
-      <dd>{entry.document.pages.length}</dd>
-    </dl>
-  );
-}
-
-function GalleryCard({
-  entry,
-  resolvers,
-  disabledReason,
-  busy,
-  onStart,
-  onDetails,
-}: {
-  entry: GalleryEntry;
-  resolvers: PreviewResolvers;
-  disabledReason?: string;
-  busy: boolean;
-  onStart: () => void;
-  onDetails: () => void;
-}) {
-  const page = entry.document.pages[0];
-  const headingId = `card-${entry.id.replace(/[^a-z0-9]/gi, '-')}`;
-  return (
-    <li
-      className="flex flex-col gap-2 rounded-md border border-border p-3"
-      aria-labelledby={headingId}
-      data-testid="gallery-card"
+    <form
+      onSubmit={submit}
+      aria-labelledby="custom-size-title"
+      className="flex flex-wrap items-end gap-2 border-t border-border pt-4"
+      noValidate
     >
-      <div className="flex justify-center">
-        {page && (
-          <ScenePreview
-            page={page}
-            width={PREVIEW_WIDTH}
-            resolvers={resolvers}
-            label={`Preview of ${entry.name}, ${page.width} by ${page.height}`}
-          />
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 id={headingId} className="text-sm font-semibold">
-          {entry.name}
-        </h3>
-        <Badge glyph={false}>{entry.badge}</Badge>
-        <Badge tone="neutral" glyph={false}>
-          {contentTypeOf(entry.contentType).label}
-        </Badge>
-      </div>
-      <Facts entry={entry} />
-      <div className="mt-auto flex flex-wrap gap-2">
-        <Button size="sm" variant="primary" onClick={onStart} disabled={busy} disabledReason={disabledReason}>
-          Use {entry.name}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onDetails}>
-          Details
-        </Button>
-      </div>
-    </li>
+      <h2 id="custom-size-title" className="w-full text-sm font-medium">
+        Custom size
+      </h2>
+      <Field label="Width (px)" htmlFor="custom-width">
+        <Input
+          id="custom-width"
+          type="number"
+          inputMode="numeric"
+          min={64}
+          max={4096}
+          className="w-[90px]"
+          value={width}
+          onChange={(e) => setWidth(e.target.value)}
+        />
+      </Field>
+      <Field label="Height (px)" htmlFor="custom-height">
+        <Input
+          id="custom-height"
+          type="number"
+          inputMode="numeric"
+          min={64}
+          max={4096}
+          className="w-[90px]"
+          value={height}
+          onChange={(e) => setHeight(e.target.value)}
+        />
+      </Field>
+      <Button type="submit" disabledReason={issue ?? undefined}>
+        Use size
+      </Button>
+      <p
+        role="status"
+        aria-live="polite"
+        className={cn('w-full text-xs', issue ? 'text-status-critical' : 'text-muted-foreground')}
+      >
+        {issue ?? dimensionsLabel(w, h)}
+      </p>
+    </form>
   );
 }
 
-/** A brand template with its current approved version (one read for the gallery), filtered like a starter. */
-function BrandTemplateCard({
-  template,
-  filters,
-  colours,
-  disabledReason,
-  busy,
-  onStart,
-  onDetails,
-}: {
-  template: TemplateWithCurrentDto;
-  filters: Filters;
-  colours: ReadonlyArray<{ key: string; value: string }>;
-  disabledReason?: string;
-  busy: boolean;
-  onStart: (e: GalleryEntry) => void;
-  onDetails: (e: GalleryEntry) => void;
-}) {
-  const { brandId } = useBrandContext();
+/** An approved brand template's current version as a layout. */
+const templateLayout = (template: TemplateWithCurrentDto, brandId: string): LayoutEntry => {
   const version = template.currentVersion;
   const document = version.document;
-  const resolvers = usePreviewResolvers(
-    useMemo(() => [document], [document]),
-    colours,
-  );
-  const page = document.pages[0];
-  const entry: GalleryEntry = {
+  const contentType = document.contentType ?? 'custom';
+  return {
     id: `template:${template.id}`,
     name: template.name,
-    description: `Brand template, version ${version.number}, approved for this brand.`,
-    contentType: document.contentType ?? 'custom',
-    formatKey: page?.formatKey ?? '',
-    channels: formatFor(page?.formatKey ?? '')?.providerKeys ?? [],
+    contentType,
+    formatKey: document.pages[0]?.formatKey ?? '',
     document,
-    badge: 'Brand template',
+    detail: `Brand template, version ${version.number} · ${contentTypeOf(contentType).label}`,
     notes: [],
     start: (title) => ({
       kind: 'create',
@@ -485,61 +410,116 @@ function BrandTemplateCard({
       },
     }),
   };
-  if (!matches(entry, filters, true)) return null;
-  return (
-    <GalleryCard
-      entry={entry}
-      resolvers={resolvers}
-      disabledReason={disabledReason}
-      busy={busy}
-      onStart={() => onStart(entry)}
-      onDetails={() => onDetails(entry)}
-    />
-  );
-}
+};
 
-function OtherStart(props: {
-  title: string;
-  description: string;
-  onClick: () => void;
-  disabledReason?: string;
+/** The layouts panel's frame: the label, the chosen size, the list, and the form that opens the document. */
+function LayoutsFrame({
+  format,
+  children,
+  footer,
+}: {
+  format: FormatDefinition;
+  children: ReactNode;
+  footer: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-border p-3">
-      <span className="text-sm font-medium">{props.title}</span>
-      <span className="text-xs text-muted-foreground">{props.description}</span>
-      <div className="mt-1">
-        <Button size="sm" onClick={props.onClick} disabledReason={props.disabledReason}>
-          {props.title}…
-        </Button>
+    <aside
+      aria-labelledby="layouts-title"
+      className="om-drawer flex min-h-0 min-w-0 flex-col border-t border-border bg-card md:border-l md:border-t-0"
+      data-testid="layouts"
+    >
+      <div className="flex shrink-0 flex-col gap-[3px] border-b border-border px-5 py-[18px]">
+        <span className="om-label">Layouts</span>
+        <h2 id="layouts-title" className="text-md font-bold">
+          {format.label}
+        </h2>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {format.width} × {format.height} px · {aspectLabel(format.width, format.height)}
+        </span>
       </div>
-    </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 py-4 md:overflow-auto">{children}</div>
+      {footer}
+    </aside>
   );
 }
 
-/** The confirm step: the title is suggested and editable; the studio opens on the created document. */
-function StartForm({
+/** A layout tile: its preview in the square box, its name and where it comes from; double-click opens it. */
+function LayoutTile({
+  name,
+  detail,
+  selected,
+  onSelect,
+  onOpen,
+  children,
+}: {
+  name: string;
+  detail: string;
+  selected: boolean;
+  onSelect: () => void;
+  onOpen: () => void;
+  children: ReactNode;
+}) {
+  // Named by the layout's name and described by its source, not by the preview's own label that comes first.
+  const id = useId();
+  return (
+    <li data-testid="gallery-card">
+      <button
+        type="button"
+        aria-labelledby={`${id}-name`}
+        aria-describedby={`${id}-detail`}
+        aria-pressed={selected}
+        onClick={onSelect}
+        onDoubleClick={onOpen}
+        className="flex w-full flex-col gap-1.5 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-card"
+      >
+        <span
+          className={cn(
+            'flex h-[140px] items-center justify-center rounded-lg bg-background outline outline-2 outline-offset-2 transition-[outline-color]',
+            selected ? 'outline-foreground' : 'outline-transparent',
+          )}
+        >
+          {children}
+        </span>
+        <span id={`${id}-name`} className="text-sm font-medium" data-testid="layout-name">
+          {name}
+        </span>
+        <span id={`${id}-detail`} className="text-xs text-muted-foreground">
+          {detail}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+/** The title the document is created with (suggested, editable) and the button that creates and opens it. */
+function OpenForm({
   defaultTitle,
+  label,
+  note,
   busy,
   disabledReason,
-  invalid,
-  onStart,
+  onOpen,
   children,
 }: {
   defaultTitle: string;
+  label: string;
+  note: string;
   busy: boolean;
   disabledReason?: string;
-  invalid?: string | null;
-  onStart: (title: string) => void;
+  onOpen: (title: string) => void;
   children?: ReactNode;
 }) {
   const [title, setTitle] = useState(defaultTitle);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (title.trim() && !invalid) onStart(title.trim());
+    if (title.trim()) onOpen(title.trim());
   };
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+    <form
+      onSubmit={submit}
+      className="flex shrink-0 flex-col gap-2.5 border-t border-border px-5 pb-[18px] pt-3.5"
+      noValidate
+    >
       {children}
       <Field
         label="New document title"
@@ -548,356 +528,246 @@ function StartForm({
       >
         <Input id="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
       </Field>
-      <DialogActions>
-        <DialogClose asChild>
-          <Button type="button">Cancel</Button>
-        </DialogClose>
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={busy || !title.trim() || Boolean(invalid)}
-          disabledReason={disabledReason ?? invalid ?? undefined}
-        >
-          {busy ? 'Creating…' : 'Create and open'}
-        </Button>
-      </DialogActions>
+      <Button
+        type="submit"
+        variant="primary"
+        className="h-[38px] w-full"
+        disabled={busy || !title.trim()}
+        disabledReason={disabledReason}
+      >
+        {busy ? 'Creating…' : label}
+      </Button>
+      <p className="text-pretty text-xs text-muted-foreground">{note}</p>
     </form>
   );
 }
 
-function DetailsDialog({
-  entry,
-  resolvers,
-  busy,
-  disabledReason,
-  onClose,
-  onStart,
-}: {
-  entry: GalleryEntry;
-  resolvers: PreviewResolvers;
-  busy: boolean;
-  disabledReason?: string;
-  onClose: () => void;
-  onStart: (title: string) => void;
-}) {
+/**
+ * The layouts for a page size: blank (the brand's background), the approved brand templates and the built-in
+ * starters made for it (instantiated with the brand's published system, previewed by the scene renderer). When the
+ * size can be more than one content type (a square post or a carousel), chips choose it; a blank start takes it.
+ */
+function StillLayouts({ format, disabledReason }: { format: FormatDefinition; disabledReason?: string }) {
+  const { brandId, brand } = useBrandContext();
+  const starterBrand = useStarterBrand(brandId, brand.publishedVersionId ?? null);
+  const templates = useTemplatesWithCurrent(brandId);
+  const start = useStartDocument();
+  const colours = useMemo(() => starterBrand.brand?.colours ?? [], [starterBrand.brand]);
+  // A size typed in the custom form rather than one of the presets: its blank start is custom artwork.
+  const custom = !FORMAT_DEFINITIONS[format.key];
+  const brandVersionId = brand.publishedVersionId ?? '';
+
+  const atFormat = useMemo((): LayoutEntry[] => {
+    const b = starterBrand.brand;
+    const fromTemplates = (templates.data?.items ?? [])
+      .filter((t) => t.state === 'active' && t.currentVersionId)
+      .map((t) => templateLayout(t, brandId));
+    const fromStarters: LayoutEntry[] =
+      b && !starterBrand.issue
+        ? STARTERS.filter((spec) => spec.formatKey === format.key).map((spec) => {
+            const made = instantiateStarter(spec, b);
+            return {
+              id: `starter:${spec.key}`,
+              name: spec.name,
+              contentType: spec.contentType,
+              formatKey: spec.formatKey,
+              document: made.document,
+              detail: `Built-in · ${contentTypeOf(spec.contentType).label}`,
+              notes: made.notes,
+              start: (title: string): StartRequest => ({
+                kind: 'create',
+                input: {
+                  brandId,
+                  title,
+                  document: made.document,
+                  contentType: spec.contentType,
+                  source: { kind: 'starter', starterKey: spec.key },
+                },
+              }),
+            };
+          })
+        : [];
+    return [...fromTemplates.filter((e) => e.formatKey === format.key), ...fromStarters];
+  }, [starterBrand.brand, starterBrand.issue, templates.data, brandId, format.key]);
+
+  const types: ContentType[] = custom
+    ? ['custom']
+    : contentTypesFor(
+        format.key,
+        atFormat.map((e) => e.contentType),
+      );
+  const [type, setType] = useState<ContentType | 'all'>('all');
+  const blankType = type === 'all' ? (types[0] ?? 'custom') : type;
+  const blankPages = contentTypeOf(blankType).pages;
+  const blankDoc = useMemo(
+    () => blankDocument(format.key, { brandVersionId, colours }, blankType, blankPages),
+    [format.key, brandVersionId, colours, blankType, blankPages],
+  );
+  const blank: LayoutEntry = {
+    id: 'blank',
+    name: 'Blank',
+    contentType: blankType,
+    formatKey: format.key,
+    document: blankDoc,
+    detail: `${contentTypeOf(blankType).label} · the brand’s background, nothing placed`,
+    notes: [],
+    start: (title) => ({
+      kind: 'create',
+      input: {
+        brandId,
+        title,
+        contentType: blankType,
+        document: blankDoc,
+        source: { kind: custom ? 'custom' : 'blank' },
+      },
+    }),
+  };
+  const shown = atFormat.filter((e) => type === 'all' || e.contentType === type);
+  const layouts = [blank, ...shown];
+  const [picked, setPicked] = useState<string | null>(null);
+  const selected = layouts.find((l) => l.id === picked) ?? shown[0] ?? blank;
+  const resolvers = usePreviewResolvers(
+    useMemo(() => [...atFormat.map((e) => e.document), blankDoc], [atFormat, blankDoc]),
+    colours,
+  );
+  const titleFor = (e: LayoutEntry) =>
+    suggestTitle(e.contentType, e.id === 'blank' ? (custom ? 'Custom layout' : 'Blank') : e.name);
+  const open = (e: LayoutEntry, title: string) => start.mutate(e.start(title));
+  const width = previewWidth(format.width, format.height);
+
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title={entry.name} description={entry.description}>
-        <div className="flex flex-col gap-3">
-          <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Pages">
-            {entry.document.pages.map((p, i) => (
-              <ScenePreview
-                key={p.id}
-                page={p}
-                width={entry.document.pages.length > 1 ? 140 : 260}
-                resolvers={resolvers}
-                label={`Page ${i + 1}: ${p.name}`}
-                className="shrink-0"
-              />
-            ))}
-          </div>
-          <Facts entry={entry} />
-          {entry.notes.map((n) => (
+    <LayoutsFrame
+      format={format}
+      footer={
+        <OpenForm
+          key={`${selected.id}:${blankType}`}
+          defaultTitle={titleFor(selected)}
+          label="Open in canvas"
+          note="The document starts from the brand’s published system. Every save is a new revision; template locks and logo rules stay in force."
+          busy={start.isPending}
+          disabledReason={disabledReason}
+          onOpen={(title) => open(selected, title)}
+        >
+          {selected.notes.map((n) => (
             <p key={n} className="text-xs text-status-warning">
               {n}
             </p>
           ))}
-          <StartForm
-            defaultTitle={suggestTitle(entry.contentType, entry.name)}
-            busy={busy}
-            disabledReason={disabledReason}
-            onStart={onStart}
-          />
+        </OpenForm>
+      }
+    >
+      {start.isError && (
+        <StatusBanner
+          tone="critical"
+          title="The document could not be created"
+          description={toUiError(start.error).message}
+        />
+      )}
+      {starterBrand.isPending && <Skeleton label="Loading the brand's starters" lines={3} />}
+      {starterBrand.isError && <RequestError error={starterBrand.error} onRetry={starterBrand.refetch} />}
+      {templates.isError && <RequestError error={templates.error} onRetry={() => void templates.refetch()} />}
+      {starterBrand.notes.length > 0 && (
+        <StatusBanner
+          tone="info"
+          title="About the logos in the starters"
+          description={starterBrand.notes.join(' ')}
+        />
+      )}
+      {starterBrand.brand && starterBrand.issue && (
+        <StatusBanner
+          tone="info"
+          title="Built-in starters need more of the brand system"
+          description={`${starterBrand.issue} You can still start blank or at a custom size.`}
+        />
+      )}
+      {types.length > 1 && (
+        <div role="group" aria-label="Content type" className="flex flex-wrap gap-1.5">
+          <Chip selected={type === 'all'} onClick={() => setType('all')}>
+            All
+          </Chip>
+          {types.map((t) => (
+            <Chip key={t} selected={type === t} onClick={() => setType(t)}>
+              {contentTypeOf(t).label}
+            </Chip>
+          ))}
         </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function BlankDialog({
-  initialType,
-  colours,
-  brandVersionId,
-  busy,
-  onClose,
-  onStart,
-}: {
-  initialType: ContentType;
-  colours: ReadonlyArray<{ key: string; value: string; role: string }>;
-  brandVersionId: string;
-  busy: boolean;
-  onClose: () => void;
-  onStart: (req: StartRequest) => void;
-}) {
-  const { brandId } = useBrandContext();
-  // A video (no page formats) starts in its own dialog.
-  const startable = CONTENT_TYPES.filter((c) => c.available && c.formats.length > 0);
-  const [type, setType] = useState<ContentType>(
-    startable.some((c) => c.key === initialType) ? initialType : 'social_post',
-  );
-  const option = contentTypeOf(type);
-  const [picked, setPicked] = useState<string | null>(null);
-  // The picked format when the type offers it, else the type's default (changing the type resets it).
-  const formatKey = picked && option.formats.includes(picked) ? picked : (option.formats[0] ?? 'square_1080');
-  const format = formatFor(formatKey);
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title="Blank canvas" description="An empty page with the brand's background colour.">
-        <StartForm
-          defaultTitle={suggestTitle(type, 'Blank')}
-          busy={busy}
-          onStart={(title) =>
-            onStart({
-              kind: 'create',
-              input: {
-                brandId,
-                title,
-                contentType: type,
-                document: blankDocument(formatKey, { brandVersionId, colours }, type, option.pages),
-                source: { kind: 'blank' },
-              },
-            })
-          }
-        >
-          <Field label="Content type" htmlFor="blank-type">
-            <Select
-              id="blank-type"
-              value={type}
-              onValueChange={(v) => {
-                if (v) setType(v as ContentType);
-              }}
-              options={startable.map((c) => ({ value: c.key, label: c.label }))}
-            />
-          </Field>
-          <Field
-            label="Format"
-            htmlFor="blank-format"
-            hint={
-              format
-                ? `${dimensionsLabel(format.width, format.height)} · ${option.pages} page${option.pages > 1 ? 's' : ''}`
-                : undefined
-            }
-          >
-            <Select
-              id="blank-format"
-              value={formatKey}
-              onValueChange={(v) => {
-                if (v) setPicked(v);
-              }}
-              options={option.formats.map((k) => ({ value: k, label: formatLabel(k) }))}
-            />
-          </Field>
-        </StartForm>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CustomDialog({
-  colours,
-  brandVersionId,
-  busy,
-  onClose,
-  onStart,
-}: {
-  colours: ReadonlyArray<{ key: string; value: string; role: string }>;
-  brandVersionId: string;
-  busy: boolean;
-  onClose: () => void;
-  onStart: (req: StartRequest) => void;
-}) {
-  const { brandId } = useBrandContext();
-  const [width, setWidth] = useState('1500');
-  const [height, setHeight] = useState('500');
-  const w = Number(width);
-  const h = Number(height);
-  const issue = width && height ? customFormatIssue(w, h) : 'Enter a width and a height';
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        title="Custom size"
-        description="Any size the renderer can export: 64 to 4096 px on each side, the long side at most 8 times the short one."
-      >
-        <StartForm
-          defaultTitle={suggestTitle('custom', 'Custom layout')}
-          busy={busy}
-          invalid={issue}
-          onStart={(title) =>
-            onStart({
-              kind: 'create',
-              input: {
-                brandId,
-                title,
-                contentType: 'custom',
-                document: blankDocument(customFormatKey(w, h), { brandVersionId, colours }, 'custom'),
-                source: { kind: 'custom' },
-              },
-            })
-          }
-        >
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Width (px)" htmlFor="custom-width">
-              <Input
-                id="custom-width"
-                type="number"
-                inputMode="numeric"
-                min={64}
-                max={4096}
-                value={width}
-                onChange={(e) => setWidth(e.target.value)}
-              />
-            </Field>
-            <Field label="Height (px)" htmlFor="custom-height">
-              <Input
-                id="custom-height"
-                type="number"
-                inputMode="numeric"
-                min={64}
-                max={4096}
-                value={height}
-                onChange={(e) => setHeight(e.target.value)}
-              />
-            </Field>
-          </div>
-          <p
-            role="status"
-            aria-live="polite"
-            className={cn('text-xs', issue ? 'text-status-critical' : 'text-muted-foreground')}
-          >
-            {issue ?? dimensionsLabel(w, h)}
-          </p>
-        </StartForm>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function DuplicateDialog({
-  busy,
-  onClose,
-  onStart,
-}: {
-  busy: boolean;
-  onClose: () => void;
-  onStart: (req: StartRequest) => void;
-}) {
-  const { brandId } = useBrandContext();
-  const documents = useDocuments(brandId);
-  const [documentId, setDocumentId] = useState<string>('');
-  const chosen = documents.items.find((d) => d.id === documentId);
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        title="Duplicate a document"
-        description="The copy starts from the document's latest saved revision; the original is not changed."
-      >
-        {documents.isPending && <Skeleton label="Loading documents" lines={2} />}
-        {documents.isError && (
-          <RequestError error={documents.error} onRetry={() => void documents.refetch()} />
-        )}
-        {documents.isSuccess && documents.items.length === 0 && (
-          <EmptyState title="No documents yet" description="Create one from a template first." />
-        )}
-        {documents.items.length > 0 && (
-          <div className="flex flex-col gap-3">
-            <Field label="Document to copy" htmlFor="duplicate-source">
-              <Select
-                id="duplicate-source"
-                value={documentId}
-                placeholder="Choose a document"
-                onValueChange={setDocumentId}
-                options={documents.items.map((d) => ({ value: d.id, label: d.title }))}
-              />
-            </Field>
-            {/* Keyed by the source so the suggested title follows the choice. */}
-            <StartForm
-              key={documentId}
-              defaultTitle={chosen ? `${chosen.title} (copy)`.slice(0, 200) : ''}
-              busy={busy}
-              invalid={chosen ? null : 'Choose a document to copy'}
-              onStart={(title) => onStart({ kind: 'duplicate', input: { documentId, title } })}
-            />
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+      )}
+      <ul aria-label="Layouts" className="grid grid-cols-2 gap-x-3.5 gap-y-4" data-testid="template-gallery">
+        {layouts.map((l) => {
+          const page = l.document.pages[0];
+          return (
+            <LayoutTile
+              key={l.id}
+              name={l.name}
+              detail={l.detail}
+              selected={l.id === selected.id}
+              onSelect={() => setPicked(l.id)}
+              onOpen={() => open(l, titleFor(l))}
+            >
+              {page && (
+                <ScenePreview
+                  page={page}
+                  width={width}
+                  resolvers={resolvers}
+                  label={`Preview of ${l.name}, ${page.width} by ${page.height}`}
+                />
+              )}
+            </LayoutTile>
+          );
+        })}
+      </ul>
+      {templates.isSuccess && starterBrand.brand && shown.length === 0 && (
+        <EmptyState
+          title="No templates for this size yet"
+          description="Start blank, or save a document as a template from the studio; once a brand manager approves it, it appears here."
+        />
+      )}
+    </LayoutsFrame>
   );
 }
 
 /**
- * STU-2b: a video document on a timeline, from a blank output preset or a built-in video template bound to the
- * brand (the template sets the format); the frame rate is chosen here.
+ * The layouts for a video size: a blank timeline or a built-in video template bound to the brand (STU-2b) made for
+ * that size, and the frame rate.
  */
-function VideoDialog({
-  busy,
-  disabledReason,
-  onClose,
-  onStart,
-}: {
-  busy: boolean;
-  disabledReason?: string;
-  onClose: () => void;
-  onStart: (req: StartRequest) => void;
-}) {
+function MotionLayouts({ format, disabledReason }: { format: FormatDefinition; disabledReason?: string }) {
   const { brandId } = useBrandContext();
   const templates = useVideoTemplates(brandId, true);
-  const [templateKey, setTemplateKey] = useState('blank');
-  const [formatKey, setFormatKey] = useState<VideoFormatKey>('video_9x16');
+  const start = useStartDocument();
+  const [picked, setPicked] = useState('blank');
   const [fps, setFps] = useState<24 | 25 | 30>(30);
-  const template = templates.data?.items.find((t) => t.key === templateKey);
+  const blank = { key: 'blank', name: 'Blank video', description: 'An empty timeline at this size.' };
+  const layouts = [blank, ...(templates.data?.items ?? []).filter((t) => t.formatKey === format.key)];
+  const selected = layouts.find((l) => l.key === picked) ?? blank;
+  const titleFor = (l: (typeof layouts)[number]) => suggestTitle('video', l.key === 'blank' ? null : l.name);
+  const open = (key: string, title: string) =>
+    start.mutate({
+      kind: 'create',
+      input: {
+        brandId,
+        title,
+        kind: 'video',
+        video: {
+          formatKey: format.key as VideoFormatKey,
+          fps,
+          ...(key === 'blank' ? {} : { templateKey: key }),
+        },
+      },
+    });
+  const scale = Math.min(PREVIEW_BOX / format.width, PREVIEW_BOX / format.height);
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title="Video" description="A reel, short or video ad edited on a timeline.">
-        {templates.isError && (
-          <RequestError error={templates.error} onRetry={() => void templates.refetch()} />
-        )}
-        <StartForm
-          defaultTitle={suggestTitle('video', null)}
-          busy={busy}
+    <LayoutsFrame
+      format={format}
+      footer={
+        <OpenForm
+          key={selected.key}
+          defaultTitle={titleFor(selected)}
+          label="Open in timeline"
+          note="Clips, captions and titles go on the timeline; every save is a new revision you can restore."
+          busy={start.isPending}
           disabledReason={disabledReason}
-          onStart={(title) =>
-            onStart({
-              kind: 'create',
-              input: {
-                brandId,
-                title,
-                kind: 'video',
-                video: {
-                  formatKey: template?.formatKey ?? formatKey,
-                  fps,
-                  ...(template ? { templateKey: template.key } : {}),
-                },
-              },
-            })
-          }
+          onOpen={(title) => open(selected.key, title)}
         >
-          <Field label="Starting point" htmlFor="video-template" hint={template?.description}>
-            <Select
-              id="video-template"
-              value={templateKey}
-              onValueChange={(v) => {
-                if (v) setTemplateKey(v);
-              }}
-              options={[
-                { value: 'blank', label: 'Blank video' },
-                ...(templates.data?.items ?? []).map((t) => ({ value: t.key, label: t.name })),
-              ]}
-            />
-          </Field>
-          <Field label="Format" htmlFor="video-format" hint={template ? 'Set by the template' : undefined}>
-            <Select
-              id="video-format"
-              value={template?.formatKey ?? formatKey}
-              disabled={Boolean(template)}
-              onValueChange={(v) => {
-                if (v) setFormatKey(v as VideoFormatKey);
-              }}
-              options={VIDEO_FORMAT_KEYS.map((k) => ({
-                value: k,
-                label: `${VIDEO_FORMATS[k].label} (${VIDEO_FORMATS[k].width}×${VIDEO_FORMATS[k].height})`,
-              }))}
-            />
-          </Field>
           <Field label="Frame rate" htmlFor="video-fps">
             <Select
               id="video-fps"
@@ -908,8 +778,43 @@ function VideoDialog({
               options={[24, 25, 30].map((n) => ({ value: String(n), label: `${n} fps` }))}
             />
           </Field>
-        </StartForm>
-      </DialogContent>
-    </Dialog>
+        </OpenForm>
+      }
+    >
+      {start.isError && (
+        <StatusBanner
+          tone="critical"
+          title="The document could not be created"
+          description={toUiError(start.error).message}
+        />
+      )}
+      {templates.isPending && <Skeleton label="Loading video templates" lines={2} />}
+      {templates.isError && <RequestError error={templates.error} onRetry={() => void templates.refetch()} />}
+      <ul aria-label="Layouts" className="grid grid-cols-2 gap-x-3.5 gap-y-4" data-testid="template-gallery">
+        {layouts.map((l) => (
+          <LayoutTile
+            key={l.key}
+            name={l.name}
+            detail={l.key === 'blank' ? l.description : `Video template · ${l.description}`}
+            selected={l.key === selected.key}
+            onSelect={() => setPicked(l.key)}
+            onOpen={() => open(l.key, titleFor(l))}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                'flex items-center justify-center rounded-sm text-sm shadow-card',
+                l.key === 'blank'
+                  ? 'border border-border-strong bg-card text-foreground'
+                  : 'bg-primary text-primary-foreground',
+              )}
+              style={{ width: Math.round(format.width * scale), height: Math.round(format.height * scale) }}
+            >
+              ▶
+            </span>
+          </LayoutTile>
+        ))}
+      </ul>
+    </LayoutsFrame>
   );
 }

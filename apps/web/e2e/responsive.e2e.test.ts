@@ -51,6 +51,11 @@ const SCREENS: Screen[] = [
   { name: 'campaigns', path: brandPath('campaigns'), ready: h1 },
   { name: 'studio documents', path: brandPath('studio'), ready: h1 },
   {
+    name: 'studio format',
+    path: brandPath('studio?kind=still&platform=instagram_business&format=square_1080'),
+    ready: (p) => p.getByTestId('template-gallery').getByTestId('gallery-card').nth(1).waitFor(),
+  },
+  {
     name: 'performance',
     path: brandPath('performance'),
     ready: (p) => p.getByRole('group', { name: 'Metric' }).waitFor(),
@@ -159,7 +164,12 @@ describe.skipIf(!enabled)('responsive parity (built app in Chromium, mock transp
             `${name} at ${width}px overflows: ${o.offenders.join(', ')}`,
           ).toBeLessThanOrEqual(o.innerWidth);
           expect(await page.getByRole('heading', { level: 1 }).count()).toBe(1);
-          if (screen.path.startsWith('/c/') && screen.path.includes('/b/')) {
+          // The Studio is full-screen with its own breadcrumb bar at every width, as the interface draws it.
+          if (
+            screen.path.startsWith('/c/') &&
+            screen.path.includes('/b/') &&
+            !screen.path.includes('/studio')
+          ) {
             // Spec 11.1: the sidebar from 1024 px; below it the top bar names company and brand and opens a drawer.
             const sidebar = page.getByRole('complementary', { name: 'Brand navigation' });
             const menu = page.getByRole('button', { name: 'Menu' });

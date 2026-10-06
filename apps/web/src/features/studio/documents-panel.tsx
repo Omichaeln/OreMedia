@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
+import { Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Section } from '../../components/section';
+import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
+import { Select } from '../../components/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +18,7 @@ import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { brandPath, useBrandContext } from '../brand/brand-context';
 import { useDocuments } from './use-document';
+import { useStartDocument } from './create/use-create-document';
 
 /** Where documents are made (STU-1a): the Studio's creation screen; the home page links to it. */
 export function NewDocumentLink({ disabledReason }: { disabledReason?: string }) {
@@ -96,10 +100,11 @@ export function RecentDocuments() {
 }
 
 /**
- * G12: a document's menu in the index: archive (it leaves the default list) or, in the archived list, restore it
- * (creative.documents.archive / unarchive, version-checked). Nothing else about the document changes.
+ * G12: a document's menu in the Continue list: duplicate it, archive it (it leaves the default list) or, in the
+ * archived list, restore it (creative.documents.archive / unarchive, version-checked). Nothing else about the
+ * document changes.
  */
-function DocumentMenu({ document }: { document: DocumentRow }) {
+function DocumentMenu({ document, onDuplicate }: { document: DocumentRow; onDuplicate: () => void }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const intent = useIntentKey();
@@ -132,7 +137,10 @@ function DocumentMenu({ document }: { document: DocumentRow }) {
           {archived ? (
             <DropdownMenuItem onSelect={() => unarchive.mutate(input)}>Restore from archive</DropdownMenuItem>
           ) : (
-            <DropdownMenuItem onSelect={() => archive.mutate(input)}>Archive</DropdownMenuItem>
+            <>
+              <DropdownMenuItem onSelect={onDuplicate}>Duplicate…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => archive.mutate(input)}>Archive</DropdownMenuItem>
+            </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -140,16 +148,29 @@ function DocumentMenu({ document }: { document: DocumentRow }) {
   );
 }
 
+/** The interface's thumbnail of a document in a list: a still frame in the ink, a motion frame in the accent. */
+function KindFrame({ kind }: { kind: DocumentRow['kind'] }) {
+  return (
+    <span aria-hidden="true" className="flex h-11 w-[52px] shrink-0 items-center justify-center">
+      <span
+        className={kind === 'video' ? 'h-10 w-[22px] rounded-sm bg-accent' : 'h-10 w-8 rounded-sm bg-primary'}
+      />
+    </span>
+  );
+}
+
 /**
- * The brand's documents from the server, newest first, page by page; every title opens the studio. Archived documents
- * are listed only when asked for (G12), each with a menu to archive or restore it.
+ * The create screen's "Continue" list: the brand's documents from the server, newest first, page by page, as the
+ * interface's rows (kind, title, when it last changed); every row opens the studio. Archived documents are listed
+ * only when asked for (G12); each row's menu duplicates, archives or restores it.
  */
 export function Documents() {
   const { companyId, brandId } = useBrandContext();
   const [showArchived, setShowArchived] = useState(false);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
   const documents = useDocuments(brandId, { archived: showArchived });
   const filter = (
-    <label className="flex items-center gap-2 self-end text-xs text-muted-foreground">
+    <label className="flex items-center gap-2 text-xs text-muted-foreground">
       <input
         type="checkbox"
         checked={showArchived}
@@ -159,73 +180,167 @@ export function Documents() {
       Show archived documents only
     </label>
   );
-  if (documents.isPending)
-    return (
-      <div className="flex flex-col gap-2">
-        {filter}
-        <Skeleton label="Loading documents" lines={3} />
-      </div>
-    );
-  if (documents.isError)
-    return (
-      <div className="flex flex-col gap-2">
-        {filter}
+  return (
+    <Section id="continue" title="Continue" action={filter}>
+      {documents.isPending && <Skeleton label="Loading documents" lines={3} />}
+      {documents.isError && (
         <RequestError
           error={documents.error}
           onRetry={() => void documents.refetch()}
           title="Documents could not be loaded"
         />
-      </div>
-    );
-  if (documents.items.length === 0)
-    return (
-      <div className="flex flex-col gap-2">
-        {filter}
-        {showArchived ? (
+      )}
+      {documents.isSuccess &&
+        documents.items.length === 0 &&
+        (showArchived ? (
           <EmptyState title="No archived documents" description="Archived documents are listed here." />
         ) : (
           <EmptyState
             title="No documents yet"
-            description="Start one from a template above; every document of the brand is listed here."
+            description="Start one above: choose Still or Motion, a size and a layout. Every document of the brand is listed here."
+          />
+        ))}
+      {documents.items.length > 0 && (
+        <>
+          <ul
+            className="-mt-2 flex flex-col"
+            aria-label={showArchived ? 'Archived documents' : 'Documents'}
+            data-testid="documents"
+          >
+            {documents.items.map((d) => (
+              <li key={d.id} className="flex items-center gap-2 border-b border-border last:border-b-0">
+                <Link
+                  to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.id)}`)}
+                  className="grid min-w-0 flex-1 grid-cols-[52px_minmax(0,1fr)_auto_16px] items-center gap-3.5 rounded-md px-1 py-2.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <KindFrame kind={d.kind} />
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="truncate text-base font-bold">{d.title}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {d.kind === 'video' ? 'Motion' : 'Still'}
+                      {d.archivedAt && ' · Archived'}
+                    </span>
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {whenChanged(d.updatedAt)}
+                  </span>
+                  <span aria-hidden="true" className="text-muted-foreground">
+                    →
+                  </span>
+                </Link>
+                <DocumentMenu document={d} onDuplicate={() => setDuplicating(d.id)} />
+              </li>
+            ))}
+          </ul>
+          <LoadMore
+            shown={documents.items.length}
+            hasNextPage={documents.hasNextPage}
+            isFetchingNextPage={documents.isFetchingNextPage}
+            onLoadMore={() => void documents.fetchNextPage()}
+            noun="documents"
+            className="px-0"
+          />
+        </>
+      )}
+      {duplicating && (
+        <DuplicateDialog initialDocumentId={duplicating} onClose={() => setDuplicating(null)} />
+      )}
+    </Section>
+  );
+}
+
+/** The confirm step of the duplicate dialog: the title is suggested and editable. */
+function StartForm({
+  defaultTitle,
+  busy,
+  invalid,
+  onStart,
+}: {
+  defaultTitle: string;
+  busy: boolean;
+  invalid: string | null;
+  onStart: (title: string) => void;
+}) {
+  const [title, setTitle] = useState(defaultTitle);
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (title.trim() && !invalid) onStart(title.trim());
+  };
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+      <Field
+        label="New document title"
+        htmlFor="doc-title"
+        error={title.trim() ? undefined : 'A title is required'}
+      >
+        <Input id="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
+      </Field>
+      <DialogActions>
+        <DialogClose asChild>
+          <Button type="button">Cancel</Button>
+        </DialogClose>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={busy || !title.trim() || Boolean(invalid)}
+          disabledReason={invalid ?? undefined}
+        >
+          {busy ? 'Creating…' : 'Create and open'}
+        </Button>
+      </DialogActions>
+    </form>
+  );
+}
+
+/**
+ * STU-1a: a copy of a document from its latest saved revision (creative.documents.duplicate), opened from a row's
+ * menu with that document chosen; another can be picked in the dialog. The studio opens on the copy.
+ */
+function DuplicateDialog({ initialDocumentId, onClose }: { initialDocumentId: string; onClose: () => void }) {
+  const { brandId } = useBrandContext();
+  const documents = useDocuments(brandId);
+  const start = useStartDocument({ onCreated: onClose });
+  const [documentId, setDocumentId] = useState(initialDocumentId);
+  const chosen = documents.items.find((d) => d.id === documentId);
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        title="Duplicate a document"
+        description="The copy starts from the document's latest saved revision; the original is not changed."
+      >
+        {start.isError && (
+          <StatusBanner
+            tone="critical"
+            title="The document could not be created"
+            description={toUiError(start.error).message}
           />
         )}
-      </div>
-    );
-  return (
-    <div className="flex flex-col gap-2">
-      {filter}
-      <ul
-        className="flex flex-col divide-y divide-border"
-        aria-label={showArchived ? 'Archived documents' : 'Documents'}
-        data-testid="documents"
-      >
-        {documents.items.map((d) => (
-          <li key={d.id} className="flex items-center justify-between gap-2 py-2.5">
-            <Link
-              to={brandPath(companyId, brandId, `studio/${encodeURIComponent(d.id)}`)}
-              className="min-w-0 truncate text-sm font-medium underline-offset-2 hover:underline"
-            >
-              {d.title}
-            </Link>
-            <span className="flex shrink-0 items-center gap-2">
-              {d.kind === 'video' && <Badge glyph={false}>Video</Badge>}
-              {d.archivedAt && <Badge tone="neutral">Archived</Badge>}
-              <span className="font-mono text-xs text-muted-foreground">
-                {new Date(d.updatedAt).toLocaleDateString()}
-              </span>
-              <DocumentMenu document={d} />
-            </span>
-          </li>
-        ))}
-      </ul>
-      <LoadMore
-        shown={documents.items.length}
-        hasNextPage={documents.hasNextPage}
-        isFetchingNextPage={documents.isFetchingNextPage}
-        onLoadMore={() => void documents.fetchNextPage()}
-        noun="documents"
-        className="px-0"
-      />
-    </div>
+        {documents.isPending && <Skeleton label="Loading documents" lines={2} />}
+        {documents.isError && (
+          <RequestError error={documents.error} onRetry={() => void documents.refetch()} />
+        )}
+        {documents.items.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <Field label="Document to copy" htmlFor="duplicate-source">
+              <Select
+                id="duplicate-source"
+                value={documentId}
+                placeholder="Choose a document"
+                onValueChange={setDocumentId}
+                options={documents.items.map((d) => ({ value: d.id, label: d.title }))}
+              />
+            </Field>
+            {/* Keyed by the source (and whether it has loaded) so the suggested title follows the choice. */}
+            <StartForm
+              key={`${documentId}:${chosen ? 'loaded' : 'waiting'}`}
+              defaultTitle={chosen ? `${chosen.title} (copy)`.slice(0, 200) : ''}
+              busy={start.isPending}
+              invalid={chosen ? null : 'Choose a document to copy'}
+              onStart={(title) => start.mutate({ kind: 'duplicate', input: { documentId, title } })}
+            />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

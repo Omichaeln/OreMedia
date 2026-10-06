@@ -44,10 +44,9 @@ describe.skipIf(!enabled)('studio generation and refinement (STU-1b, built app i
     page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
 
   const newPhotoFeature = async () => {
-    await page.goto(`${origin}${brandPath}/studio`);
+    await page.goto(`${origin}${brandPath}/studio?kind=still&platform=instagram_business&format=square_1080`);
     const gallery = page.getByTestId('template-gallery');
-    await gallery.getByTestId('gallery-card').first().waitFor({ timeout: 15_000 });
-    await gallery.getByRole('button', { name: 'Use Photo feature' }).click();
+    await gallery.getByRole('button', { name: /^Photo feature/ }).dblclick({ timeout: 15_000 });
     await page.waitForURL('**/studio/*', { timeout: 15_000 });
     await panel().waitFor({ timeout: 15_000 });
   };

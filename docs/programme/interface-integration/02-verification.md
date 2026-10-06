@@ -320,6 +320,57 @@ Visual comparison (interface `brand-system-*.png` against the application's `sys
 - Wording changed in a test: `brand-kit.e2e.test.ts` opens the voice section from the overview card named "Voice &
   writing" (the interface's label; it was "Voice & personality").
 
+## Studio (PR: claude/ui-studio)
+
+| Check                                                                                                 | Result                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`, `pnpm lint`, `prettier --check`                              | pass                                                                                                                                      |
+| `pnpm vitest run --project unit apps/web packages/ui`                                                 | pass (174), including the new `create/content-types.test.ts`                                                                              |
+| e2e (built app, mock transport): studio-entry, studio, studio-generate, video-studio, video-ai, shell | pass                                                                                                                                      |
+| e2e a11y and responsive, studio entries only (`-t studio`, both studio screens, every width)          | pass (26); the full suites run in CI                                                                                                      |
+| Screenshots                                                                                           | interface vs application at 1440, 768 and 390 px, light and dark, for create, the format step (with and without a size), design and video |
+
+Visual comparison (interface `studio-*.png` and the prototype's pick / design / video states, rendered from
+`Oremedia.html`, against the application):
+
+- Create (1440, 390): the 52 px white bar with the back arrow and "brand / Studio / Create", the 28 px "What are you
+  making?" with its line, the two cards (200 px tinted illustration, 22 px name, format count on the right,
+  description, tools line) and the "CONTINUE" rows (thumbnail, bold title, kind, when it changed, arrow) match.
+  Deviations: the format counts are what the application makes (10 page formats, 4 video presets; the interface
+  shows 31 and 13); the illustrations use the ink, accent and card tokens rather than the demo brand's palette; the
+  Continue rows say Still or Motion without the size (the document list carries no format) and keep the
+  application's row menu (Duplicate…, Archive / Restore) and the "Show archived documents only" filter; card radius
+  is the 10 px token where the interface draws 14 px; the cards do not stagger in (one entrance on `main`).
+- Format step (1440, 768): the Still / Motion switch, the "PLATFORM" list with counts, the platform title and note,
+  168 px size cards with the proportional frame, "Custom size" under a rule, and the "LAYOUTS" column (label, size,
+  dimensions, two-column tiles, the ink "Open in canvas" / "Open in timeline" and its note) match. Additions: content
+  type chips when a size can be several (a square is a post, a carousel or custom artwork), the "New document title"
+  field above Open (the title was editable before creating), a frame-rate select for video, the size's aspect ratio.
+  The custom size is in pixels only (the renderer's limits; the interface also offers millimetres for print, which
+  the application does not make) and video has no custom size. Platforms are the application's channels
+  (Instagram, Facebook, LinkedIn, X, TikTok, YouTube), not the interface's Pinterest, display ads and print.
+- Format step (390): the interface keeps two columns; the application stacks the platform list, the sizes and the
+  layouts (D-31 stacking below `md`). No horizontal scrolling.
+- Design workspace: the bar ("brand / Studio / Still / title", Rename, the dot-and-label save state, actions on the
+  right with "Send for review" in ink), the flush white columns with pill tabs (Layers, Assets, Templates;
+  Generate, Agent, Comments, Checks, History), the tinted canvas ground and the white insert bar and page strip
+  follow the interface. Deviations: the interface's 44 px tool rail is the application's insert bar above the
+  canvas; Export lives in the History tab's exports (no "Export PNG" button in the bar); the bar also carries Redo,
+  Save now, the panel toggles and the theme toggle (no account menu in a full-screen workspace).
+- Video workspace: the bar ("Motion / title", size, frame rate and length, save state), the library left, the
+  monitor centre, the inspector and video panels right, and the timeline across the full width below with
+  "Timeline", "+ Caption", "+ Title" follow the interface. The monitor sits on the tinted ground (the interface's
+  near-black ground has no token that holds in both themes); "Prompt to video" is the application's Storyboard and
+  AI edit tabs. At 390 px the monitor, the list editor, the panels and the library stack.
+- Save states: the bar shows "Saved · revision n", "Saving…", "Unsaved changes", "Not saved"; under the bar,
+  `SaveBanners` (StatusBanner) say "Autosave failed" with "Retry save", "Someone saved a newer revision while you were
+  editing" while changes are re-applied, and "Revision n was saved while you were editing" during a conflict, whose
+  decision stays in the existing dialog. Saves, rebases and conflict detection are unchanged.
+- Wording changed in tests (same expectations, the interface's flow): the create screen's h1 is "What are you
+  making?"; documents start from the format step's layouts and "Open in canvas" / "Open in timeline" instead of
+  "Use …", "Details", "Blank canvas…", "Custom size…" and the content-type tiles; a copy starts from a row's
+  "Duplicate…"; the Studio index renders without the brand navigation (shell and responsive suites).
+
 ## Performance and portfolio performance (PR #112: claude/ui-performance)
 
 | Check                                                                                           | Result                                                                                         |
