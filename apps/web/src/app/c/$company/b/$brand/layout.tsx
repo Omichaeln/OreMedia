@@ -42,15 +42,16 @@ const screenTitle = (pathname: string): string => {
 /**
  * Spec 11.1: company and brand are always visible; every brand screen renders inside this shell. A 224 px sidebar
  * beside the screen from 900 px (the `wide` breakpoint); below that a 52 px bar names brand and screen and opens the
- * same navigation as a drawer. A document's studio is a full-screen workspace with its own breadcrumb, so it renders
- * without the sidebar; the Studio section (the documents index) is an ordinary screen inside it.
+ * same navigation as a drawer. The Studio (its create screen, the format step and every document) is a full-screen
+ * workspace with its own breadcrumb bar, as the interface draws it, so it renders without the sidebar.
  */
 export function BrandLayout() {
   const { company = '', brand: brandId = '' } = useParams();
   const { pathname } = useLocation();
   const companies = useCompanies();
   const brand = useBrand(brandId);
-  const inStudio = useMatch('/c/:company/b/:brand/studio/:doc') !== null;
+  // The Studio is full-screen in the interface: its create and format steps and every document have their own bar.
+  const inStudio = useMatch('/c/:company/b/:brand/studio/*') !== null;
   const [menuOpen, setMenuOpen] = useState(false);
   const membership = companies.data?.find((c) => c.tenantId === company) ?? null;
   const companyName = membership?.name ?? null;

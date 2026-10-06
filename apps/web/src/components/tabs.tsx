@@ -4,33 +4,54 @@ import { cn } from '@oremedia/ui';
 
 export const Tabs = RadixTabs.Root;
 
+/**
+ * `line` (default): tabs over a rule, the active one underlined in the accent. `pill`: the interface's panel tabs
+ * (the studio's side panels), small buttons with the active one on the secondary fill and no rule.
+ */
+export type TabVariant = 'line' | 'pill';
+
 export function TabList({
   label,
   className,
+  variant = 'line',
   children,
 }: {
   label: string;
   className?: string;
+  variant?: TabVariant;
   children: React.ReactNode;
 }) {
   return (
     <RadixTabs.List
       aria-label={label}
-      className={cn('flex shrink-0 gap-1 border-b border-border px-1', className)}
+      className={cn(
+        'flex shrink-0',
+        variant === 'line' ? 'gap-1 border-b border-border px-1' : 'gap-0.5 px-2.5 pt-2.5',
+        className,
+      )}
     >
       {children}
     </RadixTabs.List>
   );
 }
 
-export function Tab({ value, children }: { value: string; children: React.ReactNode }) {
+export function Tab({
+  value,
+  variant = 'line',
+  children,
+}: {
+  value: string;
+  variant?: TabVariant;
+  children: React.ReactNode;
+}) {
   return (
     <RadixTabs.Trigger
       value={value}
       className={cn(
-        'relative -mb-px rounded-t-md border-b-2 border-transparent px-2.5 py-1.5 text-sm text-muted-foreground',
-        'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        'data-[state=active]:border-accent data-[state=active]:font-medium data-[state=active]:text-foreground',
+        'text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        variant === 'line'
+          ? 'relative -mb-px rounded-t-md border-b-2 border-transparent px-2.5 py-1.5 text-sm data-[state=active]:border-accent data-[state=active]:font-medium data-[state=active]:text-foreground'
+          : 'whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=active]:bg-secondary data-[state=active]:text-foreground',
       )}
     >
       {children}

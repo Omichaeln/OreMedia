@@ -36,7 +36,7 @@ export function InsertToolbar({ page, kit, readOnly, onIntent, onInserted }: Ins
     <div
       role="toolbar"
       aria-label="Insert"
-      className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-2 py-1.5"
+      className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-card px-3 py-1.5"
       data-testid="insert-toolbar"
     >
       <span className="mr-1 text-xs text-muted-foreground">Insert</span>

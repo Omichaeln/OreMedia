@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { CreativeDocumentV1, Operation } from '@oremedia/contracts/creative';
 import type { TemplateDocument } from '@oremedia/editor';
-import { Badge, Button, StatusBanner, type Tone } from '@oremedia/ui';
+import { Button, StatusBanner, StatusDot, cn, toneGlyph, toneTextClass, type Tone } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogContent } from '../../components/dialog';
 import { retryAfterText } from '../../lib/errors';
 import { elementName } from './document-helpers';
@@ -29,27 +29,35 @@ export function SaveIndicator({
             ? { tone: 'warning', text: 'Document changed elsewhere; re-applying your changes…', busy: true }
             : save.kind === 'conflict'
               ? { tone: 'critical', text: 'Conflict: needs your decision' }
-              : {
-                  tone: 'critical',
-                  text: `Autosave failed: ${save.error.message}${retryAfterText(save.error.retryAfterMs)}`,
-                };
+              : // The reason and when to retry are in the autosave banner under the bar (AutosaveFailedBanner).
+                { tone: 'critical', text: 'Not saved' };
+  // The interface's form: a 6 px dot and the state in small muted figures beside the breadcrumb; the glyph is kept
+  // for assistive technology so the dot is never the only carrier of the state.
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center gap-2 text-sm"
+      className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
       data-testid="save-state"
       data-save-kind={save.kind}
     >
-      <Badge tone={view.tone} glyph={!view.busy}>
-        {view.busy && (
-          <span
-            aria-hidden="true"
-            className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"
-          />
+      {view.busy ? (
+        <span
+          aria-hidden="true"
+          className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-status-info-dot"
+        />
+      ) : (
+        <StatusDot tone={view.tone} size="sm" />
+      )}
+      <span className="sr-only">{toneGlyph[view.tone]} </span>
+      <span
+        className={cn(
+          'truncate',
+          save.kind === 'failed' || save.kind === 'conflict' ? toneTextClass[view.tone] : '',
         )}
+      >
         {view.text}
-      </Badge>
+      </span>
       {save.kind === 'failed' && (
         <Button size="sm" onClick={onRetry}>
           Retry
@@ -57,6 +65,55 @@ export function SaveIndicator({
       )}
     </div>
   );
+}
+
+/**
+ * The interface's autosave and conflict states as banners under the studio bar (graphic and video studios alike):
+ * a failed autosave keeps the work locally and offers the retry that replays the same intent; while the head moved
+ * underneath, the person is told their changes are being re-applied; a conflict names the revision and points to the
+ * decision (the dialog). Nothing here changes how saves, rebases or conflicts work.
+ */
+export function SaveBanners({
+  save,
+  headNumber,
+  onRetry,
+}: {
+  save: SaveStatus;
+  headNumber: number;
+  onRetry: () => void;
+}) {
+  if (save.kind === 'failed')
+    return (
+      <StatusBanner
+        tone="critical"
+        title="Autosave failed"
+        description={`${save.error.message}${retryAfterText(save.error.retryAfterMs)} Your changes are kept locally; retry when ready.`}
+        actions={
+          <Button size="sm" onClick={onRetry}>
+            Retry save
+          </Button>
+        }
+      />
+    );
+  if (save.kind === 'rebasing')
+    return (
+      <StatusBanner
+        tone="warning"
+        busy
+        title="Someone saved a newer revision while you were editing"
+        description="Your changes are being re-applied on it. Nothing is overwritten."
+      />
+    );
+  if (save.kind === 'conflict')
+    return (
+      <StatusBanner
+        tone="warning"
+        live="polite"
+        title={`Revision ${headNumber} was saved while you were editing`}
+        description="Some of your changes touch the same parts. Choose which version to keep; theirs stays in the history either way."
+      />
+    );
+  return null;
 }
 
 export interface ConflictDialogProps {
