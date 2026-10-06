@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { periodComparison, slotCells, trendDays, trendStatus, type TrendPost } from './performance-helpers';
+import {
+  bestSlot,
+  channelFreshness,
+  liftOf,
+  median,
+  periodComparison,
+  signedPercent,
+  slotCells,
+  trendDays,
+  trendStatus,
+  type TrendPost,
+} from './performance-helpers';
 
 const NOW = Date.parse('2026-09-26T12:00:00Z');
 const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
@@ -74,5 +85,60 @@ describe('slotCells (UX-12 "when it lands")', () => {
       rate: null,
     });
     expect(cells.filter((c) => c.publications === 0)).toHaveLength(26);
+  });
+});
+
+describe('median and lift (the content table’s vs. median)', () => {
+  it('takes the middle of the numbers given, the mean of the two middles when even, null when none', () => {
+    expect(median([5, 1, 3])).toBe(3);
+    expect(median([4, 1, 3, 2])).toBe(2.5);
+    expect(median([])).toBeNull();
+  });
+  it('a lift needs both sides and a positive reference', () => {
+    expect(liftOf(150, 100)).toBeCloseTo(0.5);
+    expect(liftOf(null, 100)).toBeNull();
+    expect(liftOf(10, 0)).toBeNull();
+    expect(liftOf(10, null)).toBeNull();
+  });
+  it('signs a change with a true minus', () => {
+    expect(signedPercent(0.24)).toBe('+24%');
+    expect(signedPercent(-0.05)).toBe('−5%');
+    expect(signedPercent(0)).toBe('+0%');
+  });
+});
+
+describe('channelFreshness', () => {
+  const value = (subjectId: string, ageHours: number, stale = false, v: number | null = 1) => ({
+    subjectId,
+    value: v,
+    freshness: { fetchedAt: '2026-09-26T00:00:00Z', ageHours, latencyHours: 24, stale },
+  });
+  it('per channel, the oldest fetch among values with a number; stale when any is; channels without numbers left out', () => {
+    const publications = [
+      { publicationId: 'a', channelConnectionId: 'cc_x' },
+      { publicationId: 'b', channelConnectionId: 'cc_x' },
+      { publicationId: 'c', channelConnectionId: 'cc_li' },
+      { publicationId: 'd', channelConnectionId: 'cc_ig' },
+    ];
+    const out = channelFreshness(
+      [value('a', 2), value('b', 5), value('c', 60, true), value('d', 1, false, null)],
+      publications,
+    );
+    expect(out).toEqual([
+      { channelConnectionId: 'cc_x', ageHours: 5, stale: false },
+      { channelConnectionId: 'cc_li', ageHours: 60, stale: true },
+    ]);
+  });
+});
+
+describe('bestSlot', () => {
+  it('is the highest rate among slots with the minimum sample, null when none has it', () => {
+    const cells = [
+      { weekday: 0, slot: 1, publications: 6, measured: 5, rate: 0.04 },
+      { weekday: 1, slot: 1, publications: 6, measured: 6, rate: 0.05 },
+      { weekday: 2, slot: 2, publications: 2, measured: 2, rate: 0.2 },
+    ];
+    expect(bestSlot(cells, 5)).toMatchObject({ weekday: 1, slot: 1 });
+    expect(bestSlot(cells, 10)).toBeNull();
   });
 });

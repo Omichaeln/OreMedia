@@ -1,9 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { MetricAgeDays } from '@oremedia/contracts/measurement';
-import { Button, Skeleton } from '@oremedia/ui';
+import { Skeleton, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
-import { Section } from '../../components/section';
-import { Tooltip } from '../../components/tooltip';
 import { dayKey, trailingRange, wasReleased } from '../publishing/publication-state';
 import { useCalendarRange, type CalendarPublicationDto } from '../publishing/use-publishing';
 import {
@@ -14,6 +12,7 @@ import {
   type TrendDay,
   type TrendPost,
 } from './performance-helpers';
+import { PerformanceCard } from './performance-panels';
 import { usePublicationValues } from './use-measurement';
 
 export const AGES: ReadonlyArray<[MetricAgeDays, string]> = [
@@ -25,6 +24,9 @@ export const AGES: ReadonlyArray<[MetricAgeDays, string]> = [
 const DAY_MS = 86_400_000;
 
 const number = (v: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(v);
+/** Axis ticks and the readout: 1.68k, 842 (the table and the summary keep the full number). */
+const compact = (v: number) =>
+  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(v);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 const publishedIn = (list: CalendarPublicationDto[] | undefined, channelFilter: string | null) =>
@@ -135,22 +137,57 @@ export function DailyTrend({
 
   const failed = [current, previous, metrics].find((q) => q.isError);
   const loading = current.isPending || previous.isPending || (metrics.isPending && !metrics.isError);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const hoveredDay = series.find((d) => d.key === hovered) ?? null;
+  const peak = Math.max(0, ...series.map((d) => d.perPost ?? 0));
+  const readout = hoveredDay
+    ? describe(hoveredDay)
+    : currentMean === null
+      ? ''
+      : `Peak ${compact(peak)}${baseline !== null ? ` · previous ${days} days ${compact(baseline)}` : ''}`;
+  const tickKeys = [0, Math.floor((series.length - 1) / 2), series.length - 1]
+    .filter((i, n, all) => all.indexOf(i) === n)
+    .map((i) => series[i]?.key ?? todayKey);
 
   return (
-    <Section id="trend-heading" title={`${group.label} per post by day published`} testId="daily-trend">
-      <div role="group" aria-label="Measured at" className="flex flex-wrap items-center gap-1">
-        <span className="text-xs text-muted-foreground">Measured at</span>
-        {AGES.map(([a, label]) => (
-          <Button
-            key={a}
-            size="sm"
-            variant={ageDays === a ? 'secondary' : 'ghost'}
-            aria-pressed={ageDays === a}
-            onClick={() => onAgeChange(a)}
+    <PerformanceCard
+      id="trend-heading"
+      title={`${group.label} per post · last ${days} days`}
+      meta={
+        <span className="tabular-nums text-foreground" aria-live="polite" data-testid="trend-readout">
+          {readout}
+        </span>
+      }
+      testId="daily-trend"
+    >
+      <div className="-mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <p className="text-xs text-muted-foreground">
+          By day published, each post measured {ageLabel} after · the dashed line is the previous {days} days
+          · dots mark days with publications
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Measured at</span>
+          <div
+            role="group"
+            aria-label="Measured at"
+            className="flex h-7 overflow-hidden rounded-md border border-border bg-card"
           >
-            {label}
-          </Button>
-        ))}
+            {AGES.map(([a, label]) => (
+              <button
+                key={a}
+                type="button"
+                aria-pressed={ageDays === a}
+                onClick={() => onAgeChange(a)}
+                className={cn(
+                  'h-full px-2.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                  ageDays === a ? 'bg-secondary font-medium' : 'hover:bg-card-tint',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       {failed && <RequestError error={failed.error} onRetry={() => void failed.refetch()} />}
       {loading && <Skeleton label="Loading the daily trend" lines={3} />}
@@ -164,8 +201,7 @@ export function DailyTrend({
               </span>
             ) : (
               <>
-                <span className="font-semibold tabular-nums">{number(currentMean)}</span> per post at{' '}
-                {ageLabel}{' '}
+                <span className="font-bold tabular-nums">{number(currentMean)}</span> per post at {ageLabel}{' '}
                 <span className="text-muted-foreground">
                   across {measured} of {plural(currentPosts.length, 'post', 'posts')}
                   {baseline !== null
@@ -182,46 +218,87 @@ export function DailyTrend({
               </>
             )}
           </p>
-          <div className="relative mt-2 flex h-40 items-end gap-[2px] border-b border-border">
-            {baseline !== null && (
-              <div
-                className="pointer-events-none absolute inset-x-0 border-t-2 border-dashed border-muted-foreground/60"
-                style={{ bottom: `${(baseline / top) * 100}%` }}
-              >
-                <span className="absolute -top-5 right-0 bg-background px-1 text-xs text-muted-foreground">
-                  Previous {days} days
-                </span>
+          <ul aria-label="Legend" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <li className="flex items-center gap-1.5">
+              <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[2px] bg-accent" />
+              {group.label} per post at {ageLabel}
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span aria-hidden="true" className="w-4 border-t-2 border-dashed border-muted-foreground" />
+              Previous {days} days
+            </li>
+            <li className="flex items-center gap-1.5">
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+              Publications
+            </li>
+          </ul>
+          <div className="relative h-[232px]" onMouseLeave={() => setHovered(null)}>
+            <div
+              aria-hidden="true"
+              className="absolute top-0 bottom-8 left-0 flex w-10 flex-col justify-between text-right text-2xs text-muted-foreground tabular-nums"
+            >
+              <span className="-translate-y-1/2">{compact(top)}</span>
+              <span className="-translate-y-1/2">{compact(top / 2)}</span>
+              <span className="translate-y-1/2">0</span>
+            </div>
+            <div className="absolute top-0 right-0 bottom-8 left-11">
+              <div aria-hidden="true" className="absolute inset-x-0 top-0 border-t border-border" />
+              <div aria-hidden="true" className="absolute inset-x-0 top-1/2 border-t border-border" />
+              <div aria-hidden="true" className="absolute inset-x-0 bottom-0 border-t border-border-strong" />
+              {baseline !== null && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-dashed border-muted-foreground"
+                  style={{ bottom: `${(baseline / top) * 100}%` }}
+                />
+              )}
+              <div className="absolute inset-0 flex items-end gap-[2px]">
+                {series.map((d) => (
+                  <button
+                    key={d.key}
+                    type="button"
+                    aria-label={describe(d)}
+                    data-testid="trend-day"
+                    onMouseEnter={() => setHovered(d.key)}
+                    onFocus={() => setHovered(d.key)}
+                    onBlur={() => setHovered(null)}
+                    className={cn(
+                      'relative flex h-full min-w-0 flex-1 items-end justify-center rounded-t-[4px]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      hovered === d.key && 'bg-muted',
+                    )}
+                  >
+                    {d.perPost !== null ? (
+                      <span
+                        className="block w-full max-w-6 rounded-t-[4px] bg-accent"
+                        style={{ height: `${Math.max(1, (d.perPost / top) * 100)}%` }}
+                      />
+                    ) : d.posts > 0 ? (
+                      // Posts without a number at this age: an outline, never a filled bar a reader could size.
+                      <span className="block h-2 w-full max-w-6 rounded-t-[4px] border border-b-0 border-dashed border-muted-foreground" />
+                    ) : null}
+                    {d.posts > 0 && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -bottom-3 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-muted-foreground"
+                      />
+                    )}
+                  </button>
+                ))}
               </div>
-            )}
-            {series.map((d) => (
-              <Tooltip key={d.key} content={describe(d)}>
-                <button
-                  type="button"
-                  aria-label={describe(d)}
-                  data-testid="trend-day"
-                  className="flex h-full min-w-0 flex-1 items-end focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {d.perPost !== null ? (
-                    <span
-                      className="block w-full rounded-t-[4px] bg-accent"
-                      style={{ height: `${Math.max(1, (d.perPost / top) * 100)}%` }}
-                    />
-                  ) : d.posts > 0 ? (
-                    // Posts without a number at this age: an outline, never a filled bar a reader could size.
-                    <span className="block h-2 w-full rounded-t-[4px] border border-b-0 border-dashed border-muted-foreground/60" />
-                  ) : null}
-                </button>
-              </Tooltip>
-            ))}
-          </div>
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>{dayLabel(series[0]?.key ?? todayKey)}</span>
-            <span>{dayLabel(todayKey)}</span>
+            </div>
+            <div
+              aria-hidden="true"
+              className="absolute right-0 bottom-0 left-11 flex justify-between text-2xs text-muted-foreground tabular-nums"
+            >
+              {tickKeys.map((k) => (
+                <span key={k}>{dayLabel(k)}</span>
+              ))}
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Each post counts on the day it was published, measured {ageLabel} after; a dashed outline marks a
-            day whose posts have no number at that age. Collection pulls lifetime totals at fixed ages, so a
-            per-calendar-day activity count is not shown.
+            A dashed outline marks a day whose posts have no number at {ageLabel} yet. Collection pulls
+            lifetime totals at fixed ages, so a per-calendar-day activity count is not shown.
           </p>
           <details className="text-sm">
             <summary className="cursor-pointer text-muted-foreground">Show as a table</summary>
@@ -252,6 +329,6 @@ export function DailyTrend({
           </details>
         </>
       )}
-    </Section>
+    </PerformanceCard>
   );
 }

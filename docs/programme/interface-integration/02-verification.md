@@ -140,6 +140,51 @@ Visual comparison (interface `brand-system-*.png` against the application's `sys
 - Wording changed in a test: `brand-kit.e2e.test.ts` opens the voice section from the overview card named "Voice &
   writing" (the interface's label; it was "Voice & personality").
 
+## Performance and portfolio performance (PR #112: claude/ui-performance)
+
+| Check                                                                                           | Result                                                                                         |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `pnpm --filter @oremedia/web typecheck`, `pnpm lint`, `pnpm format`                             | pass                                                                                           |
+| `pnpm vitest run --project unit apps/web packages/ui`                                           | pass (new: median, lift, signed percent, channel freshness, best slot)                         |
+| e2e (built app, mock transport): shell (performance, web, overview, audit), journey, responsive | pass locally; a11y and the rest in CI on the PR                                                |
+| New assertions run against `origin/main`'s screen                                               | fail there (no "not compared" tile line, no expandable row), pass here                         |
+| Screenshots                                                                                     | application at 1440, 768 and 390 px, light, and 1440 and 390 dark, against `performance-*.png` |
+
+Visual comparison (interface `performance-1440.png` / `-390.png` against the application):
+
+- Matches at 1440: the 28 px title with the brand · company · objective line; the controls on the right (brand
+  select, the 7 / 30 / 90 days segment, a secondary button); the channel chips with dots and the freshness line on
+  the right with a stale channel in the warning colour; the figure tiles as one ruled strip (12 px radius, 1 px
+  rules between tiles, label, 22 px figure, change line, the OBJECTIVE tag); the trend in a white card (title,
+  muted line, readout top right, y axis 0 / mid / max, x labels, publication dots under the axis); By channel and
+  When it lands side by side; What the creative did as three-or-more columns of uppercase feature labels with a
+  diverging bar per value; the CONTENT label with the sort chips on the right and the ruled table; the AI review
+  and Next content cycle cards with accent eyebrows, ruled lists and Keep / Drop on each row.
+- Deviations and why: the trend is columns per day published, not a line of daily reach (collection pulls
+  lifetime totals at fixed ages, so there is no honest per-calendar-day series; a line across empty days would
+  invent continuity), with the previous period as the dashed series instead of an 8-week rolling baseline; no
+  sparklines in the tiles (per-day latest values mix post ages, so recent days would always read low); "Monthly
+  report" absent (PR #108's Reports route is not on main) and "Export" absent (no export exists); the content
+  table has no thumbnail column and no per-post "AI review of this post" (no such read model), the open row shows
+  the post's engagement quality and tracked links; the AI review's Worked / Didn't / Likely reasons become
+  Movements / Findings / Likely reasons, because insights carry no direction and only experimentally supported
+  entries are findings (spec 16.3); the steer field and "Create briefs for kept items" are not shown (the analyst
+  run takes no steer, and Keep already creates the brief on the server); channel dots are one neutral mark, not
+  per-provider colours (no provider-specific styling in generic code); the slot rows are six-hour clock ranges,
+  not Morning / Midday / Afternoon / Evening, and each cell prints its rate and measured / posted. The web
+  sources and audit sections remain below the interface's content (the overview's drill-downs land on them).
+- 768: tiles fall to four, then two per row; By channel and When it lands stay side by side; the content table
+  shows Post, Channel, the selected metric and vs. median, the other columns from 768 px up.
+- 390: the controls wrap under the title, tiles two per row, cards stack, the table keeps Post (channel in its
+  meta line), the selected metric and vs. median. No horizontal scrolling (responsive e2e).
+- Dark: every surface, rule, bar and text uses tokens; checked at 1440 and 390.
+- Portfolio performance: the interface draws its brands table inside Performance with "All brands"; the
+  application keeps `/portfolio/performance` (the brand select's "All brands" goes there) with the same header
+  and period control and a ruled table per company. The interface's Approval time, Objective and Trend columns
+  have no read model per brand and are not shown.
+- Wording changed in a test: `shell.e2e.test.ts` reads the posts as table rows and opens a post from the row's
+  button (it was a "Details" button in a list).
+
 ## Intelligence and Experiments (PR #111, `claude/ui-intelligence`, base `main`)
 
 | Check                                                                                                                                         | Result                                                                                                                                                                                                                                          |
