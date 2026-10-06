@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { AgentRunState } from '@oremedia/contracts/agents';
 import {
+  formatCompactTokens,
   formatDuration,
   formatMicros,
+  invocationLine,
   isTerminalState,
   modifyBatchOf,
   needsAttention,
@@ -10,7 +12,11 @@ import {
   pendingProposal,
   proposalPayloadOf,
   recordedException,
+  relativeTime,
+  runFigures,
   runStateChip,
+  runTitle,
+  stepTone,
 } from './run-helpers';
 import type { RunDto, StepDto } from './use-agent-runs';
 
@@ -229,5 +235,72 @@ describe('proposals', () => {
       { op: 'setText', pageId: 'page_1', elementId: 'el_h', text: 'Mine' },
       { op: 'addPage', page: { id: 'page_2' } },
     ]);
+  });
+});
+
+describe('the interface’s run rows and figures', () => {
+  it('titles a run by its brief’s goal, or by the task kind when the skill’s brief has none', () => {
+    expect(runTitle({ ...run('running'), brief: { goal: ' Draft 3 caption variants ' } })).toBe(
+      'Draft 3 caption variants',
+    );
+    expect(runTitle({ ...run('running'), brief: { goal: '' } })).toBe('copywriting');
+    expect(runTitle({ ...run('running'), taskKind: 'campaign_planning', brief: { goal: 42 } })).toBe(
+      'campaign planning',
+    );
+  });
+
+  it('says when a run started in the interface’s words, never a raw timestamp', () => {
+    const now = new Date('2026-10-05T12:00:00.000Z');
+    expect(relativeTime('2026-10-05T11:59:40.000Z', now)).toBe('Just now');
+    expect(relativeTime('2026-10-05T11:48:00.000Z', now)).toBe('12 min ago');
+    expect(relativeTime('2026-10-05T10:00:00.000Z', now)).toBe('2 h ago');
+    expect(relativeTime('2026-10-04T12:00:00.000Z', now)).toBe('Yesterday');
+    expect(relativeTime('2026-10-02T12:00:00.000Z', now)).toBe('3 days ago');
+  });
+
+  it('counts tool calls and tokens from the recorded steps and formats tokens compactly', () => {
+    const steps = [
+      step({ tokensIn: 1200, tokensOut: 300 }),
+      step({ id: 'st_2', invocations: [invocation({}), invocation({ id: 'ti_2' })] }),
+      step({ id: 'st_3', tokensIn: 1400, tokensOut: 250, invocations: [invocation({ id: 'ti_3' })] }),
+    ];
+    expect(runFigures(run('running', 140_000), steps)).toEqual({
+      toolCalls: 3,
+      tokens: 3150,
+      costMicros: 140_000,
+    });
+    expect(formatCompactTokens(900)).toBe('900');
+    expect(formatCompactTokens(3150)).toBe('3.2k');
+    expect(formatCompactTokens(4000)).toBe('4k');
+    expect(formatCompactTokens(38_400)).toBe('38k');
+  });
+
+  it('a step’s dot is its worst invocation outcome; a step without calls is what the model or validator did', () => {
+    expect(stepTone(step({ kind: 'model_call' }))).toBe('good');
+    expect(stepTone(step({ invocations: [invocation({})] }))).toBe('good');
+    expect(stepTone(step({ invocations: [invocation({ outcome: 'proposal' })] }))).toBe('warning');
+    expect(
+      stepTone(
+        step({ invocations: [invocation({ outcome: 'proposal' }), invocation({ outcome: 'error' })] }),
+      ),
+    ).toBe('critical');
+  });
+
+  it('writes the tool line as "tool → result", naming a denial’s recorded reason', () => {
+    expect(invocationLine(invocation({ outputRef: 'sn_9f3a' }))).toBe('facts.list → sn_9f3a');
+    expect(invocationLine(invocation({ outputRef: null }))).toBe('facts.list');
+    expect(invocationLine(invocation({ outcome: 'proposal', outputRef: 'proposal:st_x' }))).toBe(
+      'facts.list → proposal',
+    );
+    expect(
+      invocationLine(
+        invocation({
+          toolName: 'publications.schedule',
+          policyDecision: 'denied',
+          policyReason: 'autonomy_below_prepare_release',
+          outcome: 'denied',
+        }),
+      ),
+    ).toBe('publications.schedule → denied: autonomy_below_prepare_release');
   });
 });

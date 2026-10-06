@@ -64,10 +64,11 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   // ---- intelligence workspace (spec 16.9; spec 21.2 intelligence states) ----
 
-  it('loading, then What changed with freshness, coverage, partial coverage and anomalies as text and table', async () => {
+  it('loading, then What changed with freshness, coverage, partial coverage and anomalies as text', async () => {
     // The workspace itself is prefetched by the route loader; the anomalies below it load in the screen.
     backend.delays.set('intelligence.anomalies.list', 1_500);
-    await open('intelligence');
+    // The screen opens on "What to do next", as the interface does; What changed is its own view.
+    await open('intelligence?view=changed');
     await expect
       .poll(() => page.getByRole('status').filter({ hasText: 'Loading anomalies' }).count(), {
         timeout: 15_000,
@@ -75,22 +76,22 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
       .toBe(1);
     backend.delays.delete('intelligence.anomalies.list');
     await expect.poll(() => count('what-changed'), { timeout: 15_000 }).toBe(1);
-    const changed = await text('what-changed');
-    expect(changed).toContain('Fetched');
-    expect(changed).toContain('h ago');
-    expect(changed).toContain('Coverage');
-    expect(changed).toContain('sources: qualified_enquiries, reach');
-    expect(changed).toContain('no competitor monitoring');
-    expect(changed).toContain('missing snapshots are reported as gaps, never as zero');
+    // Freshness and coverage sit in the strip under the heading (the interface's), the view's statement in it.
+    const strip = await text('freshness');
+    expect(strip).toContain('Fetched');
+    expect(strip).toContain('h ago');
+    expect(strip).toContain('Coverage');
+    expect(strip).toContain('sources: qualified_enquiries, reach');
+    expect(strip).toContain('no competitor monitoring');
+    expect(await text('what-changed')).toContain('missing snapshots are reported as gaps, never as zero');
     expect(await count('coverage-partial')).toBe(1);
     expect(await count('stale')).toBe(0);
     await expect.poll(() => count('anomaly'), { timeout: 15_000 }).toBe(1);
     const anomaly = await text('anomaly');
     expect(anomaly).toContain('High severity');
     expect(anomaly).toContain('complaints');
-    const table = page.getByTestId('anomaly').getByRole('table');
-    expect(await table.textContent()).toContain('baseline2');
-    expect(await table.textContent()).toContain('observed9');
+    // The interface states an anomaly as one line: observed against its baseline (the bar chart is gone).
+    expect(anomaly).toContain('observed 9 against a baseline of 2 (4.5× baseline)');
     expect(await noHorizontalOverflow()).toBe(true);
   }, 45_000);
 
@@ -113,13 +114,19 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('What to do next ranks recommendations with exactly their actions; accepting creates the brief', async () => {
-    await page.getByRole('tab', { name: 'What to do next' }).click();
+    // Without a view in the URL the screen opens on "What to do next", as the interface does.
+    await open('intelligence');
+    await expect.poll(() => count('what-to-do-next'), { timeout: 15_000 }).toBe(1);
+    expect(await page.getByRole('tab', { name: 'What to do next' }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
     await expect.poll(() => count('recommendation'), { timeout: 15_000 }).toBe(4);
     const next = await text('what-to-do-next');
     expect(next).toContain('Ranking policy: baseline.');
-    expect(next).toContain('Fetched');
+    expect(await text('freshness')).toContain('Fetched');
     const first = page.getByTestId('recommendation').first();
-    expect(await first.textContent()).toContain('#1');
+    // The interface's "01"; the rank is named for assistive technology.
+    expect(await first.textContent()).toContain('Rank 1');
     const actions = first.getByRole('group', { name: /Actions for/ }).getByRole('button');
     expect(await actions.allTextContents()).toEqual(['Create brief', 'Dismiss']);
     await first.getByRole('button', { name: 'Create brief' }).click();
@@ -194,6 +201,16 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(typeof requestsTo('intelligence.recommendations.dismiss').at(-1)?.headers['idempotency-key']).toBe(
       'string',
     );
+    // The interface's quick reasons dismiss in one step, sending the reason as written.
+    const other = page
+      .getByTestId('recommendation')
+      .filter({ hasNot: page.getByText('Test price-first carousels') });
+    await other.first().getByRole('button', { name: 'Dismiss' }).click();
+    await other.first().getByRole('button', { name: 'Already doing it' }).click();
+    await expect
+      .poll(() => p6.recommendations.get(P6.recommendations.playbook)?.state, { timeout: 15_000 })
+      .toBe('dismissed');
+    expect(p6.recommendations.get(P6.recommendations.playbook)?.dismissalReason).toBe('Already doing it');
   }, 30_000);
 
   it('no objective: ranking is refused and the page links to set one', async () => {
@@ -205,12 +222,12 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     const link = page.getByTestId('no-objective').getByRole('link', { name: 'Set an objective' });
     expect(await link.getAttribute('href')).toBe(brandPath('system'));
     expect(await text('what-to-do-next')).toContain('Unranked list.');
-    expect(await text('what-to-do-next')).not.toContain('#1');
+    expect(await text('what-to-do-next')).not.toContain('Rank 1');
     p6.objective = objective;
   }, 30_000);
 
   it('analyse now shows the running state until the analyst writes its insights', async () => {
-    await open('intelligence');
+    await open('intelligence?view=changed');
     await expect.poll(() => count('what-changed'), { timeout: 15_000 }).toBe(1);
     await page.getByRole('button', { name: 'Run brand analyst' }).click();
     // RA-07: the principal is picked by name and the run's limits are shown; no id is typed.
@@ -230,10 +247,10 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   it('stale snapshots are marked with text next to the numbers', async () => {
     p6.makeStale();
-    await open('intelligence');
+    await open('intelligence?view=changed');
     await expect.poll(() => count('stale'), { timeout: 15_000 }).toBeGreaterThan(0);
     expect(await page.getByTestId('stale').first().textContent()).toContain('Stale');
-    expect(await text('what-changed')).toContain('d ago');
+    expect(await text('freshness')).toContain('d ago');
   }, 30_000);
 
   it('the playbook shows reconsider-by dates and lets an approver approve a proposal', async () => {
@@ -241,7 +258,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await expect.poll(() => count('playbook-approved'), { timeout: 15_000 }).toBe(1);
     const approved = await text('playbook-approved');
     expect(approved).toContain('Reply to product questions within four hours.');
-    expect(approved).toContain('reconsider by');
+    expect(approved).toContain('Reconsider by');
     expect(approved).toContain('Due for review');
     const proposed = page.getByTestId('playbook-proposed');
     await expect
@@ -288,7 +305,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     backend.denied.delete('intelligence.workspace.get');
     // Once for the route loader's prefetch, once for the screen's own read.
     backend.failNext.set('intelligence.workspace.get', 2);
-    await open('intelligence');
+    await open('intelligence?view=changed');
     await expect
       .poll(() => page.getByRole('alert').filter({ hasText: 'Something went wrong' }).count(), {
         timeout: 15_000,
@@ -300,7 +317,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   it('no data: every view says so instead of estimating (empty recommendations too)', async () => {
     p6.clearAnalysis();
-    await open('intelligence');
+    await open('intelligence?view=changed');
     await expect.poll(() => text('what-changed'), { timeout: 15_000 }).toContain('No data yet');
     expect(await text('what-changed')).toContain('No analysis has run for this brand yet');
     await page.getByRole('tab', { name: 'What to do next' }).click();
@@ -316,7 +333,11 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     const list = await text('experiments');
     for (const label of ['Designed', 'Running', 'Analysed', 'Structured comparison', 'Randomised'])
       expect(list).toContain(label);
-    expect(list).toContain('directional; not causal');
+    // The conclusion label moved from the row to the detail's mode line, as the interface places it.
+    await page.getByTestId(`experiment-${P6.experiments.inconclusive}`).click();
+    await expect
+      .poll(() => text('experiment-detail'), { timeout: 15_000 })
+      .toContain('directional; not causal');
     expect(await noHorizontalOverflow()).toBe(true);
   }, 30_000);
 

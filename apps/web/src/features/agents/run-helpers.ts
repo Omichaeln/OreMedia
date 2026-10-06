@@ -56,6 +56,62 @@ export function formatDuration(ms: number): string {
 
 export const formatTokens = (n: number): string => new Intl.NumberFormat().format(n);
 
+/** "4.1k", "38k", "900": a token figure as the interface's strip sets it, never a thousands-separated count. */
+export function formatCompactTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(Math.round(n / 100) / 10).toFixed(1).replace(/\.0$/, '')}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+/** "12 min ago", "2 h ago", "Yesterday", "3 days ago": the interface's relative times, never a raw timestamp. */
+export function relativeTime(iso: string, now = new Date()): string {
+  const minutes = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days} days ago`;
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+export const humanise = (key: string): string => key.replace(/_/g, ' ');
+
+/**
+ * What the run is for, as the interface titles a run: the brief's goal when the skill's schema has one (every
+ * published copywriting and planning skill does), otherwise the task kind. Nothing is invented from reasoning.
+ */
+export function runTitle(run: Pick<RunDto, 'brief' | 'taskKind'>): string {
+  const goal = run.brief['goal'];
+  return typeof goal === 'string' && goal.trim() ? goal.trim() : humanise(run.taskKind);
+}
+
+/** The interface's figure strip: tool calls made, tokens spent, cost, all from the recorded steps (spec 12.7). */
+export function runFigures(run: Pick<RunDto, 'costMicros'>, steps: readonly StepDto[]) {
+  return {
+    toolCalls: steps.reduce((n, s) => n + s.invocations.length, 0),
+    tokens: steps.reduce((n, s) => n + s.tokensIn + s.tokensOut, 0),
+    costMicros: run.costMicros,
+  };
+}
+
+/** A step's dot: its worst invocation outcome; a step without invocations records what the model or validator did. */
+export function stepTone(step: StepDto): Tone {
+  const outcomes = step.invocations.map((i) => OUTCOME_TONE[i.outcome]);
+  if (outcomes.includes('critical')) return 'critical';
+  if (outcomes.includes('warning')) return 'warning';
+  return 'good';
+}
+
+/** The interface's tool line, "tool → result": the invocation's name and its recorded output reference or denial. */
+export function invocationLine(i: InvocationDto): string {
+  if (i.policyDecision === 'denied' || i.outcome === 'denied')
+    return `${i.toolName} → denied: ${i.policyReason ?? i.outputRef ?? 'no reason recorded'}`;
+  if (i.outcome === 'proposal') return `${i.toolName} → proposal`;
+  return i.outputRef ? `${i.toolName} → ${i.outputRef}` : i.toolName;
+}
+
 export const POLICY_DECISION_TONE: Record<InvocationDto['policyDecision'], Tone> = {
   allowed: 'good',
   denied: 'critical',

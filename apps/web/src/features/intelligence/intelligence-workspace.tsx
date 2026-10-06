@@ -1,7 +1,17 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BarSeries, Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
+import {
+  Button,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Skeleton,
+  StatusBanner,
+  StatusDot,
+  toneGlyph,
+} from '@oremedia/ui';
 import { Drawer, DrawerContent, DrawerTrigger } from '../../components/drawer';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
@@ -13,17 +23,19 @@ import { useTRPC } from '../../lib/trpc';
 import { EffectiveLimits } from '../agents/effective-limits';
 import { useAgentPrincipals } from '../agents/use-agent-runs';
 import { brandPath, useBrandContext } from '../brand/brand-context';
+import { modeLabel } from '../experiments/experiment-helpers';
 import { useCompanies } from '../portfolio/use-companies';
 import { FreshnessLine } from './freshness-line';
 import {
+  anomalyText,
   canApprovePlaybook,
   clusterKindChip,
-  EXPERIMENT_GROUP_LABEL,
+  EXPERIMENT_GROUPS,
   hasCoverageGaps,
   insightLabel,
   severityChip,
   STRENGTH_CHIP,
-  verdictChip,
+  workspaceExperimentChip,
 } from './intelligence-helpers';
 import { PlaybookPanel } from './playbook-panel';
 import { RecommendationCard } from './recommendation-card';
@@ -35,23 +47,34 @@ import {
   type InsightDto,
   type RecommendationDto,
   type WorkspaceDto,
-  type WorkspaceExperimentDto,
 } from './use-intelligence';
 
 const VIEW_PARAM = 'view';
-const VIEWS = ['changed', 'learned', 'next', 'voice', 'playbook', 'experiments'] as const;
+/** The interface's tab order; it opens on "What to do next". */
+const VIEWS = ['changed', 'learned', 'next', 'voice', 'experiments', 'playbook'] as const;
 type View = (typeof VIEWS)[number];
+const DEFAULT_VIEW: View = 'next';
 const VIEW_LABEL: Record<View, string> = {
   changed: 'What changed',
   learned: 'What we learned',
   next: 'What to do next',
   voice: 'Customer voice',
-  playbook: 'Brand playbook',
   experiments: 'Experiments',
+  playbook: 'Brand playbook',
 };
 
-function InsightList({ items, label, emptyText }: { items: InsightDto[]; label: string; emptyText: string }) {
-  if (items.length === 0) return <p className="text-sm text-muted-foreground">{emptyText}</p>;
+/** A view's opening line: what it holds and what it may claim (the server's statement). */
+function Statement({ children }: { children: ReactNode }) {
+  return <p className="text-pretty text-sm text-muted-foreground">{children}</p>;
+}
+
+/**
+ * Insights as the interface lists what was learned: a dot and the statement on a ruled row. Under it, in muted
+ * text, the label that says what kind of claim it is (so the dot is never the only carrier), the period and the
+ * evidence it rests on.
+ */
+function InsightRows({ items, label, emptyText }: { items: InsightDto[]; label: string; emptyText: string }) {
+  if (items.length === 0) return <p className="py-2.5 text-sm text-muted-foreground">{emptyText}</p>;
   return (
     <ul className="divide-y divide-border" aria-label={label}>
       {items.map((i) => {
@@ -59,26 +82,20 @@ function InsightList({ items, label, emptyText }: { items: InsightDto[]; label: 
         return (
           <li
             key={i.id}
-            className="flex flex-col gap-1 py-2"
+            className="flex gap-2.5 py-2.5 text-sm"
             data-testid="insight"
             data-insight-kind={i.kind}
           >
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Badge tone={strength.tone} glyph={false}>
-                {insightLabel(i.kind, i.strength)}
-              </Badge>
-              <Badge tone={strength.tone}>{strength.label}</Badge>
+            <StatusDot tone={strength.tone} size="sm" className="mt-[7px]" />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span>{i.statement}</span>
               <span className="text-xs text-muted-foreground">
+                {insightLabel(i.kind, i.strength)} · {strength.label} ·{' '}
                 {new Date(i.periodStart).toLocaleDateString()} to {new Date(i.periodEnd).toLocaleDateString()}
+                {i.evidence.length > 0 &&
+                  ` · Evidence: ${i.evidence.map((e) => `${e.kind} ${e.ref}${e.note ? ` (${e.note})` : ''}`).join('; ')}`}
               </span>
-            </div>
-            <p className="text-sm">{i.statement}</p>
-            {i.evidence.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Evidence:{' '}
-                {i.evidence.map((e) => `${e.kind} ${e.ref}${e.note ? ` (${e.note})` : ''}`).join('; ')}
-              </p>
-            )}
+            </span>
           </li>
         );
       })}
@@ -86,65 +103,20 @@ function InsightList({ items, label, emptyText }: { items: InsightDto[]; label: 
   );
 }
 
-function ExperimentGroup({
-  label,
-  items,
-  companyId,
-  brandId,
-}: {
-  label: string;
-  items: WorkspaceExperimentDto[];
-  companyId: string;
-  brandId: string;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <h3 className="text-sm font-semibold">
-        {label} ({items.length})
-      </h3>
-      {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">None.</p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {items.map((x) => {
-            const verdict = x.latestResult ? verdictChip(x.latestResult.verdict) : null;
-            return (
-              <li key={x.id} className="py-2 text-sm">
-                <Link
-                  to={brandPath(companyId, brandId, `experiments?experiment=${encodeURIComponent(x.id)}`)}
-                  className="font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {x.hypothesis}
-                </Link>
-                <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <Badge tone="neutral" glyph={false}>
-                    {x.mode.replace(/_/g, ' ')}
-                  </Badge>
-                  <span>{x.conclusionLabel}</span>
-                  {verdict && <Badge tone={verdict.tone}>{verdict.label}</Badge>}
-                  {x.latestResult && <span>{x.latestResult.verdictReason}</span>}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 /**
  * The ranked list. A decided recommendation leaves the workspace's proposed list on the next read; the card is kept
- * (same key, same list) under "Decided just now" so its outcome and the link to what it created stay visible.
+ * (same key, same list) so its outcome and the link to what it created stay visible.
  */
 function RecommendationList({
   companyId,
   brandId,
   view,
+  evidence,
 }: {
   companyId: string;
   brandId: string;
   view: WorkspaceDto['whatToDoNext'];
+  evidence: Map<string, string>;
 }) {
   const [decided, setDecided] = useState<RecommendationDto[]>([]);
   const current = new Set(view.items.map((r) => r.id));
@@ -164,10 +136,10 @@ function RecommendationList({
   return (
     <>
       {view.items.length === 0 && (
-        <p className="mb-2 text-sm text-muted-foreground">No recommendations are waiting for a decision.</p>
+        <p className="text-sm text-muted-foreground">No recommendations are waiting for a decision.</p>
       )}
-      <ul className="flex flex-col gap-3" aria-label="Recommendations">
-        {/* One keyed array: a card moving from waiting to decided keeps its state (and its outcome banner). */}
+      <ul className="flex flex-col gap-6" aria-label="Recommendations">
+        {/* One keyed array: a card moving from waiting to decided keeps its state (and its outcome). */}
         {rows.map(({ r, position }) => (
           <RecommendationCard
             key={r.id}
@@ -175,6 +147,7 @@ function RecommendationList({
             brandId={brandId}
             recommendation={r}
             position={position}
+            evidence={r.insightIds.flatMap((id) => evidence.get(id) ?? [])}
             onDecided={remember}
           />
         ))}
@@ -319,138 +292,204 @@ function WhatChanged({ view, brandId }: { view: WorkspaceDto['whatChanged']; bra
   const anomalies = useAnomalies(brandId);
   const gaps = hasCoverageGaps(view.items);
   return (
-    <div className="flex flex-col gap-8">
-      <Section id="movements-heading" title="Movements and data gaps" testId="what-changed">
-        <FreshnessLine
-          freshness={view.freshness}
-          coverage={view.coverage}
-          statement={view.coverage.statement}
-        />
-        {gaps && (
-          <StatusBanner
-            tone="warning"
-            title="Coverage is partial"
-            description="Some snapshots are missing for the period; they are reported as gaps below, never counted as zero."
-            data-testid="coverage-partial"
-          />
-        )}
+    <div className="flex flex-col gap-6" data-testid="what-changed">
+      {view.coverage.statement && <Statement>{view.coverage.statement}.</Statement>}
+      <Section id="movements-heading" title="Movements">
         {view.items.length === 0 ? (
           <EmptyState
             title="No data yet"
             description="No analysis has run for this brand. Run the analyst once metric snapshots exist; until then nothing is shown and nothing is estimated."
           />
         ) : (
-          <InsightList items={view.items} label="Movements" emptyText="" />
+          <InsightRows items={view.items} label="Movements" emptyText="" />
         )}
       </Section>
-      <Section id="anomalies-heading" title="Anomalies" testId="anomalies">
+      <Section id="anomalies-heading" title="Anomalies & data gaps" testId="anomalies">
+        <ul className="divide-y divide-border" aria-label="Anomalies and data gaps">
+          {gaps && (
+            <li className="py-2.5 text-sm" data-testid="coverage-partial">
+              <span className="sr-only">{toneGlyph.warning} </span>Coverage is partial.{' '}
+              <span className="text-muted-foreground">
+                Some snapshots are missing for the period; they are reported as gaps, never counted as zero.
+              </span>
+            </li>
+          )}
+          {anomalies.data?.items.map((a) => {
+            const sev = severityChip(a.severity);
+            return (
+              <li key={a.id} className="py-2.5 text-sm" data-testid="anomaly">
+                {anomalyText(a)}.{' '}
+                <span className="text-muted-foreground">
+                  {sev.label} · {a.state} · detected {new Date(a.detectedAt).toLocaleString()}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
         {anomalies.isPending && <Skeleton label="Loading anomalies" />}
         {anomalies.isError && (
           <RequestError error={anomalies.error} onRetry={() => void anomalies.refetch()} />
         )}
-        {anomalies.data && anomalies.data.items.length === 0 && (
-          <p className="text-sm text-muted-foreground">No anomalies recorded.</p>
-        )}
-        {anomalies.data && anomalies.data.items.length > 0 && (
-          <ul className="divide-y divide-border" aria-label="Anomalies">
-            {anomalies.data.items.map((a) => {
-              const sev = severityChip(a.severity);
-              return (
-                <li key={a.id} className="flex flex-col gap-1 py-2" data-testid="anomaly">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <Badge tone={sev.tone}>{sev.label}</Badge>
-                    <span className="font-medium">{a.signal}</span>
-                    <Badge tone="neutral" glyph={false}>
-                      {a.state}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      detected {new Date(a.detectedAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <BarSeries
-                    title={`${a.signal}: baseline versus observed`}
-                    points={[
-                      { label: 'baseline', value: a.baseline },
-                      { label: 'observed', value: a.observed },
-                    ]}
-                  />
-                </li>
-              );
-            })}
-          </ul>
+        {anomalies.data && anomalies.data.items.length === 0 && !gaps && (
+          <p className="py-2.5 text-sm text-muted-foreground">No anomalies or data gaps recorded.</p>
         )}
       </Section>
     </div>
   );
 }
 
+/** The interface's groups, strongest first; observations and hypotheses are never findings (spec 16.3). */
 function WhatWeLearned({ view }: { view: WorkspaceDto['whatWeLearned'] }) {
   return (
-    <div className="flex flex-col gap-8">
-      <Section id="observations-heading" title="Observations and hypotheses" testId="what-we-learned">
-        <FreshnessLine freshness={view.freshness} statement={view.statement} />
-        <InsightList
-          items={[...view.observations, ...view.directional]}
-          label="Hypotheses"
-          emptyText="No observations or hypotheses yet."
-        />
-      </Section>
-      <Section id="findings-heading" title="Experimentally supported findings" testId="findings">
-        <InsightList
+    <div className="flex flex-col gap-6" data-testid="what-we-learned">
+      <Statement>{view.statement}.</Statement>
+      <Section id="findings-heading" title="Experimentally supported" testId="findings">
+        <InsightRows
           items={view.experimentallySupported}
           label="Findings"
           emptyText="No experimentally supported findings yet. Only a sound randomised experiment can add one."
         />
       </Section>
+      <Section id="directional-heading" title="Directional">
+        <InsightRows
+          items={view.directional}
+          label="Directional findings"
+          emptyText="No directional results yet."
+        />
+      </Section>
+      <Section id="hypotheses-heading" title="Observations and hypotheses — not findings">
+        <InsightRows
+          items={view.observations}
+          label="Hypotheses"
+          emptyText="No observations or hypotheses yet."
+        />
+      </Section>
     </div>
   );
 }
 
-function CustomerVoice({ brandId }: { brandId: string }) {
+/** Comment themes (spec 16.5): counts and dates only, never an author; replying happens in the Inbox. */
+function CustomerVoice({ companyId, brandId }: { companyId: string; brandId: string }) {
   const clusters = useVoiceClusters(brandId);
   return (
-    <Section id="voice-heading" title="Comment clusters" testId="voice">
-      <p className="text-xs text-muted-foreground">
-        Clusters of comments by kind with counts and sample references; author identities are never shown
-        here. Social discussion is not a representative measure of market demand.
-      </p>
+    <section aria-labelledby="voice-heading" className="flex flex-col gap-6" data-testid="voice">
+      <h2 id="voice-heading" className="sr-only">
+        Customer voice
+      </h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <Statement>
+          Themes from comments, by kind, with counts. Author identities are never shown here; social
+          discussion is not a representative measure of market demand.
+        </Statement>
+        <Link
+          to={brandPath(companyId, brandId, 'inbox')}
+          className="inline-flex min-h-6 items-center text-sm font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Reply in the Inbox <span aria-hidden="true">&nbsp;→</span>
+        </Link>
+      </div>
       {clusters.isPending && <Skeleton label="Loading customer voice" />}
       {clusters.isError && <RequestError error={clusters.error} onRetry={() => void clusters.refetch()} />}
       {clusters.data && clusters.data.items.length === 0 && (
-        <p className="text-sm text-muted-foreground">No clusters yet.</p>
+        <p className="border-t border-border py-3.5 text-sm text-muted-foreground">No themes yet.</p>
       )}
       {clusters.data && clusters.data.items.length > 0 && (
-        <ul className="divide-y divide-border" aria-label="Customer voice clusters">
+        <ul className="flex flex-col" aria-label="Customer voice clusters">
           {clusters.data.items.map((c) => {
             const kind = clusterKindChip(c.kind);
+            const linked = c.linkedRecommendationIds.length;
             return (
-              <li key={c.id} className="flex flex-col gap-1 py-2" data-testid="cluster">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <Badge tone={kind.tone}>{kind.label}</Badge>
-                  <span className="font-medium">{c.label}</span>
+              <li
+                key={c.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-t border-border py-3.5 sm:grid-cols-[minmax(0,1fr)_90px_90px]"
+                data-testid="cluster"
+              >
+                <span className="col-span-2 flex min-w-0 flex-col gap-0.5 sm:col-span-1">
+                  <span className="text-base font-bold">{c.label}</span>
                   <span className="text-xs text-muted-foreground">
-                    {c.size} message{c.size === 1 ? '' : 's'}
+                    First seen {new Date(c.firstSeen).toLocaleDateString()} · last seen{' '}
+                    {new Date(c.lastSeen).toLocaleString()} · {c.sampleMessageRefs.length} sample
+                    {c.sampleMessageRefs.length === 1 ? '' : 's'}
+                    {linked > 0 && ` · ${linked} linked recommendation${linked === 1 ? '' : 's'}`}
                   </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  First seen {new Date(c.firstSeen).toLocaleDateString()} · last seen{' '}
-                  {new Date(c.lastSeen).toLocaleString()} · samples {c.sampleMessageRefs.length}
-                  {c.linkedRecommendationIds.length
-                    ? ` · linked recommendations ${c.linkedRecommendationIds.join(', ')}`
-                    : ''}
-                </p>
+                </span>
+                <span className="text-xs text-muted-foreground">{kind.label}</span>
+                <span className="text-right text-xs tabular-nums">
+                  {c.size} message{c.size === 1 ? '' : 's'}
+                </span>
               </li>
             );
           })}
         </ul>
       )}
-    </Section>
+    </section>
+  );
+}
+
+/** Every experiment of the brand on one ruled row: name, mode, and its verdict or where it is in its lifecycle. */
+function ExperimentsView({
+  companyId,
+  brandId,
+  view,
+}: {
+  companyId: string;
+  brandId: string;
+  view: WorkspaceDto['experiments'];
+}) {
+  const rows = EXPERIMENT_GROUPS.flatMap((g) => view[g]);
+  return (
+    <section
+      aria-labelledby="experiments-heading"
+      className="flex flex-col gap-6"
+      data-testid="experiments-view"
+    >
+      <h2 id="experiments-heading" className="sr-only">
+        Experiments
+      </h2>
+      <Statement>{view.statement}.</Statement>
+      {rows.length === 0 ? (
+        <p className="border-t border-border py-3.5 text-sm text-muted-foreground">
+          No experiments yet. Accept a recommendation that prepares a test, or design one under{' '}
+          <Link
+            to={brandPath(companyId, brandId, 'experiments')}
+            className="font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            Experiments
+          </Link>
+          .
+        </p>
+      ) : (
+        <ul className="flex flex-col" aria-label="Experiments">
+          {rows.map((x) => {
+            const chip = workspaceExperimentChip(x);
+            return (
+              <li key={x.id} className="border-t border-border">
+                <Link
+                  to={brandPath(companyId, brandId, `experiments?experiment=${encodeURIComponent(x.id)}`)}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3.5 text-sm hover:text-accent-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_160px_120px]"
+                >
+                  <span className="col-span-2 font-medium sm:col-span-1">{x.hypothesis}</span>
+                  <span className="text-muted-foreground">{modeLabel(x.mode)}</span>
+                  <span className="flex items-center gap-1.5">
+                    <StatusDot tone={chip.tone} size="sm" />
+                    <span className="sr-only">{toneGlyph[chip.tone]} </span>
+                    {chip.label}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 
 /**
- * Spec 21.1 `intelligence/`: the views of spec 16.9 as tabs (customer voice on its own, as in the v3 prototype); the
- * selected view is in the URL. The analyst is started from a side sheet so the views stay first on the page.
+ * Spec 21.1 `intelligence/`: the views of spec 16.9 as the interface sets them: a 960 px column with the heading
+ * (ranked against the objective, learned from this brand's data only), the freshness and coverage strip, a row of
+ * tabs on one rule, and the selected view under it. The selected view is in the URL. The analyst is started from a
+ * side sheet so the views stay first on the page.
  */
 export function IntelligenceWorkspaceScreen() {
   const { companyId, brandId, brand } = useBrandContext();
@@ -458,7 +497,7 @@ export function IntelligenceWorkspaceScreen() {
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const raw = params.get(VIEW_PARAM);
-  const view: View = (VIEWS as readonly string[]).includes(raw ?? '') ? (raw as View) : 'changed';
+  const view: View = (VIEWS as readonly string[]).includes(raw ?? '') ? (raw as View) : DEFAULT_VIEW;
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const workspace = useWorkspace(brandId, analysis !== null);
   const companies = useCompanies();
@@ -472,59 +511,85 @@ export function IntelligenceWorkspaceScreen() {
   }, [analysis, ws, asOf]);
   const systemHref = brandPath(companyId, brandId, 'system');
   const [analystOpen, setAnalystOpen] = useState(false);
+  const insights = ws
+    ? [
+        ...ws.whatChanged.items,
+        ...ws.whatWeLearned.observations,
+        ...ws.whatWeLearned.directional,
+        ...ws.whatWeLearned.experimentallySupported,
+      ]
+    : [];
+  const evidence = new Map(insights.map((i) => [i.id, i.statement]));
+  const freshness = ws
+    ? {
+        changed: ws.whatChanged.freshness,
+        learned: ws.whatWeLearned.freshness,
+        next: ws.whatToDoNext.freshness,
+        // Comment themes carry their own dates; the strip shows the analysis behind the workspace.
+        voice: ws.whatChanged.freshness,
+        experiments: ws.experiments.freshness,
+        playbook: ws.brandPlaybook.freshness,
+      }[view]
+    : null;
 
   return (
-    <main id="main" className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Intelligence</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {ws?.objective
-              ? `Ranked against ${ws.objective.primaryMetricKey.replace(/_/g, ' ')}`
-              : 'No objective set'}{' '}
-            · learned from {brand.name}’s data only · hypotheses are labelled; only experiments support causal
-            claims
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void queryClient.invalidateQueries(trpc.intelligence.pathFilter())}
-            disabled={workspace.isFetching}
-          >
-            {workspace.isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          {ws && (
-            <Drawer open={analystOpen} onOpenChange={setAnalystOpen}>
-              <DrawerTrigger asChild>
-                <Button size="sm" variant="primary">
-                  Run brand analyst
-                </Button>
-              </DrawerTrigger>
-              <DrawerContent
-                title="Run the brand analyst"
-                side="right"
-                className="w-[min(92vw,26rem)] overflow-y-auto p-5"
-              >
-                <div id="analyse-now" className="flex flex-col gap-4">
-                  <p className="text-sm text-muted-foreground">
-                    Reviews the period’s metric snapshots and comments and writes insights and
-                    recommendations. The views refresh when they land.
-                  </p>
-                  <AnalyseNowForm
-                    brandId={brandId}
-                    onStarted={(run) => {
-                      setAnalysis({ run, asOfBefore: ws.whatChanged.freshness.asOf });
-                      setAnalystOpen(false);
-                    }}
-                  />
-                </div>
-              </DrawerContent>
-            </Drawer>
-          )}
-        </div>
-      </header>
+    <main
+      id="main"
+      className="om-in mx-auto flex w-full max-w-[960px] flex-col gap-6 px-4 py-8 sm:px-10 sm:pb-20 sm:pt-10"
+    >
+      <PageHeader
+        title="Intelligence"
+        description={
+          <>
+            {ws?.objective ? (
+              <>
+                Ranked against{' '}
+                <span className="text-foreground">{ws.objective.primaryMetricKey.replace(/_/g, ' ')}</span>
+              </>
+            ) : (
+              'No objective set'
+            )}{' '}
+            · learned from {brand.name}’s data only
+          </>
+        }
+        actions={
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => void queryClient.invalidateQueries(trpc.intelligence.pathFilter())}
+              disabled={workspace.isFetching}
+            >
+              {workspace.isFetching ? 'Refreshing…' : 'Refresh'}
+            </Button>
+            {ws && (
+              <Drawer open={analystOpen} onOpenChange={setAnalystOpen}>
+                <DrawerTrigger asChild>
+                  <Button>Run brand analyst now</Button>
+                </DrawerTrigger>
+                <DrawerContent
+                  title="Run the brand analyst"
+                  side="right"
+                  className="w-[min(92vw,26rem)] overflow-y-auto p-5"
+                >
+                  <div id="analyse-now" className="flex flex-col gap-4">
+                    <p className="text-sm text-muted-foreground">
+                      Reviews the period’s metric snapshots and comments and writes insights and
+                      recommendations. The views refresh when they land.
+                    </p>
+                    <AnalyseNowForm
+                      brandId={brandId}
+                      onStarted={(run) => {
+                        setAnalysis({ run, asOfBefore: ws.whatChanged.freshness.asOf });
+                        setAnalystOpen(false);
+                      }}
+                    />
+                  </div>
+                </DrawerContent>
+              </Drawer>
+            )}
+          </>
+        }
+      />
       {workspace.isPending && <Skeleton label="Loading intelligence workspace" lines={4} />}
       {workspace.isError && (
         <RequestError
@@ -533,8 +598,9 @@ export function IntelligenceWorkspaceScreen() {
           title={toUiError(workspace.error).kind === 'forbidden' ? 'Permission denied' : undefined}
         />
       )}
-      {ws && (
+      {ws && freshness && (
         <>
+          <FreshnessLine freshness={freshness} coverage={ws.whatChanged.coverage} />
           {ws.objective === null && (
             <StatusBanner
               tone="warning"
@@ -562,7 +628,7 @@ export function IntelligenceWorkspaceScreen() {
             onValueChange={(v) => setParams({ [VIEW_PARAM]: v }, { replace: true })}
             className="flex flex-col gap-6"
           >
-            <TabList label="Intelligence views" className="overflow-x-auto">
+            <TabList label="Intelligence views">
               {VIEWS.map((v) => (
                 <Tab key={v} value={v}>
                   {VIEW_LABEL[v]}
@@ -576,61 +642,40 @@ export function IntelligenceWorkspaceScreen() {
               <WhatWeLearned view={ws.whatWeLearned} />
             </TabPanel>
             <TabPanel value="next">
-              <Section id="next-heading" title="Ranked actions" testId="what-to-do-next">
-                <FreshnessLine freshness={ws.whatToDoNext.freshness} statement={ws.whatToDoNext.statement} />
-                <p className="text-xs text-muted-foreground">
+              <section
+                aria-labelledby="next-heading"
+                className="flex flex-col gap-6"
+                data-testid="what-to-do-next"
+              >
+                <h2 id="next-heading" className="sr-only">
+                  What to do next
+                </h2>
+                <Statement>
                   {ws.whatToDoNext.ranked
-                    ? `Ranking policy: ${ws.whatToDoNext.rankingPolicy}.`
+                    ? `${ws.whatToDoNext.statement}. Ranking policy: ${ws.whatToDoNext.rankingPolicy}.`
                     : 'Unranked list.'}
-                </p>
-                <RecommendationList companyId={companyId} brandId={brandId} view={ws.whatToDoNext} />
-              </Section>
+                </Statement>
+                <RecommendationList
+                  companyId={companyId}
+                  brandId={brandId}
+                  view={ws.whatToDoNext}
+                  evidence={evidence}
+                />
+              </section>
             </TabPanel>
             <TabPanel value="voice">
-              <CustomerVoice brandId={brandId} />
+              <CustomerVoice companyId={companyId} brandId={brandId} />
+            </TabPanel>
+            <TabPanel value="experiments">
+              <ExperimentsView companyId={companyId} brandId={brandId} view={ws.experiments} />
             </TabPanel>
             <TabPanel value="playbook">
               <PlaybookPanel
                 brandId={brandId}
                 view={ws.brandPlaybook}
-                insights={[
-                  ...ws.whatChanged.items,
-                  ...ws.whatWeLearned.observations,
-                  ...ws.whatWeLearned.directional,
-                  ...ws.whatWeLearned.experimentallySupported,
-                ]}
+                insights={insights}
                 canApprove={canApprovePlaybook(role)}
               />
-            </TabPanel>
-            <TabPanel value="experiments">
-              <Section
-                id="experiments-heading"
-                title="Experiments"
-                testId="experiments-view"
-                action={
-                  <Link
-                    to={brandPath(companyId, brandId, 'experiments')}
-                    className="underline-offset-2 hover:underline"
-                  >
-                    Open experiments <span aria-hidden="true">→</span>
-                  </Link>
-                }
-              >
-                <FreshnessLine freshness={ws.experiments.freshness} statement={ws.experiments.statement} />
-                <div className="flex flex-col gap-3">
-                  {(Object.keys(EXPERIMENT_GROUP_LABEL) as Array<keyof typeof EXPERIMENT_GROUP_LABEL>).map(
-                    (g) => (
-                      <ExperimentGroup
-                        key={g}
-                        label={EXPERIMENT_GROUP_LABEL[g]}
-                        items={ws.experiments[g]}
-                        companyId={companyId}
-                        brandId={brandId}
-                      />
-                    ),
-                  )}
-                </div>
-              </Section>
             </TabPanel>
           </Tabs>
         </>
