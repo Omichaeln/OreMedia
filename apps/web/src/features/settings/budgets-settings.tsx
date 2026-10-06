@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Button, Field, Input, Skeleton, StatusBanner } from '@oremedia/ui';
+import { Button, Field, Input, Skeleton, StatusBanner, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { toUiError } from '../../lib/errors';
@@ -23,29 +23,30 @@ const KIND_TEXT: Record<string, string> = {
   audio_generation: 'Audio generation',
 };
 
+/** A spend row as the interface draws it: what it is, a thin bar, the figure; the bar turns as the limit nears. */
 function Meter({ label, used, limit, hint }: { label: string; used: number; limit: number; hint: string }) {
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-        <span className="font-medium">{label}</span>
-        <span className="tabular-nums">
-          {usd(used)} of {usd(limit)} <span className="text-muted-foreground">({pct}%)</span>
-        </span>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-t border-border py-3.5 sm:grid-cols-[minmax(0,1fr)_200px_110px]">
+      <div className="min-w-0">
+        <p className="text-base">{label}</p>
+        <p className="text-xs text-muted-foreground">{hint}</p>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+      <p className="text-right text-xs tabular-nums sm:order-2">
+        {usd(used)} of {usd(limit)} <span className="text-muted-foreground">({pct}%)</span>
+      </p>
+      <div
+        className="col-span-full h-1 overflow-hidden rounded-sm bg-border sm:order-1 sm:col-span-1"
+        aria-hidden
+      >
         <div
-          className={
-            pct >= 90
-              ? 'h-full bg-status-critical'
-              : pct >= 70
-                ? 'h-full bg-status-warning'
-                : 'h-full bg-primary'
-          }
+          className={cn(
+            'om-grow h-full',
+            pct >= 90 ? 'bg-status-critical-dot' : pct >= 70 ? 'bg-status-warning-dot' : 'bg-primary',
+          )}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="text-xs text-muted-foreground">{hint}</p>
     </div>
   );
 }
@@ -199,24 +200,28 @@ export function BudgetsSettings({ enabled }: { enabled: boolean }) {
       )}
       {budgets.data && (
         <div className="flex flex-col gap-5">
-          <Meter
-            label={`Company, ${budgets.data.month.periodKey}`}
-            used={budgets.data.month.committedMicros}
-            limit={budgets.data.month.limitMicros}
-            hint={`Entitlement ${usd(budgets.data.month.entitlementMicros)}${budgets.data.month.storedLimitMicros !== null ? `, stored limit ${usd(budgets.data.month.storedLimitMicros)}` : ', no stored limit'}; ${usd(budgets.data.month.remainingMicros)} remains.`}
-          />
-          <LimitForm
-            brandId={brandId}
-            period="month"
-            current={budgets.data.month.storedLimitMicros ?? budgets.data.month.entitlementMicros}
-          />
-          <Meter
-            label={`This brand, ${budgets.data.day.dayKey}`}
-            used={budgets.data.day.committedMicros}
-            limit={budgets.data.day.limitMicros}
-            hint={`${budgets.data.day.storedLimitMicros === null ? 'Default limit' : 'Stored limit'}; ${usd(budgets.data.day.remainingMicros)} remains today.`}
-          />
-          <LimitForm brandId={brandId} period="day" current={budgets.data.day.limitMicros} />
+          <div className="flex flex-col">
+            <Meter
+              label={`Company · all brands · ${budgets.data.month.periodKey}`}
+              used={budgets.data.month.committedMicros}
+              limit={budgets.data.month.limitMicros}
+              hint={`Entitlement ${usd(budgets.data.month.entitlementMicros)}${budgets.data.month.storedLimitMicros !== null ? `, stored limit ${usd(budgets.data.month.storedLimitMicros)}` : ', no stored limit'}; ${usd(budgets.data.month.remainingMicros)} remains.`}
+            />
+            <Meter
+              label={`Agent spend · this brand · ${budgets.data.day.dayKey}`}
+              used={budgets.data.day.committedMicros}
+              limit={budgets.data.day.limitMicros}
+              hint={`${budgets.data.day.storedLimitMicros === null ? 'Default limit' : 'Stored limit'}; ${usd(budgets.data.day.remainingMicros)} remains today.`}
+            />
+          </div>
+          <div className="flex flex-wrap gap-x-8 gap-y-3">
+            <LimitForm
+              brandId={brandId}
+              period="month"
+              current={budgets.data.month.storedLimitMicros ?? budgets.data.month.entitlementMicros}
+            />
+            <LimitForm brandId={brandId} period="day" current={budgets.data.day.limitMicros} />
+          </div>
           <Ledger data={budgets.data} />
         </div>
       )}

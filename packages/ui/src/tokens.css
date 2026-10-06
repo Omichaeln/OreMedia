@@ -7,8 +7,12 @@
  *
  * Text tokens meet WCAG 1.4.3 (4.5:1) on --background, --card and --muted; the lighter `-dot` set is for 6–7 px
  * status dots and bars beside text that already carries the state, never for text.
+ *
+ * `[data-theme='light']` repeats the light set so a surface can be pinned light inside a dark page (the theme
+ * previews on Settings → Appearance), as `[data-theme='dark']` pins one dark.
  */
-:root {
+:root,
+[data-theme='light'] {
   --background: #f7f6f3;
   --foreground: #1a1917;
   --card: #ffffff;

@@ -235,11 +235,20 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await impressions.textContent()).toContain((7800).toLocaleString('en-US'));
     expect(await page.getByTestId('coverage').textContent()).toContain('3 of 3 publications have numbers');
     expect(await page.getByTestId('coverage').textContent()).toContain('2 stale values');
+    // Three posts against none before: under the minimum sample the change is not compared (D-14), never a number.
+    await expect
+      .poll(() => impressions.textContent(), { timeout: 15_000 })
+      .toContain('not compared: under 5 posts');
+    // The freshness line: each channel's oldest fetch; a stale channel says so in words, not only in colour.
+    const fresh = page.getByTestId('freshness-line');
+    expect(await fresh.textContent()).toContain('Acme LinkedIn');
+    expect(await fresh.textContent()).toContain('stale');
     const clicks = metric.getByRole('button', { name: /^Clicks/ });
     expect(await clicks.textContent()).toContain('2 of 3 posts');
     await clicks.click();
     await expect.poll(() => clicks.getAttribute('aria-pressed')).toBe('true');
-    const posts = page.getByTestId('performance-posts').getByRole('listitem');
+    // The interface's content table: one row per post (the detail row of an open post carries no publication).
+    const posts = page.getByTestId('performance-posts').locator('tbody tr[data-publication]');
     expect(await posts.count()).toBe(3);
     // LinkedIn did not return clicks: the row says so and sorts last, never shown as 0.
     await expect.poll(() => posts.last().textContent()).toContain('Unavailable');
@@ -359,8 +368,10 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await attributes.textContent()).toContain('Small sample');
     expect(await attributes.textContent()).not.toContain('Above brand');
     // One post: its quality composite with what is unavailable named, and its tracked link with the clicks.
+    // The interface opens a post under its row of the content table: the row's button (its title) toggles it.
     const row = page.getByTestId('performance-posts').locator('[data-publication="pub_published"]');
-    await row.getByRole('button', { name: 'Details' }).click();
+    await row.getByRole('button').click();
+    await expect.poll(() => row.getByRole('button').getAttribute('aria-expanded')).toBe('true');
     const detail = page.getByTestId('post-detail');
     await detail.getByTestId('post-quality').waitFor({ timeout: 15_000 });
     expect(new URL(page.url()).searchParams.get('post')).toBe('pub_published');
@@ -382,6 +393,38 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await next.getByTestId('recommendation').count()).toBe(1);
     expect(await next.textContent()).toContain('Answer the shipping question in a post');
     expect(await next.textContent()).not.toContain('Test price-first carousels');
+    // Keep is the recommendation's proposed action (the brief form), Drop is dismiss with a reason: nothing reads
+    // as kept or dropped before the server answers, so opening either form changes no state.
+    const brief = next.getByTestId('recommendation').first();
+    await brief.getByRole('button', { name: 'Keep' }).click();
+    await brief.getByLabel('Audience').waitFor({ timeout: 15_000 });
+    expect(await brief.getByRole('button', { name: 'Keep: create brief' }).count()).toBe(1);
+    await brief.getByRole('button', { name: 'Cancel' }).click();
+    await brief.getByRole('button', { name: 'Drop' }).click();
+    await brief.getByLabel('Reason for dismissing').waitFor({ timeout: 15_000 });
+    expect(await brief.getByRole('button', { name: 'Drop' }).last().getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    await brief.getByRole('button', { name: 'Cancel' }).click();
+    expect(await brief.getAttribute('data-recommendation-state')).toBe('proposed');
+    expect(await next.textContent()).not.toContain('Kept');
+    // The AI review: the analyst's movements, findings and hypotheses, each labelled as what it is.
+    const review = page.getByTestId('ai-review');
+    expect(await review.getByTestId('ai-review-movements').textContent()).toContain(
+      'Qualified enquiries fell 12% week on week.',
+    );
+    expect(await review.getByTestId('ai-review-findings').textContent()).toContain('Landing page B');
+    expect(await review.getByTestId('ai-review-hypotheses').textContent()).toContain(
+      'hypotheses, not findings',
+    );
+    // The objective (qualified enquiries) has no post metric here: its tile says so instead of a number.
+    expect(await page.getByTestId('objective-tile').textContent()).toContain('Unavailable');
+    expect(await page.getByRole('heading', { level: 1, name: 'Performance' }).count()).toBe(1);
+    // No export exists in the application, so the screen offers none; the overview is reached from here (D-28).
+    expect(await page.getByRole('button', { name: 'Export' }).count()).toBe(0);
+    expect(await page.getByRole('link', { name: /Web, search and audit/ }).getAttribute('href')).toContain(
+      '/overview?period=30',
+    );
     await page.close();
   }, 60_000);
 
@@ -413,7 +456,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.keyboard.press('Escape');
     await expect.poll(() => imported.textContent(), { timeout: 15_000 }).toContain('Published');
     // Import a package: manifest.json names the skill; it appears as a new draft.
-    await page.getByRole('button', { name: 'Import a skill package' }).click();
+    await page.getByRole('button', { name: 'Import SKILL.md package' }).click();
     await page.getByLabel('Skill package files').setInputFiles([
       {
         name: 'manifest.json',
@@ -450,7 +493,8 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const page = await signedIn(1440);
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=destinations')}`);
     await page.getByTestId('destinations').waitFor({ timeout: 15_000 });
-    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    // Destinations are the "Websites and sources" group of the Channels tab; the former deep link opens it.
+    expect(await page.getByRole('tab', { name: 'Channels' }).getAttribute('aria-selected')).toBe('true');
     const ga4 = page.getByTestId('destination-dst_e2e_ga4');
     await ga4.waitFor({ timeout: 15_000 });
     expect(await ga4.textContent()).toContain('Acme web');
@@ -921,7 +965,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.goto(`${origin}/connect/callback?state=${encodeURIComponent(state)}&code=auth_code_ga4`);
     await page.getByTestId('destination-connect-callback').waitFor({ timeout: 15_000 });
     expect(page.url()).toContain('tab=destinations');
-    expect(await page.getByRole('tab', { name: 'Destinations' }).getAttribute('aria-selected')).toBe('true');
+    expect(await page.getByRole('tab', { name: 'Channels' }).getAttribute('aria-selected')).toBe('true');
     await page.getByRole('button', { name: 'Finish connecting' }).click();
     const choose = page.getByTestId('destination-connect-choose');
     await choose.waitFor({ timeout: 15_000 });
@@ -1004,16 +1048,14 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
       .poll(() => tabs.allTextContents(), { timeout: 15_000 })
       .toEqual([
         'Channels',
-        'Destinations',
         'Mandates',
-        'Policy',
+        'Release policy',
         'Skills',
         'Members',
-        'Budgets',
-        'Model routing',
-        'Account',
+        'Budgets & models',
+        'Appearance',
       ]);
-    await page.getByRole('tab', { name: 'Policy' }).click();
+    await page.getByRole('tab', { name: 'Release policy' }).click();
     const policy = page.getByTestId('release-policy');
     await expect
       .poll(() => policy.textContent(), { timeout: 15_000 })
@@ -1066,7 +1108,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     expect(await mandateBrand.getByRole('button', { name: 'Release' }).getAttribute('aria-disabled')).toBe(
       'true',
     );
-    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await page.getByRole('tab', { name: 'Budgets & models' }).click();
     const routing = page.getByTestId('model-routing');
     await expect.poll(() => routing.textContent(), { timeout: 15_000 }).toContain('anthropic/claude-sonnet');
     // What is checked is apart from what is only recorded, and the model in use comes from the deployment.
@@ -1110,7 +1152,7 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     const inUseBefore = backend.modelInUse;
     backend.modelInUse = null;
     await page.reload();
-    await page.getByRole('tab', { name: 'Model routing' }).click();
+    await page.getByRole('tab', { name: 'Budgets & models' }).click();
     await expect
       .poll(() => routing.textContent(), { timeout: 15_000 })
       .toContain('The model in use is not known here');
@@ -1274,13 +1316,13 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.goto(`${origin}${home.replace('/home', '/settings?tab=policy')}`);
     await page.getByTestId('release-policy').waitFor({ timeout: 15_000 });
     expect(await page.getByTestId('kill-switches').count()).toBe(0);
-    expect(await page.getByRole('tab', { name: 'Model routing' }).count()).toBe(0);
+    expect(await page.getByRole('tab', { name: 'Budgets & models' }).count()).toBe(0);
     expect(await page.getByRole('tab', { name: 'Members' }).count()).toBe(0);
     await page.getByRole('tab', { name: 'Mandates' }).click();
     await expect.poll(() => page.getByTestId('mandate').count(), { timeout: 15_000 }).toBe(2);
     expect(await page.getByTestId('mandates').getByRole('button', { name: 'Pause' }).count()).toBe(0);
-    // Destinations: a brand manager reads the policy table and registers nothing.
-    await page.getByRole('tab', { name: 'Destinations' }).click();
+    // Websites and sources (on Channels): a brand manager reads the policy table and registers nothing.
+    await page.getByRole('tab', { name: 'Channels' }).click();
     await page.getByTestId('source-use-sup_e2e_gbp_reviews').waitFor({ timeout: 15_000 });
     expect(await page.getByTestId('source-use').getByRole('button', { name: 'Save' }).count()).toBe(0);
     expect(await page.getByTestId('register-destination').count()).toBe(0);
