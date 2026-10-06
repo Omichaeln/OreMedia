@@ -1,6 +1,7 @@
 import type { EvidenceStrength, RecommendationAction } from '@oremedia/contracts/intelligence';
 import type { MembershipRole } from '@oremedia/contracts/tenancy';
 import type { Tone } from '@oremedia/ui';
+import { experimentStateChip } from '../experiments/experiment-helpers';
 
 export interface Chip {
   tone: Tone;
@@ -37,15 +38,18 @@ export interface CoverageDto {
   statement?: string;
 }
 
-export function coverageText(c: CoverageDto): string {
+/** The coverage statement without its "Coverage" label (the strip sets the label apart, as the interface does). */
+export function coverageDetail(c: CoverageDto): string {
   const period = `${new Date(c.periodStart).toLocaleDateString()} to ${new Date(c.periodEnd).toLocaleDateString()}`;
   const sources = c.sources.length ? `sources: ${c.sources.join(', ')}` : 'no sources yet';
   const competitors = c.competitors.length
     ? `competitors: ${c.competitors.join(', ')}`
     : 'no competitor monitoring';
   const languages = c.languages.length ? `languages: ${c.languages.join(', ')}` : 'no language filter';
-  return `Coverage ${period}; ${sources}; ${competitors}; ${languages}.`;
+  return `${period}; ${sources}; ${competitors}; ${languages}.`;
 }
+
+export const coverageText = (c: CoverageDto): string => `Coverage ${coverageDetail(c)}`;
 
 /** "Partial" when the period has inputs but the analysis reports gaps (an insight with a `gap` evidence). */
 export const hasCoverageGaps = (items: ReadonlyArray<{ evidence: Array<{ kind: string }> }>): boolean =>
@@ -74,15 +78,37 @@ export const ACTION_LABEL: Record<RecommendationAction, string> = {
   propose_playbook_update: 'Propose playbook update',
 };
 
-export const LEVEL_CHIP: Record<'low' | 'medium' | 'high', Chip> = {
-  low: { tone: 'good', label: 'low' },
-  medium: { tone: 'warning', label: 'medium' },
-  high: { tone: 'critical', label: 'high' },
-};
+/** The interface's "01", "02" … rank before a recommendation's title. */
+export const rankText = (position: number): string => String(position).padStart(2, '0');
 
-/** Effort and uncertainty use the same scale but the opposite meaning is not implied: both are shown as text. */
-export const levelChip = (level: string): Chip =>
-  LEVEL_CHIP[level as 'low' | 'medium' | 'high'] ?? { tone: 'neutral', label: level };
+/**
+ * The interface states confidence; the server records uncertainty on the same three-step scale. Confidence is its
+ * inverse, so nothing is estimated: low uncertainty reads "High" confidence. An unknown level is shown as it came.
+ */
+const CONFIDENCE: Record<string, string> = { low: 'High', medium: 'Medium', high: 'Low' };
+export const confidenceText = (uncertainty: string): string =>
+  CONFIDENCE[uncertainty] ?? `unknown (${uncertainty})`;
+
+const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+export const effortText = (effort: string): string => capitalise(effort);
+
+/** "Benefit": the expected movement on its metric, with the magnitude when the analyst gave one. */
+export const benefitText = (b: { metricKey: string; direction: string; magnitude?: string | null }): string =>
+  `${b.metricKey.replace(/_/g, ' ')} ${b.direction}${b.magnitude ? ` (${b.magnitude})` : ''}`;
+
+/** The interface's quick dismissal reasons; each is sent as the stored reason, like a typed one. */
+export const DISMISS_REASONS = [
+  'Not relevant to objective',
+  'Already doing it',
+  'Evidence too weak',
+  'Conflicts with brand',
+] as const;
+
+/** An anomaly as one sentence: what was observed against its baseline, and how many times the baseline it is. */
+export function anomalyText(a: { signal: string; baseline: number; observed: number }): string {
+  const ratio = a.baseline > 0 ? ` (${(a.observed / a.baseline).toFixed(1)}× baseline)` : '';
+  return `${a.signal}: observed ${a.observed} against a baseline of ${a.baseline}${ratio}`;
+}
 
 export const SEVERITY_CHIP: Record<string, Chip> = {
   low: { tone: 'info', label: 'Low severity' },
@@ -122,13 +148,8 @@ const PLAYBOOK_APPROVERS: ReadonlySet<MembershipRole> = new Set<MembershipRole>(
 export const canApprovePlaybook = (role: MembershipRole | null | undefined): boolean =>
   role !== null && role !== undefined && PLAYBOOK_APPROVERS.has(role);
 
-/** Spec 16.9 "Experiments" view groups, as the workspace hands them over. */
-export const EXPERIMENT_GROUP_LABEL = {
-  planned: 'Planned',
-  running: 'Running',
-  completed: 'Completed',
-  inconclusive: 'Inconclusive',
-} as const;
+/** Spec 16.9 "Experiments" view groups, as the workspace hands them over, in the order the view lists them. */
+export const EXPERIMENT_GROUPS = ['running', 'planned', 'completed', 'inconclusive'] as const;
 
 /** The workspace's experiment group is shown as text; `directional; not causal` is preserved verbatim. */
 export const VERDICT_CHIP: Record<string, Chip> = {
@@ -138,6 +159,12 @@ export const VERDICT_CHIP: Record<string, Chip> = {
 };
 export const verdictChip = (verdict: string): Chip =>
   VERDICT_CHIP[verdict] ?? { tone: 'neutral', label: verdict };
+
+/** An experiment row in the workspace: its verdict once a result exists, otherwise where it is in its lifecycle. */
+export const workspaceExperimentChip = (x: {
+  state: string;
+  latestResult: { verdict: string } | null;
+}): Chip => (x.latestResult ? verdictChip(x.latestResult.verdict) : experimentStateChip(x.state));
 
 /** A date-time-local default for a review-after date: 90 days from now, at minute precision. */
 export function defaultReviewAfter(now = new Date()): string {

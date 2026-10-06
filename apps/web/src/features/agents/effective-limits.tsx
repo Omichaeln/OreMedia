@@ -2,7 +2,7 @@ import type { AutonomyMode } from '@oremedia/contracts/tenancy';
 import { Badge, Skeleton, StatusBanner } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
-import { formatDuration, formatMicros, formatTokens } from './run-helpers';
+import { formatDuration, formatMicros, formatTokens, humanise } from './run-helpers';
 import { useEffectiveLimits } from './use-agent-runs';
 
 export interface EffectiveLimitsProps {
@@ -12,13 +12,12 @@ export interface EffectiveLimitsProps {
   requestedAutonomy: AutonomyMode;
 }
 
-const mode = (m: string) => m.replace(/_/g, ' ');
-
 /**
- * RA-07: what the server will hold a run to, shown before it starts: the autonomy actually granted (and which
- * ceiling capped it), the budget that will be reserved, the brand's and company's remaining spend, the actions
- * the principal is not granted (so those tools are denied), and anything that would refuse the start right now.
- * The server decides at start; this only reads the same sources.
+ * RA-07: what the server will hold a run to, shown before it starts: the budget as the interface's three figures
+ * (max tool calls, max cost, max variants; set by the principal's budget, so read-only here), the autonomy actually
+ * granted (and which ceiling capped it), the brand's and company's remaining spend, the actions the principal is
+ * not granted (so those tools are denied), and anything that would refuse the start right now. The server decides
+ * at start; this only reads the same sources.
  */
 export function EffectiveLimits({
   brandId,
@@ -46,37 +45,48 @@ export function EffectiveLimits({
           ? 'company policy'
           : 'the plan'
       : null;
+  const figures: Array<[string, string]> = [
+    ['Max tool calls', l.budget ? String(l.budget.maxSteps) : '—'],
+    ['Max cost', l.budget ? formatMicros(l.budget.maxCostMicros) : '—'],
+    ['Max variants', l.budget ? String(l.budget.maxVariants) : '—'],
+  ];
   return (
     <section
       aria-label="Effective limits"
       data-testid="effective-limits"
       data-can-start={l.canStart}
-      className="flex flex-col gap-2 rounded-md border border-border p-3"
+      className="flex flex-col gap-3"
     >
-      <h3 className="text-sm font-semibold">What this run is held to</h3>
+      <div className="flex flex-col gap-1.5" data-testid="effective-budget">
+        <div className="grid grid-cols-3 gap-2.5">
+          {figures.map(([label, value]) => (
+            <div key={label} className="flex min-w-0 flex-col gap-1">
+              <span className="text-xs text-muted-foreground">{label}</span>
+              <span className="flex h-[34px] items-center truncate rounded-lg border border-border bg-muted px-2.5 text-sm tabular-nums">
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {l.budget
+            ? `Set by ${l.principal.name}’s budget: ${formatMicros(l.reservedMicros)} reserved at start, up to ${l.budget.maxSteps} steps, ${formatTokens(l.budget.maxTokens)} tokens, ${formatDuration(l.budget.deadlineSeconds * 1000)}.`
+            : 'Nothing can be reserved: no budget applies to this run.'}
+        </p>
+      </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">Autonomy</dt>
+        <dt className="text-muted-foreground">Granted mode</dt>
         <dd data-testid="effective-autonomy">
-          <Badge glyph={false}>{mode(l.autonomy.effective)}</Badge>
+          <Badge glyph={false}>{humanise(l.autonomy.effective)}</Badge>
           {capped ? (
             <span className="ml-2">
-              Requested {mode(l.autonomy.requested)}; capped by {capped} at {mode(l.autonomy.effective)}.
+              Requested {humanise(l.autonomy.requested)}; capped by {capped} at{' '}
+              {humanise(l.autonomy.effective)}.
             </span>
           ) : (
             <span className="ml-2">
-              {l.principal.name}’s ceiling is {mode(l.principal.maxAutonomy)}.
+              {l.principal.name}’s ceiling is {humanise(l.principal.maxAutonomy)}.
             </span>
-          )}
-        </dd>
-        <dt className="text-muted-foreground">Budget reserved</dt>
-        <dd data-testid="effective-budget">
-          {l.budget ? (
-            <>
-              {formatMicros(l.reservedMicros)} · up to {l.budget.maxSteps} steps,{' '}
-              {formatTokens(l.budget.maxTokens)} tokens, {formatDuration(l.budget.deadlineSeconds * 1000)}
-            </>
-          ) : (
-            'Nothing can be reserved'
           )}
         </dd>
         <dt className="text-muted-foreground">Remaining</dt>
