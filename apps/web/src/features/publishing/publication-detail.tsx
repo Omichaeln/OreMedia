@@ -1,16 +1,19 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
-  EmptyState,
   Field,
+  IconButton,
   Input,
-  Panel,
   Skeleton,
   StatusBanner,
+  StatusDot,
   Textarea,
+  cn,
+  toneGlyph,
 } from '@oremedia/ui';
+import { PackageTitle } from '../content/package-title';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
@@ -50,12 +53,14 @@ import {
 
 export interface PublicationDetailProps {
   brandId: string;
-  publicationId: string | null;
+  publicationId: string;
   channels: ReadonlyMap<string, ChannelDto>;
   /** R2-3: the brand's websites, named when the publication targets one. */
   destinations: ReadonlyMap<string, DestinationDto>;
   /** The brand's time zone: reschedule times are entered as the brand's wall clock (UX-06). */
   timeZone: string;
+  /** The drawer's × and Escape. */
+  onClose: () => void;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -65,9 +70,12 @@ const channelName = (channels: ReadonlyMap<string, ChannelDto>, id: string) => {
 };
 
 /**
- * One publication: its state with the explanation, hold reasons verbatim, attempts, the per-channel outcomes of
- * its revision (spec 14.4) and the actions the state allows (spec 13.1, 13.5). Every action has a keyboard path
- * and every result is written out as text.
+ * One publication in the calendar's right drawer (the interface's `aside`: its id and ×, the title, the channel
+ * and time, the state in bold with its explanation, then the sections and the actions at the foot): its state
+ * with the explanation, hold reasons verbatim, attempts, the per-channel outcomes of its revision (spec 14.4) and
+ * the actions the state allows (spec 13.1, 13.5). Every action has a keyboard path and every result is written
+ * out as text. The drawer is not modal: the calendar stays usable beside it, and below the stacking width it sits
+ * under the day list instead of over it.
  */
 export function PublicationDetail({
   brandId,
@@ -75,18 +83,42 @@ export function PublicationDetail({
   channels,
   destinations,
   timeZone,
+  onClose,
 }: PublicationDetailProps) {
   const publication = usePublication(publicationId);
+  useEffect(() => {
+    // A dialog open over the drawer (reconcile, reschedule…) takes Escape first and marks it handled.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <Panel title="Publication" data-testid="publication-detail">
-      {publicationId === null && (
-        <EmptyState
-          title="Nothing selected"
-          description="Pick a publication from the day list to see its outcome and actions."
-        />
+    <aside
+      aria-label="Publication"
+      data-testid="publication-detail"
+      className={cn(
+        'om-drawer flex min-w-0 flex-col gap-5 rounded-xl border border-border bg-card p-5 text-sm',
+        'md:fixed md:inset-y-0 md:right-0 md:z-30 md:w-[min(360px,92vw)] md:overflow-y-auto md:rounded-none md:border-y-0 md:border-r-0 md:px-6 md:py-7 md:shadow-drawer',
       )}
-      {publicationId !== null && publication.isPending && <Skeleton label="Loading publication" />}
-      {publicationId !== null && publication.isError && (
+    >
+      <div className="flex items-start justify-between gap-2">
+        <code className="text-xs tabular-nums text-muted-foreground">{publicationId}</code>
+        <IconButton
+          label="Close publication"
+          variant="ghost"
+          size="sm"
+          className="-mr-1.5 -mt-1"
+          onClick={onClose}
+        >
+          <span aria-hidden="true" className="text-lg leading-none">
+            ×
+          </span>
+        </IconButton>
+      </div>
+      {publication.isPending && <Skeleton label="Loading publication" />}
+      {publication.isError && (
         <RequestError error={publication.error} onRetry={() => void publication.refetch()} />
       )}
       {publication.isSuccess && (
@@ -98,7 +130,7 @@ export function PublicationDetail({
           timeZone={timeZone}
         />
       )}
-    </Panel>
+    </aside>
   );
 }
 
@@ -173,32 +205,52 @@ function Loaded({
   const summary = siblings.data ? channelOutcomeSummary(siblings.data.items) : null;
 
   return (
-    <div className="flex flex-col gap-4 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={chip.tone} data-testid="publication-state">
+    <div className="flex min-h-0 flex-1 flex-col gap-5 text-sm">
+      <div className="flex flex-col gap-1.5">
+        <h2 className="text-lg font-bold tracking-[-0.01em]">
+          <PackageTitle contentPackageId={p.contentPackageId} />
+        </h2>
+        <p className="text-muted-foreground">
+          {website ? (
+            <span data-testid="publication-target-website">{website}</span>
+          ) : p.channelConnectionId ? (
+            channelName(channels, p.channelConnectionId)
+          ) : null}
+          {' · '}
+          {new Date(p.scheduledFor).toLocaleString(undefined, {
+            day: 'numeric',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone,
+          })}
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="flex items-center gap-2 text-base font-bold" data-testid="publication-state">
+          <StatusDot tone={chip.tone} />
+          <span className="sr-only">{toneGlyph[chip.tone]} </span>
           {chip.label}
-        </Badge>
-        <span className="text-muted-foreground">{when(p.scheduledFor)}</span>
-        {channel && p.channelConnectionId && (
-          <Badge
-            tone={CHANNEL_CHIP[channel.status].tone}
-            glyph={CHANNEL_CHIP[channel.status].tone !== 'good'}
-          >
-            {channelName(channels, p.channelConnectionId)}: {CHANNEL_CHIP[channel.status].label}
-          </Badge>
-        )}
-        {website && (
-          <Badge tone="info" glyph={false} data-testid="publication-target-website">
-            {website}
-          </Badge>
-        )}
-        {verification && p.state === 'published' && (
-          <Badge tone={verification.tone} data-testid="publication-verification">
-            {verification.label}
-          </Badge>
+        </span>
+        {(channel || (verification && p.state === 'published')) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {channel && p.channelConnectionId && (
+              <Badge
+                tone={CHANNEL_CHIP[channel.status].tone}
+                glyph={CHANNEL_CHIP[channel.status].tone !== 'good'}
+              >
+                {channelName(channels, p.channelConnectionId)}: {CHANNEL_CHIP[channel.status].label}
+              </Badge>
+            )}
+            {verification && p.state === 'published' && (
+              <Badge tone={verification.tone} data-testid="publication-verification">
+                {verification.label}
+              </Badge>
+            )}
+          </div>
         )}
       </div>
-      <p className="text-muted-foreground" data-testid="publication-state-detail">
+      <p className="text-pretty leading-5" data-testid="publication-state-detail">
         {chip.detail}
       </p>
 
@@ -384,41 +436,6 @@ function Loaded({
       )}
       {lastError !== null && <RequestError error={lastError} />}
 
-      <div className="flex flex-wrap gap-2" aria-label="Actions">
-        {actions.cancel && (
-          <CancelAction
-            inFlight={actions.cancelInFlight}
-            pending={cancel.isPending}
-            onConfirm={() => cancel.mutate({ publicationId: p.id, expectedVersion: p.version })}
-          />
-        )}
-        {(actions.reschedule || actions.release) && (
-          <RescheduleAction
-            publication={p}
-            release={actions.release}
-            timeZone={timeZone}
-            onDone={refresh}
-            onError={fail('Reschedule failed')}
-          />
-        )}
-        {actions.reconcile && (
-          <ReconcileAction publication={p} onDone={refresh} onError={fail('Reconcile failed')} />
-        )}
-        {actions.editRemote && p.remote.edit && p.remote.allowed.edit && !remote.open && (
-          <EditRemoteAction publication={p} onDone={refresh} onError={fail('Edit request failed')} />
-        )}
-        {actions.deleteRemote && p.remote.delete && p.remote.allowed.delete && !remote.open && (
-          <DeleteRemoteAction publication={p} onDone={refresh} onError={fail('Delete request failed')} />
-        )}
-        {actions.deleteRemote &&
-          p.remote.unpublish &&
-          p.remote.allowed.unpublish &&
-          p.remoteStatus === 'live' &&
-          !remote.open && (
-            <RevertToDraftAction publication={p} onDone={refresh} onError={fail('Revert request failed')} />
-          )}
-      </div>
-
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
         <dt className="text-muted-foreground">Publication</dt>
         <dd>
@@ -459,15 +476,15 @@ function Loaded({
       </dl>
 
       <section aria-labelledby={`attempts-${p.id}`}>
-        <h3 id={`attempts-${p.id}`} className="mb-1 text-xs font-semibold">
+        <h3 id={`attempts-${p.id}`} className="om-label mb-1.5">
           Attempts
         </h3>
         {p.attempts.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No attempt yet.</p>
+          <p className="border-t border-border py-2 text-xs text-muted-foreground">No attempt yet.</p>
         ) : (
-          <ol className="flex flex-col gap-1 text-xs">
+          <ol className="flex flex-col text-xs">
             {p.attempts.map((a) => (
-              <li key={a.id} className="rounded-md border border-border p-2">
+              <li key={a.id} className="border-t border-border py-2">
                 Attempt {a.attemptNumber}: {a.outcome ?? 'open'}
                 {a.sentAt ? `, sent ${when(a.sentAt)}` : ', not sent'}
                 {a.errorCode && (
@@ -485,7 +502,7 @@ function Loaded({
       <EvidenceLedger publicationId={p.id} />
 
       <section aria-labelledby={`channels-${p.id}`} data-testid="channel-outcomes">
-        <h3 id={`channels-${p.id}`} className="mb-1 text-xs font-semibold">
+        <h3 id={`channels-${p.id}`} className="om-label mb-1.5">
           Channels for this revision
         </h3>
         {siblings.isPending && <Skeleton label="Loading channel outcomes" lines={2} />}
@@ -508,11 +525,11 @@ function Loaded({
             ) : (
               <p className="text-xs text-muted-foreground">{summary.text}</p>
             )}
-            <ul className="mt-2 flex flex-col gap-1 text-xs" aria-label="Per-channel outcomes">
+            <ul className="mt-2 flex flex-col text-xs" aria-label="Per-channel outcomes">
               {siblings.data.items.map((s) => {
                 const c = publicationChip(s.state, s.remoteStatus);
                 return (
-                  <li key={s.id} className="flex flex-wrap items-center gap-2">
+                  <li key={s.id} className="flex flex-wrap items-center gap-2 border-t border-border py-2">
                     <Badge tone={c.tone}>{c.label}</Badge>
                     <span>
                       {s.destinationId
@@ -535,6 +552,41 @@ function Loaded({
           </>
         )}
       </section>
+
+      <div className="mt-auto flex flex-wrap gap-1.5 pt-1" aria-label="Actions">
+        {actions.cancel && (
+          <CancelAction
+            inFlight={actions.cancelInFlight}
+            pending={cancel.isPending}
+            onConfirm={() => cancel.mutate({ publicationId: p.id, expectedVersion: p.version })}
+          />
+        )}
+        {(actions.reschedule || actions.release) && (
+          <RescheduleAction
+            publication={p}
+            release={actions.release}
+            timeZone={timeZone}
+            onDone={refresh}
+            onError={fail('Reschedule failed')}
+          />
+        )}
+        {actions.reconcile && (
+          <ReconcileAction publication={p} onDone={refresh} onError={fail('Reconcile failed')} />
+        )}
+        {actions.editRemote && p.remote.edit && p.remote.allowed.edit && !remote.open && (
+          <EditRemoteAction publication={p} onDone={refresh} onError={fail('Edit request failed')} />
+        )}
+        {actions.deleteRemote && p.remote.delete && p.remote.allowed.delete && !remote.open && (
+          <DeleteRemoteAction publication={p} onDone={refresh} onError={fail('Delete request failed')} />
+        )}
+        {actions.deleteRemote &&
+          p.remote.unpublish &&
+          p.remote.allowed.unpublish &&
+          p.remoteStatus === 'live' &&
+          !remote.open && (
+            <RevertToDraftAction publication={p} onDone={refresh} onError={fail('Revert request failed')} />
+          )}
+      </div>
     </div>
   );
 }
@@ -664,7 +716,7 @@ function ArticlePanel({
       className="flex flex-col gap-2 rounded-md border border-border p-3"
       data-testid="article-panel"
     >
-      <h3 id={`article-${p.id}`} className="text-xs font-semibold">
+      <h3 id={`article-${p.id}`} className="om-label">
         Website article
       </h3>
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1021,18 +1073,18 @@ function EvidenceLedger({ publicationId }: { publicationId: string }) {
   const evidence = usePublicationEvidence(publicationId);
   return (
     <section aria-labelledby={`evidence-${publicationId}`} data-testid="evidence-ledger">
-      <h3 id={`evidence-${publicationId}`} className="mb-1 text-xs font-semibold">
+      <h3 id={`evidence-${publicationId}`} className="om-label mb-1.5">
         Attempt ledger
       </h3>
       {evidence.isPending && <Skeleton label="Loading evidence" lines={2} />}
       {evidence.isError && <RequestError error={evidence.error} onRetry={() => void evidence.refetch()} />}
       {evidence.data && evidence.data.length === 0 && (
-        <p className="text-xs text-muted-foreground">No evidence recorded yet.</p>
+        <p className="border-t border-border py-2 text-xs text-muted-foreground">No evidence recorded yet.</p>
       )}
       {evidence.data && evidence.data.length > 0 && (
-        <ol className="flex flex-col gap-1 text-xs" aria-label="Evidence">
+        <ol className="flex flex-col text-xs" aria-label="Evidence">
           {evidence.data.map((e) => (
-            <li key={e.id} className="rounded-md border border-border p-2">
+            <li key={e.id} className="border-t border-border py-2">
               <span className="font-medium">{EVIDENCE_KIND_TEXT[e.kind] ?? e.kind}</span> at{' '}
               {when(e.capturedAt)}
               {e.attemptId && (
